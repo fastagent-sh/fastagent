@@ -34,7 +34,7 @@ describe("driver: loadAgentDefinition", () => {
   });
 
   it("缺 AGENTS.md / 缺 skills/ → instructions undefined、skills 空,不抛", async () => {
-    const def = await loadAgentDefinition("/tmp", { skillPaths: [] }); // 无定义的目录
+    const def = await loadAgentDefinition("/tmp", { skillPaths: [] }); // a directory with no definition
     expect(def.instructions).toBeUndefined();
     expect(def.skills).toEqual([]);
   });
@@ -64,8 +64,8 @@ describe("driver: loadAgentDefinition", () => {
   it("skillPaths 额外挂载:新 skill 进来;同名碰撞定义内赢且 surface collision", async () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [extraSkillsDir] });
     const names = def.skills.map((s) => s.name).sort();
-    expect(names).toEqual(["cutting-words", "season-words"]); // 额外的进来了,不重复
-    // 碰撞:定义内的 season-words 赢
+    expect(names).toEqual(["cutting-words", "season-words"]); // the extra one is in, no duplicates
+    // collision: the definition-local season-words wins
     const seasonWords = def.skills.find((s) => s.name === "season-words")!;
     expect(seasonWords.filePath).toContain("fixtures/agent/");
     expect(def.collisions).toHaveLength(1);
@@ -89,9 +89,9 @@ describe("driver: assembleSystemPrompt(四段式)", () => {
       skills: def.skills,
       cwd: "/work",
     });
-    // ① base(缺省 = 继承 pi 引擎的 base)
+    // (1) base (default = inherited from the pi engine)
     expect(prompt).toContain("operating inside pi");
-    // ② instructions 包裹注入(非裸贴)
+    // (2) instructions injected wrapped (not pasted bare)
     expect(prompt).toContain("<project_instructions");
     expect(prompt).toContain("Haiku Bot");
     // ③ skills listing
@@ -99,7 +99,7 @@ describe("driver: assembleSystemPrompt(四段式)", () => {
     expect(prompt).toContain("season-words");
     // ④ env context
     expect(prompt).toContain("Current working directory: /work");
-    // 顺序:base 在 instructions 前,instructions 在 skills 前
+    // order: base before instructions, instructions before skills
     expect(prompt.indexOf("operating inside pi")).toBeLessThan(prompt.indexOf("<project_instructions"));
     expect(prompt.indexOf("</project_context>")).toBeLessThan(prompt.indexOf("<available_skills>"));
   });
@@ -107,7 +107,7 @@ describe("driver: assembleSystemPrompt(四段式)", () => {
   it("base 可覆盖;无 instructions/skills 时不输出空块", () => {
     const prompt = assembleSystemPrompt({ base: "CUSTOM BASE" });
     expect(prompt).toContain("CUSTOM BASE");
-    expect(prompt).not.toContain("operating inside pi"); // 覆盖后不再含引擎 base
+    expect(prompt).not.toContain("operating inside pi"); // after override the engine base is gone
     expect(prompt).not.toContain("<project_instructions");
     expect(prompt).not.toContain("<available_skills>");
   });
@@ -135,19 +135,19 @@ describe("driver: createPiAgentFromDefinition(指向文件夹 → agent)", () =>
 
     const { agent, definition } = await createPiAgentFromDefinition(fixtureDir, {
       model: faux.getModel(),
-      skillPaths: [], // hermetic:不扫开发机真实全局
+      skillPaths: [], // hermetic: do not scan this dev machine's real globals
     });
     expect(definition.skills).toHaveLength(1);
     expect(definition.diagnostics).toHaveLength(0);
 
     const { text } = await collect(agent.invoke({ session: "s" }, { text: "write a haiku" }));
     expect(text).toContain("haiku-bot");
-    // 定义内容真进了 system prompt,且 base 继承自 pi 引擎、工具列表含 read
+    // definition content actually reached the system prompt; base inherited from pi; tool list includes read
     expect(seenSystemPrompt).toContain("Haiku Bot");
     expect(seenSystemPrompt).toContain("season-words");
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
-    // 默认 = pi 核心工具集(忠实性);自定义 code tools = 显式 tools: 注入,无魔法目录
+    // default = pi core toolset (fidelity); custom code tools = explicit tools: injection, no magic dir
     expect(seenTools.sort()).toEqual(["bash", "edit", "read", "write"]);
   });
 });
@@ -177,16 +177,16 @@ describe("driver: bundleAgentDefinition(构建时把额外挂载物化进可部�
     const def = await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [extraSkillsDir] });
     expect(def.collisions).toHaveLength(1);
 
-    // AGENTS.md 拷进来了
+    // AGENTS.md was copied in
     expect(await readFile(join(outDir, "AGENTS.md"), "utf8")).toContain("Haiku Bot");
-    // 胜出的 skills:定义内 season-words + 额外挂载 cutting-words
+    // winning skills: definition-local season-words + extra-mounted cutting-words
     const skillDirs = (await readdir(join(outDir, "skills"))).sort();
     expect(skillDirs).toEqual(["cutting-words", "season-words"]);
-    // 碰撞胜者是定义内的版本(非 GLOBAL variant)
+    // the collision winner is the definition-local version (not the GLOBAL variant)
     const sw = await readFile(join(outDir, "skills", "season-words", "SKILL.md"), "utf8");
     expect(sw).toContain("kigo");
     expect(sw).not.toContain("GLOBAL variant");
-    // 打包产物可直接再装载(自包含闭环;hermetic 故 skillPaths: [])
+    // the bundle can be reloaded directly (self-contained loop; skillPaths: [] for hermeticity)
     const reloaded = await loadAgentDefinition(outDir, { skillPaths: [] });
     expect(reloaded.skills.map((s) => s.name).sort()).toEqual(["cutting-words", "season-words"]);
   });

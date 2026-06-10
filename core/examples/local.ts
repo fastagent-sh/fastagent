@@ -1,20 +1,22 @@
 /**
- * 本地真跑最小串行 agent。
+ * Run a minimal serial agent locally, for real.
  *
- * 认证、session 持久化、执行环境都由 createPiAgent 的默认处理(dev batteries-included),
- * 本文件只管两件 **应用级** 的事:进程级代理、选哪个 model。
+ * Auth, session persistence and execution env are all handled by createPiAgent's
+ * defaults (dev batteries-included); this file only owns two **application-level**
+ * concerns: the process-level proxy and which model to use.
  *
- * 运行(Node 26 原生跑 .ts):
- *   node examples/local.ts "say hi in 3 words"   # 一次性
- *   node examples/local.ts                        # REPL,同一 session 多轮有记忆,/exit 退出
- *   node examples/local.ts --busy-demo            # 同 session 并发 → 一个跑、一个 session busy
+ * Run (Node 26 executes .ts natively):
+ *   node examples/local.ts "say hi in 3 words"   # one-shot
+ *   node examples/local.ts                        # REPL; same session keeps memory; /exit to quit
+ *   node examples/local.ts --busy-demo            # concurrent same-session → one runs, one "session busy"
  */
 import { createInterface } from "node:readline/promises";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { getModel } from "@earendil-works/pi-ai";
 import { AgentFailure, collect, createPiAgent, type AgentEvent } from "../src/index.ts";
 
-// 进程级网络配置归应用入口:Node 的 fetch 默认不读 HTTPS_PROXY,本地走代理才能到被墙的 provider。
+// Process-level network config belongs to the application entry: Node's fetch does not
+// honor HTTPS_PROXY by itself; the local proxy is required to reach blocked providers.
 setGlobalDispatcher(new EnvHttpProxyAgent());
 
 const agent = createPiAgent({
@@ -22,7 +24,7 @@ const agent = createPiAgent({
   systemPrompt: "You are a concise, helpful assistant. Keep answers short.",
 });
 
-/** 流式渲染一个 turn 到 stdout。 */
+/** Stream-render one turn to stdout. */
 async function turn(text: string): Promise<void> {
   process.stdout.write("agent> ");
   for await (const e of agent.invoke({ session: "local" }, { text })) {
@@ -37,11 +39,12 @@ async function turn(text: string): Promise<void> {
 const arg = process.argv.slice(2).join(" ").trim();
 
 if (arg === "--busy-demo") {
-  // 演示 fail-fast:同 session 并发 → A 跑、B 立即 session busy(REPL 是串行的,只能这样演示)。
-  console.log("同 session 并发:A 跑、B 应立即 session busy\n");
+  // Demonstrate fail-fast: concurrent same-session invokes → A runs, B gets "session busy"
+  // immediately (the REPL is serial, so this is the only way to show it here).
+  console.log("Concurrent same-session: A runs, B should fail fast with session busy\n");
   const summarize = async (label: string, stream: AsyncIterable<AgentEvent>) => {
     try {
-      const { text } = await collect(stream); // buffered 消费 + 终局纪律
+      const { text } = await collect(stream); // buffered consumption + terminal discipline
       console.log(`[${label}] completed: ${text.slice(0, 60)}…`);
     } catch (e) {
       if (e instanceof AgentFailure) console.log(`[${label}] failed: ${e.details} (retryable=${e.retryable})`);
@@ -59,7 +62,7 @@ if (arg) {
   await turn(arg);
 } else {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  console.log("最小串行 agent。输入消息,/exit 退出。同一 session 多轮有记忆。\n");
+  console.log("Minimal serial agent. Type a message; /exit to quit. Same session keeps memory.\n");
   while (true) {
     const text = (await rl.question("you> ")).trim();
     if (!text || text === "/exit") break;
@@ -68,5 +71,5 @@ if (arg) {
   rl.close();
 }
 
-// undici 代理 agent 的 keep-alive 连接会吊住事件循环;demo 跑完显式退出。
+// The undici proxy agent's keep-alive connections keep the event loop alive; exit explicitly.
 process.exit(0);

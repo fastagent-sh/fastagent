@@ -1,14 +1,14 @@
 /**
- * pi 事件/终值 → SPEC AgentEvent 的映射。
- *   - toAgentEvent: 流内事件(text / tool_*),其余 pi 事件返回 null 丢弃。
- *   - toTerminal:   pi `prompt()` resolve 的 AssistantMessage → completed / failed。
- *   - errorToTerminal: catch 兜底,真正 throw 的异常 → failed。
+ * The single pi dependency point for event mapping: pi events/finals → SPEC AgentEvent.
+ *   - toAgentEvent: in-stream events (text / tool_*); all other pi events return null (dropped).
+ *   - toTerminal:   the AssistantMessage resolved by pi `prompt()` → completed / failed.
+ *   - errorToTerminal: catch-all for genuine throws → failed.
  */
 import type { AgentHarnessEvent } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent, Json } from "../../agent.ts";
 
-/** 流内事件映射。非 text/tool_* 的 pi 事件(turn_start、message_start…)一律丢弃。 */
+/** In-stream event mapping. Non text/tool_* pi events (turn_start, message_start, …) are dropped. */
 export function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
   switch (pe.type) {
     case "message_update":
@@ -36,9 +36,10 @@ export function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
 }
 
 /**
- * 终局映射。**以 resolved message 的 stopReason 为准**(core-design §8):
- * pi 的 prompt() 在模型错误/abort 时不一定 throw,常态是 resolve 一个
- * stopReason: "error" | "aborted" 的 message。光靠 catch 会漏掉这类失败(违反 MUST 1)。
+ * Terminal mapping. **Decided by the resolved message's stopReason** (core-design §8):
+ * pi's prompt() does not necessarily throw on model error/abort — the normal path is
+ * resolving a message with stopReason "error" | "aborted". Relying on catch alone would
+ * miss this entire failure class (violating MUST 1).
  */
 export function toTerminal(message: AssistantMessage): AgentEvent {
   if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -48,13 +49,16 @@ export function toTerminal(message: AssistantMessage): AgentEvent {
   return { type: "completed" };
 }
 
-/** catch 兜底:真正 throw 出来的异常 → failed。 */
+/** Catch-all: genuinely thrown exceptions → failed. */
 export function errorToTerminal(error: unknown): AgentEvent {
   const details = error instanceof Error ? error.message : String(error);
   return { type: "failed", details, retryable: isRetryable(details) };
 }
 
-/** 极简 retryable 启发式(pi 的 _isRetryableError 未导出)。命中瞬时类错误模式即可重发。 */
+/**
+ * Minimal retryable heuristic (pi's _isRetryableError is not exported).
+ * Matching a transient-looking error pattern means "worth re-sending".
+ */
 const RETRYABLE =
   /\b(429|5\d\d|timeout|timed out|rate.?limit|overloaded|ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|socket hang up)\b/i;
 

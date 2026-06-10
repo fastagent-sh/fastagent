@@ -1,10 +1,11 @@
 /**
- * pi 连续性 wiring:用 open-or-create 兜出"同 session 多 turn 有记忆"。
+ * pi continuity wiring: open-or-create delivers "same session, multi-turn memory".
  *
- * 无状态设计下,harness 用完即弃;连续性不靠让 harness 活着,而靠
- * **session 持久(存 repo)、每 invoke 重新 open**——pi 的 prompt() 会
- * buildContext()(getPathToRoot + buildSessionContext)把历史 entry 折成上下文。
- * 这正是 SPEC portable conformance(无位置依赖)的落地。
+ * Under the stateless design the harness is discarded after each use; continuity
+ * comes from **persisting the session (repo) and re-opening it per invoke** — pi's
+ * prompt() runs buildContext() (getPathToRoot + buildSessionContext), folding the
+ * historical entries back into context. This is SPEC portable conformance
+ * (no location dependence) made concrete.
  */
 import { AgentHarness } from "@earendil-works/pi-agent-core";
 import type {
@@ -17,7 +18,7 @@ import type {
 import type { Model } from "@earendil-works/pi-ai";
 import { type AuthResolver, resolvePiAuth } from "./auth.ts";
 
-/** 给定 session 造一个绑该 session 的 pi harness。env/model/tools 在工厂内部注入。 */
+/** Build a pi harness bound to the given session. env/model/tools are injected inside the factory. */
 export type BuildHarness = (session: string) => AgentHarness | Promise<AgentHarness>;
 
 /**
@@ -34,21 +35,21 @@ export interface SessionRepoLike {
 }
 
 export interface PiHarnessConfig {
-  /** session 持久化后端;**跨 invoke 复用同一实例**才有连续性。 */
+  /** Session persistence backend; continuity requires **reusing the same instance across invokes**. */
   repo: SessionRepoLike;
   env: ExecutionEnv;
   model: Model<any>;
   tools?: AgentTool[];
   systemPrompt?: string;
-  /** 可显式调用/模型可见的 skills(作为 harness resources 注入)。 */
+  /** Skills visible to the model / explicitly invokable (injected as harness resources). */
   skills?: Skill[];
-  /** 解析模型认证。缺省 {@link resolvePiAuth}:先 pi OAuth(~/.pi/agent/auth.json),再退环境变量。 */
+  /** Model auth resolution. Defaults to {@link resolvePiAuth}: pi OAuth (~/.pi/agent/auth.json) first, then env vars. */
   getApiKeyAndHeaders?: AuthResolver;
 }
 
 /**
- * 造一个具备连续性的 BuildHarness:每 invoke open-or-create session。
- * 已有 → open(harness 经 buildContext 看得到历史);没有 → create。
+ * Build a continuity-capable BuildHarness: open-or-create the session per invoke.
+ * Existing → open (the harness sees history via buildContext); missing → create.
  */
 export function piHarnessFactory(config: PiHarnessConfig): BuildHarness {
   return async (sessionId) => {

@@ -34,7 +34,7 @@ async function startServer(responses: FauxResponseStep[]) {
   };
 }
 
-/** POST /invoke,解析 SSE 行成 AgentEvent[]。 */
+/** POST /invoke and parse SSE lines into AgentEvent[]. */
 async function invoke(url: string, session: string, text: string): Promise<AgentEvent[]> {
   const res = await fetch(`${url}/invoke`, { method: "POST", body: JSON.stringify({ session, text }) });
   const body = await res.text();
@@ -65,16 +65,16 @@ describe("http channel (SSE)", () => {
 
     const srv = await startServer([
       async () => {
-        started(); // 第一个 turn 已进场(lease 已持有)
-        await gate; // 挂住,保持在飞
+        started(); // first turn has entered (lease held)
+        await gate; // park here, stay in flight
         return fauxAssistantMessage("first");
       },
       fauxAssistantMessage("second"),
     ]);
     try {
       const p1 = invoke(srv.url, "same", "a");
-      await ready; // 确保 req1 已持锁
-      const e2 = await invoke(srv.url, "same", "b"); // 此刻必 busy
+      await ready; // make sure req1 holds the lease
+      const e2 = await invoke(srv.url, "same", "b"); // must be busy at this point
 
       expect(e2).toHaveLength(1);
       expect(e2[0]).toMatchObject({ type: "failed", retryable: true });
@@ -84,7 +84,7 @@ describe("http channel (SSE)", () => {
       const e1 = await p1;
       expect(e1.at(-1)?.type).toBe("completed");
     } finally {
-      release(); // 防泄漏
+      release(); // avoid leaking the gate
       await srv.close();
     }
   });

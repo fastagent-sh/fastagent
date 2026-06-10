@@ -1,7 +1,8 @@
 /**
- * 单消费者异步队列 —— pi 双口(subscribe 推 + prompt 终值)专属的 push→pull 基建。
- * 它被 pi 的双口形状召唤:async-iterable 原生的引擎(如 claude SDK)不需要它。
- * 单线程 JS:push 与 drain 之间无 await 交错,无需锁。
+ * Single-consumer async queue — push→pull plumbing dedicated to pi's two-port shape
+ * (subscribe pushes + prompt resolves). It exists because of that shape: engines that
+ * are natively async-iterable (e.g. the claude SDK) would not need it.
+ * Single-threaded JS: no await interleaves between push and drain, so no locking.
  */
 export class EventQueue<T> {
   private buffer: T[] = [];
@@ -15,9 +16,10 @@ export class EventQueue<T> {
   }
 
   /**
-   * 把已 push 的事件按序 yield,直到 `done` settle **且** 缓冲排空后停止。
-   * 不 yield `done` 的结果——终局由调用方单独产出(toTerminal)。
-   * `done` 的 reject 在这里被吞掉(调用方另行 `await run` 处理),避免 unhandled rejection。
+   * Yield pushed events in order until `done` settles AND the buffer is drained.
+   * Does not yield the result of `done` — the terminal is produced separately by the
+   * caller (toTerminal). Rejections of `done` are swallowed here (the caller awaits
+   * `run` itself) to avoid unhandled rejections.
    */
   async *drainUntil(done: Promise<unknown>): AsyncGenerator<T> {
     let settled = false;

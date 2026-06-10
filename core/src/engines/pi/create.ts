@@ -1,9 +1,10 @@
 /**
- * createPiAgent —— 一次调用起一个 pi agent,batteries-included。
+ * createPiAgent — start a pi agent in one call, batteries-included.
  *
- * 它把「createAgent + piHarnessFactory + 默认 repo/env/auth/lease」收成一个调用,
- * 让 app 代码不必直接拼 pi 的 InMemorySessionRepo / NodeExecutionEnv。
- * 所有默认都可 override:production 注入 jsonl/pg/ddb repo、sandbox/e2b env 等。
+ * Collapses "createAgent + piHarnessFactory + default repo/env/auth/lease" into a
+ * single call so app code never assembles pi's InMemorySessionRepo / NodeExecutionEnv
+ * by hand. Every default is overridable: production injects a jsonl/pg/ddb repo,
+ * a sandbox/e2b env, etc.
  */
 import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
@@ -19,15 +20,15 @@ export interface CreatePiAgentOptions {
   model: Model<any>;
   systemPrompt?: string;
   tools?: AgentTool[];
-  /** 模型可见/可显式调用的 skills(driver 产出;作为 harness resources 注入)。 */
+  /** Skills visible to the model / explicitly invokable (driver output; injected as harness resources). */
   skills?: Skill[];
-  /** session 持久化。缺省进程内 InMemorySessionRepo(dev);production 注入 jsonl/pg/ddb。 */
+  /** Session persistence. Defaults to in-process InMemorySessionRepo (dev); production injects jsonl/pg/ddb. */
   repo?: SessionRepoLike;
-  /** 工具执行环境。缺省本地 NodeExecutionEnv(cwd);production 注入 sandbox/e2b。 */
+  /** Tool execution environment. Defaults to local NodeExecutionEnv (cwd); production injects sandbox/e2b. */
   env?: ExecutionEnv;
-  /** 认证解析。缺省 resolvePiAuth()(先 pi OAuth,再环境变量)。 */
+  /** Auth resolution. Defaults to resolvePiAuth() (pi OAuth first, then env vars). */
   getApiKeyAndHeaders?: AuthResolver;
-  /** 单写者租约。缺省进程内 fail-fast inProcessLease()。 */
+  /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;
 }
 

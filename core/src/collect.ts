@@ -1,11 +1,12 @@
 /**
- * Buffered 消费 helper(caller-side,SPEC §7)。
- * 把 AgentEvent 流收成终值,并封装终局纪律:failed → throw,无终局 → 报错。
- * 流式消费(边跑边渲染 / 转 SSE)仍由 caller 自己 for-await——那是各自的 UI/wire,不强求统一。
+ * Buffered consumption helper (caller-side, SPEC §7).
+ * Reduces an AgentEvent stream to a final value and encodes the terminal discipline:
+ * failed → throw, missing terminal → error. Streaming consumers (render-as-you-go /
+ * SSE fan-out) still for-await the stream themselves — that is per-caller UI/wire.
  */
 import type { AgentEvent, Json } from "./agent.ts";
 
-/** failed 事件的异常形态(collect 用)。 */
+/** Exception form of a failed event (thrown by collect). */
 export class AgentFailure extends Error {
   readonly details: string;
   readonly retryable: boolean;
@@ -29,5 +30,5 @@ export async function collect(events: AsyncIterable<AgentEvent>): Promise<Collec
     else if (e.type === "completed") return { text, data: e.data };
     else if (e.type === "failed") throw new AgentFailure(e.details, e.retryable);
   }
-  throw new Error("stream ended without a terminal event"); // 违反 SPEC MUST 1
+  throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
 }

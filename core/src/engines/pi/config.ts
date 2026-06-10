@@ -1,17 +1,21 @@
 /**
- * fastagent.config.ts —— 三层中的第 2 层(production source):部署/装配选择,进 git,机密走 .env。
+ * fastagent.config.ts — layer 2 of the three-layer workspace (production source):
+ * deployment/assembly choices. Checked into git; secrets go in .env.
  *
- * v1 刻意只有 3 个键(每个都过"一句话讲得清 + 有近期故事"的门槛):
- *   - model:用哪个 LLM("provider/modelId" 字符串,可序列化、可被 CLI flag 覆盖);
- *   - tools:额外的自定义工具,追加在 pi 默认工具之后;
- *   - http:内置 HTTP channel 的 serving 选项。
+ * v1 deliberately has only 3 keys (each passes the "explainable in one sentence +
+ * has a near-term story" bar):
+ *   - model: which LLM ("provider/modelId" string — serializable, overridable by CLI flag);
+ *   - tools: extra custom tools, appended after pi's default tools;
+ *   - http:  serving options for the built-in HTTP channel.
  *
- * 刻意不在 v1 的(留在库 API 作逃生舱):
- *   - sessions/env 选型 —— K 轴,等 hosting 刀由真实后端定形状;
- *   - base/auth/skillPaths 覆盖 —— 默认几乎总是对的,放 config 邀请误用。
+ * Deliberately NOT in v1 (kept as library-API escape hatches):
+ *   - sessions/env backend selection — K axis; the hosting knife shapes it from real backends;
+ *   - base/auth/skillPaths overrides — the defaults are almost always right; putting them
+ *     in config invites misuse.
  *
- * 红线:config 描述"这次部署的选择",绝不描述 agent 的身份/行为(那在 AGENTS.md + skills)。
- * 删掉 config 应当仍可 zero-config 跑(model 从 --model / FASTAGENT_MODEL 来)。
+ * Red line: config describes "choices for this deployment", never the agent's identity
+ * or behavior (that lives in AGENTS.md + skills). Deleting the config must still leave
+ * a runnable zero-config agent (model via --model / FASTAGENT_MODEL).
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -21,26 +25,29 @@ import { getModel } from "@earendil-works/pi-ai";
 import type { Model } from "@earendil-works/pi-ai";
 
 export interface FastagentConfig {
-  /** "provider/modelId",如 "openai-codex/gpt-5.5"。优先级:CLI --model > config > FASTAGENT_MODEL。 */
+  /** "provider/modelId", e.g. "openai-codex/gpt-5.5". Precedence: CLI --model > config > FASTAGENT_MODEL. */
   model?: string;
-  /** 额外的自定义工具(追加在 pi 默认工具 read/bash/edit/write 之后,不替换)。 */
+  /** Extra custom tools (appended after pi defaults read/bash/edit/write; never replaces them). */
   tools?: AgentTool[];
-  /** 内置 HTTP channel 选项。 */
+  /** Built-in HTTP channel options. */
   http?: { port?: number };
 }
 
-/** identity 函数,只为类型与 IDE 补全(vite/next 同款模式)。 */
+/** Identity function for typing and IDE completion (vite/next-style). */
 export function defineConfig(config: FastagentConfig): FastagentConfig {
   return config;
 }
 
 export interface LoadedConfig {
   config: FastagentConfig;
-  /** 配置文件路径;无配置文件(zero-config)时 undefined。 */
+  /** Config file path; undefined when running zero-config. */
   path?: string;
 }
 
-/** 装载 `<dir>/fastagent.config.ts|.js|.mjs`。无文件 = zero-config({});有文件但形状不对 = 抛(fail visibly)。 */
+/**
+ * Load `<dir>/fastagent.config.ts|.js|.mjs`. No file = zero-config ({});
+ * a file with the wrong shape throws (fail visibly).
+ */
 export async function loadConfig(dir: string): Promise<LoadedConfig> {
   for (const name of ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"]) {
     const path = join(dir, name);
@@ -62,7 +69,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   return { config: {} };
 }
 
-/** 解析 "provider/modelId" → pi Model。未知即抛清晰错误(getModel 返回 undefined)。 */
+/** Resolve "provider/modelId" → a pi Model. Unknown specs throw a clear error (getModel returns undefined). */
 export function resolveModel(spec: string): Model<any> {
   const slash = spec.indexOf("/");
   if (slash < 1 || slash === spec.length - 1) {
@@ -77,7 +84,7 @@ export function resolveModel(spec: string): Model<any> {
   return model;
 }
 
-/** model 选择优先级:CLI flag > config > 环境变量 FASTAGENT_MODEL。都没有 = undefined(调用方报错)。 */
+/** Model selection precedence: CLI flag > config > FASTAGENT_MODEL env var. All absent = undefined (caller errors). */
 export function pickModelSpec(
   flag: string | undefined,
   config: FastagentConfig,

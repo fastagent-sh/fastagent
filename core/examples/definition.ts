@@ -17,7 +17,7 @@ import lookupOrderTool from "./agent/lookup-order-tool.ts";
 
 setGlobalDispatcher(new EnvHttpProxyAgent());
 
-// 自定义 code tool = 显式 import + 注入(类型检查、可重构,无魔法目录)。
+// Custom code tool = explicit import + injection (type-checked, refactor-safe; no magic directory).
 const dir = join(dirname(fileURLToPath(import.meta.url)), "agent");
 const { agent, definition } = await createPiAgentFromDefinition(dir, {
   model: getModel("openai-codex", "gpt-5.5"),

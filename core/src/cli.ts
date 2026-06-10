@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
- * fastagent CLI —— config 的消费者(产品入口,取代手写 entry 脚本)。
+ * fastagent CLI — the consumer of fastagent.config.ts (product entry point,
+ * replacing hand-written entry scripts).
  *
- * v1 只有 `dev`:本地起 agent(默认全局 skills、pi OAuth、HTTP channel)。
+ * v1 has only `dev`: run an agent locally (default global skills, pi OAuth, HTTP channel).
  *   fastagent dev [dir] [--port N] [--model provider/modelId]
- * 后续:`build`(bundleAgentDefinition 套壳)、`start`(只认产物的生产姿态)。
+ * Next: `build` (bundleAgentDefinition wrapper), `start` (production posture, artifact-only).
  *
- * 进程级副作用(代理 dispatcher、.env 装载)归这里——CLI 就是应用入口。
+ * Process-level side effects (proxy dispatcher, .env loading) belong here — the CLI
+ * is the application entry point.
  */
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
@@ -20,8 +22,8 @@ import { piDefaultTools } from "./engines/pi/tools.ts";
 function usage(code: number): never {
   console.error(`usage: fastagent dev [dir] [--port N] [--model provider/modelId]
 
-  dev   在 dir(缺省 .)装配 agent 定义并起本地 HTTP channel
-        model 优先级: --model > fastagent.config.ts > FASTAGENT_MODEL`);
+  dev   assemble the agent definition in dir (default .) and start a local HTTP channel
+        model precedence: --model > fastagent.config.ts > FASTAGENT_MODEL`);
   process.exit(code);
 }
 
@@ -45,19 +47,23 @@ try {
 } catch (error) {
   if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 }
-// 本地走代理才能到被墙 provider(Node fetch 不读 HTTPS_PROXY)。
+// Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy
+// so blocked providers are reachable.
 setGlobalDispatcher(new EnvHttpProxyAgent());
 
 const { config, path: configPath } = await loadConfig(dir);
 const modelSpec = pickModelSpec(values.model, config);
 if (!modelSpec) {
-  console.error(`缺 model:用 --model、fastagent.config.ts 的 model、或 FASTAGENT_MODEL 环境变量指定(如 "openai-codex/gpt-5.5")`);
+  console.error(
+    `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
+  );
   process.exit(1);
 }
 
 const { agent, definition } = await createPiAgentFromDefinition(dir, {
   model: resolveModel(modelSpec),
-  // config.tools 追加在 pi 默认工具之后;无 config.tools 则走 FromDefinition 默认。
+  // config.tools are appended after pi default tools; without config.tools the
+  // FromDefinition default applies.
   ...(config.tools ? { tools: [...piDefaultTools(dir), ...config.tools] } : {}),
 });
 

@@ -1,12 +1,14 @@
 /**
- * Driver:读 agent 定义文件夹(AGENTS.md + skills/)→ 产出 M 侧「定义推导」物。
+ * Driver: read an agent definition folder (AGENTS.md + skills/) → produce the
+ * M-side "definition-derived" artifacts.
  *
- * 口径(core-design §2 prompt 四段式):AGENTS.md ≠ system prompt。
- *   - driver 产出 **instructions**(AGENTS.md 内容)+ **skills**,不产出 systemPrompt;
- *   - 最终 systemPrompt = assembleSystemPrompt 组装:base(M 资产)+ instructions
- *     (包成 <project_instructions>,与 pi/Claude Code 同构)+ skills listing + env context;
- *   - model 是配置项,不归 driver(AGENTS.md 不讲用哪个 LLM);
- *   - `.mcp.json`(MCP tools)是后续单独一刀,本版不做。
+ * Stance (core-design §2, four-segment prompt): AGENTS.md ≠ system prompt.
+ *   - The driver produces **instructions** (AGENTS.md content) + **skills**, not a systemPrompt;
+ *   - the final systemPrompt is assembled by assembleSystemPrompt: base (engine asset)
+ *     + instructions (wrapped in <project_instructions>, isomorphic to pi/Claude Code)
+ *     + skills listing + env context;
+ *   - model is a config item, not the driver's job (AGENTS.md does not say which LLM);
+ *   - `.mcp.json` (MCP tools) is a separate future knife, not in this version.
  */
 import { cp, copyFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -19,18 +21,18 @@ import type { Agent } from "../../agent.ts";
 import { type CreatePiAgentOptions, createPiAgent } from "./create.ts";
 import { piDefaultTools } from "./tools.ts";
 
-/** 同名 skill 碰撞(被丢弃的一方)。必须 surface,不吞(fail visibly)。 */
+/** A same-name skill collision (the discarded side). Must surface, never swallowed (fail visibly). */
 export interface SkillCollision {
   name: string;
   winnerPath: string;
   loserPath: string;
 }
 
-/** 定义推导物(M 的「定义」格)。diagnostics/collisions 必须 surface,不吞。 */
+/** Definition-derived artifacts (the M "definition" cell). diagnostics/collisions must surface. */
 export interface AgentDefinition {
-  /** AGENTS.md 内容;文件不存在则 undefined。 */
+  /** AGENTS.md content; undefined when the file does not exist. */
   instructions?: string;
-  /** AGENTS.md 的绝对路径(存在时)。 */
+  /** Absolute path of AGENTS.md (when present). */
   instructionsPath?: string;
   skills: Skill[];
   diagnostics: SkillDiagnostic[];
@@ -39,8 +41,10 @@ export interface AgentDefinition {
 }
 
 /**
- * 默认的全局 skills 目录(pi parity):pi 用户级 + 跨工具标准目录。
- * loadSkills 会跳过不存在的目录 → 开发机上 = pi 同款体验;服务器上没有 home = 自然为空。
+ * Default global skills directories (pi parity): pi user-level + the cross-tool
+ * standard directory. loadSkills skips missing directories → on a dev machine this
+ * matches local pi; on a server with no home it is naturally empty (fallback only —
+ * the deploy path materializes via bundleAgentDefinition, the artifact is the truth).
  */
 export function defaultGlobalSkillPaths(): string[] {
   return [join(homedir(), ".pi", "agent", "skills"), join(homedir(), ".agents", "skills")];
@@ -49,17 +53,19 @@ export function defaultGlobalSkillPaths(): string[] {
 export interface LoadAgentDefinitionOptions {
   env?: ExecutionEnv;
   /**
-   * skills 挂载目录。**缺省 = defaultGlobalSkillPaths()(默认加载全局,忠实 pi 本地体验)**;
-   * 不存在的目录自动跳过(服务器上自然为空)。高级控制:
-   *   - `skillPaths: []` → 只扫定义内(确定性部署姿态);
-   *   - 自定义数组 → 精确控制挂载什么;
-   *   - 要把全局物化进部署包 → bundleAgentDefinition。
-   * 碰撞:定义内 skills 赢(部署单元是权威),先到者赢 + surface collision。
+   * Skills mount directories. **Default = defaultGlobalSkillPaths() (load globals,
+   * faithful to the local pi experience)**; missing directories are skipped.
+   * Advanced control:
+   *   - `skillPaths: []` → definition-only (deterministic deployment posture);
+   *   - custom array → precise control over what is mounted;
+   *   - to materialize globals into a deployable artifact → bundleAgentDefinition.
+   * Collisions: definition-local skills win (the deployable unit is authoritative);
+   * first-wins + surfaced collision.
    */
   skillPaths?: string[];
 }
 
-/** 读定义文件夹。env 缺省本地 Node(cwd=dir);非本地部署注入对应 env。 */
+/** Read a definition folder. env defaults to local Node (cwd=dir); non-local deployments inject their env. */
 export async function loadAgentDefinition(
   dir: string,
   options: LoadAgentDefinitionOptions = {},
@@ -81,7 +87,8 @@ export async function loadAgentDefinition(
   }
   const instructions = read.ok ? read.value : undefined;
 
-  // 定义内 skills 在前 → 碰撞时定义赢(先到者赢)。缺省追加全局目录(pi parity)。
+  // Definition-local skills first → definition wins collisions (first-wins).
+  // Default appends the global directories (pi parity).
   const { skills: raw, diagnostics } = await loadSkills(e, [
     join(root, "skills"),
     ...(options.skillPaths ?? defaultGlobalSkillPaths()),
@@ -108,12 +115,15 @@ export async function loadAgentDefinition(
 }
 
 /**
- * pi 引擎的 base prompt(①,继承自引擎,非 fastagent 自造)。
+ * The pi engine's base prompt (segment ①, inherited from the engine — not invented
+ * by fastagent).
  *
- * 镜像 pi-coding-agent 的 buildSystemPrompt 默认路径(身份 + 工具列表 + guidelines),
- * 两处有意偏离:去掉 pi-TUI 文档段(部署环境不存在那些本机路径);工具列表按
- * **实际挂载的 tools** 生成(base 与工具集必须一致,同 pi 的参数化方式)。
- * 将来 claude/codex 引擎的 binding 不需要这个——它们的 SDK 内部自带各自的 prompt 组装。
+ * Mirrors pi-coding-agent's buildSystemPrompt default path (identity + tool list +
+ * guidelines), with two deliberate deviations: the pi-TUI docs section is dropped
+ * (those local paths do not exist in deployments), and the tool list is generated
+ * from the **actually mounted tools** (base and toolset must agree — pi's own
+ * parameterization). Future claude/codex engine bindings will not need this: their
+ * SDKs assemble their own prompts internally.
  */
 export function piBasePrompt(options: { tools?: AgentTool[] } = {}): string {
   const tools = options.tools ?? [];
@@ -134,7 +144,7 @@ Guidelines:
 }
 
 export interface AssembleSystemPromptOptions {
-  /** base prompt(①)。缺省 piBasePrompt()(继承 pi 引擎;传 tools 的调用方应用 piBasePrompt({tools}))。 */
+  /** Base prompt (①). Defaults to piBasePrompt() (engine-inherited; callers passing tools should use piBasePrompt({tools})). */
   base?: string;
   instructions?: string;
   instructionsPath?: string;
@@ -142,7 +152,7 @@ export interface AssembleSystemPromptOptions {
   cwd?: string;
 }
 
-/** 组装最终 system prompt(四段式,与 pi 同构的 <project_instructions> 包裹)。 */
+/** Assemble the final system prompt (four segments, with the pi-isomorphic <project_instructions> wrapper). */
 export function assembleSystemPrompt(options: AssembleSystemPromptOptions): string {
   let prompt = options.base ?? piBasePrompt();
   if (options.instructions) {
@@ -160,15 +170,20 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
 }
 
 /**
- * 打包(**一键部署的「编译」阶段,不是可选 dev 工具**):把「解析后的完整 skill 集」
- * 物化进一个自包含的可部署文件夹——服务器上完整复现本地体验。
+ * Bundle (**the "compile" stage of one-click deploy, not an optional dev tool**):
+ * materialize the resolved full skill set into a self-contained deployable folder —
+ * the server reproduces the local experience exactly.
  *
- * 物化内容:AGENTS.md + 胜出的 skills 整夹(含全局,scripts/references/assets 一并)。
- * 碰撞规则同 loadAgentDefinition(定义内赢),败者不进包。
- * 注:**自定义 code tools 不在打包范围**——它们是代码(带 npm 依赖),部署单位是
- * 「项目+依赖」,随项目的正常构建/部署走(显式 `tools:` 注入;拷源文件不带依赖,
- * 伪自包含)。声明式挂工具的标准轨道是 `.mcp.json`(MCP,未来一刀)。
- * 运行时的默认全局扫描只是本地 dev 便利;部署路径必须经过本函数,产物才是真相。
+ * Materialized: AGENTS.md + winning skill folders (including globals; scripts/
+ * references/assets come along). Collision rules match loadAgentDefinition
+ * (definition wins); losers are not bundled.
+ * Note: **custom code tools are out of bundling scope** — they are code (with npm
+ * dependencies); their deployment unit is "project + deps" via the project's normal
+ * build/deploy (explicit `tools:` injection; copying source files without deps would
+ * be fake self-containment). The standards-track for declarative tool mounting is
+ * `.mcp.json` (MCP, a future knife).
+ * The runtime's default global scan is local-dev convenience only; the deploy path
+ * must go through this function — the artifact is the truth.
  */
 export async function bundleAgentDefinition(
   srcDir: string,
@@ -182,10 +197,10 @@ export async function bundleAgentDefinition(
   }
   for (const skill of definition.skills) {
     if (basename(skill.filePath) === "SKILL.md") {
-      // 标准 skill 文件夹:整夹拷贝(含 scripts/references/assets)
+      // Standard skill folder: copy the whole directory (scripts/references/assets included).
       await cp(dirname(skill.filePath), join(outDir, "skills", skill.name), { recursive: true });
     } else {
-      // 根部 .md 裸 skill 文件
+      // Bare root-level .md skill file.
       await copyFile(skill.filePath, join(outDir, "skills", basename(skill.filePath)));
     }
   }
@@ -193,17 +208,17 @@ export async function bundleAgentDefinition(
 }
 
 export type CreatePiAgentFromDefinitionOptions = Omit<CreatePiAgentOptions, "systemPrompt" | "tools"> & {
-  /** 覆盖 base prompt。缺省 piBasePrompt({tools})(继承 pi 引擎)。 */
+  /** Override the base prompt. Defaults to piBasePrompt({tools}) (engine-inherited). */
   base?: string;
-  /** 覆盖工具。缺省 piDefaultTools(完整 pi 工具集,忠实性;收紧姿态用 piReadOnlyTools 或自定义)。 */
+  /** Override tools. Defaults to piDefaultTools (full pi toolset, fidelity; use piReadOnlyTools or a custom list to lock down). */
   tools?: AgentTool[];
-  /** 额外 skills 挂载目录(显式;见 LoadAgentDefinitionOptions.skillPaths 口径)。 */
+  /** Extra skills mount directories (explicit; see LoadAgentDefinitionOptions.skillPaths). */
   skillPaths?: string[];
 };
 
 /**
- * 「指向文件夹 → agent」:load + assemble + createPiAgent 一次调用。
- * 返回 definition 以便 caller surface diagnostics(不吞警告)。
+ * "Point at a folder → agent": load + assemble + createPiAgent in one call.
+ * Returns the definition so callers can surface diagnostics (warnings are not swallowed).
  */
 export async function createPiAgentFromDefinition(
   dir: string,
@@ -211,7 +226,7 @@ export async function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: AgentDefinition }> {
   const env = options.env ?? new NodeExecutionEnv({ cwd: dir });
   const definition = await loadAgentDefinition(dir, { env, skillPaths: options.skillPaths });
-  // 自定义 code tools = 显式注入(`tools: [...piDefaultTools(cwd), myTool]`),不做魔法目录。
+  // Custom code tools = explicit injection (`tools: [...piDefaultTools(cwd), myTool]`); no magic directory.
   const tools = options.tools ?? piDefaultTools(env.cwd);
   const agent = createPiAgent({
     ...options,

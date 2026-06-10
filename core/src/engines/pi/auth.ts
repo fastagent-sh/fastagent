@@ -1,8 +1,9 @@
 /**
- * pi 引擎的认证解析(harness 的 `getApiKeyAndHeaders` 注入项)。
+ * Auth resolution for the pi engine (the harness's `getApiKeyAndHeaders` injection).
  *
- * 这些是**可复用的 pi 引擎接线**,故住在 engines/pi——而非 example。
- * 进程级全局副作用(如 undici 代理 dispatcher)不在此:那是应用入口的职责。
+ * This is **reusable pi engine wiring**, hence it lives in engines/pi — not in examples.
+ * Process-level global side effects (e.g. the undici proxy dispatcher) do NOT belong
+ * here: those are the application entry point's responsibility.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -13,22 +14,24 @@ import type { Model } from "@earendil-works/pi-ai";
 export type Auth = { apiKey: string; headers?: Record<string, string> } | undefined;
 export type AuthResolver = (model: Model<any>) => Promise<Auth>;
 
-/** pi 本地凭证文件(由 pi CLI 写入)。 */
+/** pi's local credentials file (written by the pi CLI). */
 export const PI_AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
 
-/** 从环境变量解析(如 OPENAI_API_KEY / ANTHROPIC_API_KEY)。 */
+/** Resolve from environment variables (e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY). */
 export const envAuth: AuthResolver = (model) => {
   const apiKey = getEnvApiKey(model.provider);
   return Promise.resolve(apiKey ? { apiKey } : undefined);
 };
 
 /**
- * 从 pi 的 OAuth 凭证文件解析(`~/.pi/agent/auth.json`,消耗 coding plan token)。
- * 直接把 access token 当 apiKey 返回——pi-ai 的 provider 会自识别 OAuth token
- * (anthropic `sk-ant-oat` / openai-codex JWT)并设好 Bearer + 必要请求头。
+ * Resolve from pi's OAuth credentials file (`~/.pi/agent/auth.json`, consuming
+ * coding-plan tokens). The access token is returned directly as apiKey — pi-ai's
+ * providers auto-detect OAuth tokens (anthropic `sk-ant-oat` / openai-codex JWT)
+ * and set the Bearer auth plus required request headers themselves.
  *
- * 注:**不刷新 token**(过期返回 undefined,提示用户重跑 pi 登录);耦合 pi CLI 的
- * 凭证文件格式,属"开箱即用"便利项,不是 core 契约。
+ * Note: **no token refresh** (expired → undefined; the user re-logs-in via pi).
+ * Coupled to the pi CLI credentials format — an out-of-the-box convenience, not a
+ * core contract.
  */
 export function piOAuthAuth(authPath: string = PI_AUTH_PATH): AuthResolver {
   return (model) => {
@@ -63,7 +66,7 @@ export function piOAuthAuth(authPath: string = PI_AUTH_PATH): AuthResolver {
   };
 }
 
-/** 默认解析:先试 pi OAuth(coding plan),再退回环境变量。 */
+/** Default resolution: try pi OAuth (coding plan) first, then fall back to env vars. */
 export function resolvePiAuth(authPath?: string): AuthResolver {
   const oauth = piOAuthAuth(authPath);
   return async (model) => (await oauth(model)) ?? envAuth(model);

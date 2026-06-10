@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { createAgent, piHarnessFactory, type AgentEvent } from "../src/index.ts";
 
-/** 一个 echo 工具,给 tool-call 路径用。 */
+/** An echo tool for the tool-call path. */
 const echoTool: AgentTool = {
   name: "echo",
   label: "Echo",
@@ -25,7 +25,7 @@ const echoTool: AgentTool = {
   },
 };
 
-/** 一个绑定 faux model + 共享 repo(→ 连续性)的 agent。每 invoke open-or-create。 */
+/** An agent bound to a faux model + shared repo (→ continuity). Open-or-create per invoke. */
 function makeAgent(responses: FauxResponseStep[]) {
   const faux = registerFauxProvider();
   faux.setResponses(responses);
@@ -139,13 +139,13 @@ describe("invoke fan-in", () => {
         const session = await repo.create({ id: sessionId });
         const harness = new AgentHarness({ env, session, model: faux.getModel(), systemPrompt: "test" });
         harness.abort = async () => {
-          throw new Error("abort blew up"); // 模拟 idle abort reject
+          throw new Error("abort blew up"); // simulate an idle abort rejecting
         };
         return harness;
       },
     });
 
-    // 迭代不得 throw,且末尾仍是 completed
+    // iteration must not throw, and the tail is still completed
     const events = await drain(agent.invoke({ session: "sg" }, { text: "hi" }));
     expect(events.at(-1)).toEqual({ type: "completed" });
   });
@@ -177,7 +177,7 @@ describe("prompt.images 透传(SPEC §4)", () => {
       ),
     );
     const dump = JSON.stringify(seen);
-    expect(dump).toContain("aGVsbG8="); // base64 载荷到达上下文
+    expect(dump).toContain("aGVsbG8="); // base64 payload reached the context
     expect(dump).toContain('"image"');
   });
 });
@@ -188,7 +188,7 @@ describe("session 连续性(open 替 create)", () => {
     const { agent } = makeAgent([
       fauxAssistantMessage("issue #42 is the login bug"),
       (context) => {
-        turn2 = context.messages; // 第二轮请求的上下文
+        turn2 = context.messages; // the context of the second request
         return fauxAssistantMessage("ok, fixing");
       },
     ]);
@@ -197,9 +197,9 @@ describe("session 连续性(open 替 create)", () => {
     await drain(agent.invoke({ session: "conv" }, { text: "now fix it" }));
 
     const dump = JSON.stringify(turn2);
-    expect(dump).toContain("triage issue #42"); // 第一轮 user
-    expect(dump).toContain("issue #42 is the login bug"); // 第一轮 assistant
-    expect(dump).toContain("now fix it"); // 第二轮 user
+    expect(dump).toContain("triage issue #42"); // turn-1 user
+    expect(dump).toContain("issue #42 is the login bug"); // turn-1 assistant
+    expect(dump).toContain("now fix it"); // turn-2 user
   });
 
   it("不同 session 互不串味", async () => {
@@ -218,7 +218,7 @@ describe("session 连续性(open 替 create)", () => {
     const dump = JSON.stringify(other);
     expect(dump).not.toContain("hunter2");
     expect(dump).not.toContain("remember the secret");
-    expect(dump).toContain("what do you know?"); // B 自己的 prompt 在
+    expect(dump).toContain("what do you know?"); // B's own prompt is present
   });
 });
 
@@ -272,9 +272,9 @@ describe("lease + setup 健壮性", () => {
     const busy = [ea, eb].filter((es) =>
       es.some((e) => e.type === "failed" && /busy/.test((e as any).details)),
     );
-    expect(completed).toHaveLength(1); // 恰一个跑完
-    expect(busy).toHaveLength(1); // 恰一个 busy
-    expect(busy[0]).toHaveLength(1); // busy 的那个没跑 turn,只一个 failed
+    expect(completed).toHaveLength(1); // exactly one completed
+    expect(busy).toHaveLength(1); // exactly one busy
+    expect(busy[0]).toHaveLength(1); // the busy one never ran a turn; a single failed event
     expect((busy[0]![0] as any).retryable).toBe(true);
   });
 
@@ -283,8 +283,8 @@ describe("lease + setup 健壮性", () => {
       fauxAssistantMessage("first"),
       fauxAssistantMessage("later"),
     ]);
-    await drain(agent.invoke({ session: "y" }, { text: "a" })); // 串行完成
+    await drain(agent.invoke({ session: "y" }, { text: "a" })); // completed serially
     const events = await drain(agent.invoke({ session: "y" }, { text: "b" }));
-    expect(events.at(-1)?.type).toBe("completed"); // 不再 busy
+    expect(events.at(-1)?.type).toBe("completed"); // no longer busy
   });
 });

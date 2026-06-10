@@ -1,25 +1,28 @@
 /**
- * pi 引擎的默认工具集 = pi 真正的内建核心 coding tools(read/bash/edit/write,同 pi 默认)。
+ * Default toolset for the pi engine = pi's real built-in core coding tools
+ * (read/bash/edit/write, same as pi's default).
  *
- * 口径(经场景推导翻转过一次,定稿):
- *   - **默认完整工具集 = 忠实性**:定义作者在 pi 本地是带全套工具 vibe 的,serving 砍工具
- *     = 行为漂移(同 base prompt 的逻辑)。直接用 pi-coding-agent 的工厂,工具名/描述/行为
- *     与 pi 本地逐字一致。
- *   - **工具层不是安全边界**:隔离是 K 侧 ExecutionEnv/sandbox 的职责(本地=用户自己的机器;
- *     AgentCore=microVM)。对公网收紧 = 显式传 `tools` 配置(如 createReadOnlyTools),是部署
- *     姿态,不是默认。
- *   - pi 工具的 operations 可注入(BashOperations 等),未来 sandbox adapter 换 operations
- *     即可,不锁本地 fs。
+ * Stance (flipped once after scenario-driven re-derivation, now final):
+ *   - **Full default toolset = fidelity**: definition authors vibe in local pi with the
+ *     full toolset; serving with fewer tools = behavior drift (same logic as the base
+ *     prompt). We use pi-coding-agent's factories so tool names/descriptions/behavior
+ *     match local pi verbatim.
+ *   - **The tool layer is not the security boundary**: isolation is the K-side
+ *     ExecutionEnv/sandbox's job (local = the user's own machine; AgentCore = microVM).
+ *     Locking down for public exposure = explicitly passing `tools` (e.g.
+ *     createReadOnlyTools) — a deployment posture, not the default.
+ *   - pi tools take injectable operations (BashOperations etc.); a future sandbox
+ *     adapter swaps operations rather than being locked to local fs.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 
-/** pi 核心默认工具集(read/bash/edit/write,与 pi 默认一致),rooted at cwd。 */
+/** pi's core default toolset (read/bash/edit/write, matching pi defaults), rooted at cwd. */
 export function piDefaultTools(cwd: string): AgentTool[] {
   return createCodingTools(cwd) as AgentTool[];
 }
 
-/** 只读子集(read/grep/find/ls),公网暴露等收紧姿态用。 */
+/** Read-only subset (read/grep/find/ls) for locked-down postures such as public exposure. */
 export function piReadOnlyTools(cwd: string): AgentTool[] {
   return createReadOnlyTools(cwd) as AgentTool[];
 }
