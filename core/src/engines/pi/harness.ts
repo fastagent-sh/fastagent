@@ -20,7 +20,13 @@ import { type AuthResolver, resolvePiAuth } from "./auth.ts";
 /** 给定 session 造一个绑该 session 的 pi harness。env/model/tools 在工厂内部注入。 */
 export type BuildHarness = (session: string) => AgentHarness | Promise<AgentHarness>;
 
-/** open-or-create 所需的最小 repo 形状(InMemorySessionRepo 结构上满足)。 */
+/**
+ * Minimal repo shape needed for open-or-create (structurally satisfied by InMemorySessionRepo).
+ *
+ * KNOWN DEBT: this is a single-sample abstraction. pi's JsonlSessionRepo does NOT fit
+ * (its create() requires { cwd }). The hosting/K knife will reshape this interface when
+ * the first persistent backend lands; do not generalize it before then.
+ */
 export interface SessionRepoLike {
   list(): Promise<SessionMetadata[]>;
   open(metadata: SessionMetadata): Promise<Session>;

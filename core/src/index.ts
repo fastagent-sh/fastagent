@@ -1,8 +1,11 @@
-// 协议契约(中立)
+// Protocol contract (neutral, engine-free)
 export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.ts";
 export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 
-// pi 参考实现
+// Channels (N-side; consume only the Agent contract)
+export { createInvokeHandler } from "./channels/http.ts";
+
+// pi reference implementation — high-level (folder → agent)
 export { createPiAgent, type CreatePiAgentOptions } from "./engines/pi/create.ts";
 export {
   loadAgentDefinition,
@@ -27,8 +30,7 @@ export {
   type LoadedConfig,
 } from "./engines/pi/config.ts";
 
-// channels(N 侧,只吃 Agent 契约)
-export { createInvokeHandler } from "./channels/http.ts";
+// pi reference implementation — low-level building blocks (escape hatch)
 export { createAgent, type CreateAgentOptions } from "./engines/pi/index.ts";
 export { type Lease, type Release, inProcessLease } from "./engines/pi/lease.ts";
 export {

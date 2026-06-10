@@ -33,7 +33,7 @@ owners:
 
 ## 与 kua.ai 三件套的边界
 
-讨论中明确了三个概念的边界 (详 [[2026-05-27-agent-dispatch-and-main-job-intelligence]]):
+讨论中明确了三个概念的边界:
 
 - **狂徒锁链** = 权限 / 决策边界 / 谁能做什么 + 给非技术人安全感
 - **主职智能** = AI 增强每个人的主职业状态, 不把人训练成全才
@@ -43,7 +43,7 @@ owners:
 
 ## 设计探索 (2026-06 session)
 
-> 一串 from-scratch 设计 + 读透 pi / ACP / A2A 真实 API 的 session。**回答了 [[state]] 「产品形态?」——是 agent serving 的 WSGI(契约 + 参考实现 + 部署工具链),不是 Flask 式应用框架。** 完整推导见下面三篇。
+> 一串 from-scratch 设计 + 读透 pi / ACP / A2A 真实 API 的 session。**结论:产品形态是 agent serving 的 WSGI(契约 + 参考实现 + 部署工具链),不是 Flask 式应用框架。** 完整推导见下面三篇。
 
 ### 文档导航(本目录)
 
@@ -51,16 +51,16 @@ owners:
 |---|---|
 | [[SPEC]] | **Agent Handler 协议规范**(契约层,引擎中立):`invoke(scope, prompt) => AsyncIterable<AgentEvent>`、5 事件、3+1 MUST、宗 ASGI、对标 fetch handler |
 | [[positioning]] | 战略定位:用户需求 / 市场 / 生态位 / 竞品矩阵 / 历史类比 / SWOT / 明确不做什么 |
-| [[core-design]] | 核心设计:agent serving 的 WSGI(契约层/实现层分清)、两条对称归一 seam(failure 闭集 + AgentObservation)、AgentApp=无状态多-session 工厂(建 AgentHarness)、坍缩到 4 项发明、对外 consume A2A/ACP、跨 runtime 编译 |
+| [[core-design]] | 核心设计:agent serving 的 WSGI(契约层/实现层分清)、pi 双口 fan-in 成 SPEC 单流(toAgentEvent/toTerminal 两 translator)、无状态多-session(每 invoke 现起 harness)、装配点二维归类、tools/skills 挂载、config v1、对外 consume A2A/ACP、跨 runtime 编译 |
 | [[comparisons]] | Flue / OpenClaw / pi 深度对比 + "GitHub issue 三连" worked example |
 
 ### 关键结论速记
 
 - **占 WSGI 那一格,不是 Flask。** fastagent 不是写 agent 的框架(agent = pi 引擎 + 你的 markdown 定义),是让现成 agent 能被服务/部署的中立层。三件套:WSGI(契约)· Werkzeug+gunicorn(参考实现=pi)· Vercel+Buildpacks(部署工具链)。
 - **invoke = agent serving 的 WSGI 位**:不对外(对外是 HTTP/A2A/ACP),是「触发源/target/引擎」三方解耦的中立契约。WSGI 不对外,invoke 不对外恰恰证明它在 WSGI 位,不是反例。
-- **两条 seam 对称归一 = 把 invoke 提纯成引擎中立契约**:failure 闭集(seam #1)+ AgentObservation 8 种语义(seam #2)。对 pi 依赖收敛到两个 translator;非 pi 引擎实现这两个 translator 就能提供 invoke。
+- **对 pi 的依赖收敛到两个 translator**(`toAgentEvent` 流内事件 + `toTerminal` 终局):非 pi 引擎实现同样的映射就能提供 invoke。早期「AgentObservation 8 语义」设计已坍缩进 SPEC 的 5 事件单流。
 - **建在 `AgentHarness`(pi-agent-core),不是 `AgentSession`(TUI 封装)**:前者 `prompt()=>AssistantMessage` buffered,是 invoke 天然底座。
-- **AgentApp = 无状态多-session 工厂**:每 invoke 现起一个绑 session 的 harness,用完即弃;唯一活态是"在飞的 turn"。能 serverless、部署 AgentCore 的地基。
+- **无状态多-session**(实现为 `createAgent`/`createPiAgent`):每 invoke 现起一个绑 session 的 harness,用完即弃;唯一活态是"在飞的 turn"。能 serverless、部署 AgentCore 的地基。
 - **真空缺 = markdown-native + 引擎/target/云中立的跨 runtime 部署**:试金石 = 一条命令把现成 `AGENTS.md`+`skills` 部署到 AgentCore 跑通。没人做到(Claude SDK 锁 Claude、OpenCode serve 锁 OpenCode、ADP 要写新 manifest)。
 - **对外 consume 标准,不另立 wire**:A2A(agent 网络,只在 Message 层)/ ACP(editor,角色倒置→只能可选 channel)/ webhook(主入口无标准,自定义)。invoke 不对齐 A2A 数据模型(pi-shaped),双 seam 喂 A2A 的 push executor。
 - **术语校准**:业界 Agent = Model + Harness,harness 含 turn loop = pi 的 `AgentHarness`;你的 `AGENTS.md`+`skills` 文件夹本文称 **agent 定义**,不叫 harness。
@@ -69,10 +69,10 @@ owners:
 
 ### ⚠️ 状态与边界
 
-- 本设计以 [[core-design]] 为权威口径;repo 现有实现(config.yaml + 焊死 channel)按它重构,不背兼容。代码真相在 `Sukitly/fastagent-mono` 的 `docs/STATE.md`。
+- 本设计以 [[core-design]] 为权威口径;代码真相在本 repo 的 `core/`(旧 `fastagent-mono`已弃,不背兼容)。
 - **"跨人/跨项目/跨组织调度"** 是你**用 fastagent 造出来的一类 app**(A2A Task 层 / workflow,framework 之上),不是 framework 本身——三件套在"组织级 Agent 协作"场景的落点,不与"serving 的 WSGI"产品形态冲突。
 - **autonomy 安全(狂徒锁链落点)= v2 纵深**,不是第一性发生点;部署通了之后才成为下一道缝。
 
 ## 现状
 
-早期 — 技术探索 + 需求验证 + 产品形态探索 三轨同步。详 [[state]]。
+早期 — 技术探索 + 需求验证 + 产品形态探索 三轨同步。
