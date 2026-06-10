@@ -151,6 +151,37 @@ describe("invoke fan-in", () => {
   });
 });
 
+describe("prompt.images 透传(SPEC §4)", () => {
+  it("images 随 prompt 到达模型上下文", async () => {
+    let seen: unknown;
+    const faux = registerFauxProvider({ models: [{ id: "faux-vision", input: ["text", "image"] }] });
+    faux.setResponses([
+      (context) => {
+        seen = context.messages;
+        return fauxAssistantMessage("saw it");
+      },
+    ]);
+    const repo = new InMemorySessionRepo();
+    const agent = createAgent({
+      buildHarness: piHarnessFactory({
+        repo,
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+        model: faux.getModel(),
+        systemPrompt: "test",
+      }),
+    });
+    await drain(
+      agent.invoke(
+        { session: "img" },
+        { text: "what is this?", images: [{ mimeType: "image/png", data: "aGVsbG8=" }] },
+      ),
+    );
+    const dump = JSON.stringify(seen);
+    expect(dump).toContain("aGVsbG8="); // base64 载荷到达上下文
+    expect(dump).toContain('"image"');
+  });
+});
+
 describe("session 连续性(open 替 create)", () => {
   it("同 session 多 turn:第二轮看得到第一轮历史", async () => {
     let turn2: unknown;

@@ -5,6 +5,7 @@ import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-a
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
   assembleSystemPrompt,
   bundleAgentDefinition,
@@ -36,6 +37,21 @@ describe("driver: loadAgentDefinition", () => {
     const def = await loadAgentDefinition("/tmp", { skillPaths: [] }); // 无定义的目录
     expect(def.instructions).toBeUndefined();
     expect(def.skills).toEqual([]);
+  });
+
+  it("AGENTS.md 读取遇非 not_found 错误 → 抛出,不静默变成「无 instructions」", async () => {
+    class DeniedEnv extends NodeExecutionEnv {
+      override async readTextFile(path: string) {
+        if (path.endsWith("AGENTS.md")) {
+          return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
+        }
+        return super.readTextFile(path);
+      }
+    }
+    const env = new DeniedEnv({ cwd: fixtureDir });
+    await expect(loadAgentDefinition(fixtureDir, { env, skillPaths: [] })).rejects.toThrow(
+      /cannot read .*AGENTS\.md.*permission denied/,
+    );
   });
 
   it("缺省 skillPaths = 全局目录(pi parity):~/.pi/agent/skills + ~/.agents/skills", () => {

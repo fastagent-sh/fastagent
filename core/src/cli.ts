@@ -39,11 +39,11 @@ if (command !== "dev") usage(1);
 
 const dir = resolve(dirArg ?? ".");
 
-// .env(机密)→ process.env;没有该文件则跳过。
+// .env (secrets) → process.env. Only a missing file is normal; surface anything else.
 try {
   process.loadEnvFile(join(dir, ".env"));
-} catch {
-  // 无 .env = 正常
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 }
 // 本地走代理才能到被墙 provider(Node fetch 不读 HTTPS_PROXY)。
 setGlobalDispatcher(new EnvHttpProxyAgent());

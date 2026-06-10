@@ -66,10 +66,19 @@ export async function loadAgentDefinition(
 ): Promise<AgentDefinition> {
   const e = options.env ?? new NodeExecutionEnv({ cwd: dir });
   const rootResult = await e.absolutePath(dir);
-  const root = rootResult.ok ? rootResult.value : dir;
+  if (!rootResult.ok) {
+    // No silent fallback: a failing absolutePath means the env itself is broken.
+    throw new Error(`cannot resolve definition dir "${dir}": ${rootResult.error.message}`);
+  }
+  const root = rootResult.value;
 
   const agentsPath = `${root}/AGENTS.md`;
   const read = await e.readTextFile(agentsPath);
+  // Only not_found means "no AGENTS.md". Anything else (permission, io) must surface,
+  // otherwise the agent silently runs without instructions (AGENTS.md rule 8).
+  if (!read.ok && read.error.code !== "not_found") {
+    throw new Error(`cannot read ${agentsPath}: ${read.error.message}`);
+  }
   const instructions = read.ok ? read.value : undefined;
 
   // 定义内 skills 在前 → 碰撞时定义赢(先到者赢)。缺省追加全局目录(pi parity)。

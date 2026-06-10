@@ -32,17 +32,32 @@ export const envAuth: AuthResolver = (model) => {
  */
 export function piOAuthAuth(authPath: string = PI_AUTH_PATH): AuthResolver {
   return (model) => {
+    let raw: string;
     try {
-      const cred = JSON.parse(readFileSync(authPath, "utf8"))[model.provider];
-      if (
-        cred?.type === "oauth" &&
-        typeof cred.access === "string" &&
-        !(typeof cred.expires === "number" && cred.expires < Date.now())
-      ) {
-        return Promise.resolve({ apiKey: cred.access });
+      raw = readFileSync(authPath, "utf8");
+    } catch (error) {
+      // Missing file = not configured (normal). Anything else must be visible.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.warn(`[fastagent] cannot read ${authPath}: ${(error as Error).message}`);
       }
+      return Promise.resolve(undefined);
+    }
+    let creds: Record<string, { type?: string; access?: unknown; expires?: unknown }>;
+    try {
+      creds = JSON.parse(raw);
     } catch {
-      // 无文件 / 解析失败 → 视为未配置
+      // Corrupt credentials are an anomaly, not "not configured" — warn so the
+      // root cause is diagnosable instead of a confusing downstream auth failure.
+      console.warn(`[fastagent] corrupt auth file ${authPath}; run pi to re-login`);
+      return Promise.resolve(undefined);
+    }
+    const cred = creds[model.provider];
+    if (
+      cred?.type === "oauth" &&
+      typeof cred.access === "string" &&
+      !(typeof cred.expires === "number" && cred.expires < Date.now())
+    ) {
+      return Promise.resolve({ apiKey: cred.access });
     }
     return Promise.resolve(undefined);
   };
