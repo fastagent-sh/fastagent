@@ -2,7 +2,7 @@
 title: fastagent - 核心设计(参考实现)
 type: design-doc
 status: design
-updated: 2026-06-09
+updated: 2026-06-11
 share_link: https://qsort.me/e7yv5ox2
 share_updated: 2026-06-08T16:43:10+08:00
 ---
@@ -143,9 +143,11 @@ createPiAgentFromHarness({ harnessFactory: (session: string) => AgentHarness, le
 createPiAgent({ model, systemPrompt?, tools?, skills?, repo?, env?, getApiKeyAndHeaders?, lease? }): Agent
 // 高层:指向文件夹(装载定义 + 组装 prompt + 默认工具)
 createPiAgentFromDefinition(dir, { model, ... }): Promise<{ agent, definition }>
+// 顶层:指向 workspace(定义 + fastagent.config.ts):装载 config → 解析 model/tools → L2
+createPiAgentFromWorkspace(dir, { model? }): Promise<{ agent, definition, config, configPath?, modelSpec }>
 ```
 
-三级返回同一契约类型 **`Agent`**(L2 另附 `LoadedDefinition` 供 caller surface 诊断)--消费者永远拿到同型的 Agent,不感知装配级别。跨进程 lease 仍 deferred(§8);middleware 未建(无消费者)。model 来源是配置非定义(AGENTS.md 不讲用哪个 LLM),见 §6 装配点归类。
+四级返回同一契约类型 **`Agent`**(做 IO 的 L2/L3 另附装载产物--`LoadedDefinition` / config--供 caller surface 诊断)--消费者永远拿到同型的 Agent,不感知装配级别。跨进程 lease 仍 deferred(§8);middleware 未建(无消费者)。model 来源是配置非定义(AGENTS.md 不讲用哪个 LLM),见 §6 装配点归类。
 
 ## 5. 坍缩:实现真正发明了什么
 
@@ -180,7 +182,7 @@ createPiAgentFromDefinition(dir, { model, ... }): Promise<{ agent, definition }>
 
 ### 6.1 装配点参数归类(定稿,二维)
 
-装配点 = `create.ts` 的 L0/L1/L2 梯子,**产物是实现 invoke 契约的 `Agent`**。每个参数按两条轴归位--**概念归属**(M=agent 是什么 / K=在哪怎么跑 / auth=凭什么连)决定该谁负责;**来源**(定义/配置/host)决定谁来填。三个产出层中,**定义装载(definition.ts)与 config 装载(config.ts)已建成;target adapter 未建--K 侧参数仍是默认值**。
+装配点 = `create.ts` 的 L0–L3 梯子(L0 住 invoke.ts),**产物是实现 invoke 契约的 `Agent`**。每个参数按两条轴归位--**概念归属**(M=agent 是什么 / K=在哪怎么跑 / auth=凭什么连)决定该谁负责;**来源**(定义/配置/host)决定谁来填。三个产出层中,**定义装载(definition.ts)与 config 装载(config.ts)已建成;target adapter 未建--K 侧参数仍是默认值**。
 
 | 参数 | 概念归属 | 来源 |
 |---|---|---|
@@ -203,7 +205,7 @@ host ─(target adapter)→ repo/env/lease 的实现接线            ┘
 
 ### 6.3 config v1(定稿,已实现)
 
-`fastagent.config.ts` = `defineConfig({ model, tools, http })` --**只有 3 个键**,每个都过「一句话讲得清 + 有近期故事」门槛:`model`="provider/modelId" 字符串;`tools`=追加在 pi 默认工具后的自定义工具数组(即「无入口部署下 code tools 的归宿」);`http.port`。优先级 CLI flag > config > `FASTAGENT_MODEL`;无 config = zero-config 跑默认。**刻意不进 v1**:sessions/env 选型(K 轴,等 hosting 刀由真实后端定形状)、base/auth/skillPaths 覆盖(默认几乎总是对的,留库 API 作逃生舱)。选 .ts 非 yaml(旧版教训):tools 是代码需 import、类型补全、生态收敛(vite/next 同款);toolchain 要声明式数据时构建期执行 config 取 resolved 值。红线:config 只描述部署选择,绝不描述 agent 身份/行为。消费者 = **CLI(`fastagent dev`,已实现;`build`/`start` 随后--业界 dev/build/start 三连,恰好对上 dev-server / bundleAgentDefinition / 跑产物)。
+`fastagent.config.ts` = `defineConfig({ model, tools, http })` --**只有 3 个键**,每个都过「一句话讲得清 + 有近期故事」门槛:`model`="provider/modelId" 字符串;`tools`=追加在 pi 默认工具后的自定义工具数组(即「无入口部署下 code tools 的归宿」);`http.port`。优先级 CLI flag > config > `FASTAGENT_MODEL`;无 config = zero-config 跑默认。**刻意不进 v1**:sessions/env 选型(K 轴,等 hosting 刀由真实后端定形状)、base/auth/skillPaths 覆盖(默认几乎总是对的,留库 API 作逃生舱)。选 .ts 非 yaml(旧版教训):tools 是代码需 import、类型补全、生态收敛(vite/next 同款);toolchain 要声明式数据时构建期执行 config 取 resolved 值。红线:config 只描述部署选择,绝不描述 agent 身份/行为。消费者 = **L3(`createPiAgentFromWorkspace`,config 驱动装配的收口);CLI(`fastagent dev`,已实现)经 L3 消费,自身只留进程副作用/展示/起服务;`build`/`start` 随后--业界 dev/build/start 三连,恰好对上 dev-server / bundleAgentDefinition / 跑产物)。
 
 ### 6.2 tools/skills 挂载口径(定稿;参照 agentskills.io 规范 + pi/Claude Code 实现)
 
@@ -325,4 +327,4 @@ host ─(target adapter)→ repo/env/lease 的实现接线            ┘
 - **「成为标准」是上行期权,不是 base case。** Agent Handler 技术上够格当 agent serving 的 gateway 标准,但事实标准要生态采纳,而大厂在出竞品标准(A2A / Agent Executor)。所以:把协议设计成开放可采纳的形状(已做,见 [[SPEC]]),产品价值赌「参考实现 + 部署 DX 够好用」,采纳是 huge upside。
 - **pi 失败有三条路径,translator 以 stopReason 为准**:(1)`prompt()` reject(少数,由 catch 兑);(2)resolve 带 `stopReason: error/aborted` 的 message(常态,`toTerminal` 检查);(3)subscribe 的 `AssistantMessageEvent{type:"error"}`。以 resolved message 的 stopReason 为准产出 `failed`,catch 只兑底路径(1)。
 - **lease**:进程内 fail-fast「session busy」地板已落地(见 §6.6 场景推导 + 决策)。**跨进程/多实例的分布式锁仍 deferred**(到有远程 SessionStore + 多实例/AgentCore 时再做)。
-- 还没钉死的微决策:`retryable` 的 errorMessage 模式集(复用 pi `_isRetryableError`);分布式 `SessionStore.lease` 最小形状;`EventQueue.drainUntil` 的 backpressure;非流式引擎的 `text` 退化(发一个大 delta)。
+- 还没钉死的微决策:`retryable` 判定已抽成可注入 `RetryClassifier`(L0 选项;默认字符串启发式,终解仍待 pi 导出结构化分类);分布式 `SessionStore.lease` 最小形状;`EventQueue.drainUntil` 的 backpressure;非流式引擎的 `text` 退化(发一个大 delta)。

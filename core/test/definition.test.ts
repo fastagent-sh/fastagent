@@ -22,7 +22,7 @@ import {
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
 const extraSkillsDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "extra-skills");
 
-describe("driver: loadAgentDefinition", () => {
+describe("definition: loadAgentDefinition", () => {
   it("读出 instructions(AGENTS.md)+ skills(SKILL.md frontmatter)", async () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [] });
     expect(def.instructions).toContain("Haiku Bot");
@@ -81,7 +81,7 @@ describe("driver: loadAgentDefinition", () => {
   });
 });
 
-describe("driver: assembleSystemPrompt(四段式)", () => {
+describe("create: assembleSystemPrompt(四段式)", () => {
   it("base + <project_instructions> + skills listing + env context", async () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [] });
     const prompt = assembleSystemPrompt({
@@ -134,7 +134,7 @@ describe("create L2: 类型只承诺实现尊重的东西", () => {
   });
 });
 
-describe("driver: createPiAgentFromDefinition(指向文件夹 → agent)", () => {
+describe("create: createPiAgentFromDefinition(指向文件夹 → agent)", () => {
   it("组装的 systemPrompt 真到达模型;skills 注入 resources;read 工具默认在", async () => {
     let seenSystemPrompt: string | undefined;
     let seenTools: string[] = [];
@@ -166,7 +166,7 @@ describe("driver: createPiAgentFromDefinition(指向文件夹 → agent)", () =>
   });
 });
 
-describe("driver: 工具集(pi 真工具,忠实性)", () => {
+describe("create: 工具集(pi 真工具,忠实性)", () => {
   it("piDefaultTools = pi 核心 4 件套(同 pi 默认);piReadOnlyTools = 只读子集", () => {
     expect(piDefaultTools(fixtureDir).map((t) => t.name).sort()).toEqual([
       "bash", "edit", "read", "write",
@@ -185,7 +185,7 @@ describe("driver: 工具集(pi 真工具,忠实性)", () => {
   });
 });
 
-describe("driver: bundleAgentDefinition(构建时把额外挂载物化进可部署包)", () => {
+describe("definition: bundleAgentDefinition(构建时把额外挂载物化进可部署包)", () => {
   it("产物自包含:AGENTS.md + 胜出的 skills 整夹;败者不进包", async () => {
     const outDir = await mkdtemp(join(tmpdir(), "fa-bundle-"));
     const def = await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [extraSkillsDir] });
