@@ -14,7 +14,7 @@
  *   - bundleAgentDefinition is a **build-time** operation and uses node:fs directly
  *     (it runs on the build machine by definition);
  *   - the invoke path (invoke.ts/harness.ts) never touches the disk itself;
- *   - config.ts / auth.ts are Node composition-root modules and may use node fs.
+ *   - config.ts / auth.ts / sessions.ts are Node composition-root modules and may use node fs.
  *
  * Error conventions on this path:
  *   - ExecutionEnv layer returns Result (pi's contract);

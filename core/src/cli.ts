@@ -10,6 +10,7 @@
  * Process-level side effects (proxy dispatcher, .env loading) belong here — the CLI
  * is the application entry point.
  */
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -45,6 +46,12 @@ try {
 } catch (error) {
   if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 }
+// .fastagent/ = layer-3 machine state (sessions land here via L3's default store);
+// self-gitignore so users never have to think about it (vite/next-style).
+await mkdir(join(dir, ".fastagent"), { recursive: true });
+await writeFile(join(dir, ".fastagent", ".gitignore"), "*\n", { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
+  if (e.code !== "EEXIST") throw e;
+});
 // Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy
 // so blocked providers are reachable.
 setGlobalDispatcher(new EnvHttpProxyAgent());

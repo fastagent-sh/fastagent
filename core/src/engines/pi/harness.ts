@@ -7,21 +7,16 @@
  * pi continuity wiring: open-or-create delivers "same session, multi-turn memory".
  *
  * Under the stateless design the harness is discarded after each use; continuity
- * comes from **persisting the session (repo) and re-opening it per invoke** — pi's
+ * comes from **persisting the session (SessionStore) and re-opening it per invoke** — pi's
  * prompt() runs buildContext() (getPathToRoot + buildSessionContext), folding the
  * historical entries back into context. This is SPEC portable conformance
  * (no location dependence) made concrete.
  */
 import { AgentHarness } from "@earendil-works/pi-agent-core";
-import type {
-  AgentTool,
-  ExecutionEnv,
-  Session,
-  SessionMetadata,
-  Skill,
-} from "@earendil-works/pi-agent-core";
+import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { type AuthResolver, resolvePiAuth } from "./auth.ts";
+import type { SessionStore } from "./sessions.ts";
 
 /**
  * pi's Model with the API-shape generic erased — fastagent only passes models
@@ -37,22 +32,9 @@ export type AnyModel = Model<any>;
  */
 export type PiHarnessFactory = (session: string) => AgentHarness | Promise<AgentHarness>;
 
-/**
- * Minimal repo shape needed for open-or-create (structurally satisfied by InMemorySessionRepo).
- *
- * KNOWN DEBT: this is a single-sample abstraction. pi's JsonlSessionRepo does NOT fit
- * (its create() requires { cwd }). The hosting/K knife will reshape this interface when
- * the first persistent backend lands; do not generalize it before then.
- */
-export interface SessionRepoLike {
-  list(): Promise<SessionMetadata[]>;
-  open(metadata: SessionMetadata): Promise<Session>;
-  create(options: { id?: string }): Promise<Session>;
-}
-
 export interface PiHarnessFactoryOptions {
-  /** Session persistence backend; continuity requires **reusing the same instance across invokes**. */
-  repo: SessionRepoLike;
+  /** Session persistence (see sessions.ts). Continuity = same backing store + same session id. */
+  sessions: SessionStore;
   env: ExecutionEnv;
   model: AnyModel;
   tools?: AgentTool[];
@@ -73,7 +55,7 @@ export interface PiHarnessFactoryOptions {
  */
 export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFactory {
   return async (sessionId) => {
-    const session = await openOrCreate(options.repo, sessionId);
+    const session = await options.sessions.openOrCreate(sessionId);
     const { systemPrompt } = options;
     return new AgentHarness({
       env: options.env,
@@ -85,9 +67,4 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       getApiKeyAndHeaders: options.getApiKeyAndHeaders ?? resolvePiAuth(),
     });
   };
-}
-
-async function openOrCreate(repo: SessionRepoLike, sessionId: string): Promise<Session> {
-  const existing = (await repo.list()).find((m) => m.id === sessionId);
-  return existing ? repo.open(existing) : repo.create({ id: sessionId });
 }

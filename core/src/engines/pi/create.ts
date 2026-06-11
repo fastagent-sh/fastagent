@@ -43,18 +43,18 @@
  *
  * 2. An injection point climbs only as high as the last rung whose persona owns
  *    the decision, then stops:
- *      - lease (deployment backend)              → reaches L2 (embedding developer);
+ *      - sessions / lease (deployment backends)  → reach L2 (embedding developer);
+ *        L3 picks its own default (jsonl under .fastagent/) without exposing a choice;
  *      - base / skillPaths (definition-assembly) → stop at L2 (L2 owns prompt/skill mounting);
  *      - retryClassifier (engine adaptation)     → stays at L0 (custom-wiring persona);
  *      - L3 exposes only what an operator may say per the config red line (today: the model flag).
- *    KNOWN DEBT: "L3 accepts no K" is a v1 line, not an invariant — repo/env ARE
- *    deployment choices semantically. When the hosting knife lands (persistent repo /
- *    sandbox env), this boundary must be re-cut: either config grows K keys (L3
- *    inherits them) or L3 options grow K overrides. Decide from real backends;
- *    do not pre-wire.
+ *    KNOWN DEBT: "L3 accepts no K" is a v1 line, not an invariant — sessions/env ARE
+ *    deployment choices semantically. When backend #2 lands (DDB / sandbox env),
+ *    this boundary must be re-cut: either config grows K keys (L3 inherits them)
+ *    or L3 options grow K overrides. Decide from real backends; do not pre-wire.
  */
 import { join } from "node:path";
-import { InMemorySessionRepo, formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
+import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
@@ -62,7 +62,8 @@ import type { Agent } from "../../agent.ts";
 import type { AuthResolver } from "./auth.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
-import { type AnyModel, type SessionRepoLike, piHarnessFactory } from "./harness.ts";
+import { type AnyModel, piHarnessFactory } from "./harness.ts";
+import { type SessionStore, inMemorySessionStore, jsonlSessionStore } from "./sessions.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
 // ── §1 tools: pi's real built-in core coding tools (engine assets) ───────────
@@ -187,8 +188,8 @@ export interface CreatePiAgentOptions {
   /** Skills visible to the model / explicitly invokable (injected as harness resources). */
   skills?: Skill[];
   // ── K: where/how it runs ───────────────────────────────────────────────
-  /** Session persistence. Defaults to in-process InMemorySessionRepo (dev); production injects jsonl/pg/ddb. */
-  repo?: SessionRepoLike;
+  /** Session persistence. Defaults to in-memory (embedding/tests); inject jsonlSessionStore for restart-surviving continuity. */
+  sessions?: SessionStore;
   /** Tool execution environment. Defaults to local NodeExecutionEnv (cwd); production injects sandbox/e2b. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
@@ -203,7 +204,7 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
   return createPiAgentFromHarness({
     lease: options.lease,
     harnessFactory: piHarnessFactory({
-      repo: options.repo ?? new InMemorySessionRepo(),
+      sessions: options.sessions ?? inMemorySessionStore(),
       env: options.env ?? new NodeExecutionEnv({ cwd: process.cwd() }),
       model: options.model,
       systemPrompt: options.systemPrompt,
@@ -230,7 +231,7 @@ export interface CreatePiAgentFromDefinitionOptions {
   /** Extra skills mount directories (see LoadAgentDefinitionOptions.skillPaths). */
   skillPaths?: string[];
   // ── K ──────────────────────────────────────────────────────────────────
-  repo?: SessionRepoLike;
+  sessions?: SessionStore;
   env?: ExecutionEnv;
   lease?: Lease;
   // ── auth ───────────────────────────────────────────────────────────────
@@ -267,7 +268,7 @@ export async function createPiAgentFromDefinition(
     tools,
     skills: definition.skills,
     // K + auth — pass-through
-    repo: options.repo,
+    sessions: options.sessions,
     env,
     lease: options.lease,
     getApiKeyAndHeaders: options.getApiKeyAndHeaders,
@@ -315,6 +316,10 @@ export async function createPiAgentFromWorkspace(
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
     model: resolveModel(modelSpec),
     tools: resolveTools(config, dir),
+    // Workspace rung owns workspace state: sessions persist under .fastagent/
+    // (layer-3 machine state — gitignored, deletable, rebuildable). `fastagent dev`
+    // restarts keep conversations — faithful to local pi, which persists sessions too.
+    sessions: jsonlSessionStore({ dir: join(dir, ".fastagent", "sessions"), cwd: dir }),
   });
   return { agent, definition, config, configPath, modelSpec };
 }

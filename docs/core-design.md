@@ -139,8 +139,8 @@ async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> 
 ```ts
 // 低层：引擎接线被打包进 harnessFactory（PiHarnessFactory）；lease = 进程内 fail-fast 单写者（§6.6）
 createPiAgentFromHarness({ harnessFactory: (session: string) => AgentHarness, lease?: Lease }): Agent
-// 中层:batteries-included(repo/env/auth/lease 全有默认、可覆盖)
-createPiAgent({ model, systemPrompt?, tools?, skills?, repo?, env?, getApiKeyAndHeaders?, lease? }): Agent
+// 中层:batteries-included(sessions/env/auth/lease 全有默认、可覆盖)
+createPiAgent({ model, systemPrompt?, tools?, skills?, sessions?, env?, getApiKeyAndHeaders?, lease? }): Agent
 // 高层:指向文件夹(装载定义 + 组装 prompt + 默认工具)
 createPiAgentFromDefinition(dir, { model, ... }): Promise<{ agent, definition }>
 // 顶层:指向 workspace(定义 + fastagent.config.ts):装载 config → 解析 model/tools → L2
@@ -190,7 +190,7 @@ createPiAgentFromWorkspace(dir, { model? }): Promise<{ agent, definition, config
 | base prompt(→ systemPrompt 骨架) | M | **引擎 binding 资产**(继承自引擎:pi→piBasePrompt;配置可覆盖) |
 | `tools` / skills | M | **定义**(skills/ + .mcp.json → 定义装载) |
 | `model` | M | **配置**(fastagent.config / env;AGENTS.md 不讲用哪个 LLM) |
-| `repo`(SessionStore) | K | **配置**选后端+参数 + **host**(target adapter 接线实现) |
+| `sessions`(SessionStore) | K | **已落地第一个持久后端**:jsonlSessionStore(dev 默认落 `.fastagent/sessions/`)+ inMemorySessionStore;config 选后端仍 deferred(等后端 #2)+ **host**(target adapter 接线实现) |
 | `env`(ExecutionEnv) | K | **配置**选环境 + **host**(target adapter 接线实现) |
 | `lease` | K | **配置**策略/TTL + **host**(target adapter 接线实现) |
 | `getApiKeyAndHeaders` | auth(横切) | **配置/secrets**(.env / vault) |
@@ -198,7 +198,7 @@ createPiAgentFromWorkspace(dir, { model? }): Promise<{ agent, definition, config
 ```
 定义文件 ─(definition.ts)→ instructions, skills(systemPrompt=prompt 组装产出) ┐
 配置 ─(fastagent.config + .env)→ model, 后端选择, secrets   ├→ createPiAgent → agent ←(N: channel 调 invoke,不是装配参数)
-host ─(target adapter)→ repo/env/lease 的实现接线            ┘
+host ─(target adapter)→ sessions/env/lease 的实现接线            ┘
 ```
 
 注:**定义装载只产出「定义推导」那一格**(instructions + skills);model 是配置项,不在 AGENTS.md 里。
@@ -250,7 +250,7 @@ host ─(target adapter)→ repo/env/lease 的实现接线            ┘
 
 **session = 一棵持久化的 entry 树 + 一个 leaf 指针**(沿用 pi 的 `SessionStorage`:append-only entry 带 `parentId` + `LeafEntry`)。**turn = 一次 invoke = 沿 leaf 向前追加一节**,所以 `session : invoke = 1 : 多`。「长程对话」是错觉:每 invoke 无状态、用完即弃;连续性靠 SessionStore 持久化 entry 树、下次 `open` + 回放 `getPathToRoot(leaf)` 重建上下文(满足 SPEC portable conformance)。
 
-> ✅ 连续性已接:`engines/pi` 的 `piHarnessFactory` 每 invoke **open-or-create**(已有则 open、harness 经 buildContext 看到历史;否则 create)。caller 只需**跨 invoke 复用同一 repo 实例**。详见 [[session]]。
+> ✅ 连续性已接:`engines/pi` 的 `piHarnessFactory` 每 invoke **open-or-create**(已有则 open、harness 经 buildContext 看到历史;否则 create)。连续性契约 = **同一 backing store + 同一 session id**:jsonlSessionStore 跨进程重启仍连续(磁盘是真相;`fastagent dev` 默认),in-memory 需复用同一实例。详见 [[session]]。
 
 **回退 / 重试 / regenerate = session 管理,不进 invoke**(SPEC §10:编排 = 上层):
 - **回退** = 把 leaf 移回某 entry(pi `navigateTree`);被甩的 turn 成死分支,不删(可选 `summarize` 留痕)。

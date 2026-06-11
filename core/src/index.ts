@@ -68,8 +68,12 @@ export {
   type AnyModel,
   type PiHarnessFactory,
   type PiHarnessFactoryOptions,
-  type SessionRepoLike,
 } from "./engines/pi/harness.ts";
+export {
+  type SessionStore,
+  inMemorySessionStore,
+  jsonlSessionStore,
+} from "./engines/pi/sessions.ts";
 export {
   type Auth,
   type AuthResolver,

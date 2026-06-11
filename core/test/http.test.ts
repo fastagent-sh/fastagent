@@ -8,7 +8,7 @@ import {
   registerFauxProvider,
   type FauxResponseStep,
 } from "@earendil-works/pi-ai";
-import { createPiAgentFromHarness, piHarnessFactory, type AgentEvent } from "../src/index.ts";
+import { createPiAgentFromHarness, inMemorySessionStore, piHarnessFactory, type AgentEvent } from "../src/index.ts";
 import { createInvokeHandler } from "../src/index.ts";
 
 async function startServer(responses: FauxResponseStep[]) {
@@ -16,7 +16,7 @@ async function startServer(responses: FauxResponseStep[]) {
   faux.setResponses(responses);
   const agent = createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
-      repo: new InMemorySessionRepo(),
+      sessions: inMemorySessionStore(),
       env: new NodeExecutionEnv({ cwd: process.cwd() }),
       model: faux.getModel(),
       systemPrompt: "test",
