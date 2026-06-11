@@ -49,8 +49,6 @@ try {
 // so blocked providers are reachable.
 setGlobalDispatcher(new EnvHttpProxyAgent());
 
-// L3 owns the whole config-driven assembly (load config → resolve model/tools → L2);
-// the CLI keeps only process side effects, presentation, and serving.
 const { agent, definition, config, configPath, modelSpec } = await createPiAgentFromWorkspace(dir, {
   model: values.model,
 }).catch((error: unknown) => {

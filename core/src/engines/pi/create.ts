@@ -27,8 +27,6 @@
  *   L0  createPiAgentFromHarness({ harnessFactory })    (invoke.ts)     [ADAPT]
  *       "Adapt engine wiring to the Agent contract": adds only the concurrency/
  *       stream shell. For tests and fully custom wiring.
- *       (Deliberately NOT `createPiAgentHarness`: that would read as "creates a
- *       harness" — it returns an Agent; the harness factory is its SOURCE.)
  *
  * Each rung only calls the one below; options narrow as you go up (L2 owns
  * systemPrompt/skills itself — they come from the definition; L3 owns model/tools —
@@ -37,7 +35,7 @@
  *
  * Two ladder-wide rules, written down so the per-rung choices stay explainable:
  *
- * 1. L0 is the odd rung out ("3+1", not 4-of-a-kind): L1–L3 fold *configuration
+ * 1. L0 is the odd rung out: L1–L3 fold *configuration
  *    inputs* (files → values → closures); L0 adapts *behavior* (pi's two ports →
  *    SPEC stream + concurrency discipline) — strictly an Adapter. It joins the
  *    create… family by NAME because it is a legitimate entry point (discoverability),
@@ -69,7 +67,7 @@ import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
 // ── §1 tools: pi's real built-in core coding tools (engine assets) ───────────
 //
-// Stance (flipped once after scenario-driven re-derivation, now final):
+// Stance:
 //   - **Full default toolset = fidelity**: definition authors vibe in local pi with the
 //     full toolset; serving with fewer tools = behavior drift (same logic as the base
 //     prompt). We use pi-coding-agent's factories so tool names/descriptions/behavior

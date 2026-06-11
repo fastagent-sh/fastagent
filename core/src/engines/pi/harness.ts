@@ -24,12 +24,9 @@ import type { Model } from "@earendil-works/pi-ai";
 import { type AuthResolver, resolvePiAuth } from "./auth.ts";
 
 /**
- * The pi Model type with its API-shape generic erased. fastagent never inspects a
- * model's API surface — it only passes models through to the harness — so the
- * generic carries no information here. Centralizing the erasure in one deliberate
- * alias (instead of scattering `Model<any>`) keeps the `any` auditable and gives
- * one place to tighten if pi ever exports a variance-friendly type. Lives here
- * because the harness is what models are fed into.
+ * pi's Model with the API-shape generic erased — fastagent only passes models
+ * through to the harness, so the generic carries no information. One alias keeps
+ * the `any` auditable (tighten here if pi exports a variance-friendly type).
  */
 export type AnyModel = Model<any>;
 

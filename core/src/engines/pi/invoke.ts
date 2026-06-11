@@ -208,12 +208,7 @@ class EventQueue<T> {
 
 // ── §4 L0: createPiAgentFromHarness ─────────────────────────────────────────
 //
-// Defined HERE, not in create.ts, although it belongs to the create… ladder by name:
-// its body is the turn mechanism itself (§1–§3 composed into an async generator).
-// Moving the name to create.ts would either drag request-time code into the
-// configuration-time file, or leave a one-line wrapper whose substance lives
-// elsewhere. Name carries the API-family identity; location carries the
-// lifecycle identity (see ladder rule 1 in create.ts).
+// Lives here, not in create.ts: its body IS the turn mechanism (ladder rule 1).
 
 export interface CreatePiAgentFromHarnessOptions {
   harnessFactory: PiHarnessFactory;

@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { piOAuthAuth } from "../src/index.ts";
 
-// AuthResolver's param is deliberately just { provider } (interface segregation) — no Model cast needed.
 const model = { provider: "anthropic" };
 
 afterEach(() => vi.restoreAllMocks());

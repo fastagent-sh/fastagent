@@ -12,10 +12,8 @@ import { getEnvApiKey } from "@earendil-works/pi-ai";
 
 export type Auth = { apiKey: string; headers?: Record<string, string> } | undefined;
 /**
- * Auth resolution keys on the provider alone — the parameter is deliberately the
- * narrowest structural type (not pi's full Model): interface segregation, and it
- * keeps this module free of the model type entirely. Still assignable wherever pi
- * expects `(model: Model) => …` (contravariance).
+ * The parameter is just { provider } — all auth resolution needs; still assignable
+ * wherever pi expects `(model: Model) => …` (contravariance).
  */
 export type AuthResolver = (model: { provider: string }) => Promise<Auth>;
 
@@ -72,9 +70,8 @@ export function piOAuthAuth(authPath: string = PI_AUTH_PATH, options: PiAuthOpti
     const cred = creds[model.provider];
     if (cred?.type === "oauth" && typeof cred.access === "string") {
       if (typeof cred.expires === "number" && cred.expires < Date.now()) {
-        // Expired is an anomaly worth surfacing (unlike missing = not configured):
-        // a silent fallback to env vars would bury the root cause behind a
-        // confusing downstream "missing API key" failure.
+        // Expired ≠ not configured: surface it, or the root cause hides behind a
+        // downstream "missing API key".
         warn(`[fastagent] pi OAuth token for "${model.provider}" expired; run pi to re-login`);
         return Promise.resolve(undefined);
       }
