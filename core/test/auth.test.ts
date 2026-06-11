@@ -41,7 +41,7 @@ describe("piOAuthAuth (silent-failure discipline)", () => {
     expect(consoleWarn).not.toHaveBeenCalled();
   });
 
-  it("valid oauth cred → access token as apiKey; expired → undefined", async () => {
+  it("valid oauth cred → access token as apiKey; expired → undefined 且告警(不静默降级)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-auth-"));
     const path = join(dir, "auth.json");
     await writeFile(
@@ -56,6 +56,8 @@ describe("piOAuthAuth (silent-failure discipline)", () => {
       path,
       JSON.stringify({ anthropic: { type: "oauth", access: "tok-old", expires: Date.now() - 1 } }),
     );
-    expect(await piOAuthAuth(path)(model)).toBeUndefined();
+    const messages: string[] = [];
+    expect(await piOAuthAuth(path, { warn: (m) => messages.push(m) })(model)).toBeUndefined();
+    expect(messages[0]).toContain("expired"); // root cause surfaced, not buried under "missing API key"
   });
 });

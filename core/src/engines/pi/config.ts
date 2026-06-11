@@ -64,6 +64,13 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
       throw new Error(`${path}: must default-export defineConfig({...})`);
     }
     const c = config as FastagentConfig;
+    // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a
+    // .js/.mjs config (`modle:`) must not silently degrade to zero-config.
+    for (const key of Object.keys(c)) {
+      if (key !== "model" && key !== "tools" && key !== "http") {
+        throw new Error(`${path}: unknown key "${key}" (valid keys: model, tools, http)`);
+      }
+    }
     if (c.model !== undefined && typeof c.model !== "string") {
       throw new Error(`${path}: "model" must be a "provider/modelId" string`);
     }

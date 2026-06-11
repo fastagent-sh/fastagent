@@ -70,11 +70,14 @@ export function piOAuthAuth(authPath: string = PI_AUTH_PATH, options: PiAuthOpti
       return Promise.resolve(undefined);
     }
     const cred = creds[model.provider];
-    if (
-      cred?.type === "oauth" &&
-      typeof cred.access === "string" &&
-      !(typeof cred.expires === "number" && cred.expires < Date.now())
-    ) {
+    if (cred?.type === "oauth" && typeof cred.access === "string") {
+      if (typeof cred.expires === "number" && cred.expires < Date.now()) {
+        // Expired is an anomaly worth surfacing (unlike missing = not configured):
+        // a silent fallback to env vars would bury the root cause behind a
+        // confusing downstream "missing API key" failure.
+        warn(`[fastagent] pi OAuth token for "${model.provider}" expired; run pi to re-login`);
+        return Promise.resolve(undefined);
+      }
       return Promise.resolve({ apiKey: cred.access });
     }
     return Promise.resolve(undefined);

@@ -28,10 +28,16 @@ describe("config: loadConfig", () => {
     await expect(loadConfig(join(fixtures, "bad-config"))).rejects.toThrow(/must default-export/);
   });
 
-  it("http 形状也校验(http.port 非数字 → 抛)", async () => {
+  it("http 形状也校验（http.port 非数字 → 抛）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { port: "oops" } };`);
     await expect(loadConfig(dir)).rejects.toThrow(/"http\.port" must be a number/);
+  });
+
+  it("未知键 → 抛（typo 不得静默退化成 zero-config）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { modle: "openai-codex/gpt-5.5" };`);
+    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "modle"/);
   });
 });
 
@@ -59,8 +65,8 @@ describe("config: resolveModel", () => {
   });
 });
 
-describe("L3: createPiAgentFromWorkspace（config 驱动装配收口引擎侧）", () => {
-  it("装配 config + definition，返回入口点需要的全部信息；flag 赢 config", async () => {
+describe("L3: createPiAgentFromWorkspace(config 驱动装配收口引擎侧)", () => {
+  it("装配 config + definition,返回入口点需要的全部信息;flag 赢 config", async () => {
     const dir = join(fixtures, "configured");
     const ws = await createPiAgentFromWorkspace(dir);
     expect(ws.modelSpec).toBe("openai-codex/gpt-5.5"); // 来自 config
@@ -73,7 +79,7 @@ describe("L3: createPiAgentFromWorkspace（config 驱动装配收口引擎侧）
     expect(overridden.modelSpec).toBe("openai-codex/gpt-5.4"); // flag 赢
   });
 
-  it("无任何 model 来源 → 启动时抛清晰错误（fail visibly）", async () => {
+  it("无任何 model 来源 → 启动时抛清晰错误(fail visibly)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
     const saved = process.env.FASTAGENT_MODEL;
     delete process.env.FASTAGENT_MODEL;
@@ -85,7 +91,7 @@ describe("L3: createPiAgentFromWorkspace（config 驱动装配收口引擎侧）
   });
 });
 
-describe("config: resolveModelSpec（优先级 flag > config > env）", () => {
+describe("config: resolveModelSpec(优先级 flag > config > env)", () => {
   it("flag 赢 config 赢 env", () => {
     const env = { FASTAGENT_MODEL: "e/m" } as NodeJS.ProcessEnv;
     expect(resolveModelSpec("f/m", { model: "c/m" }, env)).toBe("f/m");

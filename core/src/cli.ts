@@ -53,8 +53,12 @@ setGlobalDispatcher(new EnvHttpProxyAgent());
 // the CLI keeps only process side effects, presentation, and serving.
 const { agent, definition, config, configPath, modelSpec } = await createPiAgentFromWorkspace(dir, {
   model: values.model,
-}).catch((error: Error) => {
-  console.error(error.message);
+}).catch((error: unknown) => {
+  // User-fixable startup problems (missing model / bad config / broken definition)
+  // are thrown as plain `Error` with actionable messages — print just the message.
+  // Anything else (TypeError, non-Error, …) is a bug: keep the full stack visible.
+  if (error instanceof Error && error.constructor === Error) console.error(error.message);
+  else console.error(error);
   process.exit(1);
 });
 
