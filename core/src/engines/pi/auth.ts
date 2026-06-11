@@ -20,7 +20,7 @@ export type Auth = { apiKey: string; headers?: Record<string, string> } | undefi
 export type AuthResolver = (model: { provider: string }) => Promise<Auth>;
 
 /** pi's local credentials file (written by the pi CLI). */
-export const PI_AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
+const PI_AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
 
 /** Resolve from environment variables (e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY). */
 export const envAuth: AuthResolver = (model) => {

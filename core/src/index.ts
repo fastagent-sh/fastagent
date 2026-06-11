@@ -49,10 +49,11 @@ export {
   defineConfig,
   loadConfig,
   resolveModel,
-  resolveModelSpec,
   type FastagentConfig,
   type LoadedConfig,
 } from "./engines/pi/config.ts";
+// (resolveModelSpec stays module-internal: L3 owns precedence resolution — external
+// callers pass their flag via createPiAgentFromWorkspace options.model.)
 
 // pi reference implementation — low-level building blocks (escape hatch; L0)
 export {
