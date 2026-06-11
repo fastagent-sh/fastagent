@@ -32,7 +32,7 @@ share_updated: 2026-06-08T16:43:10+08:00
 | 轴 | 由什么解耦 | 在哪一层 |
 |---|---|---|
 | **N×M**(trigger ↔ agent)| `invoke` 的签名 + 事件([[SPEC]])| **core / 契约** |
-| **M**（引擎多样）| invoke 是黑盒接口 + 装配层注入（定义装载 → `LoadedDefinition` → 装配出 `Agent`）| core（依赖反转）|
+| **M**(引擎多样)| invoke 是黑盒接口 + 装配层注入(定义装载 → `LoadedDefinition` → 装配出 `Agent`)| core(依赖反转)|
 | **K**(host 多样)| invoke 的无状态性质(SPEC MUST「无位置依赖」)+ `SessionStore`/`ExecutionEnv` 注入,使 host 可替换;真正"编译到某 runtime" = target adapter | K 的*可*解耦在 core,K 的解耦*动作*在工具链层(SPEC §10 out of scope)|
 
 精确口径:**`invoke` 是 N×M 的窄腰;core 的无状态不变量 + DI 注入点,是让「×K」可被上层塌掉的钩子;K 本身的塌缩(target adapter)不在 core、不在 SPEC。** core = 对引擎中立、且被约束成 host-可移植的 serving 契约,不是"N×M×K 三轴契约"。
@@ -73,11 +73,11 @@ share_updated: 2026-06-08T16:43:10+08:00
 | 段 | 内容 | 谁拥有 |
 |---|---|---|
 | 1 base prompt | 身份、工具使用规范、行为准则(质量大头) | **引擎 binding 资产,继承自引擎**(pi binding → `piBasePrompt`,镜像 pi 的、按实际 tools 参数化、去 pi-TUI 文档段;claude/codex 引擎的 SDK 内部自带组装,binding 无需注入。理由:定义作者在该引擎下 vibe 出 AGENTS.md,换 base = 行为漂移、违背忠实性。可配置覆盖) |
-| ② instructions | **AGENTS.md 的内容**,被包成 `<project_instructions>` 注入 | **agent 定义**(定义装载 `definition.ts` 读出) |
-| ③ skills listing | `<available_skills>` 列表,指引模型按需读 SKILL.md(需 read 工具才真可用) | 定义(定义装载读出)+ prompt 组装格式化 |
+| 2 instructions | **AGENTS.md 的内容**,被包成 `<project_instructions>` 注入 | **agent 定义**(定义装载 `definition.ts` 读出) |
+| 3 skills listing | `<available_skills>` 列表,指引模型按需读 SKILL.md(需 read 工具才真可用) | 定义(定义装载读出)+ prompt 组装格式化 |
 | 4 env context | date / cwd | harness 生成 |
 
-即:**AGENTS.md = 项目级指令("README for agents"),只是注入物 ②;定义装载的产出是 instructions + skills,不是 systemPrompt;最终 systemPrompt 由 prompt 组装(`assembleSystemPrompt`)产出。**
+即:**AGENTS.md = 项目级指令("README for agents"),只是注入物 2;定义装载的产出是 instructions + skills,不是 systemPrompt;最终 systemPrompt 由 prompt 组装(`assembleSystemPrompt`)产出。**
 
 标准已分四层,fastagent 在每层的姿态:
 
@@ -112,7 +112,7 @@ async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> 
   const release = lease.tryAcquire(scope.session);          // 单写者,fail-fast(见 §6.6)
   if (!release) { yield failedBusy(); return; }             // "session busy",不排队
   try {
-    const harness = await buildHarness(scope.session);      // 每 invoke 现起,open-or-create session
+    const harness = await harnessFactory(scope.session);      // 每 invoke 现起,open-or-create session
     const queue = new EventQueue<AgentEvent>();
     const unsub = harness.subscribe(pe => queue.push(toAgentEvent(pe))); // pi event → AgentEvent
     try {
@@ -137,15 +137,15 @@ async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> 
 实现层注入点(协议看不到,见 [[SPEC]] §9 依赖反转)--**已实现的实际签名**:
 
 ```ts
-// 低层:引擎接线被打包进 buildHarness 工厂;lease = 进程内 fail-fast 单写者(§6.6)
-createAgent({ buildHarness: (session: string) => AgentHarness, lease?: Lease }): Agent
+// 低层：引擎接线被打包进 harnessFactory（PiHarnessFactory）；lease = 进程内 fail-fast 单写者（§6.6）
+createPiAgentFromHarness({ harnessFactory: (session: string) => AgentHarness, lease?: Lease }): Agent
 // 中层:batteries-included(repo/env/auth/lease 全有默认、可覆盖)
 createPiAgent({ model, systemPrompt?, tools?, skills?, repo?, env?, getApiKeyAndHeaders?, lease? }): Agent
 // 高层:指向文件夹(装载定义 + 组装 prompt + 默认工具)
 createPiAgentFromDefinition(dir, { model, ... }): Promise<{ agent, definition }>
 ```
 
-三级返回同一契约类型 **`Agent`**(L2 另附 `LoadedDefinition` 供 caller surface 诊断)——消费者永远拿到同型的 Agent,不感知装配级别。跨进程 lease 仍 deferred(§8);middleware 未建(无消费者)。model 来源是配置非定义(AGENTS.md 不讲用哪个 LLM),见 §6 装配点归类。
+三级返回同一契约类型 **`Agent`**(L2 另附 `LoadedDefinition` 供 caller surface 诊断)--消费者永远拿到同型的 Agent,不感知装配级别。跨进程 lease 仍 deferred(§8);middleware 未建(无消费者)。model 来源是配置非定义(AGENTS.md 不讲用哪个 LLM),见 §6 装配点归类。
 
 ## 5. 坍缩:实现真正发明了什么
 
@@ -180,7 +180,7 @@ createPiAgentFromDefinition(dir, { model, ... }): Promise<{ agent, definition }>
 
 ### 6.1 装配点参数归类(定稿,二维)
 
-装配点 = `create.ts` 的 L0/L1/L2 梯子,**产物是实现 invoke 契约的 `Agent`**。每个参数按两条轴归位--**概念归属**(M=agent 是什么 / K=在哪怎么跑 / auth=凭什么连)决定该谁负责;**来源**(定义/配置/host)决定谁来填。三个产出层中,**定义装载(definition.ts)与 config 装载(config.ts)已建成;target adapter 未建——K 侧参数仍是默认值**。
+装配点 = `create.ts` 的 L0/L1/L2 梯子,**产物是实现 invoke 契约的 `Agent`**。每个参数按两条轴归位--**概念归属**(M=agent 是什么 / K=在哪怎么跑 / auth=凭什么连)决定该谁负责;**来源**(定义/配置/host)决定谁来填。三个产出层中,**定义装载(definition.ts)与 config 装载(config.ts)已建成;target adapter 未建--K 侧参数仍是默认值**。
 
 | 参数 | 概念归属 | 来源 |
 |---|---|---|

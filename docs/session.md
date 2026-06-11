@@ -166,7 +166,7 @@ interface SessionStore {
 - **lease 形状 + 争用策略**:navigate/fork 与在飞 turn 冲突时阻塞 or fail-fast(retryable)?TTL + fencing 防僵尸持有者。
 - **payload stance A vs B**:A(现选)= opaque,session 与引擎绑定,存储跨 host 可移植。B(未来期权)= 标准化 message schema(consume A2A / AG-UI),跨引擎/UI 互解释——大承诺,等消费者拉动。
 - **连续性已接**(§6b 的最小落地):`engines/pi` 的 `piHarnessFactory` 每 invoke **open-or-create**——已有 session 则 `open`(harness 经 `buildContext` = `getPathToRoot` + projection 看到历史),否则 `create`。caller 跨 invoke 复用同一 repo 即得连续对话。这是我们第一次实际碰本标准:`open`=读 substrate,`buildContext`=projection。
-- **并发单写者已接(进程内,fail-fast)**:`createAgent` 默认 `inProcessLease()`——同 session 已有在飞 turn 时第二个 invoke 立即 `failed{retryable}`("session busy"),**不排队**。这是 **invoke 编排层**只防写坏的地板,不是 §6a host substrate 的 `lease`;dedupe/排队/steering 是 channel/上层决策。**跨进程分布式锁仍 deferred**。尚未接:navigate / fork / 跨进程 lease。
+- **并发单写者已接(进程内,fail-fast)**:`createPiAgentFromHarness` 默认 `inProcessLease()`——同 session 已有在飞 turn 时第二个 invoke 立即 `failed{retryable}`("session busy"),**不排队**。这是 **invoke 编排层**只防写坏的地板,不是 §6a host substrate 的 `lease`;dedupe/排队/steering 是 channel/上层决策。**跨进程分布式锁仍 deferred**。尚未接:navigate / fork / 跨进程 lease。
 
 ## 9. 与 core / SPEC 的关系 + N×M×K 对齐
 

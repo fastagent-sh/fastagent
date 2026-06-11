@@ -60,7 +60,7 @@ owners:
 - **invoke = agent serving 的 WSGI 位**:不对外(对外是 HTTP/A2A/ACP),是「触发源/target/引擎」三方解耦的中立契约。WSGI 不对外,invoke 不对外恰恰证明它在 WSGI 位,不是反例。
 - **对 pi 的依赖收敛到两个 translator**(`toAgentEvent` 流内事件 + `toTerminal` 终局):非 pi 引擎实现同样的映射就能提供 invoke。早期「AgentObservation 8 语义」设计已坍缩进 SPEC 的 5 事件单流。
 - **建在 `AgentHarness`(pi-agent-core),不是 `AgentSession`(TUI 封装)**:前者 `prompt()=>AssistantMessage` buffered,是 invoke 天然底座。
-- **无状态多-session**(实现为 `createAgent`/`createPiAgent`):每 invoke 现起一个绑 session 的 harness,用完即弃;唯一活态是"在飞的 turn"。能 serverless、部署 AgentCore 的地基。
+- **无状态多-session**(实现为 `createPiAgentFromHarness`/`createPiAgent`):每 invoke 现起一个绑 session 的 harness,用完即弃;唯一活态是"在飞的 turn"。能 serverless、部署 AgentCore 的地基。
 - **真空缺 = markdown-native + 引擎/target/云中立的跨 runtime 部署**:试金石 = 一条命令把现成 `AGENTS.md`+`skills` 部署到 AgentCore 跑通。没人做到(Claude SDK 锁 Claude、OpenCode serve 锁 OpenCode、ADP 要写新 manifest)。
 - **对外 consume 标准,不另立 wire**:A2A(agent 网络,只在 Message 层)/ ACP(editor,角色倒置→只能可选 channel)/ webhook(主入口无标准,自定义)。invoke 不对齐 A2A 数据模型(pi-shaped),双 seam 喂 A2A 的 push executor。
 - **术语校准**:业界 Agent = Model + Harness,harness 含 turn loop = pi 的 `AgentHarness`;你的 `AGENTS.md`+`skills` 文件夹本文称 **agent 定义**,不叫 harness。
