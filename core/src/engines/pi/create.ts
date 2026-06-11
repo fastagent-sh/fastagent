@@ -140,8 +140,12 @@ Guidelines:
 }
 
 export interface AssembleSystemPromptOptions {
-  /** Base prompt (①). Defaults to piBasePrompt() (engine-inherited; callers passing tools should use piBasePrompt({tools})). */
-  base?: string;
+  /**
+   * Base prompt (①), REQUIRED — deliberately no default: a defaulted
+   * piBasePrompt() would render "Available tools: (none)" even when tools are
+   * mounted (base and toolset must agree). Pass piBasePrompt({ tools }) for pi.
+   */
+  base: string;
   /** ② AGENTS.md content (verbatim), injected wrapped — never pasted bare. */
   instructions?: string;
   /** Path rendered into the <project_instructions path=…> attribute (lets the model re-read the file). */
@@ -155,7 +159,7 @@ export interface AssembleSystemPromptOptions {
 
 /** Assemble the final system prompt (four segments, with the pi-isomorphic <project_instructions> wrapper). */
 export function assembleSystemPrompt(options: AssembleSystemPromptOptions): string {
-  let prompt = options.base ?? piBasePrompt();
+  let prompt = options.base;
   if (options.instructions) {
     const pathAttr = options.instructionsPath ? ` path="${options.instructionsPath}"` : "";
     prompt +=

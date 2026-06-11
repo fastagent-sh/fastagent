@@ -85,12 +85,13 @@ describe("create: assembleSystemPrompt(四段式)", () => {
   it("base + <project_instructions> + skills listing + env context", async () => {
     const def = await loadAgentDefinition(fixtureDir, { skillPaths: [] });
     const prompt = assembleSystemPrompt({
+      base: piBasePrompt(), // required: base and toolset must agree, no silent default
       instructions: def.instructions,
       instructionsPath: join(fixtureDir, "AGENTS.md"),
       skills: def.skills,
       cwd: "/work",
     });
-    // (1) base (default = inherited from the pi engine)
+    // (1) base (inherited from the pi engine)
     expect(prompt).toContain("operating inside pi");
     // (2) instructions injected wrapped (not pasted bare)
     expect(prompt).toContain("<project_instructions");
