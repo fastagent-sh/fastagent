@@ -1,4 +1,9 @@
 /**
+ * pi harness **wiring** — note: the harness itself (turn loop, tool execution,
+ * context management) is pi's `AgentHarness`; this module only constructs one per
+ * session. The agent definition (AGENTS.md + skills) is NOT part of the harness —
+ * it is content fed INTO it (see definition.ts), the boundary the product rests on.
+ *
  * pi continuity wiring: open-or-create delivers "same session, multi-turn memory".
  *
  * Under the stateless design the harness is discarded after each use; continuity

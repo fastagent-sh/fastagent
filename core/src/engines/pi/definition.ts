@@ -3,6 +3,11 @@
  * memory, and materialize it into a deployable artifact. No dependency on agent
  * creation — this module produces data; create.ts consumes it.
  *
+ * Domain note: the definition CONCEPT is engine-neutral (AGENTS.md / agentskills
+ * are cross-product standards — the definition is input to a harness, never part
+ * of it). This IMPLEMENTATION is pi-folded (pi's loadSkills / Skill types) per the
+ * folded-M decision; lift it out of engines/pi when engine #2 lands.
+ *
  * IO policy (the precise form of the "core does not read disk" invariant):
  *   - the runtime load path (loadAgentDefinition) does IO **only through ExecutionEnv**
  *     (portable: local / sandbox / remote envs);

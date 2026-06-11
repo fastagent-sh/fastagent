@@ -32,7 +32,7 @@ share_updated: 2026-06-08T16:43:10+08:00
 | 轴 | 由什么解耦 | 在哪一层 |
 |---|---|---|
 | **N×M**(trigger ↔ agent)| `invoke` 的签名 + 事件([[SPEC]])| **core / 契约** |
-| **M**(引擎多样)| invoke 是黑盒接口 + `LoadedHarness` 注入 | core(依赖反转)|
+| **M**（引擎多样）| invoke 是黑盒接口 + 装配层注入（定义装载 → `LoadedDefinition` → 装配出 `Agent`）| core（依赖反转）|
 | **K**(host 多样)| invoke 的无状态性质(SPEC MUST「无位置依赖」)+ `SessionStore`/`ExecutionEnv` 注入,使 host 可替换;真正"编译到某 runtime" = target adapter | K 的*可*解耦在 core,K 的解耦*动作*在工具链层(SPEC §10 out of scope)|
 
 精确口径:**`invoke` 是 N×M 的窄腰;core 的无状态不变量 + DI 注入点,是让「×K」可被上层塌掉的钩子;K 本身的塌缩(target adapter)不在 core、不在 SPEC。** core = 对引擎中立、且被约束成 host-可移植的 serving 契约,不是"N×M×K 三轴契约"。
@@ -73,11 +73,11 @@ share_updated: 2026-06-08T16:43:10+08:00
 | 段 | 内容 | 谁拥有 |
 |---|---|---|
 | 1 base prompt | 身份、工具使用规范、行为准则(质量大头) | **引擎 binding 资产,继承自引擎**(pi binding → `piBasePrompt`,镜像 pi 的、按实际 tools 参数化、去 pi-TUI 文档段;claude/codex 引擎的 SDK 内部自带组装,binding 无需注入。理由:定义作者在该引擎下 vibe 出 AGENTS.md,换 base = 行为漂移、违背忠实性。可配置覆盖) |
-| 2 instructions | **AGENTS.md 的内容**,被包成 `<project_instructions>` 注入 | **agent 定义**(driver 读出) |
-| 3 skills listing | `<available_skills>` 列表,指引模型按需读 SKILL.md(需 read 工具才真可用) | 定义(driver 读出)+ harness 格式化 |
+| ② instructions | **AGENTS.md 的内容**,被包成 `<project_instructions>` 注入 | **agent 定义**(定义装载 `definition.ts` 读出) |
+| ③ skills listing | `<available_skills>` 列表,指引模型按需读 SKILL.md(需 read 工具才真可用) | 定义(定义装载读出)+ prompt 组装格式化 |
 | 4 env context | date / cwd | harness 生成 |
 
-即:**AGENTS.md = 项目级指令("README for agents"),只是注入物 2;driver 的产出是 instructions + skills,不是 systemPrompt;最终 systemPrompt 由装配时组装。**
+即:**AGENTS.md = 项目级指令("README for agents"),只是注入物 ②;定义装载的产出是 instructions + skills,不是 systemPrompt;最终 systemPrompt 由 prompt 组装(`assembleSystemPrompt`)产出。**
 
 标准已分四层,fastagent 在每层的姿态:
 
@@ -118,7 +118,7 @@ async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> 
     try {
       const run = harness.prompt(prompt.text, { images: prompt.images });
       yield* queue.drainUntil(run);                         // text / tool_* 边跑边 yield
-      yield toTerminal(await run);  // completed / failed —— MUST inspect resolved message 的 stopReason
+      yield toTerminal(await run);  // completed / failed -- MUST inspect resolved message 的 stopReason
     } finally {
       unsub(); await harness.abort();                       // 清理绝不抛(MUST 2/3)
     }
@@ -134,18 +134,18 @@ async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> 
 - **无状态多-session**:pi 是「1 harness = 1 session」;fastagent 要服务无数 session,所以**每 invoke 现起一个绑该 session 的 harness,用完即弃**。唯一活态 = 在飞的 turn,两次 invoke 之间没有不可重建的东西。**这是能 serverless、能部署 AgentCore 的最硬地基。**
 - **cancel 落地**:消费者 `break` → generator 收到 `return()` → `finally` 跑 `harness.abort()` + `lease.release()`。SPEC MUST 2 天然由 async generator 的 cleanup 兑现。
 
-实现层注入点(协议看不到,见 [[SPEC]] §9 依赖反转)——**已实现的实际签名**:
+实现层注入点(协议看不到,见 [[SPEC]] §9 依赖反转)--**已实现的实际签名**:
 
 ```ts
 // 低层:引擎接线被打包进 buildHarness 工厂;lease = 进程内 fail-fast 单写者(§6.6)
 createAgent({ buildHarness: (session: string) => AgentHarness, lease?: Lease }): Agent
 // 中层:batteries-included(repo/env/auth/lease 全有默认、可覆盖)
 createPiAgent({ model, systemPrompt?, tools?, skills?, repo?, env?, getApiKeyAndHeaders?, lease? }): Agent
-// 高层:指向文件夹(driver 读定义 + 组装 prompt + 默认工具)
+// 高层:指向文件夹(装载定义 + 组装 prompt + 默认工具)
 createPiAgentFromDefinition(dir, { model, ... }): Promise<{ agent, definition }>
 ```
 
-注:早期草图中的 `LoadedHarness`/`SessionStore.lease`/`middleware` 已被上述形状取代——M 侧装配收进 driver(§6),跨进程 lease 仍 deferred(§8),middleware 未建(无消费者)。model 来源是配置非定义(AGENTS.md 不讲用哪个 LLM),见 §6 装配点归类。
+三级返回同一契约类型 **`Agent`**(L2 另附 `LoadedDefinition` 供 caller surface 诊断)——消费者永远拿到同型的 Agent,不感知装配级别。跨进程 lease 仍 deferred(§8);middleware 未建(无消费者)。model 来源是配置非定义(AGENTS.md 不讲用哪个 LLM),见 §6 装配点归类。
 
 ## 5. 坍缩:实现真正发明了什么
 
@@ -173,20 +173,20 @@ createPiAgentFromDefinition(dir, { model, ... }): Promise<{ agent, definition }>
 
 ```
 工作区根/
-├── AGENTS.md / skills/ / .mcp.json   # 1 agent 定义:标准、可移植、fastagent 只读;driver 读盘产出 LoadedHarness
+├── AGENTS.md / skills/ / .mcp.json   # 1 agent 定义:标准、可移植、fastagent 只读;定义装载(definition.ts)读盘产出 LoadedDefinition
 ├── fastagent.config.ts · 自定义代码 · .env   # 2 production source:用户拥有、可见、进 git(机密走 .env)
 └── .fastagent/                       # 3 machine state:fastagent 生成、gitignore、可删可重建
 ```
 
 ### 6.1 装配点参数归类(定稿,二维)
 
-`createPiAgent`(参考实现的装配点)的每个参数按两条轴归位--**概念归属**(M=agent 是什么 / K=在哪怎么跑 / auth=凭什么连)决定该谁负责;**来源**(定义/配置/host)决定谁来填。今天全手传/默认,是因为三个产出层(driver / config 装载 / target adapter)都还没建。
+装配点 = `create.ts` 的 L0/L1/L2 梯子,**产物是实现 invoke 契约的 `Agent`**。每个参数按两条轴归位--**概念归属**(M=agent 是什么 / K=在哪怎么跑 / auth=凭什么连)决定该谁负责;**来源**(定义/配置/host)决定谁来填。三个产出层中,**定义装载(definition.ts)与 config 装载(config.ts)已建成;target adapter 未建——K 侧参数仍是默认值**。
 
 | 参数 | 概念归属 | 来源 |
 |---|---|---|
-| `instructions`(→ systemPrompt 的一段) | M | **定义**(AGENTS.md 正文 → driver;见 §2 prompt 四段式) |
+| `instructions`(→ systemPrompt 的一段) | M | **定义**(AGENTS.md 正文 → 定义装载;见 §2 prompt 四段式) |
 | base prompt(→ systemPrompt 骨架) | M | **引擎 binding 资产**(继承自引擎:pi→piBasePrompt;配置可覆盖) |
-| `tools` / skills | M | **定义**(skills/ + .mcp.json → driver) |
+| `tools` / skills | M | **定义**(skills/ + .mcp.json → 定义装载) |
 | `model` | M | **配置**(fastagent.config / env;AGENTS.md 不讲用哪个 LLM) |
 | `repo`(SessionStore) | K | **配置**选后端+参数 + **host**(target adapter 接线实现) |
 | `env`(ExecutionEnv) | K | **配置**选环境 + **host**(target adapter 接线实现) |
@@ -194,12 +194,12 @@ createPiAgentFromDefinition(dir, { model, ... }): Promise<{ agent, definition }>
 | `getApiKeyAndHeaders` | auth(横切) | **配置/secrets**(.env / vault) |
 
 ```
-定义文件 ─(driver)→ instructions, skills/tools(systemPrompt=装配时组装) ┐
+定义文件 ─(definition.ts)→ instructions, skills(systemPrompt=prompt 组装产出) ┐
 配置 ─(fastagent.config + .env)→ model, 后端选择, secrets   ├→ createPiAgent → agent ←(N: channel 调 invoke,不是装配参数)
 host ─(target adapter)→ repo/env/lease 的实现接线            ┘
 ```
 
-注:**driver(#3)只产出「定义推导」那一格**(instructions + skills);model 是配置项,不在 AGENTS.md 里。
+注:**定义装载只产出「定义推导」那一格**(instructions + skills);model 是配置项,不在 AGENTS.md 里。
 
 ### 6.3 config v1(定稿,已实现)
 
