@@ -11,13 +11,15 @@
  *   node examples/local.ts --busy-demo            # concurrent same-session → one runs, one "session busy"
  */
 import { createInterface } from "node:readline/promises";
-import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
+import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import { getModel } from "@earendil-works/pi-ai";
 import { AgentFailure, collect, createPiAgent, type AgentEvent } from "../src/index.ts";
 
 // Process-level network config belongs to the application entry: Node's fetch does not
 // honor HTTPS_PROXY by itself; the local proxy is required to reach blocked providers.
+// install() aligns fetch with the dispatcher (same undici impl) — see cli.ts for why.
 setGlobalDispatcher(new EnvHttpProxyAgent());
+installUndiciFetch();
 
 const agent = createPiAgent({
   model: getModel("openai-codex", "gpt-5.5"),

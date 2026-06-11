@@ -13,7 +13,7 @@
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
+import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import { createInvokeHandler } from "./channels/http.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/create.ts";
 
@@ -54,10 +54,13 @@ try {
   if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 }
 // Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy
-// so blocked providers are reachable. undici is pinned to v7: v8 (≤8.4.1) ProxyAgent
-// corrupts proxied responses (headers lost, gzip body not decompressed → SSE turns
-// parse as empty "stop" messages; verified live 2026-06-11) — re-test before bumping.
+// so blocked providers are reachable (reads HTTP(S)_PROXY/NO_PROXY from the env).
+// install() keeps fetch and the dispatcher on the SAME undici implementation —
+// pi does exactly this (core/http-dispatcher): Node 26's bundled fetch consuming
+// responses through npm undici's dispatcher skips gzip decompression, which turned
+// streamed turns into empty stopReason:"stop" messages (verified live 2026-06-11).
 setGlobalDispatcher(new EnvHttpProxyAgent());
+installUndiciFetch();
 
 const { agent, definition, config, configPath, modelSpec } = await createPiAgentFromWorkspace(dir, {
   model: values.model,

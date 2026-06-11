@@ -10,12 +10,14 @@
  */
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
+import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import { getModel } from "@earendil-works/pi-ai";
 import { createPiAgentFromDefinition, piDefaultTools } from "../src/index.ts";
 import lookupOrderTool from "./agent/lookup-order-tool.ts";
 
+// install() aligns fetch with the dispatcher (same undici impl) — see cli.ts for why.
 setGlobalDispatcher(new EnvHttpProxyAgent());
+installUndiciFetch();
 
 // Custom code tool = explicit import + injection (type-checked, refactor-safe; no magic directory).
 const dir = join(dirname(fileURLToPath(import.meta.url)), "agent");
