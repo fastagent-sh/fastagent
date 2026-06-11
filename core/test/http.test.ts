@@ -7,7 +7,7 @@ import {
   registerFauxProvider,
   type FauxResponseStep,
 } from "@earendil-works/pi-ai";
-import { createPiAgentFromHarness, inMemorySessionStore, piHarnessFactory, type AgentEvent } from "../src/index.ts";
+import { createPiAgentFromHarness, inMemorySessionStore, piHarnessFactory, type Agent, type AgentEvent } from "../src/index.ts";
 import { createInvokeHandler } from "../src/index.ts";
 
 async function startServer(responses: FauxResponseStep[]) {
@@ -110,6 +110,54 @@ describe("http channel (SSE)", () => {
       expect(notfound.status).toBe(404);
     } finally {
       await srv.close();
+    }
+  });
+
+  it("客户端断连 → invoke 被取消（generator cleanup 跑到,SPEC MUST 3）", async () => {
+    let cancelled = false;
+    let resolveCancelled!: () => void;
+    const cancelledSeen = new Promise<void>((r) => (resolveCancelled = r));
+    // 假 Agent：慢速流式吐 text；被 cancel（未自然跑完）时在 finally 里留证据
+    const fake: Agent = {
+      invoke: async function* () {
+        let finished = false;
+        try {
+          for (let i = 0; i < 10_000; i++) {
+            yield { type: "text", delta: "x" } as AgentEvent;
+            await new Promise((r) => setTimeout(r, 5));
+          }
+          finished = true;
+          yield { type: "completed" } as AgentEvent;
+        } finally {
+          if (!finished) {
+            cancelled = true;
+            resolveCancelled();
+          }
+        }
+      },
+    };
+    const server = createServer(createInvokeHandler(fake));
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const controller = new AbortController();
+      const res = await fetch(`http://localhost:${port}/invoke`, {
+        method: "POST",
+        body: JSON.stringify({ session: "s", text: "hi" }),
+        signal: controller.signal,
+      });
+      const reader = res.body!.getReader();
+      await reader.read(); // 确认流已开始
+      controller.abort(); // 模拟客户端断连
+      // cleanup 必须在有限时间内发生，否则超时判失败
+      await Promise.race([
+        cancelledSeen,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("invoke was never cancelled after client disconnect")), 3000)),
+      ]);
+      expect(cancelled).toBe(true);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
     }
   });
 

@@ -13,6 +13,7 @@ const MAX_BODY_BYTES = 1 << 20;
 
 /** Write honoring backpressure; waits for drain OR close (never hangs on a dead socket). */
 async function writeWithBackpressure(res: ServerResponse, chunk: string): Promise<void> {
+  if (res.destroyed) return; // connection already gone; caller's loop exits via done/destroyed check
   if (res.write(chunk)) return;
   await new Promise<void>((resolve) => {
     const done = () => {
@@ -63,13 +64,18 @@ export function createInvokeHandler(agent: Agent) {
     });
 
     // Take the iterator explicitly: on client disconnect, return() it so invoke
-    // runs its cancellation cleanup (SPEC MUST 3).
+    // runs its cancellation cleanup (SPEC MUST 3). The signal must be the RESPONSE's
+    // "close" — req "close" fires when the request message ends (Node ≥15), i.e.
+    // right after the body is consumed, NOT on socket teardown; listening there
+    // either cancels every request or never fires (covered by the disconnect test).
+    // res "close" also fires after normal end — return() on a finished generator
+    // is a no-op, so no special-casing.
     const iterator = agent.invoke({ session }, { text })[Symbol.asyncIterator]();
-    req.on("close", () => void iterator.return?.());
+    res.on("close", () => void iterator.return?.());
     try {
       while (true) {
         const { value, done } = await iterator.next();
-        if (done) break;
+        if (done || res.destroyed) break;
         await writeWithBackpressure(res, `data: ${JSON.stringify(value)}\n\n`);
       }
     } finally {
