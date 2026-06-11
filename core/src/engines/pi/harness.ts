@@ -23,8 +23,22 @@ import type {
 import type { Model } from "@earendil-works/pi-ai";
 import { type AuthResolver, resolvePiAuth } from "./auth.ts";
 
-/** Build a pi harness bound to the given session. env/model/tools are injected inside the factory. */
-export type BuildHarness = (session: string) => AgentHarness | Promise<AgentHarness>;
+/**
+ * The pi Model type with its API-shape generic erased. fastagent never inspects a
+ * model's API surface — it only passes models through to the harness — so the
+ * generic carries no information here. Centralizing the erasure in one deliberate
+ * alias (instead of scattering `Model<any>`) keeps the `any` auditable and gives
+ * one place to tighten if pi ever exports a variance-friendly type. Lives here
+ * because the harness is what models are fed into.
+ */
+export type AnyModel = Model<any>;
+
+/**
+ * Builds a pi harness bound to the given session — called once per invoke.
+ * env/model/tools are injected inside the factory (the closure is the wiring).
+ * Constructed by {@link piHarnessFactory}; hand-rolled in tests/custom wiring.
+ */
+export type PiHarnessFactory = (session: string) => AgentHarness | Promise<AgentHarness>;
 
 /**
  * Minimal repo shape needed for open-or-create (structurally satisfied by InMemorySessionRepo).
@@ -39,13 +53,17 @@ export interface SessionRepoLike {
   create(options: { id?: string }): Promise<Session>;
 }
 
-export interface PiHarnessConfig {
+export interface PiHarnessFactoryOptions {
   /** Session persistence backend; continuity requires **reusing the same instance across invokes**. */
   repo: SessionRepoLike;
   env: ExecutionEnv;
-  model: Model<any>;
+  model: AnyModel;
   tools?: AgentTool[];
-  systemPrompt?: string;
+  /**
+   * Final assembled prompt, or a factory **re-evaluated per invoke** (a fresh harness
+   * is built per turn) so time-sensitive segments (e.g. current date) stay current.
+   */
+  systemPrompt?: string | (() => string);
   /** Skills visible to the model / explicitly invokable (injected as harness resources). */
   skills?: Skill[];
   /** Model auth resolution. Defaults to {@link resolvePiAuth}: pi OAuth (~/.pi/agent/auth.json) first, then env vars. */
@@ -53,20 +71,21 @@ export interface PiHarnessConfig {
 }
 
 /**
- * Build a continuity-capable BuildHarness: open-or-create the session per invoke.
+ * The continuity-capable PiHarnessFactory: open-or-create the session per invoke.
  * Existing → open (the harness sees history via buildContext); missing → create.
  */
-export function piHarnessFactory(config: PiHarnessConfig): BuildHarness {
+export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFactory {
   return async (sessionId) => {
-    const session = await openOrCreate(config.repo, sessionId);
+    const session = await openOrCreate(options.repo, sessionId);
+    const { systemPrompt } = options;
     return new AgentHarness({
-      env: config.env,
+      env: options.env,
       session,
-      model: config.model,
-      tools: config.tools,
-      systemPrompt: config.systemPrompt,
-      resources: config.skills ? { skills: config.skills } : undefined,
-      getApiKeyAndHeaders: config.getApiKeyAndHeaders ?? resolvePiAuth(),
+      model: options.model,
+      tools: options.tools,
+      systemPrompt: typeof systemPrompt === "function" ? systemPrompt() : systemPrompt,
+      resources: options.skills ? { skills: options.skills } : undefined,
+      getApiKeyAndHeaders: options.getApiKeyAndHeaders ?? resolvePiAuth(),
     });
   };
 }

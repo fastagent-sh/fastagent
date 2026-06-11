@@ -15,9 +15,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { createInvokeHandler } from "./channels/http.ts";
-import { loadConfig, pickModelSpec, resolveModel } from "./engines/pi/config.ts";
-import { createPiAgentFromDefinition } from "./engines/pi/create.ts";
-import { piDefaultTools } from "./engines/pi/tools.ts";
+import { createPiAgentFromWorkspace } from "./engines/pi/create.ts";
 
 function usage(code: number): never {
   console.error(`usage: fastagent dev [dir] [--port N] [--model provider/modelId]
@@ -51,20 +49,13 @@ try {
 // so blocked providers are reachable.
 setGlobalDispatcher(new EnvHttpProxyAgent());
 
-const { config, path: configPath } = await loadConfig(dir);
-const modelSpec = pickModelSpec(values.model, config);
-if (!modelSpec) {
-  console.error(
-    `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
-  );
+// L3 owns the whole config-driven assembly (load config → resolve model/tools → L2);
+// the CLI keeps only process side effects, presentation, and serving.
+const { agent, definition, config, configPath, modelSpec } = await createPiAgentFromWorkspace(dir, {
+  model: values.model,
+}).catch((error: Error) => {
+  console.error(error.message);
   process.exit(1);
-}
-
-const { agent, definition } = await createPiAgentFromDefinition(dir, {
-  model: resolveModel(modelSpec),
-  // config.tools are appended after pi default tools; without config.tools the
-  // FromDefinition default applies.
-  ...(config.tools ? { tools: [...piDefaultTools(dir), ...config.tools] } : {}),
 });
 
 console.error(`[fastagent] dir:    ${definition.dir}`);

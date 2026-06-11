@@ -8,7 +8,7 @@ import {
   Type,
   type FauxResponseStep,
 } from "@earendil-works/pi-ai";
-import { createAgent, piHarnessFactory, type AgentEvent } from "../src/index.ts";
+import { createPiAgentFromHarness, piHarnessFactory, type AgentEvent } from "../src/index.ts";
 
 /** An echo tool for the tool-call path. */
 const echoTool: AgentTool = {
@@ -30,8 +30,8 @@ function makeAgent(responses: FauxResponseStep[]) {
   const faux = registerFauxProvider();
   faux.setResponses(responses);
   const repo = new InMemorySessionRepo();
-  const agent = createAgent({
-    buildHarness: piHarnessFactory({
+  const agent = createPiAgentFromHarness({
+    harnessFactory: piHarnessFactory({
       repo,
       env: new NodeExecutionEnv({ cwd: process.cwd() }),
       model: faux.getModel(),
@@ -99,8 +99,8 @@ describe("invoke fan-in", () => {
     let aborted = false;
     const repo = new InMemorySessionRepo();
     const env = new NodeExecutionEnv({ cwd: process.cwd() });
-    const agent = createAgent({
-      buildHarness: async (sessionId: string) => {
+    const agent = createPiAgentFromHarness({
+      harnessFactory: async (sessionId: string) => {
         const faux = registerFauxProvider();
         faux.setResponses([fauxAssistantMessage("a long answer streamed out")]);
         const session = await repo.create({ id: sessionId });
@@ -132,8 +132,8 @@ describe("invoke fan-in", () => {
   it("cleanup 绝不抛:finally 里 abort() reject 不得污染已闭合的终局流(MUST 2)", async () => {
     const repo = new InMemorySessionRepo();
     const env = new NodeExecutionEnv({ cwd: process.cwd() });
-    const agent = createAgent({
-      buildHarness: async (sessionId: string) => {
+    const agent = createPiAgentFromHarness({
+      harnessFactory: async (sessionId: string) => {
         const faux = registerFauxProvider();
         faux.setResponses([fauxAssistantMessage("done")]);
         const session = await repo.create({ id: sessionId });
@@ -162,8 +162,8 @@ describe("prompt.images 透传(SPEC §4)", () => {
       },
     ]);
     const repo = new InMemorySessionRepo();
-    const agent = createAgent({
-      buildHarness: piHarnessFactory({
+    const agent = createPiAgentFromHarness({
+      harnessFactory: piHarnessFactory({
         repo,
         env: new NodeExecutionEnv({ cwd: process.cwd() }),
         model: faux.getModel(),
@@ -223,9 +223,9 @@ describe("session 连续性(open 替 create)", () => {
 });
 
 describe("lease + setup 健壮性", () => {
-  it("buildHarness 抛 → failed 事件(不 throw,MUST 2)", async () => {
-    const agent = createAgent({
-      buildHarness: async () => {
+  it("harnessFactory 抛 → failed 事件(不 throw,MUST 2)", async () => {
+    const agent = createPiAgentFromHarness({
+      harnessFactory: async () => {
         throw new Error("cannot open session");
       },
     });
@@ -235,19 +235,19 @@ describe("lease + setup 健壮性", () => {
     expect((events[0] as any).details).toContain("cannot open session");
   });
 
-  it("createAgent 用注入的 lease 包住 invoke(acquire…release)", async () => {
+  it("createPiAgentFromHarness 用注入的 lease 包住 invoke(acquire…release)", async () => {
     const calls: string[] = [];
     const repo = new InMemorySessionRepo();
     const faux = registerFauxProvider();
     faux.setResponses([fauxAssistantMessage("ok")]);
-    const agent = createAgent({
+    const agent = createPiAgentFromHarness({
       lease: {
         tryAcquire: (s) => {
           calls.push(`acq:${s}`);
           return () => calls.push(`rel:${s}`);
         },
       },
-      buildHarness: piHarnessFactory({
+      harnessFactory: piHarnessFactory({
         repo,
         env: new NodeExecutionEnv({ cwd: process.cwd() }),
         model: faux.getModel(),
@@ -286,5 +286,47 @@ describe("lease + setup 健壮性", () => {
     await drain(agent.invoke({ session: "y" }, { text: "a" })); // completed serially
     const events = await drain(agent.invoke({ session: "y" }, { text: "b" }));
     expect(events.at(-1)?.type).toBe("completed"); // no longer busy
+  });
+});
+
+describe("systemPrompt 工厂(per-invoke 重新求值)", () => {
+  it("每次 harnessFactory 都重新调用工厂 → 时间敏感段(日期)不固化在创建时刻", async () => {
+    let calls = 0;
+    const faux = registerFauxProvider();
+    faux.setResponses([fauxAssistantMessage("a"), fauxAssistantMessage("b")]);
+    const agent = createPiAgentFromHarness({
+      harnessFactory: piHarnessFactory({
+        repo: new InMemorySessionRepo(),
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+        model: faux.getModel(),
+        systemPrompt: () => `prompt v${++calls}`,
+      }),
+    });
+
+    await drain(agent.invoke({ session: "p" }, { text: "one" }));
+    await drain(agent.invoke({ session: "p" }, { text: "two" }));
+    expect(calls).toBe(2); // evaluated once per invoke, not once per agent
+  });
+});
+
+describe("retryClassifier 注入(failed.retryable 策略可换)", () => {
+  it("注入的策略覆盖默认字符串启发式", async () => {
+    const faux = registerFauxProvider();
+    // "weird custom failure" 不命中默认正则 → 默认会是 retryable:false
+    faux.setResponses([
+      fauxAssistantMessage("x", { stopReason: "error", errorMessage: "weird custom failure" }),
+    ]);
+    const agent = createPiAgentFromHarness({
+      retryClassifier: () => true,
+      harnessFactory: piHarnessFactory({
+        repo: new InMemorySessionRepo(),
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+        model: faux.getModel(),
+        systemPrompt: "test",
+      }),
+    });
+
+    const events = await drain(agent.invoke({ session: "r" }, { text: "hi" }));
+    expect(events.at(-1)).toMatchObject({ type: "failed", retryable: true });
   });
 });

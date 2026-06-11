@@ -8,14 +8,14 @@ import {
   registerFauxProvider,
   type FauxResponseStep,
 } from "@earendil-works/pi-ai";
-import { createAgent, piHarnessFactory, type AgentEvent } from "../src/index.ts";
+import { createPiAgentFromHarness, piHarnessFactory, type AgentEvent } from "../src/index.ts";
 import { createInvokeHandler } from "../src/index.ts";
 
 async function startServer(responses: FauxResponseStep[]) {
   const faux = registerFauxProvider();
   faux.setResponses(responses);
-  const agent = createAgent({
-    buildHarness: piHarnessFactory({
+  const agent = createPiAgentFromHarness({
+    harnessFactory: piHarnessFactory({
       repo: new InMemorySessionRepo(),
       env: new NodeExecutionEnv({ cwd: process.cwd() }),
       model: faux.getModel(),
@@ -109,6 +109,19 @@ describe("http channel (SSE)", () => {
       expect(missing.status).toBe(400);
       const notfound = await fetch(`${srv.url}/other`);
       expect(notfound.status).toBe(404);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("超大 body → 413（不进 invoke）", async () => {
+    const srv = await startServer([fauxAssistantMessage("x")]);
+    try {
+      const big = await fetch(`${srv.url}/invoke`, {
+        method: "POST",
+        body: JSON.stringify({ session: "s", text: "x".repeat(2 * 1024 * 1024) }),
+      });
+      expect(big.status).toBe(413);
     } finally {
       await srv.close();
     }

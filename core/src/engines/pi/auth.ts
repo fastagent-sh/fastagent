@@ -9,10 +9,15 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getEnvApiKey } from "@earendil-works/pi-ai";
-import type { Model } from "@earendil-works/pi-ai";
 
 export type Auth = { apiKey: string; headers?: Record<string, string> } | undefined;
-export type AuthResolver = (model: Model<any>) => Promise<Auth>;
+/**
+ * Auth resolution keys on the provider alone — the parameter is deliberately the
+ * narrowest structural type (not pi's full Model): interface segregation, and it
+ * keeps this module free of the model type entirely. Still assignable wherever pi
+ * expects `(model: Model) => …` (contravariance).
+ */
+export type AuthResolver = (model: { provider: string }) => Promise<Auth>;
 
 /** pi's local credentials file (written by the pi CLI). */
 export const PI_AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
@@ -33,7 +38,17 @@ export const envAuth: AuthResolver = (model) => {
  * Coupled to the pi CLI credentials format — an out-of-the-box convenience, not a
  * core contract.
  */
-export function piOAuthAuth(authPath: string = PI_AUTH_PATH): AuthResolver {
+export interface PiAuthOptions {
+  /**
+   * Sink for non-fatal auth anomalies (unreadable/corrupt credentials file).
+   * Defaults to console.warn (fail visibly out of the box); embedders inject
+   * their own logger — the observability decision is not baked into the library.
+   */
+  warn?: (message: string) => void;
+}
+
+export function piOAuthAuth(authPath: string = PI_AUTH_PATH, options: PiAuthOptions = {}): AuthResolver {
+  const warn = options.warn ?? ((message: string) => console.warn(message));
   return (model) => {
     let raw: string;
     try {
@@ -41,7 +56,7 @@ export function piOAuthAuth(authPath: string = PI_AUTH_PATH): AuthResolver {
     } catch (error) {
       // Missing file = not configured (normal). Anything else must be visible.
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.warn(`[fastagent] cannot read ${authPath}: ${(error as Error).message}`);
+        warn(`[fastagent] cannot read ${authPath}: ${(error as Error).message}`);
       }
       return Promise.resolve(undefined);
     }
@@ -51,7 +66,7 @@ export function piOAuthAuth(authPath: string = PI_AUTH_PATH): AuthResolver {
     } catch {
       // Corrupt credentials are an anomaly, not "not configured" — warn so the
       // root cause is diagnosable instead of a confusing downstream auth failure.
-      console.warn(`[fastagent] corrupt auth file ${authPath}; run pi to re-login`);
+      warn(`[fastagent] corrupt auth file ${authPath}; run pi to re-login`);
       return Promise.resolve(undefined);
     }
     const cred = creds[model.provider];
@@ -67,7 +82,7 @@ export function piOAuthAuth(authPath: string = PI_AUTH_PATH): AuthResolver {
 }
 
 /** Default resolution: try pi OAuth (coding plan) first, then fall back to env vars. */
-export function resolvePiAuth(authPath?: string): AuthResolver {
-  const oauth = piOAuthAuth(authPath);
+export function resolvePiAuth(authPath?: string, options?: PiAuthOptions): AuthResolver {
+  const oauth = piOAuthAuth(authPath, options);
   return async (model) => (await oauth(model)) ?? envAuth(model);
 }

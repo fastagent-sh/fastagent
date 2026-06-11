@@ -2,11 +2,28 @@
  * Minimal HTTP channel handler (pure, testable): fans the single invoke stream out to SSE.
  *   - POST /invoke {session,text} → text/event-stream, one `data:` line per AgentEvent;
  *   - client disconnect → iterator.return() → invoke cancellation (SPEC MUST 3);
- *   - concurrent same-session requests → createAgent's fail-fast lease makes the second
- *     one receive `failed{session busy}`.
+ *   - concurrent same-session requests → the agent's fail-fast lease (invoke.ts) makes
+ *     the second one receive `failed{session busy}`.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent } from "../agent.ts";
+
+/** Request body cap — prompts are text (+ base64 images later); 1 MiB is generous for v1. */
+const MAX_BODY_BYTES = 1 << 20;
+
+/** Write honoring backpressure; waits for drain OR close (never hangs on a dead socket). */
+async function writeWithBackpressure(res: ServerResponse, chunk: string): Promise<void> {
+  if (res.write(chunk)) return;
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      res.off("drain", done);
+      res.off("close", done);
+      resolve();
+    };
+    res.once("drain", done);
+    res.once("close", done);
+  });
+}
 
 export function createInvokeHandler(agent: Agent) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -16,7 +33,13 @@ export function createInvokeHandler(agent: Agent) {
     }
 
     let body = "";
-    for await (const chunk of req) body += chunk;
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > MAX_BODY_BYTES) {
+        res.writeHead(413, { "content-type": "text/plain" }).end("body too large\n");
+        return;
+      }
+    }
     let payload: unknown;
     try {
       payload = JSON.parse(body);
@@ -44,7 +67,7 @@ export function createInvokeHandler(agent: Agent) {
       while (true) {
         const { value, done } = await iterator.next();
         if (done) break;
-        res.write(`data: ${JSON.stringify(value)}\n\n`);
+        await writeWithBackpressure(res, `data: ${JSON.stringify(value)}\n\n`);
       }
     } finally {
       res.end();
