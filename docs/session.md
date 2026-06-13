@@ -7,9 +7,9 @@ updated: 2026-06-09
 
 # Session — fastagent session-admin 标准(草案)
 
-> 索引 [[fastagent]] · 协议 [[SPEC]] · 实现 [[core-design]]
+> 索引 [fastagent](fastagent.md) · 协议 [SPEC](SPEC.md) · 实现 [core-design](core-design.md)
 
-> **`invoke`(见 [[SPEC]])让对话向前长一节;session-admin 管对话的树:读历史 / fork / 回退。两个正交面。** 本文定义后者——一个 event-sourced DAG + 分层解耦。`status: design`,**不冻进 locked SPEC**(SPEC §10:Task 编排/长任务状态 = 上层)。它是 fastagent 的标准扩展(moat),会演进;接口待第一个要分支/回退的 channel/UI 拉动再定型。
+> **`invoke`(见 [SPEC](SPEC.md))让对话向前长一节;session-admin 管对话的树:读历史 / fork / 回退。两个正交面。** 本文定义后者——一个 event-sourced DAG + 分层解耦。`status: design`,**不冻进 locked SPEC**(SPEC §10:Task 编排/长任务状态 = 上层)。它是 fastagent 的标准扩展(moat),会演进;接口待第一个要分支/回退的 channel/UI 拉动再定型。
 
 ## 1. 心智模型:Git for conversations(minus merge)
 
@@ -171,5 +171,5 @@ interface SessionStore {
 ## 9. 与 core / SPEC 的关系 + N×M×K 对齐
 
 - **invoke(SPEC)**:`scope.session` 保持 opaque string = 沿 current 线性续接。**session-admin 不进 invoke / 不进 `Scope`。**
-- **core([[core-design]] §6.5)**:已记录"tree/fork 跨 host 可移植"结论;本文是其展开。
+- **core([core-design](core-design.md) §6.5)**:已记录"tree/fork 跨 host 可移植"结论;本文是其展开。
 - **N×M×K**:N(①)、K(③a)是**现在就标准化**的缝;M 的"中立核 ②"现在就立(因薄 host 缝),但 M 的"引擎适配 ③b"**只分模块、不冻接口**——M 轴真正的可换引擎,等第二个引擎兑现。

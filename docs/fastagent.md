@@ -49,10 +49,10 @@ owners:
 
 | 文档 | 内容 |
 |---|---|
-| [[SPEC]] | **Agent Handler 协议规范**(契约层,引擎中立):`invoke(scope, prompt) => AsyncIterable<AgentEvent>`、5 事件、3+1 MUST、宗 ASGI、对标 fetch handler |
-| [[positioning]] | 战略定位:用户需求 / 市场 / 生态位 / 竞品矩阵 / 历史类比 / SWOT / 明确不做什么 |
-| [[core-design]] | 核心设计:agent serving 的 WSGI(契约层/实现层分清)、pi 双口 fan-in 成 SPEC 单流(toAgentEvent/toTerminal 两 translator)、无状态多-session(每 invoke 现起 harness)、装配点二维归类、tools/skills 挂载、config v1、对外 consume A2A/ACP、跨 runtime 编译 |
-| [[comparisons]] | Flue / OpenClaw / pi 深度对比 + "GitHub issue 三连" worked example |
+| [SPEC](SPEC.md) | **Agent Handler 协议规范**(契约层,引擎中立):`invoke(scope, prompt) => AsyncIterable<AgentEvent>`、5 事件、3+1 MUST、宗 ASGI、对标 fetch handler |
+| [positioning](positioning.md) | 战略定位:用户需求 / 市场 / 生态位 / 竞品矩阵 / 历史类比 / SWOT / 明确不做什么 |
+| [core-design](core-design.md) | 核心设计:agent serving 的 WSGI(契约层/实现层分清)、pi 双口 fan-in 成 SPEC 单流(toAgentEvent/toTerminal 两 translator)、无状态多-session(每 invoke 现起 harness)、装配点二维归类、tools/skills 挂载、config v1、对外 consume A2A/ACP、跨 runtime 编译 |
+| [comparisons](comparisons.md) | Flue / OpenClaw / pi 深度对比 + "GitHub issue 三连" worked example |
 
 ### 关键结论速记
 
@@ -69,7 +69,7 @@ owners:
 
 ### ⚠️ 状态与边界
 
-- 本设计以 [[core-design]] 为权威口径;代码真相在本 repo 的 `core/`(旧 `fastagent-mono`已弃,不背兼容)。
+- 本设计以 [core-design](core-design.md) 为权威口径;代码真相在本 repo 的 `core/`(旧 `fastagent-mono`已弃,不背兼容)。
 - **"跨人/跨项目/跨组织调度"** 是你**用 fastagent 造出来的一类 app**(A2A Task 层 / workflow,framework 之上),不是 framework 本身——三件套在"组织级 Agent 协作"场景的落点,不与"serving 的 WSGI"产品形态冲突。
 - **autonomy 安全(狂徒锁链落点)= v2 纵深**,不是第一性发生点;部署通了之后才成为下一道缝。
 
