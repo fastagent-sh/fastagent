@@ -173,10 +173,94 @@ Core does not queue. Dedupe, retry, user-visible “busy” messages, and steeri
 
 The HTTP channel consumes only the neutral `Agent` contract.
 
-## 10. Current open work
+## 10. Deployment: build / start (design)
 
-- `fastagent build`: create deterministic artifact-only bundles.
-- `fastagent start`: run artifact-only production posture.
-- AgentCore target adapter with external sessions and distributed locking.
-- Production observability/logging for cleanup anomalies without violating SPEC terminal discipline.
-- Engine #2, which will prove which pi-specific seams should become engine-neutral abstractions.
+This section is the agreed design for `fastagent build` / `fastagent start`. The first implementation targets a single machine or container; AWS AgentCore is deferred.
+
+### 10.1 What an agent is (the deployable unit)
+
+An agent splits into two halves along the N×M×K seam:
+
+| Half | Contents | Bundled into the artifact? |
+|---|---|---|
+| **M — what the agent is** | the authored **source tree**: `AGENTS.md` + `skills/` (markdown + bundled `scripts/`/`references/`/`assets/`) + **authored context files** (reference docs, schemas, data samples, sub-instruction files the agent reads on demand) + code tools + `fastagent.config.ts` + `.mcp.json` | **yes** |
+| **K — where/how it runs** | conversational context (sessions), execution environment (fs/shell/sandbox), auth/secrets | **no** — host-provided at runtime; **secrets are never bundled** |
+
+Two distinct things are both called "context"; they live on opposite sides:
+
+- **authored context** (static files the author wrote) is part of M and ships. It is consumed by the agent's `read`/`grep` tools on demand — it is file access rooted at the run directory (cwd), **not** prompt-loading, so it needs no new mechanism beyond "the file is present in the run dir."
+- **conversational context** (cross-turn history/memory) is K, lives in an external session store, and is reconstructed per invoke (§7).
+
+So `definition` is **not** just `AGENTS.md` — it is the authored source tree. Its default boundary is the source tree **minus**:
+
+| Never bundled | Why |
+|---|---|
+| secrets (`.env`, `.env.*`) | red line — secrets are injected at runtime, out-of-band (packaging-standard consensus) |
+| dependencies (`node_modules`) | provided by the runtime (container `npm ci` / deploy-time install) |
+| machine state / generated (`.fastagent/`, build output) | rebuildable, not authored |
+| VCS (`.git`) | irrelevant to the running agent |
+
+The boundary is gitignore-style ignore rules **plus** an unconditional secret/dep exclusion (same model as Docker build context, `npm publish`, Vercel).
+
+### 10.2 Two packaging tiers
+
+The real axis is **bundled vs runtime-provided**, not "data vs code." Code (skill `scripts/`, code tools) is part of the agent and ships; the open question is only whether its *npm dependencies* travel with it.
+
+| Tier | Carries | npm-dependent code tools | Status |
+|---|---|---|---|
+| **Container (project + `node_modules`)** | the whole project, baked into an image | works (deps in the image) | **v1 target** |
+| **Portable data bundle** (source tree, no `node_modules`) | md + skills (+scripts) + authored context + MCP declarations + manifest | needs deps bundled/self-contained | deferred (AgentCore) |
+
+In the container tier, authored context and code tools ship automatically because the whole source tree is in the image — so v1 does **not** need to solve the portable-bundle scoping problem. The portable tier must solve source-tree bundling under the §10.1 boundary (secret exclusion is the hardest part); that lands with AgentCore.
+
+### 10.3 `fastagent build`
+
+Compile a workspace into a self-contained, inspectable deployable. It is build-time (`node:fs` is fine here):
+
+1. Load + validate config and definition; resolve the model (fail visibly on a broken workspace).
+2. Materialize skills via `bundleAgentDefinition` (definition-local + opted-in globals with `--global-skills`; §6 skills lifecycle).
+3. Freeze resolved config into a `fastagent.json` manifest (data only): `{ fastagentVersion, engine, builtAt, model, http }`. The skill list is **not** duplicated — the `skills/` directory is the single source of truth.
+4. Deterministic rebuild: only owned outputs are cleaned (`AGENTS.md`, `skills/`, `fastagent.json`); never the whole out dir.
+
+`--global-skills` materializes the machine's global skills into the artifact's `skills/` (the deliberate "these ship" action). Default out dir: `.fastagent/build`; `--out` overrides.
+
+### 10.4 `fastagent start`
+
+Run a built agent in **production posture**. Differences from `dev`:
+
+| Aspect | dev | start |
+|---|---|---|
+| config | executes `fastagent.config.ts` | reads `fastagent.json` (manifest) — **no `.ts` execution at runtime** |
+| skills | definition-only (+ `--global-skills`) | artifact is the truth; **never scans globals** |
+| auth | pi OAuth → env | pluggable `AuthResolver` (§10.5) |
+| sessions | jsonl under `.fastagent/sessions` | persistent store (jsonl now; external/DDB later) |
+| model | `--model > FASTAGENT_MODEL > config` | `--model > FASTAGENT_MODEL > manifest.model` |
+| port | `--port > config` | `--port > PORT env > manifest.http.port > 8787` |
+
+`start` reuses **L2** (`createPiAgentFromDefinition`) with production wiring injected — no new ladder rung — which is exactly what L2's injection points exist for. It depends on zero builder-machine state.
+
+### 10.5 Auth at runtime (env key or OAuth)
+
+Auth is a pluggable `AuthResolver`; `start` is **not** env-only. Two deploy-appropriate sources:
+
+| Source | Use | Refresh |
+|---|---|---|
+| env API key (`envAuth`) | simplest, stateless, metered API billing | none |
+| OAuth from a credential store | run a deployed agent on a Claude Pro/Max or ChatGPT subscription | required |
+
+Feasibility is confirmed in pi: `pi-ai`'s `getOAuthApiKey()` auto-refreshes and returns updated credentials, and `pi-coding-agent`'s `AuthStorage` does file-locked auto-refresh-and-persist. The current `piOAuthAuth` reads `~/.pi/agent/auth.json` and does **not** refresh — a refresh-capable resolver is needed for runtime OAuth.
+
+Constraint: OAuth refresh tokens are single-use, so refresh must be serialized and the new credentials persisted back to the store. **Single machine/container**: a file-backed `AuthStorage` (its file lock) is sufficient — in scope for v1. **Multi-instance**: a credential broker with row-locked refresh over a shared store (the ketchup `worker_credentials` pattern) — same `AuthResolver` seam, deferred with the K-axis backends.
+
+### 10.6 Container recipe (v1, documented not generated)
+
+The container is the v1 "machine-state independence" boundary: copy the project, `npm ci`, `fastagent build`, then `CMD fastagent start`. Secrets and (optionally) OAuth credentials are injected as env/mounted files; `PORT` is honored. A Dockerfile sample ships with the implementation.
+
+## 11. Current open work
+
+- `fastagent build` / `fastagent start` per §10 (container tier first).
+- Refresh-capable runtime OAuth resolver (§10.5); multi-instance credential broker deferred.
+- Portable data-bundle scoping (§10.2): bundle the source tree under the §10.1 boundary, secret exclusion enforced — lands with the AgentCore target adapter.
+- AgentCore target adapter with external sessions and distributed locking (the async `Lease` port).
+- Production observability sink for cleanup anomalies (§3) without violating SPEC terminal discipline.
+- Engine #2, which will prove which pi-specific seams (e.g. `PiSessionStore`) should become engine-neutral abstractions.
