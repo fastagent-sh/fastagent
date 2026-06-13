@@ -65,7 +65,9 @@ export async function buildPiArtifact(
   // catastrophic cases (out == src / out contains src), but an in-tree `--out docs`
   // or `--out skills` points at EXISTING authored content that rm would destroy. Only
   // own an out dir that is safe to replace: under `.fastagent/`, non-existent, empty,
-  // or a prior artifact (has the manifest). Otherwise refuse — the source is untouched.
+  // or a prior artifact. "Prior artifact" is validated by the manifest's CONTENT, not
+  // just a file named fastagent.json — a user's authored sample by that name must not
+  // license deleting their directory. Otherwise refuse; the source is untouched.
   const outResolved = resolve(outDir);
   const ownedState = join(resolve(srcDir), ".fastagent");
   const underOwned = outResolved === ownedState || outResolved.startsWith(ownedState + sep);
@@ -74,7 +76,7 @@ export async function buildPiArtifact(
       if (e.code === "ENOENT") return [] as string[];
       throw e;
     });
-    if (entries.length > 0 && !entries.includes(MANIFEST_FILE)) {
+    if (entries.length > 0 && !(await isPriorArtifact(outResolved))) {
       throw new Error(
         `--out "${outDir}" is not empty and not a prior fastagent artifact; refusing to overwrite it ` +
           `(use an empty dir, a previous build dir, or the default .fastagent/build)`,
@@ -94,6 +96,25 @@ export async function buildPiArtifact(
   };
   await writeFile(join(outDir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
   return { manifest, definition, outDir };
+}
+
+/**
+ * Whether outDir holds a real fastagent artifact (its manifest validates), so a rebuild
+ * may safely replace it. Validated by CONTENT, not the filename: a user's authored file
+ * coincidentally named fastagent.json must not license deleting their directory.
+ */
+async function isPriorArtifact(outDir: string): Promise<boolean> {
+  try {
+    const m = JSON.parse(await readFile(join(outDir, MANIFEST_FILE), "utf8")) as Partial<ArtifactManifest>;
+    return (
+      m.engine === "pi" &&
+      typeof m.fastagentVersion === "string" &&
+      typeof m.builtAt === "string" &&
+      typeof m.model === "string"
+    );
+  } catch {
+    return false; // missing / unreadable / not our shape
+  }
 }
 
 /** Read this package's version for manifest provenance (best-effort; defaults if unreadable). */

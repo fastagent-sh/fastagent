@@ -266,11 +266,17 @@ describe("build: buildPiArtifact", () => {
     // out == src is rejected too (any guard); source intact.
     await expect(buildPiArtifact(ws, ws)).rejects.toThrow();
     expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
-    // a prior artifact dir (has the manifest) may be rebuilt into.
+    // a prior artifact dir (a VALID manifest) may be rebuilt into.
     const out = await freshOut();
     await buildPiArtifact(ws, out);
     await buildPiArtifact(ws, out);
     expect(await exists(join(out, "fastagent.json"))).toBe(true);
+
+    // a user file merely NAMED fastagent.json does not license deleting the dir.
+    const ws2 = await makeWorkspace();
+    await writeFile(join(ws2, "docs", "fastagent.json"), `{"example":"not our manifest"}\n`);
+    await expect(buildPiArtifact(ws2, join(ws2, "docs"))).rejects.toThrow(/not a prior fastagent artifact/);
+    expect(await exists(join(ws2, "docs", "schema.md"))).toBe(true); // authored content intact
   });
 
   it("builds into the default in-tree out (.fastagent/build) without copying it into itself", async () => {
