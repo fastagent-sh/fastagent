@@ -35,7 +35,8 @@ describe("definition: loadAgentDefinition", () => {
   });
 
   it("missing AGENTS.md / skills returns undefined instructions and empty skills without throwing", async () => {
-    const def = await loadAgentDefinition("/tmp", { skillPaths: [] }); // a directory with no definition
+    const dir = await mkdtemp(join(tmpdir(), "fa-empty-definition-"));
+    const def = await loadAgentDefinition(dir, { skillPaths: [] });
     expect(def.instructions).toBeUndefined();
     expect(def.skills).toEqual([]);
   });

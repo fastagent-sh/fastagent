@@ -19,7 +19,8 @@ describe("config: loadConfig", () => {
   });
 
   it("missing config file returns zero-config with undefined path", async () => {
-    const { config, path } = await loadConfig("/tmp");
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-empty-"));
+    const { config, path } = await loadConfig(dir);
     expect(config).toEqual({});
     expect(path).toBeUndefined();
   });
@@ -75,13 +76,19 @@ describe("config: resolveModel", () => {
 
 describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the engine side)", () => {
   it("assembles config + definition and returns everything the entrypoint needs; flag beats config", async () => {
-    const dir = join(fixtures, "configured");
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-configured-"));
+    await writeFile(join(dir, "AGENTS.md"), "# Test Agent\nBe concise.\n");
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      `export default { model: "openai-codex/gpt-5.5", http: { port: 9999 } };`,
+    );
+
     const ws = await createPiAgentFromWorkspace(dir);
     expect(ws.modelSpec).toBe("openai-codex/gpt-5.5"); // from config
-    expect(ws.configPath).toMatch(/fastagent\.config\.ts$/);
+    expect(ws.configPath).toMatch(/fastagent\.config\.mjs$/);
     expect(ws.config.http?.port).toBe(9999);
     expect(typeof ws.agent.invoke).toBe("function");
-    expect(ws.definition.dir).toContain("configured");
+    expect(ws.definition.dir).toBe(dir);
 
     const overridden = await createPiAgentFromWorkspace(dir, { model: "openai-codex/gpt-5.4" });
     expect(overridden.modelSpec).toBe("openai-codex/gpt-5.4"); // flag wins
