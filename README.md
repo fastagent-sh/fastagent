@@ -31,3 +31,7 @@ Public surface tiers:
 
 1. **core** (`core/`) — implement the SPEC in code: the reference `invoke` implementation fans pi's two-port harness into one event stream.
 2. **Adapters on both sides** — N-side triggers/channels and K-side hosts/target adapters.
+
+## License
+
+[MIT](LICENSE).
