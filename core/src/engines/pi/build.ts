@@ -89,6 +89,17 @@ export async function buildPiArtifact(
   const definition = await bundleAgentDefinition(srcDir, outDir, {
     skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
   });
+  // fastagent.json is the manifest's reserved name. If the ship-set already placed a
+  // file there (an authored fastagent.json at the artifact root), the manifest write
+  // below would silently clobber content the agent reads at runtime — fail visibly
+  // instead (the source is untouched; rebuilds rm outDir first, so this only fires for
+  // a genuine source-authored collision).
+  if ((await readdir(outDir)).includes(MANIFEST_FILE)) {
+    throw new Error(
+      `"${MANIFEST_FILE}" is reserved for the build manifest, but the source ships a file by ` +
+        `that name at the artifact root; rename it (config goes in fastagent.config.ts/js/mjs)`,
+    );
+  }
   const manifest: ArtifactManifest = {
     fastagentVersion: await readFastagentVersion(),
     engine: "pi",

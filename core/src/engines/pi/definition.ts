@@ -401,10 +401,25 @@ export async function bundleAgentDefinition(
   for (const skill of definition.skills) {
     const skillAbs = resolve(skill.filePath);
     if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) continue; // local: already copied
+    // Dedup is by frontmatter name, but materialization writes by directory/file name.
+    // A local skill whose dir name differs from its name (e.g. skills/foo with name
+    // "bar") can already occupy the destination of an external skill named "foo" — the
+    // copy would silently overwrite the bundled local skill. Detect the destination
+    // collision and fail visibly rather than ship a different skill than reported.
+    const dest =
+      basename(skill.filePath) === "SKILL.md"
+        ? join(outDir, "skills", skill.name)
+        : join(outDir, "skills", basename(skill.filePath));
+    if (await stat(dest).then(() => true, () => false)) {
+      throw new Error(
+        `global skill "${skill.name}" materializes to "${relative(outDir, dest)}", which a bundled ` +
+          `skill already occupies; rename one so their artifact paths do not collide`,
+      );
+    }
     if (basename(skill.filePath) === "SKILL.md") {
-      await copyDirClean(dirname(skill.filePath), join(outDir, "skills", skill.name));
+      await copyDirClean(dirname(skill.filePath), dest);
     } else {
-      await copyFile(skill.filePath, join(outDir, "skills", basename(skill.filePath)));
+      await copyFile(skill.filePath, dest);
     }
   }
   return definition;

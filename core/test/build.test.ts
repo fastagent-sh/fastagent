@@ -279,6 +279,13 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(ws2, "docs", "schema.md"))).toBe(true); // authored content intact
   });
 
+  it("fails visibly when the source ships a root fastagent.json (reserved manifest name)", async () => {
+    const ws = await makeWorkspace();
+    await writeFile(join(ws, "fastagent.json"), `{"authored":"runtime params the agent reads"}\n`);
+    await expect(buildPiArtifact(ws, await freshOut())).rejects.toThrow(/reserved for the build manifest/);
+    expect(await readFile(join(ws, "fastagent.json"), "utf8")).toContain("authored"); // source intact
+  });
+
   it(".fastagentignore patterns stay artifact-relative inside a symlinked-dir subtree", async () => {
     // A workspace .fastagentignore rule `docs/private.md` must hold even when docs/ is a
     // symlink whose subtree restarts the git base; otherwise the path anchor mis-roots.

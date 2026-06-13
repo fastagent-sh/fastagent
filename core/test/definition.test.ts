@@ -249,4 +249,20 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     await expect(bundleAgentDefinition(src, parent)).rejects.toThrow(/must not contain the source/);
     expect(await access(join(src, "AGENTS.md")).then(() => true, () => false)).toBe(true);
   });
+
+  it("fails visibly when a global skill materializes onto a bundled skill's path (dir != name)", async () => {
+    // Local skill dir "foo" but frontmatter name "bar"; a global skill named "foo" then
+    // dedups as distinct yet materializes onto out/skills/foo (the bundled local skill).
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(src, "skills", "foo"), { recursive: true });
+    await writeFile(join(src, "skills", "foo", "SKILL.md"), "---\nname: bar\ndescription: d\n---\nbody\n");
+    const ext = await mkdtemp(join(tmpdir(), "fa-bundle-ext-"));
+    await mkdir(join(ext, "foo"), { recursive: true });
+    await writeFile(join(ext, "foo", "SKILL.md"), "---\nname: foo\ndescription: d\n---\nbody\n");
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    await expect(bundleAgentDefinition(src, out, { skillPaths: [ext] })).rejects.toThrow(
+      /a bundled skill already occupies/,
+    );
+  });
 });
