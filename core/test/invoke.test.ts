@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentHarness, InMemorySessionRepo, type AgentTool } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
@@ -148,8 +148,15 @@ describe("invoke fan-in", () => {
     });
 
     // iteration must not throw, and the tail is still completed
-    const events = await drain(agent.invoke({ session: "sg" }, { text: "hi" }));
-    expect(events.at(-1)).toEqual({ type: "completed" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const events = await drain(agent.invoke({ session: "sg" }, { text: "hi" }));
+      expect(events.at(-1)).toEqual({ type: "completed" });
+      // the swallowed-to-stream cleanup error is still surfaced visibly (fail visibly)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("abort blew up"));
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

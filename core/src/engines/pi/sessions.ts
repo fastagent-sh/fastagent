@@ -1,11 +1,16 @@
 /**
  * Session persistence — the K-axis port and its first two backends.
  *
- * SessionStore is the consumer-owned port: exactly what the harness factory needs
+ * PiSessionStore is the consumer-owned port: exactly what the harness factory needs
  * (open-or-create by opaque session id) and nothing more. pi's full SessionRepo
  * surface (list/open/create/delete/fork, backend-specific create options) stays
  * behind the adapters — the invoke path never needs it, and backend-specific
  * requirements (jsonl's `cwd`) stay out of the port.
+ *
+ * The name carries the `Pi` prefix on purpose: `openOrCreate` returns pi's `Session`,
+ * so this port is pi-coupled, not an engine-neutral persistence contract. A neutral
+ * session-log port (see docs/session.md) would be a separate abstraction, justified
+ * only once a second engine provides the real requirement.
  *
  * Continuity contract: same backing store + same session id = same conversation.
  *   - in-memory: continuity bound to the store INSTANCE (gone on restart; tests/embedding);
@@ -20,12 +25,12 @@ import type { Session } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 /** What fastagent needs from a session backend: open-or-create by opaque id. */
-export interface SessionStore {
+export interface PiSessionStore {
   openOrCreate(sessionId: string): Promise<Session>;
 }
 
 /** In-process store (pi InMemorySessionRepo). Continuity lives and dies with the instance. */
-export function inMemorySessionStore(): SessionStore {
+export function inMemorySessionStore(): PiSessionStore {
   const repo = new InMemorySessionRepo();
   return {
     async openOrCreate(sessionId) {
@@ -41,7 +46,7 @@ export function inMemorySessionStore(): SessionStore {
  * `cwd` is recorded in session metadata (pi associates sessions with a project
  * directory); defaults to process.cwd().
  */
-export function jsonlSessionStore(options: { dir: string; cwd?: string }): SessionStore {
+export function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore {
   const cwd = options.cwd ?? process.cwd();
   const repo = new JsonlSessionRepo({
     fs: new NodeExecutionEnv({ cwd }),

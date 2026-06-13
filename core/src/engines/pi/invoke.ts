@@ -268,16 +268,19 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         // Both cancel (generator return → finally) and normal completion pass here.
         // Cleanup MUST NOT throw: an abort()/unsub() exception after the terminal
         // was yielded would make iteration throw, polluting an already-closed
-        // event stream (violating SPEC MUST 2 / MUST 3).
+        // event stream (violating SPEC MUST 2 / MUST 3). So we contain the throw
+        // here — but a cleanup failure is abnormal (resource/abort regression), so
+        // surface it visibly instead of swallowing it (fail visibly). A pluggable
+        // sink can replace console.warn once the production logging seam exists.
         try {
           unsub();
-        } catch {
-          // ignore
+        } catch (error) {
+          console.warn(`[fastagent] harness unsubscribe failed during cleanup: ${String(error)}`);
         }
         try {
           await harness.abort();
-        } catch {
-          // ignore
+        } catch (error) {
+          console.warn(`[fastagent] harness abort failed during cleanup: ${String(error)}`);
         }
       }
     } finally {

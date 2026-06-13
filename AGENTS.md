@@ -35,7 +35,7 @@ core/
 │       ├── definition.ts        # AGENTS.md + skills loading and bundling
 │       ├── config.ts            # fastagent.config.ts loading + model/precedence
 │       ├── auth.ts              # pi OAuth / env auth resolution
-│       └── sessions.ts          # SessionStore port + in-memory/jsonl backends
+│       └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
 ├── test/                        # vitest; faux models by default
 └── examples/                    # library + config usage
 docs/                            # SPEC, design, positioning
@@ -45,7 +45,7 @@ docs/                            # SPEC, design, positioning
 
 - **The contract is engine-neutral.** `core/src/agent.ts` must not import any engine (`@earendil-works/pi-*` only under `core/src/engines/`).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. On the invoke path, failures become `failed` events (SPEC MUST 2), never thrown iteration errors.
-- **Stateless invoke.** Each invoke builds a fresh harness and discards it; durable state lives behind `SessionStore`. Do not introduce in-process session state.
+- **Stateless invoke.** Each invoke builds a fresh harness and discards it; durable state lives behind `PiSessionStore`. Do not introduce in-process session state.
 - **Public surface is scoped on purpose.** `core/src/index.ts` exports only the supported surface. pi-coupled internals (L0 `createPiAgentFromHarness`, `piHarnessFactory`, assembly helpers) are intentionally not exported — import them from their modules for tests/custom wiring, do not re-export them.
 - **The artifact is the truth.** Deployment behavior must come from the bundled definition, not the builder machine's global state.
 

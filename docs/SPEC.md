@@ -137,7 +137,7 @@ The protocol treats an Agent as a black box. The following concerns are injected
 
 | Injection | Meaning |
 |---|---|
-| Session storage | `SessionStore` such as jsonl, Postgres, or DynamoDB |
+| Session storage | an external session store such as jsonl, Postgres, or DynamoDB |
 | Tool execution environment | local process, sandbox, E2B, etc. |
 | Model selection | injected by implementation/assembly |
 | Tools and agent definition loading | assembly-layer concerns |

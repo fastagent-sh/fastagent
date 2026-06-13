@@ -64,7 +64,7 @@ export {
 } from "./engines/pi/invoke.ts";
 export type { AnyModel } from "./engines/pi/harness.ts";
 export {
-  type SessionStore,
+  type PiSessionStore,
   inMemorySessionStore,
   jsonlSessionStore,
 } from "./engines/pi/sessions.ts";

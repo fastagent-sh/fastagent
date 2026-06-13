@@ -132,7 +132,7 @@ Code tools are different: they are TypeScript/JavaScript modules with dependenci
 
 ## 7. Sessions and statelessness
 
-Each `invoke` creates a fresh harness bound to the requested session and discards it after the turn. Conversation continuity comes from reopening the session from a `SessionStore`:
+Each `invoke` creates a fresh harness bound to the requested session and discards it after the turn. Conversation continuity comes from reopening the session from a `PiSessionStore` (pi-coupled: it returns pi's `Session`):
 
 - L1 default: `inMemorySessionStore()` for embedding/tests.
 - L3 default: `jsonlSessionStore()` under `.fastagent/sessions` for restart-surviving local dev.

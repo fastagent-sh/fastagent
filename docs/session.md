@@ -79,11 +79,11 @@ The important rule is that `navigate` and `fork` belong to the generic DAG core,
 
 Current core already implements the minimum needed for linear session continuity:
 
-- `SessionStore` in `core/src/engines/pi/sessions.ts` is intentionally smaller than this draft: it only needs `openOrCreate(sessionId)` for the pi harness factory.
+- `PiSessionStore` in `core/src/engines/pi/sessions.ts` is intentionally smaller than this draft: it only needs `openOrCreate(sessionId)` for the pi harness factory, and it is pi-coupled (returns pi's `Session`) on purpose.
 - `jsonlSessionStore` provides restart-surviving continuity for `fastagent dev`.
 - `inProcessLease` prevents same-session concurrent writes inside one process.
 
-This draft describes the next layer above that minimum: portable fork/navigation and a richer storage seam. To avoid a naming conflict, the future append/read/pointer backend is called `SessionLogStore` here, not `SessionStore`.
+This draft describes the next layer above that minimum: portable fork/navigation and a richer storage seam. The future engine-neutral append/read/pointer backend is called `SessionLogStore` here to keep it distinct from the pi-coupled `PiSessionStore` that exists today.
 
 ## Open questions
 

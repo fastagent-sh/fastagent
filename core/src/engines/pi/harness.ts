@@ -7,7 +7,7 @@
  * pi continuity wiring: open-or-create delivers "same session, multi-turn memory".
  *
  * Under the stateless design the harness is discarded after each use; continuity
- * comes from **persisting the session (SessionStore) and re-opening it per invoke** — pi's
+ * comes from **persisting the session (PiSessionStore) and re-opening it per invoke** — pi's
  * prompt() runs buildContext() (getPathToRoot + buildSessionContext), folding the
  * historical entries back into context. This is SPEC portable conformance
  * (no location dependence) made concrete.
@@ -16,7 +16,7 @@ import { AgentHarness } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { type AuthResolver, resolvePiAuth } from "./auth.ts";
-import type { SessionStore } from "./sessions.ts";
+import type { PiSessionStore } from "./sessions.ts";
 
 /**
  * pi's Model with the API-shape generic erased — fastagent only passes models
@@ -34,7 +34,7 @@ export type PiHarnessFactory = (session: string) => AgentHarness | Promise<Agent
 
 export interface PiHarnessFactoryOptions {
   /** Session persistence (see sessions.ts). Continuity = same backing store + same session id. */
-  sessions: SessionStore;
+  sessions: PiSessionStore;
   env: ExecutionEnv;
   model: AnyModel;
   tools?: AgentTool[];

@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, registerFauxProvider, type FauxResponseStep } from "@earendil-works/pi-ai";
-import { jsonlSessionStore, type AgentEvent, type SessionStore } from "../src/index.ts";
+import { jsonlSessionStore, type AgentEvent, type PiSessionStore } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 
 /** Agent over an injected store (the store is the variable under test). */
-function makeAgent(sessions: SessionStore, responses: FauxResponseStep[]) {
+function makeAgent(sessions: PiSessionStore, responses: FauxResponseStep[]) {
   const faux = registerFauxProvider();
   faux.setResponses(responses);
   return createPiAgentFromHarness({

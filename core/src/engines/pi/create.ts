@@ -64,7 +64,7 @@ import type { AuthResolver } from "./auth.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, piHarnessFactory } from "./harness.ts";
-import { type SessionStore, inMemorySessionStore, jsonlSessionStore } from "./sessions.ts";
+import { type PiSessionStore, inMemorySessionStore, jsonlSessionStore } from "./sessions.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
 // ── §1 tools: pi's real built-in core coding tools (engine assets) ───────────
@@ -190,7 +190,7 @@ export interface CreatePiAgentOptions {
   skills?: Skill[];
   // ── K: where/how it runs ───────────────────────────────────────────────
   /** Session persistence. Defaults to in-memory (embedding/tests); inject jsonlSessionStore for restart-surviving continuity. */
-  sessions?: SessionStore;
+  sessions?: PiSessionStore;
   /** Tool execution environment. Defaults to local NodeExecutionEnv (cwd); production injects sandbox/e2b. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
@@ -232,7 +232,7 @@ export interface CreatePiAgentFromDefinitionOptions {
   /** Extra skills mount directories (see LoadAgentDefinitionOptions.skillPaths). */
   skillPaths?: string[];
   // ── K ──────────────────────────────────────────────────────────────────
-  sessions?: SessionStore;
+  sessions?: PiSessionStore;
   env?: ExecutionEnv;
   lease?: Lease;
   // ── auth ───────────────────────────────────────────────────────────────

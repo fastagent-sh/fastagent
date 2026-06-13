@@ -24,7 +24,7 @@ Public surface tiers:
 |---|---|---|
 | Contract | `Agent`, `AgentEvent`, `collect`, `createInvokeHandler` | Intended to remain stable within SPEC v0.1 |
 | Pi assembly ladder | `createPiAgentFromWorkspace`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
-| Injection ports | `SessionStore`, `inMemorySessionStore`/`jsonlSessionStore`, `AuthResolver`, `Lease`, `piDefaultTools`/`piReadOnlyTools` | Public because the ladder options reference them |
+| Injection ports | `PiSessionStore`, `inMemorySessionStore`/`jsonlSessionStore`, `AuthResolver`, `Lease`, `piDefaultTools`/`piReadOnlyTools` | Public because the ladder options reference them |
 | Not exported | L0 `createPiAgentFromHarness`, `piHarnessFactory`, prompt/config assembly internals | Internal modules only; they expose pi's engine shape and are not a compatibility promise |
 
 ## Build order
