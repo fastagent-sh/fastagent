@@ -1,0 +1,9 @@
+# Review ownership. Auto-requests a review on the sensitive surfaces named in
+# CONTRIBUTING.md "Review tiers"; it does not block self-merge for low-risk PRs.
+
+# The locked contract and its types.
+/docs/SPEC.md            @kid7st
+/core/src/agent.ts       @kid7st
+
+# The public API surface.
+/core/src/index.ts       @kid7st
