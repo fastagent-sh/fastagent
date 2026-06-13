@@ -24,9 +24,10 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { cp, copyFile, mkdir, realpath, rm } from "node:fs/promises";
+import { cp, copyFile, mkdir, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import ignore, { type Ignore } from "ignore";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -133,56 +134,112 @@ export async function loadAgentDefinition(
   };
 }
 
+/** Names excluded from the artifact unconditionally, at any depth (the secret/dep red line). */
+function isHardExcluded(name: string): boolean {
+  return name === ".git" || name === "node_modules" || name === ".fastagent" || name === ".env" || name.startsWith(".env.");
+}
+
+/** Load the workspace's root `.gitignore` as a matcher (honored on top of the hard excludes). */
+async function loadGitignore(srcDir: string): Promise<Ignore | undefined> {
+  const content = await readFile(join(srcDir, ".gitignore"), "utf8").catch(() => undefined);
+  return content === undefined ? undefined : ignore().add(content);
+}
+
 /**
- * Bundle (**the "compile" stage of one-click deploy, not an optional dev tool**):
- * materialize the resolved full skill set into a self-contained deployable folder —
- * the server reproduces the local experience exactly.
+ * Recursively copy srcDir's contents into outDir, applying exclusions. Hand-rolled
+ * (not node:fs cp) because cp refuses dest-inside-src, which is exactly the default
+ * (`.fastagent/build`); the walk simply skips outDir. Symlinks are dereferenced so the
+ * artifact is self-contained; dangling links are skipped.
+ */
+async function copyCleanTree(srcBase: string, outDir: string, outBase: string, ig: Ignore | undefined): Promise<void> {
+  async function walk(relDir: string): Promise<void> {
+    const entries = await readdir(relDir === "" ? srcBase : join(srcBase, relDir), { withFileTypes: true });
+    for (const entry of entries) {
+      const rel = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
+      const abs = join(srcBase, rel);
+      if (abs === outBase || abs.startsWith(outBase + sep)) continue; // never copy outDir into itself
+      if (isHardExcluded(entry.name)) continue;
+      const isDir = entry.isDirectory();
+      if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match only with a trailing slash
+      const dest = join(outDir, rel);
+      if (isDir) {
+        await mkdir(dest, { recursive: true });
+        await walk(rel);
+      } else {
+        // entry.isFile() or a symlink: copyFile dereferences, giving a self-contained
+        // artifact; a dangling symlink is skipped rather than failing the build.
+        await copyFile(abs, dest).catch((e: NodeJS.ErrnoException) => {
+          if (!entry.isSymbolicLink()) throw e;
+        });
+      }
+    }
+  }
+  await walk("");
+}
+
+/**
+ * Bundle (**the "compile" stage of one-click deploy**): materialize a self-contained,
+ * relocatable artifact that does NOT depend on the source location — the deployable
+ * agent (core-design §10.1/§10.3).
  *
- * Materialized: AGENTS.md + winning skill folders (including globals; scripts/
- * references/assets come along). Collision rules match loadAgentDefinition
- * (definition wins); losers are not bundled.
- * Note: **custom code tools are out of bundling scope** — they are code (with npm
- * dependencies); their deployment unit is "project + deps" via the project's normal
- * build/deploy (explicit `tools:` injection). Declarative MCP tool mounting via
- * `.mcp.json` is future support, not implemented today.
+ * Copies the cleaned source TREE (AGENTS.md, skills/, authored context like docs/,
+ * fastagent.config.ts, tool source, package.json, …) into outDir, then materializes
+ * the winning global/extra skills (which live outside the source) into outDir/skills/.
+ * So `start` can run from outDir alone, with authored context resolving relative to it.
+ *
+ * Excluded from the artifact: secrets (`.env`/`.env.*`), dependencies (`node_modules`,
+ * reinstalled at deploy via `npm ci`), VCS (`.git`), machine state (`.fastagent`) —
+ * unconditionally — plus anything the workspace's root `.gitignore` ignores. Secrets
+ * are injected at runtime, never bundled.
+ *
+ * Collision rules match loadAgentDefinition (definition-local wins; losers excluded).
+ * Non-destructive to the source: only outDir is written/replaced.
  */
 export async function bundleAgentDefinition(
   srcDir: string,
   outDir: string,
   options: LoadAgentDefinitionOptions = {},
 ): Promise<LoadedDefinition> {
-  // Reject source/output aliasing BEFORE any destructive step: the cleanup below
-  // removes outDir/AGENTS.md and outDir/skills, which ARE the source when outDir is
-  // the workspace — it would delete the user's agent definition. Compare realpaths,
-  // not just resolve() strings: a --out symlinked to the workspace (or a workspace
-  // reached through a symlink) shares no path string yet aliases the same dir, and
-  // rm would follow the link into the source. A not-yet-created outDir can't alias an
-  // existing source dir, so a missing realpath is safe. Only exact aliasing is
-  // rejected — a child like the default .fastagent/build stays valid.
+  // Guard the destructive rebuild (rm -rf outDir) against catastrophic paths. realpath,
+  // not resolve(), so a --out symlinked to the source (or a source reached through a
+  // symlink) is caught. A not-yet-created outDir falls back to resolve().
   const srcReal = await realpath(srcDir).catch(() => resolve(srcDir));
-  const outReal = await realpath(outDir).catch(() => undefined);
-  if (outReal !== undefined && srcReal === outReal) {
+  const outReal = await realpath(outDir).catch(() => resolve(outDir));
+  if (srcReal === outReal) {
     throw new Error(
       `bundle output dir must differ from the source workspace (got "${outDir}"); use a separate --out (default .fastagent/build)`,
     );
   }
-  const definition = await loadAgentDefinition(srcDir, options);
-  // Deterministic rebuild: remove the outputs this bundle owns (AGENTS.md + skills/)
-  // before copying, so a skill dropped from the definition cannot survive as a stale
-  // artifact file ("the artifact is the truth"). Only owned paths are touched —
-  // never the whole outDir (it may be a user directory).
-  await rm(join(outDir, "AGENTS.md"), { force: true });
-  await rm(join(outDir, "skills"), { recursive: true, force: true });
-  await mkdir(join(outDir, "skills"), { recursive: true });
-  if (definition.instructions !== undefined) {
-    await copyFile(join(definition.dir, "AGENTS.md"), join(outDir, "AGENTS.md"));
+  if (srcReal.startsWith(outReal + sep)) {
+    // outDir is an ancestor of srcDir → rm -rf outDir would delete the source.
+    throw new Error(`bundle output dir must not contain the source workspace (got out="${outDir}")`);
   }
+
+  const definition = await loadAgentDefinition(srcDir, options);
+  const ig = await loadGitignore(srcDir);
+  // cp passes source paths based on the srcDir argument, so match its basis (resolve,
+  // not realpath) for relative()/containment; realpath was only for the data-loss guard.
+  const srcBase = resolve(srcDir);
+  const outBase = resolve(outDir);
+
+  // Clean rebuild: replace outDir entirely (guarded above so this can't delete the
+  // source). A file dropped from the source cannot survive as a stale artifact.
+  await rm(outDir, { recursive: true, force: true });
+  await mkdir(outDir, { recursive: true });
+
+  // Copy the cleaned source tree (excludes the hard set + .gitignore + outDir itself).
+  await copyCleanTree(srcBase, outDir, outBase, ig);
+
+  // Materialize winning skills that live OUTSIDE the source tree (globals / extra
+  // mounts) into outDir/skills/. Definition-local skills already arrived via the tree
+  // copy; collision losers are absent from definition.skills, so they are not copied.
+  await mkdir(join(outDir, "skills"), { recursive: true });
   for (const skill of definition.skills) {
+    const skillAbs = resolve(skill.filePath);
+    if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) continue; // local: already copied
     if (basename(skill.filePath) === "SKILL.md") {
-      // Standard skill folder: copy the whole directory (scripts/references/assets included).
       await cp(dirname(skill.filePath), join(outDir, "skills", skill.name), { recursive: true });
     } else {
-      // Bare root-level .md skill file.
       await copyFile(skill.filePath, join(outDir, "skills", basename(skill.filePath)));
     }
   }

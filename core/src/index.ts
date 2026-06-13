@@ -34,11 +34,11 @@ export {
   type SkillCollision,
 } from "./engines/pi/definition.ts";
 
-// pi reference implementation — build (validate a workspace + freeze a build manifest)
+// pi reference implementation — build (compile a workspace into a self-contained artifact)
 export {
-  buildPiWorkspace,
-  type BuildManifest,
-  type BuildPiWorkspaceOptions,
+  buildPiArtifact,
+  type ArtifactManifest,
+  type BuildPiArtifactOptions,
 } from "./engines/pi/build.ts";
 
 // pi reference implementation — engine assets (prompt base + toolsets, in create.ts).

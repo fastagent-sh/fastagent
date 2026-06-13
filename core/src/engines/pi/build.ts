@@ -1,31 +1,26 @@
 /**
- * Build: compile a workspace for serving (core-design §10.3, container tier).
+ * Build: compile a workspace into a self-contained, relocatable artifact
+ * (core-design §10.1/§10.3). Build-time only — uses node:fs directly (it runs on the
+ * build machine by definition).
  *
- * v1 targets the container packaging tier: the deployable IS the project (the whole
- * source tree ships in the image), so build does NOT produce a separate, stripped
- * artifact. Instead it:
- *   1. validates the workspace (config + model + definition) so a broken agent fails
- *      at build, not at the first request;
- *   2. freezes the resolved deployment choices (model + http) into a manifest the
- *      runtime reads.
+ * The artifact is a directory that does NOT depend on the source location: it holds
+ * the cleaned source tree (AGENTS.md, skills/, authored context, fastagent.config.ts,
+ * tool source, package.json, …) with the machine's opted-in global skills materialized
+ * into skills/, plus a `fastagent.json` manifest. Secrets/deps/vcs/machine-state are
+ * excluded (see bundleAgentDefinition); npm-dependent code tools get their deps via a
+ * `npm ci` at deploy. `start` runs from the artifact alone.
  *
- * Build is non-destructive: it only writes machine state under `.fastagent/` and never
- * touches the source tree. Authored context (root-level files the agent reads on
- * demand, §10.1a) therefore ships intact because nothing is stripped — `start` runs
- * in the project, where those files live.
- *
- * The relocatable, source-tree-bundling artifact (with the secret/dep exclusion
- * boundary) is the portable tier — deferred to the AgentCore target adapter.
- * `bundleAgentDefinition` remains the primitive for that tier; the v1 build path does
- * not use it.
+ * Build is non-destructive to the source: it only writes the (separate) outDir.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
+import { type LoadedDefinition, bundleAgentDefinition, defaultGlobalSkillPaths } from "./definition.ts";
 
-/** The build manifest written to `.fastagent/manifest.json`. Pure data (no `.ts`). */
-export interface BuildManifest {
+/** The `fastagent.json` manifest written into the artifact. Pure data (no `.ts`). */
+export interface ArtifactManifest {
   fastagentVersion: string;
   engine: "pi";
   /** ISO timestamp; provenance, not a reproducibility key. */
@@ -36,61 +31,56 @@ export interface BuildManifest {
   http?: FastagentConfig["http"];
 }
 
-export interface BuildPiWorkspaceOptions {
+export interface BuildPiArtifactOptions {
   /** Model spec override. Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
+  /** Materialize the machine's global skills into the artifact's skills/. Default false (definition-only). */
+  globalSkills?: boolean;
 }
 
-const STATE_DIR = ".fastagent";
-const MANIFEST_FILE = "manifest.json";
+const MANIFEST_FILE = "fastagent.json";
 
 /**
- * Compile {@link dir} for serving: validate config + model + definition, then write
- * `.fastagent/manifest.json`. Non-destructive (only writes under `.fastagent/`).
- * Throws a clear error on a missing/unknown model or a broken definition.
+ * Compile {@link srcDir} into a self-contained artifact at {@link outDir}. Resolves +
+ * validates the model (fails visibly if missing/unknown), materializes the cleaned
+ * source tree + opted-in globals (bundleAgentDefinition), and writes the manifest into
+ * the artifact. Non-destructive to the source; only outDir is written/replaced.
  */
-export async function buildPiWorkspace(
-  dir: string,
-  options: BuildPiWorkspaceOptions = {},
-): Promise<{ manifest: BuildManifest; definition: LoadedDefinition }> {
-  const { config } = await loadConfig(dir);
+export async function buildPiArtifact(
+  srcDir: string,
+  outDir: string,
+  options: BuildPiArtifactOptions = {},
+): Promise<{ manifest: ArtifactManifest; definition: LoadedDefinition; outDir: string }> {
+  const { config } = await loadConfig(srcDir);
   const model = resolveModelSpec(options.model, config);
   if (!model) {
     throw new Error(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  // Validate against the registry now, so a typo fails the build instead of being
-  // frozen into the manifest and only failing later at start (dev fails fast too).
+  // Validate against the registry now (before touching outDir), so a typo fails the
+  // build instead of being frozen into the manifest and only failing later at start.
   resolveModel(model);
-  // Validate the definition loads (definition-only: the agent is its folder). This
-  // surfaces a broken AGENTS.md / skills at build; it does not copy anything.
-  const definition = await loadAgentDefinition(dir, { skillPaths: [] });
 
-  const stateDir = join(dir, STATE_DIR);
-  await mkdir(stateDir, { recursive: true });
-  // Self-gitignore the state dir (same as the L3 workspace rung) so a build on a clean
-  // checkout does not leave `.fastagent/` to be committed.
-  await writeFile(join(stateDir, ".gitignore"), "*\n", { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
-    if (e.code !== "EEXIST") throw e;
+  const definition = await bundleAgentDefinition(srcDir, outDir, {
+    skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
   });
-  const manifest: BuildManifest = {
+  const manifest: ArtifactManifest = {
     fastagentVersion: await readFastagentVersion(),
     engine: "pi",
     builtAt: new Date().toISOString(),
     model,
     ...(config.http ? { http: config.http } : {}),
   };
-  await writeFile(join(stateDir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
-  return { manifest, definition };
+  await writeFile(join(outDir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
+  return { manifest, definition, outDir };
 }
 
 /** Read this package's version for manifest provenance (best-effort; defaults if unreadable). */
 async function readFastagentVersion(): Promise<string> {
   try {
-    const pkg = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8")) as {
-      version?: string;
-    };
+    const pkgPath = fileURLToPath(new URL("../../../package.json", import.meta.url));
+    const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as { version?: string };
     return pkg.version ?? "0.0.0";
   } catch {
     return "0.0.0";
