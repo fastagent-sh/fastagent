@@ -16,12 +16,15 @@ import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import { createInvokeHandler } from "./channels/http.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/create.ts";
+import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 
 function usage(code: number): never {
-  console.error(`usage: fastagent dev [dir] [--port N] [--model provider/modelId]
+  console.error(`usage: fastagent dev [dir] [--port N] [--model provider/modelId] [--global-skills]
 
   dev   assemble the agent definition in dir (default .) and start a local HTTP channel
-        model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts`);
+        model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
+        --global-skills   also load the machine's global skills (~/.pi/agent/skills,
+                          ~/.agents/skills); default is definition-only (dev == deployed)`);
   process.exit(code);
 }
 
@@ -30,6 +33,7 @@ const { positionals, values } = parseArgs({
   options: {
     port: { type: "string" },
     model: { type: "string" },
+    "global-skills": { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -62,8 +66,10 @@ try {
 setGlobalDispatcher(new EnvHttpProxyAgent());
 installUndiciFetch();
 
+const globalSkills = values["global-skills"] ?? false;
 const { agent, definition, config, configPath, modelSpec } = await createPiAgentFromWorkspace(dir, {
   model: values.model,
+  globalSkills,
 }).catch((error: unknown) => {
   // User-fixable startup problems (missing model / bad config / broken definition)
   // are thrown as plain `Error` with actionable messages — print just the message.
@@ -77,7 +83,21 @@ console.error(`[fastagent] dir:    ${definition.dir}`);
 console.error(`[fastagent] config: ${configPath ?? "(zero-config)"}`);
 console.error(`[fastagent] model:  ${modelSpec}`);
 console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
-console.error(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
+const loadedSkills = definition.skills.map((s) => s.name);
+console.error(
+  `[fastagent] skills: ${loadedSkills.join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
+);
+if (!globalSkills) {
+  // Definition-only by default: surface globals that exist on this machine but were
+  // NOT loaded, so dropped skills are visible at dev time (not discovered at deploy).
+  // A separate scan (dev-only diagnostic); the agent itself stays definition-only.
+  const withGlobals = await loadAgentDefinition(dir, { skillPaths: defaultGlobalSkillPaths() }).catch(() => undefined);
+  const available = (withGlobals?.skills ?? []).map((s) => s.name).filter((n) => !loadedSkills.includes(n));
+  if (available.length > 0) {
+    console.error(`[fastagent] ${available.length} global skill(s) available but not loaded: ${available.join(", ")}`);
+    console.error(`            use in dev: --global-skills | ship: copy into skills/ (or build --global-skills)`);
+  }
+}
 for (const c of definition.collisions) {
   console.error(`[fastagent] warn: skill "${c.name}" collision — using ${c.winnerPath}, ignoring ${c.loserPath}`);
 }
