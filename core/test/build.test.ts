@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { buildPiArtifact, loadAgentDefinition, type ArtifactManifest } from "../src/index.ts";
+
+const execFileAsync = promisify(execFile);
+async function gitInit(dir: string): Promise<void> {
+  await execFileAsync("git", ["-C", dir, "init", "-q"]);
+}
 
 async function exists(p: string): Promise<boolean> {
   return access(p).then(
@@ -71,8 +78,9 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, ".fastagent"))).toBe(false);
   });
 
-  it("honors the workspace .gitignore on top of the hard excludes", async () => {
-    const ws = await makeWorkspace({ gitignore: "secrets.txt\nscratch/\n" });
+  it("honors .fastagentignore (non-repo: the whole tree ships minus those + hard excludes)", async () => {
+    const ws = await makeWorkspace();
+    await writeFile(join(ws, ".fastagentignore"), "secrets.txt\nscratch/\n");
     await writeFile(join(ws, "secrets.txt"), "do not ship\n");
     await mkdir(join(ws, "scratch"), { recursive: true });
     await writeFile(join(ws, "scratch", "note.md"), "scratch\n");
@@ -81,6 +89,20 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "secrets.txt"))).toBe(false);
     expect(await exists(join(out, "scratch"))).toBe(false);
     expect(await exists(join(out, "docs", "schema.md"))).toBe(true); // non-ignored authored context still ships
+  });
+
+  it("delegates ignore semantics to git in a repo: .gitignore'd files do not ship, .git is excluded", async () => {
+    const ws = await makeWorkspace();
+    await writeFile(join(ws, ".gitignore"), "scratch/\n");
+    await mkdir(join(ws, "scratch"), { recursive: true });
+    await writeFile(join(ws, "scratch", "note.md"), "scratch\n");
+    await gitInit(ws); // now git decides the ship-set (untracked-non-ignored)
+    const out = await freshOut();
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "scratch"))).toBe(false); // git-ignored → not shipped
+    expect(await exists(join(out, ".git"))).toBe(false); // the repo dir is never bundled
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+    expect(await exists(join(out, "docs", "schema.md"))).toBe(true);
   });
 
   it("is non-destructive to the source tree", async () => {
@@ -173,13 +195,13 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
 
-  it("fails visibly when .gitignore excludes a loaded definition file (no silent drop)", async () => {
+  it("fails visibly when the ship-set excludes a loaded definition file (no silent drop)", async () => {
     const ws = await makeWorkspace();
     await mkdir(join(ws, "skills", "secret"), { recursive: true });
     await writeFile(join(ws, "skills", "secret", "SKILL.md"), "---\nname: secret\ndescription: x.\n---\nb\n");
-    await writeFile(join(ws, ".gitignore"), "skills/secret/\n"); // ignores a skill the agent loads
+    await writeFile(join(ws, ".fastagentignore"), "skills/secret/\n"); // excludes a skill the agent loads
     const out = await freshOut();
-    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/\.gitignore excludes agent definition file/);
+    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/excluded from the artifact/);
   });
 
   it("recognizes an in-tree out even when src and out are spelled through different symlinks", async () => {
@@ -194,11 +216,11 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "build"))).toBe(false); // no nested build/build recursion
   });
 
-  it("fails visibly on an unreadable .gitignore (only ENOENT is normal)", async () => {
+  it("fails visibly on an unreadable .fastagentignore (only ENOENT is normal)", async () => {
     const ws = await makeWorkspace();
-    await mkdir(join(ws, ".gitignore")); // a directory where a file is expected → read fails (not ENOENT)
+    await mkdir(join(ws, ".fastagentignore")); // a directory where a file is expected → read fails (not ENOENT)
     const out = await freshOut();
-    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/cannot read .*\.gitignore/);
+    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/cannot read .*\.fastagentignore/);
   });
 
   it("model precedence: --model option beats config; bad/missing model fails before writing", async () => {

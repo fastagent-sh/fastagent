@@ -24,9 +24,11 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
+import { execFile } from "node:child_process";
 import { copyFile, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import ignore, { type Ignore } from "ignore";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
@@ -139,20 +141,57 @@ function isHardExcluded(name: string): boolean {
   return name === ".git" || name === "node_modules" || name === ".fastagent" || name === ".env" || name.startsWith(".env.");
 }
 
-/** Load the workspace's root `.gitignore` as a matcher (honored on top of the hard excludes). */
-async function loadGitignore(srcDir: string): Promise<Ignore | undefined> {
+/** Load `<dir>/.fastagentignore` as a matcher (extra excludes on top of git + the hard set). */
+async function loadFastagentIgnore(dir: string): Promise<Ignore | undefined> {
   let content: string;
   try {
-    content = await readFile(join(srcDir, ".gitignore"), "utf8");
+    content = await readFile(join(dir, ".fastagentignore"), "utf8");
   } catch (error) {
-    // Only a missing file is normal. A .gitignore that exists but can't be read
-    // (permission/IO, or it's a directory) must fail visibly: silently building with
-    // no ignore rules could ship files the author explicitly excluded (e.g. secrets
-    // not covered by the hard excludes).
+    // Only a missing file is normal; an existing-but-unreadable one fails visibly
+    // (silently building with no rules could ship files the author meant to exclude).
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error(`cannot read ${join(srcDir, ".gitignore")}: ${(error as Error).message}`);
+    throw new Error(`cannot read ${join(dir, ".fastagentignore")}: ${(error as Error).message}`);
   }
   return ignore().add(content);
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The files git considers part of the working tree (tracked + untracked, minus ignored),
+ * relative to srcDir. `undefined` when srcDir is not a git repo (or git is unavailable),
+ * so the caller ships the whole tree. Delegating to git is why we no longer hand-
+ * implement .gitignore semantics (the recurring source of artifact edge cases).
+ */
+async function gitLsFiles(srcDir: string): Promise<string[] | undefined> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["-C", srcDir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      { maxBuffer: 64 * 1024 * 1024 },
+    );
+    return stdout.split("\0").filter((p) => p.length > 0);
+  } catch {
+    return undefined; // not a git repo / git unavailable
+  }
+}
+
+/** A git ship-set as fast lookups: the listed files + every ancestor dir of a listed file. */
+interface GitAllow {
+  files: Set<string>;
+  dirs: Set<string>;
+}
+function gitAllowFromFiles(files: string[]): GitAllow {
+  const fileSet = new Set(files);
+  const dirs = new Set<string>();
+  for (const f of files) {
+    let d = dirname(f);
+    while (d && d !== "." && !dirs.has(d)) {
+      dirs.add(d);
+      d = dirname(d);
+    }
+  }
+  return { files: fileSet, dirs };
 }
 
 /**
@@ -160,25 +199,26 @@ async function loadGitignore(srcDir: string): Promise<Ignore | undefined> {
  * (not node:fs cp) because cp refuses dest-inside-src, which is exactly the default out
  * `.fastagent/build`; the walk skips `skipAbs` (the out dir) instead.
  *
- * Exclusions: the hard set (secrets/deps/vcs/state, by name at any depth) always; and
- * `ig` (a .gitignore matcher rooted at srcDir) when provided. The SAME path is used for
- * the source tree AND for materializing external skill folders, so secrets in a global
- * skill (e.g. its own `.env`/`node_modules`) are never bundled either.
+ * Exclusions: the hard set (secrets/deps/vcs/state, by name at any depth) always; `ig`
+ * (a `.fastagentignore` matcher rooted at srcDir) when provided; and, when `gitAllow` is
+ * given, the git ship-set (a tracked symlink is listed as a file, a regular dir is kept
+ * when it holds a tracked file, a regular file when it is listed). The hard set always
+ * applies, so an external skill's own `.env`/`node_modules` is never bundled.
  *
- * Symlinks are dereferenced (follow `stat`): a link to a directory is recursed into, a
- * link to a file is copied, a dangling link is skipped. Cycles (e.g. `link -> .`) are
- * broken by tracking the current recursion STACK of target realpaths — a dir is skipped
- * only when its realpath is its own ancestor. Two sibling links to the same target are
- * NOT a cycle, so both are preserved (a global visited-set would drop the second).
+ * Symlinks are dereferenced (follow `stat`): a link to a directory is recursed into
+ * (WITHOUT gitAllow — its target is outside the tracked tree), a link to a file is
+ * copied, a dangling link is skipped. Cycles (e.g. `link -> .`) are broken by tracking
+ * the current recursion STACK of target realpaths — a dir is skipped only when its
+ * realpath is its own ancestor; two sibling links to the same target are both kept.
  */
 async function copyDirClean(
   srcDir: string,
   destDir: string,
-  opts: { ig?: Ignore; skipReal?: string } = {},
+  opts: { ig?: Ignore; skipReal?: string; gitAllow?: GitAllow } = {},
 ): Promise<void> {
-  const { ig, skipReal } = opts;
+  const { ig, skipReal, gitAllow } = opts;
   const base = resolve(srcDir);
-  async function walk(absDir: string, destPath: string, stack: Set<string>): Promise<void> {
+  async function walk(absDir: string, destPath: string, stack: Set<string>, allow: GitAllow | undefined): Promise<void> {
     const realDir = await realpath(absDir).catch(() => resolve(absDir));
     // Skip the out dir by REALPATH, so it is recognized even when src and out are
     // spelled through different symlink aliases (textual compare would descend into
@@ -192,7 +232,8 @@ async function copyDirClean(
       if (isHardExcluded(entry.name)) continue;
       let isDir = entry.isDirectory();
       let isFile = entry.isFile();
-      if (entry.isSymbolicLink()) {
+      const isLink = entry.isSymbolicLink();
+      if (isLink) {
         const target = await stat(abs).catch(() => undefined); // follow the link
         if (!target) continue; // dangling → skip rather than fail the build
         isDir = target.isDirectory();
@@ -201,15 +242,22 @@ async function copyDirClean(
       // Only directories and regular files belong in an artifact. Skip sockets, FIFOs,
       // and devices — copyFile would throw on them and fail the whole build.
       if (!isDir && !isFile) continue;
-      const rel = relative(base, abs); // for the ignore matcher (rooted at srcDir)
+      const rel = relative(base, abs);
       if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match only with a trailing slash
+      if (allow !== undefined) {
+        // git lists a tracked symlink as a file; a regular dir is kept when it holds a
+        // tracked file; a regular file when it is itself listed.
+        const allowed = isLink ? allow.files.has(rel) : isDir ? allow.dirs.has(rel) : allow.files.has(rel);
+        if (!allowed) continue;
+      }
       const dest = join(destPath, entry.name);
-      if (isDir) await walk(abs, dest, stack);
+      // A dereferenced symlink-dir leaves the tracked tree, so gitAllow no longer applies.
+      if (isDir) await walk(abs, dest, stack, isLink ? undefined : allow);
       else await copyFile(abs, dest); // regular file (follows a symlink-to-file)
     }
     stack.delete(realDir); // leave the descent: siblings sharing this target are not a cycle
   }
-  await walk(base, resolve(destDir), new Set());
+  await walk(base, resolve(destDir), new Set(), gitAllow);
 }
 
 /**
@@ -245,35 +293,47 @@ export async function bundleAgentDefinition(
       `bundle output dir must differ from the source workspace (got "${outDir}"); use a separate --out (default .fastagent/build)`,
     );
   }
-  if (srcReal.startsWith(outReal + sep)) {
-    // outDir is an ancestor of srcDir → rm -rf outDir would delete the source.
+  // outDir must not CONTAIN srcDir, or rm -rf outDir would delete the source. relative()
+  // (not startsWith(outReal + sep)) so the filesystem root "/" is handled: with `--out /`
+  // the string trick yields "//" and every path bypasses the guard.
+  const outToSrc = relative(outReal, srcReal);
+  if (outToSrc !== "" && outToSrc !== ".." && !outToSrc.startsWith(".." + sep) && !isAbsolute(outToSrc)) {
     throw new Error(`bundle output dir must not contain the source workspace (got out="${outDir}")`);
   }
 
   const definition = await loadAgentDefinition(srcDir, options);
-  const ig = await loadGitignore(srcDir);
+  const fastagentIg = await loadFastagentIgnore(srcDir);
   const srcBase = resolve(srcDir);
 
+  // Ship-set: in a git repo, git decides which files belong (it already applies
+  // .gitignore correctly — we no longer reimplement that). Outside a repo, the whole
+  // tree ships. Both modes additionally honor .fastagentignore + the hard excludes.
+  const gitFiles = await gitLsFiles(srcDir);
+  const gitAllow = gitFiles ? gitAllowFromFiles(gitFiles) : undefined;
+
   // The loaded definition files (AGENTS.md + local skills) ARE the agent; they must
-  // ship. If .gitignore excludes one, the reported agent would not match the artifact.
-  // Don't silently drop it (drift) or silently override .gitignore (could leak a file
-  // the author kept private) — surface the conflict.
-  if (ig) {
-    const ignored: string[] = [];
-    if (definition.instructions !== undefined && ig.ignores("AGENTS.md")) ignored.push("AGENTS.md");
-    for (const skill of definition.skills) {
-      const skillAbs = resolve(skill.filePath);
-      if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) {
-        const rel = relative(srcBase, skillAbs);
-        if (ig.ignores(rel)) ignored.push(rel);
-      }
+  // ship. If the ship-set (git or .fastagentignore) would drop one, the reported agent
+  // would not match the artifact — surface the conflict instead of silently dropping it.
+  const wouldShip = (rel: string): boolean => {
+    if (rel.split(sep).some(isHardExcluded)) return false;
+    if (fastagentIg?.ignores(rel)) return false;
+    if (gitAllow && !gitAllow.files.has(rel)) return false;
+    return true;
+  };
+  const dropped: string[] = [];
+  if (definition.instructions !== undefined && !wouldShip("AGENTS.md")) dropped.push("AGENTS.md");
+  for (const skill of definition.skills) {
+    const skillAbs = resolve(skill.filePath);
+    if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) {
+      const rel = relative(srcBase, skillAbs);
+      if (!wouldShip(rel)) dropped.push(rel);
     }
-    if (ignored.length > 0) {
-      throw new Error(
-        `.gitignore excludes agent definition file(s) the agent loads: ${ignored.join(", ")}. ` +
-          `Un-ignore them (they must ship), or remove them from the agent.`,
-      );
-    }
+  }
+  if (dropped.length > 0) {
+    throw new Error(
+      `the agent loads definition file(s) excluded from the artifact: ${dropped.join(", ")}. ` +
+        `Un-ignore them (git / .fastagentignore) — they must ship.`,
+    );
   }
 
   // Clean rebuild: replace outDir entirely (guarded above so this can't delete the
@@ -281,23 +341,23 @@ export async function bundleAgentDefinition(
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
-  // Copy the cleaned source tree. skipReal is the realpath of the now-created outDir,
-  // so an in-tree out (.fastagent/build) is skipped even via a symlink alias.
+  // Copy the ship-set into the artifact. skipReal is the realpath of the now-created
+  // outDir, so an in-tree out (.fastagent/build) is skipped even via a symlink alias.
   const skipReal = await realpath(outDir);
-  await copyDirClean(srcBase, outDir, { ig, skipReal });
+  await copyDirClean(srcBase, outDir, { ig: fastagentIg, skipReal, gitAllow });
 
   // Materialize winning skills that live OUTSIDE the source tree (globals / extra
   // mounts) into outDir/skills/. Definition-local skills already arrived via the tree
-  // copy; collision losers are absent from definition.skills, so they are not copied.
+  // copy; collision losers are absent from definition.skills. External skills copy with
+  // ONLY the hard excludes (their own .env/node_modules never ship); the workspace
+  // ship-set / .fastagentignore do not govern an external skill folder, so its SKILL.md
+  // always ships.
   await mkdir(join(outDir, "skills"), { recursive: true });
   for (const skill of definition.skills) {
     const skillAbs = resolve(skill.filePath);
     if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) continue; // local: already copied
     if (basename(skill.filePath) === "SKILL.md") {
-      // Materialize the external skill folder through the SAME clean copy, so the hard
-      // excludes apply — a global skill's own .env/node_modules/.git is never bundled.
-      const skillDir = dirname(skill.filePath);
-      await copyDirClean(skillDir, join(outDir, "skills", skill.name), { ig: await loadGitignore(skillDir) });
+      await copyDirClean(dirname(skill.filePath), join(outDir, "skills", skill.name));
     } else {
       await copyFile(skill.filePath, join(outDir, "skills", basename(skill.filePath)));
     }
