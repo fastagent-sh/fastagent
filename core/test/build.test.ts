@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { access } from "node:fs/promises";
+import { access, symlink } from "node:fs/promises";
 import { buildPiArtifact, loadAgentDefinition, type ArtifactManifest } from "../src/index.ts";
 
 async function exists(p: string): Promise<boolean> {
@@ -66,6 +66,15 @@ describe("build: buildPiArtifact", () => {
     // outDir === workspace would delete the source AGENTS.md + skills/ before copying.
     await expect(buildPiArtifact(ws, ws)).rejects.toThrow(/output dir must differ from the source/);
     // the user's files must still be there
+    expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
+    expect(await exists(join(ws, "skills", "local-skill", "SKILL.md"))).toBe(true);
+  });
+
+  it("rejects a symlinked output that aliases the source (realpath, not just resolve)", async () => {
+    const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
+    const link = join(await mkdtemp(join(tmpdir(), "fa-build-link-")), "out");
+    await symlink(ws, link); // --out is a symlink pointing at the workspace
+    await expect(buildPiArtifact(ws, link)).rejects.toThrow(/output dir must differ from the source/);
     expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
     expect(await exists(join(ws, "skills", "local-skill", "SKILL.md"))).toBe(true);
   });

@@ -24,7 +24,7 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { cp, copyFile, mkdir, rm } from "node:fs/promises";
+import { cp, copyFile, mkdir, realpath, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
@@ -152,12 +152,18 @@ export async function bundleAgentDefinition(
   options: LoadAgentDefinitionOptions = {},
 ): Promise<LoadedDefinition> {
   // Reject source/output aliasing BEFORE any destructive step: the cleanup below
-  // removes outDir/AGENTS.md and outDir/skills, which ARE the source when outDir
-  // resolves to srcDir — it would delete the user's agent definition. Only exact
-  // equality is dangerous (a child like .fastagent/build is the intended default).
-  if (resolve(srcDir) === resolve(outDir)) {
+  // removes outDir/AGENTS.md and outDir/skills, which ARE the source when outDir is
+  // the workspace — it would delete the user's agent definition. Compare realpaths,
+  // not just resolve() strings: a --out symlinked to the workspace (or a workspace
+  // reached through a symlink) shares no path string yet aliases the same dir, and
+  // rm would follow the link into the source. A not-yet-created outDir can't alias an
+  // existing source dir, so a missing realpath is safe. Only exact aliasing is
+  // rejected — a child like the default .fastagent/build stays valid.
+  const srcReal = await realpath(srcDir).catch(() => resolve(srcDir));
+  const outReal = await realpath(outDir).catch(() => undefined);
+  if (outReal !== undefined && srcReal === outReal) {
     throw new Error(
-      `bundle output dir must differ from the source workspace (got "${srcDir}"); use a separate --out (default .fastagent/build)`,
+      `bundle output dir must differ from the source workspace (got "${outDir}"); use a separate --out (default .fastagent/build)`,
     );
   }
   const definition = await loadAgentDefinition(srcDir, options);
