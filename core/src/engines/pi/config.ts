@@ -23,7 +23,7 @@
  * a runnable zero-config agent (model via --model / FASTAGENT_MODEL).
  */
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { getModel } from "@earendil-works/pi-ai";
@@ -54,9 +54,14 @@ export interface LoadedConfig {
  * a file with the wrong shape throws (fail visibly).
  */
 export async function loadConfig(dir: string): Promise<LoadedConfig> {
-  for (const name of ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"]) {
-    const path = join(dir, name);
-    if (!existsSync(path)) continue;
+  const names = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"];
+  const found = names.map((name) => join(dir, name)).filter((path) => existsSync(path));
+  if (found.length === 0) return { config: {} };
+  if (found.length > 1) {
+    throw new Error(`${dir}: multiple fastagent config files found; keep exactly one (${found.map((p) => basename(p)).join(", ")})`);
+  }
+
+  for (const path of found) {
     const mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
     const config = mod.default;
     if (!config || typeof config !== "object") {
@@ -76,6 +81,17 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     if (c.tools !== undefined && !Array.isArray(c.tools)) {
       throw new Error(`${path}: "tools" must be an array of AgentTool`);
     }
+    if (c.tools !== undefined) {
+      for (const [i, tool] of c.tools.entries()) {
+        if (!tool || typeof tool !== "object") {
+          throw new Error(`${path}: "tools[${i}]" must be an AgentTool object`);
+        }
+        const candidate = tool as { name?: unknown; execute?: unknown };
+        if (typeof candidate.name !== "string" || typeof candidate.execute !== "function") {
+          throw new Error(`${path}: "tools[${i}]" must have string "name" and function "execute"`);
+        }
+      }
+    }
     if (c.http !== undefined && (typeof c.http !== "object" || c.http === null)) {
       throw new Error(`${path}: "http" must be an object`);
     }
@@ -94,7 +110,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     }
     return { config: c, path };
   }
-  return { config: {} };
+  throw new Error(`${dir}: failed to load fastagent config`);
 }
 
 /** Resolve "provider/modelId" → a pi Model. Unknown specs throw a clear error (getModel returns undefined). */
