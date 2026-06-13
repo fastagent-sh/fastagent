@@ -45,9 +45,11 @@
  *    the decision, then stops:
  *      - sessions / lease (deployment backends)  → reach L2 (embedding developer);
  *        L3 picks its own default (jsonl under .fastagent/) without exposing a choice;
- *      - base / skillPaths (definition-assembly) → stop at L2 (L2 owns prompt/skill mounting);
+ *      - base / raw skillPaths (definition-assembly) → stop at L2 (L2 owns prompt/skill mounting);
  *      - retryClassifier (engine adaptation)     → stays at L0 (custom-wiring persona);
- *      - L3 exposes only what an operator may say per the config red line (today: the model flag).
+ *      - L3 exposes only what an operator may say: the model flag, and `globalSkills`
+ *        (a semantic authoring-scope toggle — "include the machine's global skills" —
+ *        not raw skillPaths; raw paths stay an L2/embedder concern).
  *    KNOWN DEBT: "L3 accepts no K" is a v1 line, not an invariant — sessions/env ARE
  *    deployment choices semantically. When backend #2 lands (DDB / sandbox env),
  *    this boundary must be re-cut: either config grows K keys (L3 inherits them)
@@ -62,7 +64,7 @@ import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-codin
 import type { Agent } from "../../agent.ts";
 import type { AuthResolver } from "./auth.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
+import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, piHarnessFactory } from "./harness.ts";
 import { type PiSessionStore, inMemorySessionStore, jsonlSessionStore } from "./sessions.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
@@ -286,6 +288,13 @@ export async function createPiAgentFromDefinition(
 export interface CreatePiAgentFromWorkspaceOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
+  /**
+   * Also load the machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`) on top of
+   * the definition's own `skills/`. Default false = definition-only, so dev mirrors deployment.
+   * This is an authoring-fidelity opt-in (e.g. `fastagent dev --global-skills`); to ship a global
+   * skill, materialize it into the artifact (build --global-skills) — do not rely on this at deploy.
+   */
+  globalSkills?: boolean;
 }
 
 /**
@@ -325,6 +334,9 @@ export async function createPiAgentFromWorkspace(
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
     model: resolveModel(modelSpec),
     tools: resolveTools(config, dir),
+    // Definition-only by default (the agent is its folder); globals are an explicit
+    // authoring-fidelity opt-in, never the deploy path (see ladder rule 2 + §6).
+    skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
     // Sessions persist under the state dir: `fastagent dev` restarts keep
     // conversations — faithful to local pi, which persists sessions too.
     sessions: jsonlSessionStore({ dir: join(stateDir, "sessions"), cwd: dir }),
