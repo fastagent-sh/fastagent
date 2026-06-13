@@ -286,6 +286,19 @@ describe("build: buildPiArtifact", () => {
     expect(await readFile(join(ws, "fastagent.json"), "utf8")).toContain("authored"); // source intact
   });
 
+  it("rejects a reserved root fastagent.json BEFORE bundling, so a rebuild keeps the prior artifact", async () => {
+    const ws = await makeWorkspace();
+    const out = await freshOut();
+    await buildPiArtifact(ws, out); // a good prior artifact
+    const readEngine = async () => JSON.parse(await readFile(join(out, "fastagent.json"), "utf8")).engine;
+    expect(await readEngine()).toBe("pi");
+    // source now accidentally ships a root fastagent.json; rebuild into the same out
+    await writeFile(join(ws, "fastagent.json"), `{"oops":1}\n`);
+    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/reserved for the build manifest/);
+    // the destructive bundle never ran: the prior artifact's manifest survives, out not poisoned
+    expect(await readEngine()).toBe("pi");
+  });
+
   it(".fastagentignore patterns stay artifact-relative inside a symlinked-dir subtree", async () => {
     // A workspace .fastagentignore rule `docs/private.md` must hold even when docs/ is a
     // symlink whose subtree restarts the git base; otherwise the path anchor mis-roots.

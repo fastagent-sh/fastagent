@@ -175,12 +175,21 @@ const execFileAsync = promisify(execFile);
  * repo-ness separately (rev-parse) and fail visibly if a real repo can't be enumerated.
  */
 async function gitLsFiles(srcDir: string): Promise<string[] | undefined> {
+  let inside: string;
   try {
-    await execFileAsync("git", ["-C", srcDir, "rev-parse", "--is-inside-work-tree"]);
-  } catch {
-    return undefined; // not a git repo / git unavailable → ship the whole tree
+    ({ stdout: inside } = await execFileAsync("git", ["-C", srcDir, "rev-parse", "--is-inside-work-tree"]));
+  } catch (error) {
+    const e = error as NodeJS.ErrnoException & { stderr?: string };
+    // git not installed, or the path is genuinely not inside any repo → whole tree.
+    if (e.code === "ENOENT" || /not a git repository/i.test(e.stderr ?? "")) return undefined;
+    // A REAL repo where git refuses to operate (dubious ownership, corrupt .git, perms)
+    // must NOT silently degrade to "ship everything" — that drops .gitignore protection
+    // and bundles ignored/private files. Only a confirmed non-repo takes the whole-tree
+    // path; an unexpected probe failure fails visibly.
+    throw new Error(`git could not inspect the workspace repo: ${(e.stderr || e.message).trim()}`);
   }
-  // It IS a repo: an enumeration failure here is unexpected — surface it.
+  if (inside.trim() !== "true") return undefined; // bare repo / inside .git → no work-tree ship-set
+  // It IS a work tree: an enumeration failure here is unexpected — surface it.
   let stdout: string;
   try {
     ({ stdout } = await execFileAsync(

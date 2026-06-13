@@ -250,6 +250,19 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     expect(await access(join(src, "AGENTS.md")).then(() => true, () => false)).toBe(true);
   });
 
+  it("fails visibly when git can't inspect a workspace repo (no silent whole-tree fallback)", async () => {
+    // A broken .git (here an invalid gitfile) makes `git rev-parse` fail with something
+    // other than "not a git repository". That must NOT degrade to shipping the whole
+    // tree (which would drop .gitignore protection) — only a confirmed non-repo does.
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await writeFile(join(src, ".git"), "garbage\n"); // invalid gitfile
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    await expect(bundleAgentDefinition(src, out, { skillPaths: [] })).rejects.toThrow(
+      /git could not inspect the workspace repo/,
+    );
+  });
+
   it("fails visibly when a global skill materializes onto a bundled skill's path (dir != name)", async () => {
     // Local skill dir "foo" but frontmatter name "bar"; a global skill named "foo" then
     // dedups as distinct yet materializes onto out/skills/foo (the bundled local skill).
