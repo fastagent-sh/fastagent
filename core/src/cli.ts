@@ -15,22 +15,22 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import { createInvokeHandler } from "./channels/http.ts";
-import { buildPiArtifact } from "./engines/pi/build.ts";
+import { buildPiWorkspace } from "./engines/pi/build.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/create.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 
 function usage(code: number): never {
   console.error(`usage:
   fastagent dev   [dir] [--port N] [--model provider/modelId] [--global-skills]
-  fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills]
+  fastagent build [dir] [--model provider/modelId]
 
   dev    assemble the agent in dir (default .) and serve a local HTTP channel.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --global-skills   also load the machine's global skills (~/.pi/agent/skills,
                            ~/.agents/skills); default is definition-only (dev == deployed)
-  build  compile the agent in dir into a self-contained artifact (default out:
-         .fastagent/build): materialized AGENTS.md + skills/ + fastagent.json.
-         --global-skills   materialize the machine's global skills into the artifact`);
+  build  validate the agent in dir and freeze deployment choices into
+         .fastagent/manifest.json. The deployable is the project itself (the whole
+         source tree ships); build does not strip or mutate it.`);
   process.exit(code);
 }
 
@@ -39,7 +39,6 @@ const { positionals, values } = parseArgs({
   options: {
     port: { type: "string" },
     model: { type: "string" },
-    out: { type: "string" },
     "global-skills": { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
@@ -107,18 +106,13 @@ async function runDev(): Promise<void> {
 
 async function runBuild(): Promise<void> {
   loadDotEnv(dir); // the model may come from FASTAGENT_MODEL in .env
-  const outDir = resolve(values.out ?? join(dir, ".fastagent", "build"));
-  const { manifest, definition } = await buildPiArtifact(dir, outDir, {
-    model: values.model,
-    globalSkills,
-  }).catch(failStartup);
+  const { manifest, definition } = await buildPiWorkspace(dir, { model: values.model }).catch(failStartup);
 
-  console.error(`[fastagent] built:  ${outDir}`);
+  console.error(`[fastagent] built:  ${dir}`);
+  console.error(`[fastagent] manifest: ${join(dir, ".fastagent", "manifest.json")}`);
   console.error(`[fastagent] model:  ${manifest.model}`);
   console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
-  console.error(
-    `[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
-  );
+  console.error(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 }
 

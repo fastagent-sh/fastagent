@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { access, symlink } from "node:fs/promises";
-import { buildPiArtifact, loadAgentDefinition, type ArtifactManifest } from "../src/index.ts";
+import { buildPiWorkspace, type BuildManifest } from "../src/index.ts";
 
 async function exists(p: string): Promise<boolean> {
   return access(p).then(
@@ -12,10 +11,12 @@ async function exists(p: string): Promise<boolean> {
   );
 }
 
-/** A throwaway workspace: AGENTS.md + one definition-local skill (+ optional config). */
+/** A throwaway workspace: AGENTS.md + a definition-local skill + root-level authored context. */
 async function makeWorkspace(opts: { config?: string } = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-build-ws-"));
-  await writeFile(join(dir, "AGENTS.md"), "# Build Bot\nBe terse.\n");
+  await writeFile(join(dir, "AGENTS.md"), "# Build Bot\nWhen asked about the schema, read docs/schema.md.\n");
+  await mkdir(join(dir, "docs"), { recursive: true });
+  await writeFile(join(dir, "docs", "schema.md"), "# Schema\nusers(id, name)\n");
   await mkdir(join(dir, "skills", "local-skill"), { recursive: true });
   await writeFile(
     join(dir, "skills", "local-skill", "SKILL.md"),
@@ -25,115 +26,58 @@ async function makeWorkspace(opts: { config?: string } = {}): Promise<string> {
   return dir;
 }
 
-describe("build: buildPiArtifact", () => {
-  it("materializes AGENTS.md + skills + a manifest with the resolved model", async () => {
+const manifestPath = (dir: string) => join(dir, ".fastagent", "manifest.json");
+
+describe("build: buildPiWorkspace", () => {
+  it("writes a manifest with the resolved model + http, and self-gitignores .fastagent", async () => {
     const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5", http: { port: 9000 } };` });
-    const out = await mkdtemp(join(tmpdir(), "fa-build-out-"));
-    const { manifest } = await buildPiArtifact(ws, out);
+    const { manifest } = await buildPiWorkspace(ws);
 
-    expect(await readFile(join(out, "AGENTS.md"), "utf8")).toContain("Build Bot");
-    expect((await readdir(join(out, "skills"))).sort()).toEqual(["local-skill"]);
-
-    const onDisk = JSON.parse(await readFile(join(out, "fastagent.json"), "utf8")) as ArtifactManifest;
+    const onDisk = JSON.parse(await readFile(manifestPath(ws), "utf8")) as BuildManifest;
     expect(onDisk).toEqual(manifest);
     expect(onDisk.engine).toBe("pi");
     expect(onDisk.model).toBe("openai-codex/gpt-5.5"); // from config
-    expect(onDisk.http).toEqual({ port: 9000 }); // carried from config.http
+    expect(onDisk.http).toEqual({ port: 9000 });
     expect(typeof onDisk.builtAt).toBe("string");
     expect(onDisk.fastagentVersion).toMatch(/^\d+\.\d+\.\d+/);
-    // tools are functions, not serializable — the manifest must not carry them
-    expect(onDisk).not.toHaveProperty("tools");
+    expect(onDisk).not.toHaveProperty("tools"); // functions are not serializable
+
+    expect(await readFile(join(ws, ".fastagent", ".gitignore"), "utf8")).toBe("*\n");
   });
 
-  it("the built artifact reloads as a definition-only agent (self-contained)", async () => {
-    const ws = await makeWorkspace();
-    const out = await mkdtemp(join(tmpdir(), "fa-build-out-"));
-    await buildPiArtifact(ws, out, { model: "openai-codex/gpt-5.5" });
-    const reloaded = await loadAgentDefinition(out, { skillPaths: [] });
-    expect(reloaded.instructions).toContain("Build Bot");
-    expect(reloaded.skills.map((s) => s.name)).toEqual(["local-skill"]);
+  it("is non-destructive: leaves the source tree (incl. authored context) intact", async () => {
+    const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
+    await buildPiWorkspace(ws);
+    // build validates + writes a manifest; it must not strip or move the project.
+    // Authored context (docs/schema.md) therefore ships because nothing is removed.
+    expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
+    expect(await exists(join(ws, "skills", "local-skill", "SKILL.md"))).toBe(true);
+    expect(await exists(join(ws, "docs", "schema.md"))).toBe(true);
+    expect(await readFile(join(ws, "docs", "schema.md"), "utf8")).toContain("users(id, name)");
   });
 
   it("model precedence: --model option beats config", async () => {
     const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
-    const out = await mkdtemp(join(tmpdir(), "fa-build-out-"));
-    const { manifest } = await buildPiArtifact(ws, out, { model: "openai-codex/gpt-5.4" });
+    const { manifest } = await buildPiWorkspace(ws, { model: "openai-codex/gpt-5.4" });
     expect(manifest.model).toBe("openai-codex/gpt-5.4");
   });
 
-  it("rejects source/output aliasing and leaves the source definition intact (no data loss)", async () => {
-    const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
-    // outDir === workspace would delete the source AGENTS.md + skills/ before copying.
-    await expect(buildPiArtifact(ws, ws)).rejects.toThrow(/output dir must differ from the source/);
-    // the user's files must still be there
-    expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
-    expect(await exists(join(ws, "skills", "local-skill", "SKILL.md"))).toBe(true);
-  });
-
-  it("rejects a symlinked output that aliases the source (realpath, not just resolve)", async () => {
-    const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
-    const link = join(await mkdtemp(join(tmpdir(), "fa-build-link-")), "out");
-    await symlink(ws, link); // --out is a symlink pointing at the workspace
-    await expect(buildPiArtifact(ws, link)).rejects.toThrow(/output dir must differ from the source/);
-    expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
-    expect(await exists(join(ws, "skills", "local-skill", "SKILL.md"))).toBe(true);
-  });
-
-  it("rejects an unknown/malformed model at build time, before writing the artifact", async () => {
-    const ws = await makeWorkspace();
-    const out = await mkdtemp(join(tmpdir(), "fa-build-out-"));
-    await expect(buildPiArtifact(ws, out, { model: "nope/nothing" })).rejects.toThrow(/unknown model/);
-    await expect(buildPiArtifact(ws, out, { model: "justmodel" })).rejects.toThrow(/provider\/modelId/);
-    // a rejected build must not have emitted a manifest
-    expect(await exists(join(out, "fastagent.json"))).toBe(false);
-  });
-
-  it("missing model throws a clear error (fail visibly)", async () => {
+  it("missing model throws a clear error and writes no manifest (fail visibly)", async () => {
     const ws = await makeWorkspace(); // no config, no model option
-    const out = await mkdtemp(join(tmpdir(), "fa-build-out-"));
     const saved = process.env.FASTAGENT_MODEL;
     delete process.env.FASTAGENT_MODEL;
     try {
-      await expect(buildPiArtifact(ws, out)).rejects.toThrow(/missing model/);
+      await expect(buildPiWorkspace(ws)).rejects.toThrow(/missing model/);
+      expect(await exists(manifestPath(ws))).toBe(false);
     } finally {
       if (saved !== undefined) process.env.FASTAGENT_MODEL = saved;
     }
   });
 
-  it("globalSkills materializes the machine's global skills into the artifact", async () => {
-    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
-    await mkdir(join(home, ".pi", "agent", "skills", "global-skill"), { recursive: true });
-    await writeFile(
-      join(home, ".pi", "agent", "skills", "global-skill", "SKILL.md"),
-      "---\nname: global-skill\ndescription: A global skill.\n---\nGlobal body.\n",
-    );
+  it("rejects an unknown/malformed model before writing the manifest", async () => {
     const ws = await makeWorkspace();
-    const out = await mkdtemp(join(tmpdir(), "fa-build-out-"));
-    const saved = process.env.HOME;
-    process.env.HOME = home;
-    try {
-      const off = await buildPiArtifact(ws, out, { model: "openai-codex/gpt-5.5" });
-      expect(off.definition.skills.map((s) => s.name).sort()).toEqual(["local-skill"]); // definition-only default
-      const on = await buildPiArtifact(ws, out, { model: "openai-codex/gpt-5.5", globalSkills: true });
-      expect(on.definition.skills.map((s) => s.name).sort()).toEqual(["global-skill", "local-skill"]);
-      expect((await readdir(join(out, "skills"))).sort()).toEqual(["global-skill", "local-skill"]);
-    } finally {
-      if (saved !== undefined) process.env.HOME = saved;
-      else delete process.env.HOME;
-    }
-  });
-
-  it("deterministic rebuild: a skill dropped from the workspace does not survive in the artifact", async () => {
-    const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
-    await mkdir(join(ws, "skills", "extra"), { recursive: true });
-    await writeFile(join(ws, "skills", "extra", "SKILL.md"), "---\nname: extra\ndescription: Extra.\n---\nx\n");
-    const out = await mkdtemp(join(tmpdir(), "fa-build-out-"));
-
-    await buildPiArtifact(ws, out);
-    expect((await readdir(join(out, "skills"))).sort()).toEqual(["extra", "local-skill"]);
-
-    await rm(join(ws, "skills", "extra"), { recursive: true });
-    await buildPiArtifact(ws, out);
-    expect((await readdir(join(out, "skills"))).sort()).toEqual(["local-skill"]); // stale skill gone
+    await expect(buildPiWorkspace(ws, { model: "nope/nothing" })).rejects.toThrow(/unknown model/);
+    await expect(buildPiWorkspace(ws, { model: "justmodel" })).rejects.toThrow(/provider\/modelId/);
+    expect(await exists(manifestPath(ws))).toBe(false);
   });
 });

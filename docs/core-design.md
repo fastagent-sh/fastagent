@@ -231,14 +231,14 @@ In the container tier, authored context and code tools ship automatically becaus
 
 ### 10.3 `fastagent build`
 
-Compile a workspace into a self-contained, inspectable deployable. It is build-time (`node:fs` is fine here):
+For the v1 container tier the deployable **is** the project (§10.2), so `build` does **not** produce a separate, stripped artifact — stripping is exactly what dropped authored context. `build` is a build-time, **non-destructive** validate-and-freeze step (`buildPiWorkspace`):
 
-1. Load + validate config and definition; resolve the model (fail visibly on a broken workspace).
-2. Materialize skills via `bundleAgentDefinition` (definition-local + opted-in globals with `--global-skills`; §6 skills lifecycle).
-3. Freeze resolved config into a `fastagent.json` manifest (data only): `{ fastagentVersion, engine, builtAt, model, http }`. The skill list is **not** duplicated — the `skills/` directory is the single source of truth.
-4. Deterministic rebuild: only owned outputs are cleaned (`AGENTS.md`, `skills/`, `fastagent.json`); never the whole out dir.
+1. Load + validate config and definition; resolve the model and validate it against the registry (fail visibly on a broken workspace or a bad model — not at the first request).
+2. Write `.fastagent/manifest.json` (data only): `{ fastagentVersion, engine, builtAt, model, http }`. The skill list is **not** duplicated — the `skills/` directory is the single source of truth.
 
-`--global-skills` materializes the machine's global skills into the artifact's `skills/` (the deliberate "these ship" action). Default out dir: `.fastagent/build`; `--out` overrides.
+Build only writes under `.fastagent/` (self-gitignored); it never copies, strips, or mutates the source tree. Authored context (§10.1a) therefore ships intact because nothing is removed — the project is what deploys. To ship a global skill, copy it into `skills/` (the dev report guides this); `build` does not materialize globals (there is no separate artifact to materialize into).
+
+The relocatable, source-tree-bundling artifact — with the §10.1 secret/dep exclusion boundary — is the portable tier, deferred to AgentCore. `bundleAgentDefinition` remains the primitive for that tier (with a realpath source/output-alias guard); the v1 build path does not use it.
 
 ### 10.4 `fastagent start`
 
@@ -246,7 +246,7 @@ Run a built agent in **production posture**. Differences from `dev`:
 
 | Aspect | dev | start |
 |---|---|---|
-| config | executes `fastagent.config.ts` | reads `fastagent.json` (manifest) — **no `.ts` execution at runtime** |
+| config | executes `fastagent.config.ts` | reads `.fastagent/manifest.json` for the frozen model/http; runs in the project (container tier), so config.ts is still available for code tools. The no-`.ts`-execution posture is a portable-tier (AgentCore) constraint, not v1 |
 | skills | definition-only (+ `--global-skills`) | artifact is the truth; **never scans globals** |
 | auth | pi OAuth → env | pluggable `AuthResolver` (§10.5) |
 | sessions | jsonl under `.fastagent/sessions` | persistent store (jsonl now; external/DDB later) |
