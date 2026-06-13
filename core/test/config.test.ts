@@ -3,8 +3,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { createPiAgentFromWorkspace, loadConfig, resolveModel, resolveTools } from "../src/index.ts";
-import { resolveModelSpec } from "../src/engines/pi/config.ts";
+import { createPiAgentFromWorkspace, resolveModel } from "../src/index.ts";
+import { loadConfig, resolveModelSpec } from "../src/engines/pi/config.ts";
+import { resolveTools } from "../src/engines/pi/create.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 

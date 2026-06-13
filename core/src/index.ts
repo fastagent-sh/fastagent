@@ -34,41 +34,35 @@ export {
   type SkillCollision,
 } from "./engines/pi/definition.ts";
 
-// pi reference implementation — engine assets & prompt assembly (in create.ts)
+// pi reference implementation — engine assets (prompt base + toolsets, in create.ts).
+// Internal assembly helpers (assembleSystemPrompt, resolveTools) are NOT public:
+// the ladder rungs own assembly; embedders compose via L1/L2/L3.
 export {
   piBasePrompt,
-  assembleSystemPrompt,
-  type AssembleSystemPromptOptions,
   piDefaultTools,
   piReadOnlyTools,
-  resolveTools,
 } from "./engines/pi/create.ts";
 
-// pi reference implementation — config subsystem
+// pi reference implementation — config subsystem.
+// loadConfig is internal (L3 owns config loading); resolveModel bridges a
+// "provider/modelId" string to a model for L1/L2 embedders.
 export {
   defineConfig,
-  loadConfig,
   resolveModel,
   type FastagentConfig,
-  type LoadedConfig,
 } from "./engines/pi/config.ts";
 
-// pi reference implementation — low-level building blocks (escape hatch; L0)
+// pi reference implementation — injection ports referenced by the ladder options.
+// L0 (createPiAgentFromHarness) and the pi harness-factory wiring are deliberately
+// NOT exported: they expose pi's two-port shape and would pin the engine-coupled
+// surface as a public promise before engine #2 exists. Reach them via internal
+// modules for custom wiring/tests.
 export {
-  createPiAgentFromHarness,
-  type CreatePiAgentFromHarnessOptions,
   type Lease,
   type Release,
   inProcessLease,
-  type RetryClassifier,
-  defaultRetryClassifier,
 } from "./engines/pi/invoke.ts";
-export {
-  piHarnessFactory,
-  type AnyModel,
-  type PiHarnessFactory,
-  type PiHarnessFactoryOptions,
-} from "./engines/pi/harness.ts";
+export type { AnyModel } from "./engines/pi/harness.ts";
 export {
   type SessionStore,
   inMemorySessionStore,

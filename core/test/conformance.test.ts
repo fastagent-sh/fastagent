@@ -8,13 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, registerFauxProvider, type FauxResponseStep } from "@earendil-works/pi-ai";
-import {
-  createPiAgentFromHarness,
-  inMemorySessionStore,
-  jsonlSessionStore,
-  piHarnessFactory,
-  type SessionStore,
-} from "../src/index.ts";
+import { inMemorySessionStore, jsonlSessionStore, type SessionStore } from "../src/index.ts";
+import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
+import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 
 function piAgent(responses: FauxResponseStep[], sessions: SessionStore = inMemorySessionStore()) {

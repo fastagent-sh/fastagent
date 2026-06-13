@@ -16,15 +16,16 @@ This repository is a from-scratch implementation of the locked [Agent Handler SP
 
 ## API stability
 
-This repository is pre-1.0. The stable design center is the Agent Handler contract in [SPEC.md](docs/SPEC.md). The pi reference implementation is intentionally exported for early embedding and testing, but low-level pi escape hatches may change while `build`, `start`, and the first target adapters land.
+This repository is pre-1.0. The stable design center is the Agent Handler contract in [SPEC.md](docs/SPEC.md). The root export (`@fastagent/core`) is deliberately scoped to the supported public surface; pi-coupled internals are not exported and may change freely while `build`, `start`, and the first target adapters land.
 
 Public surface tiers:
 
 | Tier | Examples | Stability |
 |---|---|---|
 | Contract | `Agent`, `AgentEvent`, `collect`, `createInvokeHandler` | Intended to remain stable within SPEC v0.1 |
-| Pi assembly ladder | `createPiAgentFromWorkspace`, `createPiAgentFromDefinition`, `createPiAgent`, `createPiAgentFromHarness` | Usable now, may tighten before 1.0 |
-| Pi internals / escape hatches | prompt/tool helpers, auth/session/lease helpers | Exposed for early adopters and tests; not a long-term compatibility promise yet |
+| Pi assembly ladder | `createPiAgentFromWorkspace`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
+| Injection ports | `SessionStore`, `inMemorySessionStore`/`jsonlSessionStore`, `AuthResolver`, `Lease`, `piDefaultTools`/`piReadOnlyTools` | Public because the ladder options reference them |
+| Not exported | L0 `createPiAgentFromHarness`, `piHarnessFactory`, prompt/config assembly internals | Internal modules only; they expose pi's engine shape and are not a compatibility promise |
 
 ## Build order
 

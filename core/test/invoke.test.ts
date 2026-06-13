@@ -8,7 +8,9 @@ import {
   Type,
   type FauxResponseStep,
 } from "@earendil-works/pi-ai";
-import { createPiAgentFromHarness, inMemorySessionStore, inProcessLease, piHarnessFactory, type AgentEvent } from "../src/index.ts";
+import { inMemorySessionStore, inProcessLease, type AgentEvent } from "../src/index.ts";
+import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
+import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 
 /** An echo tool for the tool-call path. */
 const echoTool: AgentTool = {

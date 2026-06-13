@@ -7,7 +7,6 @@ import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
-  assembleSystemPrompt,
   bundleAgentDefinition,
   collect,
   createPiAgentFromDefinition,
@@ -18,6 +17,7 @@ import {
   piReadOnlyTools,
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
+import { assembleSystemPrompt } from "../src/engines/pi/create.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
 const extraSkillsDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "extra-skills");
