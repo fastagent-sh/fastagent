@@ -3,8 +3,6 @@ title: fastagent — 战略定位
 type: product-positioning
 status: design
 updated: 2026-06-05
-share_link: https://qsort.me/fjlg0unp
-share_updated: 2026-06-08T16:43:28+08:00
 ---
 
 # fastagent 战略定位

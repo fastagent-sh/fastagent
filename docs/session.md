@@ -117,10 +117,10 @@ interface SessionAdmin {
 
 ## 6. Adapter
 
-### 6a Host / storage adapter(K)— 薄原语,payload opaque
+### 6a Host / storage adapter(K)— SessionLogStore 薄原语,payload opaque
 
 ```ts
-interface SessionStore {
+interface SessionLogStore {
   append(session: string, entry: Entry): Promise<void>;
   getEntries(session: string): Promise<Entry[]>;        // 扁平,全部
   getEntry(session: string, id: string): Promise<Entry | undefined>;
