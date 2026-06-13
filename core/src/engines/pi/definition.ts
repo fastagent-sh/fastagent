@@ -268,8 +268,13 @@ async function copyDirClean(
       // Only directories and regular files belong in an artifact. Skip sockets, FIFOs,
       // and devices — copyFile would throw on them and fail the whole build.
       if (!isDir && !isFile) continue;
-      const rel = toPosix(relative(base, abs)); // POSIX for ignore + git ship-set lookups (Windows)
-      if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match only with a trailing slash
+      // Two relative paths (POSIX, for Windows): `.fastagentignore` is the workspace's
+      // own exclude file, so its patterns are ARTIFACT-relative (from topBase) even when
+      // a base-restart subtree is below; the git allow set is the subtree repo's own, so
+      // its lookups are subtree-relative (from base).
+      const artRel = toPosix(relative(topBase, abs));
+      if (ig?.ignores(isDir ? `${artRel}/` : artRel)) continue; // dir patterns match only with a trailing slash
+      const rel = toPosix(relative(base, abs));
       // A dir entry recorded by git as a FILE is a symlink or a submodule gitlink: its
       // contents are outside THIS repo's tracked enumeration. A regular tracked dir is
       // kept when it holds a tracked file.

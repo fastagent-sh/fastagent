@@ -279,6 +279,21 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(ws2, "docs", "schema.md"))).toBe(true); // authored content intact
   });
 
+  it(".fastagentignore patterns stay artifact-relative inside a symlinked-dir subtree", async () => {
+    // A workspace .fastagentignore rule `docs/private.md` must hold even when docs/ is a
+    // symlink whose subtree restarts the git base; otherwise the path anchor mis-roots.
+    const shared = await mkdtemp(join(tmpdir(), "fa-shared-"));
+    await writeFile(join(shared, "pub.md"), "public\n");
+    await writeFile(join(shared, "private.md"), "SECRET\n");
+    const ws = await makeWorkspace();
+    await symlink(shared, join(ws, "docs2"));
+    await writeFile(join(ws, ".fastagentignore"), "docs2/private.md\n");
+    const out = await freshOut();
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "docs2", "pub.md"))).toBe(true);
+    expect(await exists(join(out, "docs2", "private.md"))).toBe(false); // anchored rule honored
+  });
+
   it("refuses --out at .fastagent/sessions (only .fastagent/build is owned), keeping session state", async () => {
     const ws = await makeWorkspace();
     const sessions = join(ws, ".fastagent", "sessions");
