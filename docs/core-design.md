@@ -3,8 +3,6 @@ title: fastagent - 核心设计(参考实现)
 type: design-doc
 status: design
 updated: 2026-06-11
-share_link: https://qsort.me/e7yv5ox2
-share_updated: 2026-06-08T16:43:10+08:00
 ---
 
 # fastagent - 核心设计(参考实现)
@@ -175,7 +173,7 @@ createPiAgentFromWorkspace(dir, { model? }): Promise<{ agent, definition, config
 
 ```
 工作区根/
-├── AGENTS.md / skills/ / .mcp.json   # 1 agent 定义:标准、可移植、fastagent 只读;定义装载(definition.ts)读盘产出 LoadedDefinition
+├── AGENTS.md / skills/               # 1 agent 定义:标准、可移植、fastagent 只读;定义装载(definition.ts)读盘产出 LoadedDefinition
 ├── fastagent.config.ts · 自定义代码 · .env   # 2 production source:用户拥有、可见、进 git(机密走 .env)
 └── .fastagent/                       # 3 machine state:fastagent 生成、gitignore、可删可重建
 ```
@@ -188,7 +186,7 @@ createPiAgentFromWorkspace(dir, { model? }): Promise<{ agent, definition, config
 |---|---|---|
 | `instructions`(→ systemPrompt 的一段) | M | **定义**(AGENTS.md 正文 → 定义装载;见 §2 prompt 四段式) |
 | base prompt(→ systemPrompt 骨架) | M | **引擎 binding 资产**(继承自引擎:pi→piBasePrompt;配置可覆盖) |
-| `tools` / skills | M | **定义**(skills/ + .mcp.json → 定义装载) |
+| `tools` / skills | M | **定义**(skills/ → 定义装载; `.mcp.json` is future MCP support, not implemented today) |
 | `model` | M | **配置**(fastagent.config / env;AGENTS.md 不讲用哪个 LLM) |
 | `sessions`(SessionStore) | K | **已落地第一个持久后端**:jsonlSessionStore(dev 默认落 `.fastagent/sessions/`)+ inMemorySessionStore;config 选后端仍 deferred(等后端 #2)+ **host**(target adapter 接线实现) |
 | `env`(ExecutionEnv) | K | **配置**选环境 + **host**(target adapter 接线实现) |
@@ -203,11 +201,11 @@ host ─(target adapter)→ sessions/env/lease 的实现接线            ┘
 
 注:**定义装载只产出「定义推导」那一格**(instructions + skills);model 是配置项,不在 AGENTS.md 里。
 
-### 6.3 config v1(定稿,已实现)
+### 6.2 config v1(定稿,已实现)
 
 `fastagent.config.ts` = `defineConfig({ model, tools, http })` --**只有 3 个键**,每个都过「一句话讲得清 + 有近期故事」门槛:`model`="provider/modelId" 字符串;`tools`=追加在 pi 默认工具后的自定义工具数组(即「无入口部署下 code tools 的归宿」);`http.port`。优先级 CLI flag > `FASTAGENT_MODEL` > config;无 config = zero-config 跑默认。**刻意不进 v1**:sessions/env 选型(K 轴,等 hosting 刀由真实后端定形状)、base/auth/skillPaths 覆盖(默认几乎总是对的,留库 API 作逃生舱)。选 .ts 非 yaml(旧版教训):tools 是代码需 import、类型补全、生态收敛(vite/next 同款);toolchain 要声明式数据时构建期执行 config 取 resolved 值。红线:config 只描述部署选择,绝不描述 agent 身份/行为。消费者 = **L3(`createPiAgentFromWorkspace`,config 驱动装配的收口);CLI(`fastagent dev`,已实现)经 L3 消费,自身只留进程副作用/展示/起服务;`build`/`start` 随后--业界 dev/build/start 三连,恰好对上 dev-server / bundleAgentDefinition / 跑产物)。
 
-### 6.2 tools/skills 挂载口径(定稿;参照 agentskills.io 规范 + pi/Claude Code 实现)
+### 6.3 tools/skills 挂载口径(定稿;参照 agentskills.io 规范 + pi/Claude Code 实现)
 
 - **skills 发现位置是 client 约定,规范不定**。pi 的层级:user 全局(`~/.pi/agent/skills`,先加载)→ 项目(`.pi/skills`)→ 额外 skillPaths(settings/extensions);碰撞先到者赢 + 发 collision 诊断。
 - **fastagent 的口径(经忠实性推导翻转过一次,定稿)**:缺省 `skillPaths = defaultGlobalSkillPaths()`(`~/.pi/agent/skills` + `~/.agents/skills`)--**默认加载全局,忠实 pi 本地体验**。高级控制:`skillPaths: []` = 只扫定义内;自定义数组 = 精确选装。
@@ -215,8 +213,8 @@ host ─(target adapter)→ sessions/env/lease 的实现接线            ┘
 - **碰撞**:定义内 skills 赢(部署单元是权威),先到者赢 + surface `collisions`(不吞)。机制同 pi、优先级取向不同(pi 是 user 先,我们是 definition 先--部署单元不同)。
 - **默认工具 = pi 核心集(read/bash/edit/write),忠实性口径(经场景推导翻转过一次,定稿)**:直接用 pi-coding-agent 的工厂(`createCodingTools`),工具名/描述/行为与 pi 本地逐字一致--定义作者是带全套工具 vibe 的,砍工具 = 行为漂移(同 base prompt 逻辑)。**工具层不是安全边界**:隔离是 K 侧 ExecutionEnv/sandbox 的职责(本地=用户自己的机器;AgentCore=microVM);对公网收紧 = 显式传 `tools`(如 `piReadOnlyTools`),是部署姿态非默认。渐进披露三级(discovery/activation/execution)随之全部开箱可用。pi 工具的 operations 可注入(BashOperations 等),未来 sandbox adapter 换 operations 即可。
 - **打包机制(bundleAgentDefinition)**:运行时只扫定义内的规则不变;dev 在**构建时**用 `bundleAgentDefinition(src, out, {skillPaths})` 把全局/额外挂载的**胜出** skill 整夹(含 scripts/references/assets)物化进产物,部署单元自包含、可直接再装载。败者不进包。
-- **自定义 tools = 代码,显式 `tools:` 注入,不做魔法目录(定稿;曾实现过 `<dir>/tools/*.ts` 自动加载,审查后删除)**。模式(ketchup 验证):项目里的普通 TS 模块实现 `AgentTool`,显式 import + `tools: [...piDefaultTools(cwd), myTool]`(示例 examples/lookup-order-tool.ts)。**删除自动加载的理由**:(a) tool 是代码,开发者已在代码里,显式 import 型检/可重构,魔法目录只省一行 import;(b) 假对称违反分层--定义夹=标准可移植数据,tools=代码属 layer-2;(c) bundle 拷源文件不带 npm 依赖,自包含是假的。无用户入口的部署下声明 tools 的归宿 = `fastagent.config.ts`(config 刀);声明式/可移植的挂工具 = **MCP**(`.mcp.json`,未来一刀)。进程内 code tools 无跨引擎标准,fastagent-on-pi 用 pi `AgentTool`。**pi extensions(含全局自定义 tools)不自动加载**:其契约绑 TUI 宿主(ctx.ui/commands/渲染),headless 无对应物;桥 = 把 `pi.registerTool({...})` 的参数搬成项目 tool 模块(形状几乎相同)。
-- spec 的 `allowed-tools`(实验性)暂不实现;`.mcp.json`(MCP tools)未来一刀。
+- **自定义 tools = 代码,显式 `tools:` 注入,不做魔法目录。** 模式:项目里的普通 TS 模块实现 `AgentTool`,显式 import + `tools: [...piDefaultTools(cwd), myTool]`(示例 examples/lookup-order-tool.ts)。理由:(a) tool 是代码,开发者已在代码里,显式 import 型检/可重构,魔法目录只省一行 import;(b) 假对称违反分层--定义夹=标准可移植数据,tools=代码属 layer-2;(c) bundle 拷源文件不带 npm 依赖,自包含是假的。无用户入口的部署下声明 tools 的归宿 = `fastagent.config.ts`(config 刀);声明式/可移植的挂工具 = **MCP**(`.mcp.json`,future support, not implemented today)。进程内 code tools 无跨引擎标准,fastagent-on-pi 用 pi `AgentTool`。**pi extensions(含全局自定义 tools)不自动加载**:其契约绑 TUI 宿主(ctx.ui/commands/渲染),headless 无对应物;桥 = 把 `pi.registerTool({...})` 的参数搬成项目 tool 模块(形状几乎相同)。
+- spec 的 `allowed-tools`(实验性)暂不实现;`.mcp.json`(MCP tools) is future support, not implemented today.
 
 ### 6.4 跨 runtime 编译(工具链层的真工程)
 

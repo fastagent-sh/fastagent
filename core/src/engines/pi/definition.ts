@@ -137,8 +137,8 @@ export async function loadAgentDefinition(
  * (definition wins); losers are not bundled.
  * Note: **custom code tools are out of bundling scope** — they are code (with npm
  * dependencies); their deployment unit is "project + deps" via the project's normal
- * build/deploy (explicit `tools:` injection). The standards-track for declarative
- * tool mounting is `.mcp.json` (MCP, a future knife).
+ * build/deploy (explicit `tools:` injection). Declarative MCP tool mounting via
+ * `.mcp.json` is future support, not implemented today.
  */
 export async function bundleAgentDefinition(
   srcDir: string,
