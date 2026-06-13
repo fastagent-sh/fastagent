@@ -202,6 +202,22 @@ So `definition` is **not** just `AGENTS.md` — it is the authored source tree. 
 
 The boundary is gitignore-style ignore rules **plus** an unconditional secret/dep exclusion (same model as Docker build context, `npm publish`, Vercel).
 
+**Path red line (a sibling of the config secret red line):** every path inside M is resolved **relative to the agent root**. Authored context and skills MUST be referenced by root-relative paths — never absolute paths or `~`, which are machine-specific and break on deploy. Machine-specific paths belong to K and are injected by the host.
+
+### 10.1a Authored-context discovery
+
+Authored context is **not loaded** the way skills are; it is ambient files the agent reads on demand. The model is deliberately minimal:
+
+| Invariant | Meaning |
+|---|---|
+| **One root** | the run directory (tool `cwd`) = the directory holding `AGENTS.md` = the root of the authored source tree. dev: workspace; container: project; data bundle: artifact dir |
+| **Relative resolution** | `AGENTS.md` / skills reference authored files by root-relative paths; the `cwd`-rooted `read`/`grep`/`find` tools resolve them. The prompt's env segment already reports `Current working directory`, so the model knows the root |
+| **No prompt enumeration** | authored context is **not** listed in the system prompt (unlike the `<available_skills>` listing). It is discovered by explicit reference in `AGENTS.md` or by the agent exploring (`ls`/`grep`/`find`). The filesystem is the registry |
+| **Skill-scoped vs project-scoped** | skill resources live under `skills/<name>/references|assets/` (bundled with the skill); project-scoped context lives at the root and ships as part of the source tree (§10.2) |
+| **Confinement is the env's job** | the tool layer is not the security boundary; in the v1 single-machine/container tier the container is the boundary (verify pi `read`'s cwd handling at implementation) |
+
+Consequence: skills need progressive disclosure (a prompt listing); authored context does not. Enumerating the source tree into the prompt would be noise and would duplicate the filesystem. This is why `start` reports skills but not authored files (§10.4).
+
 ### 10.2 Two packaging tiers
 
 The real axis is **bundled vs runtime-provided**, not "data vs code." Code (skill `scripts/`, code tools) is part of the agent and ships; the open question is only whether its *npm dependencies* travel with it.
@@ -238,6 +254,8 @@ Run a built agent in **production posture**. Differences from `dev`:
 | port | `--port > config` | `--port > PORT env > manifest.http.port > 8787` |
 
 `start` reuses **L2** (`createPiAgentFromDefinition`) with production wiring injected — no new ladder rung — which is exactly what L2's injection points exist for. It depends on zero builder-machine state.
+
+**Startup report (minimal observable surface):** `start` logs the run dir, model, **auth source** (`env (<KEY>)` or `oauth (<provider>)`), `AGENTS.md` presence, the **loaded skills** (enumerable), the session backend, and the bound port. It does **not** enumerate authored context files: they are ambient (§10.1a), so the only meaningful, bounded list is skills. This mirrors the `dev` startup report.
 
 ### 10.5 Auth at runtime (env key or OAuth)
 
