@@ -34,6 +34,13 @@ export {
   type SkillCollision,
 } from "./engines/pi/definition.ts";
 
+// pi reference implementation — build (compile a workspace into a deployable artifact)
+export {
+  buildPiArtifact,
+  type ArtifactManifest,
+  type BuildPiArtifactOptions,
+} from "./engines/pi/build.ts";
+
 // pi reference implementation — engine assets (prompt base + toolsets, in create.ts).
 // Internal assembly helpers (assembleSystemPrompt, resolveTools) are NOT public:
 // the ladder rungs own assembly; embedders compose via L1/L2/L3.
