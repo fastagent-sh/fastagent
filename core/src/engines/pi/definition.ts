@@ -180,8 +180,17 @@ async function gitLsFiles(srcDir: string): Promise<string[] | undefined> {
     ({ stdout: inside } = await execFileAsync("git", ["-C", srcDir, "rev-parse", "--is-inside-work-tree"]));
   } catch (error) {
     const e = error as NodeJS.ErrnoException & { stderr?: string };
-    // git not installed, or the path is genuinely not inside any repo → whole tree.
-    if (e.code === "ENOENT" || /not a git repository/i.test(e.stderr ?? "")) return undefined;
+    if (e.code === "ENOENT") {
+      // The git binary is not on PATH. If this IS a repo (.git present) we cannot apply
+      // its .gitignore exclusions — fail visibly rather than ship the whole tree (which
+      // would bundle ignored/private files). No .git → genuinely non-repo → whole tree.
+      if (await stat(join(srcDir, ".git")).then(() => true, () => false)) {
+        throw new Error(`git is required to build a repo workspace but was not found on PATH`);
+      }
+      return undefined;
+    }
+    // The path is genuinely not inside any repo → whole tree.
+    if (/not a git repository/i.test(e.stderr ?? "")) return undefined;
     // A REAL repo where git refuses to operate (dubious ownership, corrupt .git, perms)
     // must NOT silently degrade to "ship everything" — that drops .gitignore protection
     // and bundles ignored/private files. Only a confirmed non-repo takes the whole-tree
@@ -229,39 +238,48 @@ function gitAllowFromFiles(files: string[]): GitAllow {
   return { files: fileSet, dirs };
 }
 
+/** The exact artifact contents of a source tree: regular files (artifact-relative POSIX
+ * paths) to copy, plus the dirs to create (so empty allowed dirs survive). */
+interface ShipPlan {
+  files: { abs: string; rel: string }[];
+  dirs: string[];
+}
+
 /**
- * Recursively copy srcDir into destDir, applying the artifact exclusions. Hand-rolled
- * (not node:fs cp) because cp refuses dest-inside-src, which is exactly the default out
- * `.fastagent/build`; the walk skips `skipAbs` (the out dir) instead.
+ * Compute the SINGLE source of truth for what a source tree contributes to an artifact:
+ * one filesystem walk that applies every exclusion and returns the exact ship-set. Both
+ * the "definition files must ship" validation and the copy use this one plan, so they can
+ * never disagree (which is why a parallel ship predicate is gone).
  *
- * Exclusions: the hard set (secrets/deps/vcs/state, by name at any depth) always; `ig`
- * (a `.fastagentignore` matcher rooted at srcDir) when provided; and, when `gitAllow` is
- * given, the git ship-set (a tracked symlink is listed as a file, a regular dir is kept
- * when it holds a tracked file, a regular file when it is listed). The hard set always
- * applies, so an external skill's own `node_modules`/`.git` is never bundled.
+ * Exclusions: the hard set (deps/vcs/state, by name at any depth) always; `ig` (a
+ * `.fastagentignore` matcher rooted at srcDir, ARTIFACT-relative) when provided; and the
+ * git ship-set computed HERE from srcDir's own git (a tracked symlink/gitlink is listed
+ * as a file, a regular dir is kept when it holds a tracked file). Outside a repo the whole
+ * tree ships. `skipReal` (a realpath) is excluded so an in-tree out dir is not walked.
  *
  * Symlinks and git submodules (gitlinks) are dereferenced (follow `stat`): a link/gitlink
- * to a directory is recursed into WITHOUT gitAllow (its contents are outside the parent's
- * tracked enumeration), a link to a file is copied, a dangling link is skipped. Cycles
- * (e.g. `link -> .`) are broken by tracking the current recursion STACK of target
- * realpaths — a dir is skipped only when its realpath is its own ancestor; two sibling
- * links to the same target are both kept.
+ * to a directory starts a FRESH subtree whose ship-set is recomputed from ITS OWN git (so
+ * a submodule honors its own .gitignore; a non-repo target ships all minus hard excludes),
+ * a link to a file is copied, a dangling link is skipped. Cycles (e.g. `link -> .`) are
+ * broken by tracking the recursion STACK of target realpaths.
  */
-async function copyDirClean(
-  srcDir: string,
-  destDir: string,
-  opts: { ig?: Ignore; skipReal?: string; gitAllow?: GitAllow } = {},
-): Promise<void> {
-  const { ig, skipReal, gitAllow } = opts;
-  async function walk(absDir: string, destPath: string, stack: Set<string>, base: string, allow: GitAllow | undefined): Promise<void> {
+async function planShipSet(srcDir: string, opts: { ig?: Ignore; skipReal?: string } = {}): Promise<ShipPlan> {
+  const { ig, skipReal } = opts;
+  const topBase = resolve(srcDir);
+  const files: { abs: string; rel: string }[] = [];
+  const dirs: string[] = [];
+  const topFiles = await gitLsFiles(srcDir);
+  const topAllow = topFiles ? gitAllowFromFiles(topFiles) : undefined;
+
+  async function walk(absDir: string, stack: Set<string>, base: string, allow: GitAllow | undefined): Promise<void> {
     const realDir = await realpath(absDir).catch(() => resolve(absDir));
-    // Skip the out dir by REALPATH, so it is recognized even when src and out are
-    // spelled through different symlink aliases (textual compare would descend into
-    // the artifact being created → build/build/…).
+    // Skip the out dir by REALPATH, so it is recognized even when src and out are spelled
+    // through different symlink aliases (textual compare would descend into the artifact).
     if (skipReal !== undefined && (realDir === skipReal || realDir.startsWith(skipReal + sep))) return;
     if (stack.has(realDir)) return; // cycle: realDir is its own ancestor on this descent
     stack.add(realDir);
-    await mkdir(destPath, { recursive: true });
+    const relDir = toPosix(relative(topBase, absDir));
+    if (relDir !== "") dirs.push(relDir); // record allowed dirs so empty ones survive the copy
     for (const entry of await readdir(absDir, { withFileTypes: true })) {
       const abs = join(absDir, entry.name);
       if (isHardExcluded(entry.name)) continue;
@@ -277,12 +295,12 @@ async function copyDirClean(
       // Only directories and regular files belong in an artifact. Skip sockets, FIFOs,
       // and devices — copyFile would throw on them and fail the whole build.
       if (!isDir && !isFile) continue;
-      // Two relative paths (POSIX, for Windows): `.fastagentignore` is the workspace's
-      // own exclude file, so its patterns are ARTIFACT-relative (from topBase) even when
-      // a base-restart subtree is below; the git allow set is the subtree repo's own, so
-      // its lookups are subtree-relative (from base).
+      // Two relative paths (POSIX, for Windows): `.fastagentignore` is the workspace's own
+      // exclude file, so its patterns are ARTIFACT-relative (from topBase) even inside a
+      // base-restart subtree; the git allow set is the subtree repo's own, so its lookups
+      // are subtree-relative (from base).
       const artRel = toPosix(relative(topBase, abs));
-      if (ig?.ignores(isDir ? `${artRel}/` : artRel)) continue; // dir patterns match only with a trailing slash
+      if (ig?.ignores(isDir ? `${artRel}/` : artRel)) continue; // dir patterns need a trailing slash
       const rel = toPosix(relative(base, abs));
       // A dir entry recorded by git as a FILE is a symlink or a submodule gitlink: its
       // contents are outside THIS repo's tracked enumeration. A regular tracked dir is
@@ -292,26 +310,28 @@ async function copyDirClean(
         const allowed = isDir ? allow.dirs.has(rel) || viaFile : allow.files.has(rel);
         if (!allowed) continue;
       }
-      const dest = join(destPath, entry.name);
       if (isDir) {
-        // A symlinked dir or a submodule gitlink starts a fresh subtree: recompute the
-        // ship-set from ITS OWN git (so a submodule honors its own .gitignore), or ship
-        // all minus hard excludes when the target is not a repo (e.g. an external
-        // docs/ symlink). A plain tracked dir keeps this repo's base + allow.
         if (isLink || viaFile) {
           const subFiles = await gitLsFiles(abs);
-          await walk(abs, dest, stack, abs, subFiles ? gitAllowFromFiles(subFiles) : undefined);
+          await walk(abs, stack, abs, subFiles ? gitAllowFromFiles(subFiles) : undefined);
         } else {
-          await walk(abs, dest, stack, base, allow);
+          await walk(abs, stack, base, allow);
         }
       } else {
-        await copyFile(abs, dest); // regular file (follows a symlink-to-file)
+        files.push({ abs, rel: artRel }); // regular file (follows a symlink-to-file)
       }
     }
     stack.delete(realDir); // leave the descent: siblings sharing this target are not a cycle
   }
-  const topBase = resolve(srcDir);
-  await walk(topBase, resolve(destDir), new Set(), topBase, gitAllow);
+  await walk(topBase, new Set(), topBase, topAllow);
+  return { files, dirs };
+}
+
+/** Materialize a {@link ShipPlan} into outDir: create allowed dirs, then copy each file. */
+async function executeShipPlan(plan: ShipPlan, outDir: string): Promise<void> {
+  await mkdir(outDir, { recursive: true });
+  for (const rel of plan.dirs) await mkdir(join(outDir, rel), { recursive: true });
+  for (const f of plan.files) await copyFile(f.abs, join(outDir, f.rel));
 }
 
 /**
@@ -359,28 +379,25 @@ export async function bundleAgentDefinition(
   const fastagentIg = await loadFastagentIgnore(srcDir);
   const srcBase = resolve(srcDir);
 
-  // Ship-set: in a git repo, git decides which files belong (it already applies
-  // .gitignore correctly — we no longer reimplement that). Outside a repo, the whole
-  // tree ships. Both modes additionally honor .fastagentignore + the hard excludes.
-  const gitFiles = await gitLsFiles(srcDir);
-  const gitAllow = gitFiles ? gitAllowFromFiles(gitFiles) : undefined;
+  // ONE ship-decision drives everything below. Skip the out dir by realpath so an in-tree
+  // out (.fastagent/build) is never walked into; realpath when it exists (rebuild), else
+  // the resolved path (first build). This runs BEFORE the destructive rm, so a validation
+  // failure never destroys a prior artifact.
+  const skipReal = await realpath(outDir).catch(() => resolve(outDir));
+  const plan = await planShipSet(srcDir, { ig: fastagentIg, skipReal });
+  const shipped = new Set(plan.files.map((f) => f.rel));
 
-  // The loaded definition files (AGENTS.md + local skills) ARE the agent; they must
-  // ship. If the ship-set (git or .fastagentignore) would drop one, the reported agent
-  // would not match the artifact — surface the conflict instead of silently dropping it.
-  const wouldShip = (relPosix: string): boolean => {
-    if (relPosix.split("/").some(isHardExcluded)) return false;
-    if (fastagentIg?.ignores(relPosix)) return false;
-    if (gitAllow && !gitAllow.files.has(relPosix)) return false;
-    return true;
-  };
+  // The loaded definition files (AGENTS.md + local skills) ARE the agent; they must be in
+  // the ship-set, or the artifact would not match the reported agent. Validate against the
+  // ACTUAL plan (so e.g. a gitlink/symlink skill dir the walk did include passes) — no
+  // parallel predicate that could disagree with the copy.
   const dropped: string[] = [];
-  if (definition.instructions !== undefined && !wouldShip("AGENTS.md")) dropped.push("AGENTS.md");
+  if (definition.instructions !== undefined && !shipped.has("AGENTS.md")) dropped.push("AGENTS.md");
   for (const skill of definition.skills) {
     const skillAbs = resolve(skill.filePath);
     if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) {
-      const rel = toPosix(relative(srcBase, skillAbs)); // POSIX for ignore + git ship-set lookups
-      if (!wouldShip(rel)) dropped.push(rel);
+      const rel = toPosix(relative(srcBase, skillAbs));
+      if (!shipped.has(rel)) dropped.push(rel);
     }
   }
   if (dropped.length > 0) {
@@ -391,14 +408,10 @@ export async function bundleAgentDefinition(
   }
 
   // Clean rebuild: replace outDir entirely (guarded above so this can't delete the
-  // source). A file dropped from the source cannot survive as a stale artifact.
+  // source), then materialize the plan. A file dropped from the source cannot survive as
+  // a stale artifact.
   await rm(outDir, { recursive: true, force: true });
-  await mkdir(outDir, { recursive: true });
-
-  // Copy the ship-set into the artifact. skipReal is the realpath of the now-created
-  // outDir, so an in-tree out (.fastagent/build) is skipped even via a symlink alias.
-  const skipReal = await realpath(outDir);
-  await copyDirClean(srcBase, outDir, { ig: fastagentIg, skipReal, gitAllow });
+  await executeShipPlan(plan, outDir);
 
   // Materialize winning skills that live OUTSIDE the source tree (globals / extra
   // mounts) into outDir/skills/. Definition-local skills already arrived via the tree
@@ -426,8 +439,9 @@ export async function bundleAgentDefinition(
       );
     }
     if (basename(skill.filePath) === "SKILL.md") {
-      await copyDirClean(dirname(skill.filePath), dest);
+      await executeShipPlan(await planShipSet(dirname(skill.filePath)), dest);
     } else {
+      await mkdir(dirname(dest), { recursive: true });
       await copyFile(skill.filePath, dest);
     }
   }

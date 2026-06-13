@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { buildPiArtifact, loadAgentDefinition, type ArtifactManifest } from "../src/index.ts";
 
@@ -321,6 +322,32 @@ describe("build: buildPiArtifact", () => {
     await writeFile(join(sessions, "conv.jsonl"), "history\n");
     await expect(buildPiArtifact(ws, sessions)).rejects.toThrow(/not a prior fastagent artifact/);
     expect(await exists(join(sessions, "conv.jsonl"))).toBe(true); // session history untouched
+  });
+
+  it("builds an agent whose local skill dir is a symlink in a repo (validation uses the real ship-set)", async () => {
+    // git lists a symlinked/gitlink skill dir as `skills/foo` (a file), not
+    // `skills/foo/SKILL.md`. The single ship-plan includes the dereferenced SKILL.md, so
+    // validation must pass instead of aborting as "definition file excluded".
+    const ext = await mkdtemp(join(tmpdir(), "fa-ext-skill-"));
+    await writeFile(join(ext, "SKILL.md"), "---\nname: linked\ndescription: d\n---\nbody\n");
+    const ws = await makeWorkspace();
+    await symlink(ext, join(ws, "skills", "linked"));
+    await gitInit(ws); // git now lists skills/linked as a symlink file-entry
+    const out = await freshOut();
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "skills", "linked", "SKILL.md"))).toBe(true);
+  });
+
+  it("fails visibly when git is missing in a repo workspace (no silent whole-tree fallback)", async () => {
+    const ws = await makeWorkspace();
+    await rm(join(ws, ".git"), { recursive: true, force: true });
+    await gitInit(ws); // a real repo
+    const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+    const emptyPath = await mkdtemp(join(tmpdir(), "fa-nopath-")); // node via execPath; git absent
+    const err = await execFileAsync(process.execPath, [cli, "build", ws, "--out", await freshOut()], {
+      env: { ...process.env, PATH: emptyPath },
+    }).then(() => null, (e: { stderr?: string }) => e);
+    expect(err?.stderr ?? "").toMatch(/git is required to build a repo workspace/);
   });
 
   it("a submodule (gitlink) ships under ITS OWN git rules, not the whole working tree", async () => {
