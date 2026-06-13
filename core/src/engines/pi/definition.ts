@@ -165,21 +165,38 @@ const execFileAsync = promisify(execFile);
 
 /**
  * The files git considers part of the working tree (tracked + untracked, minus ignored),
- * relative to srcDir. `undefined` when srcDir is not a git repo (or git is unavailable),
- * so the caller ships the whole tree. Delegating to git is why we no longer hand-
- * implement .gitignore semantics (the recurring source of artifact edge cases).
+ * relative to srcDir and POSIX-normalized. `undefined` when srcDir is NOT a git repo (or
+ * git is unavailable) — the caller then ships the whole tree. Delegating to git is why we
+ * no longer hand-implement .gitignore semantics.
+ *
+ * A repo whose enumeration FAILS for an operational reason (dubious ownership, corrupt
+ * index, buffer overflow, …) must NOT silently degrade to "ship everything" — that would
+ * drop .gitignore protection and bundle ignored/generated/private files. So we detect
+ * repo-ness separately (rev-parse) and fail visibly if a real repo can't be enumerated.
  */
 async function gitLsFiles(srcDir: string): Promise<string[] | undefined> {
   try {
-    const { stdout } = await execFileAsync(
+    await execFileAsync("git", ["-C", srcDir, "rev-parse", "--is-inside-work-tree"]);
+  } catch {
+    return undefined; // not a git repo / git unavailable → ship the whole tree
+  }
+  // It IS a repo: an enumeration failure here is unexpected — surface it.
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(
       "git",
       ["-C", srcDir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-      { maxBuffer: 64 * 1024 * 1024 },
-    );
-    return stdout.split("\0").filter((p) => p.length > 0);
-  } catch {
-    return undefined; // not a git repo / git unavailable
+      { maxBuffer: 256 * 1024 * 1024 },
+    ));
+  } catch (error) {
+    throw new Error(`git ls-files failed in the workspace repo: ${(error as Error).message}`);
   }
+  return stdout.split("\0").filter((p) => p.length > 0); // git emits POSIX-separated paths
+}
+
+/** Normalize a relative path to POSIX separators for git ship-set / ignore lookups (Windows). */
+function toPosix(rel: string): string {
+  return sep === "/" ? rel : rel.split(sep).join("/");
 }
 
 /** A git ship-set as fast lookups: the listed files + every ancestor dir of a listed file. */
@@ -211,11 +228,12 @@ function gitAllowFromFiles(files: string[]): GitAllow {
  * when it holds a tracked file, a regular file when it is listed). The hard set always
  * applies, so an external skill's own `node_modules`/`.git` is never bundled.
  *
- * Symlinks are dereferenced (follow `stat`): a link to a directory is recursed into
- * (WITHOUT gitAllow — its target is outside the tracked tree), a link to a file is
- * copied, a dangling link is skipped. Cycles (e.g. `link -> .`) are broken by tracking
- * the current recursion STACK of target realpaths — a dir is skipped only when its
- * realpath is its own ancestor; two sibling links to the same target are both kept.
+ * Symlinks and git submodules (gitlinks) are dereferenced (follow `stat`): a link/gitlink
+ * to a directory is recursed into WITHOUT gitAllow (its contents are outside the parent's
+ * tracked enumeration), a link to a file is copied, a dangling link is skipped. Cycles
+ * (e.g. `link -> .`) are broken by tracking the current recursion STACK of target
+ * realpaths — a dir is skipped only when its realpath is its own ancestor; two sibling
+ * links to the same target are both kept.
  */
 async function copyDirClean(
   srcDir: string,
@@ -248,17 +266,18 @@ async function copyDirClean(
       // Only directories and regular files belong in an artifact. Skip sockets, FIFOs,
       // and devices — copyFile would throw on them and fail the whole build.
       if (!isDir && !isFile) continue;
-      const rel = relative(base, abs);
+      const rel = toPosix(relative(base, abs)); // POSIX for ignore + git ship-set lookups (Windows)
       if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match only with a trailing slash
+      // A dir entry recorded by git as a FILE is a symlink or a submodule gitlink: its
+      // contents are outside the parent's tracked enumeration, so deref it (recurse
+      // without gitAllow). A regular tracked dir is kept when it holds a tracked file.
+      const viaFile = allow !== undefined && allow.files.has(rel);
       if (allow !== undefined) {
-        // git lists a tracked symlink as a file; a regular dir is kept when it holds a
-        // tracked file; a regular file when it is itself listed.
-        const allowed = isLink ? allow.files.has(rel) : isDir ? allow.dirs.has(rel) : allow.files.has(rel);
+        const allowed = isDir ? allow.dirs.has(rel) || viaFile : allow.files.has(rel);
         if (!allowed) continue;
       }
       const dest = join(destPath, entry.name);
-      // A dereferenced symlink-dir leaves the tracked tree, so gitAllow no longer applies.
-      if (isDir) await walk(abs, dest, stack, isLink ? undefined : allow);
+      if (isDir) await walk(abs, dest, stack, isLink || viaFile ? undefined : allow);
       else await copyFile(abs, dest); // regular file (follows a symlink-to-file)
     }
     stack.delete(realDir); // leave the descent: siblings sharing this target are not a cycle
@@ -320,10 +339,10 @@ export async function bundleAgentDefinition(
   // The loaded definition files (AGENTS.md + local skills) ARE the agent; they must
   // ship. If the ship-set (git or .fastagentignore) would drop one, the reported agent
   // would not match the artifact — surface the conflict instead of silently dropping it.
-  const wouldShip = (rel: string): boolean => {
-    if (rel.split(sep).some(isHardExcluded)) return false;
-    if (fastagentIg?.ignores(rel)) return false;
-    if (gitAllow && !gitAllow.files.has(rel)) return false;
+  const wouldShip = (relPosix: string): boolean => {
+    if (relPosix.split("/").some(isHardExcluded)) return false;
+    if (fastagentIg?.ignores(relPosix)) return false;
+    if (gitAllow && !gitAllow.files.has(relPosix)) return false;
     return true;
   };
   const dropped: string[] = [];
@@ -331,7 +350,7 @@ export async function bundleAgentDefinition(
   for (const skill of definition.skills) {
     const skillAbs = resolve(skill.filePath);
     if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) {
-      const rel = relative(srcBase, skillAbs);
+      const rel = toPosix(relative(srcBase, skillAbs)); // POSIX for ignore + git ship-set lookups
       if (!wouldShip(rel)) dropped.push(rel);
     }
   }

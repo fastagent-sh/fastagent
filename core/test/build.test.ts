@@ -258,15 +258,19 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(bad, "fastagent.json"))).toBe(false);
   });
 
-  it("rejects source/output aliasing and an output that contains the source (no data loss)", async () => {
+  it("refuses to overwrite existing non-artifact output; source stays intact; rebuild is idempotent", async () => {
     const ws = await makeWorkspace();
-    await expect(buildPiArtifact(ws, ws)).rejects.toThrow(/must differ from the source/);
-    await expect(buildPiArtifact(ws, join(ws, ".."))).rejects.toThrow(/must not contain the source/);
-    // a symlinked out aliasing the source is caught via realpath
-    const link = join(await mkdtemp(join(tmpdir(), "fa-build-link-")), "out");
-    await symlink(ws, link);
-    await expect(buildPiArtifact(ws, link)).rejects.toThrow(/must differ from the source/);
-    expect(await exists(join(ws, "AGENTS.md"))).toBe(true); // source intact throughout
+    // --out at an existing authored subtree would rm it; refused, source untouched.
+    await expect(buildPiArtifact(ws, join(ws, "docs"))).rejects.toThrow(/not a prior fastagent artifact/);
+    expect(await exists(join(ws, "docs", "schema.md"))).toBe(true);
+    // out == src is rejected too (any guard); source intact.
+    await expect(buildPiArtifact(ws, ws)).rejects.toThrow();
+    expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
+    // a prior artifact dir (has the manifest) may be rebuilt into.
+    const out = await freshOut();
+    await buildPiArtifact(ws, out);
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "fastagent.json"))).toBe(true);
   });
 
   it("builds into the default in-tree out (.fastagent/build) without copying it into itself", async () => {

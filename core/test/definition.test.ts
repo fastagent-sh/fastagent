@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { access, mkdtemp, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
@@ -238,6 +238,15 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     const link = join(await mkdtemp(join(tmpdir(), "fa-bundle-link-")), "out");
     await symlink(src, link); // outDir is a symlink pointing at the source
     await expect(bundleAgentDefinition(src, link)).rejects.toThrow(/output dir must differ from the source/);
+    expect(await access(join(src, "AGENTS.md")).then(() => true, () => false)).toBe(true);
+  });
+
+  it("refuses an output that contains the source, incl. the filesystem-root edge", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "fa-bundle-parent-"));
+    const src = join(parent, "ws");
+    await mkdir(src, { recursive: true });
+    await writeFile(join(src, "AGENTS.md"), "# Precious\n");
+    await expect(bundleAgentDefinition(src, parent)).rejects.toThrow(/must not contain the source/);
     expect(await access(join(src, "AGENTS.md")).then(() => true, () => false)).toBe(true);
   });
 });

@@ -12,10 +12,9 @@
  *
  * Build is non-destructive to the source: it only writes the (separate) outDir.
  */
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, readdir, writeFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFile } from "node:fs/promises";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { type LoadedDefinition, bundleAgentDefinition, defaultGlobalSkillPaths } from "./definition.ts";
 
@@ -61,6 +60,27 @@ export async function buildPiArtifact(
   // Validate against the registry now (before touching outDir), so a typo fails the
   // build instead of being frozen into the manifest and only failing later at start.
   resolveModel(model);
+
+  // bundleAgentDefinition does `rm -rf outDir`. Its realpath guards block the
+  // catastrophic cases (out == src / out contains src), but an in-tree `--out docs`
+  // or `--out skills` points at EXISTING authored content that rm would destroy. Only
+  // own an out dir that is safe to replace: under `.fastagent/`, non-existent, empty,
+  // or a prior artifact (has the manifest). Otherwise refuse — the source is untouched.
+  const outResolved = resolve(outDir);
+  const ownedState = join(resolve(srcDir), ".fastagent");
+  const underOwned = outResolved === ownedState || outResolved.startsWith(ownedState + sep);
+  if (!underOwned) {
+    const entries = await readdir(outResolved).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return [] as string[];
+      throw e;
+    });
+    if (entries.length > 0 && !entries.includes(MANIFEST_FILE)) {
+      throw new Error(
+        `--out "${outDir}" is not empty and not a prior fastagent artifact; refusing to overwrite it ` +
+          `(use an empty dir, a previous build dir, or the default .fastagent/build)`,
+      );
+    }
+  }
 
   const definition = await bundleAgentDefinition(srcDir, outDir, {
     skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
