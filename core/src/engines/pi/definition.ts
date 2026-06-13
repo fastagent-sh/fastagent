@@ -24,9 +24,9 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { cp, copyFile, mkdir, readFile, readdir, realpath, rm } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import ignore, { type Ignore } from "ignore";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
@@ -146,35 +146,50 @@ async function loadGitignore(srcDir: string): Promise<Ignore | undefined> {
 }
 
 /**
- * Recursively copy srcDir's contents into outDir, applying exclusions. Hand-rolled
- * (not node:fs cp) because cp refuses dest-inside-src, which is exactly the default
- * (`.fastagent/build`); the walk simply skips outDir. Symlinks are dereferenced so the
- * artifact is self-contained; dangling links are skipped.
+ * Recursively copy srcDir into destDir, applying the artifact exclusions. Hand-rolled
+ * (not node:fs cp) because cp refuses dest-inside-src, which is exactly the default out
+ * `.fastagent/build`; the walk skips `skipAbs` (the out dir) instead.
+ *
+ * Exclusions: the hard set (secrets/deps/vcs/state, by name at any depth) always; and
+ * `ig` (a .gitignore matcher rooted at srcDir) when provided. The SAME path is used for
+ * the source tree AND for materializing external skill folders, so secrets in a global
+ * skill (e.g. its own `.env`/`node_modules`) are never bundled either.
+ *
+ * Symlinks are dereferenced (follow `stat`): a link to a directory is recursed into, a
+ * link to a file is copied, a dangling link is skipped. A realpath visited-set breaks
+ * symlink cycles (e.g. `link -> .`) so the walk cannot loop forever.
  */
-async function copyCleanTree(srcBase: string, outDir: string, outBase: string, ig: Ignore | undefined): Promise<void> {
-  async function walk(relDir: string): Promise<void> {
-    const entries = await readdir(relDir === "" ? srcBase : join(srcBase, relDir), { withFileTypes: true });
-    for (const entry of entries) {
-      const rel = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
-      const abs = join(srcBase, rel);
-      if (abs === outBase || abs.startsWith(outBase + sep)) continue; // never copy outDir into itself
+async function copyDirClean(
+  srcDir: string,
+  destDir: string,
+  opts: { ig?: Ignore; skipAbs?: string } = {},
+): Promise<void> {
+  const { ig, skipAbs } = opts;
+  const base = resolve(srcDir);
+  const visited = new Set<string>();
+  async function walk(absDir: string, destPath: string): Promise<void> {
+    const realDir = await realpath(absDir).catch(() => absDir);
+    if (visited.has(realDir)) return; // symlink cycle guard
+    visited.add(realDir);
+    await mkdir(destPath, { recursive: true });
+    for (const entry of await readdir(absDir, { withFileTypes: true })) {
+      const abs = join(absDir, entry.name);
+      if (skipAbs !== undefined && (abs === skipAbs || abs.startsWith(skipAbs + sep))) continue;
       if (isHardExcluded(entry.name)) continue;
-      const isDir = entry.isDirectory();
-      if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match only with a trailing slash
-      const dest = join(outDir, rel);
-      if (isDir) {
-        await mkdir(dest, { recursive: true });
-        await walk(rel);
-      } else {
-        // entry.isFile() or a symlink: copyFile dereferences, giving a self-contained
-        // artifact; a dangling symlink is skipped rather than failing the build.
-        await copyFile(abs, dest).catch((e: NodeJS.ErrnoException) => {
-          if (!entry.isSymbolicLink()) throw e;
-        });
+      let isDir = entry.isDirectory();
+      if (entry.isSymbolicLink()) {
+        const target = await stat(abs).catch(() => undefined); // follow the link
+        if (!target) continue; // dangling → skip rather than fail the build
+        isDir = target.isDirectory();
       }
+      const rel = relative(base, abs); // for the ignore matcher (rooted at srcDir)
+      if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match only with a trailing slash
+      const dest = join(destPath, entry.name);
+      if (isDir) await walk(abs, dest);
+      else await copyFile(abs, dest); // follows a symlink-to-file
     }
   }
-  await walk("");
+  await walk(base, resolve(destDir));
 }
 
 /**
@@ -228,7 +243,7 @@ export async function bundleAgentDefinition(
   await mkdir(outDir, { recursive: true });
 
   // Copy the cleaned source tree (excludes the hard set + .gitignore + outDir itself).
-  await copyCleanTree(srcBase, outDir, outBase, ig);
+  await copyDirClean(srcBase, outDir, { ig, skipAbs: outBase });
 
   // Materialize winning skills that live OUTSIDE the source tree (globals / extra
   // mounts) into outDir/skills/. Definition-local skills already arrived via the tree
@@ -238,7 +253,10 @@ export async function bundleAgentDefinition(
     const skillAbs = resolve(skill.filePath);
     if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) continue; // local: already copied
     if (basename(skill.filePath) === "SKILL.md") {
-      await cp(dirname(skill.filePath), join(outDir, "skills", skill.name), { recursive: true });
+      // Materialize the external skill folder through the SAME clean copy, so the hard
+      // excludes apply — a global skill's own .env/node_modules/.git is never bundled.
+      const skillDir = dirname(skill.filePath);
+      await copyDirClean(skillDir, join(outDir, "skills", skill.name), { ig: await loadGitignore(skillDir) });
     } else {
       await copyFile(skill.filePath, join(outDir, "skills", basename(skill.filePath)));
     }

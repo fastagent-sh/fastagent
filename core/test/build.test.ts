@@ -118,6 +118,41 @@ describe("build: buildPiArtifact", () => {
     }
   });
 
+  it("materialized global skills are also cleaned: their .env/node_modules/.git never leak", async () => {
+    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
+    const skill = join(home, ".pi", "agent", "skills", "leaky");
+    await mkdir(join(skill, "node_modules", "junk"), { recursive: true });
+    await writeFile(join(skill, "SKILL.md"), "---\nname: leaky\ndescription: x.\n---\nb\n");
+    await writeFile(join(skill, ".env"), "SKILL_SECRET=topsecret\n");
+    await writeFile(join(skill, "node_modules", "junk", "i.js"), "x\n");
+    await writeFile(join(skill, "ref.md"), "legit reference\n"); // a real bundled resource
+    const ws = await makeWorkspace();
+    const out = await freshOut();
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      await buildPiArtifact(ws, out, { globalSkills: true });
+      expect(await exists(join(out, "skills", "leaky", "ref.md"))).toBe(true); // skill content ships
+      expect(await exists(join(out, "skills", "leaky", ".env"))).toBe(false); // secret never bundled
+      expect(await exists(join(out, "skills", "leaky", "node_modules"))).toBe(false);
+    } finally {
+      if (saved !== undefined) process.env.HOME = saved;
+      else delete process.env.HOME;
+    }
+  });
+
+  it("dereferences a symlinked directory into the artifact (no silent drop)", async () => {
+    const shared = await mkdtemp(join(tmpdir(), "fa-shared-"));
+    await writeFile(join(shared, "schema.md"), "# shared\nusers(id)\n");
+    const ws = await makeWorkspace();
+    await rm(join(ws, "docs"), { recursive: true });
+    await symlink(shared, join(ws, "docs")); // docs/ is a symlink to a directory
+    const out = await freshOut();
+    await buildPiArtifact(ws, out);
+    // the symlinked dir's contents must be dereferenced into the artifact
+    expect(await readFile(join(out, "docs", "schema.md"), "utf8")).toContain("users(id)");
+  });
+
   it("model precedence: --model option beats config; bad/missing model fails before writing", async () => {
     const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
     const out = await freshOut();
