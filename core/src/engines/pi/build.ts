@@ -68,9 +68,11 @@ export async function buildPiArtifact(
   // or a prior artifact. "Prior artifact" is validated by the manifest's CONTENT, not
   // just a file named fastagent.json — a user's authored sample by that name must not
   // license deleting their directory. Otherwise refuse; the source is untouched.
+  // "Owned" is the build dir specifically (.fastagent/build), NOT all of .fastagent —
+  // .fastagent/sessions holds session history that an --out there would rm.
   const outResolved = resolve(outDir);
-  const ownedState = join(resolve(srcDir), ".fastagent");
-  const underOwned = outResolved === ownedState || outResolved.startsWith(ownedState + sep);
+  const ownedBuild = join(resolve(srcDir), ".fastagent", "build");
+  const underOwned = outResolved === ownedBuild || outResolved.startsWith(ownedBuild + sep);
   if (!underOwned) {
     const entries = await readdir(outResolved).catch((e: NodeJS.ErrnoException) => {
       if (e.code === "ENOENT") return [] as string[];

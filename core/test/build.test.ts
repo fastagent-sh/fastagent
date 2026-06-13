@@ -279,6 +279,31 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(ws2, "docs", "schema.md"))).toBe(true); // authored content intact
   });
 
+  it("refuses --out at .fastagent/sessions (only .fastagent/build is owned), keeping session state", async () => {
+    const ws = await makeWorkspace();
+    const sessions = join(ws, ".fastagent", "sessions");
+    await mkdir(sessions, { recursive: true });
+    await writeFile(join(sessions, "conv.jsonl"), "history\n");
+    await expect(buildPiArtifact(ws, sessions)).rejects.toThrow(/not a prior fastagent artifact/);
+    expect(await exists(join(sessions, "conv.jsonl"))).toBe(true); // session history untouched
+  });
+
+  it("a submodule (gitlink) ships under ITS OWN git rules, not the whole working tree", async () => {
+    // A submodule is a nested repo; its own .gitignore must decide what ships.
+    const ws = await makeWorkspace();
+    const sub = join(ws, "vendor");
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(sub, "doc.md"), "shipped reference\n");
+    await writeFile(join(sub, "secret.env"), "LEAK=no\n");
+    await writeFile(join(sub, ".gitignore"), "secret.env\n");
+    await gitInit(sub); // nested repo (acts as the submodule's checked-out tree)
+    await gitInit(ws);
+    const out = await freshOut();
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "vendor", "doc.md"))).toBe(true); // tracked content ships
+    expect(await exists(join(out, "vendor", "secret.env"))).toBe(false); // submodule .gitignore honored
+  });
+
   it("builds into the default in-tree out (.fastagent/build) without copying it into itself", async () => {
     const ws = await makeWorkspace();
     const out = join(ws, ".fastagent", "build"); // the CLI default — inside the source tree

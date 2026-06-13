@@ -205,9 +205,12 @@ interface GitAllow {
   dirs: Set<string>;
 }
 function gitAllowFromFiles(files: string[]): GitAllow {
-  const fileSet = new Set(files);
+  // git lists a gitlink/embedded-repo dir with a trailing slash (e.g. `vendor/`); strip it
+  // so the dir's rel (no slash) matches and triggers the submodule subtree recompute.
+  const cleaned = files.map((f) => (f.endsWith("/") ? f.slice(0, -1) : f));
+  const fileSet = new Set(cleaned);
   const dirs = new Set<string>();
-  for (const f of files) {
+  for (const f of cleaned) {
     let d = dirname(f);
     while (d && d !== "." && !dirs.has(d)) {
       dirs.add(d);
@@ -241,8 +244,7 @@ async function copyDirClean(
   opts: { ig?: Ignore; skipReal?: string; gitAllow?: GitAllow } = {},
 ): Promise<void> {
   const { ig, skipReal, gitAllow } = opts;
-  const base = resolve(srcDir);
-  async function walk(absDir: string, destPath: string, stack: Set<string>, allow: GitAllow | undefined): Promise<void> {
+  async function walk(absDir: string, destPath: string, stack: Set<string>, base: string, allow: GitAllow | undefined): Promise<void> {
     const realDir = await realpath(absDir).catch(() => resolve(absDir));
     // Skip the out dir by REALPATH, so it is recognized even when src and out are
     // spelled through different symlink aliases (textual compare would descend into
@@ -269,20 +271,33 @@ async function copyDirClean(
       const rel = toPosix(relative(base, abs)); // POSIX for ignore + git ship-set lookups (Windows)
       if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match only with a trailing slash
       // A dir entry recorded by git as a FILE is a symlink or a submodule gitlink: its
-      // contents are outside the parent's tracked enumeration, so deref it (recurse
-      // without gitAllow). A regular tracked dir is kept when it holds a tracked file.
+      // contents are outside THIS repo's tracked enumeration. A regular tracked dir is
+      // kept when it holds a tracked file.
       const viaFile = allow !== undefined && allow.files.has(rel);
       if (allow !== undefined) {
         const allowed = isDir ? allow.dirs.has(rel) || viaFile : allow.files.has(rel);
         if (!allowed) continue;
       }
       const dest = join(destPath, entry.name);
-      if (isDir) await walk(abs, dest, stack, isLink || viaFile ? undefined : allow);
-      else await copyFile(abs, dest); // regular file (follows a symlink-to-file)
+      if (isDir) {
+        // A symlinked dir or a submodule gitlink starts a fresh subtree: recompute the
+        // ship-set from ITS OWN git (so a submodule honors its own .gitignore), or ship
+        // all minus hard excludes when the target is not a repo (e.g. an external
+        // docs/ symlink). A plain tracked dir keeps this repo's base + allow.
+        if (isLink || viaFile) {
+          const subFiles = await gitLsFiles(abs);
+          await walk(abs, dest, stack, abs, subFiles ? gitAllowFromFiles(subFiles) : undefined);
+        } else {
+          await walk(abs, dest, stack, base, allow);
+        }
+      } else {
+        await copyFile(abs, dest); // regular file (follows a symlink-to-file)
+      }
     }
     stack.delete(realDir); // leave the descent: siblings sharing this target are not a cycle
   }
-  await walk(base, resolve(destDir), new Set(), gitAllow);
+  const topBase = resolve(srcDir);
+  await walk(topBase, resolve(destDir), new Set(), topBase, gitAllow);
 }
 
 /**
