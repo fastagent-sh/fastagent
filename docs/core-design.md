@@ -9,17 +9,17 @@ share_updated: 2026-06-08T16:43:10+08:00
 
 # fastagent - 核心设计(参考实现)
 
-> 索引 [[fastagent]] · 协议 [[SPEC]] · 同目录 [[positioning]] · [[comparisons]]
+> 索引 [fastagent](fastagent.md) · 协议 [SPEC](SPEC.md) · 同目录 [positioning](positioning.md) · [comparisons](comparisons.md)
 
-> **契约层已抽到 [[SPEC]](Agent Handler 协议,引擎中立)。本文只讲 fastagent 的参考实现--怎么用 pi 实现那个协议 + 怎么部署到任意 runtime。代码真相在 `core/`。**
+> **契约层已抽到 [SPEC](SPEC.md)(Agent Handler 协议,引擎中立)。本文只讲 fastagent 的参考实现--怎么用 pi 实现那个协议 + 怎么部署到任意 runtime。代码真相在 `core/`。**
 
 ## 0. 定位:三件套
 
-> **fastagent = agent serving 的 WSGI**(对外易懂的说法;技术宗谱是 ASGI / fetch handler,见 [[SPEC]])。一套把「触发源 / 部署 target / agent 引擎」三方解耦的 serving 契约,加一个建在 pi 上的参考实现,加一条「指向文件夹就部署到任意 runtime」的工具链。
+> **fastagent = agent serving 的 WSGI**(对外易懂的说法;技术宗谱是 ASGI / fetch handler,见 [SPEC](SPEC.md))。一套把「触发源 / 部署 target / agent 引擎」三方解耦的 serving 契约,加一个建在 pi 上的参考实现,加一条「指向文件夹就部署到任意 runtime」的工具链。
 
 | fastagent 层 | 干什么 | web 世界对应 | 在哪定义 |
 |---|---|---|---|
-| **契约层** | Agent Handler:`invoke(scope, prompt) => AsyncIterable<AgentEvent>` | **fetch handler / ASGI** | **[[SPEC]]** |
+| **契约层** | Agent Handler:`invoke(scope, prompt) => AsyncIterable<AgentEvent>` | **fetch handler / ASGI** | **[SPEC](SPEC.md)** |
 | **参考实现层** | 建在 pi-agent-core 上,把协议跑起来 | Werkzeug + gunicorn | 本文 §3-5 |
 | **工具链层** | 指向 agent 定义文件夹 → 编译 → 部署到任意 target | Vercel + Buildpacks | 本文 §6 |
 
@@ -31,7 +31,7 @@ share_updated: 2026-06-08T16:43:10+08:00
 
 | 轴 | 由什么解耦 | 在哪一层 |
 |---|---|---|
-| **N×M**(trigger ↔ agent)| `invoke` 的签名 + 事件([[SPEC]])| **core / 契约** |
+| **N×M**(trigger ↔ agent)| `invoke` 的签名 + 事件([SPEC](SPEC.md))| **core / 契约** |
 | **M**(引擎多样)| invoke 是黑盒接口 + 装配层注入(定义装载 → `LoadedDefinition` → 装配出 `Agent`)| core(依赖反转)|
 | **K**(host 多样)| invoke 的无状态性质(SPEC MUST「无位置依赖」)+ `SessionStore`/`ExecutionEnv` 注入,使 host 可替换;真正"编译到某 runtime" = target adapter | K 的*可*解耦在 core,K 的解耦*动作*在工具链层(SPEC §10 out of scope)|
 
@@ -86,12 +86,12 @@ share_updated: 2026-06-08T16:43:10+08:00
 | 内容/定义 | AGENTS.md · Agent Skills · MCP | **consume** |
 | 调用(editor↔agent) | ACP | 可选 channel(见 §6) |
 | 调用(agent↔agent) | A2A | consume(见 §6) |
-| **serving(触发源↔agent)** | **空** | **Agent Handler([[SPEC]])= 这一层的 gateway** |
+| **serving(触发源↔agent)** | **空** | **Agent Handler([SPEC](SPEC.md))= 这一层的 gateway** |
 | 打包/部署 | OCI · ADP | target adapter 输出(见 §6) |
 
-## 3. 契约 = [[SPEC]]
+## 3. 契约 = [SPEC](SPEC.md)
 
-契约层不在本文重复定义--见 [[SPEC]]。要点(供下文实现参照):
+契约层不在本文重复定义--见 [SPEC](SPEC.md)。要点(供下文实现参照):
 
 ```ts
 interface Agent { invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent>; }
@@ -134,7 +134,7 @@ async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> 
 - **无状态多-session**:pi 是「1 harness = 1 session」;fastagent 要服务无数 session,所以**每 invoke 现起一个绑该 session 的 harness,用完即弃**。唯一活态 = 在飞的 turn,两次 invoke 之间没有不可重建的东西。**这是能 serverless、能部署 AgentCore 的最硬地基。**
 - **cancel 落地**:消费者 `break` → generator 收到 `return()` → `finally` 跑 `harness.abort()` + `lease.release()`。SPEC MUST 2 天然由 async generator 的 cleanup 兑现。
 
-实现层注入点(协议看不到,见 [[SPEC]] §9 依赖反转)--**已实现的实际签名**:
+实现层注入点(协议看不到,见 [SPEC](SPEC.md) §9 依赖反转)--**已实现的实际签名**:
 
 ```ts
 // 低层：引擎接线被打包进 harnessFactory（PiHarnessFactory）；lease = 进程内 fail-fast 单写者（§6.6）
@@ -250,7 +250,7 @@ host ─(target adapter)→ sessions/env/lease 的实现接线            ┘
 
 **session = 一棵持久化的 entry 树 + 一个 leaf 指针**(沿用 pi 的 `SessionStorage`:append-only entry 带 `parentId` + `LeafEntry`)。**turn = 一次 invoke = 沿 leaf 向前追加一节**,所以 `session : invoke = 1 : 多`。「长程对话」是错觉:每 invoke 无状态、用完即弃;连续性靠 SessionStore 持久化 entry 树、下次 `open` + 回放 `getPathToRoot(leaf)` 重建上下文(满足 SPEC portable conformance)。
 
-> ✅ 连续性已接:`engines/pi` 的 `piHarnessFactory` 每 invoke **open-or-create**(已有则 open、harness 经 buildContext 看到历史;否则 create)。连续性契约 = **同一 backing store + 同一 session id**:jsonlSessionStore 跨进程重启仍连续(磁盘是真相;`fastagent dev` 默认),in-memory 需复用同一实例。详见 [[session]]。
+> ✅ 连续性已接:`engines/pi` 的 `piHarnessFactory` 每 invoke **open-or-create**(已有则 open、harness 经 buildContext 看到历史;否则 create)。连续性契约 = **同一 backing store + 同一 session id**:jsonlSessionStore 跨进程重启仍连续(磁盘是真相;`fastagent dev` 默认),in-memory 需复用同一实例。详见 [session](session.md)。
 
 **回退 / 重试 / regenerate = session 管理,不进 invoke**(SPEC §10:编排 = 上层):
 - **回退** = 把 leaf 移回某 entry(pi `navigateTree`);被甩的 turn 成死分支,不删(可选 `summarize` 留痕)。
@@ -274,7 +274,7 @@ host ─(target adapter)→ sessions/env/lease 的实现接线            ┘
 3. **入口在 session-admin 面,不进 `Scope`。** fork **返回新 session id**(Claude 同款),不把 node-id 塞进 invoke。理由是**契约卫生,不是存储做不到**:node-in-scope 会(a)被忽略时静默 append-to-leaf → 写坏对话;(b)隐藏分支落点(caller 跟 A、新 turn 落 B)。invoke 永远只有一个普适动词「续接此 session」,降级永不静默。
 4. **定位**:这把「分支 / 回退」从「只有树引擎才有的奢侈品」变成 fastagent 在**任意 host 上统一提供**的可移植 capability--AgentCore 这种最硬的 host 也能给到分支语义,正是试金石要证的「无状态可移植」。它属于 **×K 的 moat**(逐后端啤 SessionStore 的工程),不是协议白送。
 
-> 展开为独立标准草案 [[session]](event-sourced DAG + 三层解耦:1 Consumer API / 2 DAG core / 3a Host adapter · 3b Engine adapter)。
+> 展开为独立标准草案 [session](session.md)(event-sourced DAG + 三层解耦:1 Consumer API / 2 DAG core / 3a Host adapter · 3b Engine adapter)。
 
 ## 6.6 同 session 并发:core 只留 fail-fast 地板,UX 在 channel(定稿)
 
@@ -324,7 +324,7 @@ host ─(target adapter)→ sessions/env/lease 的实现接线            ┘
 ## 8. 边界与开放问题
 
 - **autonomy 安全(无人在环授权 / runaway 边界 / escalation)= v2 纵深**,不是第一性发生点。用户此刻的痛是「部署不了」,不是「不安全」;部署通了之后它才成为下一道缝(也正是 vision 里「狂徒锁链」的落点)。
-- **「成为标准」是上行期权,不是 base case。** Agent Handler 技术上够格当 agent serving 的 gateway 标准,但事实标准要生态采纳,而大厂在出竞品标准(A2A / Agent Executor)。所以:把协议设计成开放可采纳的形状(已做,见 [[SPEC]]),产品价值赌「参考实现 + 部署 DX 够好用」,采纳是 huge upside。
+- **「成为标准」是上行期权,不是 base case。** Agent Handler 技术上够格当 agent serving 的 gateway 标准,但事实标准要生态采纳,而大厂在出竞品标准(A2A / Agent Executor)。所以:把协议设计成开放可采纳的形状(已做,见 [SPEC](SPEC.md)),产品价值赌「参考实现 + 部署 DX 够好用」,采纳是 huge upside。
 - **pi 失败有三条路径,translator 以 stopReason 为准**:(1)`prompt()` reject(少数,由 catch 兑);(2)resolve 带 `stopReason: error/aborted` 的 message(常态,`toTerminal` 检查);(3)subscribe 的 `AssistantMessageEvent{type:"error"}`。以 resolved message 的 stopReason 为准产出 `failed`,catch 只兑底路径(1)。
 - **lease**:进程内 fail-fast「session busy」地板已落地(见 §6.6 场景推导 + 决策)。**跨进程/多实例的分布式锁仍 deferred**(到有远程 SessionStore + 多实例/AgentCore 时再做)。
 - 还没钉死的微决策:`retryable` 判定已抽成可注入 `RetryClassifier`(L0 选项;默认字符串启发式,终解仍待 pi 导出结构化分类);分布式 lease 最小形状(独立 `Lease` 端口,非 SessionStore 方法);`EventQueue.drainUntil` 的 backpressure;非流式引擎的 `text` 退化(发一个大 delta)。

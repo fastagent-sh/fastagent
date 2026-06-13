@@ -9,7 +9,7 @@ share_updated: 2026-06-08T16:43:28+08:00
 
 # fastagent 战略定位
 
-> 索引 [[fastagent]] · 同目录 [[core-design]] · [[comparisons]]
+> 索引 [fastagent](fastagent.md) · 同目录 [core-design](core-design.md) · [comparisons](comparisons.md)
 
 > 多角度盘点:用户需求 / 市场 / 生态位 / 竞品 / 历史类比 / SWOT。诚实优先,风险摆台面。
 

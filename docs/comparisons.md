@@ -7,7 +7,7 @@ updated: 2026-06-05
 
 # 竞品深度对比:Flue / OpenClaw / Claude SDK / OpenCode / pi
 
-> 索引 [[fastagent]] · 同目录 [[positioning]] · [[core-design]]
+> 索引 [fastagent](fastagent.md) · 同目录 [positioning](positioning.md) · [core-design](core-design.md)
 
 > 战略矩阵见 [positioning.md](positioning.md)。本文逐项拆解 + 一个 worked example。
 
@@ -52,7 +52,7 @@ updated: 2026-06-05
 | agent 是什么 | 你**用 TS 写**的 | 你**用 markdown vibe** 的定义文件夹 |
 | 入口 | code-first | markdown-native,代码是逃生舱 |
 | 与标准 | 自成 runtime API | **consume AGENTS.md/Skills/MCP;对外 consume A2A/ACP,不另立** |
-| 调用契约 | Flue 私有 API | **Agent Handler:`invoke(scope, prompt) => AsyncIterable<AgentEvent>`(引擎中立,见 [[SPEC]])** |
+| 调用契约 | Flue 私有 API | **Agent Handler:`invoke(scope, prompt) => AsyncIterable<AgentEvent>`(引擎中立,见 [SPEC](SPEC.md))** |
 | 跨 runtime | 虚拟 sandbox **抹平**环境 | **无状态 core + env 注入 + target adapter**,让同一定义编译到异构 runtime |
 | build/deploy | 分两步 | `deploy` 端到端一条命令 |
 
@@ -91,7 +91,7 @@ updated: 2026-06-05
 
 **不是竞品,是参考实现的底座(Werkzeug + gunicorn 那层的引擎)。** fastagent 建在 **pi-agent-core 的 `AgentHarness`**(不是 pi-coding-agent 的 `AgentSession`,后者是 TUI 封装、拖文件系统耦合)。pi 给的:`AgentHarness`(turn loop / `prompt()=>AssistantMessage` buffered / subscribe / hooks / compaction)、`ExecutionEnv = FileSystem & Shell`、`SessionRepo`、`AgentTool`/`Skill`、整套事件。
 
-fastagent **建在它上,不重造**:把 pi 的双口(`prompt` buffered + `subscribe`)fan-in 成 [[SPEC]] 的单一事件流;对 pi 的依赖收敛到一个 translator(pi 事件→`AgentEvent`)。详 [core-design.md §4](core-design.md)。
+fastagent **建在它上,不重造**:把 pi 的双口(`prompt` buffered + `subscribe`)fan-in 成 [SPEC](SPEC.md) 的单一事件流;对 pi 的依赖收敛到一个 translator(pi 事件→`AgentEvent`)。详 [core-design.md §4](core-design.md)。
 
 ---
 
