@@ -118,15 +118,24 @@ Deliberately not in v1: session/env backend selection, auth overrides, base prom
 
 ## 6. Tools and skills
 
-Skills are markdown/file assets. By default, local dev loads:
+Skills are markdown/file assets. Loading is **definition-only by default**: an agent is exactly its folder (`AGENTS.md` + `skills/`). This is the structural form of "your folder is the agent" — the same definition loads the same skills on every machine, and dev behavior equals deployed behavior. Definition-local skills win name collisions (the deployable unit is authoritative); collisions are surfaced as diagnostics, not swallowed.
 
-- definition-local `skills/`,
-- global pi skills: `~/.pi/agent/skills`,
-- cross-tool global skills: `~/.agents/skills`.
+The machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`, via `defaultGlobalSkillPaths()`) are an **explicit opt-in**, never a silent default. Defaulting to them would make the agent depend on ambient machine state, break reproducibility, and recreate the "works on my machine, breaks deployed" trap fastagent exists to kill.
 
-Definition-local skills win name collisions because the deployable unit is authoritative. Collisions are surfaced as diagnostics, not swallowed.
+### Skills lifecycle across dev / build / start (spec)
 
-`bundleAgentDefinition` is the build-time step that materializes the winning skill folders into a self-contained artifact. Dropped skills are removed on rebuild so the artifact is the truth.
+| Stage | Default | Opt-in to globals |
+|---|---|---|
+| `createPiAgentFromDefinition` (L2) | definition-only | caller passes `skillPaths` |
+| `fastagent dev` | definition-only (dev == deployed) | `--global-skills` (ephemeral: loads globals for local-authoring fidelity this run only; does not change the artifact) |
+| `fastagent build` | definition-only | `--global-skills` materializes the winning globals into the artifact's `skills/` (the deliberate "I want these to ship" action) |
+| `fastagent start` | always definition-only | n/a — the artifact is already self-contained |
+
+`fastagent dev` must not silently drop globals: when run definition-only, it reports which global skills exist but were not loaded, plus the one-liners to use them (`--global-skills`) or ship them (copy into `skills/` / `build --global-skills`). The "what is actually in my agent?" question is thus answered at dev time (cheap), not at deploy time (expensive).
+
+**Red line:** the only way a global skill reaches production is being materialized into the artifact (`build --global-skills` or copied into `skills/`). `fastagent.config.ts` must never carry a machine path like `~/.agents/skills/foo` as a deploy mechanism — that path does not exist on a teammate's machine, CI, or the server, reintroducing the machine-state dependency. Config describes deployment choices, not "go fetch files from a directory on the build machine."
+
+`bundleAgentDefinition` is the build-time step that materializes the resolved skill set into a self-contained artifact. Dropped skills are removed on rebuild so the artifact is the truth.
 
 Code tools are different: they are TypeScript/JavaScript modules with dependencies. FastAgent does not auto-load a magic `tools/` directory. Projects explicitly import and inject code tools through config or library APIs. Declarative MCP tool mounting via `.mcp.json` is future support, not implemented today.
 

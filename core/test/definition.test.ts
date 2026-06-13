@@ -56,11 +56,18 @@ describe("definition: loadAgentDefinition", () => {
     );
   });
 
-  it("default skillPaths are global directories (pi parity): ~/.pi/agent/skills + ~/.agents/skills", () => {
+  it("defaultGlobalSkillPaths() returns the machine global dirs (opt-in helper, not the default): ~/.pi/agent/skills + ~/.agents/skills", () => {
     const paths = defaultGlobalSkillPaths();
     expect(paths).toHaveLength(2);
     expect(paths[0]).toMatch(/\.pi\/agent\/skills$/);
     expect(paths[1]).toMatch(/\.agents\/skills$/);
+  });
+
+  it("defaults to definition-only when skillPaths is omitted (globals are opt-in, not ambient)", async () => {
+    // No skillPaths → must NOT scan the machine's global skills; only the folder's own.
+    const def = await loadAgentDefinition(fixtureDir);
+    expect(def.skills.map((s) => s.name)).toEqual(["season-words"]);
+    expect(def.collisions).toEqual([]);
   });
 
   it("extra skillPaths mount new skills; definition-local skill wins name collisions and surfaces collision info", async () => {

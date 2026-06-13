@@ -55,10 +55,13 @@ export interface LoadedDefinition {
 }
 
 /**
- * Default global skills directories (pi parity): pi user-level + the cross-tool
- * standard directory. loadSkills skips missing directories → on a dev machine this
- * matches local pi; on a server with no home it is naturally empty (fallback only —
- * the deploy path materializes via bundleAgentDefinition, the artifact is the truth).
+ * The machine's global skills directories (pi user-level + the cross-tool standard
+ * directory). This is an explicit OPT-IN helper, not a default: loading is
+ * definition-only unless a caller passes these in (e.g. `fastagent dev
+ * --global-skills` for local-authoring fidelity, or `fastagent build
+ * --global-skills` to materialize them into the artifact). Keeping it out of the
+ * default makes "your folder is the agent" structural — the same definition loads
+ * the same skills on every machine, and dev behavior equals deployed behavior.
  */
 export function defaultGlobalSkillPaths(): string[] {
   return [join(homedir(), ".pi", "agent", "skills"), join(homedir(), ".agents", "skills")];
@@ -67,12 +70,14 @@ export function defaultGlobalSkillPaths(): string[] {
 export interface LoadAgentDefinitionOptions {
   env?: ExecutionEnv;
   /**
-   * Skills mount directories. **Default = defaultGlobalSkillPaths() (load globals,
-   * faithful to the local pi experience)**; missing directories are skipped.
-   * Advanced control:
-   *   - `skillPaths: []` → definition-only (deterministic deployment posture);
+   * Extra skills mount directories, appended after the definition-local `skills/`.
+   * **Default = [] (definition-only)**: the agent is exactly its folder, so the same
+   * definition is reproducible across machines and dev mirrors deployment. Missing
+   * directories are skipped. Opt in explicitly:
+   *   - `defaultGlobalSkillPaths()` → load the machine's global skills (local-pi
+   *     fidelity during authoring; not portable, so dev/build must pass it on purpose);
    *   - custom array → precise control over what is mounted;
-   *   - to materialize globals into a deployable artifact → bundleAgentDefinition.
+   *   - to ship globals, materialize them into the artifact via bundleAgentDefinition.
    * Collisions: definition-local skills win (the deployable unit is authoritative);
    * first-wins + surfaced collision.
    */
@@ -102,10 +107,11 @@ export async function loadAgentDefinition(
   const instructions = read.ok ? read.value : undefined;
 
   // Definition-local skills first → definition wins collisions (first-wins).
-  // Default appends the global directories (pi parity).
+  // Default is definition-only ([]): "your folder is the agent". Global/extra
+  // mounts are an explicit opt-in (see skillPaths / defaultGlobalSkillPaths).
   const { skills: raw, diagnostics } = await loadSkills(e, [
     join(root, "skills"),
-    ...(options.skillPaths ?? defaultGlobalSkillPaths()),
+    ...(options.skillPaths ?? []),
   ]);
   const byName = new Map<string, Skill>();
   const collisions: SkillCollision[] = [];
