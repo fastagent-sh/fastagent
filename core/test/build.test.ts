@@ -173,6 +173,27 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
 
+  it("fails visibly when .gitignore excludes a loaded definition file (no silent drop)", async () => {
+    const ws = await makeWorkspace();
+    await mkdir(join(ws, "skills", "secret"), { recursive: true });
+    await writeFile(join(ws, "skills", "secret", "SKILL.md"), "---\nname: secret\ndescription: x.\n---\nb\n");
+    await writeFile(join(ws, ".gitignore"), "skills/secret/\n"); // ignores a skill the agent loads
+    const out = await freshOut();
+    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/\.gitignore excludes agent definition file/);
+  });
+
+  it("recognizes an in-tree out even when src and out are spelled through different symlinks", async () => {
+    const real = await mkdtemp(join(tmpdir(), "fa-build-real-"));
+    await writeFile(join(real, "AGENTS.md"), "# Bot\n");
+    await writeFile(join(real, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    const link = join(await mkdtemp(join(tmpdir(), "fa-build-link-")), "ws");
+    await symlink(real, link); // src reached via a symlink alias
+    const out = join(real, "build"); // out under the real source dir (an in-tree out)
+    await buildPiArtifact(link, out); // must not descend into the artifact it creates
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+    expect(await exists(join(out, "build"))).toBe(false); // no nested build/build recursion
+  });
+
   it("fails visibly on an unreadable .gitignore (only ENOENT is normal)", async () => {
     const ws = await makeWorkspace();
     await mkdir(join(ws, ".gitignore")); // a directory where a file is expected → read fails (not ENOENT)

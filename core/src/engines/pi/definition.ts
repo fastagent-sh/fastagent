@@ -174,18 +174,21 @@ async function loadGitignore(srcDir: string): Promise<Ignore | undefined> {
 async function copyDirClean(
   srcDir: string,
   destDir: string,
-  opts: { ig?: Ignore; skipAbs?: string } = {},
+  opts: { ig?: Ignore; skipReal?: string } = {},
 ): Promise<void> {
-  const { ig, skipAbs } = opts;
+  const { ig, skipReal } = opts;
   const base = resolve(srcDir);
   async function walk(absDir: string, destPath: string, stack: Set<string>): Promise<void> {
-    const realDir = await realpath(absDir).catch(() => absDir);
+    const realDir = await realpath(absDir).catch(() => resolve(absDir));
+    // Skip the out dir by REALPATH, so it is recognized even when src and out are
+    // spelled through different symlink aliases (textual compare would descend into
+    // the artifact being created → build/build/…).
+    if (skipReal !== undefined && (realDir === skipReal || realDir.startsWith(skipReal + sep))) return;
     if (stack.has(realDir)) return; // cycle: realDir is its own ancestor on this descent
     stack.add(realDir);
     await mkdir(destPath, { recursive: true });
     for (const entry of await readdir(absDir, { withFileTypes: true })) {
       const abs = join(absDir, entry.name);
-      if (skipAbs !== undefined && (abs === skipAbs || abs.startsWith(skipAbs + sep))) continue;
       if (isHardExcluded(entry.name)) continue;
       let isDir = entry.isDirectory();
       let isFile = entry.isFile();
@@ -249,18 +252,39 @@ export async function bundleAgentDefinition(
 
   const definition = await loadAgentDefinition(srcDir, options);
   const ig = await loadGitignore(srcDir);
-  // cp passes source paths based on the srcDir argument, so match its basis (resolve,
-  // not realpath) for relative()/containment; realpath was only for the data-loss guard.
   const srcBase = resolve(srcDir);
-  const outBase = resolve(outDir);
+
+  // The loaded definition files (AGENTS.md + local skills) ARE the agent; they must
+  // ship. If .gitignore excludes one, the reported agent would not match the artifact.
+  // Don't silently drop it (drift) or silently override .gitignore (could leak a file
+  // the author kept private) — surface the conflict.
+  if (ig) {
+    const ignored: string[] = [];
+    if (definition.instructions !== undefined && ig.ignores("AGENTS.md")) ignored.push("AGENTS.md");
+    for (const skill of definition.skills) {
+      const skillAbs = resolve(skill.filePath);
+      if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) {
+        const rel = relative(srcBase, skillAbs);
+        if (ig.ignores(rel)) ignored.push(rel);
+      }
+    }
+    if (ignored.length > 0) {
+      throw new Error(
+        `.gitignore excludes agent definition file(s) the agent loads: ${ignored.join(", ")}. ` +
+          `Un-ignore them (they must ship), or remove them from the agent.`,
+      );
+    }
+  }
 
   // Clean rebuild: replace outDir entirely (guarded above so this can't delete the
   // source). A file dropped from the source cannot survive as a stale artifact.
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
-  // Copy the cleaned source tree (excludes the hard set + .gitignore + outDir itself).
-  await copyDirClean(srcBase, outDir, { ig, skipAbs: outBase });
+  // Copy the cleaned source tree. skipReal is the realpath of the now-created outDir,
+  // so an in-tree out (.fastagent/build) is skipped even via a symlink alias.
+  const skipReal = await realpath(outDir);
+  await copyDirClean(srcBase, outDir, { ig, skipReal });
 
   // Materialize winning skills that live OUTSIDE the source tree (globals / extra
   // mounts) into outDir/skills/. Definition-local skills already arrived via the tree
