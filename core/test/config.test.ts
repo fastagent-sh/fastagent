@@ -48,6 +48,19 @@ describe("config: loadConfig", () => {
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { porrt: 9999 } };`);
     await expect(loadConfig(dir)).rejects.toThrow(/unknown key "http\.porrt"/);
   });
+
+  it("multiple config files throw instead of silently choosing one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+    await writeFile(join(dir, "fastagent.config.js"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.4" };`);
+    await expect(loadConfig(dir)).rejects.toThrow(/multiple fastagent config files/);
+  });
+
+  it("invalid custom tool entries throw during config load", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { tools: [{}] };`);
+    await expect(loadConfig(dir)).rejects.toThrow(/tools\[0\].*name.*execute/);
+  });
 });
 
 describe("config: resolveTools (append-after-defaults semantics)", () => {
