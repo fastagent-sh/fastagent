@@ -153,6 +153,33 @@ describe("build: buildPiArtifact", () => {
     expect(await readFile(join(out, "docs", "schema.md"), "utf8")).toContain("users(id)");
   });
 
+  it("preserves two sibling symlinks to the same directory (cycle guard is per-descent)", async () => {
+    const shared = await mkdtemp(join(tmpdir(), "fa-shared-"));
+    await writeFile(join(shared, "file.md"), "shared content\n");
+    const ws = await makeWorkspace();
+    await symlink(shared, join(ws, "a"));
+    await symlink(shared, join(ws, "b")); // distinct destination, same target — not a cycle
+    const out = await freshOut();
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "a", "file.md"))).toBe(true);
+    expect(await exists(join(out, "b", "file.md"))).toBe(true); // the second alias must NOT be dropped
+  });
+
+  it("does not loop on a symlink cycle", async () => {
+    const ws = await makeWorkspace();
+    await symlink(".", join(ws, "loop")); // loop -> the workspace itself (its own ancestor)
+    const out = await freshOut();
+    await buildPiArtifact(ws, out); // must terminate, not hang/overflow
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+  });
+
+  it("fails visibly on an unreadable .gitignore (only ENOENT is normal)", async () => {
+    const ws = await makeWorkspace();
+    await mkdir(join(ws, ".gitignore")); // a directory where a file is expected → read fails (not ENOENT)
+    const out = await freshOut();
+    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/cannot read .*\.gitignore/);
+  });
+
   it("model precedence: --model option beats config; bad/missing model fails before writing", async () => {
     const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
     const out = await freshOut();

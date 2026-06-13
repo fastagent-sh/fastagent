@@ -141,8 +141,18 @@ function isHardExcluded(name: string): boolean {
 
 /** Load the workspace's root `.gitignore` as a matcher (honored on top of the hard excludes). */
 async function loadGitignore(srcDir: string): Promise<Ignore | undefined> {
-  const content = await readFile(join(srcDir, ".gitignore"), "utf8").catch(() => undefined);
-  return content === undefined ? undefined : ignore().add(content);
+  let content: string;
+  try {
+    content = await readFile(join(srcDir, ".gitignore"), "utf8");
+  } catch (error) {
+    // Only a missing file is normal. A .gitignore that exists but can't be read
+    // (permission/IO, or it's a directory) must fail visibly: silently building with
+    // no ignore rules could ship files the author explicitly excluded (e.g. secrets
+    // not covered by the hard excludes).
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(`cannot read ${join(srcDir, ".gitignore")}: ${(error as Error).message}`);
+  }
+  return ignore().add(content);
 }
 
 /**
@@ -156,8 +166,10 @@ async function loadGitignore(srcDir: string): Promise<Ignore | undefined> {
  * skill (e.g. its own `.env`/`node_modules`) are never bundled either.
  *
  * Symlinks are dereferenced (follow `stat`): a link to a directory is recursed into, a
- * link to a file is copied, a dangling link is skipped. A realpath visited-set breaks
- * symlink cycles (e.g. `link -> .`) so the walk cannot loop forever.
+ * link to a file is copied, a dangling link is skipped. Cycles (e.g. `link -> .`) are
+ * broken by tracking the current recursion STACK of target realpaths — a dir is skipped
+ * only when its realpath is its own ancestor. Two sibling links to the same target are
+ * NOT a cycle, so both are preserved (a global visited-set would drop the second).
  */
 async function copyDirClean(
   srcDir: string,
@@ -166,30 +178,35 @@ async function copyDirClean(
 ): Promise<void> {
   const { ig, skipAbs } = opts;
   const base = resolve(srcDir);
-  const visited = new Set<string>();
-  async function walk(absDir: string, destPath: string): Promise<void> {
+  async function walk(absDir: string, destPath: string, stack: Set<string>): Promise<void> {
     const realDir = await realpath(absDir).catch(() => absDir);
-    if (visited.has(realDir)) return; // symlink cycle guard
-    visited.add(realDir);
+    if (stack.has(realDir)) return; // cycle: realDir is its own ancestor on this descent
+    stack.add(realDir);
     await mkdir(destPath, { recursive: true });
     for (const entry of await readdir(absDir, { withFileTypes: true })) {
       const abs = join(absDir, entry.name);
       if (skipAbs !== undefined && (abs === skipAbs || abs.startsWith(skipAbs + sep))) continue;
       if (isHardExcluded(entry.name)) continue;
       let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
         const target = await stat(abs).catch(() => undefined); // follow the link
         if (!target) continue; // dangling → skip rather than fail the build
         isDir = target.isDirectory();
+        isFile = target.isFile();
       }
+      // Only directories and regular files belong in an artifact. Skip sockets, FIFOs,
+      // and devices — copyFile would throw on them and fail the whole build.
+      if (!isDir && !isFile) continue;
       const rel = relative(base, abs); // for the ignore matcher (rooted at srcDir)
       if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match only with a trailing slash
       const dest = join(destPath, entry.name);
-      if (isDir) await walk(abs, dest);
-      else await copyFile(abs, dest); // follows a symlink-to-file
+      if (isDir) await walk(abs, dest, stack);
+      else await copyFile(abs, dest); // regular file (follows a symlink-to-file)
     }
+    stack.delete(realDir); // leave the descent: siblings sharing this target are not a cycle
   }
-  await walk(base, resolve(destDir));
+  await walk(base, resolve(destDir), new Set());
 }
 
 /**
