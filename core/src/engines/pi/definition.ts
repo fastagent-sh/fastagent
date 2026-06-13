@@ -26,7 +26,7 @@
  */
 import { cp, copyFile, mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -151,6 +151,15 @@ export async function bundleAgentDefinition(
   outDir: string,
   options: LoadAgentDefinitionOptions = {},
 ): Promise<LoadedDefinition> {
+  // Reject source/output aliasing BEFORE any destructive step: the cleanup below
+  // removes outDir/AGENTS.md and outDir/skills, which ARE the source when outDir
+  // resolves to srcDir — it would delete the user's agent definition. Only exact
+  // equality is dangerous (a child like .fastagent/build is the intended default).
+  if (resolve(srcDir) === resolve(outDir)) {
+    throw new Error(
+      `bundle output dir must differ from the source workspace (got "${srcDir}"); use a separate --out (default .fastagent/build)`,
+    );
+  }
   const definition = await loadAgentDefinition(srcDir, options);
   // Deterministic rebuild: remove the outputs this bundle owns (AGENTS.md + skills/)
   // before copying, so a skill dropped from the definition cannot survive as a stale

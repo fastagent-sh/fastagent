@@ -16,7 +16,7 @@
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type FastagentConfig, loadConfig, resolveModelSpec } from "./config.ts";
+import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { type LoadedDefinition, bundleAgentDefinition, defaultGlobalSkillPaths } from "./definition.ts";
 
 /** The `fastagent.json` manifest written into the artifact. Pure data (no `.ts`). */
@@ -59,6 +59,10 @@ export async function buildPiArtifact(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
+  // Validate against the registry now (before touching outDir), so a typo fails the
+  // build instead of being frozen into the manifest and only failing later at start.
+  // dev fails fast on the same typo; build must match. Only the throw matters here.
+  resolveModel(model);
   const definition = await bundleAgentDefinition(workspaceDir, outDir, {
     skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
   });

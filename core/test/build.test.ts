@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { access } from "node:fs/promises";
 import { buildPiArtifact, loadAgentDefinition, type ArtifactManifest } from "../src/index.ts";
+
+async function exists(p: string): Promise<boolean> {
+  return access(p).then(
+    () => true,
+    () => false,
+  );
+}
 
 /** A throwaway workspace: AGENTS.md + one definition-local skill (+ optional config). */
 async function makeWorkspace(opts: { config?: string } = {}): Promise<string> {
@@ -51,6 +59,24 @@ describe("build: buildPiArtifact", () => {
     const out = await mkdtemp(join(tmpdir(), "fa-build-out-"));
     const { manifest } = await buildPiArtifact(ws, out, { model: "openai-codex/gpt-5.4" });
     expect(manifest.model).toBe("openai-codex/gpt-5.4");
+  });
+
+  it("rejects source/output aliasing and leaves the source definition intact (no data loss)", async () => {
+    const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
+    // outDir === workspace would delete the source AGENTS.md + skills/ before copying.
+    await expect(buildPiArtifact(ws, ws)).rejects.toThrow(/output dir must differ from the source/);
+    // the user's files must still be there
+    expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
+    expect(await exists(join(ws, "skills", "local-skill", "SKILL.md"))).toBe(true);
+  });
+
+  it("rejects an unknown/malformed model at build time, before writing the artifact", async () => {
+    const ws = await makeWorkspace();
+    const out = await mkdtemp(join(tmpdir(), "fa-build-out-"));
+    await expect(buildPiArtifact(ws, out, { model: "nope/nothing" })).rejects.toThrow(/unknown model/);
+    await expect(buildPiArtifact(ws, out, { model: "justmodel" })).rejects.toThrow(/provider\/modelId/);
+    // a rejected build must not have emitted a manifest
+    expect(await exists(join(out, "fastagent.json"))).toBe(false);
   });
 
   it("missing model throws a clear error (fail visibly)", async () => {
