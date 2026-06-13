@@ -68,14 +68,33 @@ describe("build: buildPiArtifact", () => {
     expect(reloaded.skills.map((s) => s.name)).toEqual(["local-skill"]);
   });
 
-  it("excludes secrets / deps / vcs / machine-state unconditionally", async () => {
+  it("excludes deps / vcs / machine-state unconditionally (not security — correctness/bloat)", async () => {
     const ws = await makeWorkspace();
     const out = await freshOut();
     await buildPiArtifact(ws, out);
-    expect(await exists(join(out, ".env"))).toBe(false); // secret never bundled (red line)
     expect(await exists(join(out, "node_modules"))).toBe(false);
     expect(await exists(join(out, ".git"))).toBe(false);
     expect(await exists(join(out, ".fastagent"))).toBe(false);
+  });
+
+  it("does not special-case .env: ships in a bare folder (user's responsibility), excluded by git/.fastagentignore", async () => {
+    // Non-repo, no ignore file → .env ships. Security is the user's responsibility by design.
+    const ws = await makeWorkspace();
+    const bare = await freshOut();
+    await buildPiArtifact(ws, bare);
+    expect(await exists(join(bare, ".env"))).toBe(true);
+    // The user excludes it via .fastagentignore …
+    await writeFile(join(ws, ".fastagentignore"), ".env\n");
+    const ignored = await freshOut();
+    await buildPiArtifact(ws, ignored);
+    expect(await exists(join(ignored, ".env"))).toBe(false);
+    // … or, in a git repo, by .gitignore (the convention).
+    const repo = await makeWorkspace();
+    await writeFile(join(repo, ".gitignore"), ".env\n");
+    await gitInit(repo);
+    const out = await freshOut();
+    await buildPiArtifact(repo, out);
+    expect(await exists(join(out, ".env"))).toBe(false);
   });
 
   it("honors .fastagentignore (non-repo: the whole tree ships minus those + hard excludes)", async () => {
@@ -140,10 +159,12 @@ describe("build: buildPiArtifact", () => {
     }
   });
 
-  it("materialized global skills are also cleaned: their .env/node_modules/.git never leak", async () => {
+  it("materialized global skills apply the hard excludes (deps/vcs), not security (.env ships)", async () => {
     const home = await mkdtemp(join(tmpdir(), "fa-home-"));
     const skill = join(home, ".pi", "agent", "skills", "leaky");
     await mkdir(join(skill, "node_modules", "junk"), { recursive: true });
+    await mkdir(join(skill, ".git"), { recursive: true });
+    await writeFile(join(skill, ".git", "HEAD"), "x\n");
     await writeFile(join(skill, "SKILL.md"), "---\nname: leaky\ndescription: x.\n---\nb\n");
     await writeFile(join(skill, ".env"), "SKILL_SECRET=topsecret\n");
     await writeFile(join(skill, "node_modules", "junk", "i.js"), "x\n");
@@ -155,8 +176,11 @@ describe("build: buildPiArtifact", () => {
     try {
       await buildPiArtifact(ws, out, { globalSkills: true });
       expect(await exists(join(out, "skills", "leaky", "ref.md"))).toBe(true); // skill content ships
-      expect(await exists(join(out, "skills", "leaky", ".env"))).toBe(false); // secret never bundled
-      expect(await exists(join(out, "skills", "leaky", "node_modules"))).toBe(false);
+      expect(await exists(join(out, "skills", "leaky", "node_modules"))).toBe(false); // dep/bloat excluded
+      expect(await exists(join(out, "skills", "leaky", ".git"))).toBe(false); // vcs excluded
+      // .env is NOT special-cased (security is the user's responsibility); for an external
+      // skill there is no ignore mechanism, so its .env ships.
+      expect(await exists(join(out, "skills", "leaky", ".env"))).toBe(true);
     } finally {
       if (saved !== undefined) process.env.HOME = saved;
       else delete process.env.HOME;

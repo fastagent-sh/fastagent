@@ -191,16 +191,15 @@ Two distinct things are both called "context"; they live on opposite sides:
 - **authored context** (static files the author wrote) is part of M and ships. It is consumed by the agent's `read`/`grep` tools on demand — it is file access rooted at the run directory (cwd), **not** prompt-loading, so it needs no new mechanism beyond "the file is present in the run dir."
 - **conversational context** (cross-turn history/memory) is K, lives in an external session store, and is reconstructed per invoke (§7).
 
-So `definition` is **not** just `AGENTS.md` — it is the authored source tree. Its default boundary is the source tree **minus**:
+So `definition` is **not** just `AGENTS.md` — it is the authored source tree. The ship-set is decided by **git** when the workspace is a repo (`git ls-files --cached --others --exclude-standard`, so .gitignore is honored correctly), or the **whole tree** otherwise; both also honor a `.fastagentignore` file. On top of that, a small unconditional **hard-exclude** set — things never meaningful to ship:
 
 | Never bundled | Why |
 |---|---|
-| secrets (`.env`, `.env.*`) | red line — secrets are injected at runtime, out-of-band (packaging-standard consensus) |
-| dependencies (`node_modules`) | provided by the runtime (container `npm ci` / deploy-time install) |
-| machine state / generated (`.fastagent/`, build output) | rebuildable, not authored |
+| dependencies (`node_modules`) | reinstalled by the runtime (`npm ci` at deploy) |
+| machine state (`.fastagent/`) | runtime sessions + the build output; rebuildable, not authored |
 | VCS (`.git`) | irrelevant to the running agent |
 
-The boundary is gitignore-style ignore rules **plus** an unconditional secret/dep exclusion (same model as Docker build context, `npm publish`, Vercel).
+**Security is the user's responsibility, by design.** Secrets like `.env` are **not** special-cased: in a git repo they are excluded if `.gitignore`'d (the convention); otherwise the user excludes them via `.fastagentignore`. fastagent provides the ignore mechanisms (like Docker `.dockerignore` / `npm publish`); it does not scan for or guarantee secret exclusion. A user who git-tracks a symlink pointing at a secret will ship it — their call.
 
 **Path red line (a sibling of the config secret red line):** every path inside M is resolved **relative to the agent root**. Authored context and skills MUST be referenced by root-relative paths — never absolute paths or `~`, which are machine-specific and break on deploy. Machine-specific paths belong to K and are injected by the host.
 

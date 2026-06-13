@@ -136,9 +136,15 @@ export async function loadAgentDefinition(
   };
 }
 
-/** Names excluded from the artifact unconditionally, at any depth (the secret/dep red line). */
+/**
+ * Names never meaningful to ship, excluded unconditionally at any depth: VCS metadata,
+ * dependencies (reinstalled at deploy via `npm ci`), and fastagent machine state (runtime
+ * sessions + the build output). This is NOT a security list — secrets like `.env` are not
+ * special-cased; the user manages those via .gitignore (git mode) or `.fastagentignore`
+ * (security is the user's responsibility, by design).
+ */
 function isHardExcluded(name: string): boolean {
-  return name === ".git" || name === "node_modules" || name === ".fastagent" || name === ".env" || name.startsWith(".env.");
+  return name === ".git" || name === "node_modules" || name === ".fastagent";
 }
 
 /** Load `<dir>/.fastagentignore` as a matcher (extra excludes on top of git + the hard set). */
@@ -203,7 +209,7 @@ function gitAllowFromFiles(files: string[]): GitAllow {
  * (a `.fastagentignore` matcher rooted at srcDir) when provided; and, when `gitAllow` is
  * given, the git ship-set (a tracked symlink is listed as a file, a regular dir is kept
  * when it holds a tracked file, a regular file when it is listed). The hard set always
- * applies, so an external skill's own `.env`/`node_modules` is never bundled.
+ * applies, so an external skill's own `node_modules`/`.git` is never bundled.
  *
  * Symlinks are dereferenced (follow `stat`): a link to a directory is recursed into
  * (WITHOUT gitAllow — its target is outside the tracked tree), a link to a file is
@@ -270,10 +276,10 @@ async function copyDirClean(
  * the winning global/extra skills (which live outside the source) into outDir/skills/.
  * So `start` can run from outDir alone, with authored context resolving relative to it.
  *
- * Excluded from the artifact: secrets (`.env`/`.env.*`), dependencies (`node_modules`,
- * reinstalled at deploy via `npm ci`), VCS (`.git`), machine state (`.fastagent`) —
- * unconditionally — plus anything the workspace's root `.gitignore` ignores. Secrets
- * are injected at runtime, never bundled.
+ * Excluded unconditionally: dependencies (`node_modules`, reinstalled at deploy), VCS
+ * (`.git`), and machine state (`.fastagent`) — never meaningful to ship. Beyond that the
+ * ship-set is git's (in a repo) or the whole tree (otherwise), minus `.fastagentignore`.
+ * Secrets are NOT special-cased: the user excludes them via git/.fastagentignore.
  *
  * Collision rules match loadAgentDefinition (definition-local wins; losers excluded).
  * Non-destructive to the source: only outDir is written/replaced.
@@ -349,7 +355,7 @@ export async function bundleAgentDefinition(
   // Materialize winning skills that live OUTSIDE the source tree (globals / extra
   // mounts) into outDir/skills/. Definition-local skills already arrived via the tree
   // copy; collision losers are absent from definition.skills. External skills copy with
-  // ONLY the hard excludes (their own .env/node_modules never ship); the workspace
+  // ONLY the hard excludes (their own node_modules/.git never ship); the workspace
   // ship-set / .fastagentignore do not govern an external skill folder, so its SKILL.md
   // always ships.
   await mkdir(join(outDir, "skills"), { recursive: true });
