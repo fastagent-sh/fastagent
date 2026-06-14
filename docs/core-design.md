@@ -191,7 +191,7 @@ Two distinct things are both called "context"; they live on opposite sides:
 - **authored context** (static files the author wrote) is part of M and ships. It is consumed by the agent's `read`/`grep` tools on demand — it is file access rooted at the run directory (cwd), **not** prompt-loading, so it needs no new mechanism beyond "the file is present in the run dir."
 - **conversational context** (cross-turn history/memory) is K, lives in an external session store, and is reconstructed per invoke (§7).
 
-So `definition` is **not** just `AGENTS.md` — it is the authored source tree. The ship-set is decided by **git** when the workspace is a repo (`git ls-files --cached --others --exclude-standard`, so .gitignore is honored correctly), or the **whole tree** otherwise; both also honor a `.fastagentignore` file. On top of that, a small unconditional **hard-exclude** set — things never meaningful to ship:
+So `definition` is **not** just `AGENTS.md` — it is the authored source tree. The ship-set is the tree **minus** the nested `.gitignore` + `.fastagentignore` rules read along the way (each pattern scoped to its own directory, via the `ignore` library — we do **not** call git, so the artifact is reproducible regardless of the build machine's git install / global excludes / index). On top of that, a small unconditional **hard-exclude** set — things never meaningful to ship:
 
 | Never bundled | Why |
 |---|---|
@@ -199,7 +199,7 @@ So `definition` is **not** just `AGENTS.md` — it is the authored source tree. 
 | machine state (`.fastagent/`) | runtime sessions + the build output; rebuildable, not authored |
 | VCS (`.git`) | irrelevant to the running agent |
 
-**Security is the user's responsibility, by design.** Secrets like `.env` are **not** special-cased: in a git repo they are excluded if `.gitignore`'d (the convention); otherwise the user excludes them via `.fastagentignore`. fastagent provides the ignore mechanisms (like Docker `.dockerignore` / `npm publish`); it does not scan for or guarantee secret exclusion. A user who git-tracks a symlink pointing at a secret will ship it — their call.
+**Security is the user's responsibility, by design.** Secrets like `.env` are **not** special-cased: the user excludes them via `.gitignore` (the convention, honored without invoking git) or `.fastagentignore`. fastagent provides the ignore mechanisms (like Docker `.dockerignore` / `npm publish`); it does not scan for or guarantee secret exclusion. A symlink pointing at a secret, if not ignored, ships — their call.
 
 **Path red line (a sibling of the config secret red line):** every path inside M is resolved **relative to the agent root**. Authored context and skills MUST be referenced by root-relative paths — never absolute paths or `~`, which are machine-specific and break on deploy. Machine-specific paths belong to K and are injected by the host.
 
@@ -228,7 +228,7 @@ The real axis is **bundled vs runtime-provided**, not "data vs code." Code (skil
 | **local / container** | `start <artifact>` (cwd = artifact) | `npm ci` at deploy installs deps; the artifact carries `package.json` + tool source, not `node_modules` |
 | **AgentCore (later)** | OCI-wrap the same artifact | same |
 
-The artifact = the cleaned source **tree** (AGENTS.md, skills/, authored context, `fastagent.config.ts`, tool source, `package.json`, …) with opted-in globals materialized into `skills/`, **minus** the §10.1 hard excludes (`node_modules`, `.git`, `.fastagent`) and anything git/`.fastagentignore` excludes. Secrets are **not** auto-excluded — they are the user's responsibility (§10.1); inject them at runtime and keep them out via .gitignore/.fastagentignore. Pure markdown/skills agents need only `@fastagent/core` to run; code-tool agents add `npm ci`.
+The artifact = the cleaned source **tree** (AGENTS.md, skills/, authored context, `fastagent.config.ts`, tool source, `package.json`, …) with opted-in globals materialized into `skills/`, **minus** the §10.1 hard excludes (`node_modules`, `.git`, `.fastagent`) and anything `.gitignore`/`.fastagentignore` excludes (honored via the `ignore` library, not git). Secrets are **not** auto-excluded — they are the user's responsibility (§10.1); inject them at runtime and keep them out via .gitignore/.fastagentignore. Pure markdown/skills agents need only `@fastagent/core` to run; code-tool agents add `npm ci`.
 
 ### 10.3 `fastagent build`
 

@@ -24,11 +24,9 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { execFile } from "node:child_process";
 import { copyFile, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { promisify } from "node:util";
 import ignore, { type Ignore } from "ignore";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
@@ -147,88 +145,56 @@ function isHardExcluded(name: string): boolean {
   return name === ".git" || name === "node_modules" || name === ".fastagent";
 }
 
-/** Load `<dir>/.fastagentignore` as a matcher (extra excludes on top of git + the hard set). */
-async function loadFastagentIgnore(dir: string): Promise<Ignore | undefined> {
-  let content: string;
-  try {
-    content = await readFile(join(dir, ".fastagentignore"), "utf8");
-  } catch (error) {
-    // Only a missing file is normal; an existing-but-unreadable one fails visibly
-    // (silently building with no rules could ship files the author meant to exclude).
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error(`cannot read ${join(dir, ".fastagentignore")}: ${(error as Error).message}`);
-  }
-  return ignore().add(content);
-}
-
-const execFileAsync = promisify(execFile);
-
 /**
- * The files git considers part of the working tree (tracked + untracked, minus ignored),
- * relative to srcDir and POSIX-normalized. `undefined` when srcDir is NOT a git repo (or
- * git is unavailable) — the caller then ships the whole tree. Delegating to git is why we
- * no longer hand-implement .gitignore semantics.
+ * Read a directory's ignore files (`.gitignore` then `.fastagentignore`, combined into one
+ * matcher) or undefined if neither exists. Combining lets `.fastagentignore` add to OR
+ * re-include (`!`) what `.gitignore` excludes at the same level. We honor `.gitignore`
+ * ourselves (via the `ignore` library, a faithful matcher) rather than calling git: the
+ * artifact is then reproducible (independent of the build machine's git install / global
+ * excludes / index), which is the whole point of a portable bundle.
  *
- * A repo whose enumeration FAILS for an operational reason (dubious ownership, corrupt
- * index, buffer overflow, …) must NOT silently degrade to "ship everything" — that would
- * drop .gitignore protection and bundle ignored/generated/private files. So we detect
- * repo-ness separately (rev-parse) and fail visibly if a real repo can't be enumerated.
+ * An existing-but-unreadable file fails visibly — silently building with no rules could
+ * ship files the author meant to exclude.
  */
-async function gitLsFiles(srcDir: string): Promise<string[] | undefined> {
-  let inside: string;
-  try {
-    ({ stdout: inside } = await execFileAsync("git", ["-C", srcDir, "rev-parse", "--is-inside-work-tree"]));
-  } catch (error) {
-    const e = error as NodeJS.ErrnoException & { stderr?: string };
-    // git absent (ENOENT), or genuinely not a repo → ship the whole tree. We do NOT try to
-    // detect repo-ness without git: that reimplements git's discovery (parents, worktrees,
-    // gitfiles, …) and never ends. .fastagentignore is the git-independent guarantee for
-    // anything that must be excluded regardless of git.
-    if (e.code === "ENOENT" || /not a git repository/i.test(e.stderr ?? "")) return undefined;
-    // git IS present but refuses on a real repo (dubious ownership, corrupt .git, perms):
-    // do not silently drop .gitignore protection — fail visibly (the fix is trivial, e.g.
-    // `git config --global --add safe.directory`) instead of guessing.
-    throw new Error(`git could not inspect the workspace repo: ${(e.stderr || e.message).trim()}`);
-  }
-  if (inside.trim() !== "true") return undefined; // bare repo / inside .git → no work-tree ship-set
-  // It IS a work tree: an enumeration failure here is unexpected — surface it.
-  let stdout: string;
-  try {
-    ({ stdout } = await execFileAsync(
-      "git",
-      ["-C", srcDir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-      { maxBuffer: 256 * 1024 * 1024 },
-    ));
-  } catch (error) {
-    throw new Error(`git ls-files failed in the workspace repo: ${(error as Error).message}`);
-  }
-  return stdout.split("\0").filter((p) => p.length > 0); // git emits POSIX-separated paths
-}
-
-/** Normalize a relative path to POSIX separators for git ship-set / ignore lookups (Windows). */
-function toPosix(rel: string): string {
-  return sep === "/" ? rel : rel.split(sep).join("/");
-}
-
-/** A git ship-set as fast lookups: the listed files + every ancestor dir of a listed file. */
-interface GitAllow {
-  files: Set<string>;
-  dirs: Set<string>;
-}
-function gitAllowFromFiles(files: string[]): GitAllow {
-  // git lists a gitlink/embedded-repo dir with a trailing slash (e.g. `vendor/`); strip it
-  // so the dir's rel (no slash) matches and triggers the submodule subtree recompute.
-  const cleaned = files.map((f) => (f.endsWith("/") ? f.slice(0, -1) : f));
-  const fileSet = new Set(cleaned);
-  const dirs = new Set<string>();
-  for (const f of cleaned) {
-    let d = dirname(f);
-    while (d && d !== "." && !dirs.has(d)) {
-      dirs.add(d);
-      d = dirname(d);
+async function loadDirIgnore(dir: string): Promise<Ignore | undefined> {
+  let rules = "";
+  for (const name of [".gitignore", ".fastagentignore"]) {
+    try {
+      rules += `\n${await readFile(join(dir, name), "utf8")}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new Error(`cannot read ${join(dir, name)}: ${(error as Error).message}`);
+      }
     }
   }
-  return { files: fileSet, dirs };
+  return rules.trim() === "" ? undefined : ignore().add(rules);
+}
+
+/** A directory's ignore matcher scoped to where it lives (baseRel = its artifact-relative
+ *  POSIX path, "" at the root), so its patterns are tested relative to THAT directory. */
+interface ScopedIgnore {
+  baseRel: string;
+  ig: Ignore;
+}
+
+/**
+ * Whether an entry is excluded by any ignore file on the path from the root down to it
+ * (nested `.gitignore` semantics). The stack holds exactly the ancestor dirs' matchers, so
+ * every entry is below every baseRel; each pattern is tested relative to its own directory.
+ * (Cross-file `!` re-inclusion — a deeper file un-ignoring what a shallower file excluded —
+ * is not supported; erring toward exclusion is the safe direction for an artifact.)
+ */
+function scopedIgnored(stack: ScopedIgnore[], entryRel: string, isDir: boolean): boolean {
+  for (const { baseRel, ig } of stack) {
+    const sub = baseRel === "" ? entryRel : entryRel.slice(baseRel.length + 1);
+    if (ig.ignores(isDir ? `${sub}/` : sub)) return true; // dir patterns match only with a trailing slash
+  }
+  return false;
+}
+
+/** Normalize a relative path to POSIX separators for ignore lookups (Windows). */
+function toPosix(rel: string): string {
+  return sep === "/" ? rel : rel.split(sep).join("/");
 }
 
 /** The exact artifact contents of a source tree: regular files (artifact-relative POSIX
@@ -244,27 +210,26 @@ interface ShipPlan {
  * the "definition files must ship" validation and the copy use this one plan, so they can
  * never disagree (which is why a parallel ship predicate is gone).
  *
- * Exclusions: the hard set (deps/vcs/state, by name at any depth) always; `ig` (a
- * `.fastagentignore` matcher rooted at srcDir, ARTIFACT-relative) when provided; and the
- * git ship-set computed HERE from srcDir's own git (a tracked symlink/gitlink is listed
- * as a file, a regular dir is kept when it holds a tracked file). Outside a repo the whole
- * tree ships. `skipReal` (a realpath) is excluded so an in-tree out dir is not walked.
+ * Exclusions: the hard set (deps/vcs/state, by name at any depth) always; and the nested
+ * `.gitignore` + `.fastagentignore` rules read along the way (`ScopedIgnore` stack), each
+ * pattern tested relative to its own directory. We do NOT call git — honoring `.gitignore`
+ * ourselves makes the artifact reproducible (independent of the build machine's git).
+ * `skipReal` (a realpath) is excluded so an in-tree out dir is not walked.
  *
- * Symlinks and git submodules (gitlinks) are dereferenced (follow `stat`): a link/gitlink
- * to a directory starts a FRESH subtree whose ship-set is recomputed from ITS OWN git (so
- * a submodule honors its own .gitignore; a non-repo target ships all minus hard excludes),
- * a link to a file is copied, a dangling link is skipped. Cycles (e.g. `link -> .`) are
- * broken by tracking the recursion STACK of target realpaths.
+ * Symlinks are dereferenced (follow `stat`): a link to a directory is recursed into (its
+ * own nested ignore files apply uniformly), a link to a file is copied, a dangling link is
+ * skipped. A submodule needs no special case — it is just a directory with its own nested
+ * `.gitignore`. Cycles (e.g. `link -> .`) are broken by tracking the recursion STACK of
+ * target realpaths.
  */
-async function planShipSet(srcDir: string, opts: { ig?: Ignore; skipReal?: string } = {}): Promise<ShipPlan> {
-  const { ig, skipReal } = opts;
+async function planShipSet(srcDir: string, opts: { skipReal?: string } = {}): Promise<ShipPlan> {
+  const { skipReal } = opts;
   const topBase = resolve(srcDir);
   const files: { abs: string; rel: string }[] = [];
   const dirs: string[] = [];
-  const topFiles = await gitLsFiles(srcDir);
-  const topAllow = topFiles ? gitAllowFromFiles(topFiles) : undefined;
+  const ignoreStack: ScopedIgnore[] = []; // ancestor dirs' ignore matchers, root → current
 
-  async function walk(absDir: string, stack: Set<string>, base: string, allow: GitAllow | undefined): Promise<void> {
+  async function walk(absDir: string, stack: Set<string>): Promise<void> {
     const realDir = await realpath(absDir).catch(() => resolve(absDir));
     // Skip the out dir by REALPATH, so it is recognized even when src and out are spelled
     // through different symlink aliases (textual compare would descend into the artifact).
@@ -272,7 +237,9 @@ async function planShipSet(srcDir: string, opts: { ig?: Ignore; skipReal?: strin
     if (stack.has(realDir)) return; // cycle: realDir is its own ancestor on this descent
     stack.add(realDir);
     const relDir = toPosix(relative(topBase, absDir));
-    if (relDir !== "") dirs.push(relDir); // record allowed dirs so empty ones survive the copy
+    if (relDir !== "") dirs.push(relDir); // record dirs so empty (but included) ones survive
+    const dirIg = await loadDirIgnore(absDir); // this dir's ignore files govern its subtree
+    if (dirIg) ignoreStack.push({ baseRel: relDir, ig: dirIg });
     for (const entry of await readdir(absDir, { withFileTypes: true })) {
       const abs = join(absDir, entry.name);
       if (isHardExcluded(entry.name)) continue;
@@ -288,35 +255,15 @@ async function planShipSet(srcDir: string, opts: { ig?: Ignore; skipReal?: strin
       // Only directories and regular files belong in an artifact. Skip sockets, FIFOs,
       // and devices — copyFile would throw on them and fail the whole build.
       if (!isDir && !isFile) continue;
-      // Two relative paths (POSIX, for Windows): `.fastagentignore` is the workspace's own
-      // exclude file, so its patterns are ARTIFACT-relative (from topBase) even inside a
-      // base-restart subtree; the git allow set is the subtree repo's own, so its lookups
-      // are subtree-relative (from base).
-      const artRel = toPosix(relative(topBase, abs));
-      if (ig?.ignores(isDir ? `${artRel}/` : artRel)) continue; // dir patterns need a trailing slash
-      const rel = toPosix(relative(base, abs));
-      // A dir entry recorded by git as a FILE is a symlink or a submodule gitlink: its
-      // contents are outside THIS repo's tracked enumeration. A regular tracked dir is
-      // kept when it holds a tracked file.
-      const viaFile = allow !== undefined && allow.files.has(rel);
-      if (allow !== undefined) {
-        const allowed = isDir ? allow.dirs.has(rel) || viaFile : allow.files.has(rel);
-        if (!allowed) continue;
-      }
-      if (isDir) {
-        if (isLink || viaFile) {
-          const subFiles = await gitLsFiles(abs);
-          await walk(abs, stack, abs, subFiles ? gitAllowFromFiles(subFiles) : undefined);
-        } else {
-          await walk(abs, stack, base, allow);
-        }
-      } else {
-        files.push({ abs, rel: artRel }); // regular file (follows a symlink-to-file)
-      }
+      const rel = toPosix(relative(topBase, abs));
+      if (scopedIgnored(ignoreStack, rel, isDir)) continue;
+      if (isDir) await walk(abs, stack);
+      else files.push({ abs, rel }); // regular file (follows a symlink-to-file)
     }
+    if (dirIg) ignoreStack.pop();
     stack.delete(realDir); // leave the descent: siblings sharing this target are not a cycle
   }
-  await walk(topBase, new Set(), topBase, topAllow);
+  await walk(topBase, new Set());
   return { files, dirs };
 }
 
@@ -369,7 +316,6 @@ export async function bundleAgentDefinition(
   }
 
   const definition = await loadAgentDefinition(srcDir, options);
-  const fastagentIg = await loadFastagentIgnore(srcDir);
   const srcBase = resolve(srcDir);
 
   // ONE ship-decision drives everything below. Skip the out dir by realpath so an in-tree
@@ -377,7 +323,7 @@ export async function bundleAgentDefinition(
   // the resolved path (first build). This runs BEFORE the destructive rm, so a validation
   // failure never destroys a prior artifact.
   const skipReal = await realpath(outDir).catch(() => resolve(outDir));
-  const plan = await planShipSet(srcDir, { ig: fastagentIg, skipReal });
+  const plan = await planShipSet(srcDir, { skipReal });
   const shipped = new Set(plan.files.map((f) => f.rel));
 
   // The loaded definition files (AGENTS.md + local skills) ARE the agent; they must be in

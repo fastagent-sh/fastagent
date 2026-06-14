@@ -1,16 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { buildPiArtifact, loadAgentDefinition, type ArtifactManifest } from "../src/index.ts";
-
-const execFileAsync = promisify(execFile);
-async function gitInit(dir: string): Promise<void> {
-  await execFileAsync("git", ["-C", dir, "init", "-q"]);
-}
 
 async function exists(p: string): Promise<boolean> {
   return access(p).then(
@@ -89,10 +81,9 @@ describe("build: buildPiArtifact", () => {
     const ignored = await freshOut();
     await buildPiArtifact(ws, ignored);
     expect(await exists(join(ignored, ".env"))).toBe(false);
-    // … or, in a git repo, by .gitignore (the convention).
+    // … or by .gitignore (the convention), honored whether or not git is installed.
     const repo = await makeWorkspace();
     await writeFile(join(repo, ".gitignore"), ".env\n");
-    await gitInit(repo);
     const out = await freshOut();
     await buildPiArtifact(repo, out);
     expect(await exists(join(out, ".env"))).toBe(false);
@@ -111,16 +102,16 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "docs", "schema.md"))).toBe(true); // non-ignored authored context still ships
   });
 
-  it("delegates ignore semantics to git in a repo: .gitignore'd files do not ship, .git is excluded", async () => {
+  it("honors .gitignore in any tree; .git/ and node_modules/ are hard-excluded", async () => {
     const ws = await makeWorkspace();
     await writeFile(join(ws, ".gitignore"), "scratch/\n");
     await mkdir(join(ws, "scratch"), { recursive: true });
     await writeFile(join(ws, "scratch", "note.md"), "scratch\n");
-    await gitInit(ws); // now git decides the ship-set (untracked-non-ignored)
     const out = await freshOut();
     await buildPiArtifact(ws, out);
-    expect(await exists(join(out, "scratch"))).toBe(false); // git-ignored → not shipped
-    expect(await exists(join(out, ".git"))).toBe(false); // the repo dir is never bundled
+    expect(await exists(join(out, "scratch"))).toBe(false); // .gitignore'd → not shipped
+    expect(await exists(join(out, ".git"))).toBe(false); // hard-excluded
+    expect(await exists(join(out, "node_modules"))).toBe(false); // hard-excluded
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
     expect(await exists(join(out, "docs", "schema.md"))).toBe(true);
   });
@@ -324,50 +315,41 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(sessions, "conv.jsonl"))).toBe(true); // session history untouched
   });
 
-  it("builds an agent whose local skill dir is a symlink in a repo (validation uses the real ship-set)", async () => {
-    // git lists a symlinked/gitlink skill dir as `skills/foo` (a file), not
-    // `skills/foo/SKILL.md`. The single ship-plan includes the dereferenced SKILL.md, so
-    // validation must pass instead of aborting as "definition file excluded".
+  it("builds an agent whose local skill dir is a symlink (validation uses the real ship-set)", async () => {
+    // A symlinked skill dir is dereferenced by the walk; the single ship-plan includes the
+    // SKILL.md, so validation passes instead of aborting as "definition file excluded".
     const ext = await mkdtemp(join(tmpdir(), "fa-ext-skill-"));
     await writeFile(join(ext, "SKILL.md"), "---\nname: linked\ndescription: d\n---\nbody\n");
     const ws = await makeWorkspace();
     await symlink(ext, join(ws, "skills", "linked"));
-    await gitInit(ws); // git now lists skills/linked as a symlink file-entry
     const out = await freshOut();
     await buildPiArtifact(ws, out);
     expect(await exists(join(out, "skills", "linked", "SKILL.md"))).toBe(true);
   });
 
-  it("ships the whole tree when git is absent (no repo detection without git)", async () => {
-    // Without git we don't guess repo-ness; we package everything (minus hard excludes /
-    // .fastagentignore). So even a file .gitignore would exclude is shipped.
+  it("honors .gitignore without invoking git (reproducible, install-independent)", async () => {
+    // The build reads .gitignore itself (via the ignore library); no git binary is called,
+    // so the result is the same with or without git installed.
     const ws = await makeWorkspace({ gitignore: "ignored.txt\n" });
-    await writeFile(join(ws, "ignored.txt"), "shipped because git is unavailable\n");
-    await rm(join(ws, ".git"), { recursive: true, force: true });
-    await gitInit(ws); // a real repo with a .gitignore that git WOULD honor if present
+    await writeFile(join(ws, "ignored.txt"), "excluded by .gitignore\n");
     const out = await freshOut();
-    const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-    const emptyPath = await mkdtemp(join(tmpdir(), "fa-nopath-")); // node via execPath; git absent
-    await execFileAsync(process.execPath, [cli, "build", ws, "--out", out], {
-      env: { ...process.env, PATH: emptyPath },
-    }); // resolves → exit 0
-    expect(await exists(join(out, "ignored.txt"))).toBe(true);
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "ignored.txt"))).toBe(false); // .gitignore honored, no git
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
 
-  it("a submodule (gitlink) ships under ITS OWN git rules, not the whole working tree", async () => {
-    // A submodule is a nested repo; its own .gitignore must decide what ships.
+  it("honors a nested .gitignore (e.g. a vendored/submodule dir) per its own directory", async () => {
+    // A submodule is just a directory with its own nested .gitignore; no special-casing.
     const ws = await makeWorkspace();
     const sub = join(ws, "vendor");
     await mkdir(sub, { recursive: true });
     await writeFile(join(sub, "doc.md"), "shipped reference\n");
     await writeFile(join(sub, "secret.env"), "LEAK=no\n");
-    await writeFile(join(sub, ".gitignore"), "secret.env\n");
-    await gitInit(sub); // nested repo (acts as the submodule's checked-out tree)
-    await gitInit(ws);
+    await writeFile(join(sub, ".gitignore"), "secret.env\n"); // scoped to vendor/
     const out = await freshOut();
     await buildPiArtifact(ws, out);
-    expect(await exists(join(out, "vendor", "doc.md"))).toBe(true); // tracked content ships
-    expect(await exists(join(out, "vendor", "secret.env"))).toBe(false); // submodule .gitignore honored
+    expect(await exists(join(out, "vendor", "doc.md"))).toBe(true);
+    expect(await exists(join(out, "vendor", "secret.env"))).toBe(false); // nested rule honored
   });
 
   it("builds into the default in-tree out (.fastagent/build) without copying it into itself", async () => {

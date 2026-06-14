@@ -29,11 +29,10 @@ function usage(code: number): never {
          --global-skills   also load the machine's global skills (~/.pi/agent/skills,
                            ~/.agents/skills); default is definition-only (dev == deployed)
   build  compile dir into a self-contained, relocatable artifact (default out:
-         .fastagent/build): the source tree (in a repo: tracked + untracked-not-ignored;
-         else everything)
-         + materialized skills + manifest, minus node_modules/.git and anything
-         git/.fastagentignore'd. Secrets are NOT auto-excluded — keep them in .gitignore
-         or .fastagentignore. Source is untouched.
+         .fastagent/build): the source tree + materialized skills + manifest, minus
+         node_modules/.git and anything .gitignore/.fastagentignore excludes (honored
+         via a library, git is never invoked). Secrets are NOT auto-excluded — keep them
+         in .gitignore or .fastagentignore. Source is untouched.
          --global-skills   materialize the machine's global skills into the artifact`);
   process.exit(code);
 }
