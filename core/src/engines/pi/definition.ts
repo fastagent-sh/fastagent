@@ -331,6 +331,24 @@ export async function bundleAgentDefinition(
     (bundleOpts.skipPaths ?? []).map((p) => realpath(p).catch(() => resolve(p))),
   );
   const plan = await planShipSet(srcDir, { skip: [skipHere, ...skipExtra] });
+
+  // Prune LOCAL name-collision losers from the ship plan. loadAgentDefinition kept only the
+  // winner, but the whole-tree copy would still ship a losing local skill under skills/, so
+  // the artifact would reload with a duplicate name and could even pick a different winner.
+  // Keep the artifact == the reported agent. (External-mount losers are not in the tree.)
+  const localSkills = join(srcBase, "skills") + sep;
+  const loserRels = definition.collisions
+    .map((c) => resolve(c.loserPath))
+    .filter((abs) => abs.startsWith(localSkills))
+    .map((abs) => {
+      const rel = toPosix(relative(srcBase, abs));
+      return basename(abs) === "SKILL.md" ? `${toPosix(dirname(rel))}/` : rel; // a dir prefix, or an exact file
+    });
+  const isLoser = (rel: string): boolean =>
+    loserRels.some((l) => (l.endsWith("/") ? `${rel}/`.startsWith(l) : rel === l));
+  plan.files = plan.files.filter((f) => !isLoser(f.rel));
+  plan.dirs = plan.dirs.filter((d) => !isLoser(d));
+
   const shipped = new Set(plan.files.map((f) => f.rel));
   const shippedDirs = new Set(plan.dirs);
 

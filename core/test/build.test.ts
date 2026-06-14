@@ -285,6 +285,24 @@ describe("build: buildPiArtifact", () => {
     await expect(buildOk(ws, await freshOut())).rejects.toThrow(/reserved for the build manifest/);
   });
 
+  it("prunes a local name-collision LOSER so the artifact reloads to the reported winner", async () => {
+    const ws = await makeWorkspace(); // has skills/local-skill (name local-skill)
+    // two more local skills declaring the SAME name: one wins, one loses
+    await mkdir(join(ws, "skills", "aaa"), { recursive: true });
+    await mkdir(join(ws, "skills", "zzz"), { recursive: true });
+    await writeFile(join(ws, "skills", "aaa", "SKILL.md"), "---\nname: dup\ndescription: a\n---\nA\n");
+    await writeFile(join(ws, "skills", "zzz", "SKILL.md"), "---\nname: dup\ndescription: z\n---\nZ\n");
+    const out = await freshOut();
+    await buildOk(ws, out);
+    const dirs = (await readdir(join(out, "skills"))).sort();
+    expect(dirs).toContain("aaa"); // winner kept
+    expect(dirs).not.toContain("zzz"); // loser pruned from the artifact
+    // the artifact reloads with no duplicate — exactly one "dup" skill, no collision
+    const reloaded = await loadAgentDefinition(out, { skillPaths: [] });
+    expect(reloaded.skills.filter((s) => s.name === "dup")).toHaveLength(1);
+    expect(reloaded.collisions).toEqual([]);
+  });
+
   it("rebuild replaces the artifact via move-aside, leaving no staging/backup litter", async () => {
     const ws = await makeWorkspace();
     const out = join(ws, ".fastagent", "build"); // in-tree → staging + backup live under .fastagent
