@@ -169,10 +169,11 @@ async function loadDirIgnore(dir: string): Promise<{ git?: Ignore; fa?: Ignore }
   return { git: await read(".gitignore"), fa: await read(".fastagentignore") };
 }
 
-/** A directory's ignore matchers scoped to where it lives (baseRel = its artifact-relative
- *  POSIX path, "" at the root), so its patterns are tested relative to THAT directory. */
+/** A directory's ignore matchers, keyed by the matcher's ABSOLUTE directory, so each
+ *  pattern is tested relative to THAT directory — which lets ancestor ignore files (above
+ *  the build root, e.g. a monorepo-root .gitignore) anchor correctly too. */
 interface ScopedIgnore {
-  baseRel: string;
+  baseAbs: string;
   git?: Ignore;
   fa?: Ignore;
 }
@@ -180,12 +181,13 @@ interface ScopedIgnore {
 /** The verdict of one kind of ignore file across the ancestor stack: composed root → deep
  *  so a DEEPER file overrides a shallower one (git's last-match-wins; `ignore.test()` tells
  *  an explicit un-ignore from a non-match). undefined = no rule had an opinion. */
-function stackVerdict(stack: ScopedIgnore[], pick: (s: ScopedIgnore) => Ignore | undefined, entryRel: string, isDir: boolean): boolean | undefined {
+function stackVerdict(stack: ScopedIgnore[], pick: (s: ScopedIgnore) => Ignore | undefined, entryAbs: string, isDir: boolean): boolean | undefined {
   let v: boolean | undefined;
   for (const s of stack) {
     const ig = pick(s);
     if (!ig) continue;
-    const sub = s.baseRel === "" ? entryRel : entryRel.slice(s.baseRel.length + 1);
+    const sub = toPosix(relative(s.baseAbs, entryAbs)); // entry path relative to the matcher's dir
+    if (sub === "" || sub.startsWith("..")) continue; // entry not under this matcher
     const verdict = ig.test(isDir ? `${sub}/` : sub); // dir patterns match only with a trailing slash
     if (verdict.ignored) v = true;
     else if (verdict.unignored) v = false; // explicit negation re-includes
@@ -203,10 +205,23 @@ function stackVerdict(stack: ScopedIgnore[], pick: (s: ScopedIgnore) => Ignore |
  * (A file under an already-excluded DIRECTORY is never reached — the walk does not descend
  * into ignored dirs — so git's "can't re-include below an excluded dir" holds for free.)
  */
-function scopedIgnored(stack: ScopedIgnore[], entryRel: string, isDir: boolean): boolean {
-  const fa = stackVerdict(stack, (s) => s.fa, entryRel, isDir);
+function scopedIgnored(stack: ScopedIgnore[], entryAbs: string, isDir: boolean): boolean {
+  const fa = stackVerdict(stack, (s) => s.fa, entryAbs, isDir);
   if (fa !== undefined) return fa;
-  return stackVerdict(stack, (s) => s.git, entryRel, isDir) ?? false;
+  return stackVerdict(stack, (s) => s.git, entryAbs, isDir) ?? false;
+}
+
+/** The nearest ancestor of `start` (inclusive) that contains a `.git` entry — the repo
+ *  root — or undefined when none up to the filesystem root. A bounded stat walk (no git),
+ *  used only to limit how far UP ancestor ignore files are honored. */
+async function findRepoRoot(start: string): Promise<string | undefined> {
+  let d = resolve(start);
+  for (;;) {
+    if (await stat(join(d, ".git")).then(() => true, () => false)) return d;
+    const parent = dirname(d);
+    if (parent === d) return undefined; // reached the filesystem root, no repo
+    d = parent;
+  }
 }
 
 /** Normalize a relative path to POSIX separators for ignore lookups (Windows). */
@@ -257,7 +272,7 @@ async function planShipSet(srcDir: string, opts: { skip?: string[] } = {}): Prom
     if (relDir !== "") dirs.push(relDir); // record dirs so empty (but included) ones survive
     const { git, fa } = await loadDirIgnore(absDir); // this dir's ignore files govern its subtree
     const pushed = git !== undefined || fa !== undefined;
-    if (pushed) ignoreStack.push({ baseRel: relDir, git, fa });
+    if (pushed) ignoreStack.push({ baseAbs: absDir, git, fa });
     for (const entry of await readdir(absDir, { withFileTypes: true })) {
       const abs = join(absDir, entry.name);
       if (isHardExcluded(entry.name)) continue;
@@ -274,12 +289,29 @@ async function planShipSet(srcDir: string, opts: { skip?: string[] } = {}): Prom
       // and devices — copyFile would throw on them and fail the whole build.
       if (!isDir && !isFile) continue;
       const rel = toPosix(relative(topBase, abs));
-      if (scopedIgnored(ignoreStack, rel, isDir)) continue;
+      if (scopedIgnored(ignoreStack, abs, isDir)) continue;
       if (isDir) await walk(abs, stack);
       else files.push({ abs, rel }); // regular file (follows a symlink-to-file)
     }
     if (pushed) ignoreStack.pop();
     stack.delete(realDir); // leave the descent: siblings sharing this target are not a cycle
+  }
+
+  // Seed ANCESTOR ignore files up to the repo root, so a monorepo-root .gitignore applies to
+  // a package build (`fastagent build packages/agent`). Bounded at the repo root (.git):
+  // above it is not part of the project, and stopping there keeps the artifact reproducible.
+  // These stay on the stack for the whole walk (root → deep, so deeper files still override).
+  const repoRoot = await findRepoRoot(topBase);
+  if (repoRoot !== undefined && repoRoot !== topBase) {
+    const chain: string[] = [];
+    for (let d = dirname(topBase); ; d = dirname(d)) {
+      chain.push(d);
+      if (d === repoRoot || dirname(d) === d) break;
+    }
+    for (const dir of chain.reverse()) {
+      const { git, fa } = await loadDirIgnore(dir);
+      if (git !== undefined || fa !== undefined) ignoreStack.push({ baseAbs: dir, git, fa });
+    }
   }
   await walk(topBase, new Set());
   return { files, dirs };

@@ -119,6 +119,39 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "docs", "schema.md"))).toBe(true); // non-ignored authored context still ships
   });
 
+  it("honors an ancestor .gitignore up to the repo root (monorepo package build)", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "fa-monorepo-"));
+    await mkdir(join(repo, ".git"), { recursive: true }); // marks the repo root boundary
+    await writeFile(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    await writeFile(join(repo, ".gitignore"), "packages/agent/dist/\n*.env\n"); // ROOT rules
+    const pkg = join(repo, "packages", "agent");
+    await mkdir(join(pkg, "dist"), { recursive: true });
+    await mkdir(join(pkg, "src"), { recursive: true });
+    await writeFile(join(pkg, "AGENTS.md"), "# Bot\n");
+    await writeFile(join(pkg, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await writeFile(join(pkg, "dist", "out.js"), "built\n");
+    await writeFile(join(pkg, "secret.env"), "SECRET\n");
+    await writeFile(join(pkg, "src", "a.ts"), "code\n");
+    const out = await freshOut();
+    await buildOk(pkg, out);
+    expect(await exists(join(out, "dist"))).toBe(false); // root rule packages/agent/dist/ applied
+    expect(await exists(join(out, "secret.env"))).toBe(false); // root rule *.env applied
+    expect(await exists(join(out, "src", "a.ts"))).toBe(true);
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+  });
+
+  it("does not read ancestor .gitignore outside a repo (reproducible, install-independent)", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "fa-noancestor-"));
+    await writeFile(join(parent, ".gitignore"), "AGENTS.md\n"); // a stray ancestor rule, NO .git anywhere
+    const solo = join(parent, "agent");
+    await mkdir(solo, { recursive: true });
+    await writeFile(join(solo, "AGENTS.md"), "# Bot\n");
+    await writeFile(join(solo, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    const out = await freshOut();
+    await buildOk(solo, out);
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true); // ancestor .gitignore not honored (no repo root)
+  });
+
   it("honors .gitignore in any tree; .git/ and node_modules/ are hard-excluded", async () => {
     const ws = await makeWorkspace();
     await writeFile(join(ws, ".gitignore"), "scratch/\n");
