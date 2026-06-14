@@ -278,6 +278,24 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(ws, "AGENTS.md"))).toBe(true); // source intact throughout
   });
 
+  it("rejects a root entry named fastagent.json including a DIRECTORY (clear error, not EISDIR)", async () => {
+    const ws = await makeWorkspace();
+    await mkdir(join(ws, "fastagent.json"), { recursive: true });
+    await writeFile(join(ws, "fastagent.json", "inner.txt"), "x\n");
+    await expect(buildOk(ws, await freshOut())).rejects.toThrow(/reserved for the build manifest/);
+  });
+
+  it("in-tree staging lives under .fastagent so a crash-orphaned staging never ships", async () => {
+    const ws = await makeWorkspace();
+    // simulate a staging dir orphaned by a prior crashed build, where the code now puts it
+    await mkdir(join(ws, ".fastagent", ".fa-build-STALE"), { recursive: true });
+    await writeFile(join(ws, ".fastagent", ".fa-build-STALE", "junk.txt"), "partial\n");
+    await buildOk(ws, join(ws, "build")); // in-tree --out build
+    expect(await exists(join(ws, "build", ".fastagent"))).toBe(false); // .fastagent (and its staging) never walked
+    expect(await exists(join(ws, "build", ".fa-build-STALE"))).toBe(false);
+    expect(await exists(join(ws, "build", "AGENTS.md"))).toBe(true);
+  });
+
   it("guards an --out OUTSIDE the source tree behind force (avoids nuking unrelated dirs)", async () => {
     const ws = await makeWorkspace();
     const outside = await freshOut(); // a sibling temp dir, outside ws

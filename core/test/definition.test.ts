@@ -215,6 +215,21 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     expect(reloaded.skills.map((s) => s.name).sort()).toEqual(["cutting-words", "season-words"]);
   });
 
+  it("materializes an in-workspace mount outside skills/ into outDir/skills/ (reported == shipped)", async () => {
+    // A skillPaths mount inside the workspace but outside skills/ is NOT placed at
+    // outDir/skills/ by the tree copy; it must still be materialized there, or a
+    // definition-only reload (scans outDir/skills/) would lose a skill the bundle reported.
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(src, "extras", "foo"), { recursive: true });
+    await writeFile(join(src, "extras", "foo", "SKILL.md"), "---\nname: foo\ndescription: d\n---\nbody\n");
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    const def = await bundleAgentDefinition(src, out, { skillPaths: [join(src, "extras")] });
+    expect(def.skills.map((s) => s.name)).toContain("foo");
+    const reloaded = await loadAgentDefinition(out, { skillPaths: [] }); // artifact reloads itself
+    expect(reloaded.skills.map((s) => s.name)).toContain("foo");
+  });
+
   it("fails visibly when a global skill materializes onto a bundled skill's path (dir != name)", async () => {
     // Local skill dir "foo" but frontmatter name "bar"; a global skill named "foo" then
     // dedups as distinct yet materializes onto out/skills/foo (the bundled local skill).

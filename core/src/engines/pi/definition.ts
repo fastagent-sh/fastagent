@@ -332,15 +332,18 @@ export async function bundleAgentDefinition(
   );
   const plan = await planShipSet(srcDir, { skip: [skipHere, ...skipExtra] });
   const shipped = new Set(plan.files.map((f) => f.rel));
+  const shippedDirs = new Set(plan.dirs);
 
   // A caller-reserved root filename (the build manifest, fastagent.json) only collides if
   // it would actually SHIP — a source file by that name excluded via .gitignore/
   // .fastagentignore is not in the artifact and must not block the build. Checked here
-  // (plan is computed, rm not yet run) so the rejection is precise AND non-destructive.
+  // (plan is computed, publish not yet run) so the rejection is precise AND non-destructive.
+  // Match a shipped FILE or DIRECTORY at the reserved path — a root dir named fastagent.json
+  // would otherwise make the later manifest write fail with a cryptic EISDIR.
   const reserved = bundleOpts.reservedRootFile;
-  if (reserved !== undefined && shipped.has(reserved)) {
+  if (reserved !== undefined && (shipped.has(reserved) || shippedDirs.has(reserved))) {
     throw new Error(
-      `"${reserved}" is reserved for the build manifest; the source ships a file by that name ` +
+      `"${reserved}" is reserved for the build manifest; the source ships an entry by that name ` +
         `at the artifact root — rename it or exclude it (config goes in fastagent.config.ts/js/mjs)`,
     );
   }
@@ -368,16 +371,16 @@ export async function bundleAgentDefinition(
   // Materialize the plan into outDir (a fresh dir the caller provided).
   await executeShipPlan(plan, outDir);
 
-  // Materialize winning skills that live OUTSIDE the source tree (globals / extra
-  // mounts) into outDir/skills/. Definition-local skills already arrived via the tree
-  // copy; collision losers are absent from definition.skills. External skills copy with
-  // ONLY the hard excludes (their own node_modules/.git never ship); the workspace
-  // ship-set / .fastagentignore do not govern an external skill folder, so its SKILL.md
-  // always ships.
+  // Materialize winning skills that the tree copy did NOT already place under outDir/skills/
+  // (globals, extra mounts, or an in-workspace mount outside skills/). Only a skill already
+  // under <src>/skills/ is loaded from outDir/skills/ after the tree copy; anything else
+  // must be materialized there, or a definition-only reload (which scans outDir/skills/)
+  // would lose a skill bundle reported. External folders copy with ONLY the hard excludes.
+  const localSkillsDir = join(srcBase, "skills") + sep;
   await mkdir(join(outDir, "skills"), { recursive: true });
   for (const skill of definition.skills) {
     const skillAbs = resolve(skill.filePath);
-    if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) continue; // local: already copied
+    if (skillAbs.startsWith(localSkillsDir)) continue; // already at outDir/skills/ via the tree copy
     // Dedup is by frontmatter name, but materialization writes by directory/file name.
     // A local skill whose dir name differs from its name (e.g. skills/foo with name
     // "bar") can already occupy the destination of an external skill named "foo" — the

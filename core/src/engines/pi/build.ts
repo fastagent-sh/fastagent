@@ -101,11 +101,14 @@ export async function buildPiArtifact(
     );
   }
 
-  // Build into a fresh STAGING dir that is a sibling of outDir (same filesystem → the
-  // publish rename is atomic). bundle skips both staging and finalDir so neither is walked
-  // into the artifact when outDir lives inside the source tree.
+  // Build into a fresh STAGING dir, same filesystem as the target so the publish rename is
+  // atomic, and never reachable by the walk so a crash-orphaned staging can't ship:
+  //   - in-tree target  → under <src>/.fastagent/ (already hard-excluded from the walk);
+  //   - out-of-tree target → sibling of finalDir (outside the source tree, so not walked).
+  const stagingParent = outsideSource ? dirname(finalDir) : join(srcReal, ".fastagent");
   await mkdir(dirname(finalDir), { recursive: true });
-  const staging = await mkdtemp(join(dirname(finalDir), ".fa-build-"));
+  await mkdir(stagingParent, { recursive: true });
+  const staging = await mkdtemp(join(stagingParent, ".fa-build-"));
   try {
     const definition = await bundleAgentDefinition(
       srcDir,
