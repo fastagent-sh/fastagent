@@ -24,10 +24,11 @@ export {
   type CreatePiAgentFromWorkspaceOptions,
 } from "./engines/pi/create.ts";
 
-// pi reference implementation — definition domain (load / bundle)
+// pi reference implementation — definition domain (load).
+// bundleAgentDefinition is intentionally NOT exported: it does a destructive `rm -rf
+// outDir` and the overwrite guard lives in buildPiArtifact, the public build entry point.
 export {
   loadAgentDefinition,
-  bundleAgentDefinition,
   defaultGlobalSkillPaths,
   type LoadedDefinition,
   type LoadAgentDefinitionOptions,

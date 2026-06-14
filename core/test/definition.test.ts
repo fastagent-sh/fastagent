@@ -7,7 +7,6 @@ import { access, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from "n
 import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
-  bundleAgentDefinition,
   collect,
   createPiAgentFromDefinition,
   defaultGlobalSkillPaths,
@@ -17,6 +16,8 @@ import {
   piReadOnlyTools,
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
+// bundleAgentDefinition is internal (not re-exported): import it from its module.
+import { bundleAgentDefinition } from "../src/engines/pi/definition.ts";
 import { assembleSystemPrompt } from "../src/engines/pi/create.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");

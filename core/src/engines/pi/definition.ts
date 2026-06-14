@@ -147,57 +147,66 @@ function isHardExcluded(name: string): boolean {
 
 /**
  * Read a directory's ignore files (`.gitignore` then `.fastagentignore`, combined into one
- * matcher) or undefined if neither exists. Combining lets `.fastagentignore` add to OR
- * re-include (`!`) what `.gitignore` excludes at the same level. We honor `.gitignore`
- * ourselves (via the `ignore` library, a faithful matcher) rather than calling git: the
- * artifact is then reproducible (independent of the build machine's git install / global
- * excludes / index), which is the whole point of a portable bundle.
+ * matchers) or `{}` if neither exists. The two are kept SEPARATE (not merged) because
+ * `.fastagentignore` is authoritative over `.gitignore` (see scopedIgnored): a nested
+ * `.gitignore` re-inclusion must not override a build-specific `.fastagentignore` exclude.
+ * We honor `.gitignore` ourselves (via the `ignore` library, a faithful matcher) rather
+ * than calling git, so the artifact is reproducible (independent of the build machine's
+ * git install / global excludes / index) — the whole point of a portable bundle.
  *
  * An existing-but-unreadable file fails visibly — silently building with no rules could
  * ship files the author meant to exclude.
  */
-async function loadDirIgnore(dir: string): Promise<Ignore | undefined> {
-  let rules = "";
-  for (const name of [".gitignore", ".fastagentignore"]) {
+async function loadDirIgnore(dir: string): Promise<{ git?: Ignore; fa?: Ignore }> {
+  const read = async (name: string): Promise<Ignore | undefined> => {
     try {
-      rules += `\n${await readFile(join(dir, name), "utf8")}`;
+      return ignore().add(await readFile(join(dir, name), "utf8"));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw new Error(`cannot read ${join(dir, name)}: ${(error as Error).message}`);
-      }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw new Error(`cannot read ${join(dir, name)}: ${(error as Error).message}`);
     }
-  }
-  return rules.trim() === "" ? undefined : ignore().add(rules);
+  };
+  return { git: await read(".gitignore"), fa: await read(".fastagentignore") };
 }
 
-/** A directory's ignore matcher scoped to where it lives (baseRel = its artifact-relative
+/** A directory's ignore matchers scoped to where it lives (baseRel = its artifact-relative
  *  POSIX path, "" at the root), so its patterns are tested relative to THAT directory. */
 interface ScopedIgnore {
   baseRel: string;
-  ig: Ignore;
+  git?: Ignore;
+  fa?: Ignore;
+}
+
+/** The verdict of one kind of ignore file across the ancestor stack: composed root → deep
+ *  so a DEEPER file overrides a shallower one (git's last-match-wins; `ignore.test()` tells
+ *  an explicit un-ignore from a non-match). undefined = no rule had an opinion. */
+function stackVerdict(stack: ScopedIgnore[], pick: (s: ScopedIgnore) => Ignore | undefined, entryRel: string, isDir: boolean): boolean | undefined {
+  let v: boolean | undefined;
+  for (const s of stack) {
+    const ig = pick(s);
+    if (!ig) continue;
+    const sub = s.baseRel === "" ? entryRel : entryRel.slice(s.baseRel.length + 1);
+    const verdict = ig.test(isDir ? `${sub}/` : sub); // dir patterns match only with a trailing slash
+    if (verdict.ignored) v = true;
+    else if (verdict.unignored) v = false; // explicit negation re-includes
+  }
+  return v;
 }
 
 /**
- * Whether an entry is excluded by the ignore files on the path from the root down to it
- * (nested `.gitignore` semantics). The stack holds exactly the ancestor dirs' matchers, so
- * every entry is below every baseRel; each pattern is tested relative to its own directory.
- *
- * Matchers are composed root → deep so a DEEPER file overrides a shallower one, matching
- * git's last-match-wins: a broad `*.md` at the root can be re-included by `!schema.md` in
- * `docs/.gitignore`. `ignore.test()` distinguishes an explicit un-ignore (negation) from a
- * non-match, so a deeper negation flips the verdict while a non-match leaves it unchanged.
+ * Whether an entry is excluded by the ignore files from the root down to it. `.gitignore`
+ * and `.fastagentignore` are evaluated as SEPARATE hierarchies (each with full nested
+ * last-match-wins semantics), then combined with `.fastagentignore` AUTHORITATIVE: if it
+ * has a verdict (exclude, or an explicit `!` re-include) that wins; only when it is silent
+ * does `.gitignore` decide. So a nested `.gitignore` `!` can never override a
+ * `.fastagentignore` exclude — `.fastagentignore` is the git-independent guarantee.
  * (A file under an already-excluded DIRECTORY is never reached — the walk does not descend
  * into ignored dirs — so git's "can't re-include below an excluded dir" holds for free.)
  */
 function scopedIgnored(stack: ScopedIgnore[], entryRel: string, isDir: boolean): boolean {
-  let ignored = false;
-  for (const { baseRel, ig } of stack) {
-    const sub = baseRel === "" ? entryRel : entryRel.slice(baseRel.length + 1);
-    const verdict = ig.test(isDir ? `${sub}/` : sub); // dir patterns match only with a trailing slash
-    if (verdict.ignored) ignored = true;
-    else if (verdict.unignored) ignored = false; // explicit negation re-includes
-  }
-  return ignored;
+  const fa = stackVerdict(stack, (s) => s.fa, entryRel, isDir);
+  if (fa !== undefined) return fa;
+  return stackVerdict(stack, (s) => s.git, entryRel, isDir) ?? false;
 }
 
 /** Normalize a relative path to POSIX separators for ignore lookups (Windows). */
@@ -246,8 +255,9 @@ async function planShipSet(srcDir: string, opts: { skipReal?: string } = {}): Pr
     stack.add(realDir);
     const relDir = toPosix(relative(topBase, absDir));
     if (relDir !== "") dirs.push(relDir); // record dirs so empty (but included) ones survive
-    const dirIg = await loadDirIgnore(absDir); // this dir's ignore files govern its subtree
-    if (dirIg) ignoreStack.push({ baseRel: relDir, ig: dirIg });
+    const { git, fa } = await loadDirIgnore(absDir); // this dir's ignore files govern its subtree
+    const pushed = git !== undefined || fa !== undefined;
+    if (pushed) ignoreStack.push({ baseRel: relDir, git, fa });
     for (const entry of await readdir(absDir, { withFileTypes: true })) {
       const abs = join(absDir, entry.name);
       if (isHardExcluded(entry.name)) continue;
@@ -268,7 +278,7 @@ async function planShipSet(srcDir: string, opts: { skipReal?: string } = {}): Pr
       if (isDir) await walk(abs, stack);
       else files.push({ abs, rel }); // regular file (follows a symlink-to-file)
     }
-    if (dirIg) ignoreStack.pop();
+    if (pushed) ignoreStack.pop();
     stack.delete(realDir); // leave the descent: siblings sharing this target are not a cycle
   }
   await walk(topBase, new Set());

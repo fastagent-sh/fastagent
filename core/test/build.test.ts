@@ -61,6 +61,12 @@ describe("build: buildPiArtifact", () => {
     expect(reloaded.skills.map((s) => s.name)).toEqual(["local-skill"]);
   });
 
+  it("does not expose the destructive bundler publicly (buildPiArtifact is the guarded entry)", async () => {
+    const pub = await import("../src/index.ts");
+    expect("buildPiArtifact" in pub).toBe(true);
+    expect("bundleAgentDefinition" in pub).toBe(false); // internal: its rm -rf has no public guard
+  });
+
   it("excludes deps / vcs / machine-state unconditionally (not security — correctness/bloat)", async () => {
     const ws = await makeWorkspace();
     const out = await freshOut();
@@ -284,6 +290,19 @@ describe("build: buildPiArtifact", () => {
     const out = await freshOut();
     await buildPiArtifact(ws, out); // not rejected: the ignored source file never reaches the artifact
     expect(JSON.parse(await readFile(join(out, "fastagent.json"), "utf8")).engine).toBe("pi"); // the manifest
+  });
+
+  it(".fastagentignore is authoritative: a nested .gitignore !re-include cannot override it", async () => {
+    const ws = await makeWorkspace();
+    await writeFile(join(ws, ".fastagentignore"), "*.env\n"); // build-specific, authoritative
+    await mkdir(join(ws, "vendor"), { recursive: true });
+    await writeFile(join(ws, "vendor", "secret.env"), "KEY=1\n");
+    await writeFile(join(ws, "vendor", "notes.md"), "doc\n");
+    await writeFile(join(ws, "vendor", ".gitignore"), "!secret.env\n"); // must NOT win over .fastagentignore
+    const out = await freshOut();
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "vendor", "secret.env"))).toBe(false); // .fastagentignore wins
+    expect(await exists(join(out, "vendor", "notes.md"))).toBe(true);
   });
 
   it("honors a deeper .gitignore re-inclusion over a broad ancestor rule (git last-match-wins)", async () => {
