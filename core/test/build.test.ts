@@ -296,7 +296,7 @@ describe("build: buildPiArtifact", () => {
     await writeFile(join(ws, "skills", "secret", "SKILL.md"), "---\nname: secret\ndescription: x.\n---\nb\n");
     await writeFile(join(ws, ".fastagentignore"), "skills/secret/\n"); // excludes a skill the agent loads
     const out = await freshOut();
-    await expect(buildOk(ws, out)).rejects.toThrow(/excluded from the artifact/);
+    await expect(buildOk(ws, out)).rejects.toThrow(/SKILL\.md excluded by an ignore rule/);
   });
 
   it("recognizes an in-tree out even when src and out are spelled through different symlinks", async () => {
@@ -347,7 +347,7 @@ describe("build: buildPiArtifact", () => {
     await expect(buildOk(ws, await freshOut())).rejects.toThrow(/reserved for the build manifest/);
   });
 
-  it("prunes a local name-collision LOSER so the artifact reloads to the reported winner", async () => {
+  it("materializes only the winner of a local name collision (by name), never the loser", async () => {
     const ws = await makeWorkspace(); // has skills/local-skill (name local-skill)
     // two more local skills declaring the SAME name: one wins, one loses
     await mkdir(join(ws, "skills", "aaa"), { recursive: true });
@@ -357,8 +357,7 @@ describe("build: buildPiArtifact", () => {
     const out = await freshOut();
     await buildOk(ws, out);
     const dirs = (await readdir(join(out, "skills"))).sort();
-    expect(dirs).toContain("aaa"); // winner kept
-    expect(dirs).not.toContain("zzz"); // loser pruned from the artifact
+    expect(dirs).toEqual(["dup", "local-skill"]); // produced BY NAME from the model; no aaa/zzz dirs
     // the artifact reloads with no duplicate — exactly one "dup" skill, no collision
     const reloaded = await loadAgentDefinition(out, { skillPaths: [] });
     expect(reloaded.skills.filter((s) => s.name === "dup")).toHaveLength(1);

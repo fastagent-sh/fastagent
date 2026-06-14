@@ -330,27 +330,26 @@ async function executeShipPlan(plan: ShipPlan, outDir: string): Promise<void> {
 }
 
 /**
- * Bundle (**the "compile" stage of one-click deploy**): materialize a self-contained,
- * relocatable artifact that does NOT depend on the source location — the deployable
- * agent (core-design §10.1/§10.3).
+ * Bundle (the "compile" stage): materialize a self-contained, relocatable artifact — the
+ * deployable agent (core-design §10.1/§10.3).
  *
- * Copies the cleaned source TREE (AGENTS.md, skills/, authored context like docs/,
- * fastagent.config.ts, tool source, package.json, …) into outDir, then materializes
- * the winning global/extra skills (which live outside the source) into outDir/skills/.
- * So `start` can run from outDir alone, with authored context resolving relative to it.
+ * TWO independent productions, so the artifact == the reported agent BY CONSTRUCTION (no
+ * "copy the tree then patch it to match the model"):
+ *   - the AUTHORED CONTEXT tree (AGENTS.md, docs/, fastagent.config.ts, tool source,
+ *     package.json, …) is copied via the ignore-aware walk, EXCLUDING skills/;
+ *   - outDir/skills/ is produced from the RESOLVED skill model: each WINNING skill
+ *     (definition.skills — local AND mounted, treated uniformly) is materialized to
+ *     skills/<name> via the same walk (its own + ancestor .gitignore honored). Names are
+ *     unique after dedup, so destinations never collide; collision losers and non-loaded
+ *     skills simply never appear.
  *
- * Excluded unconditionally: dependencies (`node_modules`, reinstalled at deploy), VCS
- * (`.git`), and machine state (`.fastagent`) — never meaningful to ship. Beyond that the
- * ship-set is git's (in a repo) or the whole tree (otherwise), minus `.fastagentignore`.
- * Secrets are NOT special-cased: the user excludes them via git/.fastagentignore.
+ * Hard-excluded everywhere: node_modules, .git, .fastagent (isHardExcluded). Secrets are
+ * NOT special-cased; the user excludes them via .gitignore/.fastagentignore.
  *
- * Collision rules match loadAgentDefinition (definition-local wins; losers excluded).
- *
- * Fills outDir, which the caller OWNS and guarantees is a fresh dir (buildPiArtifact stages
- * into a temp dir, then publishes atomically). bundle is therefore not destructive and
- * needs no overwrite/aliasing guard — the caller guards the final path. The walk prunes
- * outDir itself plus any caller `skipPaths` (e.g. the final publish target when it sits
- * inside the source tree), so neither is bundled into the artifact.
+ * Fills outDir, which the caller OWNS and guarantees fresh (buildPiArtifact stages then
+ * publishes atomically); bundle is non-destructive and needs no overwrite/aliasing guard.
+ * The walk skips the build's own dirs (caller skipPaths) so output is never bundled into
+ * itself.
  */
 export async function bundleAgentDefinition(
   srcDir: string,
@@ -359,42 +358,22 @@ export async function bundleAgentDefinition(
   bundleOpts: { reservedRootFile?: string; skipPaths?: string[] } = {},
 ): Promise<LoadedDefinition> {
   const definition = await loadAgentDefinition(srcDir, options);
-  const srcBase = resolve(srcDir);
+  const srcReal = await realpath(srcDir).catch(() => resolve(srcDir));
+  const skillsDir = join(srcReal, "skills"); // produced from the model, NOT copied from the tree
 
-  // ONE ship-decision drives everything below. Skip this dir plus the caller's extra
-  // paths (the final publish target) so build output is never bundled into itself.
+  // Production 1 — the authored context tree, EXCLUDING skills/. Skip the build's own dirs
+  // (staging / final target) too, so output is never bundled into itself.
   const skipHere = await realpath(outDir).catch(() => resolve(outDir));
   const skipExtra = await Promise.all(
     (bundleOpts.skipPaths ?? []).map((p) => realpath(p).catch(() => resolve(p))),
   );
-  const plan = await planShipSet(srcDir, { skip: [skipHere, ...skipExtra] });
-
-  // Prune LOCAL name-collision losers from the ship plan. loadAgentDefinition kept only the
-  // winner, but the whole-tree copy would still ship a losing local skill under skills/, so
-  // the artifact would reload with a duplicate name and could even pick a different winner.
-  // Keep the artifact == the reported agent. (External-mount losers are not in the tree.)
-  const localSkills = join(srcBase, "skills") + sep;
-  const loserRels = definition.collisions
-    .map((c) => resolve(c.loserPath))
-    .filter((abs) => abs.startsWith(localSkills))
-    .map((abs) => {
-      const rel = toPosix(relative(srcBase, abs));
-      return basename(abs) === "SKILL.md" ? `${toPosix(dirname(rel))}/` : rel; // a dir prefix, or an exact file
-    });
-  const isLoser = (rel: string): boolean =>
-    loserRels.some((l) => (l.endsWith("/") ? `${rel}/`.startsWith(l) : rel === l));
-  plan.files = plan.files.filter((f) => !isLoser(f.rel));
-  plan.dirs = plan.dirs.filter((d) => !isLoser(d));
-
+  const plan = await planShipSet(srcDir, { skip: [skipHere, ...skipExtra, skillsDir] });
   const shipped = new Set(plan.files.map((f) => f.rel));
   const shippedDirs = new Set(plan.dirs);
 
-  // A caller-reserved root filename (the build manifest, fastagent.json) only collides if
-  // it would actually SHIP — a source file by that name excluded via .gitignore/
-  // .fastagentignore is not in the artifact and must not block the build. Checked here
-  // (plan is computed, publish not yet run) so the rejection is precise AND non-destructive.
-  // Match a shipped FILE or DIRECTORY at the reserved path — a root dir named fastagent.json
-  // would otherwise make the later manifest write fail with a cryptic EISDIR.
+  // A caller-reserved root name (the build manifest, fastagent.json) only collides if it
+  // would actually SHIP (an ignored one is not in the plan). Match a shipped FILE or DIR —
+  // a root dir by that name would otherwise make the later manifest write fail with EISDIR.
   const reserved = bundleOpts.reservedRootFile;
   if (reserved !== undefined && (shipped.has(reserved) || shippedDirs.has(reserved))) {
     throw new Error(
@@ -403,60 +382,32 @@ export async function bundleAgentDefinition(
     );
   }
 
-  // AGENTS.md and CANONICAL local skills (under <src>/skills/) ARE the agent and ship at
-  // their original tree path, so they must be in the ship-set or the artifact would not
-  // match the reported agent. Extra mounts (globals, or an in-workspace mount outside
-  // skills/) ship via materialization into outDir/skills/, NOT their original path — so a
-  // user may .fastagentignore the original tree to avoid a duplicate copy; don't require it.
-  const dropped: string[] = [];
-  if (definition.instructions !== undefined && !shipped.has("AGENTS.md")) dropped.push("AGENTS.md");
-  for (const skill of definition.skills) {
-    const skillAbs = resolve(skill.filePath);
-    if (skillAbs.startsWith(localSkills)) {
-      const rel = toPosix(relative(srcBase, skillAbs));
-      if (!shipped.has(rel)) dropped.push(rel);
-    }
-  }
-  if (dropped.length > 0) {
+  // AGENTS.md ships at its tree path; if an ignore rule dropped it the artifact would not
+  // match the reported agent.
+  if (definition.instructions !== undefined && !shipped.has("AGENTS.md")) {
     throw new Error(
-      `the agent loads definition file(s) excluded from the artifact: ${dropped.join(", ")}. ` +
-        `Un-ignore them (git / .fastagentignore) — they must ship.`,
+      `AGENTS.md is excluded from the artifact by an ignore rule; un-ignore it (git / .fastagentignore) — it must ship.`,
     );
   }
-
-  // Materialize the plan into outDir (a fresh dir the caller provided).
   await executeShipPlan(plan, outDir);
 
-  // Materialize winning skills that the tree copy did NOT already place under outDir/skills/
-  // (globals, extra mounts, or an in-workspace mount outside skills/). Only a skill already
-  // under <src>/skills/ is loaded from outDir/skills/ after the tree copy; anything else
-  // must be materialized there, or a definition-only reload (which scans outDir/skills/)
-  // would lose a skill bundle reported. External folders copy with ONLY the hard excludes.
-  const localSkillsDir = join(srcBase, "skills") + sep;
+  // Production 2 — outDir/skills/ from the resolved model. Each winning skill (local or
+  // mounted, uniformly) goes to skills/<name>; the same ignore-aware walk excludes its
+  // internal junk, and its defining SKILL.md must survive or the build fails visibly.
   await mkdir(join(outDir, "skills"), { recursive: true });
   for (const skill of definition.skills) {
-    const skillAbs = resolve(skill.filePath);
-    if (skillAbs.startsWith(localSkillsDir)) continue; // already at outDir/skills/ via the tree copy
-    // Dedup is by frontmatter name, but materialization writes by directory/file name.
-    // A local skill whose dir name differs from its name (e.g. skills/foo with name
-    // "bar") can already occupy the destination of an external skill named "foo" — the
-    // copy would silently overwrite the bundled local skill. Detect the destination
-    // collision and fail visibly rather than ship a different skill than reported.
-    const dest =
-      basename(skill.filePath) === "SKILL.md"
-        ? join(outDir, "skills", skill.name)
-        : join(outDir, "skills", basename(skill.filePath));
-    if (await stat(dest).then(() => true, () => false)) {
-      throw new Error(
-        `global skill "${skill.name}" materializes to "${relative(outDir, dest)}", which a bundled ` +
-          `skill already occupies; rename one so their artifact paths do not collide`,
-      );
-    }
     if (basename(skill.filePath) === "SKILL.md") {
-      await executeShipPlan(await planShipSet(dirname(skill.filePath)), dest);
+      const skillPlan = await planShipSet(dirname(skill.filePath));
+      if (!skillPlan.files.some((f) => f.rel === "SKILL.md")) {
+        throw new Error(
+          `skill "${skill.name}" (${skill.filePath}) has its SKILL.md excluded by an ignore rule; ` +
+            `un-ignore it — it must ship.`,
+        );
+      }
+      await executeShipPlan(skillPlan, join(outDir, "skills", skill.name));
     } else {
-      await mkdir(dirname(dest), { recursive: true });
-      await copyFile(skill.filePath, dest);
+      // a single-file skill (the file IS the skill): copy it by name — unique, deterministic
+      await copyFile(skill.filePath, join(outDir, "skills", `${skill.name}.md`));
     }
   }
   return definition;
