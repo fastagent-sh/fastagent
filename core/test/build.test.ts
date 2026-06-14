@@ -285,6 +285,18 @@ describe("build: buildPiArtifact", () => {
     await expect(buildOk(ws, await freshOut())).rejects.toThrow(/reserved for the build manifest/);
   });
 
+  it("rebuild replaces the artifact via move-aside, leaving no staging/backup litter", async () => {
+    const ws = await makeWorkspace();
+    const out = join(ws, ".fastagent", "build"); // in-tree → staging + backup live under .fastagent
+    await buildOk(ws, out);
+    await writeFile(join(ws, "AGENTS.md"), "# Build Bot v2\n");
+    await buildOk(ws, out); // rebuild over the existing artifact
+    expect(await readFile(join(out, "AGENTS.md"), "utf8")).toContain("v2"); // new content installed
+    // the old artifact was moved aside then dropped — no .fa-build-*/.fa-old-* left behind
+    const leftovers = (await readdir(join(ws, ".fastagent"))).filter((n) => n.startsWith(".fa-"));
+    expect(leftovers).toEqual([]);
+  });
+
   it("in-tree staging lives under .fastagent so a crash-orphaned staging never ships", async () => {
     const ws = await makeWorkspace();
     // simulate a staging dir orphaned by a prior crashed build, where the code now puts it

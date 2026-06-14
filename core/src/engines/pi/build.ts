@@ -124,10 +124,27 @@ export async function buildPiArtifact(
       ...(config.http ? { http: config.http } : {}),
     };
     await writeFile(join(staging, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
-    // Publish: the destructive replace happens ONLY now, after a complete artifact is
-    // staged. rm is a no-op when finalDir is absent.
-    await rm(finalDir, { recursive: true, force: true });
-    await rename(staging, finalDir);
+    // Publish by move-aside, so the previous good artifact is NEVER deleted until the new
+    // one is in place: rename the old artifact away, install the new one, then drop the
+    // old. A failure after the swap restores the old; the backup shares stagingParent
+    // (same filesystem as finalDir, never walked), so a crash-orphaned one can't ship.
+    // (Two metadata renames; the only residual is a sub-ms window where the path is absent
+    // — portable dir replacement's limit without symlink indirection, a deploy-layer concern.)
+    const backup = join(stagingParent, `.fa-old-${basename(staging)}`);
+    let movedOld = false;
+    try {
+      await rename(finalDir, backup);
+      movedOld = true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; // no prior artifact is fine
+    }
+    try {
+      await rename(staging, finalDir);
+    } catch (e) {
+      if (movedOld) await rename(backup, finalDir).catch(() => {}); // restore the old artifact
+      throw e;
+    }
+    if (movedOld) await rm(backup, { recursive: true, force: true });
     return { manifest, definition, outDir };
   } catch (error) {
     await rm(staging, { recursive: true, force: true }); // failure leaves no partial staging
