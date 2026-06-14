@@ -12,7 +12,7 @@
  *
  * Build is non-destructive to the source: it only writes the (separate) outDir.
  */
-import { readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
@@ -61,18 +61,6 @@ export async function buildPiArtifact(
   // build instead of being frozen into the manifest and only failing later at start.
   resolveModel(model);
 
-  // fastagent.json is the manifest's reserved name. A source file by that name at the
-  // artifact root would be overwritten by the manifest, silently changing what the agent
-  // reads at runtime. Reject it HERE — before the destructive bundle step — so a rebuild
-  // never destroys a prior good artifact (or poisons outDir) over a collision. The name
-  // has no legitimate source use (config lives in fastagent.config.ts/js/mjs).
-  if (await stat(join(resolve(srcDir), MANIFEST_FILE)).then(() => true, () => false)) {
-    throw new Error(
-      `"${MANIFEST_FILE}" is reserved for the build manifest; the source has a file by that name ` +
-        `at its root — rename it (config goes in fastagent.config.ts/js/mjs)`,
-    );
-  }
-
   // bundleAgentDefinition does `rm -rf outDir`. Its realpath guards block the
   // catastrophic cases (out == src / out contains src), but an in-tree `--out docs`
   // or `--out skills` points at EXISTING authored content that rm would destroy. Only
@@ -98,9 +86,14 @@ export async function buildPiArtifact(
     }
   }
 
-  const definition = await bundleAgentDefinition(srcDir, outDir, {
-    skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
-  });
+  // fastagent.json is the manifest's reserved root name; bundle rejects a source file by
+  // that name ONLY if it would actually ship (precise + before its destructive rm).
+  const definition = await bundleAgentDefinition(
+    srcDir,
+    outDir,
+    { skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [] },
+    { reservedRootFile: MANIFEST_FILE },
+  );
   const manifest: ArtifactManifest = {
     fastagentVersion: await readFastagentVersion(),
     engine: "pi",

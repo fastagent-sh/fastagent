@@ -178,18 +178,26 @@ interface ScopedIgnore {
 }
 
 /**
- * Whether an entry is excluded by any ignore file on the path from the root down to it
+ * Whether an entry is excluded by the ignore files on the path from the root down to it
  * (nested `.gitignore` semantics). The stack holds exactly the ancestor dirs' matchers, so
  * every entry is below every baseRel; each pattern is tested relative to its own directory.
- * (Cross-file `!` re-inclusion — a deeper file un-ignoring what a shallower file excluded —
- * is not supported; erring toward exclusion is the safe direction for an artifact.)
+ *
+ * Matchers are composed root → deep so a DEEPER file overrides a shallower one, matching
+ * git's last-match-wins: a broad `*.md` at the root can be re-included by `!schema.md` in
+ * `docs/.gitignore`. `ignore.test()` distinguishes an explicit un-ignore (negation) from a
+ * non-match, so a deeper negation flips the verdict while a non-match leaves it unchanged.
+ * (A file under an already-excluded DIRECTORY is never reached — the walk does not descend
+ * into ignored dirs — so git's "can't re-include below an excluded dir" holds for free.)
  */
 function scopedIgnored(stack: ScopedIgnore[], entryRel: string, isDir: boolean): boolean {
+  let ignored = false;
   for (const { baseRel, ig } of stack) {
     const sub = baseRel === "" ? entryRel : entryRel.slice(baseRel.length + 1);
-    if (ig.ignores(isDir ? `${sub}/` : sub)) return true; // dir patterns match only with a trailing slash
+    const verdict = ig.test(isDir ? `${sub}/` : sub); // dir patterns match only with a trailing slash
+    if (verdict.ignored) ignored = true;
+    else if (verdict.unignored) ignored = false; // explicit negation re-includes
   }
-  return false;
+  return ignored;
 }
 
 /** Normalize a relative path to POSIX separators for ignore lookups (Windows). */
@@ -296,6 +304,7 @@ export async function bundleAgentDefinition(
   srcDir: string,
   outDir: string,
   options: LoadAgentDefinitionOptions = {},
+  bundleOpts: { reservedRootFile?: string } = {},
 ): Promise<LoadedDefinition> {
   // Guard the destructive rebuild (rm -rf outDir) against catastrophic paths. realpath,
   // not resolve(), so a --out symlinked to the source (or a source reached through a
@@ -325,6 +334,18 @@ export async function bundleAgentDefinition(
   const skipReal = await realpath(outDir).catch(() => resolve(outDir));
   const plan = await planShipSet(srcDir, { skipReal });
   const shipped = new Set(plan.files.map((f) => f.rel));
+
+  // A caller-reserved root filename (the build manifest, fastagent.json) only collides if
+  // it would actually SHIP — a source file by that name excluded via .gitignore/
+  // .fastagentignore is not in the artifact and must not block the build. Checked here
+  // (plan is computed, rm not yet run) so the rejection is precise AND non-destructive.
+  const reserved = bundleOpts.reservedRootFile;
+  if (reserved !== undefined && shipped.has(reserved)) {
+    throw new Error(
+      `"${reserved}" is reserved for the build manifest; the source ships a file by that name ` +
+        `at the artifact root — rename it or exclude it (config goes in fastagent.config.ts/js/mjs)`,
+    );
+  }
 
   // The loaded definition files (AGENTS.md + local skills) ARE the agent; they must be in
   // the ship-set, or the artifact would not match the reported agent. Validate against the

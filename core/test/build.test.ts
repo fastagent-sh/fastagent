@@ -278,6 +278,24 @@ describe("build: buildPiArtifact", () => {
     expect(await readFile(join(ws, "fastagent.json"), "utf8")).toContain("authored"); // source intact
   });
 
+  it("allows a root fastagent.json that is ignored (it would not ship, so it cannot collide)", async () => {
+    const ws = await makeWorkspace({ gitignore: "fastagent.json\n" });
+    await writeFile(join(ws, "fastagent.json"), `{"generated":true}\n`);
+    const out = await freshOut();
+    await buildPiArtifact(ws, out); // not rejected: the ignored source file never reaches the artifact
+    expect(JSON.parse(await readFile(join(out, "fastagent.json"), "utf8")).engine).toBe("pi"); // the manifest
+  });
+
+  it("honors a deeper .gitignore re-inclusion over a broad ancestor rule (git last-match-wins)", async () => {
+    const ws = await makeWorkspace({ gitignore: "docs/*.md\n" }); // broadly ignore docs/*.md
+    await writeFile(join(ws, "docs", "gen.md"), "generated\n");
+    await writeFile(join(ws, "docs", ".gitignore"), "!schema.md\n"); // re-include the authored one
+    const out = await freshOut();
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "docs", "schema.md"))).toBe(true); // re-included → kept
+    expect(await exists(join(out, "docs", "gen.md"))).toBe(false); // still ignored
+  });
+
   it("rejects a reserved root fastagent.json BEFORE bundling, so a rebuild keeps the prior artifact", async () => {
     const ws = await makeWorkspace();
     const out = await freshOut();
