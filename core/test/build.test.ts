@@ -338,16 +338,20 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "skills", "linked", "SKILL.md"))).toBe(true);
   });
 
-  it("fails visibly when git is missing in a repo workspace (no silent whole-tree fallback)", async () => {
-    const ws = await makeWorkspace();
+  it("ships the whole tree when git is absent (no repo detection without git)", async () => {
+    // Without git we don't guess repo-ness; we package everything (minus hard excludes /
+    // .fastagentignore). So even a file .gitignore would exclude is shipped.
+    const ws = await makeWorkspace({ gitignore: "ignored.txt\n" });
+    await writeFile(join(ws, "ignored.txt"), "shipped because git is unavailable\n");
     await rm(join(ws, ".git"), { recursive: true, force: true });
-    await gitInit(ws); // a real repo
+    await gitInit(ws); // a real repo with a .gitignore that git WOULD honor if present
+    const out = await freshOut();
     const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
     const emptyPath = await mkdtemp(join(tmpdir(), "fa-nopath-")); // node via execPath; git absent
-    const err = await execFileAsync(process.execPath, [cli, "build", ws, "--out", await freshOut()], {
+    await execFileAsync(process.execPath, [cli, "build", ws, "--out", out], {
       env: { ...process.env, PATH: emptyPath },
-    }).then(() => null, (e: { stderr?: string }) => e);
-    expect(err?.stderr ?? "").toMatch(/git is required to build a repo workspace/);
+    }); // resolves → exit 0
+    expect(await exists(join(out, "ignored.txt"))).toBe(true);
   });
 
   it("a submodule (gitlink) ships under ITS OWN git rules, not the whole working tree", async () => {

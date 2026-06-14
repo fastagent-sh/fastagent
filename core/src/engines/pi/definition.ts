@@ -180,21 +180,14 @@ async function gitLsFiles(srcDir: string): Promise<string[] | undefined> {
     ({ stdout: inside } = await execFileAsync("git", ["-C", srcDir, "rev-parse", "--is-inside-work-tree"]));
   } catch (error) {
     const e = error as NodeJS.ErrnoException & { stderr?: string };
-    if (e.code === "ENOENT") {
-      // The git binary is not on PATH. If this IS a repo (.git present) we cannot apply
-      // its .gitignore exclusions — fail visibly rather than ship the whole tree (which
-      // would bundle ignored/private files). No .git → genuinely non-repo → whole tree.
-      if (await stat(join(srcDir, ".git")).then(() => true, () => false)) {
-        throw new Error(`git is required to build a repo workspace but was not found on PATH`);
-      }
-      return undefined;
-    }
-    // The path is genuinely not inside any repo → whole tree.
-    if (/not a git repository/i.test(e.stderr ?? "")) return undefined;
-    // A REAL repo where git refuses to operate (dubious ownership, corrupt .git, perms)
-    // must NOT silently degrade to "ship everything" — that drops .gitignore protection
-    // and bundles ignored/private files. Only a confirmed non-repo takes the whole-tree
-    // path; an unexpected probe failure fails visibly.
+    // git absent (ENOENT), or genuinely not a repo → ship the whole tree. We do NOT try to
+    // detect repo-ness without git: that reimplements git's discovery (parents, worktrees,
+    // gitfiles, …) and never ends. .fastagentignore is the git-independent guarantee for
+    // anything that must be excluded regardless of git.
+    if (e.code === "ENOENT" || /not a git repository/i.test(e.stderr ?? "")) return undefined;
+    // git IS present but refuses on a real repo (dubious ownership, corrupt .git, perms):
+    // do not silently drop .gitignore protection — fail visibly (the fix is trivial, e.g.
+    // `git config --global --add safe.directory`) instead of guessing.
     throw new Error(`git could not inspect the workspace repo: ${(e.stderr || e.message).trim()}`);
   }
   if (inside.trim() !== "true") return undefined; // bare repo / inside .git → no work-tree ship-set
