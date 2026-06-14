@@ -13,7 +13,7 @@
  * Build is non-destructive to the source: it only writes the (separate) outDir.
  */
 import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { type LoadedDefinition, bundleAgentDefinition, defaultGlobalSkillPaths } from "./definition.ts";
@@ -35,6 +35,12 @@ export interface BuildPiArtifactOptions {
   model?: string;
   /** Materialize the machine's global skills into the artifact's skills/. Default false (definition-only). */
   globalSkills?: boolean;
+  /**
+   * Allow an outDir OUTSIDE the source tree. Publishing replaces outDir wholesale, so an
+   * out-of-tree path is the place a typo (`--out /home/me`) nukes unrelated data. Default
+   * false: refuse such a path unless explicitly confirmed (cf. Vite's emptyOutDir).
+   */
+  force?: boolean;
 }
 
 const MANIFEST_FILE = "fastagent.json";
@@ -71,14 +77,28 @@ export async function buildPiArtifact(
   // symlink alias is caught; resolve fallback when outDir does not exist yet. (Whether an
   // EXISTING target is "precious" is not our call: outDir is regenerable build output.)
   const finalDir = resolve(outDir);
-  const srcReal = await realpath(srcDir).catch(() => resolve(srcDir));
-  const outReal = await realpath(finalDir).catch(() => finalDir);
+  // realpath both through the SAME symlinks (a not-yet-existing outDir is resolved via its
+  // nearest existing ancestor), so e.g. macOS /var vs /private/var does not make an in-tree
+  // target look out-of-tree.
+  const srcReal = await realpathBase(srcDir);
+  const outReal = await realpathBase(finalDir);
   if (srcReal === outReal) {
     throw new Error(`build output dir must differ from the source workspace (got "${outDir}")`);
   }
   const outToSrc = relative(outReal, srcReal); // src relative to out; ""/".."-prefixed/absolute = not contained
   if (outToSrc !== "" && outToSrc !== ".." && !outToSrc.startsWith(".." + sep) && !isAbsolute(outToSrc)) {
     throw new Error(`build output dir must not contain the source workspace (got out="${outDir}")`);
+  }
+  // Location guardrail (not a content judgment): publishing REPLACES outDir wholesale, so an
+  // out-of-tree target is where a path typo deletes unrelated data. Allow a target inside the
+  // source tree freely; require explicit confirmation (force) for one outside it.
+  const srcToOut = relative(srcReal, outReal); // out relative to src; ".."-prefixed/absolute = outside
+  const outsideSource = srcToOut === ".." || srcToOut.startsWith(".." + sep) || isAbsolute(srcToOut);
+  if (outsideSource && !options.force) {
+    throw new Error(
+      `build output dir is outside the source workspace (got "${outDir}"); it will be REPLACED wholesale — ` +
+        `pass --force to confirm building there`,
+    );
   }
 
   // Build into a fresh STAGING dir that is a sibling of outDir (same filesystem → the
@@ -109,6 +129,24 @@ export async function buildPiArtifact(
   } catch (error) {
     await rm(staging, { recursive: true, force: true }); // failure leaves no partial staging
     throw error;
+  }
+}
+
+/**
+ * realpath a path that may not exist yet: resolve the deepest existing ancestor through
+ * symlinks, then re-append the non-existent tail. So two paths under the same real root
+ * compare consistently even when the target has not been created.
+ */
+async function realpathBase(p: string): Promise<string> {
+  let cur = resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    const real = await realpath(cur).catch(() => undefined);
+    if (real !== undefined) return tail.length > 0 ? join(real, ...tail.reverse()) : real;
+    const parent = dirname(cur);
+    if (parent === cur) return resolve(p); // reached the root without resolving
+    tail.push(basename(cur));
+    cur = parent;
   }
 }
 

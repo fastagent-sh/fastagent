@@ -2,7 +2,18 @@ import { describe, expect, it } from "vitest";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPiArtifact, loadAgentDefinition, type ArtifactManifest } from "../src/index.ts";
+import {
+  buildPiArtifact,
+  loadAgentDefinition,
+  type ArtifactManifest,
+  type BuildPiArtifactOptions,
+} from "../src/index.ts";
+
+// Tests build to an isolated temp dir OUTSIDE the throwaway workspace (hermeticity); that
+// out-of-tree path needs force, which the real default (.fastagent/build, in-tree) does
+// not. The dedicated guard tests below call buildPiArtifact directly to exercise force.
+const buildOk = (src: string, out: string, opts: BuildPiArtifactOptions = {}) =>
+  buildPiArtifact(src, out, { force: true, ...opts });
 
 async function exists(p: string): Promise<boolean> {
   return access(p).then(
@@ -41,7 +52,7 @@ describe("build: buildPiArtifact", () => {
   it("produces a self-contained artifact: AGENTS.md + skills + authored context + manifest", async () => {
     const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5", http: { port: 9000 } };` });
     const out = await freshOut();
-    const { manifest } = await buildPiArtifact(ws, out);
+    const { manifest } = await buildOk(ws, out);
 
     expect(await readFile(join(out, "AGENTS.md"), "utf8")).toContain("Build Bot");
     expect((await readdir(join(out, "skills"))).sort()).toEqual(["local-skill"]);
@@ -70,7 +81,7 @@ describe("build: buildPiArtifact", () => {
   it("excludes deps / vcs / machine-state unconditionally (not security — correctness/bloat)", async () => {
     const ws = await makeWorkspace();
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "node_modules"))).toBe(false);
     expect(await exists(join(out, ".git"))).toBe(false);
     expect(await exists(join(out, ".fastagent"))).toBe(false);
@@ -80,18 +91,18 @@ describe("build: buildPiArtifact", () => {
     // Non-repo, no ignore file → .env ships. Security is the user's responsibility by design.
     const ws = await makeWorkspace();
     const bare = await freshOut();
-    await buildPiArtifact(ws, bare);
+    await buildOk(ws, bare);
     expect(await exists(join(bare, ".env"))).toBe(true);
     // The user excludes it via .fastagentignore …
     await writeFile(join(ws, ".fastagentignore"), ".env\n");
     const ignored = await freshOut();
-    await buildPiArtifact(ws, ignored);
+    await buildOk(ws, ignored);
     expect(await exists(join(ignored, ".env"))).toBe(false);
     // … or by .gitignore (the convention), honored whether or not git is installed.
     const repo = await makeWorkspace();
     await writeFile(join(repo, ".gitignore"), ".env\n");
     const out = await freshOut();
-    await buildPiArtifact(repo, out);
+    await buildOk(repo, out);
     expect(await exists(join(out, ".env"))).toBe(false);
   });
 
@@ -102,7 +113,7 @@ describe("build: buildPiArtifact", () => {
     await mkdir(join(ws, "scratch"), { recursive: true });
     await writeFile(join(ws, "scratch", "note.md"), "scratch\n");
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "secrets.txt"))).toBe(false);
     expect(await exists(join(out, "scratch"))).toBe(false);
     expect(await exists(join(out, "docs", "schema.md"))).toBe(true); // non-ignored authored context still ships
@@ -114,7 +125,7 @@ describe("build: buildPiArtifact", () => {
     await mkdir(join(ws, "scratch"), { recursive: true });
     await writeFile(join(ws, "scratch", "note.md"), "scratch\n");
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "scratch"))).toBe(false); // .gitignore'd → not shipped
     expect(await exists(join(out, ".git"))).toBe(false); // hard-excluded
     expect(await exists(join(out, "node_modules"))).toBe(false); // hard-excluded
@@ -125,7 +136,7 @@ describe("build: buildPiArtifact", () => {
   it("is non-destructive to the source tree", async () => {
     const ws = await makeWorkspace();
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
     expect(await exists(join(ws, "docs", "schema.md"))).toBe(true);
     expect(await exists(join(ws, ".env"))).toBe(true); // source secret untouched
@@ -143,11 +154,11 @@ describe("build: buildPiArtifact", () => {
     process.env.HOME = home;
     try {
       const off = await freshOut();
-      await buildPiArtifact(ws, off);
+      await buildOk(ws, off);
       expect((await readdir(join(off, "skills"))).sort()).toEqual(["local-skill"]); // default: definition-only
 
       const on = await freshOut();
-      await buildPiArtifact(ws, on, { globalSkills: true });
+      await buildOk(ws, on, { globalSkills: true });
       expect((await readdir(join(on, "skills"))).sort()).toEqual(["global-skill", "local-skill"]);
       // the source skills/ is NOT mutated by materialization
       expect((await readdir(join(ws, "skills"))).sort()).toEqual(["local-skill"]);
@@ -172,7 +183,7 @@ describe("build: buildPiArtifact", () => {
     const saved = process.env.HOME;
     process.env.HOME = home;
     try {
-      await buildPiArtifact(ws, out, { globalSkills: true });
+      await buildOk(ws, out, { globalSkills: true });
       expect(await exists(join(out, "skills", "leaky", "ref.md"))).toBe(true); // skill content ships
       expect(await exists(join(out, "skills", "leaky", "node_modules"))).toBe(false); // dep/bloat excluded
       expect(await exists(join(out, "skills", "leaky", ".git"))).toBe(false); // vcs excluded
@@ -192,7 +203,7 @@ describe("build: buildPiArtifact", () => {
     await rm(join(ws, "docs"), { recursive: true });
     await symlink(shared, join(ws, "docs")); // docs/ is a symlink to a directory
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     // the symlinked dir's contents must be dereferenced into the artifact
     expect(await readFile(join(out, "docs", "schema.md"), "utf8")).toContain("users(id)");
   });
@@ -204,7 +215,7 @@ describe("build: buildPiArtifact", () => {
     await symlink(shared, join(ws, "a"));
     await symlink(shared, join(ws, "b")); // distinct destination, same target — not a cycle
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "a", "file.md"))).toBe(true);
     expect(await exists(join(out, "b", "file.md"))).toBe(true); // the second alias must NOT be dropped
   });
@@ -213,7 +224,7 @@ describe("build: buildPiArtifact", () => {
     const ws = await makeWorkspace();
     await symlink(".", join(ws, "loop")); // loop -> the workspace itself (its own ancestor)
     const out = await freshOut();
-    await buildPiArtifact(ws, out); // must terminate, not hang/overflow
+    await buildOk(ws, out); // must terminate, not hang/overflow
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
 
@@ -223,7 +234,7 @@ describe("build: buildPiArtifact", () => {
     await writeFile(join(ws, "skills", "secret", "SKILL.md"), "---\nname: secret\ndescription: x.\n---\nb\n");
     await writeFile(join(ws, ".fastagentignore"), "skills/secret/\n"); // excludes a skill the agent loads
     const out = await freshOut();
-    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/excluded from the artifact/);
+    await expect(buildOk(ws, out)).rejects.toThrow(/excluded from the artifact/);
   });
 
   it("recognizes an in-tree out even when src and out are spelled through different symlinks", async () => {
@@ -233,7 +244,7 @@ describe("build: buildPiArtifact", () => {
     const link = join(await mkdtemp(join(tmpdir(), "fa-build-link-")), "ws");
     await symlink(real, link); // src reached via a symlink alias
     const out = join(real, "build"); // out under the real source dir (an in-tree out)
-    await buildPiArtifact(link, out); // must not descend into the artifact it creates
+    await buildOk(link, out); // must not descend into the artifact it creates
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
     expect(await exists(join(out, "build"))).toBe(false); // no nested build/build recursion
   });
@@ -242,29 +253,40 @@ describe("build: buildPiArtifact", () => {
     const ws = await makeWorkspace();
     await mkdir(join(ws, ".fastagentignore")); // a directory where a file is expected → read fails (not ENOENT)
     const out = await freshOut();
-    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/cannot read .*\.fastagentignore/);
+    await expect(buildOk(ws, out)).rejects.toThrow(/cannot read .*\.fastagentignore/);
   });
 
   it("model precedence: --model option beats config; bad/missing model fails before writing", async () => {
     const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5" };` });
     const out = await freshOut();
-    const { manifest } = await buildPiArtifact(ws, out, { model: "openai-codex/gpt-5.4" });
+    const { manifest } = await buildOk(ws, out, { model: "openai-codex/gpt-5.4" });
     expect(manifest.model).toBe("openai-codex/gpt-5.4");
 
     const bad = await freshOut();
-    await expect(buildPiArtifact(ws, bad, { model: "nope/nothing" })).rejects.toThrow(/unknown model/);
+    await expect(buildOk(ws, bad, { model: "nope/nothing" })).rejects.toThrow(/unknown model/);
     expect(await exists(join(bad, "fastagent.json"))).toBe(false);
   });
 
   it("rejects an output that is, or contains, the source (cannot publish over the input)", async () => {
     const ws = await makeWorkspace();
-    await expect(buildPiArtifact(ws, ws)).rejects.toThrow(/must differ from the source/);
-    await expect(buildPiArtifact(ws, join(ws, ".."))).rejects.toThrow(/must not contain the source/);
+    await expect(buildOk(ws, ws)).rejects.toThrow(/must differ from the source/);
+    await expect(buildOk(ws, join(ws, ".."))).rejects.toThrow(/must not contain the source/);
     // a symlink whose target is the source is caught by realpath
     const link = join(await mkdtemp(join(tmpdir(), "fa-link-")), "out");
     await symlink(ws, link);
-    await expect(buildPiArtifact(ws, link)).rejects.toThrow(/must differ from the source/);
+    await expect(buildOk(ws, link)).rejects.toThrow(/must differ from the source/);
     expect(await exists(join(ws, "AGENTS.md"))).toBe(true); // source intact throughout
+  });
+
+  it("guards an --out OUTSIDE the source tree behind force (avoids nuking unrelated dirs)", async () => {
+    const ws = await makeWorkspace();
+    const outside = await freshOut(); // a sibling temp dir, outside ws
+    await expect(buildPiArtifact(ws, outside)).rejects.toThrow(/outside the source workspace/);
+    await buildPiArtifact(ws, outside, { force: true }); // explicit confirmation builds
+    expect(await exists(join(outside, "fastagent.json"))).toBe(true);
+    // a target INSIDE the source tree needs no force (the real default, .fastagent/build)
+    await buildPiArtifact(ws, join(ws, ".fastagent", "build"));
+    expect(await exists(join(ws, ".fastagent", "build", "fastagent.json"))).toBe(true);
   });
 
   it("replaces an existing target atomically; a rebuild reflects the current source (no stale)", async () => {
@@ -272,12 +294,12 @@ describe("build: buildPiArtifact", () => {
     const out = await freshOut();
     // a pre-existing unrelated file at the target is replaced — the target is regenerable output
     await writeFile(join(out, "stale.txt"), "old\n");
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "stale.txt"))).toBe(false); // replaced wholesale by the publish
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
     // rebuild after dropping a skill from the source: the artifact is the truth
     await rm(join(ws, "skills", "local-skill"), { recursive: true, force: true });
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "skills", "local-skill"))).toBe(false);
     expect(await exists(join(out, "fastagent.json"))).toBe(true);
   });
@@ -285,7 +307,7 @@ describe("build: buildPiArtifact", () => {
   it("fails visibly when the source ships a root fastagent.json (reserved manifest name)", async () => {
     const ws = await makeWorkspace();
     await writeFile(join(ws, "fastagent.json"), `{"authored":"runtime params the agent reads"}\n`);
-    await expect(buildPiArtifact(ws, await freshOut())).rejects.toThrow(/reserved for the build manifest/);
+    await expect(buildOk(ws, await freshOut())).rejects.toThrow(/reserved for the build manifest/);
     expect(await readFile(join(ws, "fastagent.json"), "utf8")).toContain("authored"); // source intact
   });
 
@@ -293,7 +315,7 @@ describe("build: buildPiArtifact", () => {
     const ws = await makeWorkspace({ gitignore: "fastagent.json\n" });
     await writeFile(join(ws, "fastagent.json"), `{"generated":true}\n`);
     const out = await freshOut();
-    await buildPiArtifact(ws, out); // not rejected: the ignored source file never reaches the artifact
+    await buildOk(ws, out); // not rejected: the ignored source file never reaches the artifact
     expect(JSON.parse(await readFile(join(out, "fastagent.json"), "utf8")).engine).toBe("pi"); // the manifest
   });
 
@@ -305,7 +327,7 @@ describe("build: buildPiArtifact", () => {
     await writeFile(join(ws, "vendor", "notes.md"), "doc\n");
     await writeFile(join(ws, "vendor", ".gitignore"), "!secret.env\n"); // must NOT win over .fastagentignore
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "vendor", "secret.env"))).toBe(false); // .fastagentignore wins
     expect(await exists(join(out, "vendor", "notes.md"))).toBe(true);
   });
@@ -315,7 +337,7 @@ describe("build: buildPiArtifact", () => {
     await writeFile(join(ws, "docs", "gen.md"), "generated\n");
     await writeFile(join(ws, "docs", ".gitignore"), "!schema.md\n"); // re-include the authored one
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "docs", "schema.md"))).toBe(true); // re-included → kept
     expect(await exists(join(out, "docs", "gen.md"))).toBe(false); // still ignored
   });
@@ -323,12 +345,12 @@ describe("build: buildPiArtifact", () => {
   it("rejects a reserved root fastagent.json BEFORE bundling, so a rebuild keeps the prior artifact", async () => {
     const ws = await makeWorkspace();
     const out = await freshOut();
-    await buildPiArtifact(ws, out); // a good prior artifact
+    await buildOk(ws, out); // a good prior artifact
     const readEngine = async () => JSON.parse(await readFile(join(out, "fastagent.json"), "utf8")).engine;
     expect(await readEngine()).toBe("pi");
     // source now accidentally ships a root fastagent.json; rebuild into the same out
     await writeFile(join(ws, "fastagent.json"), `{"oops":1}\n`);
-    await expect(buildPiArtifact(ws, out)).rejects.toThrow(/reserved for the build manifest/);
+    await expect(buildOk(ws, out)).rejects.toThrow(/reserved for the build manifest/);
     // the destructive bundle never ran: the prior artifact's manifest survives, out not poisoned
     expect(await readEngine()).toBe("pi");
   });
@@ -343,7 +365,7 @@ describe("build: buildPiArtifact", () => {
     await symlink(shared, join(ws, "docs2"));
     await writeFile(join(ws, ".fastagentignore"), "docs2/private.md\n");
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "docs2", "pub.md"))).toBe(true);
     expect(await exists(join(out, "docs2", "private.md"))).toBe(false); // anchored rule honored
   });
@@ -356,7 +378,7 @@ describe("build: buildPiArtifact", () => {
     const ws = await makeWorkspace();
     await symlink(ext, join(ws, "skills", "linked"));
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "skills", "linked", "SKILL.md"))).toBe(true);
   });
 
@@ -366,7 +388,7 @@ describe("build: buildPiArtifact", () => {
     const ws = await makeWorkspace({ gitignore: "ignored.txt\n" });
     await writeFile(join(ws, "ignored.txt"), "excluded by .gitignore\n");
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "ignored.txt"))).toBe(false); // .gitignore honored, no git
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
@@ -380,7 +402,7 @@ describe("build: buildPiArtifact", () => {
     await writeFile(join(sub, "secret.env"), "LEAK=no\n");
     await writeFile(join(sub, ".gitignore"), "secret.env\n"); // scoped to vendor/
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "vendor", "doc.md"))).toBe(true);
     expect(await exists(join(out, "vendor", "secret.env"))).toBe(false); // nested rule honored
   });
@@ -388,7 +410,7 @@ describe("build: buildPiArtifact", () => {
   it("builds into the default in-tree out (.fastagent/build) without copying it into itself", async () => {
     const ws = await makeWorkspace();
     const out = join(ws, ".fastagent", "build"); // the CLI default — inside the source tree
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await readFile(join(out, "AGENTS.md"), "utf8")).toContain("Build Bot");
     expect(await exists(join(out, "docs", "schema.md"))).toBe(true);
     // the artifact must not contain a nested copy of itself / .fastagent
@@ -398,11 +420,11 @@ describe("build: buildPiArtifact", () => {
   it("deterministic rebuild: a file dropped from the source does not survive in the artifact", async () => {
     const ws = await makeWorkspace();
     const out = await freshOut();
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "docs", "schema.md"))).toBe(true);
 
     await rm(join(ws, "docs"), { recursive: true });
-    await buildPiArtifact(ws, out);
+    await buildOk(ws, out);
     expect(await exists(join(out, "docs"))).toBe(false); // stale authored context gone
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });

@@ -22,7 +22,7 @@ import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/defin
 function usage(code: number): never {
   console.error(`usage:
   fastagent dev   [dir] [--port N] [--model provider/modelId] [--global-skills]
-  fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills]
+  fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
 
   dev    assemble the agent in dir (default .) and serve a local HTTP channel.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
@@ -32,8 +32,10 @@ function usage(code: number): never {
          .fastagent/build): the source tree + materialized skills + manifest, minus
          node_modules/.git and anything .gitignore/.fastagentignore excludes (honored
          via a library, git is never invoked). Secrets are NOT auto-excluded — keep them
-         in .gitignore or .fastagentignore. Source is untouched.
-         --global-skills   materialize the machine's global skills into the artifact`);
+         in .gitignore or .fastagentignore. Source is untouched. The out dir is REPLACED
+         wholesale (built to a temp dir, then published atomically).
+         --global-skills   materialize the machine's global skills into the artifact
+         --force           allow an --out OUTSIDE the source tree (it will be replaced)`);
   process.exit(code);
 }
 
@@ -43,6 +45,7 @@ const { positionals, values } = parseArgs({
     port: { type: "string" },
     model: { type: "string" },
     out: { type: "string" },
+    force: { type: "boolean" },
     "global-skills": { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
@@ -114,6 +117,7 @@ async function runBuild(): Promise<void> {
   const { manifest, definition } = await buildPiArtifact(dir, outDir, {
     model: values.model,
     globalSkills,
+    force: values.force ?? false,
   }).catch(failStartup);
 
   console.error(`[fastagent] built:  ${outDir}`);
