@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -386,6 +386,20 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(ws, "build", ".fastagent"))).toBe(false); // .fastagent (and its staging) never walked
     expect(await exists(join(ws, "build", ".fa-build-STALE"))).toBe(false);
     expect(await exists(join(ws, "build", "AGENTS.md"))).toBe(true);
+  });
+
+  it("publishes through a symlinked --out to its real target, preserving the symlink", async () => {
+    const ws = await makeWorkspace();
+    const deploy = join(await mkdtemp(join(tmpdir(), "fa-deploy-")), "deploy");
+    await mkdir(deploy, { recursive: true });
+    await writeFile(join(deploy, "stale.txt"), "old\n");
+    await symlink(deploy, join(ws, "publish")); // in-workspace symlink → out-of-tree deploy dir
+    await buildPiArtifact(ws, join(ws, "publish"), { force: true });
+    // the artifact lands in the real target; the symlink is preserved (source not mutated)
+    expect((await lstat(join(ws, "publish"))).isSymbolicLink()).toBe(true);
+    expect(await exists(join(deploy, "fastagent.json"))).toBe(true);
+    expect(await exists(join(deploy, "stale.txt"))).toBe(false); // replaced wholesale
+    expect(await exists(join(ws, "publish", "AGENTS.md"))).toBe(true); // reachable via the symlink
   });
 
   it("guards an --out OUTSIDE the source tree behind force (avoids nuking unrelated dirs)", async () => {

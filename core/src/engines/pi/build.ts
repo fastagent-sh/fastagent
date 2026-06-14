@@ -76,12 +76,13 @@ export async function buildPiArtifact(
   // read src and publish over outDir, so out ⊇ src would destroy the input. realpath so a
   // symlink alias is caught; resolve fallback when outDir does not exist yet. (Whether an
   // EXISTING target is "precious" is not our call: outDir is regenerable build output.)
-  const finalDir = resolve(outDir);
-  // realpath both through the SAME symlinks (a not-yet-existing outDir is resolved via its
-  // nearest existing ancestor), so e.g. macOS /var vs /private/var does not make an in-tree
-  // target look out-of-tree.
+  // realpath BOTH through the same symlinks (a not-yet-existing outDir resolves via its
+  // nearest existing ancestor): so macOS /var vs /private/var does not misclassify an
+  // in-tree target, AND a symlinked --out resolves to its real target. outReal is the
+  // canonical publish path used everywhere below — we never rename the lexical symlink
+  // itself (that would replace the source-tree symlink with a real dir and skip the target).
   const srcReal = await realpathBase(srcDir);
-  const outReal = await realpathBase(finalDir);
+  const outReal = await realpathBase(outDir);
   if (srcReal === outReal) {
     throw new Error(`build output dir must differ from the source workspace (got "${outDir}")`);
   }
@@ -105,8 +106,8 @@ export async function buildPiArtifact(
   // atomic, and never reachable by the walk so a crash-orphaned staging can't ship:
   //   - in-tree target  → under <src>/.fastagent/ (already hard-excluded from the walk);
   //   - out-of-tree target → sibling of finalDir (outside the source tree, so not walked).
-  const stagingParent = outsideSource ? dirname(finalDir) : join(srcReal, ".fastagent");
-  await mkdir(dirname(finalDir), { recursive: true });
+  const stagingParent = outsideSource ? dirname(outReal) : join(srcReal, ".fastagent");
+  await mkdir(dirname(outReal), { recursive: true });
   await mkdir(stagingParent, { recursive: true });
   const staging = await mkdtemp(join(stagingParent, ".fa-build-"));
   try {
@@ -114,7 +115,7 @@ export async function buildPiArtifact(
       srcDir,
       staging,
       { skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [] },
-      { reservedRootFile: MANIFEST_FILE, skipPaths: [finalDir] },
+      { reservedRootFile: MANIFEST_FILE, skipPaths: [outReal] },
     );
     const manifest: ArtifactManifest = {
       fastagentVersion: await readFastagentVersion(),
@@ -133,15 +134,15 @@ export async function buildPiArtifact(
     const backup = join(stagingParent, `.fa-old-${basename(staging)}`);
     let movedOld = false;
     try {
-      await rename(finalDir, backup);
+      await rename(outReal, backup);
       movedOld = true;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; // no prior artifact is fine
     }
     try {
-      await rename(staging, finalDir);
+      await rename(staging, outReal);
     } catch (e) {
-      if (movedOld) await rename(backup, finalDir).catch(() => {}); // restore the old artifact
+      if (movedOld) await rename(backup, outReal).catch(() => {}); // restore the old artifact
       throw e;
     }
     if (movedOld) await rm(backup, { recursive: true, force: true });
