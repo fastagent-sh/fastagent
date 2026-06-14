@@ -187,7 +187,9 @@ function stackVerdict(stack: ScopedIgnore[], pick: (s: ScopedIgnore) => Ignore |
     const ig = pick(s);
     if (!ig) continue;
     const sub = toPosix(relative(s.baseAbs, entryAbs)); // entry path relative to the matcher's dir
-    if (sub === "" || sub.startsWith("..")) continue; // entry not under this matcher
+    // Outside the matcher iff empty or an UP traversal (".." / "../…"). A separator-aware
+    // check, so a real filename like "..secret.env" (a forward path) is still matched.
+    if (sub === "" || sub === ".." || sub.startsWith("../")) continue;
     const verdict = ig.test(isDir ? `${sub}/` : sub); // dir patterns match only with a trailing slash
     if (verdict.ignored) v = true;
     else if (verdict.unignored) v = false; // explicit negation re-includes
@@ -256,7 +258,10 @@ interface ShipPlan {
  */
 async function planShipSet(srcDir: string, opts: { skip?: string[] } = {}): Promise<ShipPlan> {
   const skip = opts.skip ?? [];
-  const topBase = resolve(srcDir);
+  // realpath the root so repo-root discovery + ancestor-ignore anchoring follow the REAL
+  // path: a workspace reached through a symlink still finds the actual monorepo's .git and
+  // its parent .gitignore files. Artifact paths are relative, so forward names are unchanged.
+  const topBase = await realpath(srcDir).catch(() => resolve(srcDir));
   const files: { abs: string; rel: string }[] = [];
   const dirs: string[] = [];
   const ignoreStack: ScopedIgnore[] = []; // ancestor dirs' ignore matchers, root → current

@@ -119,6 +119,35 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "docs", "schema.md"))).toBe(true); // non-ignored authored context still ships
   });
 
+  it("excludes a file whose name starts with .. (e.g. ..secret.env) when a rule matches it", async () => {
+    const ws = await makeWorkspace();
+    await writeFile(join(ws, ".fastagentignore"), "*.env\n");
+    await writeFile(join(ws, "..secret.env"), "S\n"); // a forward filename that begins with ..
+    const out = await freshOut();
+    await buildOk(ws, out);
+    expect(await exists(join(out, "..secret.env"))).toBe(false); // matched by *.env, not skipped as "outside"
+  });
+
+  it("follows a symlinked workspace to the real repo root for ancestor .gitignore", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "fa-realrepo-"));
+    await mkdir(join(repo, ".git"), { recursive: true });
+    await writeFile(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    await writeFile(join(repo, ".gitignore"), "packages/agent/dist/\n*.env\n");
+    const pkg = join(repo, "packages", "agent");
+    await mkdir(join(pkg, "dist"), { recursive: true });
+    await writeFile(join(pkg, "AGENTS.md"), "# Bot\n");
+    await writeFile(join(pkg, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await writeFile(join(pkg, "dist", "o.js"), "built\n");
+    await writeFile(join(pkg, "a.env"), "SEC\n");
+    const link = join(await mkdtemp(join(tmpdir(), "fa-wslink-")), "agent");
+    await symlink(pkg, link); // build THROUGH a symlink to the package
+    const out = await freshOut();
+    await buildOk(link, out);
+    expect(await exists(join(out, "dist"))).toBe(false); // real-repo-root rule applied
+    expect(await exists(join(out, "a.env"))).toBe(false);
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+  });
+
   it("honors an ancestor .gitignore up to the repo root (monorepo package build)", async () => {
     const repo = await mkdtemp(join(tmpdir(), "fa-monorepo-"));
     await mkdir(join(repo, ".git"), { recursive: true }); // marks the repo root boundary
