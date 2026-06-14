@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
@@ -213,6 +213,20 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     // the bundle can be reloaded directly (self-contained loop; skillPaths: [] for hermeticity)
     const reloaded = await loadAgentDefinition(outDir, { skillPaths: [] });
     expect(reloaded.skills.map((s) => s.name).sort()).toEqual(["cutting-words", "season-words"]);
+  });
+
+  it("allows an in-workspace mount whose original tree is .fastagentignore'd (it materializes)", async () => {
+    // The mount ships via materialization into outDir/skills/, NOT its original path, so a
+    // user may exclude the original tree to avoid a duplicate copy — build must not reject it.
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(src, "extras", "foo"), { recursive: true });
+    await writeFile(join(src, "extras", "foo", "SKILL.md"), "---\nname: foo\ndescription: d\n---\nbody\n");
+    await writeFile(join(src, ".fastagentignore"), "extras/\n"); // exclude the duplicate original
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    await bundleAgentDefinition(src, out, { skillPaths: [join(src, "extras")] }); // must not throw
+    expect(await access(join(out, "skills", "foo", "SKILL.md")).then(() => true, () => false)).toBe(true);
+    expect(await access(join(out, "extras")).then(() => true, () => false)).toBe(false); // no duplicate
   });
 
   it("materializes an in-workspace mount outside skills/ into outDir/skills/ (reported == shipped)", async () => {

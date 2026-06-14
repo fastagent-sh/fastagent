@@ -403,15 +403,16 @@ export async function bundleAgentDefinition(
     );
   }
 
-  // The loaded definition files (AGENTS.md + local skills) ARE the agent; they must be in
-  // the ship-set, or the artifact would not match the reported agent. Validate against the
-  // ACTUAL plan (so e.g. a gitlink/symlink skill dir the walk did include passes) — no
-  // parallel predicate that could disagree with the copy.
+  // AGENTS.md and CANONICAL local skills (under <src>/skills/) ARE the agent and ship at
+  // their original tree path, so they must be in the ship-set or the artifact would not
+  // match the reported agent. Extra mounts (globals, or an in-workspace mount outside
+  // skills/) ship via materialization into outDir/skills/, NOT their original path — so a
+  // user may .fastagentignore the original tree to avoid a duplicate copy; don't require it.
   const dropped: string[] = [];
   if (definition.instructions !== undefined && !shipped.has("AGENTS.md")) dropped.push("AGENTS.md");
   for (const skill of definition.skills) {
     const skillAbs = resolve(skill.filePath);
-    if (skillAbs === srcBase || skillAbs.startsWith(srcBase + sep)) {
+    if (skillAbs.startsWith(localSkills)) {
       const rel = toPosix(relative(srcBase, skillAbs));
       if (!shipped.has(rel)) dropped.push(rel);
     }

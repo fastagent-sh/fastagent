@@ -109,6 +109,15 @@ export async function buildPiArtifact(
   const stagingParent = outsideSource ? dirname(outReal) : join(srcReal, ".fastagent");
   await mkdir(dirname(outReal), { recursive: true });
   await mkdir(stagingParent, { recursive: true });
+  // An in-tree build creates <src>/.fastagent; self-gitignore it (same as the L3 dev path in
+  // create.ts), so a build-first workspace doesn't show the artifact/staging as untracked.
+  if (!outsideSource) {
+    await writeFile(join(srcReal, ".fastagent", ".gitignore"), "*\n", { flag: "wx" }).catch(
+      (e: NodeJS.ErrnoException) => {
+        if (e.code !== "EEXIST") throw e;
+      },
+    );
+  }
   const staging = await mkdtemp(join(stagingParent, ".fa-build-"));
   try {
     const definition = await bundleAgentDefinition(

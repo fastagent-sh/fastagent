@@ -365,6 +365,12 @@ describe("build: buildPiArtifact", () => {
     expect(reloaded.collisions).toEqual([]);
   });
 
+  it("self-gitignores the in-tree .fastagent state dir (parity with the dev path)", async () => {
+    const ws = await makeWorkspace();
+    await buildOk(ws, join(ws, ".fastagent", "build")); // in-tree default
+    expect(await readFile(join(ws, ".fastagent", ".gitignore"), "utf8")).toBe("*\n");
+  });
+
   it("rebuild replaces the artifact via move-aside, leaving no staging/backup litter", async () => {
     const ws = await makeWorkspace();
     const out = join(ws, ".fastagent", "build"); // in-tree → staging + backup live under .fastagent
