@@ -256,25 +256,30 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(bad, "fastagent.json"))).toBe(false);
   });
 
-  it("refuses to overwrite existing non-artifact output; source stays intact; rebuild is idempotent", async () => {
+  it("rejects an output that is, or contains, the source (cannot publish over the input)", async () => {
     const ws = await makeWorkspace();
-    // --out at an existing authored subtree would rm it; refused, source untouched.
-    await expect(buildPiArtifact(ws, join(ws, "docs"))).rejects.toThrow(/not a prior fastagent artifact/);
-    expect(await exists(join(ws, "docs", "schema.md"))).toBe(true);
-    // out == src is rejected too (any guard); source intact.
-    await expect(buildPiArtifact(ws, ws)).rejects.toThrow();
-    expect(await exists(join(ws, "AGENTS.md"))).toBe(true);
-    // a prior artifact dir (a VALID manifest) may be rebuilt into.
-    const out = await freshOut();
-    await buildPiArtifact(ws, out);
-    await buildPiArtifact(ws, out);
-    expect(await exists(join(out, "fastagent.json"))).toBe(true);
+    await expect(buildPiArtifact(ws, ws)).rejects.toThrow(/must differ from the source/);
+    await expect(buildPiArtifact(ws, join(ws, ".."))).rejects.toThrow(/must not contain the source/);
+    // a symlink whose target is the source is caught by realpath
+    const link = join(await mkdtemp(join(tmpdir(), "fa-link-")), "out");
+    await symlink(ws, link);
+    await expect(buildPiArtifact(ws, link)).rejects.toThrow(/must differ from the source/);
+    expect(await exists(join(ws, "AGENTS.md"))).toBe(true); // source intact throughout
+  });
 
-    // a user file merely NAMED fastagent.json does not license deleting the dir.
-    const ws2 = await makeWorkspace();
-    await writeFile(join(ws2, "docs", "fastagent.json"), `{"example":"not our manifest"}\n`);
-    await expect(buildPiArtifact(ws2, join(ws2, "docs"))).rejects.toThrow(/not a prior fastagent artifact/);
-    expect(await exists(join(ws2, "docs", "schema.md"))).toBe(true); // authored content intact
+  it("replaces an existing target atomically; a rebuild reflects the current source (no stale)", async () => {
+    const ws = await makeWorkspace();
+    const out = await freshOut();
+    // a pre-existing unrelated file at the target is replaced — the target is regenerable output
+    await writeFile(join(out, "stale.txt"), "old\n");
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "stale.txt"))).toBe(false); // replaced wholesale by the publish
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+    // rebuild after dropping a skill from the source: the artifact is the truth
+    await rm(join(ws, "skills", "local-skill"), { recursive: true, force: true });
+    await buildPiArtifact(ws, out);
+    expect(await exists(join(out, "skills", "local-skill"))).toBe(false);
+    expect(await exists(join(out, "fastagent.json"))).toBe(true);
   });
 
   it("fails visibly when the source ships a root fastagent.json (reserved manifest name)", async () => {
@@ -341,15 +346,6 @@ describe("build: buildPiArtifact", () => {
     await buildPiArtifact(ws, out);
     expect(await exists(join(out, "docs2", "pub.md"))).toBe(true);
     expect(await exists(join(out, "docs2", "private.md"))).toBe(false); // anchored rule honored
-  });
-
-  it("refuses --out at .fastagent/sessions (only .fastagent/build is owned), keeping session state", async () => {
-    const ws = await makeWorkspace();
-    const sessions = join(ws, ".fastagent", "sessions");
-    await mkdir(sessions, { recursive: true });
-    await writeFile(join(sessions, "conv.jsonl"), "history\n");
-    await expect(buildPiArtifact(ws, sessions)).rejects.toThrow(/not a prior fastagent artifact/);
-    expect(await exists(join(sessions, "conv.jsonl"))).toBe(true); // session history untouched
   });
 
   it("builds an agent whose local skill dir is a symlink (validation uses the real ship-set)", async () => {

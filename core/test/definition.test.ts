@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { access, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
@@ -213,42 +213,6 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     // the bundle can be reloaded directly (self-contained loop; skillPaths: [] for hermeticity)
     const reloaded = await loadAgentDefinition(outDir, { skillPaths: [] });
     expect(reloaded.skills.map((s) => s.name).sort()).toEqual(["cutting-words", "season-words"]);
-  });
-
-  it("rebuild determinism: rebuilding the same outDir removes dropped skills so the artifact is the truth", async () => {
-    const outDir = await mkdtemp(join(tmpdir(), "fa-bundle-"));
-    // build #1 includes extra-mounted cutting-words
-    await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [extraSkillsDir] });
-    expect((await readdir(join(outDir, "skills"))).sort()).toEqual(["cutting-words", "season-words"]);
-    // build #2 no longer mounts it, so cutting-words must disappear
-    await bundleAgentDefinition(fixtureDir, outDir, { skillPaths: [] });
-    expect((await readdir(join(outDir, "skills"))).sort()).toEqual(["season-words"]);
-  });
-
-  it("refuses source/output aliasing and leaves the source intact (no data loss)", async () => {
-    // outDir === srcDir would rm the source AGENTS.md + skills/ before copying.
-    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
-    await writeFile(join(src, "AGENTS.md"), "# Precious\n");
-    await expect(bundleAgentDefinition(src, src)).rejects.toThrow(/output dir must differ from the source/);
-    expect(await access(join(src, "AGENTS.md")).then(() => true, () => false)).toBe(true);
-  });
-
-  it("refuses a symlinked output that aliases the source (realpath, not just resolve)", async () => {
-    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
-    await writeFile(join(src, "AGENTS.md"), "# Precious\n");
-    const link = join(await mkdtemp(join(tmpdir(), "fa-bundle-link-")), "out");
-    await symlink(src, link); // outDir is a symlink pointing at the source
-    await expect(bundleAgentDefinition(src, link)).rejects.toThrow(/output dir must differ from the source/);
-    expect(await access(join(src, "AGENTS.md")).then(() => true, () => false)).toBe(true);
-  });
-
-  it("refuses an output that contains the source, incl. the filesystem-root edge", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "fa-bundle-parent-"));
-    const src = join(parent, "ws");
-    await mkdir(src, { recursive: true });
-    await writeFile(join(src, "AGENTS.md"), "# Precious\n");
-    await expect(bundleAgentDefinition(src, parent)).rejects.toThrow(/must not contain the source/);
-    expect(await access(join(src, "AGENTS.md")).then(() => true, () => false)).toBe(true);
   });
 
   it("fails visibly when a global skill materializes onto a bundled skill's path (dir != name)", async () => {

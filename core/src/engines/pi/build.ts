@@ -12,8 +12,8 @@
  *
  * Build is non-destructive to the source: it only writes the (separate) outDir.
  */
-import { readFile, readdir, writeFile } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { type LoadedDefinition, bundleAgentDefinition, defaultGlobalSkillPaths } from "./definition.ts";
@@ -41,9 +41,14 @@ const MANIFEST_FILE = "fastagent.json";
 
 /**
  * Compile {@link srcDir} into a self-contained artifact at {@link outDir}. Resolves +
- * validates the model (fails visibly if missing/unknown), materializes the cleaned
- * source tree + opted-in globals (bundleAgentDefinition), and writes the manifest into
- * the artifact. Non-destructive to the source; only outDir is written/replaced.
+ * validates the model, builds the whole artifact into a fresh STAGING dir, then PUBLISHES
+ * it atomically over outDir. The target is never touched until a complete artifact is
+ * staged, so a failure mid-build leaves it untouched; and the artifact appears in one
+ * atomic step (no half-written / poisoned target).
+ *
+ * outDir is regenerable build output: an existing target is replaced unconditionally. The
+ * one guard is structural — outDir must not be, contain, or equal the source (you cannot
+ * publish the artifact over the input you are reading). Non-destructive to the source.
  */
 export async function buildPiArtifact(
   srcDir: string,
@@ -57,70 +62,53 @@ export async function buildPiArtifact(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  // Validate against the registry now (before touching outDir), so a typo fails the
-  // build instead of being frozen into the manifest and only failing later at start.
+  // Validate against the registry now, so a typo fails the build instead of being frozen
+  // into the manifest and only failing later at start.
   resolveModel(model);
 
-  // bundleAgentDefinition does `rm -rf outDir`. Its realpath guards block the
-  // catastrophic cases (out == src / out contains src), but an in-tree `--out docs`
-  // or `--out skills` points at EXISTING authored content that rm would destroy. Only
-  // own an out dir that is safe to replace: under `.fastagent/`, non-existent, empty,
-  // or a prior artifact. "Prior artifact" is validated by the manifest's CONTENT, not
-  // just a file named fastagent.json — a user's authored sample by that name must not
-  // license deleting their directory. Otherwise refuse; the source is untouched.
-  // "Owned" is the build dir specifically (.fastagent/build), NOT all of .fastagent —
-  // .fastagent/sessions holds session history that an --out there would rm.
-  const outResolved = resolve(outDir);
-  const ownedBuild = join(resolve(srcDir), ".fastagent", "build");
-  const underOwned = outResolved === ownedBuild || outResolved.startsWith(ownedBuild + sep);
-  if (!underOwned) {
-    const entries = await readdir(outResolved).catch((e: NodeJS.ErrnoException) => {
-      if (e.code === "ENOENT") return [] as string[];
-      throw e;
-    });
-    if (entries.length > 0 && !(await isPriorArtifact(outResolved))) {
-      throw new Error(
-        `--out "${outDir}" is not empty and not a prior fastagent artifact; refusing to overwrite it ` +
-          `(use an empty dir, a previous build dir, or the default .fastagent/build)`,
-      );
-    }
+  // Structural guard (the ONLY one): the output must not be the source or contain it — we
+  // read src and publish over outDir, so out ⊇ src would destroy the input. realpath so a
+  // symlink alias is caught; resolve fallback when outDir does not exist yet. (Whether an
+  // EXISTING target is "precious" is not our call: outDir is regenerable build output.)
+  const finalDir = resolve(outDir);
+  const srcReal = await realpath(srcDir).catch(() => resolve(srcDir));
+  const outReal = await realpath(finalDir).catch(() => finalDir);
+  if (srcReal === outReal) {
+    throw new Error(`build output dir must differ from the source workspace (got "${outDir}")`);
+  }
+  const outToSrc = relative(outReal, srcReal); // src relative to out; ""/".."-prefixed/absolute = not contained
+  if (outToSrc !== "" && outToSrc !== ".." && !outToSrc.startsWith(".." + sep) && !isAbsolute(outToSrc)) {
+    throw new Error(`build output dir must not contain the source workspace (got out="${outDir}")`);
   }
 
-  // fastagent.json is the manifest's reserved root name; bundle rejects a source file by
-  // that name ONLY if it would actually ship (precise + before its destructive rm).
-  const definition = await bundleAgentDefinition(
-    srcDir,
-    outDir,
-    { skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [] },
-    { reservedRootFile: MANIFEST_FILE },
-  );
-  const manifest: ArtifactManifest = {
-    fastagentVersion: await readFastagentVersion(),
-    engine: "pi",
-    builtAt: new Date().toISOString(),
-    model,
-    ...(config.http ? { http: config.http } : {}),
-  };
-  await writeFile(join(outDir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
-  return { manifest, definition, outDir };
-}
-
-/**
- * Whether outDir holds a real fastagent artifact (its manifest validates), so a rebuild
- * may safely replace it. Validated by CONTENT, not the filename: a user's authored file
- * coincidentally named fastagent.json must not license deleting their directory.
- */
-async function isPriorArtifact(outDir: string): Promise<boolean> {
+  // Build into a fresh STAGING dir that is a sibling of outDir (same filesystem → the
+  // publish rename is atomic). bundle skips both staging and finalDir so neither is walked
+  // into the artifact when outDir lives inside the source tree.
+  await mkdir(dirname(finalDir), { recursive: true });
+  const staging = await mkdtemp(join(dirname(finalDir), ".fa-build-"));
   try {
-    const m = JSON.parse(await readFile(join(outDir, MANIFEST_FILE), "utf8")) as Partial<ArtifactManifest>;
-    return (
-      m.engine === "pi" &&
-      typeof m.fastagentVersion === "string" &&
-      typeof m.builtAt === "string" &&
-      typeof m.model === "string"
+    const definition = await bundleAgentDefinition(
+      srcDir,
+      staging,
+      { skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [] },
+      { reservedRootFile: MANIFEST_FILE, skipPaths: [finalDir] },
     );
-  } catch {
-    return false; // missing / unreadable / not our shape
+    const manifest: ArtifactManifest = {
+      fastagentVersion: await readFastagentVersion(),
+      engine: "pi",
+      builtAt: new Date().toISOString(),
+      model,
+      ...(config.http ? { http: config.http } : {}),
+    };
+    await writeFile(join(staging, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
+    // Publish: the destructive replace happens ONLY now, after a complete artifact is
+    // staged. rm is a no-op when finalDir is absent.
+    await rm(finalDir, { recursive: true, force: true });
+    await rename(staging, finalDir);
+    return { manifest, definition, outDir };
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true }); // failure leaves no partial staging
+    throw error;
   }
 }
 

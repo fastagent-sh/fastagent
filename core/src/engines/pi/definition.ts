@@ -24,9 +24,9 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { copyFile, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import ignore, { type Ignore } from "ignore";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
@@ -239,8 +239,8 @@ interface ShipPlan {
  * `.gitignore`. Cycles (e.g. `link -> .`) are broken by tracking the recursion STACK of
  * target realpaths.
  */
-async function planShipSet(srcDir: string, opts: { skipReal?: string } = {}): Promise<ShipPlan> {
-  const { skipReal } = opts;
+async function planShipSet(srcDir: string, opts: { skip?: string[] } = {}): Promise<ShipPlan> {
+  const skip = opts.skip ?? [];
   const topBase = resolve(srcDir);
   const files: { abs: string; rel: string }[] = [];
   const dirs: string[] = [];
@@ -248,9 +248,9 @@ async function planShipSet(srcDir: string, opts: { skipReal?: string } = {}): Pr
 
   async function walk(absDir: string, stack: Set<string>): Promise<void> {
     const realDir = await realpath(absDir).catch(() => resolve(absDir));
-    // Skip the out dir by REALPATH, so it is recognized even when src and out are spelled
-    // through different symlink aliases (textual compare would descend into the artifact).
-    if (skipReal !== undefined && (realDir === skipReal || realDir.startsWith(skipReal + sep))) return;
+    // Skip the build's own dirs by REALPATH (staging + the final publish target), so they
+    // are recognized through symlink aliases and never walked into the artifact.
+    if (skip.some((s) => realDir === s || realDir.startsWith(s + sep))) return;
     if (stack.has(realDir)) return; // cycle: realDir is its own ancestor on this descent
     stack.add(realDir);
     const relDir = toPosix(relative(topBase, absDir));
@@ -308,41 +308,29 @@ async function executeShipPlan(plan: ShipPlan, outDir: string): Promise<void> {
  * Secrets are NOT special-cased: the user excludes them via git/.fastagentignore.
  *
  * Collision rules match loadAgentDefinition (definition-local wins; losers excluded).
- * Non-destructive to the source: only outDir is written/replaced.
+ *
+ * Fills outDir, which the caller OWNS and guarantees is a fresh dir (buildPiArtifact stages
+ * into a temp dir, then publishes atomically). bundle is therefore not destructive and
+ * needs no overwrite/aliasing guard — the caller guards the final path. The walk prunes
+ * outDir itself plus any caller `skipPaths` (e.g. the final publish target when it sits
+ * inside the source tree), so neither is bundled into the artifact.
  */
 export async function bundleAgentDefinition(
   srcDir: string,
   outDir: string,
   options: LoadAgentDefinitionOptions = {},
-  bundleOpts: { reservedRootFile?: string } = {},
+  bundleOpts: { reservedRootFile?: string; skipPaths?: string[] } = {},
 ): Promise<LoadedDefinition> {
-  // Guard the destructive rebuild (rm -rf outDir) against catastrophic paths. realpath,
-  // not resolve(), so a --out symlinked to the source (or a source reached through a
-  // symlink) is caught. A not-yet-created outDir falls back to resolve().
-  const srcReal = await realpath(srcDir).catch(() => resolve(srcDir));
-  const outReal = await realpath(outDir).catch(() => resolve(outDir));
-  if (srcReal === outReal) {
-    throw new Error(
-      `bundle output dir must differ from the source workspace (got "${outDir}"); use a separate --out (default .fastagent/build)`,
-    );
-  }
-  // outDir must not CONTAIN srcDir, or rm -rf outDir would delete the source. relative()
-  // (not startsWith(outReal + sep)) so the filesystem root "/" is handled: with `--out /`
-  // the string trick yields "//" and every path bypasses the guard.
-  const outToSrc = relative(outReal, srcReal);
-  if (outToSrc !== "" && outToSrc !== ".." && !outToSrc.startsWith(".." + sep) && !isAbsolute(outToSrc)) {
-    throw new Error(`bundle output dir must not contain the source workspace (got out="${outDir}")`);
-  }
-
   const definition = await loadAgentDefinition(srcDir, options);
   const srcBase = resolve(srcDir);
 
-  // ONE ship-decision drives everything below. Skip the out dir by realpath so an in-tree
-  // out (.fastagent/build) is never walked into; realpath when it exists (rebuild), else
-  // the resolved path (first build). This runs BEFORE the destructive rm, so a validation
-  // failure never destroys a prior artifact.
-  const skipReal = await realpath(outDir).catch(() => resolve(outDir));
-  const plan = await planShipSet(srcDir, { skipReal });
+  // ONE ship-decision drives everything below. Skip this dir plus the caller's extra
+  // paths (the final publish target) so build output is never bundled into itself.
+  const skipHere = await realpath(outDir).catch(() => resolve(outDir));
+  const skipExtra = await Promise.all(
+    (bundleOpts.skipPaths ?? []).map((p) => realpath(p).catch(() => resolve(p))),
+  );
+  const plan = await planShipSet(srcDir, { skip: [skipHere, ...skipExtra] });
   const shipped = new Set(plan.files.map((f) => f.rel));
 
   // A caller-reserved root filename (the build manifest, fastagent.json) only collides if
@@ -377,10 +365,7 @@ export async function bundleAgentDefinition(
     );
   }
 
-  // Clean rebuild: replace outDir entirely (guarded above so this can't delete the
-  // source), then materialize the plan. A file dropped from the source cannot survive as
-  // a stale artifact.
-  await rm(outDir, { recursive: true, force: true });
+  // Materialize the plan into outDir (a fresh dir the caller provided).
   await executeShipPlan(plan, outDir);
 
   // Materialize winning skills that live OUTSIDE the source tree (globals / extra
