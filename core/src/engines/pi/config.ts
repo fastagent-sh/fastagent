@@ -61,56 +61,55 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${dir}: multiple fastagent config files found; keep exactly one (${found.map((p) => basename(p)).join(", ")})`);
   }
 
-  for (const path of found) {
-    const mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
-    const config = mod.default;
-    if (!config || typeof config !== "object") {
-      throw new Error(`${path}: must default-export defineConfig({...})`);
-    }
-    const c = config as FastagentConfig;
-    // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a
-    // .js/.mjs config (`modle:`) must not silently degrade to zero-config.
-    for (const key of Object.keys(c)) {
-      if (key !== "model" && key !== "tools" && key !== "http") {
-        throw new Error(`${path}: unknown key "${key}" (valid keys: model, tools, http)`);
-      }
-    }
-    if (c.model !== undefined && typeof c.model !== "string") {
-      throw new Error(`${path}: "model" must be a "provider/modelId" string`);
-    }
-    if (c.tools !== undefined && !Array.isArray(c.tools)) {
-      throw new Error(`${path}: "tools" must be an array of AgentTool`);
-    }
-    if (c.tools !== undefined) {
-      for (const [i, tool] of c.tools.entries()) {
-        if (!tool || typeof tool !== "object") {
-          throw new Error(`${path}: "tools[${i}]" must be an AgentTool object`);
-        }
-        const candidate = tool as { name?: unknown; execute?: unknown };
-        if (typeof candidate.name !== "string" || typeof candidate.execute !== "function") {
-          throw new Error(`${path}: "tools[${i}]" must have string "name" and function "execute"`);
-        }
-      }
-    }
-    if (c.http !== undefined && (typeof c.http !== "object" || c.http === null)) {
-      throw new Error(`${path}: "http" must be an object`);
-    }
-    // Same typo discipline one level down: { http: { porrt } } must not silently
-    // fall back to the default port.
-    for (const key of Object.keys(c.http ?? {})) {
-      if (key !== "port") {
-        throw new Error(`${path}: unknown key "http.${key}" (valid keys: port)`);
-      }
-    }
-    if (
-      c.http?.port !== undefined &&
-      (typeof c.http.port !== "number" || !Number.isInteger(c.http.port) || c.http.port < 0 || c.http.port > 65535)
-    ) {
-      throw new Error(`${path}: "http.port" must be an integer 0-65535`);
-    }
-    return { config: c, path };
+  // Exactly one config file at this point (0 and >1 handled above).
+  const path = found[0]!;
+  const mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
+  const config = mod.default;
+  if (!config || typeof config !== "object") {
+    throw new Error(`${path}: must default-export defineConfig({...})`);
   }
-  throw new Error(`${dir}: failed to load fastagent config`);
+  const c = config as FastagentConfig;
+  // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a
+  // .js/.mjs config (`modle:`) must not silently degrade to zero-config.
+  for (const key of Object.keys(c)) {
+    if (key !== "model" && key !== "tools" && key !== "http") {
+      throw new Error(`${path}: unknown key "${key}" (valid keys: model, tools, http)`);
+    }
+  }
+  if (c.model !== undefined && typeof c.model !== "string") {
+    throw new Error(`${path}: "model" must be a "provider/modelId" string`);
+  }
+  if (c.tools !== undefined && !Array.isArray(c.tools)) {
+    throw new Error(`${path}: "tools" must be an array of AgentTool`);
+  }
+  if (c.tools !== undefined) {
+    for (const [i, tool] of c.tools.entries()) {
+      if (!tool || typeof tool !== "object") {
+        throw new Error(`${path}: "tools[${i}]" must be an AgentTool object`);
+      }
+      const candidate = tool as { name?: unknown; execute?: unknown };
+      if (typeof candidate.name !== "string" || typeof candidate.execute !== "function") {
+        throw new Error(`${path}: "tools[${i}]" must have string "name" and function "execute"`);
+      }
+    }
+  }
+  if (c.http !== undefined && (typeof c.http !== "object" || c.http === null)) {
+    throw new Error(`${path}: "http" must be an object`);
+  }
+  // Same typo discipline one level down: { http: { porrt } } must not silently
+  // fall back to the default port.
+  for (const key of Object.keys(c.http ?? {})) {
+    if (key !== "port") {
+      throw new Error(`${path}: unknown key "http.${key}" (valid keys: port)`);
+    }
+  }
+  if (
+    c.http?.port !== undefined &&
+    (typeof c.http.port !== "number" || !Number.isInteger(c.http.port) || c.http.port < 0 || c.http.port > 65535)
+  ) {
+    throw new Error(`${path}: "http.port" must be an integer 0-65535`);
+  }
+  return { config: c, path };
 }
 
 /** Resolve "provider/modelId" → a pi Model. Unknown specs throw a clear error (getModel returns undefined). */
