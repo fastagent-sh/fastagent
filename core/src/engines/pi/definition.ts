@@ -297,6 +297,16 @@ export async function bundleAgentDefinition(
   // internal junk, and its defining SKILL.md must survive or the build fails visibly.
   await mkdir(join(outDir, "skills"), { recursive: true });
   for (const skill of definition.skills) {
+    // skill.name is author-supplied (frontmatter) and used here as a PATH segment. Reject a
+    // name that isn't a single safe directory component — a slash/backslash, a leading dot,
+    // or `.`/`..` could escape skills/ (path traversal) or land where the loader won't find
+    // it (artifact != reported). Pi only warns on these; the build must fail visibly.
+    if (skill.name === "" || skill.name.startsWith(".") || /[/\\]/.test(skill.name)) {
+      throw new Error(
+        `skill name "${skill.name}" (${skill.filePath}) is not a valid directory name ` +
+          `(no slashes, no leading dot); rename it.`,
+      );
+    }
     if (basename(skill.filePath) === "SKILL.md") {
       // A skill ships its own dir minus its OWN root .gitignore/.fastagentignore (Fork A);
       // planShipSet roots at the skill dir, so its flat ignore governs it (not the workspace's).

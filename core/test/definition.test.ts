@@ -229,6 +229,16 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     expect(await access(join(out, "extras")).then(() => true, () => false)).toBe(false); // no duplicate
   });
 
+  it("rejects an unsafe skill name used as a path segment (no traversal out of skills/)", async () => {
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(src, "skills", "evil"), { recursive: true });
+    await writeFile(join(src, "skills", "evil", "SKILL.md"), "---\nname: ../../escaped\ndescription: d\n---\nb\n");
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    await expect(bundleAgentDefinition(src, out)).rejects.toThrow(/not a valid directory name/);
+    expect(await access(join(out, "..", "escaped")).then(() => true, () => false)).toBe(false); // nothing escaped
+  });
+
   it("materializes an in-workspace mount outside skills/ into outDir/skills/ (reported == shipped)", async () => {
     // A skillPaths mount inside the workspace but outside skills/ is NOT placed at
     // outDir/skills/ by the tree copy; it must still be materialized there, or a
