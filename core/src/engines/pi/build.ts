@@ -61,6 +61,12 @@ export async function buildPiArtifact(
   outDir: string,
   options: BuildPiArtifactOptions = {},
 ): Promise<{ manifest: ArtifactManifest; definition: LoadedDefinition; outDir: string }> {
+  // The source must exist BEFORE anything is created: the default out is <srcDir>/.fastagent/
+  // build, so a typo'd/nonexistent srcDir would otherwise be conjured by the staging mkdir
+  // and then "built" into an empty artifact. Fail visibly instead.
+  if (!(await stat(srcDir).then((s) => s.isDirectory(), () => false))) {
+    throw new Error(`source workspace "${srcDir}" does not exist (or is not a directory)`);
+  }
   const { config } = await loadConfig(srcDir);
   const model = resolveModelSpec(options.model, config);
   if (!model) {

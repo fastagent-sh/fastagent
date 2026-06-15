@@ -426,6 +426,15 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(ws, "publish", "AGENTS.md"))).toBe(true); // reachable via the symlink
   });
 
+  it("rejects a nonexistent source workspace without creating it (no empty artifact)", async () => {
+    const base = await mkdtemp(join(tmpdir(), "fa-nosrc-"));
+    const typo = join(base, "typo"); // does not exist
+    await expect(
+      buildPiArtifact(typo, await freshOut(), { model: "openai-codex/gpt-5.5", force: true }),
+    ).rejects.toThrow(/does not exist/);
+    expect(await exists(typo)).toBe(false); // the typo'd dir was NOT conjured by mkdir
+  });
+
   it("guards an --out OUTSIDE the source tree behind force (avoids nuking unrelated dirs)", async () => {
     const ws = await makeWorkspace();
     const outside = await freshOut(); // a sibling temp dir, outside ws
