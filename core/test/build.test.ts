@@ -148,6 +148,21 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
 
+  it("fails visibly when an ancestor .gitignore excludes the build root itself (no broken artifact)", async () => {
+    // Repo ignores the WHOLE package; a nested `!AGENTS.md` would otherwise re-include only
+    // fragments (git never re-includes below an excluded parent), yielding a broken artifact.
+    const repo = await mkdtemp(join(tmpdir(), "fa-ignoredroot-"));
+    await mkdir(join(repo, ".git"), { recursive: true });
+    await writeFile(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    await writeFile(join(repo, ".gitignore"), "packages/agent/\n");
+    const pkg = join(repo, "packages", "agent");
+    await mkdir(pkg, { recursive: true });
+    await writeFile(join(pkg, "AGENTS.md"), "# Bot\n");
+    await writeFile(join(pkg, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await writeFile(join(pkg, ".gitignore"), "!AGENTS.md\n");
+    await expect(buildOk(pkg, await freshOut())).rejects.toThrow(/build root .* is excluded by an ancestor/);
+  });
+
   it("honors an ancestor .gitignore up to the repo root (monorepo package build)", async () => {
     const repo = await mkdtemp(join(tmpdir(), "fa-monorepo-"));
     await mkdir(join(repo, ".git"), { recursive: true }); // marks the repo root boundary

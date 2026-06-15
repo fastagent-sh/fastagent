@@ -330,6 +330,17 @@ async function planShipSet(srcDir: string, opts: { skip?: string[]; seedAncestor
       if (git !== undefined || fa !== undefined) ignoreStack.push({ baseAbs: dir, git, fa });
     }
   }
+
+  // If an ancestor rule excludes the BUILD ROOT itself (e.g. the repo `.gitignore`s the whole
+  // `packages/agent/`), git would never descend or re-include below it. Walking it anyway
+  // would silently ship only the fragments a nested `!` rescues — a broken artifact. Fail
+  // visibly instead. (A normal monorepo rule excludes a SUBDIR like dist/, not the root.)
+  if (scopedIgnored(ignoreStack, topBase, true)) {
+    throw new Error(
+      `build root "${srcDir}" is excluded by an ancestor .gitignore (the repo ignores this whole ` +
+        `directory); un-ignore it, or build a tracked directory.`,
+    );
+  }
   await walk(topBase, new Set());
   return { files, dirs };
 }
