@@ -229,6 +229,20 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     expect(await access(join(out, "extras")).then(() => true, () => false)).toBe(false); // no duplicate
   });
 
+  it("rejects skills whose names differ only in case (alias on a case-insensitive FS)", async () => {
+    // local "foo" + a mounted "Foo" — distinct names, but skills/foo and skills/Foo alias on
+    // macOS/Windows; reject everywhere so the artifact is portable/identical on any FS.
+    const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
+    await writeFile(join(src, "AGENTS.md"), "# Bot\n");
+    await mkdir(join(src, "skills", "foo"), { recursive: true });
+    await writeFile(join(src, "skills", "foo", "SKILL.md"), "---\nname: foo\ndescription: d\n---\nb\n");
+    const ext = await mkdtemp(join(tmpdir(), "fa-bundle-ext-"));
+    await mkdir(join(ext, "Foo"), { recursive: true });
+    await writeFile(join(ext, "Foo", "SKILL.md"), "---\nname: Foo\ndescription: d\n---\nb\n");
+    const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
+    await expect(bundleAgentDefinition(src, out, { skillPaths: [ext] })).rejects.toThrow(/case-insensitively/);
+  });
+
   it("rejects a single-file vs directory skill that materialize to the same artifact path", async () => {
     const src = await mkdtemp(join(tmpdir(), "fa-bundle-src-"));
     await writeFile(join(src, "AGENTS.md"), "# Bot\n");

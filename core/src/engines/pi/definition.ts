@@ -311,18 +311,21 @@ export async function bundleAgentDefinition(
           `(no slashes, no leading dot); rename it.`,
       );
     }
-    // Dir skills go to skills/<name>, single-file skills to skills/<name>.md — distinct name
-    // SETS, but a dir skill named "X.md" and a single-file skill named "X" map to the SAME
-    // path. Names are deduped but dests are not, so catch the clash visibly (else EISDIR).
+    // Dir skills go to skills/<name>, single-file skills to skills/<name>.md. Names are
+    // deduped but DESTS are not, so two skills can target the same path: a dir "X.md" vs a
+    // single-file "X", or names differing only in case (which alias on a case-insensitive
+    // FS). Check case-INSENSITIVELY — a portable artifact must build identically on any FS,
+    // so reject such a clash everywhere (else: cryptic EISDIR, or a silent overwrite on
+    // macOS/Windows that ships fewer skills than reported).
     const isDirSkill = basename(skill.filePath) === "SKILL.md";
     const destRel = isDirSkill ? `skills/${skill.name}` : `skills/${skill.name}.md`;
-    if (skillDests.has(destRel)) {
+    if (skillDests.has(destRel.toLowerCase())) {
       throw new Error(
-        `two skills materialize to the same artifact path "${destRel}" (a directory skill named ` +
-          `"X.md" collides with a single-file skill named "X"); rename one.`,
+        `two skills materialize to the same artifact path "${destRel}" (case-insensitively): ` +
+          `names that differ only in case, or a directory skill "X.md" vs a single-file skill "X". Rename one.`,
       );
     }
-    skillDests.add(destRel);
+    skillDests.add(destRel.toLowerCase());
     if (isDirSkill) {
       // A skill ships its own dir minus its OWN root .gitignore/.fastagentignore (Fork A);
       // planShipSet roots at the skill dir, so its flat ignore governs it (not the workspace's).
