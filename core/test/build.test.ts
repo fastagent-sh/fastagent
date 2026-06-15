@@ -181,6 +181,17 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "AGENTS.md"))).toBe(true); // ancestor .gitignore not honored (no repo root)
   });
 
+  it("applies hard excludes to a symlink's real target (vendor -> node_modules is not shipped)", async () => {
+    const ws = await makeWorkspace(); // already has node_modules/ and a .git dir
+    await symlink("node_modules", join(ws, "vendor")); // clean name aliasing a hard-excluded tree
+    await symlink(".git", join(ws, "gitlink"));
+    const out = await freshOut();
+    await buildOk(ws, out);
+    expect(await exists(join(out, "vendor"))).toBe(false); // node_modules not smuggled in via symlink
+    expect(await exists(join(out, "gitlink"))).toBe(false);
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+  });
+
   it("honors .gitignore in any tree; .git/ and node_modules/ are hard-excluded", async () => {
     const ws = await makeWorkspace();
     await writeFile(join(ws, ".gitignore"), "scratch/\n");
