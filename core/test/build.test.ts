@@ -421,6 +421,15 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(ws, "docs", "schema.md"))).toBe(true); // authored content untouched
   });
 
+  it("rejects a dangling symlink --out without replacing the symlink", async () => {
+    const ws = await makeWorkspace();
+    const link = join(ws, ".fastagent", "build");
+    await mkdir(join(ws, ".fastagent"), { recursive: true });
+    await symlink(join(tmpdir(), `fa-missing-${Date.now()}`), link); // target does not exist
+    await expect(buildPiArtifact(ws, link)).rejects.toThrow(/dangling symlink/);
+    expect((await lstat(link)).isSymbolicLink()).toBe(true); // the symlink was not replaced
+  });
+
   it("publishes through a symlinked --out to its real target, preserving the symlink", async () => {
     const ws = await makeWorkspace();
     const deploy = join(await mkdtemp(join(tmpdir(), "fa-deploy-")), "deploy");
