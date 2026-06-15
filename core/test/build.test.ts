@@ -139,13 +139,12 @@ describe("build: buildPiArtifact", () => {
   });
 
   it("matches ignore rules case-sensitively (a README.md rule does not drop readme.md)", async () => {
+    // One file only — a case-insensitive FS (macOS) can't hold both README.md and readme.md.
     const ws = await makeWorkspace({ gitignore: "README.md\n" });
-    await writeFile(join(ws, "README.md"), "UPPER\n");
-    await writeFile(join(ws, "readme.md"), "lower\n");
+    await writeFile(join(ws, "readme.md"), "lower\n"); // different case than the rule
     const out = await freshOut();
     await buildOk(ws, out);
-    expect(await exists(join(out, "README.md"))).toBe(false); // the rule's exact case is excluded
-    expect(await exists(join(out, "readme.md"))).toBe(true); // a different case is NOT (git on Linux)
+    expect(await exists(join(out, "readme.md"))).toBe(true); // rule's case differs → not excluded
   });
 
   it("honors only the ROOT .gitignore/.fastagentignore (flat) — not nested or ancestor rules", async () => {
