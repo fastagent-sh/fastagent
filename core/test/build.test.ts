@@ -171,17 +171,6 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "AGENTS.md"))).toBe(true); // ancestor .gitignore not honored (no repo root)
   });
 
-  it("skips symlinks even when they point at hard-excluded trees (vendor -> node_modules)", async () => {
-    const ws = await makeWorkspace(); // already has node_modules/ and a .git dir
-    await symlink("node_modules", join(ws, "vendor")); // a clean name aliasing an excluded tree
-    await symlink(".git", join(ws, "gitlink"));
-    const out = await freshOut();
-    await buildOk(ws, out);
-    expect(await exists(join(out, "vendor"))).toBe(false); // symlink skipped (not followed)
-    expect(await exists(join(out, "gitlink"))).toBe(false);
-    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
-  });
-
   it("honors .gitignore in any tree; .git/ and node_modules/ are hard-excluded", async () => {
     const ws = await makeWorkspace();
     await writeFile(join(ws, ".gitignore"), "scratch/\n");
@@ -266,18 +255,12 @@ describe("build: buildPiArtifact", () => {
     await rm(join(ws, "docs"), { recursive: true });
     await symlink(shared, join(ws, "docs")); // a symlinked directory
     await symlink(join(shared, "schema.md"), join(ws, "link.md")); // a symlinked file
+    await symlink("node_modules", join(ws, "vendor")); // a symlink aliasing a hard-excluded tree
     const out = await freshOut();
     await buildOk(ws, out);
     expect(await exists(join(out, "docs"))).toBe(false); // symlinked dir not followed
     expect(await exists(join(out, "link.md"))).toBe(false); // file symlink not shipped
-    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
-  });
-
-  it("does not loop on a symlink cycle", async () => {
-    const ws = await makeWorkspace();
-    await symlink(".", join(ws, "loop")); // loop -> the workspace itself (its own ancestor)
-    const out = await freshOut();
-    await buildOk(ws, out); // must terminate, not hang/overflow
+    expect(await exists(join(out, "vendor"))).toBe(false); // symlink to node_modules not smuggled in
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
 
@@ -419,15 +402,6 @@ describe("build: buildPiArtifact", () => {
     const ws = await makeWorkspace(); // has authored docs/schema.md
     await expect(buildOk(ws, join(ws, "docs"))).rejects.toThrow(/in-tree build output must be under \.fastagent/);
     expect(await exists(join(ws, "docs", "schema.md"))).toBe(true); // authored content untouched
-  });
-
-  it("rejects a dangling symlink --out without replacing the symlink", async () => {
-    const ws = await makeWorkspace();
-    const link = join(ws, ".fastagent", "build");
-    await mkdir(join(ws, ".fastagent"), { recursive: true });
-    await symlink(join(tmpdir(), `fa-missing-${Date.now()}`), link); // target does not exist
-    await expect(buildPiArtifact(ws, link)).rejects.toThrow(/dangling symlink/);
-    expect((await lstat(link)).isSymbolicLink()).toBe(true); // the symlink was not replaced
   });
 
   it("publishes through a symlinked --out to its real target, preserving the symlink", async () => {

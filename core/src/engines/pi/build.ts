@@ -12,7 +12,7 @@
  *
  * Build is non-destructive to the source: it only writes the (separate) outDir.
  */
-import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
@@ -77,18 +77,6 @@ export async function buildPiArtifact(
   // Validate against the registry now, so a typo fails the build instead of being frozen
   // into the manifest and only failing later at start.
   resolveModel(model);
-
-  // A DANGLING symlink --out can't be resolved (realpathBase falls back to the lexical link
-  // path), so publish would rename/replace the symlink itself and the real deploy target
-  // would stay missing. Fail visibly. (A symlink whose target EXISTS resolves below and
-  // publishes to the real target, preserving the link.)
-  const outLink = await lstat(outDir).catch(() => undefined);
-  if (outLink?.isSymbolicLink() && !(await stat(outDir).then(() => true, () => false))) {
-    throw new Error(
-      `build output "${outDir}" is a dangling symlink (its target does not exist); ` +
-        `create the target or use a real path`,
-    );
-  }
 
   // Structural guard (the ONLY one): the output must not be the source or contain it — we
   // read src and publish over outDir, so out ⊇ src would destroy the input. realpath so a
