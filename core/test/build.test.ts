@@ -316,6 +316,19 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(bad, "fastagent.json"))).toBe(false);
   });
 
+  it("fails visibly when a config defining code tools is excluded from the artifact", async () => {
+    // model/http survive via the manifest, but tools are functions — only in the config file.
+    // Build a workspace with a SINGLE config (config.ts) so loadConfig doesn't reject on count.
+    const ws = await mkdtemp(join(tmpdir(), "fa-toolcfg-"));
+    await writeFile(join(ws, "AGENTS.md"), "# Bot\n");
+    await writeFile(
+      join(ws, "fastagent.config.ts"),
+      `export default { model: "openai-codex/gpt-5.5", tools: [{ name: "t", description: "d", parameters: {}, execute: async () => "x" }] };\n`,
+    );
+    await writeFile(join(ws, ".fastagentignore"), "fastagent.config.ts\n"); // excludes the tool config
+    await expect(buildOk(ws, await freshOut())).rejects.toThrow(/defines code tools but .* is excluded/);
+  });
+
   it("rejects an output that is, or contains, the source (cannot publish over the input)", async () => {
     const ws = await makeWorkspace();
     await expect(buildOk(ws, ws)).rejects.toThrow(/must differ from the source/);
