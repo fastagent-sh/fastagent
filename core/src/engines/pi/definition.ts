@@ -299,6 +299,7 @@ export async function bundleAgentDefinition(
   // mounted, uniformly) goes to skills/<name>; the same ignore-aware walk excludes its
   // internal junk, and its defining SKILL.md must survive or the build fails visibly.
   await mkdir(join(outDir, "skills"), { recursive: true });
+  const skillDests = new Set<string>(); // artifact-relative dests, to catch path collisions
   for (const skill of definition.skills) {
     // skill.name is author-supplied (frontmatter) and used here as a PATH segment. Reject a
     // name that isn't a single safe directory component — a slash/backslash, a leading dot,
@@ -310,7 +311,19 @@ export async function bundleAgentDefinition(
           `(no slashes, no leading dot); rename it.`,
       );
     }
-    if (basename(skill.filePath) === "SKILL.md") {
+    // Dir skills go to skills/<name>, single-file skills to skills/<name>.md — distinct name
+    // SETS, but a dir skill named "X.md" and a single-file skill named "X" map to the SAME
+    // path. Names are deduped but dests are not, so catch the clash visibly (else EISDIR).
+    const isDirSkill = basename(skill.filePath) === "SKILL.md";
+    const destRel = isDirSkill ? `skills/${skill.name}` : `skills/${skill.name}.md`;
+    if (skillDests.has(destRel)) {
+      throw new Error(
+        `two skills materialize to the same artifact path "${destRel}" (a directory skill named ` +
+          `"X.md" collides with a single-file skill named "X"); rename one.`,
+      );
+    }
+    skillDests.add(destRel);
+    if (isDirSkill) {
       // A skill ships its own dir minus its OWN root .gitignore/.fastagentignore (Fork A);
       // planShipSet roots at the skill dir, so its flat ignore governs it (not the workspace's).
       const skillPlan = await planShipSet(dirname(skill.filePath));
