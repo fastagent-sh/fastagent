@@ -362,7 +362,10 @@ export async function bundleAgentDefinition(
 ): Promise<LoadedDefinition> {
   const definition = await loadAgentDefinition(srcDir, options);
   const srcReal = await realpath(srcDir).catch(() => resolve(srcDir));
-  const skillsDir = join(srcReal, "skills"); // produced from the model, NOT copied from the tree
+  // skills/ is produced from the model, NOT copied from the tree — so the authored-context
+  // walk skips it. realpath it (like the other skip entries), so a SYMLINKED skills/ matches
+  // the walk's realpath comparison and isn't copied in as a raw (loser-bearing) tree.
+  const skillsDir = await realpath(join(srcReal, "skills")).catch(() => join(srcReal, "skills"));
 
   // Production 1 — the authored context tree, EXCLUDING skills/. Skip the build's own dirs
   // (staging / final target) too, so output is never bundled into itself.

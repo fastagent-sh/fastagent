@@ -360,6 +360,23 @@ describe("build: buildPiArtifact", () => {
     await expect(buildOk(ws, await freshOut())).rejects.toThrow(/reserved for the build manifest/);
   });
 
+  it("skips a SYMLINKED skills/ in the authored pass; skills come only from the model", async () => {
+    // A symlinked skills/ must not be copied in as a raw tree (which would carry collision
+    // losers); the authored-context walk skips it by realpath, model materialization fills it.
+    const shared = await mkdtemp(join(tmpdir(), "fa-shared-skills-"));
+    await mkdir(join(shared, "aaa"), { recursive: true });
+    await mkdir(join(shared, "zzz"), { recursive: true });
+    await writeFile(join(shared, "aaa", "SKILL.md"), "---\nname: dup\ndescription: a\n---\nA\n");
+    await writeFile(join(shared, "zzz", "SKILL.md"), "---\nname: dup\ndescription: z\n---\nZ\n"); // same name
+    const ws = await mkdtemp(join(tmpdir(), "fa-symskills-ws-"));
+    await writeFile(join(ws, "AGENTS.md"), "# Bot\n");
+    await writeFile(join(ws, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await symlink(shared, join(ws, "skills")); // skills/ is a symlink to the shared tree
+    const out = await freshOut();
+    await buildOk(ws, out);
+    expect((await readdir(join(out, "skills"))).sort()).toEqual(["dup"]); // only the winner, no aaa/zzz
+  });
+
   it("materializes only the winner of a local name collision (by name), never the loser", async () => {
     const ws = await makeWorkspace(); // has skills/local-skill (name local-skill)
     // two more local skills declaring the SAME name: one wins, one loses
