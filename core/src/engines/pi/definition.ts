@@ -288,10 +288,15 @@ async function planShipSet(srcDir: string, opts: { skip?: string[]; seedAncestor
       if (isLink) {
         const target = await stat(abs).catch(() => undefined); // follow the link
         if (!target) continue; // dangling → skip rather than fail the build
-        // A symlink can alias a hard-excluded tree under a clean name (vendor -> node_modules,
-        // docs -> .git, state -> .fastagent). Apply the name-based hard-exclude to the REAL
-        // target too, or the artifact would ship exactly what the hard-exclude set forbids.
-        if (isHardExcluded(basename(await realpath(abs).catch(() => abs)))) continue;
+        // A symlink can alias a hard-excluded tree under a clean name — either directly
+        // (vendor -> node_modules) or by pointing INSIDE one (vendor -> node_modules/pkg,
+        // state -> .fastagent/cache). Apply the name-based hard-exclude to every segment of
+        // the real target's path relative to topBase, so neither form smuggles in the tree
+        // the hard-exclude set forbids. (Relative, not absolute: a workspace that itself
+        // lives under a node_modules ancestor is not falsely excluded — that segment is above
+        // topBase, not in the relative path.)
+        const realTarget = await realpath(abs).catch(() => abs);
+        if (toPosix(relative(topBase, realTarget)).split("/").some(isHardExcluded)) continue;
         isDir = target.isDirectory();
         isFile = target.isFile();
       }
