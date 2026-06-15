@@ -170,7 +170,10 @@ async function loadRootIgnore(dir: string): Promise<Ignore | undefined> {
       }
     }
   }
-  return rules.trim() === "" ? undefined : ignore().add(rules);
+  // ignorecase:false — the `ignore` library defaults to case-INSENSITIVE, which would make a
+  // rule `README.md` also drop an authored `readme.md`. Match git on a case-sensitive
+  // filesystem (our main deploy target) and stay reproducible (a fixed mode, not FS-derived).
+  return rules.trim() === "" ? undefined : ignore({ ignorecase: false }).add(rules);
 }
 
 /** Normalize a relative path to POSIX separators for ignore lookups (Windows). */
