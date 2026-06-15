@@ -55,7 +55,7 @@
  *    this boundary must be re-cut: either config grows K keys (L3 inherits them)
  *    or L3 options grow K overrides. Decide from real backends; do not pre-wire.
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
@@ -64,7 +64,7 @@ import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-codin
 import type { Agent } from "../../agent.ts";
 import type { AuthResolver } from "./auth.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./definition.ts";
+import { type LoadedDefinition, defaultGlobalSkillPaths, ensureStateDirSelfIgnored, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, piHarnessFactory } from "./harness.ts";
 import { type PiSessionStore, inMemorySessionStore, jsonlSessionStore } from "./sessions.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
@@ -328,9 +328,7 @@ export async function createPiAgentFromWorkspace(
   // callers of L3 get the same self-gitignored dir (vite/next-style).
   const stateDir = join(dir, ".fastagent");
   await mkdir(stateDir, { recursive: true });
-  await writeFile(join(stateDir, ".gitignore"), "*\n", { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
-    if (e.code !== "EEXIST") throw e;
-  });
+  await ensureStateDirSelfIgnored(stateDir);
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
     model: resolveModel(modelSpec),
     tools: resolveTools(config, dir),

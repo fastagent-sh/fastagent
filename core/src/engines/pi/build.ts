@@ -16,7 +16,7 @@ import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { type LoadedDefinition, bundleAgentDefinition, defaultGlobalSkillPaths } from "./definition.ts";
+import { type LoadedDefinition, bundleAgentDefinition, defaultGlobalSkillPaths, ensureStateDirSelfIgnored } from "./definition.ts";
 
 /** The `fastagent.json` manifest written into the artifact. Pure data (no `.ts`). */
 export interface ArtifactManifest {
@@ -135,11 +135,7 @@ export async function buildPiArtifact(
   // An in-tree build creates <src>/.fastagent; self-gitignore it (same as the L3 dev path in
   // create.ts), so a build-first workspace doesn't show the artifact/staging as untracked.
   if (!outsideSource) {
-    await writeFile(join(srcReal, ".fastagent", ".gitignore"), "*\n", { flag: "wx" }).catch(
-      (e: NodeJS.ErrnoException) => {
-        if (e.code !== "EEXIST") throw e;
-      },
-    );
+    await ensureStateDirSelfIgnored(join(srcReal, ".fastagent"));
   }
   const staging = await mkdtemp(join(stagingParent, ".fa-build-"));
   try {

@@ -24,7 +24,7 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { copyFile, mkdir, readFile, readdir, realpath } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import ignore, { type Ignore } from "ignore";
@@ -146,6 +146,19 @@ function isHardExcluded(name: string): boolean {
 }
 
 /**
+ * Self-ignore a `.fastagent` state dir: write `<stateDir>/.gitignore` = "*" (idempotent —
+ * an existing one is kept). Layer-3 machine state (dev sessions, build staging/artifacts) is
+ * gitignored, deletable, and rebuildable, so a workspace that only runs dev/build never shows
+ * it as untracked. The caller creates the dir; this only drops the marker. Shared by the L3
+ * dev path (create.ts) and an in-tree build (build.ts) so the marker stays in one place.
+ */
+export async function ensureStateDirSelfIgnored(stateDir: string): Promise<void> {
+  await writeFile(join(stateDir, ".gitignore"), "*\n", { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
+    if (e.code !== "EEXIST") throw e;
+  });
+}
+
+/**
  * Load the build root's exclude rules into ONE flat matcher: `.gitignore` then
  * `.fastagentignore` (fa last → authoritative on conflicts), applied artifact-relative to
  * the whole tree. Deliberately FLAT — we read only the ROOT files, not nested .gitignore
@@ -252,7 +265,7 @@ async function executeShipPlan(plan: ShipPlan, outDir: string): Promise<void> {
  *     package.json, …) is copied via the ignore-aware walk, EXCLUDING skills/;
  *   - outDir/skills/ is produced from the RESOLVED skill model: each WINNING skill
  *     (definition.skills — local AND mounted, treated uniformly) is materialized to
- *     skills/<name> via the same walk (its own + ancestor .gitignore honored). Names are
+ *     skills/<name> via the same walk (its own root .gitignore honored). Names are
  *     unique after dedup, so destinations never collide; collision losers and non-loaded
  *     skills simply never appear.
  *
