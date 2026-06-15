@@ -114,7 +114,10 @@ async function runDev(): Promise<void> {
 
 async function runBuild(): Promise<void> {
   loadDotEnv(dir); // the model may come from FASTAGENT_MODEL in .env
-  const outDir = resolve(values.out ?? join(dir, ".fastagent", "build"));
+  // Resolve a relative --out against the SOURCE dir (not the shell cwd), matching the
+  // default (dir/.fastagent/build) and the in-tree guard — so `build pkg --out .fastagent/
+  // build` targets pkg's, not cwd's. Absolute --out is unaffected.
+  const outDir = values.out !== undefined ? resolve(dir, values.out) : join(dir, ".fastagent", "build");
   const { manifest, definition } = await buildPiArtifact(dir, outDir, {
     model: values.model,
     globalSkills,
