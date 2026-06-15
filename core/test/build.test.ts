@@ -290,13 +290,26 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
 
-  it("fails visibly when the ship-set excludes a loaded definition file (no silent drop)", async () => {
+  it("fails visibly when AGENTS.md is excluded from the artifact (authored context)", async () => {
+    const ws = await makeWorkspace();
+    await writeFile(join(ws, ".fastagentignore"), "AGENTS.md\n");
+    const out = await freshOut();
+    await expect(buildOk(ws, out)).rejects.toThrow(/AGENTS\.md is excluded/);
+  });
+
+  it("a workspace ignore does not exclude a loaded skill; the skill's OWN ignore governs its files", async () => {
+    // Fork A: .gitignore/.fastagentignore govern AUTHORED context, not the skill set. A skill
+    // ships its own dir minus its OWN nested ignores; to drop a skill, remove it.
     const ws = await makeWorkspace();
     await mkdir(join(ws, "skills", "secret"), { recursive: true });
     await writeFile(join(ws, "skills", "secret", "SKILL.md"), "---\nname: secret\ndescription: x.\n---\nb\n");
-    await writeFile(join(ws, ".fastagentignore"), "skills/secret/\n"); // excludes a skill the agent loads
+    await writeFile(join(ws, "skills", "secret", "junk.log"), "noise\n");
+    await writeFile(join(ws, "skills", "secret", ".gitignore"), "junk.log\n"); // the skill's OWN ignore
+    await writeFile(join(ws, ".fastagentignore"), "skills/secret/\n"); // workspace rule: does NOT apply to skills
     const out = await freshOut();
-    await expect(buildOk(ws, out)).rejects.toThrow(/SKILL\.md excluded by an ignore rule/);
+    await buildOk(ws, out);
+    expect(await exists(join(out, "skills", "secret", "SKILL.md"))).toBe(true); // skill still ships
+    expect(await exists(join(out, "skills", "secret", "junk.log"))).toBe(false); // own ignore honored
   });
 
   it("recognizes an in-tree out even when src and out are spelled through different symlinks", async () => {

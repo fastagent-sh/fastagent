@@ -12,7 +12,7 @@
  *
  * Build is non-destructive to the source: it only writes the (separate) outDir.
  */
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
@@ -101,6 +101,12 @@ export async function buildPiArtifact(
         `pass --force to confirm building there`,
     );
   }
+  // Build output is a DIRECTORY. An existing FILE at the target (e.g. a typo `--out AGENTS.md`)
+  // would be moved aside and replaced by the artifact dir — mutating the source. Reject it.
+  const outStat = await stat(outReal).catch(() => undefined);
+  if (outStat?.isFile()) {
+    throw new Error(`build output "${outDir}" is an existing file; the output must be a directory`);
+  }
 
   // Build into a fresh STAGING dir, same filesystem as the target so the publish rename is
   // atomic, and never reachable by the walk so a crash-orphaned staging can't ship:
@@ -120,12 +126,20 @@ export async function buildPiArtifact(
   }
   const staging = await mkdtemp(join(stagingParent, ".fa-build-"));
   try {
-    const definition = await bundleAgentDefinition(
-      srcDir,
-      staging,
-      { skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [] },
-      { reservedRootFile: MANIFEST_FILE, skipPaths: [outReal] },
-    );
+    const definition = await bundleAgentDefinition(srcDir, staging, {
+      skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
+    }, { skipPaths: [outReal] });
+    // fastagent.json is the manifest's reserved name. If a source entry landed at
+    // staging/fastagent.json (a file/dir by that name, incl. a case-insensitive alias like
+    // FastAgent.json on macOS/Windows), the manifest write would overwrite authored content
+    // — reject. Checking the staged path is filesystem-accurate for case-sensitivity, and
+    // non-destructive (staging is thrown away on failure).
+    if (await stat(join(staging, MANIFEST_FILE)).then(() => true, () => false)) {
+      throw new Error(
+        `"${MANIFEST_FILE}" is reserved for the build manifest; the source ships an entry by that name ` +
+          `at the artifact root — rename or exclude it (config goes in fastagent.config.ts/js/mjs)`,
+      );
+    }
     const manifest: ArtifactManifest = {
       fastagentVersion: await readFastagentVersion(),
       engine: "pi",

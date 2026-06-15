@@ -191,7 +191,11 @@ Two distinct things are both called "context"; they live on opposite sides:
 - **authored context** (static files the author wrote) is part of M and ships. It is consumed by the agent's `read`/`grep` tools on demand — it is file access rooted at the run directory (cwd), **not** prompt-loading, so it needs no new mechanism beyond "the file is present in the run dir."
 - **conversational context** (cross-turn history/memory) is K, lives in an external session store, and is reconstructed per invoke (§7).
 
-So `definition` is **not** just `AGENTS.md` — it is the authored source tree. The ship-set is the tree **minus** the nested `.gitignore` + `.fastagentignore` rules read along the way (each pattern scoped to its own directory, via the `ignore` library — we do **not** call git, so the artifact is reproducible regardless of the build machine's git install / global excludes / index). On top of that, a small unconditional **hard-exclude** set — things never meaningful to ship:
+So `definition` is **not** just `AGENTS.md` — it is the authored source tree. The artifact is produced as **two independent things**, so it equals the reported agent by construction: (1) the **authored context tree** (AGENTS.md, docs/, config, tool source, …) **minus** the nested `.gitignore`/`.fastagentignore` rules read along the way (each scoped to its own directory + ancestors up to the repo root, via the `ignore` library — we do **not** call git, so the artifact is reproducible regardless of the build machine's git install / global excludes / index), EXCLUDING `skills/`; and (2) `skills/` produced from the **resolved skill model** — each winning skill (local or mounted) materialized to `skills/<name>`.
+
+**Skills are self-contained units ("Fork A").** A skill ships its own directory minus its OWN nested ignores; the consuming workspace's `.gitignore`/`.fastagentignore` govern *authored context*, not the skill set (a skill is like an npm package: its `.npmignore` governs it, not the consumer's). To drop a skill, remove it — workspace ignores don't. This makes "artifact == reported agent" hold by construction (collision losers and non-loaded skills never appear; names are unique so destinations never collide).
+
+On top of that, a small unconditional **hard-exclude** set — things never meaningful to ship:
 
 | Never bundled | Why |
 |---|---|

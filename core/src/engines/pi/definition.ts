@@ -256,8 +256,9 @@ interface ShipPlan {
  * `.gitignore`. Cycles (e.g. `link -> .`) are broken by tracking the recursion STACK of
  * target realpaths.
  */
-async function planShipSet(srcDir: string, opts: { skip?: string[] } = {}): Promise<ShipPlan> {
+async function planShipSet(srcDir: string, opts: { skip?: string[]; seedAncestors?: boolean } = {}): Promise<ShipPlan> {
   const skip = opts.skip ?? [];
+  const seedAncestors = opts.seedAncestors ?? true;
   // realpath the root so repo-root discovery + ancestor-ignore anchoring follow the REAL
   // path: a workspace reached through a symlink still finds the actual monorepo's .git and
   // its parent .gitignore files. Artifact paths are relative, so forward names are unchanged.
@@ -306,7 +307,9 @@ async function planShipSet(srcDir: string, opts: { skip?: string[] } = {}): Prom
   // a package build (`fastagent build packages/agent`). Bounded at the repo root (.git):
   // above it is not part of the project, and stopping there keeps the artifact reproducible.
   // These stay on the stack for the whole walk (root → deep, so deeper files still override).
-  const repoRoot = await findRepoRoot(topBase);
+  // Skipped for skill materialization (seedAncestors:false): a skill is a self-contained
+  // unit governed by its OWN nested ignores, not the consuming workspace's (Fork A).
+  const repoRoot = seedAncestors ? await findRepoRoot(topBase) : undefined;
   if (repoRoot !== undefined && repoRoot !== topBase) {
     const chain: string[] = [];
     for (let d = dirname(topBase); ; d = dirname(d)) {
@@ -355,7 +358,7 @@ export async function bundleAgentDefinition(
   srcDir: string,
   outDir: string,
   options: LoadAgentDefinitionOptions = {},
-  bundleOpts: { reservedRootFile?: string; skipPaths?: string[] } = {},
+  bundleOpts: { skipPaths?: string[] } = {},
 ): Promise<LoadedDefinition> {
   const definition = await loadAgentDefinition(srcDir, options);
   const srcReal = await realpath(srcDir).catch(() => resolve(srcDir));
@@ -369,18 +372,6 @@ export async function bundleAgentDefinition(
   );
   const plan = await planShipSet(srcDir, { skip: [skipHere, ...skipExtra, skillsDir] });
   const shipped = new Set(plan.files.map((f) => f.rel));
-  const shippedDirs = new Set(plan.dirs);
-
-  // A caller-reserved root name (the build manifest, fastagent.json) only collides if it
-  // would actually SHIP (an ignored one is not in the plan). Match a shipped FILE or DIR —
-  // a root dir by that name would otherwise make the later manifest write fail with EISDIR.
-  const reserved = bundleOpts.reservedRootFile;
-  if (reserved !== undefined && (shipped.has(reserved) || shippedDirs.has(reserved))) {
-    throw new Error(
-      `"${reserved}" is reserved for the build manifest; the source ships an entry by that name ` +
-        `at the artifact root — rename it or exclude it (config goes in fastagent.config.ts/js/mjs)`,
-    );
-  }
 
   // AGENTS.md ships at its tree path; if an ignore rule dropped it the artifact would not
   // match the reported agent.
@@ -397,7 +388,9 @@ export async function bundleAgentDefinition(
   await mkdir(join(outDir, "skills"), { recursive: true });
   for (const skill of definition.skills) {
     if (basename(skill.filePath) === "SKILL.md") {
-      const skillPlan = await planShipSet(dirname(skill.filePath));
+      // seedAncestors:false — a skill ships its own dir minus its OWN nested ignores; the
+      // consuming workspace's ignores govern authored context, not skills (Fork A).
+      const skillPlan = await planShipSet(dirname(skill.filePath), { seedAncestors: false });
       if (!skillPlan.files.some((f) => f.rel === "SKILL.md")) {
         throw new Error(
           `skill "${skill.name}" (${skill.filePath}) has its SKILL.md excluded by an ignore rule; ` +
