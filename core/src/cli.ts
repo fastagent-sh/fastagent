@@ -33,7 +33,8 @@ function usage(code: number): never {
          node_modules/.git and anything .gitignore/.fastagentignore excludes (honored
          via a library, git is never invoked). Secrets are NOT auto-excluded — keep them
          in .gitignore or .fastagentignore. Source is untouched. The out dir is REPLACED
-         wholesale (built to a temp dir, then published atomically).
+         wholesale (built to a temp dir, then published atomically); an in-tree --out must
+         be under .fastagent/, else use an out-of-tree path with --force.
          --global-skills   materialize the machine's global skills into the artifact
          --force           allow an --out OUTSIDE the source tree (it will be replaced)`);
   process.exit(code);

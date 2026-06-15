@@ -101,6 +101,17 @@ export async function buildPiArtifact(
         `pass --force to confirm building there`,
     );
   }
+  // An IN-TREE output must live under .fastagent/ (the designated, hard-excluded build-state
+  // area; the default is .fastagent/build). Any other in-tree path is authored content: the
+  // publish would delete that subtree from the source AND the artifact would lack it (the
+  // walk skips the out path) — a typo like `--out docs` must not silently break the agent.
+  const stateDir = join(srcReal, ".fastagent");
+  if (!outsideSource && !outReal.startsWith(stateDir + sep)) {
+    throw new Error(
+      `in-tree build output must be under .fastagent/ (e.g. the default .fastagent/build); got "${outDir}" — ` +
+        `it is authored content. Build under .fastagent/, or use an out-of-tree path with --force.`,
+    );
+  }
   // Build output is a DIRECTORY. An existing FILE at the target (e.g. a typo `--out AGENTS.md`)
   // would be moved aside and replaced by the artifact dir — mutating the source. Reject it.
   const outStat = await stat(outReal).catch(() => undefined);

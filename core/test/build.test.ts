@@ -318,10 +318,10 @@ describe("build: buildPiArtifact", () => {
     await writeFile(join(real, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
     const link = join(await mkdtemp(join(tmpdir(), "fa-build-link-")), "ws");
     await symlink(real, link); // src reached via a symlink alias
-    const out = join(real, "build"); // out under the real source dir (an in-tree out)
+    const out = join(real, ".fastagent", "build"); // in-tree out (under .fastagent/), via the real path
     await buildOk(link, out); // must not descend into the artifact it creates
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
-    expect(await exists(join(out, "build"))).toBe(false); // no nested build/build recursion
+    expect(await exists(join(out, ".fastagent"))).toBe(false); // no nested .fastagent recursion
   });
 
   it("fails visibly on an unreadable .fastagentignore (only ENOENT is normal)", async () => {
@@ -417,10 +417,17 @@ describe("build: buildPiArtifact", () => {
     // simulate a staging dir orphaned by a prior crashed build, where the code now puts it
     await mkdir(join(ws, ".fastagent", ".fa-build-STALE"), { recursive: true });
     await writeFile(join(ws, ".fastagent", ".fa-build-STALE", "junk.txt"), "partial\n");
-    await buildOk(ws, join(ws, "build")); // in-tree --out build
-    expect(await exists(join(ws, "build", ".fastagent"))).toBe(false); // .fastagent (and its staging) never walked
-    expect(await exists(join(ws, "build", ".fa-build-STALE"))).toBe(false);
-    expect(await exists(join(ws, "build", "AGENTS.md"))).toBe(true);
+    const out = join(ws, ".fastagent", "build"); // in-tree out (must be under .fastagent/)
+    await buildOk(ws, out);
+    expect(await exists(join(out, ".fastagent"))).toBe(false); // .fastagent (and its staging) never walked
+    expect(await exists(join(out, ".fa-build-STALE"))).toBe(false);
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+  });
+
+  it("rejects an in-tree --out outside .fastagent/ (authored content), leaving the source intact", async () => {
+    const ws = await makeWorkspace(); // has authored docs/schema.md
+    await expect(buildOk(ws, join(ws, "docs"))).rejects.toThrow(/in-tree build output must be under \.fastagent/);
+    expect(await exists(join(ws, "docs", "schema.md"))).toBe(true); // authored content untouched
   });
 
   it("publishes through a symlinked --out to its real target, preserving the symlink", async () => {

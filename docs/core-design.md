@@ -239,12 +239,13 @@ The artifact = the cleaned source **tree** (AGENTS.md, skills/, authored context
 `buildPiArtifact(srcDir, outDir, { model?, globalSkills? })` compiles a workspace into the self-contained artifact (§10.2). Build-time (`node:fs` is fine here):
 
 1. Load + validate config; resolve the model and validate it against the registry (fail visibly on a missing/unknown model — before anything is written, never frozen into the manifest to fail later at start).
-2. Materialize the artifact (`bundleAgentDefinition`): hand-rolled recursive copy of the cleaned source tree into `outDir` (cp is not used — it refuses dest-inside-src, which is the default `.fastagent/build`), then materialize opted-in global/extra skills (which live outside the source) into `outDir/skills/`.
-3. Write `outDir/fastagent.json` (data only): `{ fastagentVersion, engine, builtAt, model, http }`. The skill list is **not** duplicated — `skills/` is the single source of truth.
+2. Materialize the artifact (`bundleAgentDefinition`, two independent productions — see §10.1): the authored-context tree (minus `skills/`) copied via the ignore-aware walk, and `skills/` produced from the resolved skill model. Written into a fresh STAGING dir, never the target.
+3. Write `<staging>/fastagent.json` (data only): `{ fastagentVersion, engine, builtAt, model, http }`. The skill list is **not** duplicated — `skills/` is the single source of truth.
+4. **Publish** atomically: move any existing target aside, rename staging into place, drop the old (a failure restores the old; the target is never deleted before a complete artifact exists).
 
-Default out: `.fastagent/build` (self-gitignored); `--out` overrides. `--global-skills` materializes the machine's globals into the artifact (never into the source). Build is **non-destructive to the source** — it only writes/replaces `outDir`.
+Default out: `.fastagent/build` (self-gitignored); `--out` overrides. `--global-skills` materializes the machine's globals into the artifact (never into the source). Build is **non-destructive to the source**.
 
-Data-loss guards (the whole point, given the destructive rebuild `rm -rf outDir`): reject `outDir` realpath-equal to `srcDir` (aliasing, incl. symlinks) and reject `outDir` that contains `srcDir` (an ancestor — `rm -rf` would delete the source). Deterministic rebuild: a file dropped from the source does not survive (outDir is replaced).
+Structural output guards (no content/preciousness judgment — only "don't destroy the input / don't ship a broken agent"): reject `outDir` realpath-equal to `srcDir` or containing it (you can't publish over the input you read); reject an existing **file** target (output is a directory); require `--force` for an **out-of-tree** target (a typo there deletes unrelated data, cf. Vite's `emptyOutDir`); and require an **in-tree** target to be under `.fastagent/` (the designated, hard-excluded build-state area) — any other in-tree path is authored content the publish would delete and the artifact would lack. Deterministic rebuild: a file dropped from the source does not survive (the target is replaced wholesale).
 
 ### 10.4 `fastagent start`
 
