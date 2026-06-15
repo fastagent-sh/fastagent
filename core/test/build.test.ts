@@ -128,60 +128,26 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "..secret.env"))).toBe(false); // matched by *.env, not skipped as "outside"
   });
 
-  it("follows a symlinked workspace to the real repo root for ancestor .gitignore", async () => {
-    const repo = await mkdtemp(join(tmpdir(), "fa-realrepo-"));
-    await mkdir(join(repo, ".git"), { recursive: true });
-    await writeFile(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
-    await writeFile(join(repo, ".gitignore"), "packages/agent/dist/\n*.env\n");
-    const pkg = join(repo, "packages", "agent");
-    await mkdir(join(pkg, "dist"), { recursive: true });
-    await writeFile(join(pkg, "AGENTS.md"), "# Bot\n");
-    await writeFile(join(pkg, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
-    await writeFile(join(pkg, "dist", "o.js"), "built\n");
-    await writeFile(join(pkg, "a.env"), "SEC\n");
+  it("builds through a symlinked workspace path (the root is realpath'd)", async () => {
+    const real = await makeWorkspace();
     const link = join(await mkdtemp(join(tmpdir(), "fa-wslink-")), "agent");
-    await symlink(pkg, link); // build THROUGH a symlink to the package
+    await symlink(real, link); // build THROUGH a symlink to the workspace
     const out = await freshOut();
     await buildOk(link, out);
-    expect(await exists(join(out, "dist"))).toBe(false); // real-repo-root rule applied
-    expect(await exists(join(out, "a.env"))).toBe(false);
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+    expect(await exists(join(out, "docs", "schema.md"))).toBe(true);
   });
 
-  it("fails visibly when an ancestor .gitignore excludes the build root itself (no broken artifact)", async () => {
-    // Repo ignores the WHOLE package; a nested `!AGENTS.md` would otherwise re-include only
-    // fragments (git never re-includes below an excluded parent), yielding a broken artifact.
-    const repo = await mkdtemp(join(tmpdir(), "fa-ignoredroot-"));
-    await mkdir(join(repo, ".git"), { recursive: true });
-    await writeFile(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
-    await writeFile(join(repo, ".gitignore"), "packages/agent/\n");
-    const pkg = join(repo, "packages", "agent");
-    await mkdir(pkg, { recursive: true });
-    await writeFile(join(pkg, "AGENTS.md"), "# Bot\n");
-    await writeFile(join(pkg, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
-    await writeFile(join(pkg, ".gitignore"), "!AGENTS.md\n");
-    await expect(buildOk(pkg, await freshOut())).rejects.toThrow(/build root .* is excluded by an ancestor/);
-  });
-
-  it("honors an ancestor .gitignore up to the repo root (monorepo package build)", async () => {
-    const repo = await mkdtemp(join(tmpdir(), "fa-monorepo-"));
-    await mkdir(join(repo, ".git"), { recursive: true }); // marks the repo root boundary
-    await writeFile(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
-    await writeFile(join(repo, ".gitignore"), "packages/agent/dist/\n*.env\n"); // ROOT rules
-    const pkg = join(repo, "packages", "agent");
-    await mkdir(join(pkg, "dist"), { recursive: true });
-    await mkdir(join(pkg, "src"), { recursive: true });
-    await writeFile(join(pkg, "AGENTS.md"), "# Bot\n");
-    await writeFile(join(pkg, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
-    await writeFile(join(pkg, "dist", "out.js"), "built\n");
-    await writeFile(join(pkg, "secret.env"), "SECRET\n");
-    await writeFile(join(pkg, "src", "a.ts"), "code\n");
+  it("honors only the ROOT .gitignore/.fastagentignore (flat) — not nested or ancestor rules", async () => {
+    const ws = await makeWorkspace({ gitignore: "*.env\n" }); // ROOT rule
+    await writeFile(join(ws, "secret.env"), "S\n");
+    await mkdir(join(ws, "sub"), { recursive: true });
+    await writeFile(join(ws, "sub", "keep.log"), "k\n");
+    await writeFile(join(ws, "sub", ".gitignore"), "keep.log\n"); // NESTED rule — not honored
     const out = await freshOut();
-    await buildOk(pkg, out);
-    expect(await exists(join(out, "dist"))).toBe(false); // root rule packages/agent/dist/ applied
-    expect(await exists(join(out, "secret.env"))).toBe(false); // root rule *.env applied
-    expect(await exists(join(out, "src", "a.ts"))).toBe(true);
-    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
+    await buildOk(ws, out);
+    expect(await exists(join(out, "secret.env"))).toBe(false); // root rule applied (any depth)
+    expect(await exists(join(out, "sub", "keep.log"))).toBe(true); // nested .gitignore NOT honored
   });
 
   it("does not read ancestor .gitignore outside a repo (reproducible, install-independent)", async () => {
@@ -196,17 +162,13 @@ describe("build: buildPiArtifact", () => {
     expect(await exists(join(out, "AGENTS.md"))).toBe(true); // ancestor .gitignore not honored (no repo root)
   });
 
-  it("applies hard excludes to a symlink's real target, directly OR by pointing inside one", async () => {
+  it("skips symlinks even when they point at hard-excluded trees (vendor -> node_modules)", async () => {
     const ws = await makeWorkspace(); // already has node_modules/ and a .git dir
-    await mkdir(join(ws, "node_modules", "pkg"), { recursive: true });
-    await writeFile(join(ws, "node_modules", "pkg", "i.js"), "dep\n");
-    await symlink("node_modules", join(ws, "vendor")); // -> the hard-excluded tree directly
-    await symlink("node_modules/pkg", join(ws, "pkg")); // -> INSIDE the hard-excluded tree
+    await symlink("node_modules", join(ws, "vendor")); // a clean name aliasing an excluded tree
     await symlink(".git", join(ws, "gitlink"));
     const out = await freshOut();
     await buildOk(ws, out);
-    expect(await exists(join(out, "vendor"))).toBe(false);
-    expect(await exists(join(out, "pkg"))).toBe(false); // node_modules/pkg not smuggled in either
+    expect(await exists(join(out, "vendor"))).toBe(false); // symlink skipped (not followed)
     expect(await exists(join(out, "gitlink"))).toBe(false);
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
@@ -288,28 +250,18 @@ describe("build: buildPiArtifact", () => {
     }
   });
 
-  it("dereferences a symlinked directory into the artifact (no silent drop)", async () => {
+  it("skips symlink entries (not followed, not shipped) so the artifact is self-contained", async () => {
     const shared = await mkdtemp(join(tmpdir(), "fa-shared-"));
-    await writeFile(join(shared, "schema.md"), "# shared\nusers(id)\n");
+    await writeFile(join(shared, "schema.md"), "# shared\n");
     const ws = await makeWorkspace();
     await rm(join(ws, "docs"), { recursive: true });
-    await symlink(shared, join(ws, "docs")); // docs/ is a symlink to a directory
+    await symlink(shared, join(ws, "docs")); // a symlinked directory
+    await symlink(join(shared, "schema.md"), join(ws, "link.md")); // a symlinked file
     const out = await freshOut();
     await buildOk(ws, out);
-    // the symlinked dir's contents must be dereferenced into the artifact
-    expect(await readFile(join(out, "docs", "schema.md"), "utf8")).toContain("users(id)");
-  });
-
-  it("preserves two sibling symlinks to the same directory (cycle guard is per-descent)", async () => {
-    const shared = await mkdtemp(join(tmpdir(), "fa-shared-"));
-    await writeFile(join(shared, "file.md"), "shared content\n");
-    const ws = await makeWorkspace();
-    await symlink(shared, join(ws, "a"));
-    await symlink(shared, join(ws, "b")); // distinct destination, same target — not a cycle
-    const out = await freshOut();
-    await buildOk(ws, out);
-    expect(await exists(join(out, "a", "file.md"))).toBe(true);
-    expect(await exists(join(out, "b", "file.md"))).toBe(true); // the second alias must NOT be dropped
+    expect(await exists(join(out, "docs"))).toBe(false); // symlinked dir not followed
+    expect(await exists(join(out, "link.md"))).toBe(false); // file symlink not shipped
+    expect(await exists(join(out, "AGENTS.md"))).toBe(true);
   });
 
   it("does not loop on a symlink cycle", async () => {
@@ -515,27 +467,13 @@ describe("build: buildPiArtifact", () => {
     expect(JSON.parse(await readFile(join(out, "fastagent.json"), "utf8")).engine).toBe("pi"); // the manifest
   });
 
-  it(".fastagentignore is authoritative: a nested .gitignore !re-include cannot override it", async () => {
-    const ws = await makeWorkspace();
-    await writeFile(join(ws, ".fastagentignore"), "*.env\n"); // build-specific, authoritative
-    await mkdir(join(ws, "vendor"), { recursive: true });
-    await writeFile(join(ws, "vendor", "secret.env"), "KEY=1\n");
-    await writeFile(join(ws, "vendor", "notes.md"), "doc\n");
-    await writeFile(join(ws, "vendor", ".gitignore"), "!secret.env\n"); // must NOT win over .fastagentignore
+  it(".fastagentignore is authoritative over .gitignore at the root (applied last)", async () => {
+    const ws = await makeWorkspace({ gitignore: "*.env\n" }); // git excludes all .env
+    await writeFile(join(ws, "wanted.env"), "W\n");
+    await writeFile(join(ws, ".fastagentignore"), "!wanted.env\n"); // fa re-includes — wins (last)
     const out = await freshOut();
     await buildOk(ws, out);
-    expect(await exists(join(out, "vendor", "secret.env"))).toBe(false); // .fastagentignore wins
-    expect(await exists(join(out, "vendor", "notes.md"))).toBe(true);
-  });
-
-  it("honors a deeper .gitignore re-inclusion over a broad ancestor rule (git last-match-wins)", async () => {
-    const ws = await makeWorkspace({ gitignore: "docs/*.md\n" }); // broadly ignore docs/*.md
-    await writeFile(join(ws, "docs", "gen.md"), "generated\n");
-    await writeFile(join(ws, "docs", ".gitignore"), "!schema.md\n"); // re-include the authored one
-    const out = await freshOut();
-    await buildOk(ws, out);
-    expect(await exists(join(out, "docs", "schema.md"))).toBe(true); // re-included → kept
-    expect(await exists(join(out, "docs", "gen.md"))).toBe(false); // still ignored
+    expect(await exists(join(out, "wanted.env"))).toBe(true); // .fastagentignore overrides .gitignore
   });
 
   it("rejects a reserved root fastagent.json BEFORE bundling, so a rebuild keeps the prior artifact", async () => {
@@ -549,21 +487,6 @@ describe("build: buildPiArtifact", () => {
     await expect(buildOk(ws, out)).rejects.toThrow(/reserved for the build manifest/);
     // the destructive bundle never ran: the prior artifact's manifest survives, out not poisoned
     expect(await readEngine()).toBe("pi");
-  });
-
-  it(".fastagentignore patterns stay artifact-relative inside a symlinked-dir subtree", async () => {
-    // A workspace .fastagentignore rule `docs/private.md` must hold even when docs/ is a
-    // symlink whose subtree restarts the git base; otherwise the path anchor mis-roots.
-    const shared = await mkdtemp(join(tmpdir(), "fa-shared-"));
-    await writeFile(join(shared, "pub.md"), "public\n");
-    await writeFile(join(shared, "private.md"), "SECRET\n");
-    const ws = await makeWorkspace();
-    await symlink(shared, join(ws, "docs2"));
-    await writeFile(join(ws, ".fastagentignore"), "docs2/private.md\n");
-    const out = await freshOut();
-    await buildOk(ws, out);
-    expect(await exists(join(out, "docs2", "pub.md"))).toBe(true);
-    expect(await exists(join(out, "docs2", "private.md"))).toBe(false); // anchored rule honored
   });
 
   it("builds an agent whose local skill dir is a symlink (validation uses the real ship-set)", async () => {
@@ -587,20 +510,6 @@ describe("build: buildPiArtifact", () => {
     await buildOk(ws, out);
     expect(await exists(join(out, "ignored.txt"))).toBe(false); // .gitignore honored, no git
     expect(await exists(join(out, "AGENTS.md"))).toBe(true);
-  });
-
-  it("honors a nested .gitignore (e.g. a vendored/submodule dir) per its own directory", async () => {
-    // A submodule is just a directory with its own nested .gitignore; no special-casing.
-    const ws = await makeWorkspace();
-    const sub = join(ws, "vendor");
-    await mkdir(sub, { recursive: true });
-    await writeFile(join(sub, "doc.md"), "shipped reference\n");
-    await writeFile(join(sub, "secret.env"), "LEAK=no\n");
-    await writeFile(join(sub, ".gitignore"), "secret.env\n"); // scoped to vendor/
-    const out = await freshOut();
-    await buildOk(ws, out);
-    expect(await exists(join(out, "vendor", "doc.md"))).toBe(true);
-    expect(await exists(join(out, "vendor", "secret.env"))).toBe(false); // nested rule honored
   });
 
   it("builds into the default in-tree out (.fastagent/build) without copying it into itself", async () => {

@@ -24,7 +24,7 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { copyFile, mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import ignore, { type Ignore } from "ignore";
@@ -146,84 +146,31 @@ function isHardExcluded(name: string): boolean {
 }
 
 /**
- * Read a directory's ignore files (`.gitignore` then `.fastagentignore`, combined into one
- * matchers) or `{}` if neither exists. The two are kept SEPARATE (not merged) because
- * `.fastagentignore` is authoritative over `.gitignore` (see scopedIgnored): a nested
- * `.gitignore` re-inclusion must not override a build-specific `.fastagentignore` exclude.
- * We honor `.gitignore` ourselves (via the `ignore` library, a faithful matcher) rather
- * than calling git, so the artifact is reproducible (independent of the build machine's
- * git install / global excludes / index) — the whole point of a portable bundle.
+ * Load the build root's exclude rules into ONE flat matcher: `.gitignore` then
+ * `.fastagentignore` (fa last → authoritative on conflicts), applied artifact-relative to
+ * the whole tree. Deliberately FLAT — we read only the ROOT files, not nested .gitignore
+ * down the tree and not ancestor .gitignore up a monorepo. Reproducing git's full nested +
+ * ancestor + repo-boundary ignore engine by hand is an open-ended edge factory (it was);
+ * the contract is simply "hard excludes + your root .gitignore/.fastagentignore". For
+ * finer or monorepo-package control, put rules in the root `.fastagentignore`. The single
+ * `ignore` library matcher handles git's PER-FILE pattern syntax (negation, anchoring,
+ * `**`, dir-slash) faithfully — that part is not hand-rolled.
  *
  * An existing-but-unreadable file fails visibly — silently building with no rules could
  * ship files the author meant to exclude.
  */
-async function loadDirIgnore(dir: string): Promise<{ git?: Ignore; fa?: Ignore }> {
-  const read = async (name: string): Promise<Ignore | undefined> => {
+async function loadRootIgnore(dir: string): Promise<Ignore | undefined> {
+  let rules = "";
+  for (const name of [".gitignore", ".fastagentignore"]) {
     try {
-      return ignore().add(await readFile(join(dir, name), "utf8"));
+      rules += `\n${await readFile(join(dir, name), "utf8")}`;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw new Error(`cannot read ${join(dir, name)}: ${(error as Error).message}`);
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new Error(`cannot read ${join(dir, name)}: ${(error as Error).message}`);
+      }
     }
-  };
-  return { git: await read(".gitignore"), fa: await read(".fastagentignore") };
-}
-
-/** A directory's ignore matchers, keyed by the matcher's ABSOLUTE directory, so each
- *  pattern is tested relative to THAT directory — which lets ancestor ignore files (above
- *  the build root, e.g. a monorepo-root .gitignore) anchor correctly too. */
-interface ScopedIgnore {
-  baseAbs: string;
-  git?: Ignore;
-  fa?: Ignore;
-}
-
-/** The verdict of one kind of ignore file across the ancestor stack: composed root → deep
- *  so a DEEPER file overrides a shallower one (git's last-match-wins; `ignore.test()` tells
- *  an explicit un-ignore from a non-match). undefined = no rule had an opinion. */
-function stackVerdict(stack: ScopedIgnore[], pick: (s: ScopedIgnore) => Ignore | undefined, entryAbs: string, isDir: boolean): boolean | undefined {
-  let v: boolean | undefined;
-  for (const s of stack) {
-    const ig = pick(s);
-    if (!ig) continue;
-    const sub = toPosix(relative(s.baseAbs, entryAbs)); // entry path relative to the matcher's dir
-    // Outside the matcher iff empty or an UP traversal (".." / "../…"). A separator-aware
-    // check, so a real filename like "..secret.env" (a forward path) is still matched.
-    if (sub === "" || sub === ".." || sub.startsWith("../")) continue;
-    const verdict = ig.test(isDir ? `${sub}/` : sub); // dir patterns match only with a trailing slash
-    if (verdict.ignored) v = true;
-    else if (verdict.unignored) v = false; // explicit negation re-includes
   }
-  return v;
-}
-
-/**
- * Whether an entry is excluded by the ignore files from the root down to it. `.gitignore`
- * and `.fastagentignore` are evaluated as SEPARATE hierarchies (each with full nested
- * last-match-wins semantics), then combined with `.fastagentignore` AUTHORITATIVE: if it
- * has a verdict (exclude, or an explicit `!` re-include) that wins; only when it is silent
- * does `.gitignore` decide. So a nested `.gitignore` `!` can never override a
- * `.fastagentignore` exclude — `.fastagentignore` is the git-independent guarantee.
- * (A file under an already-excluded DIRECTORY is never reached — the walk does not descend
- * into ignored dirs — so git's "can't re-include below an excluded dir" holds for free.)
- */
-function scopedIgnored(stack: ScopedIgnore[], entryAbs: string, isDir: boolean): boolean {
-  const fa = stackVerdict(stack, (s) => s.fa, entryAbs, isDir);
-  if (fa !== undefined) return fa;
-  return stackVerdict(stack, (s) => s.git, entryAbs, isDir) ?? false;
-}
-
-/** The nearest ancestor of `start` (inclusive) that contains a `.git` entry — the repo
- *  root — or undefined when none up to the filesystem root. A bounded stat walk (no git),
- *  used only to limit how far UP ancestor ignore files are honored. */
-async function findRepoRoot(start: string): Promise<string | undefined> {
-  let d = resolve(start);
-  for (;;) {
-    if (await stat(join(d, ".git")).then(() => true, () => false)) return d;
-    const parent = dirname(d);
-    if (parent === d) return undefined; // reached the filesystem root, no repo
-    d = parent;
-  }
+  return rules.trim() === "" ? undefined : ignore().add(rules);
 }
 
 /** Normalize a relative path to POSIX separators for ignore lookups (Windows). */
@@ -239,109 +186,49 @@ interface ShipPlan {
 }
 
 /**
- * Compute the SINGLE source of truth for what a source tree contributes to an artifact:
- * one filesystem walk that applies every exclusion and returns the exact ship-set. Both
- * the "definition files must ship" validation and the copy use this one plan, so they can
- * never disagree (which is why a parallel ship predicate is gone).
+ * Compute exactly what a source tree contributes to the artifact: one filesystem walk
+ * returning the regular files (+ dirs to create) to copy.
  *
- * Exclusions: the hard set (deps/vcs/state, by name at any depth) always; and the nested
- * `.gitignore` + `.fastagentignore` rules read along the way (`ScopedIgnore` stack), each
- * pattern tested relative to its own directory. We do NOT call git — honoring `.gitignore`
- * ourselves makes the artifact reproducible (independent of the build machine's git).
- * `skipReal` (a realpath) is excluded so an in-tree out dir is not walked.
+ * Exclusions, deliberately SIMPLE and bounded (not a re-implementation of git's ignore
+ * engine — that hand-roll was an open-ended edge factory):
+ *   - the hard set (node_modules/.git/.fastagent, by name at any depth) always;
+ *   - the build ROOT's flat `.gitignore` + `.fastagentignore` (one matcher, fa
+ *     authoritative), applied artifact-relative to every entry. NESTED .gitignore (down
+ *     the tree) and ANCESTOR .gitignore (up a monorepo) are NOT honored — put such rules
+ *     in the root `.fastagentignore`.
  *
- * Symlinks are dereferenced (follow `stat`): a link to a directory is recursed into (its
- * own nested ignore files apply uniformly), a link to a file is copied, a dangling link is
- * skipped. A submodule needs no special case — it is just a directory with its own nested
- * `.gitignore`. Cycles (e.g. `link -> .`) are broken by tracking the recursion STACK of
- * target realpaths.
+ * Symlinks are NOT followed: a symlink entry is skipped entirely (the artifact is
+ * self-contained with no links to dereference, and no "link aliases an excluded tree" or
+ * cycle edges). `skip` (realpaths) excludes the build's own dirs (staging / target). The
+ * ROOT is realpath'd, so building through a symlinked path still resolves the real tree;
+ * only symlinks INSIDE the tree are skipped.
  */
-async function planShipSet(srcDir: string, opts: { skip?: string[]; seedAncestors?: boolean } = {}): Promise<ShipPlan> {
+async function planShipSet(srcDir: string, opts: { skip?: string[] } = {}): Promise<ShipPlan> {
   const skip = opts.skip ?? [];
-  const seedAncestors = opts.seedAncestors ?? true;
-  // realpath the root so repo-root discovery + ancestor-ignore anchoring follow the REAL
-  // path: a workspace reached through a symlink still finds the actual monorepo's .git and
-  // its parent .gitignore files. Artifact paths are relative, so forward names are unchanged.
   const topBase = await realpath(srcDir).catch(() => resolve(srcDir));
   const files: { abs: string; rel: string }[] = [];
   const dirs: string[] = [];
-  const ignoreStack: ScopedIgnore[] = []; // ancestor dirs' ignore matchers, root → current
+  const ig = await loadRootIgnore(topBase); // the root's flat ignore matcher, artifact-relative
 
-  async function walk(absDir: string, stack: Set<string>): Promise<void> {
+  async function walk(absDir: string): Promise<void> {
     const realDir = await realpath(absDir).catch(() => resolve(absDir));
-    // Skip the build's own dirs by REALPATH (staging + the final publish target), so they
-    // are recognized through symlink aliases and never walked into the artifact.
+    // Skip the build's own dirs (staging + the final publish target) by realpath.
     if (skip.some((s) => realDir === s || realDir.startsWith(s + sep))) return;
-    if (stack.has(realDir)) return; // cycle: realDir is its own ancestor on this descent
-    stack.add(realDir);
     const relDir = toPosix(relative(topBase, absDir));
     if (relDir !== "") dirs.push(relDir); // record dirs so empty (but included) ones survive
-    const { git, fa } = await loadDirIgnore(absDir); // this dir's ignore files govern its subtree
-    const pushed = git !== undefined || fa !== undefined;
-    if (pushed) ignoreStack.push({ baseAbs: absDir, git, fa });
     for (const entry of await readdir(absDir, { withFileTypes: true })) {
-      const abs = join(absDir, entry.name);
       if (isHardExcluded(entry.name)) continue;
-      let isDir = entry.isDirectory();
-      let isFile = entry.isFile();
-      const isLink = entry.isSymbolicLink();
-      if (isLink) {
-        const target = await stat(abs).catch(() => undefined); // follow the link
-        if (!target) continue; // dangling → skip rather than fail the build
-        // A symlink can alias a hard-excluded tree under a clean name — either directly
-        // (vendor -> node_modules) or by pointing INSIDE one (vendor -> node_modules/pkg,
-        // state -> .fastagent/cache). Apply the name-based hard-exclude to every segment of
-        // the real target's path relative to topBase, so neither form smuggles in the tree
-        // the hard-exclude set forbids. (Relative, not absolute: a workspace that itself
-        // lives under a node_modules ancestor is not falsely excluded — that segment is above
-        // topBase, not in the relative path.)
-        const realTarget = await realpath(abs).catch(() => abs);
-        if (toPosix(relative(topBase, realTarget)).split("/").some(isHardExcluded)) continue;
-        isDir = target.isDirectory();
-        isFile = target.isFile();
-      }
-      // Only directories and regular files belong in an artifact. Skip sockets, FIFOs,
-      // and devices — copyFile would throw on them and fail the whole build.
-      if (!isDir && !isFile) continue;
+      if (entry.isSymbolicLink()) continue; // not followed, not shipped
+      const isDir = entry.isDirectory();
+      if (!isDir && !entry.isFile()) continue; // skip sockets/FIFOs/devices
+      const abs = join(absDir, entry.name);
       const rel = toPosix(relative(topBase, abs));
-      if (scopedIgnored(ignoreStack, abs, isDir)) continue;
-      if (isDir) await walk(abs, stack);
-      else files.push({ abs, rel }); // regular file (follows a symlink-to-file)
-    }
-    if (pushed) ignoreStack.pop();
-    stack.delete(realDir); // leave the descent: siblings sharing this target are not a cycle
-  }
-
-  // Seed ANCESTOR ignore files up to the repo root, so a monorepo-root .gitignore applies to
-  // a package build (`fastagent build packages/agent`). Bounded at the repo root (.git):
-  // above it is not part of the project, and stopping there keeps the artifact reproducible.
-  // These stay on the stack for the whole walk (root → deep, so deeper files still override).
-  // Skipped for skill materialization (seedAncestors:false): a skill is a self-contained
-  // unit governed by its OWN nested ignores, not the consuming workspace's (Fork A).
-  const repoRoot = seedAncestors ? await findRepoRoot(topBase) : undefined;
-  if (repoRoot !== undefined && repoRoot !== topBase) {
-    const chain: string[] = [];
-    for (let d = dirname(topBase); ; d = dirname(d)) {
-      chain.push(d);
-      if (d === repoRoot || dirname(d) === d) break;
-    }
-    for (const dir of chain.reverse()) {
-      const { git, fa } = await loadDirIgnore(dir);
-      if (git !== undefined || fa !== undefined) ignoreStack.push({ baseAbs: dir, git, fa });
+      if (ig?.ignores(isDir ? `${rel}/` : rel)) continue; // dir patterns match with a trailing slash
+      if (isDir) await walk(abs);
+      else files.push({ abs, rel });
     }
   }
-
-  // If an ancestor rule excludes the BUILD ROOT itself (e.g. the repo `.gitignore`s the whole
-  // `packages/agent/`), git would never descend or re-include below it. Walking it anyway
-  // would silently ship only the fragments a nested `!` rescues — a broken artifact. Fail
-  // visibly instead. (A normal monorepo rule excludes a SUBDIR like dist/, not the root.)
-  if (scopedIgnored(ignoreStack, topBase, true)) {
-    throw new Error(
-      `build root "${srcDir}" is excluded by an ancestor .gitignore (the repo ignores this whole ` +
-        `directory); un-ignore it, or build a tracked directory.`,
-    );
-  }
-  await walk(topBase, new Set());
+  await walk(topBase);
   return { files, dirs };
 }
 
@@ -411,9 +298,9 @@ export async function bundleAgentDefinition(
   await mkdir(join(outDir, "skills"), { recursive: true });
   for (const skill of definition.skills) {
     if (basename(skill.filePath) === "SKILL.md") {
-      // seedAncestors:false — a skill ships its own dir minus its OWN nested ignores; the
-      // consuming workspace's ignores govern authored context, not skills (Fork A).
-      const skillPlan = await planShipSet(dirname(skill.filePath), { seedAncestors: false });
+      // A skill ships its own dir minus its OWN root .gitignore/.fastagentignore (Fork A);
+      // planShipSet roots at the skill dir, so its flat ignore governs it (not the workspace's).
+      const skillPlan = await planShipSet(dirname(skill.filePath));
       if (!skillPlan.files.some((f) => f.rel === "SKILL.md")) {
         throw new Error(
           `skill "${skill.name}" (${skill.filePath}) has its SKILL.md excluded by an ignore rule; ` +
