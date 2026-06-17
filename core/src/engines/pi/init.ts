@@ -137,6 +137,11 @@ export async function scaffoldWorkspace(dir: string): Promise<ScaffoldResult> {
   await mkdir(dir, { recursive: true });
   const created: string[] = [];
   const skipped: string[] = [];
+  const warnings: string[] = [];
+  // ONE rollback scope covering ALL post-write work (the write loop AND the advisory read):
+  // any failure after the first write removes files written THIS run (guard + wx guarantee they
+  // are ours), so scaffoldWorkspace is atomic — success or the dir left as it was (retryable).
+  // Empty dirs we may have created are harmless and left as-is.
   try {
     for (const file of FILES) {
       const abs = join(dir, file.rel);
@@ -151,31 +156,29 @@ export async function scaffoldWorkspace(dir: string): Promise<ScaffoldResult> {
         else throw error;
       }
     }
+
+    // Security wiring is the .gitignore's whole job here: `fastagent build` excludes secrets ONLY
+    // via .gitignore/.fastagentignore (it does not special-case .env — core-design §10.1). If we
+    // KEPT a pre-existing .gitignore that does not ignore .env, the scaffold's secret line silently
+    // did not take effect while next-steps still tells the user to create .env → build could ship it.
+    // Warn with the exact fix; do NOT silently mutate the user's file (non-destructive contract +
+    // §10.1 "security is the user's responsibility; fastagent informs").
+    //
+    // Use the EXACT matcher build uses (loadRootIgnore: .gitignore + .fastagentignore, fa last,
+    // case-sensitive) so the advisory matches what the artifact will actually ship — a hand-rolled
+    // check diverges (misses .fastagentignore `!.env`, or a case-mismatched `.ENV`) and gives false
+    // assurance, the dangerous direction. This read can throw on an existing-but-unreadable ignore
+    // file (loadRootIgnore fails visibly); keeping it INSIDE the rollback scope means such a throw
+    // still leaves no half-scaffold.
+    const rootIgnore = await loadRootIgnore(dir);
+    if (!rootIgnore?.ignores(".env")) {
+      warnings.push(
+        `your .gitignore/.fastagentignore does not exclude ".env" — add it, or \`fastagent build\` may ship secrets into the artifact`,
+      );
+    }
   } catch (error) {
-    // Roll back files written THIS run (guard + wx guarantee they are ours, not pre-existing)
-    // so an unexpected mid-write failure never leaves a half-scaffold that blocks retry. Empty
-    // dirs we may have created are harmless and left as-is.
     for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
     throw error;
-  }
-
-  // Security wiring is the .gitignore's whole job here: `fastagent build` excludes secrets ONLY
-  // via .gitignore/.fastagentignore (it does not special-case .env — core-design §10.1). If we
-  // KEPT a pre-existing .gitignore that does not ignore .env, the scaffold's secret line silently
-  // did not take effect while next-steps still tells the user to create .env → build could ship it.
-  // Warn with the exact fix; do NOT silently mutate the user's file (non-destructive contract +
-  // §10.1 "security is the user's responsibility; fastagent informs").
-  //
-  // Use the EXACT matcher build uses (loadRootIgnore: .gitignore + .fastagentignore, fa last,
-  // case-sensitive) so the advisory matches what the artifact will actually ship — a hand-rolled
-  // check diverges (misses .fastagentignore `!.env`, or a case-mismatched `.ENV`) and gives false
-  // assurance, the dangerous direction.
-  const warnings: string[] = [];
-  const rootIgnore = await loadRootIgnore(dir);
-  if (!rootIgnore?.ignores(".env")) {
-    warnings.push(
-      `your .gitignore/.fastagentignore does not exclude ".env" — add it, or \`fastagent build\` may ship secrets into the artifact`,
-    );
   }
   return { dir, created, skipped, intoNonEmpty, warnings };
 }

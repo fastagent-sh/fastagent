@@ -88,6 +88,11 @@ async function runInit(): Promise<void> {
   }
   for (const w of warnings) console.error(`[fastagent] warn: ${w}`);
   console.error(`  next steps:`);
+  // The .env / config / `fastagent dev` steps all act on the scaffolded dir. When init targeted a
+  // non-cwd dir (e.g. `fastagent init my-agent`, the recommended clean-start flow), lead with a
+  // `cd` so every step — including bare `fastagent dev` (which defaults its dir to .) — is correct.
+  const rel = relative(process.cwd(), dir);
+  if (rel !== "") console.error(`    cd ${rel}`);
   console.error(`    1. credentials — run \`pi login\`, or add a key to .env (e.g. OPENAI_API_KEY=...)`);
   console.error(`    2. optional   — edit fastagent.config.mjs to choose your model`);
   console.error(`    3. fastagent dev   # serve locally and iterate`);

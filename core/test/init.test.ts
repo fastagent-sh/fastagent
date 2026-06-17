@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createPiAgentFromWorkspace, loadAgentDefinition, scaffoldWorkspace } from "../src/index.ts";
 
 const freshDir = () => mkdtemp(join(tmpdir(), "fa-init-"));
@@ -10,6 +12,17 @@ async function exists(p: string): Promise<boolean> {
     () => true,
     () => false,
   );
+}
+
+const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+/** Run `fastagent <args>` from `cwd` to completion; return stderr (the [fastagent] report stream). */
+function cliInit(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args], { cwd });
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += String(d)));
+    child.on("close", () => resolve(stderr));
+  });
 }
 
 describe("init: scaffoldWorkspace", () => {
@@ -56,6 +69,15 @@ describe("init: scaffoldWorkspace", () => {
     expect(await exists(join(dir, "AGENTS.md"))).toBe(false);
   });
 
+  it("rolls back the scaffold when the .env advisory read throws (unreadable ignore file), keeping retry clean", async () => {
+    const dir = await freshDir();
+    await mkdir(join(dir, ".fastagentignore")); // a dir where a file is expected → loadRootIgnore throws
+    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/cannot read .*\.fastagentignore/);
+    // the advisory read sits inside the rollback scope → the scaffolded AGENTS.md was removed,
+    // so a retry is not blocked by the overwrite guard
+    expect(await exists(join(dir, "AGENTS.md"))).toBe(false);
+  });
+
   it("refuses to overwrite an existing workspace (AGENTS.md or a config), leaving it intact", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "AGENTS.md"), "# My real agent\n");
@@ -65,6 +87,17 @@ describe("init: scaffoldWorkspace", () => {
     const dir2 = await freshDir();
     await writeFile(join(dir2, "fastagent.config.ts"), "export default {};\n");
     await expect(scaffoldWorkspace(dir2)).rejects.toThrow(/already has fastagent\.config\.ts/);
+  });
+
+  it("prints a `cd <dir>` step for a named target so the dev/.env/config steps are correct", async () => {
+    const base = await freshDir();
+    // init into a subdir from `base` as cwd: the next steps must lead with `cd my-agent`.
+    const named = await cliInit(["init", "my-agent"], base);
+    expect(named).toMatch(/cd my-agent/);
+    // init into cwd (default .): no cd step, bare `fastagent dev` is already correct.
+    const cwd = await cliInit(["init"], await freshDir());
+    expect(cwd).not.toMatch(/cd /);
+    expect(cwd).toMatch(/fastagent dev/);
   });
 
   it("keeps a pre-existing .gitignore; warns when it does not ignore .env (build could ship secrets)", async () => {
