@@ -73,6 +73,7 @@ export {
 export {
   defineConfig,
   resolveModel,
+  listModels,
   type FastagentConfig,
 } from "./engines/pi/config.ts";
 

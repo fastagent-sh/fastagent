@@ -26,7 +26,7 @@ import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { getModel } from "@earendil-works/pi-ai";
+import { getModel, getModels, getProviders } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./harness.ts";
 
 export interface FastagentConfig {
@@ -122,9 +122,24 @@ export function resolveModel(spec: string): AnyModel {
   const modelId = spec.slice(slash + 1);
   const model = getModel(provider as never, modelId as never) as AnyModel | undefined;
   if (!model) {
-    throw new Error(`unknown model "${spec}" (provider "${provider}" / id "${modelId}" not in registry)`);
+    throw new Error(
+      `unknown model "${spec}" (provider "${provider}" / id "${modelId}" not in registry); run \`fastagent models\` to list available specs`,
+    );
   }
   return model;
+}
+
+/**
+ * All registered "provider/modelId" specs, sorted — the discovery list behind `fastagent models`.
+ * Sourced from pi-ai's registry (getProviders × getModels), so it stays in sync with what
+ * {@link resolveModel} accepts. Pure (no IO); the CLI prints it to stdout.
+ */
+export function listModels(): string[] {
+  const specs: string[] = [];
+  for (const provider of getProviders()) {
+    for (const model of getModels(provider)) specs.push(`${provider}/${model.id}`);
+  }
+  return specs.sort();
 }
 
 /** Model selection precedence: CLI flag > FASTAGENT_MODEL env var > config default. All absent = undefined (caller errors). */

@@ -3,11 +3,28 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { createPiAgentFromWorkspace, resolveModel } from "../src/index.ts";
+import { createPiAgentFromWorkspace, listModels, resolveModel } from "../src/index.ts";
 import { loadConfig, resolveModelSpec } from "../src/engines/pi/config.ts";
 import { resolveTools } from "../src/engines/pi/create.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+
+describe("config: listModels (fastagent models discovery)", () => {
+  it("lists well-formed provider/modelId specs, sorted, that resolveModel accepts", () => {
+    const specs = listModels();
+    expect(specs.length).toBeGreaterThan(0);
+    // every entry is a "provider/modelId" and round-trips through resolveModel (the list is the
+    // discovery surface for exactly what --model / config accepts).
+    for (const spec of specs) {
+      // provider (no slash) + "/" + non-empty modelId (which MAY contain slashes, e.g.
+      // cloudflare-ai-gateway/workers-ai/@cf/...); resolveModel splits on the first slash.
+      expect(spec).toMatch(/^[^/]+\/.+$/);
+      expect(() => resolveModel(spec)).not.toThrow();
+    }
+    expect(specs).toEqual([...specs].sort()); // sorted
+    expect(specs).toContain("openai-codex/gpt-5.5"); // the spec used across the repo
+  });
+});
 
 describe("config: loadConfig", () => {
   it("loads the fastagent.config.ts default export, including tools passthrough", async () => {

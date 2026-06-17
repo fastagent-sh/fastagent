@@ -4,6 +4,7 @@
  * replacing hand-written entry scripts).
  *
  *   fastagent init  [dir] — scaffold a minimal runnable workspace
+ *   fastagent models      — list available "provider/modelId" specs
  *   fastagent dev   [dir] — assemble + serve a local HTTP channel (iteration)
  *   fastagent build [dir] — compile a self-contained artifact (core-design §10.3)
  *   fastagent start [dir] — run a built artifact in production posture (core-design §10.4)
@@ -18,6 +19,7 @@ import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher }
 import { createInvokeHandler } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
+import { listModels } from "./engines/pi/config.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { scaffoldWorkspace } from "./engines/pi/init.ts";
@@ -25,8 +27,9 @@ import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {
   console.error(`usage:
-  fastagent init  [dir]
-  fastagent dev   [dir] [--port N] [--model provider/modelId] [--global-skills]
+  fastagent init   [dir]
+  fastagent models
+  fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
 
@@ -36,6 +39,7 @@ function usage(code: number): never {
                            ~/.agents/skills); default is definition-only (dev == deployed)
   init   scaffold a minimal runnable workspace in dir (default .): AGENTS.md, an example
          skill, fastagent.config.mjs, .gitignore. Refuses to overwrite an existing workspace.
+  models list the available "provider/modelId" specs (use one with --model or in the config).
   build  compile dir into a self-contained, relocatable artifact (default out:
          .fastagent/build): the source tree + materialized skills + manifest, minus
          node_modules/.git and anything .gitignore/.fastagentignore excludes (honored
@@ -73,10 +77,16 @@ const dir = resolve(dirArg ?? ".");
 const globalSkills = values["global-skills"] ?? false;
 
 if (command === "init") await runInit();
+else if (command === "models") runModels();
 else if (command === "dev") await runDev();
 else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
 else usage(1);
+
+/** `fastagent models`: print every registered "provider/modelId" to stdout (pipe-friendly). */
+function runModels(): void {
+  for (const spec of listModels()) console.log(spec);
+}
 
 async function runInit(): Promise<void> {
   const { created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir).catch(failStartup);
