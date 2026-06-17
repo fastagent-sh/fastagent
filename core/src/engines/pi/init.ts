@@ -16,8 +16,17 @@
  *
  * Node composition-root module: writes template files; no engine import beyond the default
  * model string in the config template (folded-M — lift if a second engine ever scaffolds).
+ *
+ * Scope boundary (deliberate — do not keep hardening past it): init is best-effort atomic for
+ * ORDINARY inputs (a missing or normal target dir). It guards the common, recoverable cases —
+ * never overwrites an existing workspace, preflights non-directory/symlink scaffold parents, and
+ * rolls back a partial write. It does NOT defend against every pathological pre-existing state of
+ * the target (TOCTOU races, read-only dirs, FIFOs, mid-write disk-full, …): this is a local
+ * scaffolding command on the developer's own machine, where such a failure is surfaced and
+ * recovered by deleting the dir and retrying. Hardening past this line is an open-ended edge
+ * factory for negligible benefit; stop here.
  */
-import { access, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { loadRootIgnore } from "./definition.ts";
 
@@ -128,9 +137,12 @@ export async function scaffoldWorkspace(dir: string): Promise<ScaffoldResult> {
     }
   }
   for (const rel of parents) {
-    const st = await stat(join(dir, rel)).catch(() => undefined);
+    // lstat, NOT stat: a symlink at a scaffold parent (e.g. `skills` → another dir) must be
+    // REJECTED, not followed — following it would write the scaffold OUTSIDE the requested dir.
+    // This matches build, which also does not follow in-tree symlinks (definition.ts planShipSet).
+    const st = await lstat(join(dir, rel)).catch(() => undefined);
     if (st && !st.isDirectory()) {
-      throw new Error(`cannot scaffold: "${rel}" exists and is not a directory (remove it, or init elsewhere)`);
+      throw new Error(`cannot scaffold: "${rel}" exists and is not a directory (a regular file or symlink) — remove it, or init elsewhere`);
     }
   }
 

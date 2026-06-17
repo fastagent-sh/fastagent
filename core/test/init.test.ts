@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +67,15 @@ describe("init: scaffoldWorkspace", () => {
     await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"skills" exists and is not a directory/);
     // no half-scaffold: AGENTS.md was never written, so a retry is not blocked by the guard
     expect(await exists(join(dir, "AGENTS.md"))).toBe(false);
+  });
+
+  it("rejects a symlinked scaffold parent (does not follow it and write outside the workspace)", async () => {
+    const external = await freshDir(); // a dir OUTSIDE the workspace
+    const dir = await freshDir();
+    await symlink(external, join(dir, "skills")); // `skills` is a symlink → must be rejected, not followed
+    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"skills" exists and is not a directory/);
+    expect(await exists(join(dir, "AGENTS.md"))).toBe(false); // nothing written in the workspace
+    expect(await readdir(external)).toEqual([]); // and nothing escaped into the symlink target
   });
 
   it("rolls back the scaffold when the .env advisory read throws (unreadable ignore file), keeping retry clean", async () => {
