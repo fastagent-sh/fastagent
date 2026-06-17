@@ -30,8 +30,11 @@ core/
 │   ├── cli.ts                   # `fastagent dev` entry point (process side effects live here)
 │   ├── index.ts                 # the public API surface (see README "API stability")
 │   └── engines/pi/              # the pi reference implementation
-│       ├── create.ts            # L1–L3 assembly ladder + engine assets/prompt
+│       ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
 │       ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
+│       ├── dev.ts               # `dev` opener: open a workspace → agent (authoring posture)
+│       ├── build.ts             # `build`: compile a workspace → self-contained artifact
+│       ├── start.ts             # `start` opener: run a built artifact (production posture)
 │       ├── harness.ts           # pi harness wiring (factory)
 │       ├── definition.ts        # AGENTS.md + skills loading and bundling
 │       ├── config.ts            # fastagent.config.ts loading + model/precedence

@@ -17,8 +17,8 @@ import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher }
 import { createInvokeHandler } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
-import { createPiAgentFromWorkspace } from "./engines/pi/create.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
+import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {

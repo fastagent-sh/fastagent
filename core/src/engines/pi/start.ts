@@ -1,12 +1,12 @@
 /**
  * Start: run a built artifact in production posture (core-design §10.4).
  *
- * `start` is the deploy-time sibling of L3 `createPiAgentFromWorkspace` (dev). Both are thin
- * orchestrations over L2 `createPiAgentFromDefinition` — NOT a new ladder rung (the M-assembly
- * ladder is L0–L3; this only injects production K-wiring into L2). The two differ only in
- * where their inputs come from and which K defaults they pick:
+ * `start` is the deploy-time sibling of `createPiAgentFromWorkspace` (dev, dev.ts). Both are thin
+ * command OPENERS over L2 `createPiAgentFromDefinition` — NOT ladder rungs (the reusable ladder is
+ * L0–L2 in create.ts/invoke.ts); they only inject command-posture K-wiring into L2. The two differ
+ * only in where their inputs come from and which K defaults they pick:
  *
- *   | concern  | dev (L3, from workspace)        | start (from artifact, here)            |
+ *   | concern  | dev (from workspace, dev.ts)    | start (from artifact, here)            |
  *   |----------|----------------------------------|-----------------------------------------|
  *   | model    | config.model                     | manifest.model (frozen at build)        |
  *   | tools    | loadConfig → resolveTools        | loadConfig → resolveTools (same)        |

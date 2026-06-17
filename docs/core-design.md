@@ -83,18 +83,25 @@ The real implementation catches setup/runtime errors and converts them to `faile
 
 ## 4. Assembly ladder
 
-The pi implementation exposes four entry points. Each upper rung delegates downward.
+The reusable ladder is three rungs (L0–L2); each upper rung delegates downward.
 
 | Rung | Function | Meaning |
 |---|---|---|
-| L3 `[OPEN]` | `createPiAgentFromWorkspace(dir, { model? })` | load workspace config + definition; used by CLI |
 | L2 `[LOAD]` | `createPiAgentFromDefinition(dir, options)` | load `AGENTS.md` + skills, assemble prompt, then L1 |
 | L1 `[ASSEMBLE]` | `createPiAgent(options)` | assemble from typed parts: model, prompt, tools, sessions, env, auth |
 | L0 `[ADAPT]` | `createPiAgentFromHarness({ harnessFactory })` | adapt pi harness wiring into the Agent Handler stream |
 
 Naming rule: `From<source>` means inputs are derived from that source. No suffix (`createPiAgent`) means typed parts are supplied directly.
 
-L0 lives in `invoke.ts` because its body is the request-time turn mechanism; L1–L3 live in `create.ts` because they are configuration-time assembly.
+L0 lives in `invoke.ts` because its body is the request-time turn mechanism; L1–L2 live in `create.ts` because they are configuration-time assembly.
+
+**Command openers (above L2).** The three CLI commands are thin compositions over L2 that open a source, resolve model/tools, inject command-posture K-wiring, then call L2. They are **not** ladder rungs and live in their own command modules so dev/build/start stay symmetric and `create.ts` stays the pure reusable ladder:
+
+| Command | Function | Module | Posture |
+|---|---|---|---|
+| `dev` | `createPiAgentFromWorkspace(dir, { model?, globalSkills? })` | `dev.ts` | authoring (config.ts, `.fastagent/` sessions) |
+| `start` | `createPiAgentFromArtifact(dir, { model?, sessionsDir? })` | `start.ts` | production (manifest, sessions outside the artifact) |
+| `build` | `buildPiArtifact(src, out, options)` | `build.ts` | compile (produces an artifact, not an Agent) |
 
 ## 5. Config v1
 
@@ -144,7 +151,7 @@ Code tools are different: they are TypeScript/JavaScript modules with dependenci
 Each `invoke` creates a fresh harness bound to the requested session and discards it after the turn. Conversation continuity comes from reopening the session from a `PiSessionStore` (pi-coupled: it returns pi's `Session`):
 
 - L1 default: `inMemorySessionStore()` for embedding/tests.
-- L3 default: `jsonlSessionStore()` under `.fastagent/sessions` for restart-surviving local dev.
+- dev opener default: `jsonlSessionStore()` under `.fastagent/sessions` for restart-surviving local dev.
 
 This gives the reference implementation portable conformance in miniature: two separate instances sharing the same external store can continue the same session.
 
@@ -262,7 +269,7 @@ Run a built agent in **production posture**. Differences from `dev`:
 | model | `--model > FASTAGENT_MODEL > config` | `--model > FASTAGENT_MODEL > manifest.model` |
 | port | `--port > config` | `--port > PORT env > manifest.http.port > 8787` |
 
-`start` reuses **L2** (`createPiAgentFromDefinition`) with production wiring injected — no new ladder rung — which is exactly what L2's injection points exist for. It depends on zero builder-machine state. The entry point is `createPiAgentFromArtifact(artifactDir, options)` (in `engines/pi/start.ts`): a deploy-time orchestration sibling of L3 `createPiAgentFromWorkspace`, not a ladder rung. It reads `fastagent.json` (frozen model/http) + the shipped `fastagent.config.*` (code tools), resolves the model/sessions, then calls L2.
+`start` reuses **L2** (`createPiAgentFromDefinition`) with production wiring injected — no new ladder rung — which is exactly what L2's injection points exist for. It depends on zero builder-machine state. The entry point is `createPiAgentFromArtifact(artifactDir, options)` (in `engines/pi/start.ts`): a deploy-time orchestration sibling of `createPiAgentFromWorkspace` (dev), not a ladder rung. It reads `fastagent.json` (frozen model/http) + the shipped `fastagent.config.*` (code tools), resolves the model/sessions, then calls L2.
 
 **Sessions live OUTSIDE the artifact** (the M/K split): the artifact is immutable and replaced wholesale on redeploy, so conversational state (K) kept inside it would be wiped on every deploy and every container restart. The default is the shell-cwd-relative, visible `./fastagent-sessions/` (precedence `--sessions-dir > FASTAGENT_SESSIONS_DIR > <cwd>/fastagent-sessions`), self-gitignored, **never** the artifact's own `.fastagent/`. The cwd-relative default's only footgun (continuity bound to launch dir) is loud (the resolved absolute path is in the startup report) and absent in containers (fixed `WORKDIR`); a sessions dir resolving inside the artifact emits a visible warning. dev keeps sessions under `<workspace>/.fastagent/` because the dev "artifact" is the mutable workspace itself — a deliberate difference, not an inconsistency.
 

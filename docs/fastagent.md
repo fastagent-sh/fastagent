@@ -53,7 +53,7 @@ You can build products such as multi-channel assistants or A2A task systems on t
 Core v0.1 local development is closed:
 
 - SPEC reference implementation over pi,
-- L0–L3 assembly ladder,
+- L0–L2 assembly ladder + dev/build/start command openers,
 - HTTP/SSE channel,
 - `fastagent dev`,
 - persistent jsonl sessions under `.fastagent/sessions`,

@@ -3,21 +3,18 @@
  * (Division of labor: invoke.ts decides HOW a turn runs, request time; this
  * module decides WHAT parts an agent is assembled from, configuration time.)
  *
- * Organized as the engine-asset parts plus the assembly ladder that consumes them:
+ * Organized as the engine-asset parts plus the reusable assembly ladder that consumes them:
  *
  *   §1 tools   — pi default/read-only toolsets (engine assets)
  *   §2 prompt  — four-segment systemPrompt assembly (pure functions)
- *   §3 ladder  — the single place where a pi agent gets put together.
+ *   §3 ladder  — the reusable rungs that put a pi agent together (L0–L2).
  *
  * Ladder naming rule: `From<source>` marks INDIRECTION — that rung derives its
- * inputs from the named source (a workspace, a definition folder, engine wiring).
- * L1 carries no suffix: its inputs are given directly as typed options — it is the
- * canonical constructor every other rung ultimately calls. Each rung also has a
- * semantic verb — what its fold actually does — used as its label below:
+ * inputs from the named source (a definition folder, engine wiring). L1 carries no
+ * suffix: its inputs are given directly as typed options — it is the canonical
+ * constructor every other rung ultimately calls. Each rung also has a semantic verb —
+ * what its fold actually does — used as its label below:
  *
- *   L3  createPiAgentFromWorkspace(dir, options)        (this file)     [OPEN]
- *       "Open the deployment site" (definition + fastagent.config.ts + .env):
- *       config.ts loads/resolves, then L2. For the CLI and config-driven embedding.
  *   L2  createPiAgentFromDefinition(dir, options)       (this file)     [LOAD]
  *       "Load the portable agent definition": definition.ts loads, §2 assembles,
  *       then L1. For folder-based embedding.
@@ -28,34 +25,43 @@
  *       "Adapt engine wiring to the Agent contract": adds only the concurrency/
  *       stream shell. For tests and fully custom wiring.
  *
+ * Above L2 sit the COMMAND OPENERS — not ladder rungs, but command-posture
+ * compositions that open a source, resolve model/tools, inject K-wiring, then call L2:
+ *   createPiAgentFromWorkspace (dev.ts, authoring posture) and
+ *   createPiAgentFromArtifact (start.ts, production posture). They live in their own
+ *   command modules (alongside build.ts) so dev/build/start stay symmetric and create.ts
+ *   stays the pure REUSABLE ladder. The openers own command policy (config/manifest
+ *   precedence, the .fastagent state dir vs external sessions, --global-skills); the
+ *   ladder owns engine assembly.
+ *
  * Each rung only calls the one below; options narrow as you go up (L2 owns
- * systemPrompt/skills itself — they come from the definition; L3 owns model/tools —
- * they come from the config resolution, so their options deliberately do not
- * accept them).
+ * systemPrompt/skills itself — they come from the definition; the openers own model/tools —
+ * they come from the config/manifest resolution, so L2's options deliberately do not
+ * accept them as the openers' job).
  *
  * Two ladder-wide rules, written down so the per-rung choices stay explainable:
  *
- * 1. L0 is the odd rung out: L1–L3 fold *configuration
+ * 1. L0 is the odd rung out: L1–L2 fold *configuration
  *    inputs* (files → values → closures); L0 adapts *behavior* (pi's two ports →
  *    SPEC stream + concurrency discipline) — strictly an Adapter. It joins the
  *    create… family by NAME because it is a legitimate entry point (discoverability),
  *    but lives in invoke.ts because its body IS the turn mechanism (cohesion).
  *
- * 2. An injection point climbs only as high as the last rung whose persona owns
- *    the decision, then stops:
+ * 2. An injection point climbs only as high as the last persona who owns the
+ *    decision, then stops:
  *      - sessions / lease (deployment backends)  → reach L2 (embedding developer);
- *        L3 picks its own default (jsonl under .fastagent/) without exposing a choice;
+ *        the openers pick their own default (dev: jsonl under .fastagent/; start: jsonl
+ *        outside the artifact) without exposing a choice;
  *      - base / raw skillPaths (definition-assembly) → stop at L2 (L2 owns prompt/skill mounting);
  *      - retryClassifier (engine adaptation)     → stays at L0 (custom-wiring persona);
- *      - L3 exposes only what an operator may say: the model flag, and `globalSkills`
- *        (a semantic authoring-scope toggle — "include the machine's global skills" —
- *        not raw skillPaths; raw paths stay an L2/embedder concern).
- *    KNOWN DEBT: "L3 accepts no K" is a v1 line, not an invariant — sessions/env ARE
- *    deployment choices semantically. When backend #2 lands (DDB / sandbox env),
- *    this boundary must be re-cut: either config grows K keys (L3 inherits them)
- *    or L3 options grow K overrides. Decide from real backends; do not pre-wire.
+ *      - an opener exposes only what an operator may say: the model flag, and (dev)
+ *        `globalSkills` (a semantic authoring-scope toggle, not raw skillPaths; raw
+ *        paths stay an L2/embedder concern).
+ *    KNOWN DEBT: "the openers accept no K" is a v1 line, not an invariant — sessions/env
+ *    ARE deployment choices semantically. When backend #2 lands (DDB / sandbox env),
+ *    this boundary must be re-cut: either config grows K keys (the openers inherit them)
+ *    or opener options grow K overrides. Decide from real backends; do not pre-wire.
  */
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
@@ -63,10 +69,10 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 import type { Agent } from "../../agent.ts";
 import type { AuthResolver } from "./auth.ts";
-import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { type LoadedDefinition, defaultGlobalSkillPaths, ensureStateDirSelfIgnored, loadAgentDefinition } from "./definition.ts";
+import type { FastagentConfig } from "./config.ts";
+import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, piHarnessFactory } from "./harness.ts";
-import { type PiSessionStore, inMemorySessionStore, jsonlSessionStore } from "./sessions.ts";
+import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
 // ── §1 tools: pi's real built-in core coding tools (engine assets) ───────────
@@ -95,8 +101,8 @@ export function piReadOnlyTools(cwd: string): AgentTool[] {
 
 /**
  * Materialize the documented `config.tools` semantics: extra tools are APPENDED
- * after pi's defaults, never replacing them. Used by L3; exported for callers
- * assembling manually from a loaded config.
+ * after pi's defaults, never replacing them. Used by the dev/start openers; exported
+ * for callers assembling manually from a loaded config.
  */
 export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] {
   const defaults = piDefaultTools(cwd);
@@ -176,7 +182,10 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
   return prompt;
 }
 
-// ── §3 the assembly ladder: L1 / L2 / L3 (L0 lives in invoke.ts) ─────────────
+// ── §3 the reusable assembly ladder: L1 / L2 (L0 lives in invoke.ts) ─────────
+//
+// The command openers (createPiAgentFromWorkspace in dev.ts, createPiAgentFromArtifact
+// in start.ts) compose OVER L2 and live in their own command modules — see the header.
 
 /** L1 options, grouped by the two-axis model (core-design §6.1). */
 export interface CreatePiAgentOptions {
@@ -279,65 +288,8 @@ export async function createPiAgentFromDefinition(
   return { agent, definition };
 }
 
-/**
- * L3 options. Notably absent by design: `model`/`tools` as objects — at this rung
- * they come from the config resolution (that is the whole point of L3). K/auth
- * overrides are also absent: deployment backends are a library-API concern (use
- * L2/L1) for now — see ladder rule 2 (KNOWN DEBT: re-cut when hosting lands).
- */
-export interface CreatePiAgentFromWorkspaceOptions {
-  /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
-  model?: string;
-  /**
-   * Also load the machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`) on top of
-   * the definition's own `skills/`. Default false = definition-only, so dev mirrors deployment.
-   * This is an authoring-fidelity opt-in (e.g. `fastagent dev --global-skills`); to ship a global
-   * skill, materialize it into the artifact (build --global-skills) — do not rely on this at deploy.
-   */
-  globalSkills?: boolean;
-}
-
-/**
- * L3: "point at a workspace → agent": the workspace = definition folder +
- * fastagent.config.ts (+ .env handled by the process entry). Loads the config,
- * resolves model (flag > env > config) and tools (append-after-defaults), then L2.
- * Throws a clear error when no model source is set (fail visibly at startup).
- * Returns everything an entry point needs to report what it assembled.
- */
-export async function createPiAgentFromWorkspace(
-  dir: string,
-  options: CreatePiAgentFromWorkspaceOptions = {},
-): Promise<{
-  agent: Agent;
-  definition: LoadedDefinition;
-  config: FastagentConfig;
-  /** Config file path; undefined when running zero-config. */
-  configPath?: string;
-  /** The resolved "provider/modelId" spec actually in use. */
-  modelSpec: string;
-}> {
-  const { config, path: configPath }: LoadedConfig = await loadConfig(dir);
-  const modelSpec = resolveModelSpec(options.model, config);
-  if (!modelSpec) {
-    throw new Error(
-      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
-    );
-  }
-  // Workspace rung owns workspace state: .fastagent/ (layer-3 machine state —
-  // gitignored, deletable, rebuildable) is created HERE, not in the CLI, so library
-  // callers of L3 get the same self-gitignored dir (vite/next-style).
-  const stateDir = join(dir, ".fastagent");
-  await mkdir(stateDir, { recursive: true });
-  await ensureStateDirSelfIgnored(stateDir);
-  const { agent, definition } = await createPiAgentFromDefinition(dir, {
-    model: resolveModel(modelSpec),
-    tools: resolveTools(config, dir),
-    // Definition-only by default (the agent is its folder); globals are an explicit
-    // authoring-fidelity opt-in, never the deploy path (see ladder rule 2 + §6).
-    skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
-    // Sessions persist under the state dir: `fastagent dev` restarts keep
-    // conversations — faithful to local pi, which persists sessions too.
-    sessions: jsonlSessionStore({ dir: join(stateDir, "sessions"), cwd: dir }),
-  });
-  return { agent, definition, config, configPath, modelSpec };
-}
+// The command OPENERS that compose over L2 live in their own command modules:
+//   dev   → createPiAgentFromWorkspace  (dev.ts)
+//   start → createPiAgentFromArtifact   (start.ts)
+//   build → buildPiArtifact             (build.ts)
+// keeping create.ts the pure reusable ladder (L0–L2 + engine assets). See the header.

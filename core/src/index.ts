@@ -14,15 +14,20 @@ export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 // Channels (N-side; consume only the Agent contract)
 export { createInvokeHandler } from "./channels/http.ts";
 
-// pi reference implementation — assembly ladder (L1/L2/L3; L0 below)
+// pi reference implementation — reusable assembly ladder (L1/L2; L0 below)
 export {
   createPiAgent,
   createPiAgentFromDefinition,
-  createPiAgentFromWorkspace,
   type CreatePiAgentOptions,
   type CreatePiAgentFromDefinitionOptions,
-  type CreatePiAgentFromWorkspaceOptions,
 } from "./engines/pi/create.ts";
+
+// pi reference implementation — dev (open a workspace into an agent, authoring posture).
+// The command opener that composes over L2; sibling of createPiAgentFromArtifact (start).
+export {
+  createPiAgentFromWorkspace,
+  type CreatePiAgentFromWorkspaceOptions,
+} from "./engines/pi/dev.ts";
 
 // pi reference implementation — definition domain (load).
 // bundleAgentDefinition is intentionally NOT exported: it does a destructive `rm -rf
