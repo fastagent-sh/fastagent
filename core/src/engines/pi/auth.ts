@@ -86,3 +86,14 @@ export function resolvePiAuth(authPath?: string, options?: PiAuthOptions): AuthR
   const oauth = piOAuthAuth(authPath, options);
   return async (model) => (await oauth(model)) ?? envAuth(model);
 }
+
+/**
+ * Which source of the DEFAULT chain ({@link resolvePiAuth}: OAuth → env) currently has
+ * credentials for `provider`. Reporting-only (e.g. the `start` startup line); mirrors the
+ * default chain order, warns suppressed (the live resolver surfaces anomalies per invoke).
+ */
+export async function probeAuthSource(provider: string, authPath?: string): Promise<"oauth" | "env" | "none"> {
+  if (await piOAuthAuth(authPath, { warn: () => {} })({ provider })) return "oauth";
+  if (await envAuth({ provider })) return "env";
+  return "none";
+}

@@ -42,6 +42,14 @@ export {
   type BuildPiArtifactOptions,
 } from "./engines/pi/build.ts";
 
+// pi reference implementation — start (run a built artifact in production posture).
+// Deploy-time sibling of L3 createPiAgentFromWorkspace; both are thin orchestrations over L2.
+export {
+  createPiAgentFromArtifact,
+  loadManifest,
+  type CreatePiAgentFromArtifactOptions,
+} from "./engines/pi/start.ts";
+
 // pi reference implementation — engine assets (prompt base + toolsets, in create.ts).
 // Internal assembly helpers (assembleSystemPrompt, resolveTools) are NOT public:
 // the ladder rungs own assembly; embedders compose via L1/L2/L3.
@@ -82,5 +90,6 @@ export {
   type PiAuthOptions,
   envAuth,
   piOAuthAuth,
+  probeAuthSource,
   resolvePiAuth,
 } from "./engines/pi/auth.ts";

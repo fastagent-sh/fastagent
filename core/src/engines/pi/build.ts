@@ -43,7 +43,8 @@ export interface BuildPiArtifactOptions {
   force?: boolean;
 }
 
-const MANIFEST_FILE = "fastagent.json";
+/** The reserved manifest filename inside an artifact (written by build, read by start). */
+export const MANIFEST_FILE = "fastagent.json";
 
 /**
  * Compile {@link srcDir} into a self-contained artifact at {@link outDir}. Resolves +

@@ -257,12 +257,14 @@ Run a built agent in **production posture**. Differences from `dev`:
 |---|---|---|
 | config | executes `fastagent.config.ts` | reads the artifact's `fastagent.json` for the frozen model/http; runs from the artifact (cwd = artifact). config.ts ships in the artifact for code tools (needs `npm ci`); the strict no-`.ts`-at-runtime posture is a later hardening |
 | skills | definition-only (+ `--global-skills`) | artifact is the truth; **never scans globals** |
-| auth | pi OAuth → env | pluggable `AuthResolver` (§10.5) |
-| sessions | jsonl under `.fastagent/sessions` | persistent store (jsonl now; external/DDB later) |
+| auth | pi OAuth → env | pluggable `AuthResolver` (§10.5); default still pi OAuth → env |
+| sessions | jsonl under `.fastagent/sessions` | jsonl **outside** the artifact (jsonl now; external/DDB later) |
 | model | `--model > FASTAGENT_MODEL > config` | `--model > FASTAGENT_MODEL > manifest.model` |
 | port | `--port > config` | `--port > PORT env > manifest.http.port > 8787` |
 
-`start` reuses **L2** (`createPiAgentFromDefinition`) with production wiring injected — no new ladder rung — which is exactly what L2's injection points exist for. It depends on zero builder-machine state.
+`start` reuses **L2** (`createPiAgentFromDefinition`) with production wiring injected — no new ladder rung — which is exactly what L2's injection points exist for. It depends on zero builder-machine state. The entry point is `createPiAgentFromArtifact(artifactDir, options)` (in `engines/pi/start.ts`): a deploy-time orchestration sibling of L3 `createPiAgentFromWorkspace`, not a ladder rung. It reads `fastagent.json` (frozen model/http) + the shipped `fastagent.config.*` (code tools), resolves the model/sessions, then calls L2.
+
+**Sessions live OUTSIDE the artifact** (the M/K split): the artifact is immutable and replaced wholesale on redeploy, so conversational state (K) kept inside it would be wiped on every deploy and every container restart. The default is the shell-cwd-relative, visible `./fastagent-sessions/` (precedence `--sessions-dir > FASTAGENT_SESSIONS_DIR > <cwd>/fastagent-sessions`), self-gitignored, **never** the artifact's own `.fastagent/`. The cwd-relative default's only footgun (continuity bound to launch dir) is loud (the resolved absolute path is in the startup report) and absent in containers (fixed `WORKDIR`); a sessions dir resolving inside the artifact emits a visible warning. dev keeps sessions under `<workspace>/.fastagent/` because the dev "artifact" is the mutable workspace itself — a deliberate difference, not an inconsistency.
 
 **Startup report (minimal observable surface):** `start` logs the run dir, model, **auth source** (`env (<KEY>)` or `oauth (<provider>)`), `AGENTS.md` presence, the **loaded skills** (enumerable), the session backend, and the bound port. It does **not** enumerate authored context files: they are ambient (§10.1a), so the only meaningful, bounded list is skills. This mirrors the `dev` startup report.
 
@@ -285,7 +287,7 @@ The container is the v1 "machine-state independence" boundary: copy the project,
 
 ## 11. Current open work
 
-- `fastagent build` / `fastagent start` per §10 (container tier first).
+- `fastagent build` / `fastagent start` per §10 are implemented (single-machine tier); the documented container recipe (§10.6) is not yet shipped.
 - Refresh-capable runtime OAuth resolver (§10.5); multi-instance credential broker deferred.
 - Portable data-bundle scoping (§10.2): bundle the source tree under the §10.1 boundary, secret exclusion enforced — lands with the AgentCore target adapter.
 - AgentCore target adapter with external sessions and distributed locking (the async `Lease` port).

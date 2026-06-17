@@ -5,24 +5,27 @@
  *
  *   fastagent dev   [dir] — assemble + serve a local HTTP channel (iteration)
  *   fastagent build [dir] — compile a self-contained artifact (core-design §10.3)
- * Next: `start` (production posture, runs an artifact).
+ *   fastagent start [dir] — run a built artifact in production posture (core-design §10.4)
  *
  * Process-level side effects (proxy dispatcher, .env loading) belong here — the CLI
  * is the application entry point.
  */
 import { createServer } from "node:http";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import { createInvokeHandler } from "./channels/http.ts";
+import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/create.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
+import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {
   console.error(`usage:
   fastagent dev   [dir] [--port N] [--model provider/modelId] [--global-skills]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
+  fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
 
   dev    assemble the agent in dir (default .) and serve a local HTTP channel.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
@@ -36,7 +39,13 @@ function usage(code: number): never {
          wholesale (built to a temp dir, then published atomically); an in-tree --out must
          be under .fastagent/, else use an out-of-tree path with --force.
          --global-skills   materialize the machine's global skills into the artifact
-         --force           allow an --out OUTSIDE the source tree (it will be replaced)`);
+         --force           allow an --out OUTSIDE the source tree (it will be replaced)
+  start  run a built artifact (default dir .) in production posture: model/http come from
+         the artifact's fastagent.json; skills are the artifact (never global).
+         model precedence: --model > FASTAGENT_MODEL > manifest.model
+         port precedence:  --port > PORT env > manifest.http.port > 8787
+         sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > ./fastagent-sessions
+                   (kept OUTSIDE the artifact so a redeploy never wipes conversations)`);
   process.exit(code);
 }
 
@@ -46,6 +55,7 @@ const { positionals, values } = parseArgs({
     port: { type: "string" },
     model: { type: "string" },
     out: { type: "string" },
+    "sessions-dir": { type: "string" },
     force: { type: "boolean" },
     "global-skills": { type: "boolean" },
     help: { type: "boolean", short: "h" },
@@ -59,16 +69,24 @@ const globalSkills = values["global-skills"] ?? false;
 
 if (command === "dev") await runDev();
 else if (command === "build") await runBuild();
+else if (command === "start") await runStart();
 else usage(1);
+
+/** Parse + range-check a port string (CLI flag or env). Invalid → exit 1 (argument error). */
+function parsePort(value: string | undefined, source: string): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > 65535) {
+    console.error(`invalid ${source} "${value}": must be an integer 0-65535`);
+    process.exit(1);
+  }
+  return n;
+}
 
 async function runDev(): Promise<void> {
   // Validate flags before any assembly work: argument errors must fail instantly,
   // not after the startup report. (config's http.port is range-checked by loadConfig.)
-  const portFlag = values.port === undefined ? undefined : Number(values.port);
-  if (portFlag !== undefined && (!Number.isInteger(portFlag) || portFlag < 0 || portFlag > 65535)) {
-    console.error(`invalid --port "${values.port}": must be an integer 0-65535`);
-    process.exit(1);
-  }
+  const portFlag = parsePort(values.port, "--port");
   loadDotEnv(dir);
   // Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy
   // so blocked providers are reachable (reads HTTP(S)_PROXY/NO_PROXY from the env).
@@ -105,11 +123,7 @@ async function runDev(): Promise<void> {
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
-  const port = portFlag ?? config.http?.port ?? 8787;
-  createServer(createInvokeHandler(agent)).listen(port, () => {
-    console.error(`[fastagent] http channel on :${port}`);
-    console.error(`  curl -N -X POST localhost:${port}/invoke -d '{"session":"s1","text":"hi"}'`);
-  });
+  serve(agent, portFlag ?? config.http?.port ?? 8787);
 }
 
 async function runBuild(): Promise<void> {
@@ -131,6 +145,60 @@ async function runBuild(): Promise<void> {
     `[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
   );
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
+}
+
+async function runStart(): Promise<void> {
+  const portFlag = parsePort(values.port, "--port");
+  loadDotEnv(dir); // env API keys + an optional PORT/FASTAGENT_MODEL override
+  // Same proxy/undici setup as dev (see runDev): route fetch through the local proxy and
+  // keep fetch + dispatcher on the same undici implementation.
+  setGlobalDispatcher(new EnvHttpProxyAgent());
+  installUndiciFetch();
+
+  const { agent, definition, manifest, modelSpec, sessionsDir } = await createPiAgentFromArtifact(dir, {
+    model: values.model,
+    sessionsDir: values["sessions-dir"] ? resolve(values["sessions-dir"]) : undefined,
+  }).catch(failStartup);
+
+  const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
+  const authSource = await probeAuthSource(provider);
+
+  console.error(`[fastagent] start:    ${dir}`);
+  console.error(`[fastagent] model:    ${modelSpec}`);
+  console.error(`[fastagent] auth:     ${authSource === "none" ? "(none found)" : `${authSource} (${provider})`}`);
+  console.error(`[fastagent] agents:   ${definition.instructions ? "AGENTS.md" : "(none)"}`);
+  console.error(`[fastagent] skills:   ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
+  console.error(`[fastagent] sessions: ${sessionsDir}`);
+  // Visible footgun guard: a sessions dir inside the artifact is wiped by a redeploy that
+  // replaces the artifact wholesale. Warn, don't block (running in place is legitimate).
+  const rel = relative(dir, sessionsDir);
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+    console.error(
+      `[fastagent] warn: sessions dir is INSIDE the artifact; a redeploy that replaces the artifact ` +
+        `will wipe conversations — use --sessions-dir to place them outside.`,
+    );
+  }
+  reportDefinitionWarnings(definition.collisions, definition.diagnostics);
+
+  serve(agent, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787);
+}
+
+/**
+ * Bind the HTTP channel, with a clean message instead of a raw stack on a listen failure
+ * (the common case being EADDRINUSE — a port already in use). A listen error is a startup
+ * problem, not a bug, so it exits like {@link failStartup} rather than crashing unhandled.
+ */
+function serve(agent: Parameters<typeof createInvokeHandler>[0], port: number): void {
+  const server = createServer(createInvokeHandler(agent));
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EADDRINUSE") console.error(`port ${port} is already in use; choose another with --port`);
+    else console.error(`cannot bind http channel on :${port}: ${error.message}`);
+    process.exit(1);
+  });
+  server.listen(port, () => {
+    console.error(`[fastagent] http channel on :${port}`);
+    console.error(`  curl -N -X POST localhost:${port}/invoke -d '{"session":"s1","text":"hi"}'`);
+  });
 }
 
 /** .env (secrets) → process.env. Only a missing file is normal; surface anything else. */
