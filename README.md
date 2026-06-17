@@ -4,6 +4,22 @@ WSGI for agent serving: turn an existing agent definition (`AGENTS.md` + `skills
 
 This repository is a from-scratch implementation of the locked [Agent Handler SPEC v0.1](docs/SPEC.md). It does not carry compatibility baggage from older experiments.
 
+## Install
+
+`@kid7st/core` is published to **GitHub Packages** (private). Consumers authenticate with a GitHub token that has `read:packages`, via an `.npmrc` next to their project:
+
+```
+@kid7st:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+Then install the CLI or the library (requires Node ≥ 26 — the package ships TypeScript sources, run via Node's type stripping; no build step):
+
+```bash
+npm i -g @kid7st/core   # the `fastagent` CLI on PATH
+npm i @kid7st/core      # the library (defineConfig, Agent contract, …) for code-tool agents
+```
+
 ## Documentation
 
 | Document | Purpose |
@@ -16,7 +32,7 @@ This repository is a from-scratch implementation of the locked [Agent Handler SP
 
 ## API stability
 
-This repository is pre-1.0. The stable design center is the Agent Handler contract in [SPEC.md](docs/SPEC.md). The root export (`@fastagent/core`) is deliberately scoped to the supported public surface; pi-coupled internals are not exported and may change freely while `build`, `start`, and the first target adapters land.
+This repository is pre-1.0. The stable design center is the Agent Handler contract in [SPEC.md](docs/SPEC.md). The root export (`@kid7st/core`) is deliberately scoped to the supported public surface; pi-coupled internals are not exported and may change freely while `build`, `start`, and the first target adapters land.
 
 Public surface tiers:
 

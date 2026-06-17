@@ -1,0 +1,47 @@
+name: Publish
+
+# Publish @kid7st/core to GitHub Packages when a GitHub Release is published.
+# The release tag is the manual gate; the job re-verifies (typecheck + test) before
+# publishing so a non-green tag never ships. Version comes from core/package.json —
+# bump it before tagging (GitHub Packages rejects re-publishing an existing version).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write # required to publish to GitHub Packages
+
+jobs:
+  publish:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@kid7st'
+          cache: npm
+          cache-dependency-path: core/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
