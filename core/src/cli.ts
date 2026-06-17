@@ -116,6 +116,22 @@ function parsePort(value: string | undefined, source: string): number | undefine
   return Number(trimmed);
 }
 
+/**
+ * Report which source provides the model's credentials — and, when none is found, surface a
+ * remediation hint at STARTUP (dev and start alike) rather than letting the agent fail silently
+ * at first invoke. Non-blocking: you may be iterating on prompts, or set credentials afterward.
+ */
+async function reportAuth(modelSpec: string): Promise<void> {
+  const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
+  const source = await probeAuthSource(provider);
+  console.error(`[fastagent] auth:   ${source === "none" ? "(none found)" : `${source} (${provider})`}`);
+  if (source === "none") {
+    console.error(
+      `[fastagent] warn: no credentials for "${provider}" — run \`pi login\`, or set the provider API key in .env (e.g. OPENAI_API_KEY); invokes will fail until then`,
+    );
+  }
+}
+
 async function runDev(): Promise<void> {
   // Validate flags before any assembly work: argument errors must fail instantly,
   // not after the startup report. (config's http.port is range-checked by loadConfig.)
@@ -138,6 +154,7 @@ async function runDev(): Promise<void> {
   console.error(`[fastagent] dir:    ${definition.dir}`);
   console.error(`[fastagent] config: ${configPath ?? "(zero-config)"}`);
   console.error(`[fastagent] model:  ${modelSpec}`);
+  await reportAuth(modelSpec);
   console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
   const loadedSkills = definition.skills.map((s) => s.name);
   console.error(
@@ -193,14 +210,11 @@ async function runStart(): Promise<void> {
     sessionsDir: values["sessions-dir"] ? resolve(values["sessions-dir"]) : undefined,
   }).catch(failStartup);
 
-  const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
-  const authSource = await probeAuthSource(provider);
-
-  console.error(`[fastagent] start:    ${dir}`);
-  console.error(`[fastagent] model:    ${modelSpec}`);
-  console.error(`[fastagent] auth:     ${authSource === "none" ? "(none found)" : `${authSource} (${provider})`}`);
-  console.error(`[fastagent] agents:   ${definition.instructions ? "AGENTS.md" : "(none)"}`);
-  console.error(`[fastagent] skills:   ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
+  console.error(`[fastagent] start:  ${dir}`);
+  console.error(`[fastagent] model:  ${modelSpec}`);
+  await reportAuth(modelSpec);
+  console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
+  console.error(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   console.error(`[fastagent] sessions: ${sessionsDir}`);
   // Visible footgun guard: a sessions dir inside the artifact is wiped by a redeploy that
   // replaces the artifact wholesale. Warn, don't block (running in place is legitimate).

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { piOAuthAuth } from "../src/index.ts";
+import { piOAuthAuth, probeAuthSource } from "../src/index.ts";
 
 const model = { provider: "anthropic" };
 
@@ -58,5 +58,19 @@ describe("piOAuthAuth (silent-failure discipline)", () => {
     const messages: string[] = [];
     expect(await piOAuthAuth(path, { warn: (m) => messages.push(m) })(model)).toBeUndefined();
     expect(messages[0]).toContain("expired"); // root cause surfaced, not buried under "missing API key"
+  });
+});
+
+describe("probeAuthSource (startup credential report; dev + start)", () => {
+  it("reports oauth when the credentials file has a live token for the provider", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-probe-"));
+    const path = join(dir, "auth.json");
+    await writeFile(path, JSON.stringify({ anthropic: { type: "oauth", access: "tok", expires: Date.now() + 60_000 } }));
+    expect(await probeAuthSource("anthropic", path)).toBe("oauth");
+  });
+
+  it("reports none when neither the credentials file nor env provides a key", async () => {
+    // a provider with no env-var mapping + a nonexistent auth file → deterministically none
+    expect(await probeAuthSource("no-such-provider", "/nonexistent/auth.json")).toBe("none");
   });
 });
