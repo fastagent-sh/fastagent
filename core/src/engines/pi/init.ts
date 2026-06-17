@@ -17,9 +17,9 @@
  * Node composition-root module: writes template files; no engine import beyond the default
  * model string in the config template (folded-M — lift if a second engine ever scaffolds).
  */
-import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import ignore from "ignore";
+import { loadRootIgnore } from "./definition.ts";
 
 const AGENTS_MD = `# Assistant
 
@@ -137,11 +137,16 @@ export async function scaffoldWorkspace(dir: string): Promise<ScaffoldResult> {
   // did not take effect while next-steps still tells the user to create .env → build could ship it.
   // Warn with the exact fix; do NOT silently mutate the user's file (non-destructive contract +
   // §10.1 "security is the user's responsibility; fastagent informs").
+  //
+  // Use the EXACT matcher build uses (loadRootIgnore: .gitignore + .fastagentignore, fa last,
+  // case-sensitive) so the advisory matches what the artifact will actually ship — a hand-rolled
+  // check diverges (misses .fastagentignore `!.env`, or a case-mismatched `.ENV`) and gives false
+  // assurance, the dangerous direction.
   const warnings: string[] = [];
-  const gitignore = await readFile(join(dir, ".gitignore"), "utf8").catch(() => "");
-  if (!ignore().add(gitignore).ignores(".env")) {
+  const rootIgnore = await loadRootIgnore(dir);
+  if (!rootIgnore?.ignores(".env")) {
     warnings.push(
-      `your .gitignore does not ignore ".env" — add it, or \`fastagent build\` may ship secrets into the artifact`,
+      `your .gitignore/.fastagentignore does not exclude ".env" — add it, or \`fastagent build\` may ship secrets into the artifact`,
     );
   }
   return { dir, created, skipped, intoNonEmpty, warnings };

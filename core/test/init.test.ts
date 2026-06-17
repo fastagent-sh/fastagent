@@ -67,12 +67,38 @@ describe("init: scaffoldWorkspace", () => {
     expect(created).toContain("AGENTS.md");
     expect(await readFile(join(dir, ".gitignore"), "utf8")).toBe("custom\n"); // kept, NOT mutated
     expect(intoNonEmpty).toBe(true); // the dir already had the .gitignore
-    expect(warnings).toEqual([expect.stringMatching(/does not ignore "\.env"/)]);
+    expect(warnings).toEqual([expect.stringMatching(/does not exclude "\.env"/)]);
   });
 
   it("does not warn when a kept .gitignore already covers .env", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, ".gitignore"), "node_modules/\n*.env\n"); // *.env covers .env
+    const { skipped, warnings } = await scaffoldWorkspace(dir);
+    expect(skipped).toEqual([".gitignore"]);
+    expect(warnings).toEqual([]);
+  });
+
+  // The advisory must mirror build's matcher (loadRootIgnore: .gitignore + .fastagentignore,
+  // fa last, case-SENSITIVE), or it gives false assurance in the dangerous direction.
+  it("warns on a case-mismatched rule (.ENV does not exclude .env under build's case-sensitive matcher)", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, ".gitignore"), ".ENV\n"); // wrong case → build (ignorecase:false) ships .env
+    const { warnings } = await scaffoldWorkspace(dir);
+    expect(warnings).toEqual([expect.stringMatching(/does not exclude "\.env"/)]);
+  });
+
+  it("warns when .fastagentignore re-includes .env (applied last, authoritative — build ships it)", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, ".gitignore"), ".env\n"); // git excludes it …
+    await writeFile(join(dir, ".fastagentignore"), "!.env\n"); // … but fa un-excludes it (last wins)
+    const { warnings } = await scaffoldWorkspace(dir);
+    expect(warnings).toEqual([expect.stringMatching(/does not exclude "\.env"/)]);
+  });
+
+  it("does not warn when .fastagentignore excludes .env though the kept .gitignore does not (combined matcher)", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, ".gitignore"), "node_modules/\n"); // kept, NO .env rule
+    await writeFile(join(dir, ".fastagentignore"), ".env\n"); // fa covers it → build excludes
     const { skipped, warnings } = await scaffoldWorkspace(dir);
     expect(skipped).toEqual([".gitignore"]);
     expect(warnings).toEqual([]);

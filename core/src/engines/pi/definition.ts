@@ -171,8 +171,12 @@ export async function ensureStateDirSelfIgnored(stateDir: string): Promise<void>
  *
  * An existing-but-unreadable file fails visibly — silently building with no rules could
  * ship files the author meant to exclude.
+ *
+ * Exported (module-internal, not on the public surface) so other commands can ask the exact
+ * question the build will answer — e.g. `init` checks whether `.env` will be excluded from the
+ * artifact using THIS matcher, so its advisory matches what `build` actually ships.
  */
-async function loadRootIgnore(dir: string): Promise<Ignore | undefined> {
+export async function loadRootIgnore(dir: string): Promise<Ignore | undefined> {
   let rules = "";
   for (const name of [".gitignore", ".fastagentignore"]) {
     try {
