@@ -22,6 +22,9 @@ export {
   type CreatePiAgentFromDefinitionOptions,
 } from "./engines/pi/create.ts";
 
+// pi reference implementation — init (scaffold a minimal runnable workspace).
+export { scaffoldWorkspace, type ScaffoldResult } from "./engines/pi/init.ts";
+
 // pi reference implementation — dev (open a workspace into an agent, authoring posture).
 // The command opener that composes over L2; sibling of createPiAgentFromArtifact (start).
 export {

@@ -3,6 +3,7 @@
  * fastagent CLI — the consumer of fastagent.config.ts (product entry point,
  * replacing hand-written entry scripts).
  *
+ *   fastagent init  [dir] — scaffold a minimal runnable workspace
  *   fastagent dev   [dir] — assemble + serve a local HTTP channel (iteration)
  *   fastagent build [dir] — compile a self-contained artifact (core-design §10.3)
  *   fastagent start [dir] — run a built artifact in production posture (core-design §10.4)
@@ -19,10 +20,12 @@ import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
+import { scaffoldWorkspace } from "./engines/pi/init.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {
   console.error(`usage:
+  fastagent init  [dir]
   fastagent dev   [dir] [--port N] [--model provider/modelId] [--global-skills]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
@@ -31,6 +34,8 @@ function usage(code: number): never {
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --global-skills   also load the machine's global skills (~/.pi/agent/skills,
                            ~/.agents/skills); default is definition-only (dev == deployed)
+  init   scaffold a minimal runnable workspace in dir (default .): AGENTS.md, an example
+         skill, fastagent.config.mjs, .gitignore. Refuses to overwrite an existing workspace.
   build  compile dir into a self-contained, relocatable artifact (default out:
          .fastagent/build): the source tree + materialized skills + manifest, minus
          node_modules/.git and anything .gitignore/.fastagentignore excludes (honored
@@ -67,10 +72,22 @@ const [command, dirArg] = positionals;
 const dir = resolve(dirArg ?? ".");
 const globalSkills = values["global-skills"] ?? false;
 
-if (command === "dev") await runDev();
+if (command === "init") await runInit();
+else if (command === "dev") await runDev();
 else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
 else usage(1);
+
+async function runInit(): Promise<void> {
+  const { created, skipped } = await scaffoldWorkspace(dir).catch(failStartup);
+  console.error(`[fastagent] initialized ${dir}`);
+  if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
+  if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
+  console.error(`  next steps:`);
+  console.error(`    1. credentials — run \`pi login\`, or add a key to .env (e.g. OPENAI_API_KEY=...)`);
+  console.error(`    2. optional   — edit fastagent.config.mjs to choose your model`);
+  console.error(`    3. fastagent dev   # serve locally and iterate`);
+}
 
 /**
  * Parse + range-check a port string (CLI flag or env). Empty/whitespace (e.g. `PORT=` in an
