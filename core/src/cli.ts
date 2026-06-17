@@ -103,7 +103,7 @@ async function runInit(): Promise<void> {
   // `cd` so every step — including bare `fastagent dev` (which defaults its dir to .) — is correct.
   const rel = relative(process.cwd(), dir);
   if (rel !== "") console.error(`    cd ${rel}`);
-  console.error(`    1. credentials — run \`pi login\`, or add a key to .env (e.g. OPENAI_API_KEY=...)`);
+  console.error(`    1. credentials — authenticate with \`pi login\`, or set the provider's API key in .env`);
   console.error(`    2. optional   — edit fastagent.config.mjs to choose your model`);
   console.error(`    3. fastagent dev   # serve locally and iterate`);
 }
@@ -136,8 +136,11 @@ async function reportAuth(modelSpec: string): Promise<void> {
   const source = await probeAuthSource(provider);
   console.error(`[fastagent] auth:   ${source === "none" ? "(none found)" : `${source} (${provider})`}`);
   if (source === "none") {
+    // Lead with `pi login`: the default model (openai-codex) is OAuth-only, and we cannot name
+    // the right env var (it is provider-specific and pi-ai's mapping is not exported). Keep the
+    // env path generic so we never advertise a key that can't satisfy the probed provider.
     console.error(
-      `[fastagent] warn: no credentials for "${provider}" — run \`pi login\`, or set the provider API key in .env (e.g. OPENAI_API_KEY); invokes will fail until then`,
+      `[fastagent] warn: no credentials for "${provider}" — authenticate with \`pi login\`, or set the provider's API key in .env; invokes will fail until then`,
     );
   }
 }
