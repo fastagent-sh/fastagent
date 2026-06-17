@@ -1,8 +1,47 @@
 import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildPiArtifact, createPiAgentFromArtifact, loadManifest } from "../src/index.ts";
+
+const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+
+/** Run the CLI to completion (for paths that exit, e.g. an invalid argument). */
+function cliRunToExit(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ code: number | null; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, ...env } });
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("close", (code) => resolve({ code, stderr }));
+  });
+}
+
+/** Run the CLI until it logs the http-channel line; return the bound port, then kill it. */
+function cliBoundPort(args: string[], env: NodeJS.ProcessEnv = {}): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, ...env } });
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`timeout before binding; stderr:\n${stderr}`));
+    }, 8000);
+    child.stderr.on("data", (d) => {
+      stderr += String(d);
+      const m = stderr.match(/http channel on :(\d+)/);
+      if (m) {
+        clearTimeout(timer);
+        child.kill("SIGKILL");
+        resolve(Number(m[1]));
+      }
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`exited (code ${code}) before binding; stderr:\n${stderr}`));
+    });
+  });
+}
 
 /** A minimal workspace, then build it into an artifact — the input `start` consumes. */
 async function makeArtifact(opts: { config?: string } = {}): Promise<{ artifact: string }> {
@@ -115,6 +154,37 @@ describe("start: createPiAgentFromArtifact", () => {
       if (saved !== undefined) process.env.HOME = saved;
       else delete process.env.HOME;
     }
+  });
+
+  it("empty PORT env falls through to the manifest port (not listen(0))", async () => {
+    // The bug: Number("") === 0, so `PORT=` (empty) used to bind an ephemeral port. A random
+    // manifest port proves fall-through: the bound port can only match it if `PORT=` was
+    // treated as unset (no --port given, so the manifest is the next source).
+    const manifestPort = 19000 + Math.floor(Math.random() * 10000);
+    const ws = await mkdtemp(join(tmpdir(), "fa-start-port-ws-"));
+    await writeFile(join(ws, "AGENTS.md"), "# Bot\n");
+    await writeFile(
+      join(ws, "fastagent.config.mjs"),
+      `export default { model: "openai-codex/gpt-5.5", http: { port: ${manifestPort} } };`,
+    );
+    const artifact = await mkdtemp(join(tmpdir(), "fa-start-port-art-"));
+    await buildPiArtifact(ws, artifact, { force: true });
+    const bound = await cliBoundPort(["start", artifact, "--sessions-dir", await freshSessions()], { PORT: "" });
+    expect(bound).toBe(manifestPort);
+  });
+
+  it("rejects a non-decimal port (strict parse, not Number coercion) with a clean exit", async () => {
+    const { artifact } = await makeArtifact();
+    const { code, stderr } = await cliRunToExit([
+      "start",
+      artifact,
+      "--port",
+      "0x50",
+      "--sessions-dir",
+      await freshSessions(),
+    ]);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/invalid --port "0x50": must be an integer 0-65535/);
   });
 
   it("appends code tools shipped in the artifact's config", async () => {

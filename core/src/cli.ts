@@ -72,15 +72,22 @@ else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
 else usage(1);
 
-/** Parse + range-check a port string (CLI flag or env). Invalid → exit 1 (argument error). */
+/**
+ * Parse + range-check a port string (CLI flag or env). Empty/whitespace (e.g. `PORT=` in an
+ * env file) is treated as "not set" → undefined, so the `??` precedence chain falls through to
+ * the next source instead of binding port 0 (an ephemeral port) — `Number("")` is 0. A
+ * non-empty but non-decimal/out-of-range value is an argument error → exit 1. Strict `^\d+$`
+ * (not `Number`) rejects hex/exponent/negative/whitespace coercion quirks.
+ */
 function parsePort(value: string | undefined, source: string): number | undefined {
   if (value === undefined) return undefined;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 0 || n > 65535) {
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  if (!/^\d+$/.test(trimmed) || Number(trimmed) > 65535) {
     console.error(`invalid ${source} "${value}": must be an integer 0-65535`);
     process.exit(1);
   }
-  return n;
+  return Number(trimmed);
 }
 
 async function runDev(): Promise<void> {
