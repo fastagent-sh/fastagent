@@ -17,7 +17,7 @@
  * Node composition-root module: writes template files; no engine import beyond the default
  * model string in the config template (folded-M — lift if a second engine ever scaffolds).
  */
-import { access, mkdir, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { loadRootIgnore } from "./definition.ts";
 
@@ -114,21 +114,49 @@ export async function scaffoldWorkspace(dir: string): Promise<ScaffoldResult> {
   // toward `init <name>` (a fresh subdir) when scaffolding into an existing/non-empty dir.
   const intoNonEmpty = (await readdir(dir).catch(() => [] as string[])).length > 0;
 
+  // Preflight the parent directories every scaffold file needs (e.g. `skills`,
+  // `skills/house-style`). A pre-existing NON-directory there would make mkdir fail mid-loop
+  // with ENOTDIR — AFTER the first file is written — leaving a half-scaffold that the identity
+  // guard then blocks on retry. Detect it BEFORE any write, with a clear message; the dir is
+  // left untouched and the user can retry after fixing it.
+  const parents = new Set<string>();
+  for (const file of FILES) {
+    let p = dirname(file.rel);
+    while (p !== "." && p !== "") {
+      parents.add(p);
+      p = dirname(p);
+    }
+  }
+  for (const rel of parents) {
+    const st = await stat(join(dir, rel)).catch(() => undefined);
+    if (st && !st.isDirectory()) {
+      throw new Error(`cannot scaffold: "${rel}" exists and is not a directory (remove it, or init elsewhere)`);
+    }
+  }
+
   await mkdir(dir, { recursive: true });
   const created: string[] = [];
   const skipped: string[] = [];
-  for (const file of FILES) {
-    const abs = join(dir, file.rel);
-    await mkdir(dirname(abs), { recursive: true });
-    try {
-      // wx: never clobber. The identity files are guaranteed absent (guard above); the rest
-      // (e.g. a pre-existing .gitignore) are kept on EEXIST instead of overwritten.
-      await writeFile(abs, file.content, { flag: "wx" });
-      created.push(file.rel);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") skipped.push(file.rel);
-      else throw error;
+  try {
+    for (const file of FILES) {
+      const abs = join(dir, file.rel);
+      await mkdir(dirname(abs), { recursive: true });
+      try {
+        // wx: never clobber. The identity files are guaranteed absent (guard above); the rest
+        // (e.g. a pre-existing .gitignore) are kept on EEXIST instead of overwritten.
+        await writeFile(abs, file.content, { flag: "wx" });
+        created.push(file.rel);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") skipped.push(file.rel);
+        else throw error;
+      }
     }
+  } catch (error) {
+    // Roll back files written THIS run (guard + wx guarantee they are ours, not pre-existing)
+    // so an unexpected mid-write failure never leaves a half-scaffold that blocks retry. Empty
+    // dirs we may have created are harmless and left as-is.
+    for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
+    throw error;
   }
 
   // Security wiring is the .gitignore's whole job here: `fastagent build` excludes secrets ONLY

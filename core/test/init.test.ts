@@ -48,6 +48,14 @@ describe("init: scaffoldWorkspace", () => {
     expect(intoNonEmpty).toBe(false);
   });
 
+  it("preflights blocking parent paths: a file named `skills` fails BEFORE writing AGENTS.md (retryable)", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, "skills"), "i am a file, not a dir\n"); // blocks skills/house-style/
+    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"skills" exists and is not a directory/);
+    // no half-scaffold: AGENTS.md was never written, so a retry is not blocked by the guard
+    expect(await exists(join(dir, "AGENTS.md"))).toBe(false);
+  });
+
   it("refuses to overwrite an existing workspace (AGENTS.md or a config), leaving it intact", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "AGENTS.md"), "# My real agent\n");
