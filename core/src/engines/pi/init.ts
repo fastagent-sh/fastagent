@@ -17,8 +17,9 @@
  * Node composition-root module: writes template files; no engine import beyond the default
  * model string in the config template (folded-M — lift if a second engine ever scaffolds).
  */
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import ignore from "ignore";
 
 const AGENTS_MD = `# Assistant
 
@@ -77,6 +78,10 @@ export interface ScaffoldResult {
   created: string[];
   /** Files that already existed and were kept untouched (e.g. a pre-existing .gitignore). */
   skipped: string[];
+  /** True if the target already had content before this run (init into an existing/non-empty dir). */
+  intoNonEmpty: boolean;
+  /** Non-fatal advisories the caller MUST surface (e.g. a kept .gitignore that does not ignore .env). */
+  warnings: string[];
 }
 
 async function exists(p: string): Promise<boolean> {
@@ -105,6 +110,10 @@ export async function scaffoldWorkspace(dir: string): Promise<ScaffoldResult> {
     );
   }
 
+  // Was the target non-empty BEFORE we wrote anything? (missing dir = empty). Used to nudge
+  // toward `init <name>` (a fresh subdir) when scaffolding into an existing/non-empty dir.
+  const intoNonEmpty = (await readdir(dir).catch(() => [] as string[])).length > 0;
+
   await mkdir(dir, { recursive: true });
   const created: string[] = [];
   const skipped: string[] = [];
@@ -121,5 +130,19 @@ export async function scaffoldWorkspace(dir: string): Promise<ScaffoldResult> {
       else throw error;
     }
   }
-  return { dir, created, skipped };
+
+  // Security wiring is the .gitignore's whole job here: `fastagent build` excludes secrets ONLY
+  // via .gitignore/.fastagentignore (it does not special-case .env — core-design §10.1). If we
+  // KEPT a pre-existing .gitignore that does not ignore .env, the scaffold's secret line silently
+  // did not take effect while next-steps still tells the user to create .env → build could ship it.
+  // Warn with the exact fix; do NOT silently mutate the user's file (non-destructive contract +
+  // §10.1 "security is the user's responsibility; fastagent informs").
+  const warnings: string[] = [];
+  const gitignore = await readFile(join(dir, ".gitignore"), "utf8").catch(() => "");
+  if (!ignore().add(gitignore).ignores(".env")) {
+    warnings.push(
+      `your .gitignore does not ignore ".env" — add it, or \`fastagent build\` may ship secrets into the artifact`,
+    );
+  }
+  return { dir, created, skipped, intoNonEmpty, warnings };
 }

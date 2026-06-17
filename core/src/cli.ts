@@ -79,10 +79,14 @@ else if (command === "start") await runStart();
 else usage(1);
 
 async function runInit(): Promise<void> {
-  const { created, skipped } = await scaffoldWorkspace(dir).catch(failStartup);
+  const { created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir).catch(failStartup);
   console.error(`[fastagent] initialized ${dir}`);
   if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
   if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
+  if (intoNonEmpty) {
+    console.error(`  note: scaffolded into a non-empty directory; for a clean start, run \`fastagent init <name>\` (a fresh subdir)`);
+  }
+  for (const w of warnings) console.error(`[fastagent] warn: ${w}`);
   console.error(`  next steps:`);
   console.error(`    1. credentials — run \`pi login\`, or add a key to .env (e.g. OPENAI_API_KEY=...)`);
   console.error(`    2. optional   — edit fastagent.config.mjs to choose your model`);
