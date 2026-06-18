@@ -299,8 +299,8 @@ async function runDev(): Promise<void> {
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const assemble = (bustToolCache: boolean): Promise<DevAgent> =>
-    createPiAgentFromWorkspace(dir, { model: values.model, globalSkills, bustToolCache });
+  const assemble = (bustModuleCache: boolean): Promise<DevAgent> =>
+    createPiAgentFromWorkspace(dir, { model: values.model, globalSkills, bustModuleCache });
 
   let current: DevAgent = await assemble(false).catch(failStartup);
 
@@ -317,16 +317,26 @@ async function runDev(): Promise<void> {
   // silently: it swaps in an error agent so `/invoke` returns `failed`, and logs the error loudly.
   serve(() => current.agent, portFlag ?? current.config.http?.port ?? 8787);
   if (!values["no-watch"]) {
+    // Monotonic reload id: concurrent reloads (a save during a slow assemble) must not race —
+    // only the LATEST attempt's outcome (success or failure) is applied; older results are
+    // discarded so a slow/stale reload can't overwrite a newer agent or re-apply a fixed failure.
+    let latest = 0;
     watchWorkspace(() => {
+      const seq = ++latest;
       void (async () => {
         try {
           const next = await assemble(true);
+          if (seq !== latest) {
+            await next.dispose?.(); // superseded by a newer reload — drop this assembly
+            return;
+          }
           const prev = current;
           current = next;
           console.error(`[fastagent] reloaded`);
           reportAgentsSkillsTools(current);
           await prev.dispose?.(); // teardown seam for future stateful resources (no-op today)
         } catch (error) {
+          if (seq !== latest) return; // superseded — don't clobber a newer (possibly fixed) state
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[fastagent] reload FAILED — serving a failure until you fix it:\n${message}`);
           current = { ...current, agent: errorAgent(message) };
