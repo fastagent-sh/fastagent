@@ -23,6 +23,7 @@ import { buildPiArtifact } from "./engines/pi/build.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
+import { resolveTools } from "./engines/pi/create.ts";
 import { scaffoldWorkspace } from "./engines/pi/init.ts";
 import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
@@ -110,7 +111,13 @@ async function runTool(): Promise<void> {
   loadDotEnv(toolDir); // a tool may read a key from .env
   const { config } = await loadConfig(toolDir).catch(failStartup);
   const discovered = await loadTools(toolDir).catch(failStartup);
-  const { tools } = mergeDiscoveredTools(config.tools ?? [], discovered.tools);
+  // Same tool set dev/start mount (pi defaults + config.tools + discovered, deduped) so the
+  // runner exercises exactly what gets served — a tool shadowed by a default/config tool is not
+  // run here either; surface that collision instead of silently testing the wrong implementation.
+  const { tools, collisions } = mergeDiscoveredTools(resolveTools(config, toolDir), discovered.tools);
+  for (const c of [...discovered.collisions, ...collisions]) {
+    console.error(`[fastagent] warn: tool "${c.name}" (${c.source}) is shadowed by a default/config tool — not mounted`);
+  }
   const tool = tools.find((t) => t.name === name);
   if (!tool) {
     console.error(`unknown tool "${name}". available: ${tools.map((t) => t.name).join(", ") || "(none)"}`);
