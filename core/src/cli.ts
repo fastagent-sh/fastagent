@@ -22,7 +22,7 @@ import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher }
 import { createInvokeHandler } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
-import { listModels, loadConfig, resolveModel } from "./engines/pi/config.ts";
+import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
@@ -267,17 +267,7 @@ async function runDev(): Promise<void> {
     await serveOnce();
     return;
   }
-  // Validate the non-editable FLAGS before spawning, so a bad flag fails immediately like the
-  // pre-supervisor CLI did — not in a worker that exits and waits for a save that can't fix an
-  // argv value. (A bad model from the CONFIG is editable, so that stays a worker "save to retry".)
-  parsePort(values.port, "--port");
-  if (values.model) {
-    try {
-      resolveModel(values.model);
-    } catch (error) {
-      failStartup(error); // a bad --model is a clean argument error, not an unhandled throw
-    }
-  }
+  parsePort(values.port, "--port"); // flag-shape check (a non-integer port fails before spawning)
   runDevSupervisor();
 }
 
@@ -310,23 +300,34 @@ function runDevSupervisor(): void {
   const ignoredTop = new Set([".fastagent", "node_modules", ".git"]);
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
+  let everServed = false; // has any worker successfully bound (sent `ready`) yet?
   let timer: NodeJS.Timeout | undefined;
 
   const spawnWorker = (): void => {
+    // ipc fd so the worker can signal readiness once it binds; stdio otherwise inherited.
     const w = spawn(process.execPath, [process.argv[1]!, ...process.argv.slice(2)], {
-      stdio: "inherit",
+      stdio: ["inherit", "inherit", "inherit", "ipc"],
       env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
     });
     worker = w;
+    w.on("message", (m: { type?: string }) => {
+      if (m?.type === "ready") everServed = true;
+    });
     w.on("exit", (code, signal) => {
       if (worker !== w) return; // already superseded
       worker = undefined;
       if (reloadPending) {
         reloadPending = false;
         spawnWorker(); // restart requested: the old worker has now exited, so the port is free
+      } else if (!everServed) {
+        // The worker failed BEFORE ever serving — a non-editable startup failure (bad flag,
+        // EADDRINUSE, broken initial workspace) that saving cannot fix. Propagate the exit code so
+        // `fastagent dev` fails like the old CLI did (and smoke tests don't hang). The worker
+        // already printed the specific error (inherited stdio).
+        process.exit(code ?? 1);
       } else {
-        // The worker stopped on its own — a broken edit (non-zero) or a crash. Do not loop; the
-        // error is already printed (inherited stdio). Wait for the next save to retry.
+        // A worker that HAD been serving stopped (a broken edit, or a crash). The edit is fixable;
+        // the error is already printed. Wait for the next save to retry, do not loop or exit.
         console.error(`[fastagent] dev stopped (worker exited: ${signal ?? code}) — save a change to retry`);
       }
     });
@@ -432,6 +433,7 @@ function serve(agent: Parameters<typeof createInvokeHandler>[0], port: number): 
     process.exit(1);
   });
   server.listen(port, () => {
+    process.send?.({ type: "ready" }); // tell the dev supervisor we bound (no-op without an IPC channel)
     console.error(`[fastagent] http channel on :${port}`);
     console.error(`  curl -N -X POST localhost:${port}/invoke -d '{"session":"s1","text":"hi"}'`);
   });
