@@ -14,7 +14,7 @@
  * is the application entry point.
  */
 import { spawn } from "node:child_process";
-import { watch } from "node:fs";
+import { existsSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -343,18 +343,33 @@ function runDevSupervisor(): void {
     }
   };
 
-  try {
-    watch(dir, { recursive: true }, (_event, filename) => {
-      // fs.watch does not guarantee `filename` (Node docs). When present, skip machine-state edits
-      // (.fastagent session writes, deps, vcs). When ABSENT we cannot filter — reload rather than
-      // drop the event: serving stale code is worse than an occasional extra restart (debounced).
-      if (filename && ignoredTop.has(filename.split(/[\\/]/)[0]!)) return;
-      clearTimeout(timer);
-      timer = setTimeout(triggerReload, 200);
-    });
+  // Watch the SOURCE surface, NOT .fastagent: the worker writes jsonl sessions DEEP under
+  // .fastagent on every invoke. A whole-tree recursive watch would fire on each of those writes
+  // and — when fs.watch omits the filename (Node does not guarantee it) — restart dev on its own
+  // session writes. Watching only source means those writes are never in the watched set at all,
+  // so the missing-filename case can safely reload (it can only be a real source edit).
+  const onChange = (filename: string | null): void => {
+    // Only the top-level watcher can surface an ignorable machine-state name; filter it when the
+    // filename is available, else reload (top-level events are rare — not the per-invoke writes).
+    if (filename && ignoredTop.has(filename.split(/[\\/]/)[0]!)) return;
+    clearTimeout(timer);
+    timer = setTimeout(triggerReload, 200);
+  };
+  let watching = false;
+  const tryWatch = (target: string, recursive: boolean): void => {
+    try {
+      watch(target, { recursive }, (_event, filename) => onChange(filename));
+      watching = true;
+    } catch {
+      /* path absent or unwatchable on this platform — skip it */
+    }
+  };
+  tryWatch(dir, false); // AGENTS.md, fastagent.config.*, .env, .gitignore, top-level files
+  for (const sub of ["skills", "tools"]) if (existsSync(join(dir, sub))) tryWatch(join(dir, sub), true);
+  if (watching) {
     console.error(`[fastagent] watching for changes — edits restart the dev worker (--no-watch to disable)`);
-  } catch (error) {
-    console.error(`[fastagent] warn: file watching unavailable (${(error as Error).message}); edits need a manual restart`);
+  } else {
+    console.error(`[fastagent] warn: file watching unavailable; edits need a manual restart`);
   }
 
   const shutdown = (): never => {
