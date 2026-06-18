@@ -89,7 +89,13 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
 
       const rt = await buildChatRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
       try {
+        let invalidated = false;
+        rt.setBeforeSessionInvalidate(() => {
+          invalidated = true;
+        });
         await expect(rt.importFromJsonl(imported, other)).rejects.toThrow(/fastagent chat is workspace-scoped/);
+        expect(invalidated).toBe(false);
+        expect(rt.cwd).toBe(dir);
       } finally {
         rt.session.dispose?.();
       }

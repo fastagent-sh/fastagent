@@ -30,6 +30,7 @@
  * show). Cross-workspace session switches are rejected: `.env` is process-global, so one chat TUI is
  * one workspace; run `fastagent chat <other-dir>` for another workspace.
  */
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
@@ -124,7 +125,7 @@ export async function buildChatRuntime(
   const assemblyFor = (cwd: string) => {
     const activeCwd = resolve(cwd);
     if (activeCwd !== rootCwd) {
-      throw new Error(`fastagent chat is workspace-scoped: cannot switch to ${activeCwd}; run \`fastagent chat ${activeCwd}\` instead`);
+      throw workspaceScopeError(activeCwd);
     }
     assembly ??= resolveAssembly(rootCwd);
     return assembly;
@@ -170,11 +171,57 @@ export async function buildChatRuntime(
     return { ...result, services, diagnostics: services.diagnostics };
   };
 
-  return createAgentSessionRuntime(createRuntime, {
+  const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd: rootCwd,
     agentDir: getAgentDir(),
     sessionManager: sessionManager ?? SessionManager.create(rootCwd),
   });
+  enforceWorkspaceScopedSessionSwitches(runtime, rootCwd);
+  return runtime;
+}
+
+function workspaceScopeError(targetCwd: string): Error {
+  return new Error(`fastagent chat is workspace-scoped: cannot switch to ${targetCwd}; run \`fastagent chat ${targetCwd}\` instead`);
+}
+
+function readSessionHeaderCwd(sessionPath: string): string | undefined {
+  const resolvedPath = resolve(sessionPath);
+  if (!existsSync(resolvedPath)) return undefined;
+  for (const line of readFileSync(resolvedPath, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as { type?: unknown; cwd?: unknown };
+      if (entry.type === "session") return typeof entry.cwd === "string" ? resolve(entry.cwd) : undefined;
+    } catch {
+      // Ignore malformed lines the same way pi's session loader does; no cwd means no preflight.
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Reject cross-workspace resume/import BEFORE calling pi's replacement methods. pi tears down the
+ * active session before invoking the runtime factory; a factory-only cwd guard would therefore
+ * leave the TUI holding an invalidated session on rejection.
+ */
+function enforceWorkspaceScopedSessionSwitches(runtime: AgentSessionRuntime, rootCwd: string): void {
+  const assertSameWorkspace = (targetCwd: string | undefined) => {
+    if (targetCwd !== undefined && resolve(targetCwd) !== rootCwd) throw workspaceScopeError(resolve(targetCwd));
+  };
+
+  const switchSession = runtime.switchSession.bind(runtime);
+  runtime.switchSession = async (...args: Parameters<AgentSessionRuntime["switchSession"]>) => {
+    const [sessionPath, options] = args;
+    assertSameWorkspace(options?.cwdOverride ?? readSessionHeaderCwd(sessionPath));
+    return switchSession(...args);
+  };
+
+  const importFromJsonl = runtime.importFromJsonl.bind(runtime);
+  runtime.importFromJsonl = async (...args: Parameters<AgentSessionRuntime["importFromJsonl"]>) => {
+    const [inputPath, cwdOverride] = args;
+    assertSameWorkspace(cwdOverride ?? readSessionHeaderCwd(inputPath));
+    return importFromJsonl(...args);
+  };
 }
 
 /**
