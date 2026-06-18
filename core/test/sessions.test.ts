@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, registerFauxProvider, type FauxResponseStep } from "@earendil-works/pi-ai";
-import { jsonlSessionStore, type AgentEvent, type PiSessionStore } from "../src/index.ts";
+import { inMemorySessionStore, jsonlSessionStore, type AgentEvent, type PiSessionStore } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 
@@ -102,6 +102,84 @@ describe("jsonlSessionStore (persistent sessions, first K-axis backend)", () => 
     expect(JSON.stringify(other)).not.toContain("hunter2"); // B cannot see A same-named session
   });
 
+});
+
+describe("crash-safety: reconcile interrupted tool calls on open", () => {
+  /** ids of assistant tool_use blocks that have no matching toolResult (a poisoned transcript). */
+  const danglingToolCalls = (messages: any[]): string[] => {
+    const settled = new Set(messages.filter((m) => m.role === "toolResult").map((m) => m.toolCallId));
+    const out: string[] = [];
+    for (const m of messages) {
+      if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
+      for (const b of m.content) if (b?.type === "toolCall" && !settled.has(b.id)) out.push(b.id);
+    }
+    return out;
+  };
+
+  /** Simulate a turn that died mid tool-execution: assistant(tool_use) persisted, NO result. */
+  async function poison(store: PiSessionStore, id: string) {
+    const s = await store.openOrCreate(id);
+    await s.appendMessage({ role: "user", content: [{ type: "text", text: "run it" }], timestamp: Date.now() } as any);
+    await s.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "x" } }],
+      provider: "faux",
+      model: "faux",
+      stopReason: "toolUse",
+      usage: { input: 0, output: 0 },
+      timestamp: Date.now(),
+    } as any);
+  }
+
+  it("reopening a crashed session repairs the gap with an interrupted error result", async () => {
+    const store = inMemorySessionStore();
+    await poison(store, "crashed");
+
+    const reopened = await store.openOrCreate("crashed"); // open -> reconcile fires
+    const { messages } = await reopened.buildContext();
+
+    expect(danglingToolCalls(messages)).toEqual([]); // no more dangling tool_use
+    const repaired = messages.find((m: any) => m.role === "toolResult" && m.toolCallId === "call-1") as any;
+    expect(repaired.isError).toBe(true);
+    // customer-facing contract: the model-visible text is neutral and decision-guiding,
+    // never "aborted" (cancellation misread) and never leaking infra detail (relayable to users).
+    const text = repaired.content[0].text as string;
+    expect(text).toMatch(/did not complete/i);
+    expect(text).not.toMatch(/abort|crash|restart|process/i);
+    // operational marker lives in details (not sent to the provider), for developer observability.
+    expect(repaired.details).toMatchObject({ fastagent: "interrupted-tool-call" });
+  });
+
+  it("a retry after the crash now completes instead of being rejected by a pairing-validating provider", async () => {
+    const store = inMemorySessionStore();
+    await poison(store, "crashed");
+
+    let contextSeen: any[] = [];
+    const agent = makeAgent(store, [
+      (context) => {
+        contextSeen = context.messages;
+        // Mirror Anthropic/OpenAI: reject an assistant tool_use without a matching tool_result.
+        return danglingToolCalls(context.messages).length > 0
+          ? fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 tool_use without tool_result" })
+          : fauxAssistantMessage("recovered");
+      },
+    ]);
+
+    const events = await drain(agent.invoke({ session: "crashed" }, { text: "are you there?" }));
+    expect(danglingToolCalls(contextSeen)).toEqual([]); // the provider never sees a dangling call
+    expect(events.at(-1)?.type).toBe("completed"); // was "failed" before the reconcile fix
+  });
+
+  it("a clean session is untouched (no spurious results appended)", async () => {
+    const store = inMemorySessionStore();
+    await drain(makeAgent(store, [fauxAssistantMessage("hello")]).invoke({ session: "clean" }, { text: "hi" }));
+    const reopened = await store.openOrCreate("clean");
+    const { messages } = await reopened.buildContext();
+    expect(messages.some((m: any) => m.role === "toolResult")).toBe(false);
+  });
+});
+
+describe("jsonlSessionStore (malicious id)", () => {
   it("malicious session id cannot escape the sessions directory because it is filename-encoded and can round-trip", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-sessions-"));
     const dir = join(root, "sessions");
