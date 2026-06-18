@@ -203,6 +203,34 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
     }
   });
 
+  it("a mid-history gap behind a later assistant turn is surfaced, not ignored", async () => {
+    // History: assistant(call-1) -> user -> assistant(error). The dangling call-1 is NOT on the
+    // leaf assistant; scanning every turn (not only the leaf) must still surface it.
+    const store = inMemorySessionStore();
+    const s = await store.openOrCreate("mid-later-assistant");
+    await s.appendMessage({ role: "user", content: [{ type: "text", text: "run it" }], timestamp: Date.now() } as any);
+    await s.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "x" } }],
+      provider: "faux", model: "faux", stopReason: "toolUse", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+    } as any);
+    await s.appendMessage({ role: "user", content: [{ type: "text", text: "still there?" }], timestamp: Date.now() } as any);
+    await s.appendMessage({
+      role: "assistant", content: [{ type: "text", text: "sorry, failed" }],
+      provider: "faux", model: "faux", stopReason: "error", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+    } as any);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const reopened = await store.openOrCreate("mid-later-assistant"); // open -> reconcile
+      const { messages } = await reopened.buildContext();
+      expect(messages.some((m: any) => m.role === "toolResult")).toBe(false); // NOT appended
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("call-1")); // surfaced (leaf has no tool_use)
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("pairing is turn-local: a reused tool-call id from an earlier turn does not mask a leaf gap", async () => {
     // tool-call ids are not globally unique (a model may restart at call-1 each turn). An earlier
     // *completed* call-1 must NOT make a later crashed call-1 look already paired.

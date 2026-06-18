@@ -49,14 +49,13 @@ export interface PiSessionStore {
  * restart ids at `call-1` each response), so matching against the whole transcript would falsely
  * "settle" the leaf's call against an earlier turn's identical id and skip the repair.
  *
- * Append-only logs can only repair a gap AT THE LEAF: the last assistant message followed by
- * nothing but its own toolResults. Appending a missing result there yields a valid
- * `assistant -> toolResults` run. We reconcile on every open, before any later turn is
- * appended, so a crash gap is always at the leaf — but we ENFORCE that rather than assume it:
- * a leaf call sitting behind later history (which appending cannot repair) is surfaced via
- * `console.warn` and left untouched, never "fixed" with an orphaned result that would only make
- * the transcript worse. (Unreachable in the current single-leaf, reconcile-on-open design; the
- * guard exists for forks/navigation or pre-fix poisoned sessions.)
+ * Append-only logs can only repair a gap AT THE LEAF (the last assistant followed by nothing but
+ * its own toolResults): appending the missing result there yields a valid `assistant -> toolResults`
+ * run. We still scan EVERY assistant turn-locally so a gap that is NOT at the leaf — an earlier
+ * assistant's call, or a leaf call already followed by later history — is surfaced via `console.warn`
+ * rather than silently ignored or "fixed" with an orphaned result that appending cannot place
+ * correctly. (Mid-history gaps are unreachable in the reconcile-on-open design — we reconcile before
+ * any later turn is appended — so the guard exists for forks/navigation or pre-fix sessions.)
  *
  * The synthetic result has three audiences, so it splits them deliberately:
  *   - `content` is read by the MODEL next turn (and may be relayed to the end user). It stays
@@ -70,7 +69,7 @@ export interface PiSessionStore {
 async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
   const { messages } = await session.buildContext();
 
-  // Leaf turn = the last assistant message.
+  // The leaf is the last assistant; only its gap can be repaired by appending (append-only log).
   let leafIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role === "assistant") {
@@ -78,38 +77,46 @@ async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
       break;
     }
   }
-  const leaf = leafIdx === -1 ? undefined : messages[leafIdx];
-  if (leaf?.role !== "assistant") return; // no assistant turn yet (also narrows `leaf`)
+  if (leafIdx === -1) return; // no assistant turn yet
+  const leafReparable = messages.slice(leafIdx + 1).every((m) => m.role === "toolResult");
 
-  // Turn-local pairing: only toolResults that FOLLOW the leaf can pair its calls. Using the
-  // tail (not the whole transcript) is what makes this robust to ids reused across turns.
-  const tail = messages.slice(leafIdx + 1);
-  const paired = new Set<string>();
-  for (const m of tail) {
-    if (m.role === "toolResult") paired.add(m.toolCallId);
-  }
-  const dangling = leaf.content.filter(
-    (block): block is Extract<typeof block, { type: "toolCall" }> =>
-      block.type === "toolCall" && !paired.has(block.id),
-  );
-  if (dangling.length === 0) return; // leaf has no tool_use, or all of them are already paired
+  // Scan EVERY assistant turn-locally: a tool_use is paired only by the toolResults that
+  // immediately follow it (up to the next non-toolResult). Turn-local windows are robust to
+  // ids reused across turns; scanning every turn (not only the leaf) lets a mid-history gap be
+  // surfaced rather than silently ignored.
+  const toRepair: { id: string; name: string }[] = [];
+  const orphaned: string[] = [];
+  messages.forEach((m, idx) => {
+    if (m.role !== "assistant") return;
+    const paired = new Set<string>();
+    for (let j = idx + 1; j < messages.length; j++) {
+      const next = messages[j];
+      if (next?.role !== "toolResult") break;
+      paired.add(next.toolCallId);
+    }
+    for (const block of m.content) {
+      if (block.type !== "toolCall" || paired.has(block.id)) continue;
+      // The leaf's gap (last assistant, followed only by its own results) is repairable by
+      // appending. Any earlier gap is mid-history: an append-only log cannot fix it.
+      if (idx === leafIdx && leafReparable) toRepair.push({ id: block.id, name: block.name });
+      else orphaned.push(block.id);
+    }
+  });
 
-  // Reconcilable only if nothing but the leaf's own toolResults follows it. If a later turn
-  // already sits after the gap (a broken invariant — we reconcile before any later turn is
-  // appended), appending cannot repair it; surface instead of adding an orphan.
-  if (tail.some((m) => m.role !== "toolResult")) {
+  if (orphaned.length > 0) {
+    // Behind later history: a result appended at the end arrives too late. Surface, do not add an
+    // orphan. Unreachable in the reconcile-on-open design; the guard is for forks/pre-fix sessions.
     console.warn(
       `[fastagent] unmatched tool_use is not at the session leaf; leaving it unreconciled ` +
-        `(an append-only log cannot repair a mid-history gap): toolCallIds=${dangling.map((b) => b.id).join(",")}`,
+        `(an append-only log cannot repair a mid-history gap): toolCallIds=${orphaned.join(",")}`,
     );
-    return;
   }
 
-  for (const block of dangling) {
+  for (const { id, name } of toRepair) {
     const result: AgentMessage = {
       role: "toolResult",
-      toolCallId: block.id,
-      toolName: block.name,
+      toolCallId: id,
+      toolName: name,
       content: [
         {
           type: "text",
