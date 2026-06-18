@@ -64,14 +64,7 @@ export async function buildChatRuntime(
   /** Session backend. Defaults to pi's project-scoped store; tests inject SessionManager.inMemory(). */
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
-  // Resolve the WHOLE fastagent agent INSIDE the factory, keyed on the factory's `cwd` (not the
-  // startup `dir`). pi reuses the factory to rebuild the session on /new, /resume, switch, and
-  // fork, passing that session's cwd. Keying off it means a session resumed from another workspace
-  // assembles THAT workspace's agent (prompt + skills + tools + services all from one cwd) instead
-  // of mixing two; /new also re-reads, so edits made since startup are picked up. The first build
-  // runs synchronously inside createAgentSessionRuntime below, so a missing model still throws at
-  // startup (caught by the CLI's failStartup).
-  const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+  async function resolveAssembly(cwd: string) {
     const { config } = await loadConfig(cwd);
     const modelSpec = resolveModelSpec(options.model, config);
     if (!modelSpec) {
@@ -111,6 +104,27 @@ export async function buildChatRuntime(
       instructions: definition.instructions,
       instructionsPath: definition.instructions !== undefined ? join(cwd, "AGENTS.md") : undefined,
     });
+
+    return { model, definition, defaultNames, customTools, customToolDefs, systemPrompt };
+  }
+
+  // pi calls the factory again on /new, /resume, switch, and fork. Dynamic imports for config/tools
+  // are cached by Node, so trying to treat same-cwd rebuilds as hot reload would silently produce a
+  // half-fresh agent (new AGENTS.md/skills from fs, stale config/tools from ESM cache). Keep chat a
+  // coherent startup snapshot per cwd instead: restart `fastagent chat` to load edits. Different cwd
+  // resumes still assemble that workspace once, so cross-workspace sessions do not mix agents.
+  const assemblies = new Map<string, Promise<Awaited<ReturnType<typeof resolveAssembly>>>>();
+  const assemblyFor = (cwd: string) => {
+    let cached = assemblies.get(cwd);
+    if (cached === undefined) {
+      cached = resolveAssembly(cwd);
+      assemblies.set(cwd, cached);
+    }
+    return cached;
+  };
+
+  const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+    const { model, definition, defaultNames, customTools, customToolDefs, systemPrompt } = await assemblyFor(cwd);
 
     const services = await createAgentSessionServices({
       cwd,

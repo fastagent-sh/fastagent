@@ -49,11 +49,18 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
         expect((sp.match(/Current working directory/g) ?? []).length).toBe(1);
         expect((sp.match(/<available_skills>/g) ?? []).length).toBe(1);
 
+        // Chat is a coherent startup snapshot per cwd: same-cwd rebuilds (/new, fork) must not
+        // half-refresh only the fs-read pieces while config/tools stay stale in Node's import cache.
+        await writeFile(join(dir, "AGENTS.md"), "# Changed Agent\nSHOULD_NOT_HOT_RELOAD_IN_CHAT.\n");
+
         // P1 regression guard: the TUI rebuilds the session on /new (and /resume, fork) via the same
         // factory. The custom tool must come back — registering through customTools (not patching
         // state afterward) is what makes that hold.
         await rt.newSession();
         expect(rt.session.agent.state.tools.map((t) => t.name)).toContain("ping");
+        const rebuiltPrompt = rt.session.agent.state.systemPrompt ?? "";
+        expect(rebuiltPrompt).toContain("MAGIC_CHAT_MARKER_91");
+        expect(rebuiltPrompt).not.toContain("SHOULD_NOT_HOT_RELOAD_IN_CHAT");
       } finally {
         rt.session.dispose?.();
       }
