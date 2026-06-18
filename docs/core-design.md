@@ -159,6 +159,8 @@ Each `invoke` creates a fresh harness bound to the requested session and discard
 
 This gives the reference implementation portable conformance in miniature: two separate instances sharing the same external store can continue the same session.
 
+**Crash-safe reopen.** A turn that dies mid tool-execution leaves the session with an assistant `tool_use` whose result was never persisted (pi writes the assistant message at `message_end`, *before* the tools run). The stateless retry path — reopen the session, re-invoke — depends on that transcript staying valid, but pi reconciles nothing (neither `buildSessionContext` nor `convertToLlm`), so the next provider call rejects the dangling `tool_use` and the retry fails: a mid-turn crash poisons the session. So the store reconciles on every open of an *existing* session, appending an honest error tool result for each unmatched call — mirroring pi's own `createErrorToolResult` for aborted calls, at the recovery boundary pi's inline abort path cannot reach (the process was already dead). This restores transcript *validity* only; tool side-effect idempotency stays the tool's responsibility (SPEC §6 non-guarantee). The synthetic result's `content` is model-facing (neutral, decision-guiding, no "aborted" misread, no infra leak); the operational marker lives in `details`, which is never sent to the provider.
+
 Full fork/navigation session-admin is a separate draft: see [session](session.md).
 
 ## 8. Same-session concurrency
@@ -304,3 +306,4 @@ The container is the v1 "machine-state independence" boundary: copy the project,
 - AgentCore target adapter with external sessions and distributed locking (the async `Lease` port).
 - Production observability sink for cleanup anomalies (§3) without violating SPEC terminal discipline.
 - Engine #2, which will prove which pi-specific seams (e.g. `PiSessionStore`) should become engine-neutral abstractions.
+- Crash-safe reopen (§7) is reconciled in fastagent's session store today; the more fundamental fix is upstream in pi's `buildSessionContext` (the single context-rebuild point). If accepted there, the fastagent-layer reconciliation retires.
