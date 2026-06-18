@@ -53,7 +53,7 @@ export interface LoadedConfig {
  * Load `<dir>/fastagent.config.ts|.js|.mjs`. No file = zero-config ({});
  * a file with the wrong shape throws (fail visibly).
  */
-export async function loadConfig(dir: string, options: { bust?: boolean } = {}): Promise<LoadedConfig> {
+export async function loadConfig(dir: string): Promise<LoadedConfig> {
   const names = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"];
   const found = names.map((name) => join(dir, name)).filter((path) => existsSync(path));
   if (found.length === 0) return { config: {} };
@@ -63,11 +63,7 @@ export async function loadConfig(dir: string, options: { bust?: boolean } = {}):
 
   // Exactly one config file at this point (0 and >1 handled above).
   const path = found[0]!;
-  // bust: append a unique query so Node's immutable ESM cache re-evaluates an edited config
-  // (dev hot-reload). Without it, a saved model/tools/http change — or a syntax error — would be
-  // silently ignored until restart. The default path caches normally (one load for build/start).
-  const url = pathToFileURL(path).href + (options.bust ? `?v=${Date.now()}` : "");
-  const mod = (await import(url)) as { default?: unknown };
+  const mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
   const config = mod.default;
   if (!config || typeof config !== "object") {
     throw new Error(`${path}: must default-export defineConfig({...})`);

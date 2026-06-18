@@ -45,28 +45,6 @@ async function invoke(url: string, session: string, text: string): Promise<Agent
 }
 
 describe("http channel (SSE)", () => {
-  it("accepts an agent getter and serves the current (hot-swappable) agent", async () => {
-    const fake = (mark: string): Agent => ({
-      // eslint-disable-next-line require-yield
-      async *invoke() {
-        yield { type: "text", delta: mark };
-        yield { type: "completed" };
-      },
-    });
-    let agent = fake("A");
-    const server = createServer(createInvokeHandler(() => agent));
-    await new Promise<void>((r) => server.listen(0, r));
-    const url = `http://localhost:${(server.address() as AddressInfo).port}`;
-    try {
-      expect((await invoke(url, "s", "x")).find((e) => e.type === "text")).toMatchObject({ delta: "A" });
-      agent = fake("B"); // hot-swap behind the getter
-      expect((await invoke(url, "s", "x")).find((e) => e.type === "text")).toMatchObject({ delta: "B" });
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((r) => server.close(() => r()));
-    }
-  });
-
   it("POST /invoke streams text + completed over SSE", async () => {
     const srv = await startServer([fauxAssistantMessage("hello over http")]);
     try {

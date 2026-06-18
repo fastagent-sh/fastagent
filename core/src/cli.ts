@@ -19,7 +19,6 @@ import { createServer } from "node:http";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
-import type { Agent } from "./agent.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
@@ -229,20 +228,10 @@ async function reportAuth(modelSpec: string): Promise<void> {
   }
 }
 
-/** A reloadable assembly. `dispose` is the teardown seam for future stateful resources (no-op today). */
-type DevAgent = Awaited<ReturnType<typeof createPiAgentFromWorkspace>> & { dispose?: () => Promise<void> };
+type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;
 
-/** An agent that surfaces a reload failure through the channel: every invoke yields one `failed`. */
-function errorAgent(details: string): Agent {
-  return {
-    async *invoke() {
-      yield { type: "failed", details: `agent reload failed: ${details}`, retryable: false };
-    },
-  };
-}
-
-/** The agents/skills/tools/collisions report lines (shared by the initial report and each reload). */
-function reportAgentsSkillsTools(a: DevAgent): void {
+/** The agents/skills/tools/collisions report lines. */
+function reportAgentsSkillsTools(a: Assembled): void {
   console.error(`[fastagent] agents: ${a.definition.instructions ? "AGENTS.md" : "(none)"}`);
   console.error(
     `[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
@@ -265,85 +254,102 @@ async function reportAvailableGlobalSkills(definition: LoadedDefinition): Promis
 }
 
 /**
- * Watch the workspace for source edits (debounced) and call `onChange`. Native fs.watch, recursive;
- * machine state (.fastagent), deps (node_modules), and VCS (.git) are ignored so the agent's own
- * session writes never trigger a reload. If watching is unavailable, edits need a manual restart.
+ * `fastagent dev` hot-reload is process-restart, not in-process swap: the dev command is a
+ * SUPERVISOR that spawns a worker (this same command with FASTAGENT_DEV_WORKER set) to assemble +
+ * serve, and restarts that worker on any workspace edit. A fresh process per reload means what is
+ * served is ALWAYS your latest code — no in-process module-cache staleness, including modules a
+ * tool/config imports (the reason in-process busting was dropped). The supervisor never crashes;
+ * a broken edit stops the worker with a loud error and waits for the next save to retry.
  */
-function watchWorkspace(onChange: () => void): void {
-  const ignoredTop = new Set([".fastagent", "node_modules", ".git"]);
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    watch(dir, { recursive: true }, (_event, filename) => {
-      if (!filename) return;
-      if (ignoredTop.has(filename.split(/[\\/]/)[0]!)) return;
-      clearTimeout(timer);
-      timer = setTimeout(onChange, 200);
-    });
-    console.error(`[fastagent] watching for changes — edit AGENTS.md / skills / tools to hot-reload (--no-watch to disable)`);
-  } catch (error) {
-    console.error(`[fastagent] warn: file watching unavailable (${(error as Error).message}); edits need a manual restart`);
+async function runDev(): Promise<void> {
+  // Worker (spawned by the supervisor) or `--no-watch`: assemble + serve once, no watching.
+  if (process.env.FASTAGENT_DEV_WORKER === "1" || values["no-watch"]) {
+    await serveOnce();
+    return;
   }
+  parsePort(values.port, "--port"); // validate the flag up front so a bad --port fails before spawning
+  runDevSupervisor();
 }
 
-async function runDev(): Promise<void> {
-  // Validate flags before any assembly work: argument errors must fail instantly,
-  // not after the startup report. (config's http.port is range-checked by loadConfig.)
+/** Assemble the workspace agent and serve it once (the dev worker; also the --no-watch path). */
+async function serveOnce(): Promise<void> {
   const portFlag = parsePort(values.port, "--port");
   loadDotEnv(dir);
-  // Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy
-  // so blocked providers are reachable (reads HTTP(S)_PROXY/NO_PROXY from the env).
-  // install() keeps fetch and the dispatcher on the SAME undici implementation —
-  // pi does exactly this (core/http-dispatcher): Node 26's bundled fetch consuming
-  // responses through npm undici's dispatcher skips gzip decompression, which turned
-  // streamed turns into empty stopReason:"stop" messages (verified live 2026-06-11).
+  // Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy, and keep
+  // fetch + dispatcher on the SAME undici implementation (pi's core/http-dispatcher; otherwise
+  // Node 26's bundled fetch skips gzip decompression — empty stopReason:"stop" messages).
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const assemble = (bustModuleCache: boolean): Promise<DevAgent> =>
-    createPiAgentFromWorkspace(dir, { model: values.model, globalSkills, bustModuleCache });
+  const a = await createPiAgentFromWorkspace(dir, { model: values.model, globalSkills }).catch(failStartup);
+  console.error(`[fastagent] dir:    ${a.definition.dir}`);
+  console.error(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
+  console.error(`[fastagent] model:  ${a.modelSpec}`);
+  await reportAuth(a.modelSpec);
+  reportAgentsSkillsTools(a);
+  await reportAvailableGlobalSkills(a.definition);
+  serve(a.agent, portFlag ?? a.config.http?.port ?? 8787);
+}
 
-  let current: DevAgent = await assemble(false).catch(failStartup);
+/**
+ * Supervisor: spawn the worker and restart it on debounced workspace edits. Each restart is a
+ * fresh process (always-latest, no stale module cache). The supervisor itself never exits on a bad
+ * edit — the worker fails loudly (its own startup error) and the supervisor waits for the next save.
+ */
+function runDevSupervisor(): void {
+  const ignoredTop = new Set([".fastagent", "node_modules", ".git"]);
+  let worker: ReturnType<typeof spawn> | undefined;
+  let reloadPending = false;
+  let timer: NodeJS.Timeout | undefined;
 
-  console.error(`[fastagent] dir:    ${current.definition.dir}`);
-  console.error(`[fastagent] config: ${current.configPath ?? "(zero-config)"}`);
-  console.error(`[fastagent] model:  ${current.modelSpec}`);
-  await reportAuth(current.modelSpec);
-  reportAgentsSkillsTools(current);
-  await reportAvailableGlobalSkills(current.definition);
-
-  // Hot-reload (in-process): the channel reads the LATEST agent via the getter, so a reload
-  // swaps it without rebinding the server or dropping in-flight turns (and sessions persist on
-  // disk, so continuity survives regardless). A broken edit does NOT crash dev and is NOT served
-  // silently: it swaps in an error agent so `/invoke` returns `failed`, and logs the error loudly.
-  serve(() => current.agent, portFlag ?? current.config.http?.port ?? 8787);
-  if (!values["no-watch"]) {
-    // Monotonic reload id: concurrent reloads (a save during a slow assemble) must not race —
-    // only the LATEST attempt's outcome (success or failure) is applied; older results are
-    // discarded so a slow/stale reload can't overwrite a newer agent or re-apply a fixed failure.
-    let latest = 0;
-    watchWorkspace(() => {
-      const seq = ++latest;
-      void (async () => {
-        try {
-          const next = await assemble(true);
-          if (seq !== latest) {
-            await next.dispose?.(); // superseded by a newer reload — drop this assembly
-            return;
-          }
-          const prev = current;
-          current = next;
-          console.error(`[fastagent] reloaded`);
-          reportAgentsSkillsTools(current);
-          await prev.dispose?.(); // teardown seam for future stateful resources (no-op today)
-        } catch (error) {
-          if (seq !== latest) return; // superseded — don't clobber a newer (possibly fixed) state
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`[fastagent] reload FAILED — serving a failure until you fix it:\n${message}`);
-          current = { ...current, agent: errorAgent(message) };
-        }
-      })();
+  const spawnWorker = (): void => {
+    const w = spawn(process.execPath, [process.argv[1]!, ...process.argv.slice(2)], {
+      stdio: "inherit",
+      env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
     });
+    worker = w;
+    w.on("exit", (code, signal) => {
+      if (worker !== w) return; // already superseded
+      worker = undefined;
+      if (reloadPending) {
+        reloadPending = false;
+        spawnWorker(); // restart requested: the old worker has now exited, so the port is free
+      } else {
+        // The worker stopped on its own — a broken edit (non-zero) or a crash. Do not loop; the
+        // error is already printed (inherited stdio). Wait for the next save to retry.
+        console.error(`[fastagent] dev stopped (worker exited: ${signal ?? code}) — save a change to retry`);
+      }
+    });
+  };
+
+  const triggerReload = (): void => {
+    console.error(`[fastagent] change detected — restarting…`);
+    if (worker) {
+      reloadPending = true;
+      worker.kill("SIGTERM"); // the exit handler respawns once the port is released
+    } else {
+      spawnWorker(); // worker was down (broken edit) — retry now
+    }
+  };
+
+  try {
+    watch(dir, { recursive: true }, (_event, filename) => {
+      if (!filename || ignoredTop.has(filename.split(/[\\/]/)[0]!)) return;
+      clearTimeout(timer);
+      timer = setTimeout(triggerReload, 200);
+    });
+    console.error(`[fastagent] watching for changes — edits restart the dev worker (--no-watch to disable)`);
+  } catch (error) {
+    console.error(`[fastagent] warn: file watching unavailable (${(error as Error).message}); edits need a manual restart`);
   }
+
+  const shutdown = (): never => {
+    worker?.kill("SIGTERM");
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  spawnWorker();
 }
 
 async function runBuild(): Promise<void> {

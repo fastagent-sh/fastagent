@@ -40,12 +40,6 @@ export interface CreatePiAgentFromWorkspaceOptions {
    * skill, materialize it into the artifact (build --global-skills) — do not rely on this at deploy.
    */
   globalSkills?: boolean;
-  /**
-   * Re-import the workspace's ESM modules (fastagent.config.* AND tools/) with a cache-busting
-   * query, so dev hot-reload picks up their edits (Node's ESM cache is immutable). AGENTS.md /
-   * skills are read via readFile each time, so they need no busting.
-   */
-  bustModuleCache?: boolean;
 }
 
 /**
@@ -74,7 +68,7 @@ export async function createPiAgentFromWorkspace(
   /** Discovered tools dropped on a name clash with a default/config tool (surfaced, not silent). */
   toolCollisions: ToolCollision[];
 }> {
-  const { config, path: configPath }: LoadedConfig = await loadConfig(dir, { bust: options.bustModuleCache });
+  const { config, path: configPath }: LoadedConfig = await loadConfig(dir);
   const modelSpec = resolveModelSpec(options.model, config);
   if (!modelSpec) {
     throw new Error(
@@ -82,7 +76,7 @@ export async function createPiAgentFromWorkspace(
     );
   }
   // Discover tools/ and merge with pi defaults + config.tools (existing win name clashes).
-  const discovered = await loadTools(dir, { bust: options.bustModuleCache });
+  const discovered = await loadTools(dir);
   const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, dir), discovered.tools);
   const toolCollisions = [...discovered.collisions, ...crossCollisions];
   const defaultNames = new Set(piDefaultTools(dir).map((t) => t.name));
