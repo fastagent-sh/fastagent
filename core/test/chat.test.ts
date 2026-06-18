@@ -43,6 +43,11 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
         expect(sp).toContain("MAGIC_CHAT_MARKER_91");
         expect(sp).toMatch(/greet/);
         expect(st.model).toBeDefined(); // the config model resolved (fastagent's, not pi's default)
+        // Duplication guard: pi appends the skill section + env (date/cwd); the override must carry
+        // only base+instructions, or chat drifts from served and wastes context.
+        expect((sp.match(/Current date/g) ?? []).length).toBe(1);
+        expect((sp.match(/Current working directory/g) ?? []).length).toBe(1);
+        expect((sp.match(/<available_skills>/g) ?? []).length).toBe(1);
 
         // P1 regression guard: the TUI rebuilds the session on /new (and /resume, fork) via the same
         // factory. The custom tool must come back — registering through customTools (not patching
