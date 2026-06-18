@@ -22,7 +22,7 @@ import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher }
 import { createInvokeHandler } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
-import { listModels, loadConfig } from "./engines/pi/config.ts";
+import { listModels, loadConfig, resolveModel } from "./engines/pi/config.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
@@ -267,7 +267,17 @@ async function runDev(): Promise<void> {
     await serveOnce();
     return;
   }
-  parsePort(values.port, "--port"); // validate the flag up front so a bad --port fails before spawning
+  // Validate the non-editable FLAGS before spawning, so a bad flag fails immediately like the
+  // pre-supervisor CLI did — not in a worker that exits and waits for a save that can't fix an
+  // argv value. (A bad model from the CONFIG is editable, so that stays a worker "save to retry".)
+  parsePort(values.port, "--port");
+  if (values.model) {
+    try {
+      resolveModel(values.model);
+    } catch (error) {
+      failStartup(error); // a bad --model is a clean argument error, not an unhandled throw
+    }
+  }
   runDevSupervisor();
 }
 
