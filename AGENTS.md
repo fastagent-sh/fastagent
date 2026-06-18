@@ -32,7 +32,7 @@ core/
 │   └── engines/pi/              # the pi reference implementation
 │       ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
 │       ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
-│       ├── init.ts              # `init`: scaffold a minimal runnable workspace
+│       ├── init.ts              # `init`: scaffold a runnable agent (complete by default; --minimal)
 │       ├── dev.ts               # `dev` opener: open a workspace → agent (authoring posture)
 │       ├── build.ts             # `build`: compile a workspace → self-contained artifact
 │       ├── start.ts             # `start` opener: run a built artifact (production posture)

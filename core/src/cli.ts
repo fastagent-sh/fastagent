@@ -13,6 +13,7 @@
  * Process-level side effects (proxy dispatcher, .env loading) belong here — the CLI
  * is the application entry point.
  */
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -30,7 +31,7 @@ import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {
   console.error(`usage:
-  fastagent init   [dir]
+  fastagent init   [dir] [--minimal] [--no-install]
   fastagent models
   fastagent tool   <name> '<json-args>' [dir]
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills]
@@ -41,8 +42,11 @@ function usage(code: number): never {
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --global-skills   also load the machine's global skills (~/.pi/agent/skills,
                            ~/.agents/skills); default is definition-only (dev == deployed)
-  init   scaffold a minimal runnable workspace in dir (default .): AGENTS.md, an example
-         skill, fastagent.config.mjs, .gitignore. Refuses to overwrite an existing workspace.
+  init   scaffold a runnable agent in dir (default .) and run npm install. Default is a
+         complete agent: AGENTS.md, a skill, tools/word-count.ts (a code tool), config,
+         package.json, .npmrc, .gitignore. Refuses to overwrite an existing workspace.
+         --minimal      markdown-only (no package.json/tool/install) — a prompt+skills agent
+         --no-install   scaffold but skip npm install
   models list the available "provider/modelId" specs (use one with --model or in the config).
   tool   run one tool (from tools/ or config.tools) directly with JSON args — no model, no
          server, no tokens. Fast feedback while authoring: fastagent tool add '{"a":2,"b":3}'
@@ -73,6 +77,8 @@ const { positionals, values } = parseArgs({
     "sessions-dir": { type: "string" },
     force: { type: "boolean" },
     "global-skills": { type: "boolean" },
+    minimal: { type: "boolean" },
+    "no-install": { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -139,23 +145,48 @@ async function runTool(): Promise<void> {
 }
 
 async function runInit(): Promise<void> {
-  const { created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir).catch(failStartup);
-  console.error(`[fastagent] initialized ${dir}`);
+  const minimal = values.minimal ?? false;
+  const { complete, created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir, { minimal }).catch(
+    failStartup,
+  );
+  console.error(`[fastagent] initialized ${dir}${complete ? "" : " (minimal)"}`);
   if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
   if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
   if (intoNonEmpty) {
     console.error(`  note: scaffolded into a non-empty directory; for a clean start, run \`fastagent init <name>\` (a fresh subdir)`);
   }
   for (const w of warnings) console.error(`[fastagent] warn: ${w}`);
+
+  // A complete agent has a tool that imports @kid7st/fastagent, so its deps must be installed.
+  // Run `npm install` for the developer (the package is public; users handling a private package
+  // will have run `npm login`). --no-install skips it; --minimal has no deps at all. A kept
+  // (pre-existing) package.json is not ours, so we do not install over it.
+  const willInstall = complete && !values["no-install"] && created.includes("package.json");
+  let installFailed = false;
+  if (willInstall) {
+    console.error(`[fastagent] installing dependencies (npm install)…`);
+    installFailed = (await npmInstall(dir)) !== 0;
+    if (installFailed) console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
+  }
+
+  // Next steps act on the scaffolded dir. For a named target (`fastagent init my-agent`) lead with
+  // a `cd` so bare `fastagent dev` (which defaults to .) is correct. Credentials are NOT mentioned
+  // here — `dev`/`start` prompt for them in context when missing (reportAuth); front-loading an
+  // instruction a newcomer can't act on yet is noise.
   console.error(`  next steps:`);
-  // The .env / config / `fastagent dev` steps all act on the scaffolded dir. When init targeted a
-  // non-cwd dir (e.g. `fastagent init my-agent`, the recommended clean-start flow), lead with a
-  // `cd` so every step — including bare `fastagent dev` (which defaults its dir to .) — is correct.
   const rel = relative(process.cwd(), dir);
   if (rel !== "") console.error(`    cd ${rel}`);
-  console.error(`    1. credentials — authenticate with \`pi login\`, or set the provider's API key in .env`);
-  console.error(`    2. optional   — edit fastagent.config.mjs to choose your model`);
-  console.error(`    3. fastagent dev   # serve locally and iterate`);
+  if (complete && (values["no-install"] || installFailed)) console.error(`    npm install`);
+  console.error(`    fastagent dev   # serve locally and iterate`);
+}
+
+/** Run `npm install` in `cwd` (inherit stdio so the user sees progress). Returns the exit code. */
+function npmInstall(cwd: string): Promise<number> {
+  return new Promise((resolveCode) => {
+    const child = spawn("npm", ["install"], { cwd, stdio: "inherit" });
+    child.on("close", (code) => resolveCode(code ?? 1));
+    child.on("error", () => resolveCode(1)); // npm not on PATH, etc.
+  });
 }
 
 /**
