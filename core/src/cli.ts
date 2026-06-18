@@ -25,7 +25,6 @@ import { buildPiArtifact } from "./engines/pi/build.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
-import { runPiChat } from "./engines/pi/chat.ts";
 import { resolveTools } from "./engines/pi/create.ts";
 import { scaffoldWorkspace } from "./engines/pi/init.ts";
 import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
@@ -277,9 +276,13 @@ async function runDev(): Promise<void> {
   runDevSupervisor();
 }
 
-/** Open the workspace agent in pi's interactive TUI (the `chat` channel). */
+/** Open the workspace agent in pi's interactive TUI (the pi-specific `chat` command). */
 async function runChat(): Promise<void> {
   loadDotEnv(dir); // model spec + provider API keys may come from .env
+  // Lazy-import: chat pulls pi's interactive TUI module graph (InteractiveMode, pi-tui). A static
+  // import would load it on EVERY command; headless `start`/`dev` never need it. Runtime hygiene
+  // only — the dependency (and install size) is unchanged.
+  const { runPiChat } = await import("./engines/pi/chat.ts");
   await runPiChat(dir, { model: values.model, globalSkills }).catch(failStartup);
 }
 
