@@ -119,6 +119,18 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
         await expect(rt.importFromJsonl(imported, other)).rejects.toThrow(/fastagent chat is workspace-scoped/);
         expect(invalidated).toBe(false);
         expect(rt.cwd).toBe(dir);
+
+        // A legacy/imported session with NO cwd header must run in the chat workspace, not fall back
+        // to pi's process.cwd() (which is this repo here, not `dir`) and trip the cross-workspace
+        // teardown path. It should import successfully and stay pinned to the chat root.
+        const noCwd = join(root, "no-cwd-session.jsonl");
+        await writeFile(
+          noCwd,
+          `${JSON.stringify({ type: "session", version: 3, id: "nocwd", timestamp: new Date().toISOString() })}\n`,
+        );
+        expect(process.cwd()).not.toBe(dir);
+        await expect(rt.importFromJsonl(noCwd)).resolves.toMatchObject({ cancelled: false });
+        expect(rt.cwd).toBe(dir);
       } finally {
         rt.session.dispose?.();
       }
