@@ -1,6 +1,6 @@
 name: Publish
 
-# Publish @kid7st/core to GitHub Packages when a GitHub Release is published.
+# Publish @kid7st/fastagent to GitHub Packages when a GitHub Release is published.
 # The release tag is the manual gate; the job re-verifies (typecheck + test) before
 # publishing so a non-green tag never ships. Version comes from core/package.json —
 # bump it before tagging (GitHub Packages rejects re-publishing an existing version).

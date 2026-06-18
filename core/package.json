@@ -1,5 +1,5 @@
 {
-  "name": "@kid7st/core",
+  "name": "@kid7st/fastagent",
   "version": "0.1.0",
   "description": "Reference implementation of the Agent Handler contract: fan in pi AgentHarness events into the SPEC event stream.",
   "license": "MIT",
