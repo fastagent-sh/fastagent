@@ -16,10 +16,11 @@
  * folder" (dir-only AGENTS.md + `skills/` + `tools/`). So we INJECT fastagent's assembly into pi's
  * session:
  *   - model      → fromServices({ model })            (fastagent's flag>env>config resolution)
- *   - prompt     → resourceLoaderOptions.systemPromptOverride (fastagent's exact served prompt;
- *                  byte-faithful to what HTTP serves — pi's TUI-doc base section is intentionally
- *                  NOT added, so chat == served)
- *   - skills     → resourceLoaderOptions.skillsOverride  (fastagent's skills, for invocation)
+ *   - prompt     → resourceLoaderOptions.systemPromptOverride = fastagent's base + instructions
+ *                  ONLY; pi appends the skill section and env (date/cwd) itself, so including them
+ *                  here would duplicate both. The result equals what dev/start serve (pi's skill/env
+ *                  renderers are the ones assembleSystemPrompt mirrors).
+ *   - skills     → resourceLoaderOptions.skillsOverride  (fastagent's skills, for the section + invocation)
  *   - tools      → default coding tools by NAME (pi rebuilds them cwd-bound, keeping its rich TUI
  *                  rendering) + fastagent's custom tools registered via pi's customTools path, so
  *                  they survive the TUI rebuilding the session on /new, /resume, and fork
@@ -40,7 +41,7 @@ import {
   createAgentSessionServices,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
+import { loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./definition.ts";
 import { loadTools, mergeDiscoveredTools } from "./tool.ts";
@@ -63,52 +64,54 @@ export async function buildChatRuntime(
   /** Session backend. Defaults to pi's project-scoped store; tests inject SessionManager.inMemory(). */
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
-  const { config }: { config: FastagentConfig } = await loadConfig(dir);
-  const modelSpec = resolveModelSpec(options.model, config);
-  if (!modelSpec) {
-    throw new Error(
-      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
-    );
-  }
-  const model = resolveModel(modelSpec);
-
-  const env = new NodeExecutionEnv({ cwd: dir });
-  const definition = await loadAgentDefinition(dir, {
-    env,
-    skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
-  });
-
-  // Same tool resolution as the dev opener (defaults + config.tools + discovered tools/, deduped),
-  // then split: defaults go to pi by NAME (so pi rebuilds them cwd-bound, keeping rich TUI
-  // rendering); customs go through pi's `customTools` registration path.
-  const discovered = await loadTools(dir);
-  const { tools } = mergeDiscoveredTools(resolveTools(config, dir), discovered.tools);
-  const defaultNames = piDefaultTools(dir).map((t) => t.name);
-  const customTools = tools.filter((t) => !defaultNames.includes(t.name));
-  // Adapt fastagent's AgentTool to pi's ToolDefinition. Registering through the session factory
-  // (below) — not patching session.agent.state afterward — is what makes the customs survive the
-  // TUI rebuilding the session on /new, /resume, and fork. (`parameters` is plain JSON-Schema; pi
-  // accepts it. The extra execute args onUpdate/ctx are unused by fastagent tools.)
-  const customToolDefs = customTools.map((t) => ({
-    name: t.name,
-    label: t.name,
-    description: t.description ?? "",
-    parameters: t.parameters,
-    execute: (id: string, params: unknown, signal: AbortSignal | undefined) => t.execute(id, params, signal),
-  })) as unknown as ToolDefinition[];
-
-  // fastagent's exact served system prompt (re-evaluated per call so the date stays the turn's).
-  const systemPrompt = (): string =>
-    assembleSystemPrompt({
-      base: piBasePrompt({ tools }),
-      instructions: definition.instructions,
-      instructionsPath: definition.instructions !== undefined ? join(dir, "AGENTS.md") : undefined,
-      skills: definition.skills,
-      date: new Date().toISOString().slice(0, 10),
-      cwd: dir,
+  // Resolve the WHOLE fastagent agent INSIDE the factory, keyed on the factory's `cwd` (not the
+  // startup `dir`). pi reuses the factory to rebuild the session on /new, /resume, switch, and
+  // fork, passing that session's cwd. Keying off it means a session resumed from another workspace
+  // assembles THAT workspace's agent (prompt + skills + tools + services all from one cwd) instead
+  // of mixing two; /new also re-reads, so edits made since startup are picked up. The first build
+  // runs synchronously inside createAgentSessionRuntime below, so a missing model still throws at
+  // startup (caught by the CLI's failStartup).
+  const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+    const { config } = await loadConfig(cwd);
+    const modelSpec = resolveModelSpec(options.model, config);
+    if (!modelSpec) {
+      throw new Error(
+        `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
+      );
+    }
+    const model = resolveModel(modelSpec);
+    const env = new NodeExecutionEnv({ cwd });
+    const definition = await loadAgentDefinition(cwd, {
+      env,
+      skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
     });
 
-  const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+    // Same tool resolution as the dev opener (defaults + config.tools + discovered tools/, deduped),
+    // then split: defaults go to pi by NAME (so pi rebuilds them cwd-bound, keeping rich TUI
+    // rendering); customs go through pi's `customTools` path so they survive /new, /resume, fork.
+    const discovered = await loadTools(cwd);
+    const { tools } = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
+    const defaultNames = piDefaultTools(cwd).map((t) => t.name);
+    const customTools = tools.filter((t) => !defaultNames.includes(t.name));
+    // Adapt fastagent's AgentTool to pi's ToolDefinition. (`parameters` is plain JSON-Schema; pi
+    // accepts it. The extra execute args onUpdate/ctx are unused by fastagent tools.)
+    const customToolDefs = customTools.map((t) => ({
+      name: t.name,
+      label: t.name,
+      description: t.description ?? "",
+      parameters: t.parameters,
+      execute: (id: string, params: unknown, signal: AbortSignal | undefined) => t.execute(id, params, signal),
+    })) as unknown as ToolDefinition[];
+
+    // base + instructions ONLY. pi appends the skill section (from skillsOverride) and the env
+    // (date/cwd) itself; including them here would duplicate both — chat must match what dev/start
+    // serve, and pi's renderers are the ones fastagent's assembleSystemPrompt mirrors.
+    const systemPrompt = assembleSystemPrompt({
+      base: piBasePrompt({ tools }),
+      instructions: definition.instructions,
+      instructionsPath: definition.instructions !== undefined ? join(cwd, "AGENTS.md") : undefined,
+    });
+
     const services = await createAgentSessionServices({
       cwd,
       resourceLoaderOptions: {
@@ -118,7 +121,7 @@ export async function buildChatRuntime(
         noExtensions: true,
         noPromptTemplates: true,
         noContextFiles: true,
-        systemPromptOverride: () => systemPrompt(),
+        systemPromptOverride: () => systemPrompt,
         // Replace pi's discovered skills with fastagent's resolved skills (so the agent's skills are
         // invocable and match the prompt's listing). fastagent's Skill (pi-agent-core: content
         // inline) is reshaped to pi-coding-agent's (read from filePath/baseDir at invocation time).
