@@ -40,6 +40,8 @@ export interface CreatePiAgentFromWorkspaceOptions {
    * skill, materialize it into the artifact (build --global-skills) — do not rely on this at deploy.
    */
   globalSkills?: boolean;
+  /** Re-import tool modules with a cache-busting query (dev hot-reload re-assembles per change). */
+  bustToolCache?: boolean;
 }
 
 /**
@@ -76,7 +78,7 @@ export async function createPiAgentFromWorkspace(
     );
   }
   // Discover tools/ and merge with pi defaults + config.tools (existing win name clashes).
-  const discovered = await loadTools(dir);
+  const discovered = await loadTools(dir, { bust: options.bustToolCache });
   const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, dir), discovered.tools);
   const toolCollisions = [...discovered.collisions, ...crossCollisions];
   const defaultNames = new Set(piDefaultTools(dir).map((t) => t.name));
