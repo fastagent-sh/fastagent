@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readdir } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -176,6 +176,36 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
     const reopened = await store.openOrCreate("clean");
     const { messages } = await reopened.buildContext();
     expect(messages.some((m: any) => m.role === "toolResult")).toBe(false);
+  });
+
+  it("an unmatched call behind later history is surfaced, not silently appended (fail visibly)", async () => {
+    // A gap that is NOT at the leaf (a later turn already sits after the dangling call) cannot
+    // be repaired by appending to an append-only log; appending would only add an orphan.
+    const store = inMemorySessionStore();
+    const s = await store.openOrCreate("mid-history");
+    await s.appendMessage({ role: "user", content: [{ type: "text", text: "run it" }], timestamp: Date.now() } as any);
+    await s.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "x" } }],
+      provider: "faux", model: "faux", stopReason: "toolUse", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+    } as any);
+    // a later turn lands after the dangling call without it ever being reconciled
+    await s.appendMessage({ role: "user", content: [{ type: "text", text: "still there?" }], timestamp: Date.now() } as any);
+    await s.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "sorry, failed" }],
+      provider: "faux", model: "faux", stopReason: "error", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+    } as any);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const reopened = await store.openOrCreate("mid-history"); // open -> reconcile
+      const { messages } = await reopened.buildContext();
+      expect(messages.some((m: any) => m.role === "toolResult")).toBe(false); // NOT appended
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("call-1")); // surfaced instead
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
