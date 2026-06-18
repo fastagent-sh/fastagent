@@ -30,7 +30,7 @@
  * show). Cross-workspace session switches are rejected: `.env` is process-global, so one chat TUI is
  * one workspace; run `fastagent chat <other-dir>` for another workspace.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
@@ -122,10 +122,12 @@ export async function buildChatRuntime(
   // startup workspace; switching the same TUI process to another cwd would either inherit those env
   // values or require mutating global env at runtime (secrets/leakage footgun). Fail visibly and ask
   // the user to run a separate `fastagent chat <dir>` for that workspace.
-  const rootCwd = resolve(dir);
+  const rootCwd = canonicalCwd(dir);
   let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {
-    const activeCwd = resolve(cwd);
+    // Compare canonical paths: process.cwd() (pi's fallback) returns the realpath, so a workspace
+    // reached through a symlink would otherwise mismatch a non-realpath rootCwd.
+    const activeCwd = canonicalCwd(cwd);
     if (activeCwd !== rootCwd) {
       throw workspaceScopeError(activeCwd);
     }
@@ -204,6 +206,16 @@ function workspaceScopeError(targetCwd: string): Error {
   return new Error(`fastagent chat is workspace-scoped: cannot switch to ${targetCwd}; run \`fastagent chat ${targetCwd}\` instead`);
 }
 
+/** Resolve to a canonical (symlink-free) path so comparisons match pi's process.cwd() realpath. */
+function canonicalCwd(p: string): string {
+  const resolved = resolve(p);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved; // a path that doesn't exist (e.g. a foreign workspace cwd) stays as resolved
+  }
+}
+
 function readSessionHeaderCwd(sessionPath: string): string | undefined {
   const resolvedPath = resolve(sessionPath);
   if (!existsSync(resolvedPath)) return undefined;
@@ -211,7 +223,7 @@ function readSessionHeaderCwd(sessionPath: string): string | undefined {
     if (!line.trim()) continue;
     try {
       const entry = JSON.parse(line) as { type?: unknown; cwd?: unknown };
-      if (entry.type === "session") return typeof entry.cwd === "string" ? resolve(entry.cwd) : undefined;
+      if (entry.type === "session") return typeof entry.cwd === "string" ? canonicalCwd(entry.cwd) : undefined;
     } catch {
       // Ignore malformed lines the same way pi's session loader does; no header cwd → caller pins root.
     }
@@ -220,31 +232,32 @@ function readSessionHeaderCwd(sessionPath: string): string | undefined {
 }
 
 /**
- * Keep resume/import inside the chat's single workspace, deciding BEFORE delegating to pi. pi tears
- * down the active session before invoking the runtime factory, so a factory-only guard would leave
- * the TUI on an invalidated session when it rejects. We always pin pi's effective cwd to rootCwd:
- * a session that explicitly records a different workspace is rejected up front, while a session with
- * no cwd (legacy/imported files) runs in the chat workspace instead of falling back to pi's
- * `process.cwd()` (which, when chat was launched from outside <dir>, would itself force a
- * cross-workspace rebuild and tear the live session down).
+ * Keep resume/import inside the chat's single workspace, deciding BEFORE delegating to pi.
+ *
+ * The chat process is chdir'd into rootCwd at startup (see runChat), so pi's `?? process.cwd()`
+ * fallback for a session with no cwd header already resolves to rootCwd on EVERY replacement path
+ * (resume, import, fork, new). The one remaining gap is a session that EXPLICITLY records a
+ * different workspace cwd: pi would bind that foreign cwd and the runtime factory would reject it —
+ * but only AFTER tearing the live session down, leaving the TUI on an invalidated session. Reject
+ * such a switch up front. (fork/new carry no foreign target: fork reopens the current, already
+ * vetted session; new reuses the current cwd.)
  */
 function enforceWorkspaceScopedSessionSwitches(runtime: AgentSessionRuntime, rootCwd: string): void {
-  const pinnedTargetCwd = (sessionPath: string, cwdOverride: string | undefined): string => {
-    const known = cwdOverride !== undefined ? resolve(cwdOverride) : readSessionHeaderCwd(sessionPath);
-    if (known !== undefined && known !== rootCwd) throw workspaceScopeError(known);
-    return rootCwd;
+  const rejectForeignTarget = (sessionPath: string, cwdOverride: string | undefined): void => {
+    const target = cwdOverride !== undefined ? canonicalCwd(cwdOverride) : readSessionHeaderCwd(sessionPath);
+    if (target !== undefined && target !== rootCwd) throw workspaceScopeError(target);
   };
 
   const switchSession = runtime.switchSession.bind(runtime);
   runtime.switchSession = async (...args: Parameters<AgentSessionRuntime["switchSession"]>) => {
-    const [sessionPath, options] = args;
-    return switchSession(sessionPath, { ...options, cwdOverride: pinnedTargetCwd(sessionPath, options?.cwdOverride) });
+    rejectForeignTarget(args[0], args[1]?.cwdOverride);
+    return switchSession(...args);
   };
 
   const importFromJsonl = runtime.importFromJsonl.bind(runtime);
   runtime.importFromJsonl = async (...args: Parameters<AgentSessionRuntime["importFromJsonl"]>) => {
-    const [inputPath, cwdOverride] = args;
-    return importFromJsonl(inputPath, pinnedTargetCwd(inputPath, cwdOverride));
+    rejectForeignTarget(args[0], args[1]);
+    return importFromJsonl(...args);
   };
 }
 
