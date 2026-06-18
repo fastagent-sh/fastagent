@@ -25,10 +25,12 @@
  *                  rendering) + fastagent's custom tools registered via pi's customTools path, so
  *                  they survive the TUI rebuilding the session on /new, /resume, and fork
  *
- * Auth/login, model HTTP, and sessions ride pi's native machinery on purpose (the login dialog,
- * OAuth, and /resume are part of the "real harness" experience this command exists to show).
+ * Auth/login, model HTTP, and same-workspace sessions ride pi's native machinery on purpose (the
+ * login dialog, OAuth, and /resume are part of the "real harness" experience this command exists to
+ * show). Cross-workspace session switches are rejected: `.env` is process-global, so one chat TUI is
+ * one workspace; run `fastagent chat <other-dir>` for another workspace.
  */
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSessionRuntime,
@@ -111,16 +113,21 @@ export async function buildChatRuntime(
   // pi calls the factory again on /new, /resume, switch, and fork. Dynamic imports for config/tools
   // are cached by Node, so trying to treat same-cwd rebuilds as hot reload would silently produce a
   // half-fresh agent (new AGENTS.md/skills from fs, stale config/tools from ESM cache). Keep chat a
-  // coherent startup snapshot per cwd instead: restart `fastagent chat` to load edits. Different cwd
-  // resumes still assemble that workspace once, so cross-workspace sessions do not mix agents.
-  const assemblies = new Map<string, Promise<Awaited<ReturnType<typeof resolveAssembly>>>>();
+  // coherent startup snapshot instead: restart `fastagent chat` to load edits.
+  //
+  // Also keep chat workspace-scoped. `.env` is process-global and is loaded by the CLI for the
+  // startup workspace; switching the same TUI process to another cwd would either inherit those env
+  // values or require mutating global env at runtime (secrets/leakage footgun). Fail visibly and ask
+  // the user to run a separate `fastagent chat <dir>` for that workspace.
+  const rootCwd = resolve(dir);
+  let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {
-    let cached = assemblies.get(cwd);
-    if (cached === undefined) {
-      cached = resolveAssembly(cwd);
-      assemblies.set(cwd, cached);
+    const activeCwd = resolve(cwd);
+    if (activeCwd !== rootCwd) {
+      throw new Error(`fastagent chat is workspace-scoped: cannot switch to ${activeCwd}; run \`fastagent chat ${activeCwd}\` instead`);
     }
-    return cached;
+    assembly ??= resolveAssembly(rootCwd);
+    return assembly;
   };
 
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
@@ -164,16 +171,16 @@ export async function buildChatRuntime(
   };
 
   return createAgentSessionRuntime(createRuntime, {
-    cwd: dir,
+    cwd: rootCwd,
     agentDir: getAgentDir(),
-    sessionManager: sessionManager ?? SessionManager.create(dir),
+    sessionManager: sessionManager ?? SessionManager.create(rootCwd),
   });
 }
 
 /**
  * Open the workspace's agent in pi's interactive TUI and run until the user exits. The agent is
  * fastagent's assembled agent (same model/tools/skills/prompt as dev/start serve); pi's TUI handles
- * login, rendering, sessions, and /resume natively.
+ * login, rendering, and same-workspace sessions natively.
  */
 export async function runPiChat(dir: string, options: RunPiChatOptions = {}): Promise<void> {
   const runtime = await buildChatRuntime(dir, options);

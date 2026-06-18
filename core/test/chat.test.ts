@@ -68,4 +68,33 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("rejects cross-workspace session switches because chat env is workspace-scoped", async () => {
+    const root = await mkdtemp(join(tmpdir(), "fa-chat-scope-"));
+    const dir = join(root, "agent-a");
+    const other = join(root, "agent-b");
+    const sessionsDir = join(root, "sessions");
+    try {
+      await mkdir(dir, { recursive: true });
+      await mkdir(other, { recursive: true });
+      await writeFile(join(dir, "AGENTS.md"), "# Agent A\n");
+      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      await writeFile(join(other, "AGENTS.md"), "# Agent B\n");
+      await writeFile(join(other, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      const imported = join(root, "other-session.jsonl");
+      await writeFile(
+        imported,
+        `${JSON.stringify({ type: "session", version: 3, id: "other", timestamp: new Date().toISOString(), cwd: other })}\n`,
+      );
+
+      const rt = await buildChatRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
+      try {
+        await expect(rt.importFromJsonl(imported, other)).rejects.toThrow(/fastagent chat is workspace-scoped/);
+      } finally {
+        rt.session.dispose?.();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
