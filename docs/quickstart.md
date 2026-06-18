@@ -59,6 +59,8 @@ data: {"type":"completed"}
 
 Reuse the same `session` value to continue a conversation; conversations persist under `.fastagent/sessions`, so a `dev` restart keeps them.
 
+To try the agent interactively instead of over HTTP, run `fastagent chat`. It opens the **same** assembled agent (same model, tools, skills, instructions) in pi's full interactive TUI — streaming, tool rendering, `/` commands, model switching, session resume — so you can vibe-check what you'll serve without writing a client.
+
 ## 3. Add a tool
 
 A tool is a file in `tools/`; the **filename is the tool name**, and `tools/` is auto-discovered — no registration in the config. Drop in `tools/reverse.ts`:
