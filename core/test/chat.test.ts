@@ -93,6 +93,34 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
     }
   });
 
+  it("suppresses pi's machine-global APPEND_SYSTEM.md so chat matches what dev/start serve", async () => {
+    // getAgentDir() honors PI_CODING_AGENT_DIR; point it at a temp agent dir holding an append
+    // prompt. dev/start never read that file, so chat must not either, or fidelity breaks.
+    const dir = await mkdtemp(join(tmpdir(), "fa-chat-append-"));
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-agentdir-"));
+    const prev = process.env.PI_CODING_AGENT_DIR;
+    try {
+      await writeFile(join(dir, "AGENTS.md"), "# Agent\nDEFN_ONLY_MARKER.\n");
+      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      await writeFile(join(agentDir, "APPEND_SYSTEM.md"), "GLOBAL_APPEND_LEAK_MARKER must not reach chat.\n");
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+
+      const rt = await buildChatRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        const sp = rt.session.agent.state.systemPrompt ?? "";
+        expect(sp).toContain("DEFN_ONLY_MARKER"); // fastagent's prompt is there
+        expect(sp).not.toContain("GLOBAL_APPEND_LEAK_MARKER"); // pi's append prompt is suppressed
+      } finally {
+        rt.session.dispose?.();
+      }
+    } finally {
+      if (prev === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = prev;
+      await rm(dir, { recursive: true, force: true });
+      await rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects cross-workspace session switches because chat env is workspace-scoped", async () => {
     const root = await mkdtemp(join(tmpdir(), "fa-chat-scope-"));
     const dir = join(root, "agent-a");

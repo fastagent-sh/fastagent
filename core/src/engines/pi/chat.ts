@@ -142,12 +142,15 @@ export async function buildChatRuntime(
       cwd,
       resourceLoaderOptions: {
         // Definition-only, like dev/start: suppress pi's machine-global discovery (the developer's
-        // own ~/.pi extensions, slash commands, and global AGENTS.md) so chat runs the SAME agent
-        // that gets served, not the authoring machine's pi setup layered on top.
+        // own ~/.pi extensions, slash commands, global AGENTS.md, and APPEND_SYSTEM.md append
+        // prompts) so chat runs the SAME agent that gets served, not the authoring machine's pi
+        // setup layered on top. (noContextFiles covers AGENTS.md context only; the append prompt is
+        // discovered separately and needs its own override.)
         noExtensions: true,
         noPromptTemplates: true,
         noContextFiles: true,
         systemPromptOverride: () => systemPrompt,
+        appendSystemPromptOverride: () => [],
         // Replace pi's discovered skills with fastagent's resolved skills (so the agent's skills are
         // invocable and match the prompt's listing). fastagent's Skill (pi-agent-core: content
         // inline) is reshaped to pi-coding-agent's (read from filePath/baseDir at invocation time).
