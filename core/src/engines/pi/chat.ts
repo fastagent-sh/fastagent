@@ -213,34 +213,38 @@ function readSessionHeaderCwd(sessionPath: string): string | undefined {
       const entry = JSON.parse(line) as { type?: unknown; cwd?: unknown };
       if (entry.type === "session") return typeof entry.cwd === "string" ? resolve(entry.cwd) : undefined;
     } catch {
-      // Ignore malformed lines the same way pi's session loader does; no cwd means no preflight.
+      // Ignore malformed lines the same way pi's session loader does; no header cwd → caller pins root.
     }
   }
   return undefined;
 }
 
 /**
- * Reject cross-workspace resume/import BEFORE calling pi's replacement methods. pi tears down the
- * active session before invoking the runtime factory; a factory-only cwd guard would therefore
- * leave the TUI holding an invalidated session on rejection.
+ * Keep resume/import inside the chat's single workspace, deciding BEFORE delegating to pi. pi tears
+ * down the active session before invoking the runtime factory, so a factory-only guard would leave
+ * the TUI on an invalidated session when it rejects. We always pin pi's effective cwd to rootCwd:
+ * a session that explicitly records a different workspace is rejected up front, while a session with
+ * no cwd (legacy/imported files) runs in the chat workspace instead of falling back to pi's
+ * `process.cwd()` (which, when chat was launched from outside <dir>, would itself force a
+ * cross-workspace rebuild and tear the live session down).
  */
 function enforceWorkspaceScopedSessionSwitches(runtime: AgentSessionRuntime, rootCwd: string): void {
-  const assertSameWorkspace = (targetCwd: string | undefined) => {
-    if (targetCwd !== undefined && resolve(targetCwd) !== rootCwd) throw workspaceScopeError(resolve(targetCwd));
+  const pinnedTargetCwd = (sessionPath: string, cwdOverride: string | undefined): string => {
+    const known = cwdOverride !== undefined ? resolve(cwdOverride) : readSessionHeaderCwd(sessionPath);
+    if (known !== undefined && known !== rootCwd) throw workspaceScopeError(known);
+    return rootCwd;
   };
 
   const switchSession = runtime.switchSession.bind(runtime);
   runtime.switchSession = async (...args: Parameters<AgentSessionRuntime["switchSession"]>) => {
     const [sessionPath, options] = args;
-    assertSameWorkspace(options?.cwdOverride ?? readSessionHeaderCwd(sessionPath));
-    return switchSession(...args);
+    return switchSession(sessionPath, { ...options, cwdOverride: pinnedTargetCwd(sessionPath, options?.cwdOverride) });
   };
 
   const importFromJsonl = runtime.importFromJsonl.bind(runtime);
   runtime.importFromJsonl = async (...args: Parameters<AgentSessionRuntime["importFromJsonl"]>) => {
     const [inputPath, cwdOverride] = args;
-    assertSameWorkspace(cwdOverride ?? readSessionHeaderCwd(inputPath));
-    return importFromJsonl(...args);
+    return importFromJsonl(inputPath, pinnedTargetCwd(inputPath, cwdOverride));
   };
 }
 
