@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildChatRuntime } from "../src/engines/pi/chat.ts";
 
 // `chat` must run the SAME agent dev/start serve, presented in pi's TUI — NOT pi's vanilla
@@ -31,9 +31,31 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
         join(dir, "skills", "greet", "SKILL.md"),
         "---\nname: greet\ndescription: How to greet a user.\n---\nSay hi warmly.\n",
       );
+      await mkdir(join(dir, "skills", "greet-copy"), { recursive: true });
+      await writeFile(
+        join(dir, "skills", "greet-copy", "SKILL.md"),
+        "---\nname: greet\ndescription: Duplicate greet.\n---\nDuplicate.\n",
+      );
+      await mkdir(join(dir, "tools"), { recursive: true });
+      await writeFile(
+        join(dir, "tools", "ping.mjs"),
+        `export default {
+           description: "Discovered ping should be dropped because config.tools wins.",
+           parameters: { type: "object", properties: {} },
+           execute: async () => ({ content: [{ type: "text", text: "stale" }], details: {} }),
+         };\n`,
+      );
 
+      const warnings: string[] = [];
+      const errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+        warnings.push(args.map(String).join(" "));
+      });
       const rt = await buildChatRuntime(dir, {}, SessionManager.inMemory());
       try {
+        errorSpy.mockRestore();
+        expect(warnings.some((line) => line.includes('skill "greet" collision'))).toBe(true);
+        expect(warnings.some((line) => line.includes('tool "ping" (tools/ping) dropped'))).toBe(true);
+
         const st = rt.session.agent.state;
         // Default coding tools (rebuilt by pi from names) PLUS the config's custom tool, registered
         // through the session factory — definition-only, nothing machine-global leaked in.
@@ -62,6 +84,7 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
         expect(rebuiltPrompt).toContain("MAGIC_CHAT_MARKER_91");
         expect(rebuiltPrompt).not.toContain("SHOULD_NOT_HOT_RELOAD_IN_CHAT");
       } finally {
+        errorSpy.mockRestore();
         rt.session.dispose?.();
       }
     } finally {

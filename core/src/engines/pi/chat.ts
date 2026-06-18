@@ -47,7 +47,7 @@ import {
 import { loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./definition.ts";
-import { loadTools, mergeDiscoveredTools } from "./tool.ts";
+import { loadTools, mergeDiscoveredTools, type ToolCollision } from "./tool.ts";
 
 export interface RunPiChatOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -81,12 +81,14 @@ export async function buildChatRuntime(
       env,
       skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
     });
+    reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
     // Same tool resolution as the dev opener (defaults + config.tools + discovered tools/, deduped),
     // then split: defaults go to pi by NAME (so pi rebuilds them cwd-bound, keeping rich TUI
     // rendering); customs go through pi's `customTools` path so they survive /new, /resume, fork.
     const discovered = await loadTools(cwd);
-    const { tools } = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
+    const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
+    reportToolCollisions([...discovered.collisions, ...crossCollisions]);
     const defaultNames = piDefaultTools(cwd).map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));
     // Adapt fastagent's AgentTool to pi's ToolDefinition. (`parameters` is plain JSON-Schema; pi
@@ -178,6 +180,24 @@ export async function buildChatRuntime(
   });
   enforceWorkspaceScopedSessionSwitches(runtime, rootCwd);
   return runtime;
+}
+
+function reportDefinitionWarnings(
+  collisions: { name: string; winnerPath: string; loserPath: string }[],
+  diagnostics: { code: string; message: string; path: string }[],
+): void {
+  for (const c of collisions) {
+    console.error(`[fastagent] warn: skill "${c.name}" collision — using ${c.winnerPath}, ignoring ${c.loserPath}`);
+  }
+  for (const d of diagnostics) {
+    console.error(`[fastagent] warn: ${d.code}: ${d.message} (${d.path})`);
+  }
+}
+
+function reportToolCollisions(collisions: ToolCollision[]): void {
+  for (const c of collisions) {
+    console.error(`[fastagent] warn: tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`);
+  }
 }
 
 function workspaceScopeError(targetCwd: string): Error {
