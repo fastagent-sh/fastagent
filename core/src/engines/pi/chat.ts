@@ -21,8 +21,8 @@
  *                  NOT added, so chat == served)
  *   - skills     → resourceLoaderOptions.skillsOverride  (fastagent's skills, for invocation)
  *   - tools      → default coding tools by NAME (pi rebuilds them cwd-bound, keeping its rich TUI
- *                  rendering) + fastagent's custom tools appended to session state (functional; the
- *                  prose listing already lives in the injected system prompt)
+ *                  rendering) + fastagent's custom tools registered via pi's customTools path, so
+ *                  they survive the TUI rebuilding the session on /new, /resume, and fork
  *
  * Auth/login, model HTTP, and sessions ride pi's native machinery on purpose (the login dialog,
  * OAuth, and /resume are part of the "real harness" experience this command exists to show).
@@ -34,6 +34,7 @@ import {
   type CreateAgentSessionRuntimeFactory,
   InteractiveMode,
   SessionManager,
+  type ToolDefinition,
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
@@ -78,11 +79,23 @@ export async function buildChatRuntime(
   });
 
   // Same tool resolution as the dev opener (defaults + config.tools + discovered tools/, deduped),
-  // then split: defaults go to pi by NAME (rich rendering), customs are appended to session state.
+  // then split: defaults go to pi by NAME (so pi rebuilds them cwd-bound, keeping rich TUI
+  // rendering); customs go through pi's `customTools` registration path.
   const discovered = await loadTools(dir);
   const { tools } = mergeDiscoveredTools(resolveTools(config, dir), discovered.tools);
   const defaultNames = piDefaultTools(dir).map((t) => t.name);
   const customTools = tools.filter((t) => !defaultNames.includes(t.name));
+  // Adapt fastagent's AgentTool to pi's ToolDefinition. Registering through the session factory
+  // (below) — not patching session.agent.state afterward — is what makes the customs survive the
+  // TUI rebuilding the session on /new, /resume, and fork. (`parameters` is plain JSON-Schema; pi
+  // accepts it. The extra execute args onUpdate/ctx are unused by fastagent tools.)
+  const customToolDefs = customTools.map((t) => ({
+    name: t.name,
+    label: t.name,
+    description: t.description ?? "",
+    parameters: t.parameters,
+    execute: (id: string, params: unknown, signal: AbortSignal | undefined) => t.execute(id, params, signal),
+  })) as unknown as ToolDefinition[];
 
   // fastagent's exact served system prompt (re-evaluated per call so the date stays the turn's).
   const systemPrompt = (): string =>
@@ -127,23 +140,17 @@ export async function buildChatRuntime(
       sessionManager,
       sessionStartEvent,
       model,
-      tools: defaultNames,
+      tools: [...defaultNames, ...customTools.map((t) => t.name)],
+      customTools: customToolDefs,
     });
     return { ...result, services, diagnostics: services.diagnostics };
   };
 
-  const runtime = await createAgentSessionRuntime(createRuntime, {
+  return createAgentSessionRuntime(createRuntime, {
     cwd: dir,
     agentDir: getAgentDir(),
     sessionManager: sessionManager ?? SessionManager.create(dir),
   });
-
-  // Mount fastagent's custom tools functionally. Appended (not replaced) so the default tools keep
-  // pi's built-in rich rendering; the customs' prose already lives in the injected system prompt.
-  if (customTools.length > 0) {
-    runtime.session.agent.state.tools = [...runtime.session.agent.state.tools, ...customTools];
-  }
-  return runtime;
 }
 
 /**
