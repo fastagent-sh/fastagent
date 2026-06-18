@@ -98,7 +98,10 @@ const TOOL_EXTS = new Set([".ts", ".js", ".mjs"]);
  * its default export taken as the tool, and named from the filename (authoritative). Missing
  * `tools/` is normal (returns none). A file that does not default-export a tool fails visibly.
  */
-export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; collisions: ToolCollision[] }> {
+export async function loadTools(
+  dir: string,
+  options: { bust?: boolean } = {},
+): Promise<{ tools: AgentTool[]; collisions: ToolCollision[] }> {
   const toolsDir = join(dir, "tools");
   let entries;
   try {
@@ -116,9 +119,12 @@ export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; coll
     const ext = extname(entry.name);
     if (!TOOL_EXTS.has(ext) || entry.name.endsWith(".d.ts")) continue;
     const file = join(toolsDir, entry.name);
+    // bust: append a unique query so Node's immutable ESM cache re-evaluates an edited tool
+    // (dev hot-reload). The default path is cached normally (one load for build/start).
+    const url = pathToFileURL(file).href + (options.bust ? `?v=${Date.now()}` : "");
     let mod: { default?: unknown };
     try {
-      mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
+      mod = (await import(url)) as { default?: unknown };
     } catch (error) {
       // Two common causes get a specific hint instead of a raw stack: a missing dependency
       // (deps not installed — run `npm install`) and a non-ESM workspace (the tool's `import`

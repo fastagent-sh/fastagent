@@ -14,15 +14,17 @@
  * is the application entry point.
  */
 import { spawn } from "node:child_process";
+import { watch } from "node:fs";
 import { createServer } from "node:http";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
+import type { Agent } from "./agent.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
-import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
+import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
 import { scaffoldWorkspace } from "./engines/pi/init.ts";
@@ -34,7 +36,7 @@ function usage(code: number): never {
   fastagent init   [dir] [--minimal] [--no-install]
   fastagent models
   fastagent tool   <name> '<json-args>' [dir]
-  fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills]
+  fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills] [--no-watch]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
 
@@ -79,6 +81,7 @@ const { positionals, values } = parseArgs({
     "global-skills": { type: "boolean" },
     minimal: { type: "boolean" },
     "no-install": { type: "boolean" },
+    "no-watch": { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -226,6 +229,62 @@ async function reportAuth(modelSpec: string): Promise<void> {
   }
 }
 
+/** A reloadable assembly. `dispose` is the teardown seam for future stateful resources (no-op today). */
+type DevAgent = Awaited<ReturnType<typeof createPiAgentFromWorkspace>> & { dispose?: () => Promise<void> };
+
+/** An agent that surfaces a reload failure through the channel: every invoke yields one `failed`. */
+function errorAgent(details: string): Agent {
+  return {
+    async *invoke() {
+      yield { type: "failed", details: `agent reload failed: ${details}`, retryable: false };
+    },
+  };
+}
+
+/** The agents/skills/tools/collisions report lines (shared by the initial report and each reload). */
+function reportAgentsSkillsTools(a: DevAgent): void {
+  console.error(`[fastagent] agents: ${a.definition.instructions ? "AGENTS.md" : "(none)"}`);
+  console.error(
+    `[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
+  );
+  if (a.toolNames.length > 0) console.error(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
+  reportToolCollisions(a.toolCollisions);
+  reportDefinitionWarnings(a.definition.collisions, a.definition.diagnostics);
+}
+
+/** Startup-only diagnostic: machine global skills that exist but were not loaded (definition-only). */
+async function reportAvailableGlobalSkills(definition: LoadedDefinition): Promise<void> {
+  if (globalSkills) return;
+  const loaded = definition.skills.map((s) => s.name);
+  const withGlobals = await loadAgentDefinition(dir, { skillPaths: defaultGlobalSkillPaths() }).catch(() => undefined);
+  const available = (withGlobals?.skills ?? []).map((s) => s.name).filter((n) => !loaded.includes(n));
+  if (available.length > 0) {
+    console.error(`[fastagent] ${available.length} global skill(s) available but not loaded: ${available.join(", ")}`);
+    console.error(`            use in dev: --global-skills | ship: copy into skills/ (or build --global-skills)`);
+  }
+}
+
+/**
+ * Watch the workspace for source edits (debounced) and call `onChange`. Native fs.watch, recursive;
+ * machine state (.fastagent), deps (node_modules), and VCS (.git) are ignored so the agent's own
+ * session writes never trigger a reload. If watching is unavailable, edits need a manual restart.
+ */
+function watchWorkspace(onChange: () => void): void {
+  const ignoredTop = new Set([".fastagent", "node_modules", ".git"]);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    watch(dir, { recursive: true }, (_event, filename) => {
+      if (!filename) return;
+      if (ignoredTop.has(filename.split(/[\\/]/)[0]!)) return;
+      clearTimeout(timer);
+      timer = setTimeout(onChange, 200);
+    });
+    console.error(`[fastagent] watching for changes — edit AGENTS.md / skills / tools to hot-reload (--no-watch to disable)`);
+  } catch (error) {
+    console.error(`[fastagent] warn: file watching unavailable (${(error as Error).message}); edits need a manual restart`);
+  }
+}
+
 async function runDev(): Promise<void> {
   // Validate flags before any assembly work: argument errors must fail instantly,
   // not after the startup report. (config's http.port is range-checked by loadConfig.)
@@ -240,37 +299,41 @@ async function runDev(): Promise<void> {
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const { agent, definition, config, configPath, modelSpec, toolNames, toolCollisions } =
-    await createPiAgentFromWorkspace(dir, {
-      model: values.model,
-      globalSkills,
-    }).catch(failStartup);
+  const assemble = (bustToolCache: boolean): Promise<DevAgent> =>
+    createPiAgentFromWorkspace(dir, { model: values.model, globalSkills, bustToolCache });
 
-  console.error(`[fastagent] dir:    ${definition.dir}`);
-  console.error(`[fastagent] config: ${configPath ?? "(zero-config)"}`);
-  console.error(`[fastagent] model:  ${modelSpec}`);
-  await reportAuth(modelSpec);
-  console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
-  const loadedSkills = definition.skills.map((s) => s.name);
-  console.error(
-    `[fastagent] skills: ${loadedSkills.join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
-  );
-  if (!globalSkills) {
-    // Definition-only by default: surface globals that exist on this machine but were
-    // NOT loaded, so dropped skills are visible at dev time (not discovered at deploy).
-    // A separate scan (dev-only diagnostic); the agent itself stays definition-only.
-    const withGlobals = await loadAgentDefinition(dir, { skillPaths: defaultGlobalSkillPaths() }).catch(() => undefined);
-    const available = (withGlobals?.skills ?? []).map((s) => s.name).filter((n) => !loadedSkills.includes(n));
-    if (available.length > 0) {
-      console.error(`[fastagent] ${available.length} global skill(s) available but not loaded: ${available.join(", ")}`);
-      console.error(`            use in dev: --global-skills | ship: copy into skills/ (or build --global-skills)`);
-    }
+  let current: DevAgent = await assemble(false).catch(failStartup);
+
+  console.error(`[fastagent] dir:    ${current.definition.dir}`);
+  console.error(`[fastagent] config: ${current.configPath ?? "(zero-config)"}`);
+  console.error(`[fastagent] model:  ${current.modelSpec}`);
+  await reportAuth(current.modelSpec);
+  reportAgentsSkillsTools(current);
+  await reportAvailableGlobalSkills(current.definition);
+
+  // Hot-reload (in-process): the channel reads the LATEST agent via the getter, so a reload
+  // swaps it without rebinding the server or dropping in-flight turns (and sessions persist on
+  // disk, so continuity survives regardless). A broken edit does NOT crash dev and is NOT served
+  // silently: it swaps in an error agent so `/invoke` returns `failed`, and logs the error loudly.
+  serve(() => current.agent, portFlag ?? current.config.http?.port ?? 8787);
+  if (!values["no-watch"]) {
+    watchWorkspace(() => {
+      void (async () => {
+        try {
+          const next = await assemble(true);
+          const prev = current;
+          current = next;
+          console.error(`[fastagent] reloaded`);
+          reportAgentsSkillsTools(current);
+          await prev.dispose?.(); // teardown seam for future stateful resources (no-op today)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[fastagent] reload FAILED — serving a failure until you fix it:\n${message}`);
+          current = { ...current, agent: errorAgent(message) };
+        }
+      })();
+    });
   }
-  if (toolNames.length > 0) console.error(`[fastagent] tools:  ${toolNames.join(", ")}`);
-  reportToolCollisions(toolCollisions);
-  reportDefinitionWarnings(definition.collisions, definition.diagnostics);
-
-  serve(agent, portFlag ?? config.http?.port ?? 8787);
 }
 
 async function runBuild(): Promise<void> {

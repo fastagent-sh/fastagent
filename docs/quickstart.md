@@ -41,7 +41,7 @@ For a pure prompt+skills agent with no code and no dependencies, use `fastagent 
 fastagent dev
 ```
 
-The startup report shows the model, auth source, loaded skills, and tools. If it prints `auth: (none found)`, set credentials (see prerequisites) and re-run. Then send a turn:
+The startup report shows the model, auth source, loaded skills, and tools, and then watches for changes (hot-reload; `--no-watch` to disable). If it prints `auth: (none found)`, set credentials (see prerequisites) and re-run. Then send a turn:
 
 ```bash
 curl -N -X POST localhost:8787/invoke \
@@ -82,7 +82,7 @@ fastagent tool reverse '{"text":"hello"}'
 # → { "reversed": "olleh" }
 ```
 
-Restart `fastagent dev` and the model can call `reverse`. Mention the tool in `AGENTS.md` so the model knows when to use it. (`input` is a [Zod](https://zod.dev) schema: the args are validated before `execute`, and an invalid call is reported back to the model, not a crash.)
+`fastagent dev` **hot-reloads** — save the file and it picks up the new tool (and edits to `AGENTS.md` / skills) without a restart; a broken edit is reported (the console and `/invoke` show the error) without crashing the server. Mention the tool in `AGENTS.md` so the model knows when to use it. (`input` is a [Zod](https://zod.dev) schema: the args are validated before `execute`, and an invalid call is reported back to the model, not a crash.)
 
 ## 4. Build and run the artifact
 

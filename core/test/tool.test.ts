@@ -61,6 +61,22 @@ describe("loadTools (filesystem discovery)", () => {
     expect((await tools[0]!.execute("c", {})).details).toBe("pong");
   });
 
+  it("bust re-imports an edited tool (dev hot-reload); without bust it stays cached", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-tools-"));
+    await mkdir(join(dir, "tools"));
+    const file = join(dir, "tools", "x.mjs");
+    const tool = (v: string) =>
+      `export default { description: "d", parameters: { type: "object" }, async execute() { return { content: [{ type: "text", text: "${v}" }], details: "${v}" }; } };`;
+    await writeFile(file, tool("v1"));
+    expect((await (await loadTools(dir)).tools[0]!.execute("c", {})).details).toBe("v1");
+
+    await writeFile(file, tool("v2")); // edit the tool
+    // same URL → Node's immutable ESM cache returns the old module
+    expect((await (await loadTools(dir)).tools[0]!.execute("c", {})).details).toBe("v1");
+    // bust → a fresh import picks up the edit
+    expect((await (await loadTools(dir, { bust: true })).tools[0]!.execute("c", {})).details).toBe("v2");
+  });
+
   it("fails visibly when a tool file does not default-export a tool", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-tools-"));
     await mkdir(join(dir, "tools"));
