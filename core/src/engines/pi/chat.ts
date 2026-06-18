@@ -1,11 +1,14 @@
 /**
  * Chat: open a workspace into pi's interactive TUI (`fastagent chat`).
  *
- * `chat` is a CHANNEL, symmetric to the HTTP channel (channels/http.ts): it consumes the SAME
- * assembled agent that `dev`/`start` serve, but presents it through pi's real interactive TUI
- * (`InteractiveMode` — editor, streaming render, tool-call display, slash commands, model cycling,
- * session tree/fork, compaction) instead of HTTP/SSE. We deliberately reuse pi's full TUI rather
- * than hand-rolling a REPL: a crude line loop would misrepresent the runtime, which IS pi.
+ * `chat` is a pi-specific COMMAND, beside dev.ts/start.ts — NOT an engine-neutral channel. The HTTP
+ * channel (channels/http.ts) consumes only the Agent contract (agent.ts), so it works with any
+ * engine; `chat` instead drives pi's full session API (`InteractiveMode` — editor, streaming
+ * render, tool-call display, slash commands, model cycling, session tree/fork, compaction) and
+ * never touches the contract. It HAS to be engine-coupled: the contract is a minimal turn-based
+ * `invoke`, while a real TUI needs the engine's whole session lifecycle — forcing it through the
+ * contract would collapse it to the crude REPL this command exists to avoid. chat trades
+ * neutrality for fidelity, so it lives under engines/pi/ (and is not re-exported from index.ts).
  *
  * FIDELITY CONTRACT — chat must run the SAME agent dev/start serve, not pi's vanilla discovery.
  * pi's DefaultResourceLoader would walk AGENTS.md up to the repo root and discover skills under its
