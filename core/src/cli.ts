@@ -14,7 +14,7 @@
  * is the application entry point.
  */
 import { spawn } from "node:child_process";
-import { existsSync, watch } from "node:fs";
+import { watch as watchTree } from "chokidar";
 import { createServer } from "node:http";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -297,7 +297,6 @@ async function serveOnce(): Promise<void> {
  * edit — the worker fails loudly (its own startup error) and the supervisor waits for the next save.
  */
 function runDevSupervisor(): void {
-  const ignoredTop = new Set([".fastagent", "node_modules", ".git"]);
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
@@ -343,37 +342,28 @@ function runDevSupervisor(): void {
     }
   };
 
-  // Watch the SOURCE surface, NOT .fastagent: the worker writes jsonl sessions DEEP under
-  // .fastagent on every invoke. A whole-tree recursive watch would fire on each of those writes
-  // and — when fs.watch omits the filename (Node does not guarantee it) — restart dev on its own
-  // session writes. Watching only source means those writes are never in the watched set at all,
-  // so the missing-filename case can safely reload (it can only be a real source edit).
-  const onChange = (filename: string | null): void => {
-    // Only the top-level watcher can surface an ignorable machine-state name; filter it when the
-    // filename is available, else reload (top-level events are rare — not the per-invoke writes).
-    if (filename && ignoredTop.has(filename.split(/[\\/]/)[0]!)) return;
+  // Recursively watch the workspace, structurally ignoring machine-state dirs. The worker writes
+  // jsonl sessions DEEP under .fastagent on every invoke, so watching it would restart dev on its
+  // own writes; node_modules/.git are noise. Everything else is watched — tools, skills, AND helper
+  // dirs a tool/config imports (e.g. lib/) — so a saved transitive import triggers the fresh-process
+  // reload too. chokidar gives reliable cross-platform recursion + structural ignore that native
+  // fs.watch cannot (its `filename` is not guaranteed, defeating a path-based filter).
+  const watcher = watchTree(dir, {
+    ignoreInitial: true, // the startup scan is not a change
+    ignored: /(?:^|[\\/])(?:\.fastagent|node_modules|\.git)(?:[\\/]|$)/,
+  });
+  watcher.on("all", () => {
     clearTimeout(timer);
     timer = setTimeout(triggerReload, 200);
-  };
-  let watching = false;
-  const tryWatch = (target: string, recursive: boolean): void => {
-    try {
-      watch(target, { recursive }, (_event, filename) => onChange(filename));
-      watching = true;
-    } catch {
-      /* path absent or unwatchable on this platform — skip it */
-    }
-  };
-  tryWatch(dir, false); // AGENTS.md, fastagent.config.*, .env, .gitignore, top-level files
-  for (const sub of ["skills", "tools"]) if (existsSync(join(dir, sub))) tryWatch(join(dir, sub), true);
-  if (watching) {
-    console.error(`[fastagent] watching for changes — edits restart the dev worker (--no-watch to disable)`);
-  } else {
-    console.error(`[fastagent] warn: file watching unavailable; edits need a manual restart`);
-  }
+  });
+  watcher.on("error", (error) =>
+    console.error(`[fastagent] warn: file watching error (${(error as Error).message}); some edits may need a manual restart`),
+  );
+  console.error(`[fastagent] watching for changes — edits restart the dev worker (--no-watch to disable)`);
 
   const shutdown = (): never => {
     worker?.kill("SIGTERM");
+    void watcher.close();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
