@@ -43,14 +43,20 @@ export interface PiSessionStore {
  * Tool side-effect idempotency stays the tool's responsibility (SPEC §6); this only restores
  * transcript validity, it does not promise the interrupted tool ran exactly once.
  *
+ * Pairing is TURN-LOCAL, never transcript-global: a tool_use is paired only by a toolResult
+ * that FOLLOWS it (append-only — a result always lands after the assistant that requested it).
+ * tool-call ids are not guaranteed unique across turns (model-neutral: a local/custom model may
+ * restart ids at `call-1` each response), so matching against the whole transcript would falsely
+ * "settle" the leaf's call against an earlier turn's identical id and skip the repair.
+ *
  * Append-only logs can only repair a gap AT THE LEAF: the last assistant message followed by
  * nothing but its own toolResults. Appending a missing result there yields a valid
  * `assistant -> toolResults` run. We reconcile on every open, before any later turn is
  * appended, so a crash gap is always at the leaf — but we ENFORCE that rather than assume it:
- * an unmatched call sitting behind later history (which appending cannot repair) is surfaced
- * via `console.warn` and left untouched, never "fixed" with an orphaned result that would only
- * make the transcript worse. (Unreachable in the current single-leaf, reconcile-on-open design;
- * the guard exists for forks/navigation or pre-fix poisoned sessions.)
+ * a leaf call sitting behind later history (which appending cannot repair) is surfaced via
+ * `console.warn` and left untouched, never "fixed" with an orphaned result that would only make
+ * the transcript worse. (Unreachable in the current single-leaf, reconcile-on-open design; the
+ * guard exists for forks/navigation or pre-fix poisoned sessions.)
  *
  * The synthetic result has three audiences, so it splits them deliberately:
  *   - `content` is read by the MODEL next turn (and may be relayed to the end user). It stays
@@ -64,51 +70,46 @@ export interface PiSessionStore {
 async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
   const { messages } = await session.buildContext();
 
-  const settled = new Set<string>();
-  for (const m of messages) {
-    if (m.role === "toolResult") settled.add(m.toolCallId);
-  }
-
-  // Every unmatched tool_use across the transcript, tagged with its message index.
-  const unmatched: { idx: number; id: string; name: string }[] = [];
-  messages.forEach((m, idx) => {
-    if (m.role !== "assistant") return;
-    for (const block of m.content) {
-      if (block.type === "toolCall" && !settled.has(block.id)) {
-        unmatched.push({ idx, id: block.id, name: block.name });
-      }
-    }
-  });
-  if (unmatched.length === 0) return;
-
-  // The leaf turn = the last assistant message followed by nothing but its own toolResults.
-  // Only unmatched calls belonging to it can be repaired by appending (see the doc comment).
-  let leafAssistantIdx = -1;
+  // Leaf turn = the last assistant message.
+  let leafIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role === "assistant") {
-      leafAssistantIdx = i;
+      leafIdx = i;
       break;
     }
   }
-  const leafIsAtTail =
-    leafAssistantIdx !== -1 && messages.slice(leafAssistantIdx + 1).every((m) => m.role === "toolResult");
+  const leaf = leafIdx === -1 ? undefined : messages[leafIdx];
+  if (leaf?.role !== "assistant") return; // no assistant turn yet (also narrows `leaf`)
 
-  const atLeaf = unmatched.filter((u) => leafIsAtTail && u.idx === leafAssistantIdx);
-  const notAtLeaf = unmatched.filter((u) => !(leafIsAtTail && u.idx === leafAssistantIdx));
+  // Turn-local pairing: only toolResults that FOLLOW the leaf can pair its calls. Using the
+  // tail (not the whole transcript) is what makes this robust to ids reused across turns.
+  const tail = messages.slice(leafIdx + 1);
+  const paired = new Set<string>();
+  for (const m of tail) {
+    if (m.role === "toolResult") paired.add(m.toolCallId);
+  }
+  const dangling = leaf.content.filter(
+    (block): block is Extract<typeof block, { type: "toolCall" }> =>
+      block.type === "toolCall" && !paired.has(block.id),
+  );
+  if (dangling.length === 0) return; // leaf has no tool_use, or all of them are already paired
 
-  if (notAtLeaf.length > 0) {
-    // Behind later history: appending cannot repair it. Surface, do not silently corrupt.
+  // Reconcilable only if nothing but the leaf's own toolResults follows it. If a later turn
+  // already sits after the gap (a broken invariant — we reconcile before any later turn is
+  // appended), appending cannot repair it; surface instead of adding an orphan.
+  if (tail.some((m) => m.role !== "toolResult")) {
     console.warn(
       `[fastagent] unmatched tool_use is not at the session leaf; leaving it unreconciled ` +
-        `(an append-only log cannot repair a mid-history gap): toolCallIds=${notAtLeaf.map((u) => u.id).join(",")}`,
+        `(an append-only log cannot repair a mid-history gap): toolCallIds=${dangling.map((b) => b.id).join(",")}`,
     );
+    return;
   }
 
-  for (const { id, name } of atLeaf) {
+  for (const block of dangling) {
     const result: AgentMessage = {
       role: "toolResult",
-      toolCallId: id,
-      toolName: name,
+      toolCallId: block.id,
+      toolName: block.name,
       content: [
         {
           type: "text",

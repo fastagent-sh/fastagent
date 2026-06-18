@@ -178,9 +178,9 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
     expect(messages.some((m: any) => m.role === "toolResult")).toBe(false);
   });
 
-  it("an unmatched call behind later history is surfaced, not silently appended (fail visibly)", async () => {
-    // A gap that is NOT at the leaf (a later turn already sits after the dangling call) cannot
-    // be repaired by appending to an append-only log; appending would only add an orphan.
+  it("a leaf call behind later history is surfaced, not silently appended (fail visibly)", async () => {
+    // The leaf's dangling call is followed by a later turn (a user prompt) rather than only its
+    // own results, so appending to an append-only log cannot repair it; surface instead.
     const store = inMemorySessionStore();
     const s = await store.openOrCreate("mid-history");
     await s.appendMessage({ role: "user", content: [{ type: "text", text: "run it" }], timestamp: Date.now() } as any);
@@ -191,11 +191,6 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
     } as any);
     // a later turn lands after the dangling call without it ever being reconciled
     await s.appendMessage({ role: "user", content: [{ type: "text", text: "still there?" }], timestamp: Date.now() } as any);
-    await s.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "sorry, failed" }],
-      provider: "faux", model: "faux", stopReason: "error", usage: { input: 0, output: 0 }, timestamp: Date.now(),
-    } as any);
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -206,6 +201,46 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("pairing is turn-local: a reused tool-call id from an earlier turn does not mask a leaf gap", async () => {
+    // tool-call ids are not globally unique (a model may restart at call-1 each turn). An earlier
+    // *completed* call-1 must NOT make a later crashed call-1 look already paired.
+    const store = inMemorySessionStore();
+    const s = await store.openOrCreate("reused-id");
+    // turn 1: call-1 ran and completed
+    await s.appendMessage({ role: "user", content: [{ type: "text", text: "first" }], timestamp: Date.now() } as any);
+    await s.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "a" } }],
+      provider: "faux", model: "faux", stopReason: "toolUse", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+    } as any);
+    await s.appendMessage({
+      role: "toolResult", toolCallId: "call-1", toolName: "echo",
+      content: [{ type: "text", text: "a" }], isError: false, timestamp: Date.now(),
+    } as any);
+    await s.appendMessage({
+      role: "assistant", content: [{ type: "text", text: "done turn 1" }],
+      provider: "faux", model: "faux", stopReason: "stop", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+    } as any);
+    // turn 2: call-1 reused, crashed before its result
+    await s.appendMessage({ role: "user", content: [{ type: "text", text: "second" }], timestamp: Date.now() } as any);
+    await s.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "b" } }],
+      provider: "faux", model: "faux", stopReason: "toolUse", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+    } as any);
+
+    const reopened = await store.openOrCreate("reused-id"); // open -> reconcile
+    const { messages } = await reopened.buildContext();
+    // the leaf call-1 must be repaired despite the earlier paired call-1 (turn-local pairing)
+    const interrupted = messages.filter(
+      (m: any) => m.role === "toolResult" && m.details?.fastagent === "interrupted-tool-call",
+    );
+    expect(interrupted).toHaveLength(1);
+    expect((interrupted[0] as any).toolCallId).toBe("call-1");
+    // and the leaf is now valid: its call has a following result
+    expect(messages.at(-1)).toMatchObject({ role: "toolResult", toolCallId: "call-1", isError: true });
   });
 });
 
