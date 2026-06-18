@@ -4,6 +4,26 @@ WSGI for agent serving: turn an existing agent definition (`AGENTS.md` + `skills
 
 This repository is a from-scratch implementation of the locked [Agent Handler SPEC v0.1](docs/SPEC.md). It does not carry compatibility baggage from older experiments.
 
+## Install
+
+`@kid7st/fastagent` is published to **GitHub Packages** (private), so installs authenticate with a GitHub token that has `read:packages`. Put the scope registry and token in your **user** npm config (`~/.npmrc`) so it applies to both a global CLI install and a project dependency, from any directory:
+
+```
+@kid7st:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+(A per-project `.npmrc` is only read when you run npm from within that project, and a global `npm i -g` is usually run from elsewhere — so the user config is the reliable place. If you commit a project `.npmrc`, keep only the registry line there and supply the token via env / `~/.npmrc`; never commit the token.)
+
+Then install (requires Node ≥ 26):
+
+```bash
+npm i -g @kid7st/fastagent   # the `fastagent` CLI on PATH
+npm i @kid7st/fastagent      # the library (defineConfig, the Agent contract, …) for code-tool agents
+```
+
+The package ships compiled JavaScript + type declarations (`dist/`); the repository itself runs the TypeScript sources directly under Node 26.
+
 ## Documentation
 
 | Document | Purpose |
@@ -16,7 +36,7 @@ This repository is a from-scratch implementation of the locked [Agent Handler SP
 
 ## API stability
 
-This repository is pre-1.0. The stable design center is the Agent Handler contract in [SPEC.md](docs/SPEC.md). The root export (`@fastagent/core`) is deliberately scoped to the supported public surface; pi-coupled internals are not exported and may change freely while `build`, `start`, and the first target adapters land.
+This repository is pre-1.0. The stable design center is the Agent Handler contract in [SPEC.md](docs/SPEC.md). The root export (`@kid7st/fastagent`) is deliberately scoped to the supported public surface; pi-coupled internals are not exported and may change freely while `build`, `start`, and the first target adapters land.
 
 Public surface tiers:
 

@@ -4,7 +4,7 @@
  *
  * Run: node ../../src/cli.ts dev .   (real users: fastagent dev)
  */
-import { defineConfig } from "../../src/index.ts"; // real users: from "@fastagent/core"
+import { defineConfig } from "../../src/index.ts"; // real users: from "@kid7st/fastagent"
 import lookupOrderTool from "./lookup-order-tool.ts";
 
 export default defineConfig({

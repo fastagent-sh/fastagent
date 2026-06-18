@@ -1,21 +1,37 @@
 {
-  "name": "@fastagent/core",
+  "name": "@kid7st/fastagent",
   "version": "0.1.0",
   "description": "Reference implementation of the Agent Handler contract: fan in pi AgentHarness events into the SPEC event stream.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kid7st/fastagent.git",
+    "directory": "core"
+  },
   "type": "module",
   "engines": {
     "node": ">=26"
   },
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "bin": {
-    "fastagent": "./src/cli.ts"
+    "fastagent": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "test": "vitest --run",
     "typecheck": "tsc --noEmit"
   },

@@ -241,7 +241,7 @@ The real axis is **bundled vs runtime-provided**, not "data vs code." Code (skil
 | **local / container** | `start <artifact>` (cwd = artifact) | `npm ci` at deploy installs deps; the artifact carries `package.json` + tool source, not `node_modules` |
 | **AgentCore (later)** | OCI-wrap the same artifact | same |
 
-The artifact = the cleaned source **tree** (AGENTS.md, skills/, authored context, `fastagent.config.ts`, tool source, `package.json`, …) with opted-in globals materialized into `skills/`, **minus** the §10.1 hard excludes (`node_modules`, `.git`, `.fastagent`) and anything `.gitignore`/`.fastagentignore` excludes (honored via the `ignore` library, not git). Secrets are **not** auto-excluded — they are the user's responsibility (§10.1); inject them at runtime and keep them out via .gitignore/.fastagentignore. Pure markdown/skills agents need only `@fastagent/core` to run; code-tool agents add `npm ci`.
+The artifact = the cleaned source **tree** (AGENTS.md, skills/, authored context, `fastagent.config.ts`, tool source, `package.json`, …) with opted-in globals materialized into `skills/`, **minus** the §10.1 hard excludes (`node_modules`, `.git`, `.fastagent`) and anything `.gitignore`/`.fastagentignore` excludes (honored via the `ignore` library, not git). Secrets are **not** auto-excluded — they are the user's responsibility (§10.1); inject them at runtime and keep them out via .gitignore/.fastagentignore. Pure markdown/skills agents need only `@kid7st/fastagent` to run; code-tool agents add `npm ci`.
 
 ### 10.3 `fastagent build`
 
