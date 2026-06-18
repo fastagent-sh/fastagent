@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -116,25 +117,55 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
         rt.setBeforeSessionInvalidate(() => {
           invalidated = true;
         });
+        // A session that EXPLICITLY records another workspace is rejected before pi tears the live
+        // session down — independent of process.cwd().
         await expect(rt.importFromJsonl(imported, other)).rejects.toThrow(/fastagent chat is workspace-scoped/);
         expect(invalidated).toBe(false);
-        expect(rt.cwd).toBe(dir);
-
-        // A legacy/imported session with NO cwd header must run in the chat workspace, not fall back
-        // to pi's process.cwd() (which is this repo here, not `dir`) and trip the cross-workspace
-        // teardown path. It should import successfully and stay pinned to the chat root.
-        const noCwd = join(root, "no-cwd-session.jsonl");
-        await writeFile(
-          noCwd,
-          `${JSON.stringify({ type: "session", version: 3, id: "nocwd", timestamp: new Date().toISOString() })}\n`,
-        );
-        expect(process.cwd()).not.toBe(dir);
-        await expect(rt.importFromJsonl(noCwd)).resolves.toMatchObject({ cancelled: false });
-        expect(rt.cwd).toBe(dir);
+        expect(rt.cwd).toBe(realpathSync(dir)); // runtime cwd is canonical (symlink-free)
       } finally {
         rt.session.dispose?.();
       }
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps cwd-less legacy sessions in the chat workspace across import and fork", async () => {
+    // The chat process runs chdir'd into the workspace (runChat); these cases depend on that
+    // invariant, so emulate it here. Without it, a cwd-less session would fall back to pi's
+    // process.cwd() and trip the cross-workspace teardown path on import AND on /fork.
+    const root = await mkdtemp(join(tmpdir(), "fa-chat-legacy-"));
+    const dir = join(root, "agent");
+    const sessionsDir = join(root, "sessions");
+    const originalCwd = process.cwd();
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "AGENTS.md"), "# Agent\n");
+      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      // A legacy session: a header with NO cwd, plus one user message entry to fork at.
+      const legacy = join(root, "legacy-session.jsonl");
+      await writeFile(
+        legacy,
+        `${JSON.stringify({ type: "session", version: 3, id: "legacy", timestamp: new Date().toISOString() })}\n` +
+          `${JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: "hi" } })}\n`,
+      );
+
+      process.chdir(dir);
+      const realDir = realpathSync(dir); // pi binds the realpath via process.cwd()
+      const rt = await buildChatRuntime(dir, {}, SessionManager.create(dir, sessionsDir));
+      try {
+        // Import the cwd-less session: no foreign cwd, so it runs in the chat workspace.
+        await expect(rt.importFromJsonl(legacy)).resolves.toMatchObject({ cancelled: false });
+        expect(rt.cwd).toBe(realDir);
+        // Fork at an entry: pi reopens the current (cwd-less) session file without a cwd override.
+        // The chdir invariant keeps that resolving to the chat workspace instead of process.cwd().
+        await expect(rt.fork("m1", { position: "at" })).resolves.toMatchObject({ cancelled: false });
+        expect(rt.cwd).toBe(realDir);
+      } finally {
+        rt.session.dispose?.();
+      }
+    } finally {
+      process.chdir(originalCwd);
       await rm(root, { recursive: true, force: true });
     }
   });

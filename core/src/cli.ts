@@ -279,6 +279,11 @@ async function runDev(): Promise<void> {
 /** Open the workspace agent in pi's interactive TUI (the pi-specific `chat` command). */
 async function runChat(): Promise<void> {
   loadDotEnv(dir); // model spec + provider API keys may come from .env
+  // Run the chat process IN the workspace. chat is workspace-scoped, and pi resolves a session's
+  // cwd as `header.cwd ?? process.cwd()`; aligning process.cwd() with the workspace makes that
+  // fallback land on the workspace for every session-replacement path (resume/import/fork/new),
+  // so a cwd-less legacy/imported session never drifts to the launch directory. `dir` is absolute.
+  process.chdir(dir);
   // Lazy-import: chat pulls pi's interactive TUI module graph (InteractiveMode, pi-tui). A static
   // import would load it on EVERY command; headless `start`/`dev` never need it. Runtime hygiene
   // only — the dependency (and install size) is unchanged.
