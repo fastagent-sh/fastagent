@@ -40,7 +40,8 @@
     "@earendil-works/pi-ai": "^0.79.2",
     "@earendil-works/pi-coding-agent": "^0.79.2",
     "ignore": "^7.0.5",
-    "undici": "^8.4.1"
+    "undici": "^8.4.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

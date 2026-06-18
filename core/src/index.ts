@@ -25,6 +25,16 @@ export {
 // pi reference implementation — init (scaffold a minimal runnable workspace).
 export { scaffoldWorkspace, type ScaffoldResult } from "./engines/pi/init.ts";
 
+// pi reference implementation — tool authoring: defineTool (+ re-exported z) and tools/ discovery.
+export {
+  defineTool,
+  loadTools,
+  type DefineToolOptions,
+  type ToolContext,
+  type ToolCollision,
+} from "./engines/pi/tool.ts";
+export { z } from "zod";
+
 // pi reference implementation — dev (open a workspace into an agent, authoring posture).
 // The command opener that composes over L2; sibling of createPiAgentFromArtifact (start).
 export {

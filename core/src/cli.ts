@@ -5,6 +5,7 @@
  *
  *   fastagent init  [dir] — scaffold a minimal runnable workspace
  *   fastagent models      — list available "provider/modelId" specs
+ *   fastagent tool  <name> '<json>' [dir] — run one tool directly (no model)
  *   fastagent dev   [dir] — assemble + serve a local HTTP channel (iteration)
  *   fastagent build [dir] — compile a self-contained artifact (core-design §10.3)
  *   fastagent start [dir] — run a built artifact in production posture (core-design §10.4)
@@ -19,16 +20,18 @@ import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher }
 import { createInvokeHandler } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
-import { listModels } from "./engines/pi/config.ts";
+import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { scaffoldWorkspace } from "./engines/pi/init.ts";
+import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {
   console.error(`usage:
   fastagent init   [dir]
   fastagent models
+  fastagent tool   <name> '<json-args>' [dir]
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
@@ -40,6 +43,8 @@ function usage(code: number): never {
   init   scaffold a minimal runnable workspace in dir (default .): AGENTS.md, an example
          skill, fastagent.config.mjs, .gitignore. Refuses to overwrite an existing workspace.
   models list the available "provider/modelId" specs (use one with --model or in the config).
+  tool   run one tool (from tools/ or config.tools) directly with JSON args — no model, no
+         server, no tokens. Fast feedback while authoring: fastagent tool add '{"a":2,"b":3}'
   build  compile dir into a self-contained, relocatable artifact (default out:
          .fastagent/build): the source tree + materialized skills + manifest, minus
          node_modules/.git and anything .gitignore/.fastagentignore excludes (honored
@@ -78,6 +83,7 @@ const globalSkills = values["global-skills"] ?? false;
 
 if (command === "init") await runInit();
 else if (command === "models") runModels();
+else if (command === "tool") await runTool();
 else if (command === "dev") await runDev();
 else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
@@ -86,6 +92,43 @@ else usage(1);
 /** `fastagent models`: print every registered "provider/modelId" to stdout (pipe-friendly). */
 function runModels(): void {
   for (const spec of listModels()) console.log(spec);
+}
+
+/**
+ * `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model,
+ * no server, no tokens. The tightest authoring feedback loop. Args are validated by the tool's
+ * own schema (a defineTool tool returns an "Invalid arguments" result the same way the model sees).
+ */
+async function runTool(): Promise<void> {
+  const name = positionals[1];
+  const argsJson = positionals[2] ?? "{}";
+  const toolDir = resolve(positionals[3] ?? ".");
+  if (!name) {
+    console.error(`usage: fastagent tool <name> '<json-args>' [dir]`);
+    process.exit(1);
+  }
+  loadDotEnv(toolDir); // a tool may read a key from .env
+  const { config } = await loadConfig(toolDir).catch(failStartup);
+  const discovered = await loadTools(toolDir).catch(failStartup);
+  const { tools } = mergeDiscoveredTools(config.tools ?? [], discovered.tools);
+  const tool = tools.find((t) => t.name === name);
+  if (!tool) {
+    console.error(`unknown tool "${name}". available: ${tools.map((t) => t.name).join(", ") || "(none)"}`);
+    process.exit(1);
+  }
+  let args: unknown;
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    console.error(`invalid JSON args: ${argsJson}`);
+    process.exit(1);
+  }
+  const result = await tool.execute(`cli-${name}`, args).catch(failStartup);
+  const out =
+    result?.details !== undefined
+      ? result.details
+      : (result?.content ?? []).map((c) => ("text" in c ? c.text : "")).join("");
+  console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2));
 }
 
 async function runInit(): Promise<void> {
@@ -159,10 +202,11 @@ async function runDev(): Promise<void> {
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const { agent, definition, config, configPath, modelSpec } = await createPiAgentFromWorkspace(dir, {
-    model: values.model,
-    globalSkills,
-  }).catch(failStartup);
+  const { agent, definition, config, configPath, modelSpec, toolNames, toolCollisions } =
+    await createPiAgentFromWorkspace(dir, {
+      model: values.model,
+      globalSkills,
+    }).catch(failStartup);
 
   console.error(`[fastagent] dir:    ${definition.dir}`);
   console.error(`[fastagent] config: ${configPath ?? "(zero-config)"}`);
@@ -184,6 +228,8 @@ async function runDev(): Promise<void> {
       console.error(`            use in dev: --global-skills | ship: copy into skills/ (or build --global-skills)`);
     }
   }
+  if (toolNames.length > 0) console.error(`[fastagent] tools:  ${toolNames.join(", ")}`);
+  reportToolCollisions(toolCollisions);
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
   serve(agent, portFlag ?? config.http?.port ?? 8787);
@@ -218,16 +264,19 @@ async function runStart(): Promise<void> {
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const { agent, definition, manifest, modelSpec, sessionsDir } = await createPiAgentFromArtifact(dir, {
-    model: values.model,
-    sessionsDir: values["sessions-dir"] ? resolve(values["sessions-dir"]) : undefined,
-  }).catch(failStartup);
+  const { agent, definition, manifest, modelSpec, sessionsDir, toolNames, toolCollisions } =
+    await createPiAgentFromArtifact(dir, {
+      model: values.model,
+      sessionsDir: values["sessions-dir"] ? resolve(values["sessions-dir"]) : undefined,
+    }).catch(failStartup);
 
   console.error(`[fastagent] start:  ${dir}`);
   console.error(`[fastagent] model:  ${modelSpec}`);
   await reportAuth(modelSpec);
   console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
   console.error(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
+  if (toolNames.length > 0) console.error(`[fastagent] tools:  ${toolNames.join(", ")}`);
+  reportToolCollisions(toolCollisions);
   console.error(`[fastagent] sessions: ${sessionsDir}`);
   // Visible footgun guard: a sessions dir inside the artifact is wiped by a redeploy that
   // replaces the artifact wholesale. Warn, don't block (running in place is legitimate).
@@ -288,5 +337,11 @@ function reportDefinitionWarnings(
   }
   for (const d of diagnostics) {
     console.error(`[fastagent] warn: ${d.code}: ${d.message} (${d.path})`);
+  }
+}
+
+function reportToolCollisions(collisions: { name: string; source: string }[]): void {
+  for (const c of collisions) {
+    console.error(`[fastagent] warn: tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`);
   }
 }

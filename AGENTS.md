@@ -36,6 +36,7 @@ core/
 │       ├── dev.ts               # `dev` opener: open a workspace → agent (authoring posture)
 │       ├── build.ts             # `build`: compile a workspace → self-contained artifact
 │       ├── start.ts             # `start` opener: run a built artifact (production posture)
+│       ├── tool.ts              # defineTool (Zod) + tools/ filesystem discovery
 │       ├── harness.ts           # pi harness wiring (factory)
 │       ├── definition.ts        # AGENTS.md + skills loading and bundling
 │       ├── config.ts            # fastagent.config.ts loading + model/precedence
