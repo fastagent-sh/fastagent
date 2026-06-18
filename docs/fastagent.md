@@ -8,10 +8,10 @@ domain: https://fastagent.sh
 
 # FastAgent
 
-FastAgent is **Flask/WSGI for agents**: it turns an existing agent definition — `AGENTS.md` plus `skills/` — into a running capability without rewriting it, in either mode:
+FastAgent is **Flask/WSGI for agents**: it turns an existing agent definition — `AGENTS.md` plus `skills/` — into a running capability without rewriting it, in either posture:
 
-- **Embed** (primary): the agent is one capability inside a product you already have — `createPiAgent(...).invoke(...)` in your own route, wired to your session store, your auth, your host. Library, not framework: it composes into your stack instead of owning the application.
-- **Deploy** (secondary): the agent is a standalone service — webhook handler, scheduled worker, Slack/Telegram bot, API endpoint, or cloud-hosted agent.
+- **Embed into an existing product**: the agent is one capability inside a product you already have — `createPiAgent(...).invoke(...)` in your own route, wired to your session store, your auth, your host. Library, not framework: it composes into your stack instead of owning the application.
+- **Serve as a standalone agent service**: the agent runs while you are away — webhook handler, scheduled worker, Slack/Telegram bot, API endpoint, or cloud-hosted agent.
 
 The product has three pieces:
 
@@ -25,7 +25,7 @@ FastAgent is not an agent-writing framework. The agent already exists as markdow
 
 There are two trigger moments. **Embed:** a developer is building a product (often vibe-coded: their own auth/DB/host) and needs to add an agent *feature* — without adopting a second framework's routing/db/project layout. **Deploy:** a developer has a local agent they like and wants it to work while they are not watching — webhooks, schedules, Telegram/Slack, an API endpoint.
 
-Local interactive tools do not solve either problem. Full frameworks (Flue, Eve) solve them by making you build an agent *product* in their world. FastAgent's bet is the opposite posture — a neutral contract you embed into *your* world — plus neutrality across:
+Local interactive tools do not solve either problem. Full frameworks (Flue, Eve) solve them by making you build an agent *product* in their world. FastAgent's bet is the opposite posture — a neutral contract you embed into *your* world or run as a thin service/channel — plus neutrality across:
 
 - agent definitions (`AGENTS.md`, Agent Skills, future MCP support),
 - engines (pi first; other engines later),
