@@ -24,10 +24,13 @@ npm i @kid7st/fastagent      # the library (defineConfig, the Agent contract, �
 
 The package ships compiled JavaScript + type declarations (`dist/`); the repository itself runs the TypeScript sources directly under Node 26.
 
+**New here? Start with the [Quickstart](docs/quickstart.md)** — from an installed CLI to a running, deployable agent in a few minutes.
+
 ## Documentation
 
 | Document | Purpose |
 |---|---|
+| [quickstart.md](docs/quickstart.md) | **Quickstart**: scaffold → run → add a tool → build/start, end to end |
 | [SPEC.md](docs/SPEC.md) | **Agent Handler protocol**: the engine-neutral contract layer. `status: locked` v0.1 |
 | [core-design.md](docs/core-design.md) | The pi-based reference implementation of the SPEC, plus the N × M × K layering model |
 | [session.md](docs/session.md) | Draft session-admin model: event-sourced conversation DAG, fork, and navigation. `status: design` |
