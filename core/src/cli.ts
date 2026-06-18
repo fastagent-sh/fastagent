@@ -345,7 +345,10 @@ function runDevSupervisor(): void {
 
   try {
     watch(dir, { recursive: true }, (_event, filename) => {
-      if (!filename || ignoredTop.has(filename.split(/[\\/]/)[0]!)) return;
+      // fs.watch does not guarantee `filename` (Node docs). When present, skip machine-state edits
+      // (.fastagent session writes, deps, vcs). When ABSENT we cannot filter — reload rather than
+      // drop the event: serving stale code is worse than an occasional extra restart (debounced).
+      if (filename && ignoredTop.has(filename.split(/[\\/]/)[0]!)) return;
       clearTimeout(timer);
       timer = setTimeout(triggerReload, 200);
     });
