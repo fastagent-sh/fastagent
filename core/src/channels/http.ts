@@ -26,13 +26,7 @@ async function writeWithBackpressure(res: ServerResponse, chunk: string): Promis
   });
 }
 
-/**
- * `agent` may be a getter (`() => Agent`) so a caller can hot-swap the served agent between
- * requests (dev hot-reload) without rebinding the server. The current agent is resolved per
- * request; in-flight requests keep the agent they started with.
- */
-export function createInvokeHandler(agent: Agent | (() => Agent)) {
-  const getAgent = typeof agent === "function" ? agent : () => agent;
+export function createInvokeHandler(agent: Agent) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method !== "POST" || req.url !== "/invoke") {
       res.writeHead(404, { "content-type": "text/plain" }).end("POST /invoke\n");
@@ -76,7 +70,7 @@ export function createInvokeHandler(agent: Agent | (() => Agent)) {
     // either cancels every request or never fires (covered by the disconnect test).
     // res "close" also fires after normal end — return() on a finished generator
     // is a no-op, so no special-casing.
-    const iterator = getAgent().invoke({ session }, { text })[Symbol.asyncIterator]();
+    const iterator = agent.invoke({ session }, { text })[Symbol.asyncIterator]();
     res.on("close", () => void iterator.return?.());
     try {
       while (true) {
