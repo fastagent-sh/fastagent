@@ -15,6 +15,9 @@
  *   - tools/ is auto-discovered (filename = tool name), so the config needs no `tools: []`.
  *   - .gitignore lists `.env` so the "secrets are the user's responsibility" model
  *     (core-design §10.1) is wired up from the first commit (build honors .gitignore).
+ *   - .env.example documents the (optional) env knobs and is committable (only `.env` is ignored);
+ *     it is all-commented and states the default model uses OAuth (`pi login`), not an API key, so
+ *     it never implies a key is required.
  *
  * Node composition-root module: writes template files (the CLI handles `npm install`).
  *
@@ -91,6 +94,29 @@ node_modules/
 .fastagent/
 `;
 
+// All-commented: copying to .env sets nothing by accident, and every knob is optional. Auth leads
+// with `pi login` because the default model (openai-codex) is OAuth-only — never imply an API key.
+const ENV_EXAMPLE = `# Environment for this agent. Copy to .env (gitignored) and uncomment what you need.
+# Everything here is OPTIONAL — the defaults work without a .env.
+
+# --- Model auth ---
+# The default model (openai-codex) signs in with OAuth, not an API key: run \`pi login\` once.
+# Switch to an API-key provider? Set its key here — the variable name is provider-specific
+# (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY). Run \`fastagent models\` to see available specs.
+# OPENAI_API_KEY=
+# ANTHROPIC_API_KEY=
+
+# --- Model selection (overrides fastagent.config) ---
+# Precedence: --model flag > FASTAGENT_MODEL > config.
+# FASTAGENT_MODEL=openai-codex/gpt-5.5
+
+# --- Serving (fastagent start) ---
+# Port precedence: --port > PORT > config.http.port > 8787
+# PORT=8787
+# Where conversations persist (default: ./fastagent-sessions)
+# FASTAGENT_SESSIONS_DIR=./fastagent-sessions
+`;
+
 /** package.json for the complete (code-tool) agent: ESM + the deps a defineTool tool imports. */
 function packageJson(name: string): string {
   return `${JSON.stringify(
@@ -155,6 +181,7 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
     { rel: join("skills", "house-style", "SKILL.md"), content: SKILL_MD },
     { rel: "fastagent.config.mjs", content: CONFIG_MJS },
     { rel: ".gitignore", content: GITIGNORE },
+    { rel: ".env.example", content: ENV_EXAMPLE },
   ];
   if (!minimal) {
     files.push(

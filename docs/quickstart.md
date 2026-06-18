@@ -30,6 +30,7 @@ my-agent/
 ├── tools/word-count.ts          # a code tool (defineTool) — auto-discovered
 ├── fastagent.config.mjs         # deployment choices: model, http port
 ├── package.json                 # ESM + the @kid7st/fastagent + zod deps
+├── .env.example                 # optional env knobs (model/keys/port) — copy to .env
 └── .gitignore / .npmrc
 ```
 
