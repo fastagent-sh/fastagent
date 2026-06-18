@@ -120,12 +120,15 @@ export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; coll
     try {
       mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
     } catch (error) {
-      // The most common cause is a non-ESM workspace: a tool's `import` needs the project's
-      // package.json to set "type": "module". Surface the file + a hint instead of a raw stack.
-      throw new Error(
-        `cannot load tools/${entry.name}: ${(error as Error).message}\n` +
-          `  (a code-tool workspace must be ESM — set "type": "module" in package.json)`,
-      );
+      // Two common causes get a specific hint instead of a raw stack: a missing dependency
+      // (deps not installed — run `npm install`) and a non-ESM workspace (the tool's `import`
+      // needs package.json "type": "module").
+      const e = error as NodeJS.ErrnoException;
+      const hint =
+        e.code === "ERR_MODULE_NOT_FOUND" || /Cannot find (package|module)/.test(e.message)
+          ? `  (a dependency is not installed — run \`npm install\` in the workspace)`
+          : `  (a code-tool workspace must be ESM — set "type": "module" in package.json)`;
+      throw new Error(`cannot load tools/${entry.name}: ${e.message}\n${hint}`);
     }
     const tool = mod.default as Partial<AgentTool> | undefined;
     if (!tool || typeof tool.execute !== "function") {

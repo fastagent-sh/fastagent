@@ -26,31 +26,51 @@ function cliInit(args: string[], cwd: string): Promise<string> {
 }
 
 describe("init: scaffoldWorkspace", () => {
-  it("scaffolds a workspace that loads and assembles offline (init → dev is self-contained)", async () => {
+  it("default scaffolds a COMPLETE agent (instructions + skill + a code tool + package.json)", async () => {
     const dir = await freshDir();
-    const { created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir);
+    const { complete, created, warnings } = await scaffoldWorkspace(dir);
+    expect(complete).toBe(true);
+    expect(created).toEqual(
+      expect.arrayContaining([
+        "AGENTS.md",
+        join("skills", "house-style", "SKILL.md"),
+        join("tools", "word-count.ts"),
+        "fastagent.config.mjs",
+        "package.json",
+        ".npmrc",
+        ".gitignore",
+      ]),
+    );
+    expect(warnings).toEqual([]);
+
+    // package.json is ESM with the tool's deps; the tool imports the package + names from its file.
+    const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
+    expect(pkg.type).toBe("module");
+    expect(pkg.dependencies["@kid7st/fastagent"]).toBeDefined();
+    expect(pkg.dependencies.zod).toBeDefined();
+    expect(await readFile(join(dir, "tools", "word-count.ts"), "utf8")).toContain('from "@kid7st/fastagent"');
+    expect(await readFile(join(dir, ".npmrc"), "utf8")).toContain("npm.pkg.github.com");
+
+    // AGENTS.md + skill load as a definition offline (loadAgentDefinition does not touch tools/).
+    const def = await loadAgentDefinition(dir);
+    expect(def.skills.map((s) => s.name)).toEqual(["house-style"]);
+    expect(def.collisions).toEqual([]);
+  });
+
+  it("--minimal scaffolds the markdown-only unit (no package.json/tool) and assembles fully offline", async () => {
+    const dir = await freshDir();
+    const { complete, created } = await scaffoldWorkspace(dir, { minimal: true });
+    expect(complete).toBe(false);
     expect(created.sort()).toEqual(
       ["AGENTS.md", ".gitignore", "fastagent.config.mjs", join("skills", "house-style", "SKILL.md")].sort(),
     );
-    expect(skipped).toEqual([]);
-    // fresh empty dir, and our own .gitignore ignores .env → no advisories
-    expect(intoNonEmpty).toBe(false);
-    expect(warnings).toEqual([]);
+    expect(await exists(join(dir, "package.json"))).toBe(false);
+    expect(await exists(join(dir, "tools"))).toBe(false);
 
-    // The scaffold is a valid definition: AGENTS.md + the example skill, no diagnostics/collisions.
-    const def = await loadAgentDefinition(dir);
-    expect(def.instructions).toContain("concise");
-    expect(def.skills.map((s) => s.name)).toEqual(["house-style"]);
-    expect(def.diagnostics).toEqual([]);
-    expect(def.collisions).toEqual([]);
-
-    // dev assembly works with zero edits and zero network (model is resolved from the registry).
+    // No tool to import → dev assembles with zero edits and zero network.
     const { agent, modelSpec } = await createPiAgentFromWorkspace(dir);
     expect(typeof agent.invoke).toBe("function");
     expect(modelSpec).toBe("openai-codex/gpt-5.5");
-
-    // .gitignore wires up the "secrets are the user's responsibility" model from the start.
-    expect(await readFile(join(dir, ".gitignore"), "utf8")).toContain(".env");
   });
 
   it("creates a non-existent target dir (counts as empty, no non-empty note)", async () => {
@@ -101,10 +121,10 @@ describe("init: scaffoldWorkspace", () => {
   it("prints a `cd <dir>` step for a named target so the dev/.env/config steps are correct", async () => {
     const base = await freshDir();
     // init into a subdir from `base` as cwd: the next steps must lead with `cd my-agent`.
-    const named = await cliInit(["init", "my-agent"], base);
+    const named = await cliInit(["init", "my-agent", "--no-install"], base);
     expect(named).toMatch(/cd my-agent/);
     // init into cwd (default .): no cd step, bare `fastagent dev` is already correct.
-    const cwd = await cliInit(["init"], await freshDir());
+    const cwd = await cliInit(["init", "--no-install"], await freshDir());
     expect(cwd).not.toMatch(/cd /);
     expect(cwd).toMatch(/fastagent dev/);
   });
