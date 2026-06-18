@@ -25,9 +25,10 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { createPiAgentFromDefinition, resolveTools } from "./create.ts";
+import { createPiAgentFromDefinition, piDefaultTools, resolveTools } from "./create.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, ensureStateDirSelfIgnored } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
+import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
 
 export interface CreatePiAgentFromWorkspaceOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -62,6 +63,10 @@ export async function createPiAgentFromWorkspace(
   configPath?: string;
   /** The resolved "provider/modelId" spec actually in use. */
   modelSpec: string;
+  /** Non-default tool names in effect: config.tools + discovered tools/. */
+  toolNames: string[];
+  /** Discovered tools dropped on a name clash with a default/config tool (surfaced, not silent). */
+  toolCollisions: ToolCollision[];
 }> {
   const { config, path: configPath }: LoadedConfig = await loadConfig(dir);
   const modelSpec = resolveModelSpec(options.model, config);
@@ -70,6 +75,12 @@ export async function createPiAgentFromWorkspace(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
+  // Discover tools/ and merge with pi defaults + config.tools (existing win name clashes).
+  const discovered = await loadTools(dir);
+  const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, dir), discovered.tools);
+  const toolCollisions = [...discovered.collisions, ...crossCollisions];
+  const defaultNames = new Set(piDefaultTools(dir).map((t) => t.name));
+  const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));
   // The dev opener owns workspace state: .fastagent/ (machine state — gitignored, deletable,
   // rebuildable) is created HERE, not in the CLI, so library callers get the same
   // self-gitignored dir (vite/next-style).
@@ -78,7 +89,7 @@ export async function createPiAgentFromWorkspace(
   await ensureStateDirSelfIgnored(stateDir);
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
     model: resolveModel(modelSpec),
-    tools: resolveTools(config, dir),
+    tools,
     // Definition-only by default (the agent is its folder); globals are an explicit
     // authoring-fidelity opt-in, never the deploy path (see create.ts ladder rule 2 + core-design §6).
     skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
@@ -86,5 +97,5 @@ export async function createPiAgentFromWorkspace(
     // faithful to local pi, which persists sessions too.
     sessions: jsonlSessionStore({ dir: join(stateDir, "sessions"), cwd: dir }),
   });
-  return { agent, definition, config, configPath, modelSpec };
+  return { agent, definition, config, configPath, modelSpec, toolNames, toolCollisions };
 }

@@ -28,9 +28,10 @@ import type { Agent } from "../../agent.ts";
 import type { AuthResolver } from "./auth.ts";
 import { type ArtifactManifest, MANIFEST_FILE } from "./build.ts";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { createPiAgentFromDefinition, resolveTools } from "./create.ts";
+import { createPiAgentFromDefinition, piDefaultTools, resolveTools } from "./create.ts";
 import { type LoadedDefinition, ensureStateDirSelfIgnored } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
+import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
 
 /**
  * Read + validate `<artifactDir>/fastagent.json`. The manifest is machine-generated, so this
@@ -110,6 +111,10 @@ export async function createPiAgentFromArtifact(
   modelSpec: string;
   /** Absolute session store directory in use (for the startup report). */
   sessionsDir: string;
+  /** Non-default tool names in effect: config.tools + discovered tools/. */
+  toolNames: string[];
+  /** Discovered tools dropped on a name clash with a default/config tool. */
+  toolCollisions: ToolCollision[];
 }> {
   const manifest = await loadManifest(artifactDir);
   // config.ts ships in the artifact for code tools (model/http come from the manifest).
@@ -125,14 +130,20 @@ export async function createPiAgentFromArtifact(
   // start run inside a git repo does not show conversations as untracked).
   await mkdir(sessionsDir, { recursive: true });
   await ensureStateDirSelfIgnored(sessionsDir);
+  // Discover tools/ (ships in the artifact as authored context) and merge with config.tools + defaults.
+  const discovered = await loadTools(artifactDir);
+  const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, artifactDir), discovered.tools);
+  const toolCollisions = [...discovered.collisions, ...crossCollisions];
+  const defaultNames = new Set(piDefaultTools(artifactDir).map((t) => t.name));
+  const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));
   const { agent, definition } = await createPiAgentFromDefinition(artifactDir, {
     model: resolveModel(modelSpec),
     // Code tools shipped in fastagent.config.* (appended after pi defaults); model/http are
     // already frozen in the manifest, but tools are functions and only live in the config file.
-    tools: resolveTools(config, artifactDir),
+    tools,
     // Continuity from an external store, reconstructed per invoke (SPEC portable conformance).
     sessions: jsonlSessionStore({ dir: sessionsDir, cwd: artifactDir }),
     getApiKeyAndHeaders: options.getApiKeyAndHeaders,
   });
-  return { agent, definition, manifest, config, modelSpec, sessionsDir };
+  return { agent, definition, manifest, config, modelSpec, sessionsDir, toolNames, toolCollisions };
 }

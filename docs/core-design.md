@@ -144,7 +144,11 @@ The machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`, via `defa
 
 `bundleAgentDefinition` is the build-time step that materializes the resolved skill set into a self-contained artifact. Dropped skills are removed on rebuild so the artifact is the truth.
 
-Code tools are different: they are TypeScript/JavaScript modules with dependencies. FastAgent does not auto-load a magic `tools/` directory. Projects explicitly import and inject code tools through config or library APIs. Declarative MCP tool mounting via `.mcp.json` is future support, not implemented today.
+Code tools are TypeScript/JavaScript modules. The vibe path is `defineTool` + filesystem discovery: drop a file in `tools/`, default-export `defineTool({ description, input, execute })`, and it is auto-discovered, named from the filename (authoritative), schema-validated, and injected — no `name` field, no manual registration. `defineTool` takes a Zod `input` schema (re-exported as `z` from the package), converts it to JSON Schema for the model, validates the model's arguments before `execute` (a validation failure becomes an error result the model can correct, not a crash), and wraps a plain return value into pi's result shape.
+
+> Reversal: an earlier draft said "FastAgent does not auto-load a magic `tools/` directory." That rationale conflated dependency installation with registration — they are orthogonal. Vercel's eve (same "agent is a directory" thesis) auto-discovers `tools/` despite tools being TS-with-deps, and it is the bigger DX win (it removes both the `name` field and the wiring). So fastagent now auto-discovers `tools/`.
+
+`config.tools` remains as the programmatic/advanced injection path; discovered tools are merged after pi defaults + `config.tools`, deduped by name (existing win; dropped tools are surfaced, not silent). A code-tool workspace must be ESM (`"type": "module"` in package.json) so a tool's `import` resolves. `fastagent tool <name> '<json>'` runs one tool's body directly — no model, no server, no tokens — the tightest authoring feedback loop. Declarative MCP tool mounting via `.mcp.json` is future support, not implemented today.
 
 ## 7. Sessions and statelessness
 
