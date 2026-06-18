@@ -25,6 +25,7 @@ import { buildPiArtifact } from "./engines/pi/build.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
+import { runPiChat } from "./engines/pi/chat.ts";
 import { resolveTools } from "./engines/pi/create.ts";
 import { scaffoldWorkspace } from "./engines/pi/init.ts";
 import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
@@ -36,6 +37,7 @@ function usage(code: number): never {
   fastagent models
   fastagent tool   <name> '<json-args>' [dir]
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills] [--no-watch]
+  fastagent chat   [dir] [--model provider/modelId] [--global-skills]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
 
@@ -43,6 +45,9 @@ function usage(code: number): never {
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --global-skills   also load the machine's global skills (~/.pi/agent/skills,
                            ~/.agents/skills); default is definition-only (dev == deployed)
+  chat   open the SAME assembled agent in pi's interactive TUI (the real harness, not a
+         crude REPL) — to try it locally before serving. Same model/tool/skill resolution
+         as dev; pi handles login, sessions, and /resume natively.
   init   scaffold a runnable agent in dir (default .) and run npm install. Default is a
          complete agent: AGENTS.md, a skill, tools/word-count.ts (a code tool), config,
          package.json, .npmrc, .gitignore. Refuses to overwrite an existing workspace.
@@ -94,6 +99,7 @@ if (command === "init") await runInit();
 else if (command === "models") runModels();
 else if (command === "tool") await runTool();
 else if (command === "dev") await runDev();
+else if (command === "chat") await runChat();
 else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
 else usage(1);
@@ -269,6 +275,12 @@ async function runDev(): Promise<void> {
   }
   parsePort(values.port, "--port"); // flag-shape check (a non-integer port fails before spawning)
   runDevSupervisor();
+}
+
+/** Open the workspace agent in pi's interactive TUI (the `chat` channel). */
+async function runChat(): Promise<void> {
+  loadDotEnv(dir); // model spec + provider API keys may come from .env
+  await runPiChat(dir, { model: values.model, globalSkills }).catch(failStartup);
 }
 
 /** Assemble the workspace agent and serve it once (the dev worker; also the --no-watch path). */
