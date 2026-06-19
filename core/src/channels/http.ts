@@ -1,85 +1,174 @@
 /**
- * Minimal HTTP channel handler (pure, testable): fans the single invoke stream out to SSE.
- *   - POST /invoke {session,text} → text/event-stream, one `data:` line per AgentEvent;
- *   - client disconnect → iterator.return() → invoke cancellation (SPEC MUST 3);
- *   - concurrent same-session requests → the agent's fail-fast lease (invoke.ts) makes
- *     the second one receive `failed{session busy}`.
+ * HTTP/SSE channel: fan one invoke stream out to Server-Sent Events.
+ *
+ * The handler is **Fetch-shaped** (`(Request) => Promise<Response>`) on purpose: that is the
+ * cross-runtime form every embedding host speaks (Next/Astro/Hono/Bun/Deno/Cloudflare), so the
+ * same handler mounts inside an existing app's own route. It is path-agnostic — the host owns the
+ * route; this handler only turns a POST body `{session,text}` into an SSE stream. Cancellation,
+ * backpressure, and the body cap are all native to the web stream primitives:
+ *   - consumer cancels the response body (client disconnect) → ReadableStream.cancel() →
+ *     iterator.return() → invoke cancellation (SPEC MUST 3);
+ *   - pull-based ReadableStream applies backpressure (next event is pulled when wanted);
+ *   - concurrent same-session requests → the agent's fail-fast lease (invoke.ts) makes the second
+ *     receive `failed{session busy}`.
+ *
+ * `nodeListener` is the thin node:http adapter (used by the standalone `fastagent dev/start`
+ * server). The SSE logic lives once in the Fetch handler; node:http is just transport.
  */
+import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent } from "../agent.ts";
 
 /** Request body cap — prompts are text (+ base64 images later); 1 MiB is generous for v1. */
 const MAX_BODY_BYTES = 1 << 20;
 
-/** Write honoring backpressure; waits for drain OR close (never hangs on a dead socket). */
-async function writeWithBackpressure(res: ServerResponse, chunk: string): Promise<void> {
-  if (res.destroyed) return; // connection already gone; caller's loop exits via done/destroyed check
-  if (res.write(chunk)) return;
-  await new Promise<void>((resolve) => {
-    const done = () => {
-      res.off("drain", done);
-      res.off("close", done);
-      resolve();
-    };
-    res.once("drain", done);
-    res.once("close", done);
-  });
+const encoder = new TextEncoder();
+const textHeaders = { "content-type": "text/plain" };
+
+function text(body: string, status: number): Response {
+  return new Response(body, { status, headers: textHeaders });
 }
 
-export function createInvokeHandler(agent: Agent) {
-  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (req.method !== "POST" || req.url !== "/invoke") {
-      res.writeHead(404, { "content-type": "text/plain" }).end("POST /invoke\n");
-      return;
+/** Read the request body with a hard byte cap (counts real bytes, not JS characters). */
+async function readBodyCapped(req: Request, max: number): Promise<{ text: string } | { tooLarge: true }> {
+  if (!req.body) return { text: "" };
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > max) {
+      await reader.cancel();
+      return { tooLarge: true };
     }
+    chunks.push(value);
+  }
+  const buf = new Uint8Array(received);
+  let offset = 0;
+  for (const c of chunks) {
+    buf.set(c, offset);
+    offset += c.byteLength;
+  }
+  return { text: new TextDecoder().decode(buf) };
+}
 
-    const chunks: Buffer[] = [];
-    let received = 0;
-    for await (const chunk of req) {
-      const buf = chunk as Buffer; // no setEncoding → chunks are Buffers; count real bytes
-      received += buf.length;
-      if (received > MAX_BODY_BYTES) {
-        res.writeHead(413, { "content-type": "text/plain" }).end("body too large\n");
-        return;
-      }
-      chunks.push(buf);
-    }
+/**
+ * Fetch-shaped invoke handler. Mount it at any route in the host app; it accepts POST only.
+ * Returns SSE (`text/event-stream`) with one `data:` line per AgentEvent.
+ */
+export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Response> {
+  return async (req) => {
+    if (req.method !== "POST") return text("POST only\n", 405);
+
+    const body = await readBodyCapped(req, MAX_BODY_BYTES);
+    if ("tooLarge" in body) return text("body too large\n", 413);
+
     let payload: unknown;
     try {
-      payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      payload = JSON.parse(body.text);
     } catch {
-      res.writeHead(400, { "content-type": "text/plain" }).end("invalid json\n");
-      return;
+      return text("invalid json\n", 400);
     }
-    const { session, text } = (payload ?? {}) as { session?: unknown; text?: unknown };
-    if (typeof session !== "string" || typeof text !== "string") {
-      res.writeHead(400, { "content-type": "text/plain" }).end('need { "session": string, "text": string }\n');
-      return;
+    const { session, text: promptText } = (payload ?? {}) as { session?: unknown; text?: unknown };
+    if (typeof session !== "string" || typeof promptText !== "string") {
+      return text('need { "session": string, "text": string }\n', 400);
     }
 
-    res.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
+    // Take the iterator explicitly so the stream's cancel() (consumer disconnect) can return() it
+    // and run invoke's cancellation cleanup (SPEC MUST 3). pull = backpressure: the next event is
+    // produced only when the consumer wants it.
+    const iterator = agent.invoke({ session }, { text: promptText })[Symbol.asyncIterator]();
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { value, done } = await iterator.next();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
+      },
+      async cancel() {
+        await iterator.return?.();
+      },
     });
 
-    // Take the iterator explicitly: on client disconnect, return() it so invoke
-    // runs its cancellation cleanup (SPEC MUST 3). The signal must be the RESPONSE's
-    // "close" — req "close" fires when the request message ends (Node ≥15), i.e.
-    // right after the body is consumed, NOT on socket teardown; listening there
-    // either cancels every request or never fires (covered by the disconnect test).
-    // res "close" also fires after normal end — return() on a finished generator
-    // is a no-op, so no special-casing.
-    const iterator = agent.invoke({ session }, { text })[Symbol.asyncIterator]();
-    res.on("close", () => void iterator.return?.());
-    try {
-      while (true) {
-        const { value, done } = await iterator.next();
-        if (done || res.destroyed) break;
-        await writeWithBackpressure(res, `data: ${JSON.stringify(value)}\n\n`);
-      }
-    } finally {
-      res.end();
-    }
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      },
+    });
   };
+}
+
+/**
+ * node:http adapter for a Fetch handler. Bridges IncomingMessage → Request and pumps the
+ * Response body back to ServerResponse with backpressure; a client disconnect (`res` close)
+ * cancels both the request signal and the response stream (→ invoke cancellation).
+ */
+export function nodeListener(
+  handler: (req: Request) => Promise<Response>,
+): (req: IncomingMessage, res: ServerResponse) => void {
+  return (req, res) => {
+    void pump(handler, req, res);
+  };
+}
+
+async function pump(
+  handler: (req: Request) => Promise<Response>,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const controller = new AbortController();
+  res.on("close", () => controller.abort());
+
+  const method = req.method ?? "GET";
+  const hasBody = method !== "GET" && method !== "HEAD";
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (Array.isArray(v)) for (const vv of v) headers.append(k, vv);
+    else if (v != null) headers.set(k, v);
+  }
+
+  let response: Response;
+  try {
+    const request = new Request(`http://${req.headers.host ?? "localhost"}${req.url ?? "/"}`, {
+      method,
+      headers,
+      body: hasBody ? (Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>) : undefined,
+      duplex: "half",
+      signal: controller.signal,
+    } as RequestInit & { duplex: "half" });
+    response = await handler(request);
+  } catch (error) {
+    if (!res.headersSent) res.writeHead(500, textHeaders);
+    res.end(`internal error: ${(error as Error).message}\n`);
+    return;
+  }
+
+  const outHeaders: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    outHeaders[key] = value;
+  });
+  res.writeHead(response.status, outHeaders);
+
+  if (!response.body) {
+    res.end();
+    return;
+  }
+  const reader = response.body.getReader();
+  res.on("close", () => void reader.cancel());
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done || res.destroyed) break;
+      if (!res.write(value)) await new Promise<void>((resolve) => res.once("drain", resolve));
+    }
+  } finally {
+    if (!res.destroyed) res.end();
+  }
 }

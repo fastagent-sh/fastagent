@@ -12,7 +12,9 @@ export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.t
 export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 
 // Channels (N-side; consume only the Agent contract)
-export { createInvokeHandler } from "./channels/http.ts";
+// createInvokeHandler is Fetch-shaped ((Request) => Promise<Response>) so it mounts in any host
+// route; nodeListener bridges it onto node:http for the standalone server.
+export { createInvokeHandler, nodeListener } from "./channels/http.ts";
 
 // pi reference implementation — reusable assembly ladder (L1/L2; L0 below)
 export {
