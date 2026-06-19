@@ -33,7 +33,7 @@ Most teams that need an agent are not building an agent platform; they are addin
 | OpenCode `serve` | Headless server for OpenCode | OpenCode | OpenCode-locked | Product server |
 | pi | Harness engine and coding agent | — | The reference engine FastAgent (and Flue) build on | Werkzeug-like substrate |
 
-**Flue and FastAgent build on the same engine (pi).** Neither has a durable-execution capability the other technically cannot reach — both checkpoint at turn/operation boundaries because pi's turn loop is the shared black box. The difference is product shape, not engine power.
+**Flue and FastAgent build on the same engine (pi), but not with current durability parity.** Shared pi keeps both under the same engine turn-loop boundary, yet Flue already packages stronger framework-level durability UX (durable workflows/streams, persistence, resume). FastAgent today proves a smaller serving-layer shape: turn-level session continuity, external-session seams, and crash-safe transcript reopen. Deployment-grade durability for long-running agents still depends on target adapters with external sessions and distributed locking.
 
 ## Eve (Vercel)
 
