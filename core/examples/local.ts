@@ -5,7 +5,7 @@
  * handled by createPiAgent's defaults (dev batteries-included); this file only owns
  * two **application-level** concerns: the process-level proxy and which model to use.
  *
- * Run (Node 26 executes .ts natively):
+ * Run (Node >=22.19 executes .ts natively):
  *   node examples/local.ts "say hi in 3 words"   # one-shot
  *   node examples/local.ts                        # REPL; same session keeps memory; /exit to quit
  *   node examples/local.ts --busy-demo            # concurrent same-session → one runs, one "session busy"

@@ -15,14 +15,14 @@ This repository is a from-scratch implementation of the locked [Agent Handler SP
 
 (A per-project `.npmrc` is only read when you run npm from within that project, and a global `npm i -g` is usually run from elsewhere — so the user config is the reliable place. If you commit a project `.npmrc`, keep only the registry line there and supply the token via env / `~/.npmrc`; never commit the token.)
 
-Then install (requires Node ≥ 26):
+Then install (requires Node ≥ 22.19):
 
 ```bash
 npm i -g @kid7st/fastagent   # the `fastagent` CLI on PATH
 npm i @kid7st/fastagent      # the library (defineConfig, the Agent contract, …) for code-tool agents
 ```
 
-The package ships compiled JavaScript + type declarations (`dist/`); the repository itself runs the TypeScript sources directly under Node 26.
+The package ships compiled JavaScript + type declarations (`dist/`). The runtime floor follows pi's packages (`node >=22.19.0`); no build step is required in consuming projects.
 
 **New here? Start with the [Quickstart](docs/quickstart.md)** — from an installed CLI to a running, deployable agent in a few minutes.
 
