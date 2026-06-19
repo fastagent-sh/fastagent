@@ -16,10 +16,10 @@ The sharpest distinction is not feature count or neutrality — it is *what you 
 | | Eve / Flue | FastAgent |
 |---|---|---|
 | Assumes you are building | an agent **product/platform** (the agent is the thing) | a product with an agent **feature** (the agent is one capability) |
-| Posture | **move into their world** (their routing, db, project layout, deploy) | **embed into your world** (one contract + injected ports inside your stack) |
-| Verb | **deploy** an agent | **embed** an agent capability |
+| Posture | **move into their world** (their routing, db, project layout, deploy) | **compose into your world** (one contract + injected ports, either in your app or as a thin service/channel) |
+| Integration surface | full project/framework/platform | library API, route handler, webhook/channel adapter, or standalone service |
 
-Most teams that need an agent are not building an agent platform; they are adding an agent feature to a SaaS/web/app. That **agent-as-a-feature** majority is where FastAgent fits and where full frameworks create friction.
+Most teams that need an agent are not building an agent platform; they are adding an agent feature to a SaaS/web/app or channel. That **agent-as-a-feature** majority is where FastAgent fits and where full frameworks create friction.
 
 ## Overview
 
@@ -53,9 +53,9 @@ So FastAgent's old differentiators mostly collapse against Flue:
 | Built on open pi | Flue is also built on pi |
 | Markdown-native, serve coding-agent artifacts | Flue is too, with more mature AI-first DX |
 | **Zero-rewrite, just point at a folder** | Only this remains — but the delta is thin: Flue needs a ~10-line `createAgent` + project layout; FastAgent needs a config |
-| **Library, not framework** (transport-neutral `invoke`, no imposed structure) | The one structural difference: Flue is a full framework (imposes routing/db/project layout); FastAgent is a contract + injected ports you embed into your own stack |
+| **Library/thin service, not framework** (transport-neutral `invoke`, no imposed structure) | The one structural difference: Flue is a full framework (imposes routing/db/project layout); FastAgent is a contract + injected ports you compose into your stack or run as a thin channel/service |
 
-The honest difference is **agent-as-a-feature vs agent-as-the-product**: Flue wants to be your app framework; FastAgent wants to be one capability inside your app. Even pairing Flue with Astro — same team, same Vite — still yields *two frameworks to stitch*, because Flue's value is owning the application, not embedding into one. That is the structural seam FastAgent owns; resource parity (a funded Astro team vs a small project) means FastAgent cannot win on framework breadth, only on this posture.
+The honest difference is **agent-as-a-feature vs agent-as-the-product**: Flue wants to be your app framework; FastAgent wants to be one capability inside your app or channel. Even pairing Flue with Astro — same team, same Vite — still yields *two frameworks to stitch*, because Flue's value is owning the application, not serving one capability with minimal surface area. That is the structural seam FastAgent owns; resource parity (a funded Astro team vs a small project) means FastAgent cannot win on framework breadth, only on this posture.
 
 ## OpenClaw
 
@@ -74,7 +74,7 @@ FastAgent only exists if neutrality matters: the same serving/embedding path sho
 
 ## pi
 
-pi is not the competitor; it is the first engine substrate — and the one **Flue also builds on**. FastAgent uses `pi-agent-core`'s `AgentHarness`, adapting pi's two ports (`prompt()` final value + `subscribe()` events) into the single Agent Handler event stream. FastAgent should avoid rebuilding pi's harness; its value is the contract, the embed/assembly shape, and host portability around the harness.
+pi is not the competitor; it is the first engine substrate — and the one **Flue also builds on**. FastAgent's serving/embedding path uses `pi-agent-core`'s `AgentHarness`, adapting pi's two ports (`prompt()` final value + `subscribe()` events) into the single Agent Handler event stream. The `fastagent chat` dev command is intentionally pi-specific and uses pi's interactive session lifecycle for TUI fidelity; it does not change the serving contract. FastAgent should avoid rebuilding pi's harness; its value is the contract, the embed/assembly shape, and host portability around the harness.
 
 ## Worked example: an agent feature in an Astro product
 
@@ -92,14 +92,21 @@ import { agent } from "../../lib/agent.ts"; // createPiAgentFromDefinition('./ag
 export const POST: APIRoute = async ({ request, locals }) => {
   if (!locals.user) return new Response("Unauthorized", { status: 401 }); // your auth
   const { session, text } = await request.json();
-  const stream = new ReadableStream({
-    async start(c) {
-      for await (const e of agent.invoke({ session: `${locals.user.id}:${session}` }, { text }))
-        c.enqueue(`data: ${JSON.stringify(e)}\n\n`);
-      c.close();
+  const iterator = agent.invoke({ session: `${locals.user.id}:${session}` }, { text })[Symbol.asyncIterator]();
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(c) {
+      const { value, done } = await iterator.next();
+      if (done) return c.close();
+      c.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
+    },
+    async cancel() {
+      await iterator.return?.(); // client disconnect/cancel → SPEC MUST 3 cleanup
     },
   });
-  return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+  return new Response(stream, {
+    headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+  });
 };
 ```
 
@@ -107,4 +114,4 @@ One build, one deploy, one auth, your database. The transport-neutral `invoke` c
 
 ## Summary
 
-FastAgent wins where the job is **"embed an agent capability into a product I already have, on a stack I already chose, without adopting a second framework."** If the user is building an agent *product/platform* — or needs heavyweight durable/swarm/sandbox out of the box — Flue (open) or Eve (Vercel) is the better fit. FastAgent's defensible position is the Flask/WSGI one: a minimal, transport-neutral serving contract plus injected ports (session/auth/env/lease), composed into the user's own stack — promising less, but not annexing the user's architecture.
+FastAgent wins where the job is **"turn an existing agent folder into an agent capability — inside my product, or as Slack/webhook/API infrastructure — without adopting a second framework."** If the user is building an agent *product/platform* — or needs heavyweight durable/swarm/sandbox out of the box — Flue (open) or Eve (Vercel) is the better fit. FastAgent's defensible position is the Flask/WSGI one: a minimal, transport-neutral serving contract plus injected ports (session/auth/env/lease), composed into the user's own stack or deployed as a thin service — promising less, but not annexing the user's architecture.
