@@ -45,7 +45,8 @@ Public surface tiers:
 
 | Tier | Examples | Stability |
 |---|---|---|
-| Contract | `Agent`, `AgentEvent`, `collect`, `createInvokeHandler` | Intended to remain stable within SPEC v0.1 |
+| Contract | `Agent`, `AgentEvent`, `collect` | Intended to remain stable within SPEC v0.1 |
+| Channels (reference) | `createInvokeHandler`, `nodeListener` | Reference HTTP/SSE channel, outside the SPEC contract (invoke is not a wire protocol). The handler is **Fetch-shaped** (`(Request) => Promise<Response>`); shape may still change pre-1.0 |
 | Pi assembly ladder | `createPiAgentFromWorkspace`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
 | Injection ports | `PiSessionStore`, `inMemorySessionStore`/`jsonlSessionStore`, `AuthResolver`, `Lease`, `piDefaultTools`/`piReadOnlyTools` | Public because the ladder options reference them |
 | Not exported | L0 `createPiAgentFromHarness`, `piHarnessFactory`, prompt/config assembly internals | Internal modules only; they expose pi's engine shape and are not a compatibility promise |
