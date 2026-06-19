@@ -85,9 +85,18 @@ A product team is building a SaaS in Astro (with their own auth and Postgres) an
 **With FastAgent:** the agent is one Astro endpoint.
 
 ```ts
+// src/lib/agent.ts
+import { createPiAgentFromDefinition, resolveModel } from "@kid7st/fastagent";
+import { postgresSessionStore } from "./sessions"; // your adapter
+
+export const { agent } = await createPiAgentFromDefinition("./agent", {
+  model: resolveModel(process.env.FASTAGENT_MODEL ?? "openai-codex/gpt-5.5"),
+  sessions: postgresSessionStore,
+});
+
 // src/pages/api/agent.ts (Astro SSR endpoint)
 import type { APIRoute } from "astro";
-import { agent } from "../../lib/agent.ts"; // createPiAgentFromDefinition('./agent', { sessions: yourPostgres })
+import { agent } from "../../lib/agent.ts";
 
 export const POST: APIRoute = async ({ request, locals }) => {
   if (!locals.user) return new Response("Unauthorized", { status: 401 }); // your auth
@@ -109,6 +118,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
   });
 };
 ```
+
+Today, custom session stores use `createPiAgentFromDefinition`, so the embed setup passes a resolved model explicitly. A config-resolving embed opener that also accepts K-axis overrides (sessions/auth/env/lease) is the intended ergonomic follow-up.
 
 One build, one deploy, one auth, your database. The transport-neutral `invoke` contract (no bundled HTTP framework) is what lets the agent live inside the host's own route. This is the demo that makes the abstract positioning concrete — and the sweet spot is explicit: a relatively *light* agent feature (interactive/generation/trigger-response) in a *TS/Node* product with an *existing stack*. A *heavy* agent (long autonomy, swarm, sandbox isolation, many channels) tilts back toward Flue's batteries-included path even as a feature.
 
