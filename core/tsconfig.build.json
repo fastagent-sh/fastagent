@@ -1,5 +1,5 @@
 {
-  // Publish build only (dev still runs the .ts sources directly via Node 26). Emits .js + .d.ts
+  // Publish build only. Emits .js + .d.ts
   // to dist/, which is what the package ships — Node refuses to type-strip .ts under node_modules,
   // so consumers must receive compiled JavaScript. rewriteRelativeImportExtensions rewrites the
   // source's explicit `./x.ts` import specifiers to `./x.js` in the output.

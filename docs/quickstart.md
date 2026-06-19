@@ -10,7 +10,7 @@ From an installed CLI to a running, deployable agent in a few minutes. Everythin
 
 ## Prerequisites
 
-- **Node ≥ 26** (`node -v`). The package ships compiled JavaScript; Node runs it directly, no build step on your side.
+- **Node ≥ 22.19** (`node -v`). The package ships compiled JavaScript; consuming projects do not need a build step for FastAgent itself.
 - **The `fastagent` CLI** — see [Install](../README.md#install): `npm i -g @kid7st/fastagent`, with the `@kid7st` scope registry + a GitHub token in your `~/.npmrc`.
 - **Model credentials** — either `pi login` (OAuth) or a provider API key in the workspace's `.env` (e.g. `OPENAI_API_KEY=…`). Run `fastagent models` to list the available `provider/modelId` specs.
 
@@ -94,7 +94,7 @@ fastagent build                  # → .fastagent/build : a self-contained, relo
 fastagent start .fastagent/build # run it in production posture
 ```
 
-`build` compiles the workspace (instructions + skills + tools + config) into an artifact whose manifest freezes the model and http port. `start` runs that artifact with sessions kept **outside** it (so a redeploy never wipes conversations). To deploy: copy the artifact directory anywhere with Node ≥ 26, run `npm ci`, then `fastagent start`.
+`build` compiles the workspace (instructions + skills + tools + config) into an artifact whose manifest freezes the model and http port. `start` runs that artifact with sessions kept **outside** it (so a redeploy never wipes conversations). To deploy: copy the artifact directory anywhere with Node ≥ 22.19, run `npm ci`, then `fastagent start`.
 
 ## Where next
 
