@@ -14,6 +14,7 @@
  * is the application entry point.
  */
 import { spawn } from "node:child_process";
+import { watch as watchTree } from "chokidar";
 import { createServer } from "node:http";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -22,7 +23,7 @@ import { createInvokeHandler } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
-import { defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
+import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
 import { scaffoldWorkspace } from "./engines/pi/init.ts";
@@ -34,7 +35,8 @@ function usage(code: number): never {
   fastagent init   [dir] [--minimal] [--no-install]
   fastagent models
   fastagent tool   <name> '<json-args>' [dir]
-  fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills]
+  fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills] [--no-watch]
+  fastagent chat   [dir] [--model provider/modelId] [--global-skills]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
 
@@ -42,6 +44,9 @@ function usage(code: number): never {
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --global-skills   also load the machine's global skills (~/.pi/agent/skills,
                            ~/.agents/skills); default is definition-only (dev == deployed)
+  chat   open the SAME assembled agent in pi's interactive TUI (the real harness, not a
+         crude REPL) — to try it locally before serving. Same model/tool/skill resolution
+         as dev; pi handles login, sessions, and /resume natively.
   init   scaffold a runnable agent in dir (default .) and run npm install. Default is a
          complete agent: AGENTS.md, a skill, tools/word-count.ts (a code tool), config,
          package.json, .npmrc, .gitignore. Refuses to overwrite an existing workspace.
@@ -79,6 +84,7 @@ const { positionals, values } = parseArgs({
     "global-skills": { type: "boolean" },
     minimal: { type: "boolean" },
     "no-install": { type: "boolean" },
+    "no-watch": { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
 });
@@ -92,6 +98,7 @@ if (command === "init") await runInit();
 else if (command === "models") runModels();
 else if (command === "tool") await runTool();
 else if (command === "dev") await runDev();
+else if (command === "chat") await runChat();
 else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
 else usage(1);
@@ -226,51 +233,162 @@ async function reportAuth(modelSpec: string): Promise<void> {
   }
 }
 
+type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;
+
+/** The agents/skills/tools/collisions report lines. */
+function reportAgentsSkillsTools(a: Assembled): void {
+  console.error(`[fastagent] agents: ${a.definition.instructions ? "AGENTS.md" : "(none)"}`);
+  console.error(
+    `[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
+  );
+  if (a.toolNames.length > 0) console.error(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
+  reportToolCollisions(a.toolCollisions);
+  reportDefinitionWarnings(a.definition.collisions, a.definition.diagnostics);
+}
+
+/** Startup-only diagnostic: machine global skills that exist but were not loaded (definition-only). */
+async function reportAvailableGlobalSkills(definition: LoadedDefinition): Promise<void> {
+  if (globalSkills) return;
+  const loaded = definition.skills.map((s) => s.name);
+  const withGlobals = await loadAgentDefinition(dir, { skillPaths: defaultGlobalSkillPaths() }).catch(() => undefined);
+  const available = (withGlobals?.skills ?? []).map((s) => s.name).filter((n) => !loaded.includes(n));
+  if (available.length > 0) {
+    console.error(`[fastagent] ${available.length} global skill(s) available but not loaded: ${available.join(", ")}`);
+    console.error(`            use in dev: --global-skills | ship: copy into skills/ (or build --global-skills)`);
+  }
+}
+
+/**
+ * `fastagent dev` hot-reload is process-restart, not in-process swap: the dev command is a
+ * SUPERVISOR that spawns a worker (this same command with FASTAGENT_DEV_WORKER set) to assemble +
+ * serve, and restarts that worker on any workspace edit. A fresh process per reload means what is
+ * served is ALWAYS your latest code — no in-process module-cache staleness, including modules a
+ * tool/config imports (the reason in-process busting was dropped). The supervisor never crashes;
+ * a broken edit stops the worker with a loud error and waits for the next save to retry.
+ */
 async function runDev(): Promise<void> {
-  // Validate flags before any assembly work: argument errors must fail instantly,
-  // not after the startup report. (config's http.port is range-checked by loadConfig.)
+  // Worker (spawned by the supervisor) or `--no-watch`: assemble + serve once, no watching.
+  if (process.env.FASTAGENT_DEV_WORKER === "1" || values["no-watch"]) {
+    await serveOnce();
+    return;
+  }
+  parsePort(values.port, "--port"); // flag-shape check (a non-integer port fails before spawning)
+  runDevSupervisor();
+}
+
+/** Open the workspace agent in pi's interactive TUI (the pi-specific `chat` command). */
+async function runChat(): Promise<void> {
+  loadDotEnv(dir); // model spec + provider API keys may come from .env
+  // Run the chat process IN the workspace. chat is workspace-scoped, and pi resolves a session's
+  // cwd as `header.cwd ?? process.cwd()`; aligning process.cwd() with the workspace makes that
+  // fallback land on the workspace for every session-replacement path (resume/import/fork/new),
+  // so a cwd-less legacy/imported session never drifts to the launch directory. `dir` is absolute.
+  process.chdir(dir);
+  // Lazy-import: chat pulls pi's interactive TUI module graph (InteractiveMode, pi-tui). A static
+  // import would load it on EVERY command; headless `start`/`dev` never need it. Runtime hygiene
+  // only — the dependency (and install size) is unchanged.
+  const { runPiChat } = await import("./engines/pi/chat.ts");
+  await runPiChat(dir, { model: values.model, globalSkills }).catch(failStartup);
+}
+
+/** Assemble the workspace agent and serve it once (the dev worker; also the --no-watch path). */
+async function serveOnce(): Promise<void> {
   const portFlag = parsePort(values.port, "--port");
   loadDotEnv(dir);
-  // Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy
-  // so blocked providers are reachable (reads HTTP(S)_PROXY/NO_PROXY from the env).
-  // install() keeps fetch and the dispatcher on the SAME undici implementation —
-  // pi does exactly this (core/http-dispatcher): Node 26's bundled fetch consuming
-  // responses through npm undici's dispatcher skips gzip decompression, which turned
-  // streamed turns into empty stopReason:"stop" messages (verified live 2026-06-11).
+  // Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy, and keep
+  // fetch + dispatcher on the SAME undici implementation (pi's core/http-dispatcher; otherwise
+  // Node 26's bundled fetch skips gzip decompression — empty stopReason:"stop" messages).
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const { agent, definition, config, configPath, modelSpec, toolNames, toolCollisions } =
-    await createPiAgentFromWorkspace(dir, {
-      model: values.model,
-      globalSkills,
-    }).catch(failStartup);
+  const a = await createPiAgentFromWorkspace(dir, { model: values.model, globalSkills }).catch(failStartup);
+  console.error(`[fastagent] dir:    ${a.definition.dir}`);
+  console.error(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
+  console.error(`[fastagent] model:  ${a.modelSpec}`);
+  await reportAuth(a.modelSpec);
+  reportAgentsSkillsTools(a);
+  await reportAvailableGlobalSkills(a.definition);
+  serve(a.agent, portFlag ?? a.config.http?.port ?? 8787);
+}
 
-  console.error(`[fastagent] dir:    ${definition.dir}`);
-  console.error(`[fastagent] config: ${configPath ?? "(zero-config)"}`);
-  console.error(`[fastagent] model:  ${modelSpec}`);
-  await reportAuth(modelSpec);
-  console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
-  const loadedSkills = definition.skills.map((s) => s.name);
-  console.error(
-    `[fastagent] skills: ${loadedSkills.join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
-  );
-  if (!globalSkills) {
-    // Definition-only by default: surface globals that exist on this machine but were
-    // NOT loaded, so dropped skills are visible at dev time (not discovered at deploy).
-    // A separate scan (dev-only diagnostic); the agent itself stays definition-only.
-    const withGlobals = await loadAgentDefinition(dir, { skillPaths: defaultGlobalSkillPaths() }).catch(() => undefined);
-    const available = (withGlobals?.skills ?? []).map((s) => s.name).filter((n) => !loadedSkills.includes(n));
-    if (available.length > 0) {
-      console.error(`[fastagent] ${available.length} global skill(s) available but not loaded: ${available.join(", ")}`);
-      console.error(`            use in dev: --global-skills | ship: copy into skills/ (or build --global-skills)`);
+/**
+ * Supervisor: spawn the worker and restart it on debounced workspace edits. Each restart is a
+ * fresh process (always-latest, no stale module cache). The supervisor itself never exits on a bad
+ * edit — the worker fails loudly (its own startup error) and the supervisor waits for the next save.
+ */
+function runDevSupervisor(): void {
+  let worker: ReturnType<typeof spawn> | undefined;
+  let reloadPending = false;
+  let everServed = false; // has any worker successfully bound (sent `ready`) yet?
+  let timer: NodeJS.Timeout | undefined;
+
+  const spawnWorker = (): void => {
+    // ipc fd so the worker can signal readiness once it binds; stdio otherwise inherited.
+    const w = spawn(process.execPath, [process.argv[1]!, ...process.argv.slice(2)], {
+      stdio: ["inherit", "inherit", "inherit", "ipc"],
+      env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
+    });
+    worker = w;
+    w.on("message", (m: { type?: string }) => {
+      if (m?.type === "ready") everServed = true;
+    });
+    w.on("exit", (code, signal) => {
+      if (worker !== w) return; // already superseded
+      worker = undefined;
+      if (reloadPending) {
+        reloadPending = false;
+        spawnWorker(); // restart requested: the old worker has now exited, so the port is free
+      } else if (!everServed) {
+        // The worker failed BEFORE ever serving — a non-editable startup failure (bad flag,
+        // EADDRINUSE, broken initial workspace) that saving cannot fix. Propagate the exit code so
+        // `fastagent dev` fails like the old CLI did (and smoke tests don't hang). The worker
+        // already printed the specific error (inherited stdio).
+        process.exit(code ?? 1);
+      } else {
+        // A worker that HAD been serving stopped (a broken edit, or a crash). The edit is fixable;
+        // the error is already printed. Wait for the next save to retry, do not loop or exit.
+        console.error(`[fastagent] dev stopped (worker exited: ${signal ?? code}) — save a change to retry`);
+      }
+    });
+  };
+
+  const triggerReload = (): void => {
+    console.error(`[fastagent] change detected — restarting…`);
+    if (worker) {
+      reloadPending = true;
+      worker.kill("SIGTERM"); // the exit handler respawns once the port is released
+    } else {
+      spawnWorker(); // worker was down (broken edit) — retry now
     }
-  }
-  if (toolNames.length > 0) console.error(`[fastagent] tools:  ${toolNames.join(", ")}`);
-  reportToolCollisions(toolCollisions);
-  reportDefinitionWarnings(definition.collisions, definition.diagnostics);
+  };
 
-  serve(agent, portFlag ?? config.http?.port ?? 8787);
+  // Recursively watch the workspace, structurally ignoring machine-state dirs. The worker writes
+  // jsonl sessions DEEP under .fastagent on every invoke, so watching it would restart dev on its
+  // own writes; node_modules/.git are noise. Everything else is watched — tools, skills, AND helper
+  // dirs a tool/config imports (e.g. lib/) — so a saved transitive import triggers the fresh-process
+  // reload too. chokidar gives reliable cross-platform recursion + structural ignore that native
+  // fs.watch cannot (its `filename` is not guaranteed, defeating a path-based filter).
+  const watcher = watchTree(dir, {
+    ignoreInitial: true, // the startup scan is not a change
+    ignored: /(?:^|[\\/])(?:\.fastagent|node_modules|\.git)(?:[\\/]|$)/,
+  });
+  watcher.on("all", () => {
+    clearTimeout(timer);
+    timer = setTimeout(triggerReload, 200);
+  });
+  watcher.on("error", (error) =>
+    console.error(`[fastagent] warn: file watching error (${(error as Error).message}); some edits may need a manual restart`),
+  );
+  console.error(`[fastagent] watching for changes — edits restart the dev worker (--no-watch to disable)`);
+
+  const shutdown = (): never => {
+    worker?.kill("SIGTERM");
+    void watcher.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  spawnWorker();
 }
 
 async function runBuild(): Promise<void> {
@@ -343,6 +461,7 @@ function serve(agent: Parameters<typeof createInvokeHandler>[0], port: number): 
     process.exit(1);
   });
   server.listen(port, () => {
+    process.send?.({ type: "ready" }); // tell the dev supervisor we bound (no-op without an IPC channel)
     console.error(`[fastagent] http channel on :${port}`);
     console.error(`  curl -N -X POST localhost:${port}/invoke -d '{"session":"s1","text":"hi"}'`);
   });

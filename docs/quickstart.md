@@ -30,6 +30,7 @@ my-agent/
 ├── tools/word-count.ts          # a code tool (defineTool) — auto-discovered
 ├── fastagent.config.mjs         # deployment choices: model, http port
 ├── package.json                 # ESM + the @kid7st/fastagent + zod deps
+├── .env.example                 # optional env knobs (model/keys/port) — copy to .env
 └── .gitignore / .npmrc
 ```
 
@@ -41,7 +42,7 @@ For a pure prompt+skills agent with no code and no dependencies, use `fastagent 
 fastagent dev
 ```
 
-The startup report shows the model, auth source, loaded skills, and tools. If it prints `auth: (none found)`, set credentials (see prerequisites) and re-run. Then send a turn:
+The startup report shows the model, auth source, loaded skills, and tools, and then watches for changes — a save **restarts the worker** (the `fastagent dev` command itself stays up; `--no-watch` to disable). If it prints `auth: (none found)`, set credentials (see prerequisites) and re-run. Then send a turn:
 
 ```bash
 curl -N -X POST localhost:8787/invoke \
@@ -58,6 +59,8 @@ data: {"type":"completed"}
 ```
 
 Reuse the same `session` value to continue a conversation; conversations persist under `.fastagent/sessions`, so a `dev` restart keeps them.
+
+To try the agent interactively instead of over HTTP, run `fastagent chat`. It opens the **same** assembled agent (same model, tools, skills, instructions) in pi's full interactive TUI — streaming, tool rendering, `/` commands, model switching, session resume — so you can vibe-check what you'll serve without writing a client.
 
 ## 3. Add a tool
 
@@ -82,7 +85,7 @@ fastagent tool reverse '{"text":"hello"}'
 # → { "reversed": "olleh" }
 ```
 
-Restart `fastagent dev` and the model can call `reverse`. Mention the tool in `AGENTS.md` so the model knows when to use it. (`input` is a [Zod](https://zod.dev) schema: the args are validated before `execute`, and an invalid call is reported back to the model, not a crash.)
+`fastagent dev` **reloads on save** — it restarts the worker on any edit to `AGENTS.md` / skills / tools / config, so the served agent is always your latest code (including modules a tool imports). A broken edit stops the worker with the error printed and waits for the next save; the `dev` command never crashes. Mention the tool in `AGENTS.md` so the model knows when to use it. (`input` is a [Zod](https://zod.dev) schema: the args are validated before `execute`, and an invalid call is reported back to the model, not a crash.)
 
 ## 4. Build and run the artifact
 

@@ -34,6 +34,7 @@ core/
 │       ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
 │       ├── init.ts              # `init`: scaffold a runnable agent (complete by default; --minimal)
 │       ├── dev.ts               # `dev` opener: open a workspace → agent (authoring posture)
+│       ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
 │       ├── build.ts             # `build`: compile a workspace → self-contained artifact
 │       ├── start.ts             # `start` opener: run a built artifact (production posture)
 │       ├── tool.ts              # defineTool (Zod) + tools/ filesystem discovery

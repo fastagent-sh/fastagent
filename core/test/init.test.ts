@@ -39,9 +39,19 @@ describe("init: scaffoldWorkspace", () => {
         "package.json",
         ".npmrc",
         ".gitignore",
+        ".env.example",
       ]),
     );
     expect(warnings).toEqual([]);
+
+    // .env.example documents env knobs without misleading: all-commented (sets nothing), and it
+    // states the default model uses OAuth (`pi login`), never implying an API key is required.
+    const envExample = await readFile(join(dir, ".env.example"), "utf8");
+    expect(envExample).toMatch(/pi login/);
+    expect(envExample).toMatch(/OAuth, not an API key/);
+    for (const line of envExample.split("\n")) {
+      if (line.trim() !== "") expect(line.startsWith("#")).toBe(true); // every non-blank line is a comment
+    }
 
     // package.json is ESM with the tool's deps; the tool imports the package + names from its file.
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
@@ -62,7 +72,7 @@ describe("init: scaffoldWorkspace", () => {
     const { complete, created } = await scaffoldWorkspace(dir, { minimal: true });
     expect(complete).toBe(false);
     expect(created.sort()).toEqual(
-      ["AGENTS.md", ".gitignore", "fastagent.config.mjs", join("skills", "house-style", "SKILL.md")].sort(),
+      ["AGENTS.md", ".gitignore", ".env.example", "fastagent.config.mjs", join("skills", "house-style", "SKILL.md")].sort(),
     );
     expect(await exists(join(dir, "package.json"))).toBe(false);
     expect(await exists(join(dir, "tools"))).toBe(false);
