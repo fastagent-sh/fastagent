@@ -19,7 +19,7 @@ import { createServer } from "node:http";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
-import { createInvokeHandler } from "./channels/http.ts";
+import { createInvokeHandler, nodeListener } from "./channels/http.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
@@ -454,7 +454,18 @@ async function runStart(): Promise<void> {
  * problem, not a bug, so it exits like {@link failStartup} rather than crashing unhandled.
  */
 function serve(agent: Parameters<typeof createInvokeHandler>[0], port: number): void {
-  const server = createServer(createInvokeHandler(agent));
+  // Standalone routing lives in the composition root: only POST /invoke is the agent endpoint;
+  // any other path is a clear 404. The Fetch handler itself stays path-agnostic (the embed case
+  // mounts it at the host's own route).
+  const handler = createInvokeHandler(agent);
+  const server = createServer(
+    nodeListener(async (req) => {
+      if (new URL(req.url).pathname !== "/invoke") {
+        return new Response("POST /invoke\n", { status: 404, headers: { "content-type": "text/plain" } });
+      }
+      return handler(req);
+    }),
+  );
   server.on("error", (error: NodeJS.ErrnoException) => {
     if (error.code === "EADDRINUSE") console.error(`port ${port} is already in use; choose another with --port`);
     else console.error(`cannot bind http channel on :${port}: ${error.message}`);
