@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  core:
-    name: Core checks (Node ${{ matrix.node-version }})
+  test:
+    name: Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -38,3 +38,15 @@ jobs:
       - name: Test
         run: npm test
         working-directory: core
+
+  # Stable-named aggregate gate: this is the branch-protection required check.
+  # Keeping a fixed name (independent of the matrix) means adding/removing Node
+  # versions never requires editing branch protection.
+  core-checks:
+    name: Core checks
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all matrix jobs to pass
+        run: '[ "${{ needs.test.result }}" = "success" ]'
