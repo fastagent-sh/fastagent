@@ -102,9 +102,14 @@ The protocol does **not** guarantee the following; implementations and consumers
 - **`tool_started` / `tool_ended` pairing**: normally these events are paired by `id`, and `tool_ended` follows the matching `tool_started`; after cancellation (c), a dangling `tool_started` may remain. Tool UIs must tolerate dangling starts.
 - **Session cleanliness of `failed.retryable`**: `retryable: true` means “worth re-sending with the same `session`”. It does **not** guarantee that the failed turn was atomic with respect to session state. A partial turn may have already appended entries or run side-effecting tools. Retry side-effect safety belongs to the engine/tools, not to the protocol (§9).
 
-## 7. Buffered
+## 7. Consumption: streaming and buffered
 
-A Caller that does not need streaming can reduce the stream to a buffered result with a caller-side helper; this helper is not part of the protocol:
+`invoke` returns a stream, but there are **two first-class ways to consume it**, matching the two shapes of agent work:
+
+- **Streaming** — conversational/interactive features: read `text` deltas and `tool_*` events as they arrive (a chat UI, an SSE endpoint).
+- **Buffered** — task-style features (classify, extract, generate, triage): ignore intermediate events and take the final result. This is the dominant shape when an agent is **embedded as a feature** (input → result), not a chat.
+
+Buffered consumption is a degeneration of the same stream via a pure caller-side reducer. It adds **no** protocol surface — `invoke` still returns only `AsyncIterable<AgentEvent>` — but it is a **canonical, supported consumption mode**, not an afterthought (the reference implementation exports `collect`):
 
 ```ts
 async function collect(events: AsyncIterable<AgentEvent>): Promise<{ text: string; data?: Json }> {
@@ -118,6 +123,8 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<{ text: strin
 }
 ```
 
+`collect` also restores JS-idiomatic error handling for the buffered case: `failed` becomes a thrown `AgentFailure`, whereas streaming consumers handle it as the terminal event (MUST 2). Task-style results ride on `completed.data`; a typed/validated result is an extension (§8), demand-driven and not part of v0.1 core.
+
 ## 8. Extension points
 
 The core stays small. The following extensions attach through additional `scope` fields, new non-terminal events, optional parameters, or Middleware:
@@ -129,6 +136,7 @@ The core stays small. The following extensions attach through additional `scope`
 | Execution constraints such as deadline / budget | Middleware; for example, `budget_exceeded` becomes a `failed` event produced by Middleware |
 | Mid-turn steering | **Extension, not part of the v0.1 core signature**: add an optional third parameter `input?: AsyncIterable<Prompt>` to `invoke` and feed input into the in-flight turn, corresponding to pi `steer` / `followUp` / `nextTurn`. If the desired behavior is “discard the current turn and go another way”, use cancel + a new `invoke` with the same `session`; no steering extension is required. |
 | Thinking / citations / artifact streaming | Add new non-terminal `AgentEvent` types |
+| Structured / typed result | Per-invoke output-schema negotiation; the validated result rides on `completed.data`. Demand-driven (task-style embed features); not in v0.1 core, and MUST NOT change the frozen terminal set. |
 | Failure subdivision | Add `failed.code?` |
 
 ## 9. Dependency inversion
