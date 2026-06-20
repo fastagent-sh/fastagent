@@ -44,6 +44,15 @@ export {
   type CreatePiAgentFromWorkspaceOptions,
 } from "./engines/pi/dev.ts";
 
+// pi reference implementation — embed (open a workspace into an agent, production-embed posture).
+// Reads the workspace config (model + tools) like dev, but injects K (sessions/env/lease/auth) like
+// L2 and creates no files — the blessed entry point for embedding an agent into an existing app.
+export {
+  createPiAgentForEmbed,
+  type CreatePiAgentForEmbedOptions,
+} from "./engines/pi/embed.ts";
+export type { ExecutionEnv } from "@earendil-works/pi-agent-core";
+
 // pi reference implementation — definition domain (load).
 // bundleAgentDefinition is intentionally NOT exported: it does a destructive `rm -rf
 // outDir` and the overwrite guard lives in buildPiArtifact, the public build entry point.
