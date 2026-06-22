@@ -67,9 +67,12 @@ export function createWebhookHandler<E>(
         const result = await collect(agent.invoke(scope, prompt)); // buffered + terminal discipline
         await binding.deliver?.(event, result);
       } catch (error) {
-        if (error instanceof AgentFailure)
-          await binding.onError?.(event, error); // a turn failure
-        else throw error; // a real bug → the background runner's error sink (fail visibly)
+        // A turn failure with an onError handler is delivered out-of-band. WITHOUT a handler it must
+        // still be visible: rethrow so it reaches the background runner's error sink, same as a real
+        // bug — never swallow it (fail visibly). For a fat agent this is the case where the agent
+        // crashed before posting anything, so the failure especially must not vanish.
+        if (error instanceof AgentFailure && binding.onError) await binding.onError(event, error);
+        else throw error;
       }
     });
 
