@@ -331,7 +331,19 @@ describe("build: buildPiArtifact", () => {
       `export default { model: "openai-codex/gpt-5.5", tools: [{ name: "t", description: "d", parameters: {}, execute: async () => "x" }] };\n`,
     );
     await writeFile(join(ws, ".fastagentignore"), "fastagent.config.ts\n"); // excludes the tool config
-    await expect(buildOk(ws, await freshOut())).rejects.toThrow(/defines code tools but .* is excluded/);
+    await expect(buildOk(ws, await freshOut())).rejects.toThrow(/defines code tools or channels but .* is excluded/);
+  });
+
+  it("fails visibly when a config defining channels is excluded from the artifact", async () => {
+    // Same class as tools: channels is a function, lives only in the config file, not the manifest.
+    const ws = await mkdtemp(join(tmpdir(), "fa-chancfg-"));
+    await writeFile(join(ws, "AGENTS.md"), "# Bot\n");
+    await writeFile(
+      join(ws, "fastagent.config.ts"),
+      `export default { model: "openai-codex/gpt-5.5", channels: () => ({ "GET /health": () => new Response("ok") }) };\n`,
+    );
+    await writeFile(join(ws, ".fastagentignore"), "fastagent.config.ts\n"); // excludes the channel config
+    await expect(buildOk(ws, await freshOut())).rejects.toThrow(/defines code tools or channels but .* is excluded/);
   });
 
   it("rejects an output that is, or contains, the source (cannot publish over the input)", async () => {

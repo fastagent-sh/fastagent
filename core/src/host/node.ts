@@ -69,7 +69,11 @@ export function serveNode(handler: ChannelHandler, options: { port: number }): N
       const { response, background } = result;
       if (background) {
         inFlight.add(background);
-        void background.finally(() => inFlight.delete(background));
+        // Observe rejections: a misbehaving channel's background must not crash the host as an
+        // unhandled rejection (drain uses allSettled, but the tracking chain needs its own catch).
+        void background
+          .catch((error) => console.error(`[host] background work failed: ${String(error)}`))
+          .finally(() => inFlight.delete(background));
       }
       return response;
     }),
@@ -84,6 +88,10 @@ export function serveNode(handler: ChannelHandler, options: { port: number }): N
   return {
     listening,
     drain: () => Promise.allSettled(inFlight).then(() => {}),
-    close: () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((e) => (e ? reject(e) : resolve()));
+        server.closeIdleConnections(); // don't hang on idle keep-alive sockets
+      }),
   };
 }

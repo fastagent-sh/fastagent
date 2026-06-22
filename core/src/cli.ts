@@ -460,10 +460,11 @@ async function runStart(): Promise<void> {
     routesFor(config, agent),
     portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787,
   );
-  // Production graceful shutdown: a host (fly.io, k8s) sends SIGTERM — finish in-flight turns first.
+  // Production graceful shutdown: a host (fly.io, k8s) sends SIGTERM. Close FIRST (stop accepting),
+  // then drain — so work accepted mid-shutdown is included, not killed by exit.
   process.on("SIGTERM", async () => {
-    await host.drain();
     await host.close();
+    await host.drain();
     process.exit(0);
   });
 }
