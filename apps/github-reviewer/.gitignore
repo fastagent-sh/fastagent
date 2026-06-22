@@ -1,0 +1,8 @@
+# secrets — never commit, never ship in the build artifact
+.env
+
+# dependencies (reinstalled at deploy)
+node_modules/
+
+# fastagent machine state (dev sessions + build output)
+.fastagent/

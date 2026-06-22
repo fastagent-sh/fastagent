@@ -1,0 +1,33 @@
+# fly.io config for github-reviewer. `fly launch --no-deploy` regenerates app/region for you;
+# the load-bearing bits are the long-running settings below (background reviews must outlive the
+# request, so the machine must NOT auto-stop).
+app = "github-reviewer"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "8080"
+  # Sessions outside the artifact (a redeploy replaces the artifact wholesale).
+  FASTAGENT_SESSIONS_DIR = "/data/sessions"
+
+# Persist sessions across restarts/redeploys (optional but nice for re-review continuity).
+[mounts]
+  source = "reviewer_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Long-running: a review is dispatched AFTER the 202, by createTrackedBackground in-process — the
+  # machine must stay up to finish it. Do not auto-stop.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"

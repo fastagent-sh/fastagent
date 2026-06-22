@@ -1,0 +1,16 @@
+{
+  "name": "github-reviewer",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@kid7st/fastagent": "^0.2.0"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "build": "fastagent build",
+    "deploy": "fly deploy --build-secret GITHUB_TOKEN=$(gh auth token)"
+  }
+}
