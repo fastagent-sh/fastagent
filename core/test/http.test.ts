@@ -22,8 +22,14 @@ function makeAgent(responses: FauxResponseStep[]): Agent {
 }
 
 /** Drive the Fetch handler directly (no server) and parse SSE lines into AgentEvent[]. */
-async function invoke(handler: (req: Request) => Promise<Response>, session: string, text: string): Promise<AgentEvent[]> {
-  const res = await handler(new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session, text }) }));
+async function invoke(
+  handler: (req: Request) => Promise<Response>,
+  session: string,
+  text: string,
+): Promise<AgentEvent[]> {
+  const res = await handler(
+    new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session, text }) }),
+  );
   expect(res.headers.get("content-type")).toBe("text/event-stream");
   const body = await res.text();
   return body
@@ -36,7 +42,10 @@ describe("invoke handler (Fetch/SSE)", () => {
   it("POST streams text + completed over SSE", async () => {
     const handler = createInvokeHandler(makeAgent([fauxAssistantMessage("hello over http")]));
     const events = await invoke(handler, "s1", "hi");
-    const text = events.filter((e) => e.type === "text").map((e) => (e as any).delta).join("");
+    const text = events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as any).delta)
+      .join("");
     expect(text).toBe("hello over http");
     expect(events.at(-1)).toEqual({ type: "completed" });
   });
@@ -84,23 +93,28 @@ describe("invoke handler (Fetch/SSE)", () => {
   it("non-POST returns 405; bad/missing body returns 400", async () => {
     const handler = createInvokeHandler(makeAgent([fauxAssistantMessage("x")]));
     expect((await handler(new Request("http://app/invoke", { method: "GET" }))).status).toBe(405);
+    expect((await handler(new Request("http://app/invoke", { method: "POST", body: "{not json" }))).status).toBe(400);
     expect(
-      (await handler(new Request("http://app/invoke", { method: "POST", body: "{not json" }))).status,
-    ).toBe(400);
-    expect(
-      (await handler(new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session: "s" }) }))).status,
+      (await handler(new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session: "s" }) })))
+        .status,
     ).toBe(400);
   });
 
   it("oversized body returns 413 before invoke and counts real bytes, not JS characters", async () => {
     const handler = createInvokeHandler(makeAgent([fauxAssistantMessage("x")]));
     const big = await handler(
-      new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session: "s", text: "x".repeat(2 * 1024 * 1024) }) }),
+      new Request("http://app/invoke", {
+        method: "POST",
+        body: JSON.stringify({ session: "s", text: "x".repeat(2 * 1024 * 1024) }),
+      }),
     );
     expect(big.status).toBe(413);
     // 400k emoji = 400k chars but > 1 MiB in bytes → must be rejected
     const multibyte = await handler(
-      new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session: "s", text: "🙂".repeat(400_000) }) }),
+      new Request("http://app/invoke", {
+        method: "POST",
+        body: JSON.stringify({ session: "s", text: "🙂".repeat(400_000) }),
+      }),
     );
     expect(multibyte.status).toBe(413);
   });
@@ -128,7 +142,9 @@ describe("invoke handler (Fetch/SSE)", () => {
       },
     };
     const handler = createInvokeHandler(fake);
-    const res = await handler(new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session: "s", text: "hi" }) }));
+    const res = await handler(
+      new Request("http://app/invoke", { method: "POST", body: JSON.stringify({ session: "s", text: "hi" }) }),
+    );
     const reader = res.body!.getReader();
     await reader.read(); // stream has started
     await reader.cancel(); // consumer disconnects
@@ -166,13 +182,19 @@ describe("nodeListener (standalone server bridge)", () => {
   it("bridges POST /invoke to SSE; wrong path returns 404", async () => {
     const srv = await startServer(makeAgent([fauxAssistantMessage("bridged")]));
     try {
-      const res = await fetch(`${srv.url}/invoke`, { method: "POST", body: JSON.stringify({ session: "s", text: "hi" }) });
+      const res = await fetch(`${srv.url}/invoke`, {
+        method: "POST",
+        body: JSON.stringify({ session: "s", text: "hi" }),
+      });
       const body = await res.text();
       const events = body
         .split("\n\n")
         .filter((b) => b.startsWith("data: "))
         .map((b) => JSON.parse(b.slice("data: ".length)) as AgentEvent);
-      const txt = events.filter((e) => e.type === "text").map((e) => (e as any).delta).join("");
+      const txt = events
+        .filter((e) => e.type === "text")
+        .map((e) => (e as any).delta)
+        .join("");
       expect(txt).toBe("bridged");
       expect(events.at(-1)?.type).toBe("completed");
 
@@ -221,7 +243,9 @@ describe("nodeListener (standalone server bridge)", () => {
       controller.abort(); // client disconnect
       await Promise.race([
         cancelledSeen,
-        new Promise((_, reject) => setTimeout(() => reject(new Error("invoke was never cancelled after disconnect")), 3000)),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("invoke was never cancelled after disconnect")), 3000),
+        ),
       ]);
       expect(cancelled).toBe(true);
     } finally {
@@ -234,7 +258,11 @@ describe("nodeListener (standalone server bridge)", () => {
 describe("nodeListener backpressure", () => {
   /** Minimal IncomingMessage: GET (no body) so the bridge needs no request stream. */
   function fakeReq(): IncomingMessage {
-    const req = new EventEmitter() as unknown as IncomingMessage & { method: string; url: string; headers: Record<string, string> };
+    const req = new EventEmitter() as unknown as IncomingMessage & {
+      method: string;
+      url: string;
+      headers: Record<string, string>;
+    };
     req.method = "GET";
     req.url = "/invoke";
     req.headers = { host: "localhost" };

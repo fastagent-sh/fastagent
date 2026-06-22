@@ -110,10 +110,7 @@ export async function loadAgentDefinition(
   // Definition-local skills first → definition wins collisions (first-wins).
   // Default is definition-only ([]): "your folder is the agent". Global/extra
   // mounts are an explicit opt-in (see skillPaths / defaultGlobalSkillPaths).
-  const { skills: raw, diagnostics } = await loadSkills(e, [
-    join(root, "skills"),
-    ...(options.skillPaths ?? []),
-  ]);
+  const { skills: raw, diagnostics } = await loadSkills(e, [join(root, "skills"), ...(options.skillPaths ?? [])]);
   const byName = new Map<string, Skill>();
   const collisions: SkillCollision[] = [];
   for (const skill of raw) {
@@ -297,9 +294,7 @@ export async function bundleAgentDefinition(
   // Production 1 — the authored context tree, EXCLUDING skills/. Skip the build's own dirs
   // (staging / final target) too, so output is never bundled into itself.
   const skipHere = await realpath(outDir).catch(() => resolve(outDir));
-  const skipExtra = await Promise.all(
-    (bundleOpts.skipPaths ?? []).map((p) => realpath(p).catch(() => resolve(p))),
-  );
+  const skipExtra = await Promise.all((bundleOpts.skipPaths ?? []).map((p) => realpath(p).catch(() => resolve(p))));
   const plan = await planShipSet(srcDir, { skip: [skipHere, ...skipExtra, skillsDir] });
   const shipped = new Set(plan.files.map((f) => f.rel));
 

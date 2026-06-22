@@ -132,9 +132,7 @@ export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] 
 export function piBasePrompt(options: { tools?: AgentTool[] } = {}): string {
   const tools = options.tools ?? [];
   const toolsList =
-    tools.length > 0
-      ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n")
-      : "(none)";
+    tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
   return `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
 Available tools:

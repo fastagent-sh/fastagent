@@ -51,10 +51,7 @@ describe("piOAuthAuth (silent-failure discipline)", () => {
     );
     expect(await piOAuthAuth(path)(model)).toEqual({ apiKey: "tok-live" });
 
-    await writeFile(
-      path,
-      JSON.stringify({ anthropic: { type: "oauth", access: "tok-old", expires: Date.now() - 1 } }),
-    );
+    await writeFile(path, JSON.stringify({ anthropic: { type: "oauth", access: "tok-old", expires: Date.now() - 1 } }));
     const messages: string[] = [];
     expect(await piOAuthAuth(path, { warn: (m) => messages.push(m) })(model)).toBeUndefined();
     expect(messages[0]).toContain("expired"); // root cause surfaced, not buried under "missing API key"
@@ -65,7 +62,10 @@ describe("probeAuthSource (startup credential report; dev + start)", () => {
   it("reports oauth when the credentials file has a live token for the provider", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-probe-"));
     const path = join(dir, "auth.json");
-    await writeFile(path, JSON.stringify({ anthropic: { type: "oauth", access: "tok", expires: Date.now() + 60_000 } }));
+    await writeFile(
+      path,
+      JSON.stringify({ anthropic: { type: "oauth", access: "tok", expires: Date.now() + 60_000 } }),
+    );
     expect(await probeAuthSource("anthropic", path)).toBe("oauth");
   });
 

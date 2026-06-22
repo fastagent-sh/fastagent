@@ -236,7 +236,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       return;
     }
     try {
-      let harness;
+      let harness: Awaited<ReturnType<PiHarnessFactory>>;
       try {
         harness = await harnessFactory(scope.session);
       } catch (error) {

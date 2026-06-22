@@ -160,7 +160,13 @@ export async function buildChatRuntime(
             description: s.description,
             filePath: s.filePath,
             baseDir: dirname(s.filePath),
-            sourceInfo: { path: s.filePath, source: "fastagent", scope: "project", origin: "top-level", baseDir: dirname(s.filePath) },
+            sourceInfo: {
+              path: s.filePath,
+              source: "fastagent",
+              scope: "project",
+              origin: "top-level",
+              baseDir: dirname(s.filePath),
+            },
             disableModelInvocation: s.disableModelInvocation ?? false,
           })) as typeof base.skills,
           diagnostics: base.diagnostics,
@@ -201,12 +207,16 @@ function reportDefinitionWarnings(
 
 function reportToolCollisions(collisions: ToolCollision[]): void {
   for (const c of collisions) {
-    console.error(`[fastagent] warn: tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`);
+    console.error(
+      `[fastagent] warn: tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`,
+    );
   }
 }
 
 function workspaceScopeError(targetCwd: string): Error {
-  return new Error(`fastagent chat is workspace-scoped: cannot switch to ${targetCwd}; run \`fastagent chat ${targetCwd}\` instead`);
+  return new Error(
+    `fastagent chat is workspace-scoped: cannot switch to ${targetCwd}; run \`fastagent chat ${targetCwd}\` instead`,
+  );
 }
 
 /** Resolve to a canonical (symlink-free) path so comparisons match pi's process.cwd() realpath. */

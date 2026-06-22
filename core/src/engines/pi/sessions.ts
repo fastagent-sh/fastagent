@@ -175,8 +175,5 @@ export function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSes
 
 /** Injective filename-safe encoding: [A-Za-z0-9._-] verbatim ("s1" stays "s1"), the rest %-escaped ("%" itself included). */
 function encodeSessionId(id: string): string {
-  return id.replace(
-    /[^A-Za-z0-9._-]/g,
-    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`,
-  );
+  return id.replace(/[^A-Za-z0-9._-]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
 }

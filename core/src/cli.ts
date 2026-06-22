@@ -129,7 +129,9 @@ async function runTool(): Promise<void> {
   // run here either; surface that collision instead of silently testing the wrong implementation.
   const { tools, collisions } = mergeDiscoveredTools(resolveTools(config, toolDir), discovered.tools);
   for (const c of [...discovered.collisions, ...collisions]) {
-    console.error(`[fastagent] warn: tool "${c.name}" (${c.source}) is shadowed by a default/config tool — not mounted`);
+    console.error(
+      `[fastagent] warn: tool "${c.name}" (${c.source}) is shadowed by a default/config tool — not mounted`,
+    );
   }
   const tool = tools.find((t) => t.name === name);
   if (!tool) {
@@ -160,7 +162,9 @@ async function runInit(): Promise<void> {
   if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
   if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
   if (intoNonEmpty) {
-    console.error(`  note: scaffolded into a non-empty directory; for a clean start, run \`fastagent init <name>\` (a fresh subdir)`);
+    console.error(
+      `  note: scaffolded into a non-empty directory; for a clean start, run \`fastagent init <name>\` (a fresh subdir)`,
+    );
   }
   for (const w of warnings) console.error(`[fastagent] warn: ${w}`);
 
@@ -173,7 +177,8 @@ async function runInit(): Promise<void> {
   if (willInstall) {
     console.error(`[fastagent] installing dependencies (npm install)…`);
     installFailed = (await npmInstall(dir)) !== 0;
-    if (installFailed) console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
+    if (installFailed)
+      console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
   }
 
   // Next steps act on the scaffolded dir. For a named target (`fastagent init my-agent`) lead with
@@ -324,6 +329,7 @@ function runDevSupervisor(): void {
 
   const spawnWorker = (): void => {
     // ipc fd so the worker can signal readiness once it binds; stdio otherwise inherited.
+    // biome-ignore lint/style/noNonNullAssertion: argv[1] is always the script path under a node entry
     const w = spawn(process.execPath, [process.argv[1]!, ...process.argv.slice(2)], {
       stdio: ["inherit", "inherit", "inherit", "ipc"],
       env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
@@ -377,7 +383,9 @@ function runDevSupervisor(): void {
     timer = setTimeout(triggerReload, 200);
   });
   watcher.on("error", (error) =>
-    console.error(`[fastagent] warn: file watching error (${(error as Error).message}); some edits may need a manual restart`),
+    console.error(
+      `[fastagent] warn: file watching error (${(error as Error).message}); some edits may need a manual restart`,
+    ),
   );
   console.error(`[fastagent] watching for changes — edits restart the dev worker (--no-watch to disable)`);
 
@@ -510,6 +518,8 @@ function reportDefinitionWarnings(
 
 function reportToolCollisions(collisions: { name: string; source: string }[]): void {
   for (const c of collisions) {
-    console.error(`[fastagent] warn: tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`);
+    console.error(
+      `[fastagent] warn: tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`,
+    );
   }
 }

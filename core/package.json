@@ -1,7 +1,19 @@
 {
   "name": "@kid7st/fastagent",
   "version": "0.1.0",
-  "description": "Reference implementation of the Agent Handler contract: fan in pi AgentHarness events into the SPEC event stream.",
+  "description": "Flask/WSGI for agents: serve or embed an existing agent folder (AGENTS.md + skills/) as a production capability. Engine-, model-, and host-neutral.",
+  "keywords": [
+    "agent",
+    "ai-agent",
+    "llm",
+    "agents.md",
+    "agent-skills",
+    "mcp",
+    "agent-serving",
+    "sse",
+    "pi",
+    "fastagent"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -25,16 +37,21 @@
     "fastagent": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "test": "vitest --run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src test examples",
+    "format": "biome check --write src test examples"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.79.8",
@@ -46,6 +63,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }

@@ -5,13 +5,7 @@
  * (`@earendil-works/pi-*` may only appear under engines/).
  */
 
-export type Json =
-  | null
-  | boolean
-  | number
-  | string
-  | Json[]
-  | { [k: string]: Json };
+export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
 /** Base64-encoded image reference. */
 export interface ImageRef {

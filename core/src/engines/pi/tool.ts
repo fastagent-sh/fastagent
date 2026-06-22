@@ -22,6 +22,7 @@
  * Node composition-root module: `loadTools` dynamically imports the workspace's tool modules
  * (local files, not node_modules — so Node strips their types); the invoke path stays disk-free.
  */
+import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -100,7 +101,7 @@ const TOOL_EXTS = new Set([".ts", ".js", ".mjs"]);
  */
 export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; collisions: ToolCollision[] }> {
   const toolsDir = join(dir, "tools");
-  let entries;
+  let entries: Dirent[];
   try {
     entries = await readdir(toolsDir, { withFileTypes: true });
   } catch (error) {

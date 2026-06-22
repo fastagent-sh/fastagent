@@ -56,7 +56,10 @@ describe("invoke fan-in", () => {
 
     const events = await drain(agent.invoke({ session: "s1" }, { text: "hi" }));
 
-    const text = events.filter((e) => e.type === "text").map((e) => (e as any).delta).join("");
+    const text = events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as any).delta)
+      .join("");
     expect(text).toBe("hello world");
     expect(events.at(-1)).toEqual({ type: "completed" });
     expect(events.filter((e) => e.type === "completed" || e.type === "failed")).toHaveLength(1);
@@ -266,19 +269,14 @@ describe("lease + setup robustness", () => {
   });
 
   it("same-session concurrency: one completes, the other fail-fasts with 'session busy' (no queue, no reentry)", async () => {
-    const { agent } = makeAgent([
-      fauxAssistantMessage("first"),
-      fauxAssistantMessage("should-not-run"),
-    ]);
+    const { agent } = makeAgent([fauxAssistantMessage("first"), fauxAssistantMessage("should-not-run")]);
     const [ea, eb] = await Promise.all([
       drain(agent.invoke({ session: "x" }, { text: "a" })),
       drain(agent.invoke({ session: "x" }, { text: "b" })),
     ]);
 
     const completed = [ea, eb].filter((es) => es.at(-1)?.type === "completed");
-    const busy = [ea, eb].filter((es) =>
-      es.some((e) => e.type === "failed" && /busy/.test((e as any).details)),
-    );
+    const busy = [ea, eb].filter((es) => es.some((e) => e.type === "failed" && /busy/.test((e as any).details)));
     expect(completed).toHaveLength(1); // exactly one completed
     expect(busy).toHaveLength(1); // exactly one busy
     expect(busy[0]).toHaveLength(1); // the busy one never ran a turn; a single failed event
@@ -286,10 +284,7 @@ describe("lease + setup robustness", () => {
   });
 
   it("busy is transient: same session can be used again after the previous turn completes", async () => {
-    const { agent } = makeAgent([
-      fauxAssistantMessage("first"),
-      fauxAssistantMessage("later"),
-    ]);
+    const { agent } = makeAgent([fauxAssistantMessage("first"), fauxAssistantMessage("later")]);
     await drain(agent.invoke({ session: "y" }, { text: "a" })); // completed serially
     const events = await drain(agent.invoke({ session: "y" }, { text: "b" }));
     expect(events.at(-1)?.type).toBe("completed"); // no longer busy
@@ -320,9 +315,7 @@ describe("retryClassifier injection (failed.retryable policy is replaceable)", (
   it("injected policy overrides the default string heuristic", async () => {
     const faux = registerFauxProvider();
     // "weird custom failure" does not match the default regex, so the default would be retryable:false
-    faux.setResponses([
-      fauxAssistantMessage("x", { stopReason: "error", errorMessage: "weird custom failure" }),
-    ]);
+    faux.setResponses([fauxAssistantMessage("x", { stopReason: "error", errorMessage: "weird custom failure" })]);
     const agent = createPiAgentFromHarness({
       retryClassifier: () => true,
       harnessFactory: piHarnessFactory({
@@ -337,7 +330,6 @@ describe("retryClassifier injection (failed.retryable policy is replaceable)", (
     expect(events.at(-1)).toMatchObject({ type: "failed", retryable: true });
   });
 });
-
 
 describe("inProcessLease (fail-fast single writer)", () => {
   it("occupied session makes the second tryAcquire return null (no queue)", () => {

@@ -132,7 +132,10 @@ export async function createPiAgentFromArtifact(
   await ensureStateDirSelfIgnored(sessionsDir);
   // Discover tools/ (ships in the artifact as authored context) and merge with config.tools + defaults.
   const discovered = await loadTools(artifactDir);
-  const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, artifactDir), discovered.tools);
+  const { tools, collisions: crossCollisions } = mergeDiscoveredTools(
+    resolveTools(config, artifactDir),
+    discovered.tools,
+  );
   const toolCollisions = [...discovered.collisions, ...crossCollisions];
   const defaultNames = new Set(piDefaultTools(artifactDir).map((t) => t.name));
   const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));

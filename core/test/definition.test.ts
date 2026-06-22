@@ -178,9 +178,11 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
 
 describe("create: toolset (real pi tools, fidelity)", () => {
   it("piDefaultTools are pi core four tools (same as pi default); piReadOnlyTools is the read-only subset", () => {
-    expect(piDefaultTools(fixtureDir).map((t) => t.name).sort()).toEqual([
-      "bash", "edit", "read", "write",
-    ]);
+    expect(
+      piDefaultTools(fixtureDir)
+        .map((t) => t.name)
+        .sort(),
+    ).toEqual(["bash", "edit", "read", "write"]);
     const ro = piReadOnlyTools(fixtureDir).map((t) => t.name);
     expect(ro).not.toContain("bash");
     expect(ro).not.toContain("write");
@@ -225,8 +227,18 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     await writeFile(join(src, ".fastagentignore"), "extras/\n"); // exclude the duplicate original
     const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
     await bundleAgentDefinition(src, out, { skillPaths: [join(src, "extras")] }); // must not throw
-    expect(await access(join(out, "skills", "foo", "SKILL.md")).then(() => true, () => false)).toBe(true);
-    expect(await access(join(out, "extras")).then(() => true, () => false)).toBe(false); // no duplicate
+    expect(
+      await access(join(out, "skills", "foo", "SKILL.md")).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(true);
+    expect(
+      await access(join(out, "extras")).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false); // no duplicate
   });
 
   it("rejects skills that materialize to the same artifact path (one case-insensitive guard)", async () => {
@@ -257,7 +269,12 @@ describe("definition: bundleAgentDefinition (materializes extra mounts into a de
     await writeFile(join(src, "skills", "evil", "SKILL.md"), "---\nname: ../../escaped\ndescription: d\n---\nb\n");
     const out = await mkdtemp(join(tmpdir(), "fa-bundle-out-"));
     await expect(bundleAgentDefinition(src, out)).rejects.toThrow(/not a valid directory name/);
-    expect(await access(join(out, "..", "escaped")).then(() => true, () => false)).toBe(false); // nothing escaped
+    expect(
+      await access(join(out, "..", "escaped")).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false); // nothing escaped
   });
 
   it("materializes an in-workspace mount outside skills/ into outDir/skills/ (reported == shipped)", async () => {
