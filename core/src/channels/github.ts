@@ -12,7 +12,6 @@
  * The agent acts back via `gh` (agent-native), so the channel owns no OUTBOUND credentials — only
  * `secret`, for inbound verification. (A credential resolver / typed tools are a later option.)
  */
-import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import { collect } from "../collect.ts";
 import { readBodyCapped } from "./body.ts";
@@ -97,13 +96,38 @@ const reply = (body: string, status: number): Response => new Response(body, { s
  */
 const defer = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** Constant-time compare of GitHub's `X-Hub-Signature-256` against the body HMAC. */
-function verify(raw: string, signature: string | null, secret: string): boolean {
-  if (!signature) return false;
-  const expected = `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
-  const a = Buffer.from(signature);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
+/**
+ * Verify GitHub's `X-Hub-Signature-256` against the body HMAC, using Web Crypto so the channel loads
+ * on any runtime (Node / Cloudflare / Deno / Bun) — no `node:crypto`/`Buffer`, matching its
+ * platform-agnostic contract. Constant-time compare is kept explicit (the recompute-and-compare
+ * shape), not delegated to an unspecified primitive.
+ */
+async function verify(raw: string, signature: string | null, secret: string): Promise<boolean> {
+  if (!signature?.startsWith("sha256=")) return false;
+  const provided = hexToBytes(signature.slice("sha256=".length));
+  if (!provided) return false;
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ]);
+  const expected = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(raw)));
+  return timingSafeEqualBytes(provided, expected);
+}
+
+/** Constant-time byte compare (length-dependent only, like node's timingSafeEqual on equal lengths). */
+function timingSafeEqualBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  return diff === 0;
+}
+
+/** Parse a lowercase/uppercase hex string to bytes; null on any non-hex/odd-length input. */
+function hexToBytes(hex: string): Uint8Array | null {
+  if (hex.length % 2 !== 0 || /[^0-9a-f]/i.test(hex)) return null;
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
 }
 
 /** Pre-extract the common fields from a native GitHub payload (no full normalization). */
@@ -230,7 +254,7 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
     const body = await readBodyCapped(req, MAX_WEBHOOK_BYTES);
     if ("tooLarge" in body) return { response: reply("payload too large\n", 413) };
     const raw = body.text;
-    if (!verify(raw, req.headers.get("x-hub-signature-256"), secret))
+    if (!(await verify(raw, req.headers.get("x-hub-signature-256"), secret)))
       return { response: reply("invalid signature\n", 401) };
 
     const event = req.headers.get("x-github-event") ?? "";

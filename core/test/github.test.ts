@@ -1,4 +1,6 @@
 import { createHmac } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { githubChannel } from "../src/github.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
@@ -41,6 +43,15 @@ const PR_OPENED = {
 };
 
 describe("github channel", () => {
+  it("depends on no node: builtins (loads on Fetch-only runtimes: Cloudflare/Deno/Bun)", async () => {
+    // The channel returns `background` for serverless ctx.waitUntil; a node: import would break
+    // module load there. Guard the channel + its body helper.
+    for (const rel of ["../src/channels/github.ts", "../src/channels/body.ts"]) {
+      const src = await readFile(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+      expect(src).not.toMatch(/from "node:/);
+    }
+  });
+
   it("rejects non-POST with 405", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, { secret: SECRET, on: () => {} });
