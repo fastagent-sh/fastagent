@@ -103,11 +103,8 @@ and re-invoke on a worker. That reshape is **K-face**, deferred (§12).
 ## 5. The channel interface
 
 ```ts
-// webhook.ts — userland N. Imports ONLY contracts.
-import {
-  collect, AgentFailure,
-  type Agent, type Scope, type Prompt, type Json, type BackgroundRunner,
-} from "@kid7st/fastagent";
+// You implement WebhookBinding; core ships createWebhookHandler (core/src/channels/webhook.ts).
+import type { Agent, AgentFailure, BackgroundRunner, Json, Prompt, Scope } from "@kid7st/fastagent";
 
 /** Per-platform glue (generic callback, Slack, GitHub, …). One impl per platform. */
 export interface WebhookBinding<E> {
@@ -124,35 +121,21 @@ export interface WebhookBinding<E> {
   onError?(event: E, failure: AgentFailure): Promise<void>;
 }
 
+// Shipped by core — you implement only the WebhookBinding above. Signature:
 export function createWebhookHandler<E>(
   agent: Agent,
   binding: WebhookBinding<E>,
   background: BackgroundRunner,
-): (req: Request) => Promise<Response> {
-  return async (req) => {
-    const event = await binding.parse(req);            // failure plane #1: pre-ACK
-    if (!event) return new Response("rejected\n", { status: 401 });
-
-    const { scope, prompt } = binding.toInvocation(event);
-
-    background(async () => {                            // failure plane #2: post-ACK, out-of-band
-      try {
-        const result = await collect(agent.invoke(scope, prompt)); // buffered + terminal discipline
-        await binding.deliver?.(event, result);
-      } catch (e) {
-        if (e instanceof AgentFailure) await binding.onError?.(event, e); // a turn failure
-        else throw e;                                                   // a real bug → host error path
-      }
-    });
-
-    return new Response(null, { status: 202 });        // Accepted; work runs via background
-  };
-}
+): (req: Request) => Promise<Response>;
 ```
 
-The handler is **Fetch-shaped** (`(Request) => Promise<Response>`), like
-`createInvokeHandler`, so it mounts in any host route; `nodeListener` bridges it to
-`node:http` for the standalone server.
+Behavior (the authoritative impl is `core/src/channels/webhook.ts`): a non-POST is `405`; a
+`parse` returning `null` is `401` and a `parse` that throws is `400` (failure plane #1, pre-ACK);
+otherwise it ACKs `202` and runs the turn via `background`. On a turn failure it calls
+`binding.onError` — or, when no `onError` is installed, **rethrows** the `AgentFailure` so it reaches
+the background runner's error sink rather than being swallowed (fail-visible). The handler is
+**Fetch-shaped** (`(Request) => Promise<Response>`), like `createInvokeHandler`, so it mounts in any
+host route; `nodeListener` bridges it to `node:http` for the standalone server.
 
 ## 6. The discipline (the rules that make it host-neutral)
 
@@ -201,29 +184,17 @@ the port type. Its shape:
 
 ```ts
 import { createTrackedBackground } from "@kid7st/fastagent";
-const { background, drain } = createTrackedBackground();
 
-// shape (shipped in core/src/channels/background.ts):
-const background: BackgroundRunner = (task) => {
-  // Start on a macrotask (setImmediate): the caller's response (e.g. a webhook 202, written in a
-  // microtask continuation) lands before the turn begins, so the turn's synchronous prefix never
-  // delays the ACK. A synchronous throw inside `task` is captured (routed to onTaskError), never
-  // escaping as a pre-ACK failure.
-  const p = new Promise<void>((resolve, reject) => {
-    setImmediate(() => {
-      try {
-        resolve(task());
-      } catch (error) {
-        reject(error);
-      }
-    });
-  })
-    .catch(onTaskError) // default: console.error — fail visibly, never swallow
-    .finally(() => inFlight.delete(p));
-  inFlight.add(p);
-};
-// drain() = Promise.allSettled([...inFlight]); call it on SIGTERM before exiting.
+const { background, drain } = createTrackedBackground(); // + optional { onTaskError }
+// pass `background` to createWebhookHandler; call `drain()` on SIGTERM before exiting.
 ```
+
+Behavior (impl: `core/src/channels/background.ts`): each task starts on a **macrotask**
+(`setImmediate`) so the caller's response — e.g. a webhook `202`, written in a microtask
+continuation — lands before the turn begins; a synchronous throw inside the task is captured and
+routed to `onTaskError` (default `console.error` — fail visibly, never swallow); `drain()` awaits
+all in-flight tasks. Strict ACK-first latency *under load* is the durable runner's job, not this
+in-process one (§12).
 
 The wrong impl, for contrast:
 
@@ -241,10 +212,13 @@ Multi-instance / crash-durable `background` (queue + worker, AgentCore async inv
 ```ts
 // server.ts — wires one N + one M + one K.
 import { createServer } from "node:http";
-import { createPiAgentFromArtifact, nodeListener } from "@kid7st/fastagent"; // M assembly + transport
-import { createWebhookHandler } from "./webhook.ts";                         // N
-import { callbackBinding } from "./callback-binding.ts";                     // N glue (per platform)
-import { createTrackedBackground } from "./tracked-background.ts";           // K (single-instance)
+import {
+  createPiAgentFromArtifact, // M assembly
+  nodeListener, // transport
+  createWebhookHandler, // N channel (shipped by core)
+  createTrackedBackground, // K runner (shipped by core)
+} from "@kid7st/fastagent";
+import { callbackBinding } from "./callback-binding.ts"; // N glue (per platform — you write this)
 
 const { agent } = await createPiAgentFromArtifact(process.cwd());
 const { background, drain } = createTrackedBackground();
@@ -262,7 +236,7 @@ callbackUrl }` in, result POSTed back); Slack / GitHub bindings follow the same 
 
 ```ts
 // callback-binding.ts
-import type { WebhookBinding } from "./webhook.ts";
+import type { WebhookBinding } from "@kid7st/fastagent";
 interface Ev { session: string; text: string; callbackUrl: string }
 
 export const callbackBinding: WebhookBinding<Ev> = {
