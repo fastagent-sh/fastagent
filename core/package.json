@@ -61,6 +61,8 @@
     "@earendil-works/pi-agent-core": "^0.79.8",
     "@earendil-works/pi-ai": "^0.79.2",
     "@earendil-works/pi-coding-agent": "^0.79.8",
+    "@octokit/webhooks-methods": "^6.0.0",
+    "@octokit/webhooks-types": "^7.6.1",
     "chokidar": "^5.0.0",
     "ignore": "^7.0.5",
     "undici": "^8.5.0",

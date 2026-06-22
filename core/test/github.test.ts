@@ -45,7 +45,8 @@ const PR_OPENED = {
 describe("github channel", () => {
   it("depends on no node: builtins (loads on Fetch-only runtimes: Cloudflare/Deno/Bun)", async () => {
     // The channel returns `background` for serverless ctx.waitUntil; a node: import would break
-    // module load there. Guard the channel + its body helper.
+    // module load there. Guard the channel + its body helper. (Its deps are runtime-agnostic too:
+    // @octokit/webhooks-methods ships a web build on Web Crypto; @octokit/webhooks-types is types-only.)
     for (const rel of ["../src/channels/github.ts", "../src/channels/body.ts"]) {
       const src = await readFile(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
       expect(src).not.toMatch(/from "node:/);
