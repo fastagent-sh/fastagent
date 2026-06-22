@@ -15,11 +15,9 @@ export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 // createInvokeHandler is Fetch-shaped ((Request) => Promise<Response>) so it mounts in any host
 // route; nodeListener bridges it onto node:http for the standalone server.
 export { createInvokeHandler, nodeListener } from "./channels/http.ts";
-// Webhook channel (N): the ACK-early topology — 202 now, run the turn via the `background` port,
-// deliver out-of-band. Consumes only the Agent contract. `background` is the Caller-side host port
-// (execution lifetime); createTrackedBackground is the single-instance reference impl.
-export { createWebhookHandler, type WebhookBinding, type WebhookOutcome } from "./channels/webhook.ts";
-export { type BackgroundRunner, createTrackedBackground } from "./channels/background.ts";
+// The GitHub channel is a platform-specific subpath export: `@kid7st/fastagent/github`
+// (see src/github.ts). The execution-lifetime helper it builds on (channels/background.ts) is an
+// internal detail of channels, not a public port.
 
 // pi reference implementation — reusable assembly ladder (L1/L2; L0 below)
 export {
