@@ -5,7 +5,7 @@
  *
  * Organized as the engine-asset parts plus the reusable assembly ladder that consumes them:
  *
- *   §1 tools   — pi default/read-only toolsets (engine assets)
+ *   §1 tools   — pi default toolset (engine asset)
  *   §2 prompt  — four-segment systemPrompt assembly (pure functions)
  *   §3 ladder  — the reusable rungs that put a pi agent together (L0–L2).
  *
@@ -66,7 +66,7 @@ import { join } from "node:path";
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
+import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import type { Agent } from "../../agent.ts";
 import type { AuthResolver } from "./auth.ts";
 import type { FastagentConfig } from "./config.ts";
@@ -84,19 +84,14 @@ import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 //     match local pi verbatim.
 //   - **The tool layer is not the security boundary**: isolation is the K-side
 //     ExecutionEnv/sandbox's job (local = the user's own machine; AgentCore = microVM).
-//     Locking down for public exposure = explicitly passing `tools` (e.g.
-//     piReadOnlyTools) — a deployment posture, not the default.
+//     Locking down for public exposure = explicitly passing a restricted `tools`
+//     list — a deployment posture, not the default.
 //   - pi tools take injectable operations (BashOperations etc.); a future sandbox
 //     adapter swaps operations rather than being locked to local fs.
 
 /** pi's core default toolset (read/bash/edit/write, matching pi defaults), rooted at cwd. */
 export function piDefaultTools(cwd: string): AgentTool[] {
   return createCodingTools(cwd) as AgentTool[];
-}
-
-/** Read-only subset (read/grep/find/ls) for locked-down postures such as public exposure. */
-export function piReadOnlyTools(cwd: string): AgentTool[] {
-  return createReadOnlyTools(cwd) as AgentTool[];
 }
 
 /**
@@ -236,7 +231,7 @@ export interface CreatePiAgentFromDefinitionOptions {
   model: AnyModel;
   /** Override the base prompt (segment ①). Defaults to piBasePrompt({tools}) (engine-inherited). */
   base?: string;
-  /** Override tools. Defaults to piDefaultTools (full pi toolset, fidelity; lock down with piReadOnlyTools or a custom list). */
+  /** Override tools. Defaults to piDefaultTools (full pi toolset, fidelity; lock down with a custom list). */
   tools?: AgentTool[];
   /** Extra skills mount directories (see LoadAgentDefinitionOptions.skillPaths). */
   skillPaths?: string[];

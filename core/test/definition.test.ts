@@ -13,7 +13,6 @@ import {
   loadAgentDefinition,
   piBasePrompt,
   piDefaultTools,
-  piReadOnlyTools,
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
 // bundleAgentDefinition is internal (not re-exported): import it from its module.
@@ -177,16 +176,12 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools are pi core four tools (same as pi default); piReadOnlyTools is the read-only subset", () => {
+  it("piDefaultTools are pi core four tools (same as pi default)", () => {
     expect(
       piDefaultTools(fixtureDir)
         .map((t) => t.name)
         .sort(),
     ).toEqual(["bash", "edit", "read", "write"]);
-    const ro = piReadOnlyTools(fixtureDir).map((t) => t.name);
-    expect(ro).not.toContain("bash");
-    expect(ro).not.toContain("write");
-    expect(ro).toContain("read");
   });
 
   it("pi's read tool can read the fixture (same behavior as local pi)", async () => {
