@@ -29,7 +29,14 @@ export function coalesceBySession(background: BackgroundRunner): Schedule {
       try {
         do {
           state.dirty = false;
-          await run(); // reviews the LATEST PR state (the agent reads it live via gh)
+          try {
+            await run(); // reviews the LATEST PR state (the agent reads it live via gh)
+          } catch (err) {
+            // A failed review must NOT drop a pending re-review of newer state: catch here (so the
+            // loop still checks `dirty`), surface it (fail-visible). No infinite loop — the loop
+            // only repeats while new deliveries keep setting `dirty` (each push = a fresh attempt).
+            console.error(`[github-reviewer] review failed for ${session}: ${String(err)}`);
+          }
         } while (state.dirty);
       } finally {
         active.delete(session);
