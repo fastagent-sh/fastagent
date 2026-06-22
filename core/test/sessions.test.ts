@@ -34,9 +34,7 @@ describe("jsonlSessionStore (persistent sessions, first K-axis backend)", () => 
     const dir = await mkdtemp(join(tmpdir(), "fa-sessions-"));
 
     // "process 1":run one turn and persist it
-    const agent1 = makeAgent(jsonlSessionStore({ dir }), [
-      fauxAssistantMessage("the answer is blue"),
-    ]);
+    const agent1 = makeAgent(jsonlSessionStore({ dir }), [fauxAssistantMessage("the answer is blue")]);
     const e1 = await drain(agent1.invoke({ session: "conv" }, { text: "what color?" }));
     expect(e1.at(-1)?.type).toBe("completed");
 
@@ -61,10 +59,12 @@ describe("jsonlSessionStore (persistent sessions, first K-axis backend)", () => 
     const dir = await mkdtemp(join(tmpdir(), "fa-sessions-"));
     const store = jsonlSessionStore({ dir });
 
-    await drain(makeAgent(store, [fauxAssistantMessage("secret hunter2")]).invoke(
-      { session: "A" },
-      { text: "remember the secret" },
-    ));
+    await drain(
+      makeAgent(store, [fauxAssistantMessage("secret hunter2")]).invoke(
+        { session: "A" },
+        { text: "remember the secret" },
+      ),
+    );
     let other: unknown;
     await drain(
       makeAgent(store, [
@@ -101,7 +101,6 @@ describe("jsonlSessionStore (persistent sessions, first K-axis backend)", () => 
 
     expect(JSON.stringify(other)).not.toContain("hunter2"); // B cannot see A same-named session
   });
-
 });
 
 describe("crash-safety: reconcile interrupted tool calls on open", () => {
@@ -187,10 +186,18 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
     await s.appendMessage({
       role: "assistant",
       content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "x" } }],
-      provider: "faux", model: "faux", stopReason: "toolUse", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+      provider: "faux",
+      model: "faux",
+      stopReason: "toolUse",
+      usage: { input: 0, output: 0 },
+      timestamp: Date.now(),
     } as any);
     // a later turn lands after the dangling call without it ever being reconciled
-    await s.appendMessage({ role: "user", content: [{ type: "text", text: "still there?" }], timestamp: Date.now() } as any);
+    await s.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "still there?" }],
+      timestamp: Date.now(),
+    } as any);
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -212,12 +219,25 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
     await s.appendMessage({
       role: "assistant",
       content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "x" } }],
-      provider: "faux", model: "faux", stopReason: "toolUse", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+      provider: "faux",
+      model: "faux",
+      stopReason: "toolUse",
+      usage: { input: 0, output: 0 },
+      timestamp: Date.now(),
     } as any);
-    await s.appendMessage({ role: "user", content: [{ type: "text", text: "still there?" }], timestamp: Date.now() } as any);
     await s.appendMessage({
-      role: "assistant", content: [{ type: "text", text: "sorry, failed" }],
-      provider: "faux", model: "faux", stopReason: "error", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+      role: "user",
+      content: [{ type: "text", text: "still there?" }],
+      timestamp: Date.now(),
+    } as any);
+    await s.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "sorry, failed" }],
+      provider: "faux",
+      model: "faux",
+      stopReason: "error",
+      usage: { input: 0, output: 0 },
+      timestamp: Date.now(),
     } as any);
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -241,22 +261,39 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
     await s.appendMessage({
       role: "assistant",
       content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "a" } }],
-      provider: "faux", model: "faux", stopReason: "toolUse", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+      provider: "faux",
+      model: "faux",
+      stopReason: "toolUse",
+      usage: { input: 0, output: 0 },
+      timestamp: Date.now(),
     } as any);
     await s.appendMessage({
-      role: "toolResult", toolCallId: "call-1", toolName: "echo",
-      content: [{ type: "text", text: "a" }], isError: false, timestamp: Date.now(),
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "echo",
+      content: [{ type: "text", text: "a" }],
+      isError: false,
+      timestamp: Date.now(),
     } as any);
     await s.appendMessage({
-      role: "assistant", content: [{ type: "text", text: "done turn 1" }],
-      provider: "faux", model: "faux", stopReason: "stop", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+      role: "assistant",
+      content: [{ type: "text", text: "done turn 1" }],
+      provider: "faux",
+      model: "faux",
+      stopReason: "stop",
+      usage: { input: 0, output: 0 },
+      timestamp: Date.now(),
     } as any);
     // turn 2: call-1 reused, crashed before its result
     await s.appendMessage({ role: "user", content: [{ type: "text", text: "second" }], timestamp: Date.now() } as any);
     await s.appendMessage({
       role: "assistant",
       content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "b" } }],
-      provider: "faux", model: "faux", stopReason: "toolUse", usage: { input: 0, output: 0 }, timestamp: Date.now(),
+      provider: "faux",
+      model: "faux",
+      stopReason: "toolUse",
+      usage: { input: 0, output: 0 },
+      timestamp: Date.now(),
     } as any);
 
     const reopened = await store.openOrCreate("reused-id"); // open -> reconcile
@@ -279,9 +316,7 @@ describe("jsonlSessionStore (malicious id)", () => {
     const store = jsonlSessionStore({ dir, cwd: root });
     const evil = "../../escape/me";
 
-    const e1 = await drain(
-      makeAgent(store, [fauxAssistantMessage("ok")]).invoke({ session: evil }, { text: "hi" }),
-    );
+    const e1 = await drain(makeAgent(store, [fauxAssistantMessage("ok")]).invoke({ session: evil }, { text: "hi" }));
     expect(e1.at(-1)?.type).toBe("completed");
 
     // only sessions/ is created under root; no escape/ or other path breakout appears

@@ -72,7 +72,13 @@ describe("init: scaffoldWorkspace", () => {
     const { complete, created } = await scaffoldWorkspace(dir, { minimal: true });
     expect(complete).toBe(false);
     expect(created.sort()).toEqual(
-      ["AGENTS.md", ".gitignore", ".env.example", "fastagent.config.mjs", join("skills", "house-style", "SKILL.md")].sort(),
+      [
+        "AGENTS.md",
+        ".gitignore",
+        ".env.example",
+        "fastagent.config.mjs",
+        join("skills", "house-style", "SKILL.md"),
+      ].sort(),
     );
     expect(await exists(join(dir, "package.json"))).toBe(false);
     expect(await exists(join(dir, "tools"))).toBe(false);

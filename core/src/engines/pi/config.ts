@@ -58,10 +58,13 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   const found = names.map((name) => join(dir, name)).filter((path) => existsSync(path));
   if (found.length === 0) return { config: {} };
   if (found.length > 1) {
-    throw new Error(`${dir}: multiple fastagent config files found; keep exactly one (${found.map((p) => basename(p)).join(", ")})`);
+    throw new Error(
+      `${dir}: multiple fastagent config files found; keep exactly one (${found.map((p) => basename(p)).join(", ")})`,
+    );
   }
 
   // Exactly one config file at this point (0 and >1 handled above).
+  // biome-ignore lint/style/noNonNullAssertion: length checked above — exactly one element here
   const path = found[0]!;
   const mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
   const config = mod.default;

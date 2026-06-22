@@ -133,7 +133,10 @@ function packageJson(name: string): string {
 
 /** Sanitize a directory basename into a valid npm package name (lowercase, safe chars). */
 function toPackageName(dir: string): string {
-  const base = basename(resolve(dir)).toLowerCase().replace(/[^a-z0-9._-]/g, "-").replace(/^[._-]+/, "");
+  const base = basename(resolve(dir))
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "-")
+    .replace(/^[._-]+/, "");
   return base || "agent";
 }
 
@@ -219,7 +222,9 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
   for (const rel of parents) {
     const st = await lstat(join(dir, rel)).catch(() => undefined);
     if (st && !st.isDirectory()) {
-      throw new Error(`cannot scaffold: "${rel}" exists and is not a directory (a regular file or symlink) — remove it, or init elsewhere`);
+      throw new Error(
+        `cannot scaffold: "${rel}" exists and is not a directory (a regular file or symlink) — remove it, or init elsewhere`,
+      );
     }
   }
 
@@ -255,7 +260,9 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
     }
     // A kept package.json won't carry the tool's deps — the example tool would not resolve.
     if (!minimal && skipped.includes("package.json")) {
-      warnings.push(`kept your existing package.json — add "@kid7st/fastagent" and "zod" to its dependencies to use code tools`);
+      warnings.push(
+        `kept your existing package.json — add "@kid7st/fastagent" and "zod" to its dependencies to use code tools`,
+      );
     }
   } catch (error) {
     for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});

@@ -23,6 +23,7 @@ import type { PiSessionStore } from "./sessions.ts";
  * through to the harness, so the generic carries no information. One alias keeps
  * the `any` auditable (tighten here if pi exports a variance-friendly type).
  */
+// biome-ignore lint/suspicious/noExplicitAny: intentional variance-friendly model type, audited at this single point (see above)
 export type AnyModel = Model<any>;
 
 /**

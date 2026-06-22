@@ -19,6 +19,7 @@ The full local loop is fast:
 ```bash
 cd core
 npm install
+npm run lint           # biome check (format + lint, read-only); `npm run format` to fix
 npm run typecheck      # tsc --noEmit (covers src, test, examples)
 npm test               # vitest --run
 ```
@@ -30,7 +31,7 @@ Tests use faux models by default, so they validate serving mechanics without net
 ```text
 1. git checkout -b feature/<thing>
 2. ... change code, iterate locally ...
-3. cd core && npm run typecheck && npm test
+3. cd core && npm run lint && npm run typecheck && npm test
 4. git push -u origin feature/<thing>
 5. gh pr create --base main           # fill in the PR template
 6. CI green → merge (see "Merge strategy")
@@ -50,9 +51,10 @@ git fetch --prune origin
 
 A PR is mergeable only when, in `core/`:
 
+- `npm run lint` is clean (Biome format + lint; run `npm run format` to auto-fix),
 - `npm run typecheck` is clean (TypeScript with `noUnusedLocals`/`noUnusedParameters`),
 - `npm test` passes,
-- CI (`Core checks`, Node 26) is green.
+- CI (`Core checks`, Node 22.19 / 24 / 26) is green.
 
 Add or update the smallest relevant tests that prove the change. Reusable SPEC conformance lives in `core/test/spec-conformance.ts`; one-off product-scenario scripts should be run and then deleted, not committed.
 

@@ -16,7 +16,12 @@ import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { type LoadedDefinition, bundleAgentDefinition, defaultGlobalSkillPaths, ensureStateDirSelfIgnored } from "./definition.ts";
+import {
+  type LoadedDefinition,
+  bundleAgentDefinition,
+  defaultGlobalSkillPaths,
+  ensureStateDirSelfIgnored,
+} from "./definition.ts";
 
 /** The `fastagent.json` manifest written into the artifact. Pure data (no `.ts`). */
 export interface ArtifactManifest {
@@ -65,7 +70,12 @@ export async function buildPiArtifact(
   // The source must exist BEFORE anything is created: the default out is <srcDir>/.fastagent/
   // build, so a typo'd/nonexistent srcDir would otherwise be conjured by the staging mkdir
   // and then "built" into an empty artifact. Fail visibly instead.
-  if (!(await stat(srcDir).then((s) => s.isDirectory(), () => false))) {
+  if (
+    !(await stat(srcDir).then(
+      (s) => s.isDirectory(),
+      () => false,
+    ))
+  ) {
     throw new Error(`source workspace "${srcDir}" does not exist (or is not a directory)`);
   }
   const { config, path: configPath } = await loadConfig(srcDir);
@@ -94,14 +104,14 @@ export async function buildPiArtifact(
     throw new Error(`build output dir must differ from the source workspace (got "${outDir}")`);
   }
   const outToSrc = relative(outReal, srcReal); // src relative to out; ""/".."-prefixed/absolute = not contained
-  if (outToSrc !== "" && outToSrc !== ".." && !outToSrc.startsWith(".." + sep) && !isAbsolute(outToSrc)) {
+  if (outToSrc !== "" && outToSrc !== ".." && !outToSrc.startsWith(`..${sep}`) && !isAbsolute(outToSrc)) {
     throw new Error(`build output dir must not contain the source workspace (got out="${outDir}")`);
   }
   // Location guardrail (not a content judgment): publishing REPLACES outDir wholesale, so an
   // out-of-tree target is where a path typo deletes unrelated data. Allow a target inside the
   // source tree freely; require explicit confirmation (force) for one outside it.
   const srcToOut = relative(srcReal, outReal); // out relative to src; ".."-prefixed/absolute = outside
-  const outsideSource = srcToOut === ".." || srcToOut.startsWith(".." + sep) || isAbsolute(srcToOut);
+  const outsideSource = srcToOut === ".." || srcToOut.startsWith(`..${sep}`) || isAbsolute(srcToOut);
   if (outsideSource && !options.force) {
     throw new Error(
       `build output dir is outside the source workspace (got "${outDir}"); it will be REPLACED wholesale — ` +
@@ -140,15 +150,25 @@ export async function buildPiArtifact(
   }
   const staging = await mkdtemp(join(stagingParent, ".fa-build-"));
   try {
-    const definition = await bundleAgentDefinition(srcDir, staging, {
-      skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
-    }, { skipPaths: [outReal] });
+    const definition = await bundleAgentDefinition(
+      srcDir,
+      staging,
+      {
+        skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
+      },
+      { skipPaths: [outReal] },
+    );
     // fastagent.json is the manifest's reserved name. If a source entry landed at
     // staging/fastagent.json (a file/dir by that name, incl. a case-insensitive alias like
     // FastAgent.json on macOS/Windows), the manifest write would overwrite authored content
     // — reject. Checking the staged path is filesystem-accurate for case-sensitivity, and
     // non-destructive (staging is thrown away on failure).
-    if (await stat(join(staging, MANIFEST_FILE)).then(() => true, () => false)) {
+    if (
+      await stat(join(staging, MANIFEST_FILE)).then(
+        () => true,
+        () => false,
+      )
+    ) {
       throw new Error(
         `"${MANIFEST_FILE}" is reserved for the build manifest; the source ships an entry by that name ` +
           `at the artifact root — rename or exclude it (config goes in fastagent.config.ts/js/mjs)`,
@@ -162,7 +182,10 @@ export async function buildPiArtifact(
     if (
       (config.tools?.length ?? 0) > 0 &&
       configPath !== undefined &&
-      !(await stat(join(staging, basename(configPath))).then(() => true, () => false))
+      !(await stat(join(staging, basename(configPath))).then(
+        () => true,
+        () => false,
+      ))
     ) {
       throw new Error(
         `fastagent.config defines code tools but ${basename(configPath)} is excluded from the artifact ` +

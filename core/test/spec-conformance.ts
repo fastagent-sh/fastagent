@@ -32,7 +32,9 @@ export interface ConformanceSubject {
    * `sawHistory` reports whether instance B's turn observed instance A's turn
    * (the subject knows how to probe its own engine's context).
    */
-  pair?(): { a: Agent; b: Agent; sawHistory: () => boolean } | Promise<{ a: Agent; b: Agent; sawHistory: () => boolean }>;
+  pair?():
+    | { a: Agent; b: Agent; sawHistory: () => boolean }
+    | Promise<{ a: Agent; b: Agent; sawHistory: () => boolean }>;
 }
 
 const TERMINAL = new Set(["completed", "failed"]);

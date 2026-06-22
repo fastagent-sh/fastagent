@@ -41,7 +41,10 @@ async function makeWorkspace(opts: { config?: string; gitignore?: string } = {})
   await writeFile(join(dir, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n");
   await mkdir(join(dir, ".git"), { recursive: true });
   await writeFile(join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
-  await writeFile(join(dir, "fastagent.config.mjs"), opts.config ?? `export default { model: "openai-codex/gpt-5.5" };`);
+  await writeFile(
+    join(dir, "fastagent.config.mjs"),
+    opts.config ?? `export default { model: "openai-codex/gpt-5.5" };`,
+  );
   if (opts.gitignore !== undefined) await writeFile(join(dir, ".gitignore"), opts.gitignore);
   return dir;
 }
@@ -50,7 +53,9 @@ const freshOut = () => mkdtemp(join(tmpdir(), "fa-build-out-"));
 
 describe("build: buildPiArtifact", () => {
   it("produces a self-contained artifact: AGENTS.md + skills + authored context + manifest", async () => {
-    const ws = await makeWorkspace({ config: `export default { model: "openai-codex/gpt-5.5", http: { port: 9000 } };` });
+    const ws = await makeWorkspace({
+      config: `export default { model: "openai-codex/gpt-5.5", http: { port: 9000 } };`,
+    });
     const out = await freshOut();
     const { manifest } = await buildOk(ws, out);
 

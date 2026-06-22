@@ -94,7 +94,13 @@ describe("start: createPiAgentFromArtifact", () => {
   it("assembles an agent from the artifact: manifest model, definition, external sessions dir", async () => {
     const { artifact } = await makeArtifact();
     const sessionsDir = await freshSessions();
-    const { agent, definition, manifest, modelSpec, sessionsDir: used } = await createPiAgentFromArtifact(artifact, {
+    const {
+      agent,
+      definition,
+      manifest,
+      modelSpec,
+      sessionsDir: used,
+    } = await createPiAgentFromArtifact(artifact, {
       sessionsDir,
     });
     expect(typeof agent.invoke).toBe("function");
