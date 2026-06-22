@@ -28,7 +28,8 @@ export type BackgroundRunner = (task: () => Promise<void>) => void;
  * use it. Multi-instance / crash-durable runners (queue + worker, a platform's async invocation)
  * are host-specific and live outside core.
  *
- * The task is started on a macrotask (setImmediate), so the caller's response — e.g. a webhook 202,
+ * The task is started on a macrotask (`setTimeout(…, 0)` — portable, unlike Node's `setImmediate`), so
+ * the caller's response — e.g. a webhook 202,
  * written in a microtask continuation — lands before the turn begins, and a task that throws
  * *synchronously* becomes a tracked rejection instead of propagating out of `background()` (which
  * would otherwise turn a post-ACK failure into a pre-ACK error). `drain()` awaits all in-flight
@@ -44,18 +45,19 @@ export function createTrackedBackground(options: { onTaskError?: (error: unknown
     options.onTaskError ?? ((error: unknown) => console.error(`[fastagent] background task failed: ${String(error)}`));
   const inFlight = new Set<Promise<void>>();
   const background: BackgroundRunner = (task) => {
-    // Start on a macrotask (setImmediate), not synchronously and not a microtask: the caller's
-    // response — e.g. a webhook 202, whose write is a microtask continuation — lands BEFORE the
-    // turn begins, so the turn's synchronous prefix never delays the ACK. A synchronous throw inside
-    // `task` is captured (routed to onTaskError), never escaping `background()` as a pre-ACK failure.
+    // Start on a macrotask (setTimeout 0 — portable across runtimes, unlike Node's setImmediate),
+    // not synchronously and not a microtask: the caller's response — e.g. a webhook 202, whose write
+    // is a microtask continuation — lands BEFORE the turn begins, so the turn's synchronous prefix
+    // never delays the ACK. A synchronous throw inside `task` is captured (routed to onTaskError),
+    // never escaping `background()` as a pre-ACK failure.
     const p = new Promise<void>((resolve, reject) => {
-      setImmediate(() => {
+      setTimeout(() => {
         try {
           resolve(task());
         } catch (error) {
           reject(error);
         }
-      });
+      }, 0);
     })
       .catch(onTaskError)
       .finally(() => inFlight.delete(p));
