@@ -28,9 +28,12 @@ export type BackgroundRunner = (task: () => Promise<void>) => void;
  * use it. Multi-instance / crash-durable runners (queue + worker, a platform's async invocation)
  * are host-specific and live outside core.
  *
- * `drain()` awaits all in-flight tasks — call it on SIGTERM before exiting. A task that throws is
- * settled (not propagated) so one failure cannot wedge the drain, and is surfaced via `onTaskError`
- * (default console.error: fail visibly, never swallow).
+ * The task is started on a microtask (not synchronously), so the caller's path — e.g. a webhook
+ * returning 202 — finishes before the turn begins, and a task that throws *synchronously* becomes a
+ * tracked rejection instead of propagating out of `background()` (which would otherwise turn a
+ * post-ACK failure into a pre-ACK error). `drain()` awaits all in-flight tasks — call it on SIGTERM
+ * before exiting. A task failure is settled (not propagated) so one cannot wedge the drain, and is
+ * surfaced via `onTaskError` (default console.error: fail visibly, never swallow).
  */
 export function createTrackedBackground(options: { onTaskError?: (error: unknown) => void } = {}): {
   background: BackgroundRunner;
@@ -40,7 +43,10 @@ export function createTrackedBackground(options: { onTaskError?: (error: unknown
     options.onTaskError ?? ((error: unknown) => console.error(`[fastagent] background task failed: ${String(error)}`));
   const inFlight = new Set<Promise<void>>();
   const background: BackgroundRunner = (task) => {
-    const p = task()
+    // Start on a microtask: keeps the task off the caller's synchronous frame (the ACK path) and
+    // turns a synchronous throw inside `task` into a tracked rejection routed to onTaskError.
+    const p = Promise.resolve()
+      .then(task)
       .catch(onTaskError)
       .finally(() => inFlight.delete(p));
     inFlight.add(p);

@@ -167,4 +167,18 @@ describe("createTrackedBackground", () => {
     expect(errors).toHaveLength(1);
     expect((errors[0] as Error).message).toBe("task boom");
   });
+
+  it("a synchronously-thrown task is captured (not propagated out of background) and tracked", async () => {
+    const errors: unknown[] = [];
+    const { background, drain } = createTrackedBackground({ onTaskError: (e) => errors.push(e) });
+    // A task that throws synchronously (before returning a promise) must not escape background() —
+    // otherwise the webhook handler would reject pre-ACK (500) instead of ACKing and tracking it.
+    const syncThrow = (() => {
+      throw new Error("sync boom");
+    }) as () => Promise<void>;
+    expect(() => background(syncThrow)).not.toThrow();
+    await expect(drain()).resolves.toBeUndefined();
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe("sync boom");
+  });
 });
