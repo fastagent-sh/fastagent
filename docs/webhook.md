@@ -224,9 +224,18 @@ const { agent } = await createPiAgentFromArtifact(process.cwd());
 const { background, drain } = createTrackedBackground();
 
 const server = createServer(nodeListener(createWebhookHandler(agent, callbackBinding, background)));
-process.on("SIGTERM", async () => { server.close(); await drain(); process.exit(0); });
+process.on("SIGTERM", async () => {
+  server.closeIdleConnections?.(); // drop idle keep-alive sockets so close() does not hang
+  await new Promise<void>((r) => server.close(() => r())); // let in-flight requests send their 202 (they enqueue their task first)
+  await drain(); // ordering matters: drain AFTER close, so no late request enqueues a task past the snapshot
+  process.exit(0);
+});
 server.listen(8787);
 ```
+
+The `close → drain` order is the point: draining before the listener is closed can miss a task
+from a request still mid-`parse` when the signal arrived. Production-grade graceful shutdown
+(keep-alive handling, a hard timeout) is host-specific; this shows only the ordering.
 
 ## 10. Build it as a family, not a one-off
 
