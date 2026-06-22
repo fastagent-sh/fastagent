@@ -73,11 +73,7 @@ export {
 // pi reference implementation — engine assets (prompt base + toolsets, in create.ts).
 // Internal assembly helpers (assembleSystemPrompt, resolveTools) are NOT public:
 // the ladder rungs own assembly; embedders compose via L1/L2/L3.
-export {
-  piBasePrompt,
-  piDefaultTools,
-  piReadOnlyTools,
-} from "./engines/pi/create.ts";
+export { piBasePrompt, piDefaultTools } from "./engines/pi/create.ts";
 
 // pi reference implementation — config subsystem.
 // loadConfig is internal (L3 owns config loading); resolveModel bridges a
