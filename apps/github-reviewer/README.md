@@ -56,6 +56,20 @@ Open or push to a PR → GitHub POSTs the event → the reviewer ACKs `202`, rev
 background, and posts its review. Non-PR deliveries (ping, labels, comments) are ACKed `200` and
 ignored.
 
+## Limitations (v1)
+
+- **Duplicate reviews on redelivery.** Concurrent pushes to the same PR are coalesced to one review
+  of the latest state (`src/coalesce.ts`). But a *redelivery of the same webhook* (manual redeliver,
+  or a retry after a lost `202`) is not deduplicated, so it can produce a second review of the same
+  PR state. Rare in normal operation (we ACK fast; an unchanged head sends no new `synchronize`).
+  Proper dedup is by delivery id in a **durable** store surviving restarts and multiple instances —
+  the idempotency port deferred in `docs/webhook.md` §12 — not an in-process half-measure.
+- **Single instance.** `createTrackedBackground` and the coalescing map are in-process, so the
+  reviewer runs as one machine (`fly.toml` keeps it long-running, no auto-stop). Multi-instance needs
+  the durable session/lease/idempotency backends (K-face).
+- **OAuth token refresh.** `PI_AUTH_JSON` is written once at boot and not refreshed; a long run on an
+  OAuth model needs the secret re-set when the token expires (core-design §10.5).
+
 ## Local check
 
 ```bash

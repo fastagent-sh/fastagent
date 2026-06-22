@@ -21,6 +21,15 @@ import {
 import { coalesceBySession } from "./coalesce.ts";
 import { githubBinding } from "./github-binding.ts";
 
+// Local convenience: load .env so `node src/server.ts` works with secrets in a local .env (the
+// fastagent CLI does the same). In the container there is no .env (it is .dockerignored) — secrets
+// come from the host env / fly secrets — so a missing file is normal.
+try {
+  process.loadEnvFile(".env");
+} catch (e) {
+  if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+}
+
 if (!process.env.GITHUB_WEBHOOK_SECRET) {
   // Fail at startup, not on the first webhook: a reviewer with no secret would 400 every delivery.
   console.error("[github-reviewer] GITHUB_WEBHOOK_SECRET is not set; refusing to start");
