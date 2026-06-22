@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, registerFauxProvider, type FauxResponseStep } from "@earendil-works/pi-ai";
@@ -227,5 +228,54 @@ describe("nodeListener (standalone server bridge)", () => {
       server.closeAllConnections();
       await new Promise<void>((r) => server.close(() => r()));
     }
+  });
+});
+
+describe("nodeListener backpressure", () => {
+  /** Minimal IncomingMessage: GET (no body) so the bridge needs no request stream. */
+  function fakeReq(): IncomingMessage {
+    const req = new EventEmitter() as unknown as IncomingMessage & { method: string; url: string; headers: Record<string, string> };
+    req.method = "GET";
+    req.url = "/invoke";
+    req.headers = { host: "localhost" };
+    return req;
+  }
+  /** Minimal ServerResponse whose write() always signals backpressure (returns false). */
+  function fakeRes() {
+    const res = new EventEmitter() as unknown as ServerResponse & { ended: boolean; destroyed: boolean };
+    res.destroyed = false;
+    (res as { ended: boolean }).ended = false;
+    (res as unknown as { headersSent: boolean }).headersSent = false;
+    (res as unknown as { writeHead: () => ServerResponse }).writeHead = () => res;
+    (res as unknown as { write: () => boolean }).write = () => false; // always backpressure
+    (res as unknown as { end: () => void }).end = () => {
+      (res as { ended: boolean }).ended = true;
+    };
+    return res as ServerResponse & { ended: boolean; destroyed: boolean };
+  }
+
+  it("client close during backpressure ends pump (no leak; regression for drain-only wait)", async () => {
+    // An endless SSE stream so pump always has more to write and parks on backpressure.
+    const handler = async (): Promise<Response> => {
+      const stream = new ReadableStream<Uint8Array>({
+        pull(c) {
+          c.enqueue(new TextEncoder().encode("data: x\n\n"));
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+    };
+    const req = fakeReq();
+    const res = fakeRes();
+    nodeListener(handler)(req, res);
+
+    // Let pump start, write once (→ false), and suspend on the backpressure wait.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(res.ended).toBe(false);
+
+    res.emit("close"); // client disconnects WHILE parked on backpressure (no 'drain' will ever come)
+
+    // With drain+close wait, pump resumes, the cancelled reader yields done, and finally runs end().
+    await new Promise((r) => setTimeout(r, 20));
+    expect(res.ended).toBe(true);
   });
 });
