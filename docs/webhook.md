@@ -205,11 +205,19 @@ const { background, drain } = createTrackedBackground();
 
 // shape (shipped in core/src/channels/background.ts):
 const background: BackgroundRunner = (task) => {
-  // Start on a microtask: keeps the task off the caller's synchronous frame (the ACK path), and
-  // turns a synchronous throw inside `task` into a tracked rejection routed to onTaskError
-  // instead of escaping as a pre-ACK failure.
-  const p = Promise.resolve()
-    .then(task)
+  // Start on a macrotask (setImmediate): the caller's response (e.g. a webhook 202, written in a
+  // microtask continuation) lands before the turn begins, so the turn's synchronous prefix never
+  // delays the ACK. A synchronous throw inside `task` is captured (routed to onTaskError), never
+  // escaping as a pre-ACK failure.
+  const p = new Promise<void>((resolve, reject) => {
+    setImmediate(() => {
+      try {
+        resolve(task());
+      } catch (error) {
+        reject(error);
+      }
+    });
+  })
     .catch(onTaskError) // default: console.error — fail visibly, never swallow
     .finally(() => inFlight.delete(p));
   inFlight.add(p);
