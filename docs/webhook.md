@@ -215,11 +215,16 @@ const { background, drain } = createTrackedBackground(); // + optional { onTaskE
 ```
 
 Behavior (impl: `core/src/channels/background.ts`): each task starts on a **macrotask**
-(`setImmediate`) so the caller's response — e.g. a webhook `202`, written in a microtask
-continuation — lands before the turn begins; a synchronous throw inside the task is captured and
-routed to `onTaskError` (default `console.error` — fail visibly, never swallow); `drain()` awaits
-all in-flight tasks. Strict ACK-first latency *under load* is the durable runner's job, not this
-in-process one (§12).
+(`setTimeout(…, 0)` — portable across runtimes, not Node's `setImmediate`) so the caller's response —
+e.g. a webhook `202`, written in a microtask continuation — lands before the turn begins; a
+synchronous throw inside the task is captured and routed to `onTaskError` (default `console.error` —
+fail visibly, never swallow); `drain()` awaits all in-flight tasks. Strict ACK-first latency *under
+load* is the durable runner's job, not this in-process one (§12).
+
+`createTrackedBackground` assumes a **long-running process** (it runs the task after the response
+and drains on shutdown), so it fits Node/Deno/Bun *servers*. A **request-scoped serverless** runtime
+(Cloudflare Workers, Deno Deploy) freezes after the response, so provide your own runner there — e.g.
+one backed by `ctx.waitUntil(task())` — satisfying the same `BackgroundRunner` completion guarantee.
 
 The wrong impl, for contrast:
 
