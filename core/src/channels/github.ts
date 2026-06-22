@@ -106,6 +106,41 @@ function toDelivery(event: string, deliveryId: string, payload: Record<string, u
 type Turn = () => Promise<void>;
 type Concurrency = NonNullable<Parameters<GithubRun>[0]["concurrency"]>;
 
+/** Per-session pending-work holder. One per active session, across modes (see schedule). */
+interface Gate {
+  /** Fixed by the first delivery for the session; "reject" never uses a gate. */
+  mode: "coalesce" | "serialize";
+  add(turn: Turn): void;
+  take(): Turn | undefined;
+}
+
+function makeGate(mode: "coalesce" | "serialize", first: Turn): Gate {
+  if (mode === "serialize") {
+    // Every delivery, in arrival order — a FIFO queue.
+    const q: Turn[] = [first];
+    return {
+      mode,
+      add: (t) => {
+        q.push(t);
+      },
+      take: () => q.shift(),
+    };
+  }
+  // Coalesce — only the latest matters; deliveries during a run collapse into the next take.
+  let latest: Turn | undefined = first;
+  return {
+    mode,
+    add: (t) => {
+      latest = t;
+    },
+    take: () => {
+      const t = latest;
+      latest = undefined;
+      return t;
+    },
+  };
+}
+
 /**
  * Build a GitHub channel for `agent`. Returns a Fetch handler to mount and a `drain` for shutdown.
  * All correctness-critical machinery (verify, ACK-early, per-session concurrency, background, drain)
@@ -114,8 +149,11 @@ type Concurrency = NonNullable<Parameters<GithubRun>[0]["concurrency"]>;
 export function githubChannel(agent: Agent, options: GithubChannelOptions): GithubChannel {
   const { secret, on } = options;
   const { background, drain } = createTrackedBackground();
-  const coalescing = new Map<string, { dirty: boolean; latest: Turn }>(); // per session, coalesce mode
-  const queues = new Map<string, Turn[]>(); // per session, serialize mode
+  // ONE gate per session, across all modes — so a session never starts a second background loop
+  // (which would collide on the engine lease and silently drop a delivery). The gate's mode is fixed
+  // by the first delivery for that session; it holds pending work per that mode (coalesce: the latest
+  // only; serialize: a FIFO queue).
+  const gates = new Map<string, Gate>();
 
   // A failed turn must never wedge or silently drop a session's pending work: surface it, keep going.
   const runTurn = async (session: string, turn: Turn) => {
@@ -132,40 +170,25 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
       background(turn); // a concurrent same-session turn hits the engine lease and fails fast
       return;
     }
-    if (concurrency === "serialize") {
-      const q = queues.get(session);
-      if (q) {
-        q.push(turn); // a drain loop is active for this session → enqueue, run in arrival order
-        return;
+    const existing = gates.get(session);
+    if (existing) {
+      if (existing.mode !== concurrency) {
+        // Mixing modes on one session is incoherent (is it "latest wins" or "all in order"?). Keep
+        // the first mode and surface the mismatch — never silently drop the delivery.
+        console.warn(
+          `[github] session "${session}" mixes concurrency modes ("${existing.mode}" then "${concurrency}"); using "${existing.mode}"`,
+        );
       }
-      const queue: Turn[] = [turn];
-      queues.set(session, queue);
-      background(async () => {
-        try {
-          while (queue.length > 0) await runTurn(session, queue.shift() as Turn);
-        } finally {
-          queues.delete(session);
-        }
-      });
+      existing.add(turn);
       return;
     }
-    // coalesce (default): ≤1 in flight; deliveries during a run collapse into one re-run of the LATEST.
-    const cur = coalescing.get(session);
-    if (cur) {
-      cur.latest = turn;
-      cur.dirty = true;
-      return;
-    }
-    const st = { dirty: false, latest: turn };
-    coalescing.set(session, st);
+    const gate = makeGate(concurrency, turn);
+    gates.set(session, gate);
     background(async () => {
       try {
-        do {
-          st.dirty = false;
-          await runTurn(session, st.latest);
-        } while (st.dirty);
+        for (let t = gate.take(); t; t = gate.take()) await runTurn(session, t);
       } finally {
-        coalescing.delete(session);
+        gates.delete(session);
       }
     });
   };
