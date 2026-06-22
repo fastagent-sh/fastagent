@@ -16,8 +16,8 @@ export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 // route; nodeListener bridges it onto node:http for the standalone server.
 export { createInvokeHandler, nodeListener } from "./channels/http.ts";
 // The GitHub channel is a platform-specific subpath export: `@kid7st/fastagent/github`
-// (see src/github.ts). The execution-lifetime helper it builds on (channels/background.ts) is an
-// internal detail of channels, not a public port.
+// (see src/github.ts). It declares post-ACK work as a `background` promise; the host satisfies it
+// (serverless `ctx.waitUntil`, or the bundled `inProcessHost` for long-running hosts).
 
 // pi reference implementation — reusable assembly ladder (L1/L2; L0 below)
 export {

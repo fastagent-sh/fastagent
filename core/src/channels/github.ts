@@ -15,7 +15,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import { collect } from "../collect.ts";
-import { createTrackedBackground } from "./background.ts";
 
 /** A verified delivery: common fields pre-extracted for ergonomic routing, plus the raw payload. */
 export interface GithubDelivery {
@@ -66,23 +65,22 @@ export interface GithubChannelOptions {
   on: (delivery: GithubDelivery, run: GithubRun) => void | Promise<void>;
 }
 
-/**
- * The host's per-request execution context — its native way to keep post-response work alive. Pass
- * the one your runtime hands you and the channel uses the host's best mechanism automatically:
- *   - Cloudflare Workers / Vercel: the `ctx` from `fetch(req, env, ctx)` (its `waitUntil` pins the
- *     turn to the platform after the 202);
- *   - long-running host (Node server / fly.io): pass nothing — the channel runs the turn in-process,
- *     and `drain()` finishes it on shutdown.
- */
-export interface GithubExecutionContext {
-  waitUntil(promise: Promise<unknown>): void;
+export interface GithubFetchResult {
+  /** Return to the client immediately (ACK-early: 202 before the turn runs). */
+  response: Response;
+  /**
+   * Post-ACK work that MUST run to completion (the agent turn[s]) — already running, declared back to
+   * the host so it keeps execution alive past the response. The channel states the requirement; the
+   * host satisfies it with its platform mechanism: serverless via `ctx.waitUntil(background)`, a
+   * long-running host via `inProcessHost` (tracked + drained on shutdown). `undefined` when the
+   * delivery scheduled no new work.
+   */
+  background?: Promise<unknown>;
 }
 
 export interface GithubChannel {
-  /** Fetch-shaped handler — mount at your webhook route (POST). Pass the host's `ctx` when it has one. */
-  fetch: (req: Request, ctx?: GithubExecutionContext) => Promise<Response>;
-  /** Await in-flight in-process turns on shutdown (long-running hosts) — call on SIGTERM before exit. */
-  drain: () => Promise<void>;
+  /** Fetch-shaped handler — mount at your webhook route (POST). Returns the response + any post-ACK work. */
+  fetch: (req: Request) => Promise<GithubFetchResult>;
 }
 
 const textHeaders = { "content-type": "text/plain" };
@@ -162,15 +160,8 @@ function makeGate(mode: "coalesce" | "serialize", first: Turn): Gate {
  * All correctness-critical machinery (verify, ACK-early, per-session concurrency, background, drain)
  * is internal.
  */
-type Runner = (task: Turn) => void;
-
 export function githubChannel(agent: Agent, options: GithubChannelOptions): GithubChannel {
   const { secret, on } = options;
-  // In-process runner: the fallback for a long-running host, and the source of `drain`. When a host
-  // gives a per-request `ctx.waitUntil` (serverless), we use THAT instead — leverage the host's
-  // native capacity, not force in-process everywhere.
-  const tracked = createTrackedBackground();
-  const drain = tracked.drain;
   // ONE gate per session, across all modes — so a session never starts a second background loop
   // (which would collide on the engine lease and silently drop a delivery). The gate's mode is fixed
   // by the first delivery for that session; it holds pending work per that mode (coalesce: the latest
@@ -186,12 +177,12 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
     }
   };
 
-  // Schedule a session's turn per its trigger type (see GithubRun), kicked via this request's runner
-  // (the host's waitUntil, or the in-process tracked runner).
-  const schedule = (session: string, concurrency: Concurrency, turn: Turn, runner: Runner) => {
+  // Schedule a session's turn per its trigger type (see GithubRun). Returns the post-ACK promise the
+  // host must keep alive when this delivery STARTS new work, or undefined when it folds into a loop
+  // already in flight (that loop's promise was returned to the delivery that started it).
+  const schedule = (session: string, concurrency: Concurrency, turn: Turn): Promise<void> | undefined => {
     if (concurrency === "reject") {
-      runner(turn); // a concurrent same-session turn hits the engine lease and fails fast
-      return;
+      return runTurn(session, turn); // a concurrent same-session turn hits the engine lease and fails fast
     }
     const existing = gates.get(session);
     if (existing) {
@@ -203,51 +194,78 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
         );
       }
       existing.add(turn);
-      return;
+      return undefined; // the in-flight loop (already declared to the host) will run it
     }
     const gate = makeGate(concurrency, turn);
     gates.set(session, gate);
-    runner(async () => {
+    return (async () => {
       try {
         for (let t = gate.take(); t; t = gate.take()) await runTurn(session, t);
       } finally {
         gates.delete(session);
       }
-    });
+    })();
   };
 
-  const fetch = async (req: Request, ctx?: GithubExecutionContext): Promise<Response> => {
-    if (req.method !== "POST") return reply("POST only\n", 405);
+  const fetch = async (req: Request): Promise<GithubFetchResult> => {
+    if (req.method !== "POST") return { response: reply("POST only\n", 405) };
     const raw = await req.text();
-    if (!verify(raw, req.headers.get("x-hub-signature-256"), secret)) return reply("invalid signature\n", 401);
+    if (!verify(raw, req.headers.get("x-hub-signature-256"), secret))
+      return { response: reply("invalid signature\n", 401) };
 
     const event = req.headers.get("x-github-event") ?? "";
-    if (event === "ping") return new Response(null, { status: 204 }); // GitHub setup ping
+    if (event === "ping") return { response: new Response(null, { status: 204 }) }; // GitHub setup ping
     let payload: Record<string, unknown>;
     try {
       payload = JSON.parse(raw) as Record<string, unknown>;
     } catch {
-      return reply("invalid json\n", 400);
+      return { response: reply("invalid json\n", 400) };
     }
 
-    // Use the host's native primitive when it gave us one (serverless waitUntil pins the turn to the
-    // platform); otherwise the in-process tracked runner (long-running host, drained on shutdown).
-    const runner: Runner = ctx ? (task) => ctx.waitUntil(task()) : tracked.background;
-
+    // Collect the post-ACK work this delivery STARTS, declared back to the host to keep alive.
+    const started: Promise<unknown>[] = [];
     const delivery = toDelivery(event, req.headers.get("x-github-delivery") ?? "", payload);
     const run: GithubRun = ({ session, text, concurrency = "coalesce" }) => {
-      schedule(
-        session,
-        concurrency,
-        async () => {
-          await collect(agent.invoke({ session }, { text })); // throws AgentFailure on a failed turn → sink
-        },
-        runner,
-      );
+      const work = schedule(session, concurrency, async () => {
+        await collect(agent.invoke({ session }, { text })); // throws AgentFailure on a failed turn → sink
+      });
+      if (work) started.push(work);
     };
-    await on(delivery, run); // app routing only; schedules ACK-early work, never blocks on the turn
-    return new Response(null, { status: 202 });
+    await on(delivery, run); // app routing only; never blocks on the turn
+
+    return {
+      response: new Response(null, { status: 202 }),
+      background: started.length ? Promise.allSettled(started) : undefined,
+    };
   };
 
-  return { fetch, drain };
+  return { fetch };
+}
+
+/** Long-running (Node) host adapter: satisfy the channel's `background` in-process, drain on exit. */
+export interface InProcessHost {
+  /** Run the channel fetch, keep its post-ACK work in-flight in-process, return the Response. */
+  handle: (req: Request) => Promise<Response>;
+  /** Await in-flight background work on shutdown — call on SIGTERM before exit so none are dropped. */
+  drain: () => Promise<void>;
+}
+
+/**
+ * The long-running host's way to satisfy a channel's `background`: the process stays up, so just keep
+ * the promise referenced until it settles, and await outstanding ones on shutdown. (A serverless host
+ * satisfies the same `background` differently — `ctx.waitUntil(background)`.)
+ */
+export function inProcessHost(fetch: GithubChannel["fetch"]): InProcessHost {
+  const inFlight = new Set<Promise<unknown>>();
+  return {
+    handle: async (req) => {
+      const { response, background } = await fetch(req);
+      if (background) {
+        inFlight.add(background);
+        void background.finally(() => inFlight.delete(background));
+      }
+      return response;
+    },
+    drain: () => Promise.allSettled(inFlight).then(() => {}),
+  };
 }

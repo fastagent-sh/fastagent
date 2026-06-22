@@ -1,13 +1,14 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { githubChannel, inProcessHost } from "../src/github.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
-import { githubChannel } from "../src/github.ts";
 
 /** A faux Agent that records invocations (contract-only; proves the channel works with any Agent). */
 function recordingAgent() {
   const calls: { session: string; text: string }[] = [];
   const agent: Agent = {
     async *invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+      await new Promise((r) => setTimeout(r, 0)); // a real turn isn't instantaneous (real IO)
       calls.push({ session: scope.session, text: prompt.text });
       yield { type: "completed" };
     },
@@ -42,8 +43,9 @@ describe("github channel", () => {
   it("rejects non-POST with 405", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, { secret: SECRET, on: () => {} });
-    const res = await ch.fetch(new Request("http://app/webhook", { method: "GET" }));
-    expect(res.status).toBe(405);
+    const { response, background } = await ch.fetch(new Request("http://app/webhook", { method: "GET" }));
+    expect(response.status).toBe(405);
+    expect(background).toBeUndefined();
     expect(calls).toHaveLength(0);
   });
 
@@ -57,8 +59,8 @@ describe("github channel", () => {
       },
     });
     // valid body, but signed with the wrong secret
-    const res = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers, "wrong"));
-    expect(res.status).toBe(401);
+    const { response } = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers, "wrong"));
+    expect(response.status).toBe(401);
     expect(routed).toBe(false);
   });
 
@@ -71,8 +73,8 @@ describe("github channel", () => {
         routed = true;
       },
     });
-    const res = await ch.fetch(signed({ zen: "hi" }, { "x-github-event": "ping", "x-github-delivery": "p1" }));
-    expect(res.status).toBe(204);
+    const { response } = await ch.fetch(signed({ zen: "hi" }, { "x-github-event": "ping", "x-github-delivery": "p1" }));
+    expect(response.status).toBe(204);
     expect(routed).toBe(false);
   });
 
@@ -88,9 +90,10 @@ describe("github channel", () => {
         }
       },
     });
+    const host = inProcessHost(ch.fetch); // long-running host adapter (tracks background, drains)
 
-    const res = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers));
-    expect(res.status).toBe(202);
+    const response = await host.handle(signed(PR_OPENED.body, PR_OPENED.headers));
+    expect(response.status).toBe(202);
     expect(seen).toMatchObject({
       event: "pull_request",
       action: "opened",
@@ -102,7 +105,7 @@ describe("github channel", () => {
     });
     expect(calls).toHaveLength(0); // ACK-early: not invoked synchronously
 
-    await ch.drain();
+    await host.drain();
     expect(calls).toEqual([{ session: "pr-o/r#7", text: "Review #7 in o/r" }]);
   });
 
@@ -114,34 +117,35 @@ describe("github channel", () => {
         run({ session: "s", text: d.action ?? "", concurrency: "serialize" });
       },
     });
+    const host = inProcessHost(ch.fetch);
     for (const action of ["a", "b", "c"]) {
-      const res = await ch.fetch(
+      const response = await host.handle(
         signed({ action }, { "x-github-event": "issue_comment", "x-github-delivery": action }),
       );
-      expect(res.status).toBe(202);
+      expect(response.status).toBe(202);
     }
-    await ch.drain();
+    await host.drain();
     expect(calls.map((c) => c.text)).toEqual(["a", "b", "c"]);
   });
 
-  it("uses the host's waitUntil when given a ctx (serverless), not the in-process runner", async () => {
+  it("declares post-ACK work as `background` for the host to satisfy (serverless: ctx.waitUntil)", async () => {
     const { agent, calls } = recordingAgent();
-    const pinned: Promise<unknown>[] = [];
-    const ctx = { waitUntil: (p: Promise<unknown>) => pinned.push(p) }; // stands in for Cloudflare/Vercel ctx
     const ch = githubChannel(agent, {
       secret: SECRET,
       on(d, run) {
         if (d.event === "pull_request") run({ session: "s", text: "x" });
       },
     });
-    const res = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers), ctx);
-    expect(res.status).toBe(202);
-    expect(pinned).toHaveLength(1); // turn pinned via the host's waitUntil
-    await Promise.all(pinned); // the platform keeps the worker alive until it settles
+    // The channel only DECLARES the work; a serverless host satisfies it with ctx.waitUntil(background).
+    const { response, background } = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers));
+    expect(response.status).toBe(202);
+    expect(background).toBeDefined();
+    expect(calls).toHaveLength(0); // ACK-early: nothing run before the host keeps it alive
+    await background; // = ctx.waitUntil(background) on the platform
     expect(calls).toEqual([{ session: "s", text: "x" }]);
   });
 
-  it("an unhandled but verified event acks 202 and never invokes", async () => {
+  it("an unhandled but verified event acks 202 with no background work", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, {
       secret: SECRET,
@@ -149,9 +153,11 @@ describe("github channel", () => {
         if (d.event === "pull_request") run({ session: "x", text: "y" }); // not a pull_request here
       },
     });
-    const res = await ch.fetch(signed({ action: "labeled" }, { "x-github-event": "label", "x-github-delivery": "d2" }));
-    expect(res.status).toBe(202);
-    await ch.drain();
+    const { response, background } = await ch.fetch(
+      signed({ action: "labeled" }, { "x-github-event": "label", "x-github-delivery": "d2" }),
+    );
+    expect(response.status).toBe(202);
+    expect(background).toBeUndefined();
     expect(calls).toHaveLength(0);
   });
 });
