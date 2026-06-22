@@ -28,10 +28,11 @@ export type BackgroundRunner = (task: () => Promise<void>) => void;
  * use it. Multi-instance / crash-durable runners (queue + worker, a platform's async invocation)
  * are host-specific and live outside core.
  *
- * The task is started on a microtask (not synchronously), so the caller's path — e.g. a webhook
- * returning 202 — finishes before the turn begins, and a task that throws *synchronously* becomes a
- * tracked rejection instead of propagating out of `background()` (which would otherwise turn a
- * post-ACK failure into a pre-ACK error). `drain()` awaits all in-flight tasks — call it on SIGTERM
+ * The task is started on a macrotask (setImmediate), so the caller's response — e.g. a webhook 202,
+ * written in a microtask continuation — lands before the turn begins, and a task that throws
+ * *synchronously* becomes a tracked rejection instead of propagating out of `background()` (which
+ * would otherwise turn a post-ACK failure into a pre-ACK error). `drain()` awaits all in-flight
+ * tasks — call it on SIGTERM
  * before exiting. A task failure is settled (not propagated) so one cannot wedge the drain, and is
  * surfaced via `onTaskError` (default console.error: fail visibly, never swallow).
  */
@@ -43,10 +44,19 @@ export function createTrackedBackground(options: { onTaskError?: (error: unknown
     options.onTaskError ?? ((error: unknown) => console.error(`[fastagent] background task failed: ${String(error)}`));
   const inFlight = new Set<Promise<void>>();
   const background: BackgroundRunner = (task) => {
-    // Start on a microtask: keeps the task off the caller's synchronous frame (the ACK path) and
-    // turns a synchronous throw inside `task` into a tracked rejection routed to onTaskError.
-    const p = Promise.resolve()
-      .then(task)
+    // Start on a macrotask (setImmediate), not synchronously and not a microtask: the caller's
+    // response — e.g. a webhook 202, whose write is a microtask continuation — lands BEFORE the
+    // turn begins, so the turn's synchronous prefix never delays the ACK. A synchronous throw inside
+    // `task` is captured (routed to onTaskError), never escaping `background()` as a pre-ACK failure.
+    const p = new Promise<void>((resolve, reject) => {
+      setImmediate(() => {
+        try {
+          resolve(task());
+        } catch (error) {
+          reject(error);
+        }
+      });
+    })
       .catch(onTaskError)
       .finally(() => inFlight.delete(p));
     inFlight.add(p);
