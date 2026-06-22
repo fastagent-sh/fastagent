@@ -13,16 +13,23 @@ import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  collect,
   createPiAgentFromArtifact,
   createTrackedBackground,
-  createWebhookHandler,
   nodeListener,
 } from "@kid7st/fastagent";
+import { coalesceBySession } from "./coalesce.ts";
 import { githubBinding } from "./github-binding.ts";
 
 if (!process.env.GITHUB_WEBHOOK_SECRET) {
   // Fail at startup, not on the first webhook: a reviewer with no secret would 400 every delivery.
   console.error("[github-reviewer] GITHUB_WEBHOOK_SECRET is not set; refusing to start");
+  process.exit(1);
+}
+if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
+  // The agent reviews and posts via `gh`, which authenticates from GH_TOKEN/GITHUB_TOKEN. Without it
+  // the server would stay healthy and ACK webhooks while every review silently posts nothing.
+  console.error("[github-reviewer] GH_TOKEN (or GITHUB_TOKEN) is not set; the agent's gh calls would fail — refusing to start");
   process.exit(1);
 }
 
@@ -41,7 +48,32 @@ const port = Number(process.env.PORT ?? 8080);
 
 const { agent, modelSpec } = await createPiAgentFromArtifact(artifactDir);
 const { background, drain } = createTrackedBackground();
-const webhook = createWebhookHandler(agent, githubBinding, background);
+
+// Scheduling policy is this agent's trigger decision (SPEC §8): PR review coalesces to the latest
+// state per PR, so rapid re-pushes neither run parallel/stale reviews nor get dropped. Built inline
+// here (not via core's createWebhookHandler, which is the simple each-delivery reference) because
+// the policy belongs to the app, not core.
+const schedule = coalesceBySession(background);
+const textHeaders = { "content-type": "text/plain" };
+
+const webhook = async (req: Request): Promise<Response> => {
+  if (req.method !== "POST") return new Response("POST only\n", { status: 405, headers: textHeaders });
+  let outcome: Awaited<ReturnType<typeof githubBinding.parse>>;
+  try {
+    outcome = await githubBinding.parse(req);
+  } catch (e) {
+    return new Response(`bad request: ${(e as Error).message}\n`, { status: 400, headers: textHeaders });
+  }
+  if (outcome.action === "reject") {
+    return new Response("rejected\n", { status: outcome.status ?? 401, headers: textHeaders });
+  }
+  if (outcome.action === "ignore") return new Response(null, { status: 200 });
+  const { scope, prompt } = githubBinding.toInvocation(outcome.event);
+  schedule(scope.session, async () => {
+    await collect(agent.invoke(scope, prompt)); // throws AgentFailure on a failed turn → background's onTaskError sink
+  });
+  return new Response(null, { status: 202 });
+};
 
 const server = createServer(
   nodeListener(async (req) => {
