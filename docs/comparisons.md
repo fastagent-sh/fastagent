@@ -119,7 +119,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 };
 ```
 
-Today, custom session stores use `createPiAgentFromDefinition`, so the embed setup passes a resolved model explicitly. A config-resolving embed opener that also accepts K-axis overrides (sessions/auth/env/lease) is the intended ergonomic follow-up.
+The embed entry point is `createPiAgentFromDefinition` (L2): point at the folder, pass a resolved model (`resolveModel("provider/modelId")`) and your own K ports (sessions/env/lease/auth), and inject tools explicitly. There is deliberately no separate embed opener — L2 already gives folder + K injection + a fully replaceable toolset (pass `piReadOnlyTools(dir)` or an app-specific set to drop the default coding tools).
 
 One build, one deploy, one auth, your database. The transport-neutral `invoke` contract (no bundled HTTP framework) is what lets the agent live inside the host's own route. This is the demo that makes the abstract positioning concrete — and the sweet spot is explicit: a relatively *light* agent feature (interactive/generation/trigger-response) in a *TS/Node* product with an *existing stack*. A *heavy* agent (long autonomy, swarm, sandbox isolation, many channels) tilts back toward Flue's batteries-included path even as a feature.
 
