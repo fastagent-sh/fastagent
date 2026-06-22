@@ -39,13 +39,21 @@ export interface GithubDelivery {
 
 /**
  * Run the agent for a delivery. Fire-and-ACK-early: schedules the turn, returns immediately.
- * `concurrency` is PER-CALL because one channel routes many event types with different semantics:
- *   - "coalesce" (default): only the latest matters — re-run once more after the current finishes
- *     (PR push → review latest; rebuild; "process current state" triggers);
+ * `concurrency` is PER-CALL because one channel routes many event types with different semantics
+ * (map your trigger type to a mode):
+ *   - "coalesce" (default): only the latest matters — ≤1 in flight per session; deliveries during a
+ *     run collapse into one re-run of the LATEST turn afterward (PR push → review latest; rebuild);
+ *   - "serialize": every delivery matters, in order — a per-session FIFO queue, one at a time, none
+ *     dropped (comment-command bots, command sequences);
  *   - "reject": fail-fast via the engine lease (a second concurrent same-session turn fails).
- * Event-stream triggers (each delivery matters, in order) need FIFO — not yet supported.
+ * Independent triggers (each delivery is its own task) need no mode — give them distinct sessions.
+ * At-most-once (dedup by delivery id) is an orthogonal concern, not a concurrency mode.
  */
-export type GithubRun = (turn: { session: string; text: string; concurrency?: "coalesce" | "reject" }) => void;
+export type GithubRun = (turn: {
+  session: string;
+  text: string;
+  concurrency?: "coalesce" | "serialize" | "reject";
+}) => void;
 
 export interface GithubChannelOptions {
   /** Webhook secret — verifies inbound deliveries (HMAC-SHA256 over the raw body). */
@@ -95,6 +103,9 @@ function toDelivery(event: string, deliveryId: string, payload: Record<string, u
   };
 }
 
+type Turn = () => Promise<void>;
+type Concurrency = NonNullable<Parameters<GithubRun>[0]["concurrency"]>;
+
 /**
  * Build a GitHub channel for `agent`. Returns a Fetch handler to mount and a `drain` for shutdown.
  * All correctness-critical machinery (verify, ACK-early, per-session concurrency, background, drain)
@@ -103,35 +114,58 @@ function toDelivery(event: string, deliveryId: string, payload: Record<string, u
 export function githubChannel(agent: Agent, options: GithubChannelOptions): GithubChannel {
   const { secret, on } = options;
   const { background, drain } = createTrackedBackground();
-  const active = new Map<string, { dirty: boolean }>(); // coalescing state, per session
+  const coalescing = new Map<string, { dirty: boolean; latest: Turn }>(); // per session, coalesce mode
+  const queues = new Map<string, Turn[]>(); // per session, serialize mode
 
-  // Schedule a session's turn per the requested policy. coalesce: ≤1 in flight + dirty re-run
-  // (review the latest, never drop, never redundant intermediate); reject: fail-fast via the lease.
-  const schedule = (session: string, concurrency: "coalesce" | "reject", turn: () => Promise<void>) => {
+  // A failed turn must never wedge or silently drop a session's pending work: surface it, keep going.
+  const runTurn = async (session: string, turn: Turn) => {
+    try {
+      await turn();
+    } catch (error) {
+      console.error(`[github] turn failed for ${session}: ${String(error)}`);
+    }
+  };
+
+  // Schedule a session's turn per its trigger type (see GithubRun).
+  const schedule = (session: string, concurrency: Concurrency, turn: Turn) => {
     if (concurrency === "reject") {
-      background(turn);
+      background(turn); // a concurrent same-session turn hits the engine lease and fails fast
       return;
     }
-    const cur = active.get(session);
+    if (concurrency === "serialize") {
+      const q = queues.get(session);
+      if (q) {
+        q.push(turn); // a drain loop is active for this session → enqueue, run in arrival order
+        return;
+      }
+      const queue: Turn[] = [turn];
+      queues.set(session, queue);
+      background(async () => {
+        try {
+          while (queue.length > 0) await runTurn(session, queue.shift() as Turn);
+        } finally {
+          queues.delete(session);
+        }
+      });
+      return;
+    }
+    // coalesce (default): ≤1 in flight; deliveries during a run collapse into one re-run of the LATEST.
+    const cur = coalescing.get(session);
     if (cur) {
+      cur.latest = turn;
       cur.dirty = true;
       return;
     }
-    const st = { dirty: false };
-    active.set(session, st);
+    const st = { dirty: false, latest: turn };
+    coalescing.set(session, st);
     background(async () => {
       try {
         do {
           st.dirty = false;
-          try {
-            await turn();
-          } catch (error) {
-            // A failed turn must not drop a pending re-run; surface it (fail-visible), re-check dirty.
-            console.error(`[github] turn failed for ${session}: ${String(error)}`);
-          }
+          await runTurn(session, st.latest);
         } while (st.dirty);
       } finally {
-        active.delete(session);
+        coalescing.delete(session);
       }
     });
   };

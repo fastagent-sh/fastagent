@@ -106,6 +106,24 @@ describe("github channel", () => {
     expect(calls).toEqual([{ session: "pr-o/r#7", text: "Review #7 in o/r" }]);
   });
 
+  it("serialize: every same-session delivery runs in arrival order, none dropped", async () => {
+    const { agent, calls } = recordingAgent();
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on(d, run) {
+        run({ session: "s", text: d.action ?? "", concurrency: "serialize" });
+      },
+    });
+    for (const action of ["a", "b", "c"]) {
+      const res = await ch.fetch(
+        signed({ action }, { "x-github-event": "issue_comment", "x-github-delivery": action }),
+      );
+      expect(res.status).toBe(202);
+    }
+    await ch.drain();
+    expect(calls.map((c) => c.text)).toEqual(["a", "b", "c"]);
+  });
+
   it("an unhandled but verified event acks 202 and never invokes", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, {
