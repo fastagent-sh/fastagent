@@ -100,6 +100,9 @@ export {
   inProcessLease,
 } from "./engines/pi/invoke.ts";
 export type { AnyModel } from "./engines/pi/harness.ts";
+// ExecutionEnv is the K-axis env port referenced by the ladder's `env` option (L1/L2): export the
+// type so embedders can inject a sandbox env without reaching into pi-agent-core directly.
+export type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 export {
   type PiSessionStore,
   inMemorySessionStore,
