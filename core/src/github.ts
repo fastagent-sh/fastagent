@@ -5,11 +5,9 @@
  */
 export {
   githubChannel,
-  inProcessHost,
   type GithubChannel,
   type GithubChannelOptions,
   type GithubDelivery,
   type GithubFetchResult,
   type GithubRun,
-  type InProcessHost,
 } from "./channels/github.ts";

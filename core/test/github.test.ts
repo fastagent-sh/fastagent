@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { githubChannel, inProcessHost } from "../src/github.ts";
+import { githubChannel } from "../src/github.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
 /** A faux Agent that records invocations (contract-only; proves the channel works with any Agent). */
@@ -91,9 +91,7 @@ describe("github channel", () => {
         }
       },
     });
-    const host = inProcessHost(ch.fetch); // long-running host adapter (tracks background, drains)
-
-    const response = await host.handle(signed(PR_OPENED.body, PR_OPENED.headers));
+    const { response, background } = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers));
     expect(response.status).toBe(202);
     expect(seen).toMatchObject({
       event: "pull_request",
@@ -106,7 +104,7 @@ describe("github channel", () => {
     });
     expect(calls).toHaveLength(0); // ACK-early: not invoked synchronously
 
-    await host.drain();
+    await background; // the host keeps this alive (here we just await it)
     expect(calls).toEqual([{ session: "pr-o/r#7", text: "Review #7 in o/r" }]);
   });
 
@@ -118,14 +116,15 @@ describe("github channel", () => {
         run({ session: "s", text: d.action ?? "", concurrency: "serialize" });
       },
     });
-    const host = inProcessHost(ch.fetch);
+    const pending: Promise<unknown>[] = [];
     for (const action of ["a", "b", "c"]) {
-      const response = await host.handle(
+      const { response, background } = await ch.fetch(
         signed({ action }, { "x-github-event": "issue_comment", "x-github-delivery": action }),
       );
       expect(response.status).toBe(202);
+      if (background) pending.push(background); // only the delivery that STARTS the loop returns one
     }
-    await host.drain();
+    await Promise.all(pending);
     expect(calls.map((c) => c.text)).toEqual(["a", "b", "c"]);
   });
 

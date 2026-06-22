@@ -15,11 +15,13 @@
  */
 import { spawn } from "node:child_process";
 import { watch as watchTree } from "chokidar";
-import { createServer } from "node:http";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
-import { createInvokeHandler, nodeListener } from "./channels/http.ts";
+import type { Agent } from "./agent.ts";
+import { createInvokeHandler } from "./channels/http.ts";
+import { type NodeHost, type Routes, router, serveNode } from "./host/node.ts";
+import type { FastagentConfig } from "./engines/pi/config.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
@@ -313,7 +315,8 @@ async function serveOnce(): Promise<void> {
   await reportAuth(a.modelSpec);
   reportAgentsSkillsTools(a);
   await reportAvailableGlobalSkills(a.definition);
-  serve(a.agent, portFlag ?? a.config.http?.port ?? 8787);
+  // dev == deployed: serve the same channels the artifact would (default invoke when none declared).
+  serve(routesFor(a.config, a.agent), portFlag ?? a.config.http?.port ?? 8787);
 }
 
 /**
@@ -428,7 +431,7 @@ async function runStart(): Promise<void> {
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const { agent, definition, manifest, modelSpec, sessionsDir, toolNames, toolCollisions } =
+  const { agent, definition, manifest, config, modelSpec, sessionsDir, toolNames, toolCollisions } =
     await createPiAgentFromArtifact(dir, {
       model: values.model,
       sessionsDir: values["sessions-dir"] ? resolve(values["sessions-dir"]) : undefined,
@@ -453,37 +456,46 @@ async function runStart(): Promise<void> {
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
-  serve(agent, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787);
+  const host = serve(
+    routesFor(config, agent),
+    portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787,
+  );
+  // Production graceful shutdown: a host (fly.io, k8s) sends SIGTERM — finish in-flight turns first.
+  process.on("SIGTERM", async () => {
+    await host.drain();
+    await host.close();
+    process.exit(0);
+  });
 }
 
 /**
- * Bind the HTTP channel, with a clean message instead of a raw stack on a listen failure
- * (the common case being EADDRINUSE — a port already in use). A listen error is a startup
- * problem, not a bug, so it exits like {@link failStartup} rather than crashing unhandled.
+ * The routes this deployment serves: the config's declared channels (passed the assembled agent),
+ * or the default invoke channel at POST /invoke when none are declared (zero-config still runs).
  */
-function serve(agent: Parameters<typeof createInvokeHandler>[0], port: number): void {
-  // Standalone routing lives in the composition root: only POST /invoke is the agent endpoint;
-  // any other path is a clear 404. The Fetch handler itself stays path-agnostic (the embed case
-  // mounts it at the host's own route).
-  const handler = createInvokeHandler(agent);
-  const server = createServer(
-    nodeListener(async (req) => {
-      if (new URL(req.url).pathname !== "/invoke") {
-        return new Response("POST /invoke\n", { status: 404, headers: { "content-type": "text/plain" } });
-      }
-      return handler(req);
-    }),
+function routesFor(config: FastagentConfig, agent: Agent): Routes {
+  return config.channels ? config.channels(agent) : { "POST /invoke": createInvokeHandler(agent) };
+}
+
+/**
+ * Serve `routes` via the Node host. The host owns mechanism (binding, background, drain); the CLI
+ * owns the policy here: a clean message + exit(1) on a bind failure (EADDRINUSE is a startup problem,
+ * not a bug), the dev-supervisor ready signal, and the startup log. Returns the host for shutdown.
+ */
+function serve(routes: Routes, port: number): NodeHost {
+  const host = serveNode(router(routes), { port });
+  host.listening.then(
+    (boundPort) => {
+      process.send?.({ type: "ready" }); // tell the dev supervisor we bound (no-op without an IPC channel)
+      console.error(`[fastagent] http channel on :${boundPort}`);
+      console.error(`[fastagent] routes: ${Object.keys(routes).join(", ") || "(none)"}`);
+    },
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") console.error(`port ${port} is already in use; choose another with --port`);
+      else console.error(`cannot bind http channel on :${port}: ${error.message}`);
+      process.exit(1);
+    },
   );
-  server.on("error", (error: NodeJS.ErrnoException) => {
-    if (error.code === "EADDRINUSE") console.error(`port ${port} is already in use; choose another with --port`);
-    else console.error(`cannot bind http channel on :${port}: ${error.message}`);
-    process.exit(1);
-  });
-  server.listen(port, () => {
-    process.send?.({ type: "ready" }); // tell the dev supervisor we bound (no-op without an IPC channel)
-    console.error(`[fastagent] http channel on :${port}`);
-    console.error(`  curl -N -X POST localhost:${port}/invoke -d '{"session":"s1","text":"hi"}'`);
-  });
+  return host;
 }
 
 /** .env (secrets) → process.env. Only a missing file is normal; surface anything else. */

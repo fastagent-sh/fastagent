@@ -7,11 +7,12 @@
  * fastagent.config.ts — layer 2 of the three-layer workspace (production source):
  * deployment/assembly choices. Checked into git; secrets go in .env.
  *
- * v1 deliberately has only 3 keys (each passes the "explainable in one sentence +
- * has a near-term story" bar):
- *   - model: which LLM ("provider/modelId" string — serializable; a repo default overridden by env/CLI);
- *   - tools: extra custom tools, appended after pi's default tools;
- *   - http:  serving options for the built-in HTTP channel.
+ * v1 keys (each passes the "explainable in one sentence + has a near-term story" bar):
+ *   - model:    which LLM ("provider/modelId" string — serializable; a repo default overridden by env/CLI);
+ *   - tools:    extra custom tools, appended after pi's default tools;
+ *   - http:     serving options for the built-in HTTP channel (bind port);
+ *   - channels: this deployment's HTTP surface — a factory `(agent) => Routes` declaring which
+ *               channels mount at which routes. Absent = the default invoke channel at POST /invoke.
  *
  * Deliberately NOT in v1 (kept as library-API escape hatches):
  *   - sessions/env backend selection — K axis; the hosting knife shapes it from real backends;
@@ -27,6 +28,8 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { getModel, getModels, getProviders } from "@earendil-works/pi-ai";
+import type { Agent } from "../../agent.ts";
+import type { Routes } from "../../host/node.ts";
 import type { AnyModel } from "./harness.ts";
 
 export interface FastagentConfig {
@@ -36,6 +39,13 @@ export interface FastagentConfig {
   tools?: AgentTool[];
   /** Built-in HTTP channel options. */
   http?: { port?: number };
+  /**
+   * This deployment's HTTP surface: a factory that receives the assembled agent and returns its
+   * route table (see {@link Routes}). Lets a deployment mount channels (e.g. the GitHub webhook
+   * channel) plus plain routes (e.g. health) without a hand-written server. Absent = the default
+   * invoke channel at POST /invoke.
+   */
+  channels?: (agent: Agent) => Routes;
 }
 
 /** Identity function for typing and IDE completion (vite/next-style). */
@@ -75,9 +85,12 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a
   // .js/.mjs config (`modle:`) must not silently degrade to zero-config.
   for (const key of Object.keys(c)) {
-    if (key !== "model" && key !== "tools" && key !== "http") {
-      throw new Error(`${path}: unknown key "${key}" (valid keys: model, tools, http)`);
+    if (key !== "model" && key !== "tools" && key !== "http" && key !== "channels") {
+      throw new Error(`${path}: unknown key "${key}" (valid keys: model, tools, http, channels)`);
     }
+  }
+  if (c.channels !== undefined && typeof c.channels !== "function") {
+    throw new Error(`${path}: "channels" must be a function (agent) => Routes`);
   }
   if (c.model !== undefined && typeof c.model !== "string") {
     throw new Error(`${path}: "model" must be a "provider/modelId" string`);

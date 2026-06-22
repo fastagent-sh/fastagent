@@ -253,31 +253,3 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
 
   return { fetch };
 }
-
-/** Long-running (Node) host adapter: satisfy the channel's `background` in-process, drain on exit. */
-export interface InProcessHost {
-  /** Run the channel fetch, keep its post-ACK work in-flight in-process, return the Response. */
-  handle: (req: Request) => Promise<Response>;
-  /** Await in-flight background work on shutdown — call on SIGTERM before exit so none are dropped. */
-  drain: () => Promise<void>;
-}
-
-/**
- * The long-running host's way to satisfy a channel's `background`: the process stays up, so just keep
- * the promise referenced until it settles, and await outstanding ones on shutdown. (A serverless host
- * satisfies the same `background` differently — `ctx.waitUntil(background)`.)
- */
-export function inProcessHost(fetch: GithubChannel["fetch"]): InProcessHost {
-  const inFlight = new Set<Promise<unknown>>();
-  return {
-    handle: async (req) => {
-      const { response, background } = await fetch(req);
-      if (background) {
-        inFlight.add(background);
-        void background.finally(() => inFlight.delete(background));
-      }
-      return response;
-    },
-    drain: () => Promise.allSettled(inFlight).then(() => {}),
-  };
-}
