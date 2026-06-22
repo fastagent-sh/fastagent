@@ -255,12 +255,24 @@ export const callbackBinding: WebhookBinding<Ev> = {
     return b.session && b.text && b.callbackUrl ? (b as Ev) : null;
   },
   toInvocation: (e) => ({ scope: { session: e.session }, prompt: { text: e.text } }),
-  deliver: (e, r) =>
-    fetch(e.callbackUrl, { method: "POST", body: JSON.stringify({ ok: true, ...r }) }).then(() => {}),
-  onError: (e, f) =>
-    fetch(e.callbackUrl, { method: "POST", body: JSON.stringify({ ok: false, error: f.details, retryable: f.retryable }) }).then(() => {}),
+  deliver: async (e, r) => {
+    const res = await fetch(e.callbackUrl, { method: "POST", body: JSON.stringify({ ok: true, ...r }) });
+    if (!res.ok) throw new Error(`callback POST failed: ${res.status}`); // fetch does NOT reject on 4xx/5xx; surface it
+  },
+  onError: async (e, f) => {
+    const res = await fetch(e.callbackUrl, {
+      method: "POST",
+      body: JSON.stringify({ ok: false, error: f.details, retryable: f.retryable }),
+    });
+    if (!res.ok) throw new Error(`callback POST failed: ${res.status}`);
+  },
 };
 ```
+
+> The §9/§10 samples are **illustrative** — they show the wiring and the binding shape, not a
+> production HTTP client. Concerns like request timeouts, retry/backoff, and SSRF allowlisting of
+> `callbackUrl` are the binding author's, per platform; only the essentials (a `res.ok` check so a
+> failed delivery is not silently lost) are shown here.
 
 ## 11. Acceptance criteria (definition of done)
 
