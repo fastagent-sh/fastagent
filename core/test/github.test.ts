@@ -7,8 +7,9 @@ import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 function recordingAgent() {
   const calls: { session: string; text: string }[] = [];
   const agent: Agent = {
+    // Fully synchronous on purpose: if the channel still ACKs early with this, the macrotask defer
+    // holds regardless of what a real invoke() does synchronously (lease/harness/auth setup).
     async *invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-      await new Promise((r) => setTimeout(r, 0)); // a real turn isn't instantaneous (real IO)
       calls.push({ session: scope.session, text: prompt.text });
       yield { type: "completed" };
     },

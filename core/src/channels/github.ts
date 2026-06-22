@@ -86,6 +86,13 @@ export interface GithubChannel {
 const textHeaders = { "content-type": "text/plain" };
 const reply = (body: string, status: number): Response => new Response(body, { status, headers: textHeaders });
 
+/**
+ * Yield a macrotask so `fetch` returns the 202 before ANY turn work begins — including the agent's
+ * synchronous setup at the start of `invoke()` (lease/harness/auth). This is the channel's ACK-early
+ * guarantee, independent of what `invoke()` does and of which host keeps `background` alive.
+ */
+const defer = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
 /** Constant-time compare of GitHub's `X-Hub-Signature-256` against the body HMAC. */
 function verify(raw: string, signature: string | null, secret: string): boolean {
   if (!signature) return false;
@@ -182,7 +189,11 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
   // already in flight (that loop's promise was returned to the delivery that started it).
   const schedule = (session: string, concurrency: Concurrency, turn: Turn): Promise<void> | undefined => {
     if (concurrency === "reject") {
-      return runTurn(session, turn); // a concurrent same-session turn hits the engine lease and fails fast
+      // a concurrent same-session turn hits the engine lease and fails fast (after the ACK)
+      return (async () => {
+        await defer();
+        await runTurn(session, turn);
+      })();
     }
     const existing = gates.get(session);
     if (existing) {
@@ -199,6 +210,7 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
     const gate = makeGate(concurrency, turn);
     gates.set(session, gate);
     return (async () => {
+      await defer(); // ACK-early: let fetch return the 202 before the turn's setup runs
       try {
         for (let t = gate.take(); t; t = gate.take()) await runTurn(session, t);
       } finally {
