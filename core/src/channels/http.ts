@@ -166,7 +166,21 @@ async function pump(
     for (;;) {
       const { done, value } = await reader.read();
       if (done || res.destroyed) break;
-      if (!res.write(value)) await new Promise<void>((resolve) => res.once("drain", resolve));
+      // Backpressure: wait for drain, but ALSO resolve on close. If the client disconnects after
+      // write() returned false, Node never emits 'drain' on the closed socket, so waiting on 'drain'
+      // alone would suspend pump() forever (leaking the request/stream) even though the close handler
+      // cancelled the reader.
+      if (!res.write(value)) {
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            res.off("drain", done);
+            res.off("close", done);
+            resolve();
+          };
+          res.once("drain", done);
+          res.once("close", done);
+        });
+      }
     }
   } finally {
     if (!res.destroyed) res.end();
