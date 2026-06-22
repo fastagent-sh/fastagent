@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type Routes, router, serveNode } from "../src/host/node.ts";
 
 describe("host/node: router", () => {
@@ -42,6 +42,24 @@ describe("host/node: serveNode", () => {
     release(); // let the background work finish
     await host.drain(); // drain awaits the in-flight background
     expect(ran).toBe(true);
+    await host.close();
+  });
+
+  it("a rejecting background is observed (no unhandled rejection) and still drains", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((m) => {
+      errors.push(String(m));
+    });
+    const host = serveNode(
+      () => ({ response: new Response(null, { status: 202 }), background: Promise.reject(new Error("boom")) }),
+      { port: 0 },
+    );
+    const port = await host.listening;
+    const res = await fetch(`http://127.0.0.1:${port}/x`, { method: "POST" });
+    expect(res.status).toBe(202);
+    await host.drain(); // must not throw despite the rejection
+    expect(errors.some((e) => e.includes("boom"))).toBe(true); // surfaced, not swallowed
+    spy.mockRestore();
     await host.close();
   });
 });
