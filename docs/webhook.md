@@ -100,6 +100,17 @@ hosts. A durable, cross-instance host (the work must survive *this* instance dyi
 serialize a closure — that reshapes the port to carry `{ scope, prompt, delivery }` data
 and re-invoke on a worker. That reshape is **K-face**, deferred (§12).
 
+**v1 registers synchronously.** `background` returns `void`, and the handler ACKs `202` as soon as
+it returns. This is correct for a runner whose handoff is synchronous (the in-process reference
+adds the task to a set). A runner whose handoff is **async** — e.g. it must enqueue to a durable
+store *before* the task is accepted — needs `background` to surface acceptance so the handler ACKs
+only after the task is durably accepted (a failed handoff → non-2xx → the provider retries, instead
+of a silently lost webhook). That is a **non-breaking** widening to `(task) => void | Promise<void>`
+that the handler `await`s; it lands **with the durable runner (K-face, §12)**, not before — there is
+no async-handoff runner today, and building the contract for one that does not exist is exactly the
+speculative surface this project avoids. The v1 contract is therefore: *the runner registers
+synchronously.*
+
 ## 5. The channel interface
 
 ```ts
