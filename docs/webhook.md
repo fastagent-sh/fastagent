@@ -194,21 +194,27 @@ no path to tools/env today (tools receive only `ToolContext{ signal }`).
 
 ## 8. Reference host (single-instance) — `createTrackedBackground`
 
-The simplest **correct** `background`: track in-flight tasks so a graceful shutdown drains
-them instead of killing turns mid-flight. Channel-agnostic (any ACK-early channel can use
-it); depends only on the port type.
+Core ships this as `createTrackedBackground` (import it; you do not write it). The simplest
+**correct** `background`: track in-flight tasks so a graceful shutdown drains them instead of
+killing turns mid-flight. Channel-agnostic (any ACK-early channel can use it); depends only on
+the port type. Its shape:
 
 ```ts
-import type { BackgroundRunner } from "@kid7st/fastagent";
+import { createTrackedBackground } from "@kid7st/fastagent";
+const { background, drain } = createTrackedBackground();
 
-export function createTrackedBackground(): { background: BackgroundRunner; drain: () => Promise<void> } {
-  const inFlight = new Set<Promise<void>>();
-  const background: BackgroundRunner = (task) => {
-    const p = task().finally(() => inFlight.delete(p));
-    inFlight.add(p);
-  };
-  return { background, drain: () => Promise.allSettled([...inFlight]).then(() => {}) };
-}
+// shape (shipped in core/src/channels/background.ts):
+const background: BackgroundRunner = (task) => {
+  // Start on a microtask: keeps the task off the caller's synchronous frame (the ACK path), and
+  // turns a synchronous throw inside `task` into a tracked rejection routed to onTaskError
+  // instead of escaping as a pre-ACK failure.
+  const p = Promise.resolve()
+    .then(task)
+    .catch(onTaskError) // default: console.error — fail visibly, never swallow
+    .finally(() => inFlight.delete(p));
+  inFlight.add(p);
+};
+// drain() = Promise.allSettled([...inFlight]); call it on SIGTERM before exiting.
 ```
 
 The wrong impl, for contrast:

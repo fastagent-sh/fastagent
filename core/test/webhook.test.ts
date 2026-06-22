@@ -108,6 +108,27 @@ describe("webhook channel", () => {
     expect(calls.onError[0]?.retryable).toBe(true);
   });
 
+  it("a turn failure with no onError handler surfaces via the runner's error sink (not swallowed)", async () => {
+    const agent = fauxAgent([{ type: "failed", details: "model exploded", retryable: true }]);
+    const binding: WebhookBinding<Ev> = {
+      async parse(req) {
+        return (await req.json()) as Ev;
+      },
+      toInvocation: (e) => ({ scope: { session: e.session }, prompt: { text: e.text } }),
+      // no onError — the failure must still be visible
+    };
+    const errors: unknown[] = [];
+    const { background, drain } = createTrackedBackground({ onTaskError: (e) => errors.push(e) });
+    const handler = createWebhookHandler(agent, binding, background);
+
+    const res = await handler(post({ session: "pr-4", text: "review" }));
+    expect(res.status).toBe(202);
+    await drain();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(AgentFailure);
+    expect((errors[0] as AgentFailure).details).toBe("model exploded");
+  });
+
   it("parse → null rejects with 401 and never invokes", async () => {
     const { binding, calls } = recordingBinding(async () => null);
     const bg = captureBackground();
