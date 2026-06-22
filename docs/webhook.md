@@ -106,10 +106,20 @@ and re-invoke on a worker. That reshape is **K-face**, deferred (§12).
 // You implement WebhookBinding; core ships createWebhookHandler (core/src/channels/webhook.ts).
 import type { Agent, AgentFailure, BackgroundRunner, Json, Prompt, Scope } from "@kid7st/fastagent";
 
+/**
+ * What `parse` decided about a delivery: act on it, ACK-and-skip it, or reject it. Real webhooks
+ * send many event types and redeliveries, so a skipped/duplicate one must be ACKed 2xx (not 4xx) or
+ * the provider keeps retrying.
+ */
+export type WebhookOutcome<E> =
+  | { action: "invoke"; event: E }          // run the agent → 202
+  | { action: "ignore" }                     // valid, no work (duplicate / unhandled event type) → 200
+  | { action: "reject"; status?: number };   // bad/unauthorized → 4xx (default 401)
+
 /** Per-platform glue (generic callback, Slack, GitHub, …). One impl per platform. */
 export interface WebhookBinding<E> {
-  /** Verify signature + parse the request into an event, or null to reject (→ 4xx). */
-  parse(req: Request): Promise<E | null>;
+  /** Verify the request and classify it (invoke / ignore / reject). Throwing = unexpected fault → 400. */
+  parse(req: Request): Promise<WebhookOutcome<E>>;
   /** Map the event to an invocation. `scope.session` is derived from the payload. */
   toInvocation(event: E): { scope: Scope; prompt: Prompt };
   /**
@@ -129,9 +139,11 @@ export function createWebhookHandler<E>(
 ): (req: Request) => Promise<Response>;
 ```
 
-Behavior (the authoritative impl is `core/src/channels/webhook.ts`): a non-POST is `405`; a
-`parse` returning `null` is `401` and a `parse` that throws is `400` (failure plane #1, pre-ACK);
-otherwise it ACKs `202` and runs the turn via `background`. On a turn failure it calls
+Behavior (the authoritative impl is `core/src/channels/webhook.ts`): a non-POST is `405`; `parse`
+classifies the delivery — `reject` → 4xx (default 401), `ignore` → 200 no-op (ACK a duplicate or an
+unhandled event type so the provider stops retrying), `invoke` → ACK `202` and run the turn via
+`background`; a `parse` that *throws* is an unexpected fault → 400 (failure plane #1, pre-ACK). On a
+turn failure it calls
 `binding.onError` — or, when no `onError` is installed, **rethrows** the `AgentFailure` so it reaches
 the background runner's error sink rather than being swallowed (fail-visible). The handler is
 **Fetch-shaped** (`(Request) => Promise<Response>`), like `createInvokeHandler`, so it mounts in any
@@ -165,9 +177,11 @@ is the signal that it is worth retrying with the same `session`.
 (channel policy). This is the *concurrency floor*, not idempotency.
 
 **Dedup / idempotency is channel-owned, before `invoke`.** Webhooks redeliver; an
-at-most-once channel must dedup on the platform's **delivery id** (which the binding has),
-*before* calling `invoke` — not via the Lease (busy ≠ duplicate) and not via the agent.
-v1 leaves dedup to the binding; a shared idempotency store may later become its own port
+at-most-once channel dedups on the platform's **delivery id** (which the binding has) inside
+`parse`, returning `{ action: "ignore" }` for a duplicate so it is ACKed 2xx (not retried) without
+running the agent — not via the Lease (busy ≠ duplicate) and not via the agent. The same `ignore`
+outcome is how a binding ACKs event types it does not handle. v1 leaves the dedup *store* to the
+binding; a shared idempotency store may later become its own port
 (do not add it now — §12).
 
 **`Scope` is sufficient for serve.** `scope.session` (opaque, channel-derived) is enough
@@ -250,9 +264,14 @@ interface Ev { session: string; text: string; callbackUrl: string }
 
 export const callbackBinding: WebhookBinding<Ev> = {
   async parse(req) {
-    if (req.headers.get("x-secret") !== process.env.WEBHOOK_SECRET) return null;
-    const b = (await req.json()) as Partial<Ev>;
-    return b.session && b.text && b.callbackUrl ? (b as Ev) : null;
+    if (req.headers.get("x-secret") !== process.env.WEBHOOK_SECRET) return { action: "reject", status: 401 };
+    const b = (await req.json()) as Record<string, unknown>;
+    // Validate TYPES, not just truthiness: a non-string field cast to Ev would crash downstream
+    // (the session store calls string methods; fetch(callbackUrl) fails post-ACK).
+    if (typeof b.session !== "string" || typeof b.text !== "string" || typeof b.callbackUrl !== "string") {
+      return { action: "reject", status: 400 };
+    }
+    return { action: "invoke", event: { session: b.session, text: b.text, callbackUrl: b.callbackUrl } };
   },
   toInvocation: (e) => ({ scope: { session: e.session }, prompt: { text: e.text } }),
   deliver: async (e, r) => {

@@ -18,7 +18,7 @@ export { createInvokeHandler, nodeListener } from "./channels/http.ts";
 // Webhook channel (N): the ACK-early topology — 202 now, run the turn via the `background` port,
 // deliver out-of-band. Consumes only the Agent contract. `background` is the Caller-side host port
 // (execution lifetime); createTrackedBackground is the single-instance reference impl.
-export { createWebhookHandler, type WebhookBinding } from "./channels/webhook.ts";
+export { createWebhookHandler, type WebhookBinding, type WebhookOutcome } from "./channels/webhook.ts";
 export { type BackgroundRunner, createTrackedBackground } from "./channels/background.ts";
 
 // pi reference implementation — reusable assembly ladder (L1/L2; L0 below)

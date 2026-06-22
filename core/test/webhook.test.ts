@@ -32,7 +32,7 @@ function recordingBinding(parse?: WebhookBinding<Ev>["parse"]): {
 } {
   const calls = { deliver: [] as CollectResult[], onError: [] as AgentFailure[], invocations: [] as Ev[] };
   const binding: WebhookBinding<Ev> = {
-    parse: parse ?? (async (req) => (await req.json()) as Ev),
+    parse: parse ?? (async (req) => ({ action: "invoke", event: (await req.json()) as Ev })),
     toInvocation(e) {
       calls.invocations.push(e);
       return { scope: { session: e.session }, prompt: { text: e.text } };
@@ -112,7 +112,7 @@ describe("webhook channel", () => {
     const agent = fauxAgent([{ type: "failed", details: "model exploded", retryable: true }]);
     const binding: WebhookBinding<Ev> = {
       async parse(req) {
-        return (await req.json()) as Ev;
+        return { action: "invoke", event: (await req.json()) as Ev };
       },
       toInvocation: (e) => ({ scope: { session: e.session }, prompt: { text: e.text } }),
       // no onError — the failure must still be visible
@@ -129,12 +129,21 @@ describe("webhook channel", () => {
     expect((errors[0] as AgentFailure).details).toBe("model exploded");
   });
 
-  it("parse → null rejects with 401 and never invokes", async () => {
-    const { binding, calls } = recordingBinding(async () => null);
+  it("a reject outcome answers 4xx (default 401) and never invokes", async () => {
+    const { binding, calls } = recordingBinding(async () => ({ action: "reject" }));
     const bg = captureBackground();
     const handler = createWebhookHandler(fauxAgent([]), binding, bg.background);
     const res = await handler(post({ nope: true }));
     expect(res.status).toBe(401);
+    expect(calls.invocations).toHaveLength(0);
+  });
+
+  it("an ignore outcome ACKs 2xx (200) and never invokes — so a deduped/unhandled delivery is not retried", async () => {
+    const { binding, calls } = recordingBinding(async () => ({ action: "ignore" }));
+    const bg = captureBackground();
+    const handler = createWebhookHandler(fauxAgent([]), binding, bg.background);
+    const res = await handler(post({ duplicate: true }));
+    expect(res.status).toBe(200);
     expect(calls.invocations).toHaveLength(0);
   });
 
@@ -152,7 +161,7 @@ describe("webhook channel", () => {
     const agent = fauxAgent([{ type: "completed" }]);
     const binding: WebhookBinding<Ev> = {
       async parse(req) {
-        return (await req.json()) as Ev;
+        return { action: "invoke", event: (await req.json()) as Ev };
       },
       toInvocation: (e) => ({ scope: { session: e.session }, prompt: { text: e.text } }),
       // no deliver, no onError — the agent owns its output

@@ -7,8 +7,12 @@
  * works with any Agent. The per-platform glue (verify, parse, map, optional delivery) is the
  * {@link WebhookBinding} the caller supplies.
  *
+ * `parse` returns one of three outcomes so a binding can act, ignore, or reject a delivery (real
+ * webhooks send many event types and redeliveries; an ignored/duplicate one must be ACKed 2xx, not
+ * 4xx, or the provider retries it).
+ *
  * Two failure planes:
- *   - pre-ACK: parse/verify rejects → 4xx on the request;
+ *   - pre-ACK: parse rejects (bad/unauthorized) → 4xx; parse throws (unexpected fault) → 400;
  *   - post-ACK: the turn fails → `binding.onError` out-of-band (the 202 already went out).
  *
  * Delivery is OPTIONAL: a "fat" agent posts its own result via tools (e.g. `gh pr review`), so the
@@ -20,10 +24,26 @@ import type { BackgroundRunner } from "./background.ts";
 
 const textHeaders = { "content-type": "text/plain" };
 
+/**
+ * What `parse` decided about a delivery:
+ *   - `invoke` — run the agent on `event` (→ 202);
+ *   - `ignore` — valid but no work (a duplicate, or an event type this binding doesn't handle) → 200
+ *     no-op; the delivery is ACKed so the provider doesn't retry it;
+ *   - `reject` — bad/unauthorized request → 4xx (default 401).
+ */
+export type WebhookOutcome<E> =
+  | { action: "invoke"; event: E }
+  | { action: "ignore" }
+  | { action: "reject"; status?: number };
+
 /** Per-platform glue. One impl per platform (GitHub, Slack, generic callback). */
 export interface WebhookBinding<E> {
-  /** Verify the request (signature, etc.) and parse it into an event, or null to reject (→ 401). */
-  parse(req: Request): Promise<E | null>;
+  /**
+   * Verify the request (signature, etc.) and classify it: invoke / ignore / reject (see
+   * {@link WebhookOutcome}). Throwing signals an unexpected fault (unreadable body) → 400; an
+   * expected bad/unauthorized request is `{ action: "reject" }`, not a throw.
+   */
+  parse(req: Request): Promise<WebhookOutcome<E>>;
   /** Map the event to an invocation. `scope.session` is derived from the payload. */
   toInvocation(event: E): { scope: Scope; prompt: Prompt };
   /**
@@ -48,16 +68,21 @@ export function createWebhookHandler<E>(
   return async (req) => {
     if (req.method !== "POST") return new Response("POST only\n", { status: 405, headers: textHeaders });
 
-    let parsed: E | null;
+    let outcome: WebhookOutcome<E>;
     try {
-      parsed = await binding.parse(req);
+      outcome = await binding.parse(req);
     } catch (error) {
-      // parse/verify throwing is a fault in the request (bad signature shape, unreadable body),
-      // not a deliberately rejected webhook — answer with 400, before any ACK.
+      // parse throwing is an UNEXPECTED fault (unreadable body, etc.), not a deliberate reject —
+      // answer 400, before any ACK. An expected bad request is `{ action: "reject" }` below.
       return new Response(`bad request: ${(error as Error).message}\n`, { status: 400, headers: textHeaders });
     }
-    if (parsed === null) return new Response("rejected\n", { status: 401, headers: textHeaders });
-    const event = parsed;
+    // A valid-but-skipped delivery (duplicate / unhandled event type) MUST be ACKed 2xx, or the
+    // provider keeps retrying it; only a bad/unauthorized request gets 4xx.
+    if (outcome.action === "reject") {
+      return new Response("rejected\n", { status: outcome.status ?? 401, headers: textHeaders });
+    }
+    if (outcome.action === "ignore") return new Response(null, { status: 200 });
+    const { event } = outcome;
 
     const { scope, prompt } = binding.toInvocation(event);
 
