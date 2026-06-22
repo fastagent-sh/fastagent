@@ -145,6 +145,50 @@ describe("github channel", () => {
     expect(calls).toEqual([{ session: "s", text: "x" }]);
   });
 
+  it("rejects an oversized body with 413 before verifying (DoS guard)", async () => {
+    const { agent, calls } = recordingAgent();
+    let routed = false;
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on: () => {
+        routed = true;
+      },
+    });
+    const big = "x".repeat((25 << 20) + 1); // just over the 25 MiB cap
+    const req = new Request("http://app/webhook", {
+      method: "POST",
+      body: big,
+      headers: { "x-github-event": "pull_request", "x-github-delivery": "big" },
+    });
+    const { response } = await ch.fetch(req);
+    expect(response.status).toBe(413); // rejected before HMAC/JSON
+    expect(routed).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("ACK-early holds for async routing: no turn starts until on() resolves", async () => {
+    const { agent, calls } = recordingAgent(); // synchronous agent: if a turn starts, it records at once
+    let release!: () => void;
+    const slow = new Promise<void>((r) => {
+      release = r;
+    });
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      async on(d, run) {
+        if (d.event === "pull_request") run({ session: "s", text: "x" }); // route first
+        await slow; // then a slow async step (telemetry / a lookup) — on() stays pending
+      },
+    });
+    const fetchP = ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers));
+    await new Promise((r) => setTimeout(r, 10)); // give macrotasks a chance while on() is pending
+    expect(calls).toHaveLength(0); // the turn must NOT have started while on() is pending
+    release();
+    const { response, background } = await fetchP;
+    expect(response.status).toBe(202);
+    await background;
+    expect(calls).toEqual([{ session: "s", text: "x" }]);
+  });
+
   it("an unhandled but verified event acks 202 with no background work", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, {

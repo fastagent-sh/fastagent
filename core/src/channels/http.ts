@@ -18,6 +18,7 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent } from "../agent.ts";
+import { readBodyCapped } from "./body.ts";
 
 /** Request body cap — prompts are text (+ base64 images later); 1 MiB is generous for v1. */
 const MAX_BODY_BYTES = 1 << 20;
@@ -27,31 +28,6 @@ const textHeaders = { "content-type": "text/plain" };
 
 function text(body: string, status: number): Response {
   return new Response(body, { status, headers: textHeaders });
-}
-
-/** Read the request body with a hard byte cap (counts real bytes, not JS characters). */
-async function readBodyCapped(req: Request, max: number): Promise<{ text: string } | { tooLarge: true }> {
-  if (!req.body) return { text: "" };
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    received += value.byteLength;
-    if (received > max) {
-      await reader.cancel();
-      return { tooLarge: true };
-    }
-    chunks.push(value);
-  }
-  const buf = new Uint8Array(received);
-  let offset = 0;
-  for (const c of chunks) {
-    buf.set(c, offset);
-    offset += c.byteLength;
-  }
-  return { text: new TextDecoder().decode(buf) };
 }
 
 /**

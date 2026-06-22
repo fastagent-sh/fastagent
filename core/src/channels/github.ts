@@ -15,6 +15,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import { collect } from "../collect.ts";
+import { readBodyCapped } from "./body.ts";
+
+/** Raw body cap before verification — GitHub caps webhook payloads at 25 MB; reject larger early. */
+const MAX_WEBHOOK_BYTES = 25 << 20;
 
 /** A verified delivery: common fields pre-extracted for ergonomic routing, plus the raw payload. */
 export interface GithubDelivery {
@@ -221,7 +225,11 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
 
   const fetch = async (req: Request): Promise<GithubFetchResult> => {
     if (req.method !== "POST") return { response: reply("POST only\n", 405) };
-    const raw = await req.text();
+    // Cap the body BEFORE verifying: this endpoint is public/unauthenticated, so an unbounded read
+    // would let any client exhaust memory (a Content-Length check is bypassable with chunked bodies).
+    const body = await readBodyCapped(req, MAX_WEBHOOK_BYTES);
+    if ("tooLarge" in body) return { response: reply("payload too large\n", 413) };
+    const raw = body.text;
     if (!verify(raw, req.headers.get("x-hub-signature-256"), secret))
       return { response: reply("invalid signature\n", 401) };
 
@@ -234,17 +242,28 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
       return { response: reply("invalid json\n", 400) };
     }
 
-    // Collect the post-ACK work this delivery STARTS, declared back to the host to keep alive.
-    const started: Promise<unknown>[] = [];
+    // Routing only RECORDS turns; none start until `on` fully resolves. `on` may be async and await
+    // after calling `run` (telemetry, a lookup) — if a turn started at `run` time, its deferred work
+    // could begin while `fetch` is still awaiting `on`, breaking ACK-early for async routing.
+    const requests: { session: string; concurrency: Concurrency; turn: Turn }[] = [];
     const delivery = toDelivery(event, req.headers.get("x-github-delivery") ?? "", payload);
     const run: GithubRun = ({ session, text, concurrency = "coalesce" }) => {
-      const work = schedule(session, concurrency, async () => {
-        await collect(agent.invoke({ session }, { text })); // throws AgentFailure on a failed turn → sink
+      requests.push({
+        session,
+        concurrency,
+        turn: async () => {
+          await collect(agent.invoke({ session }, { text })); // throws AgentFailure on a failed turn → sink
+        },
       });
-      if (work) started.push(work);
     };
-    await on(delivery, run); // app routing only; never blocks on the turn
+    await on(delivery, run);
 
+    // Routing done — now schedule. schedule still defers each turn past this response (ACK-early).
+    const started: Promise<unknown>[] = [];
+    for (const r of requests) {
+      const work = schedule(r.session, r.concurrency, r.turn);
+      if (work) started.push(work);
+    }
     return {
       response: new Response(null, { status: 202 }),
       background: started.length ? Promise.allSettled(started) : undefined,
