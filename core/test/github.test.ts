@@ -108,6 +108,36 @@ describe("github channel", () => {
     expect(calls).toEqual([{ session: "pr-o/r#7", text: "Review #7 in o/r" }]);
   });
 
+  it("accepts GitHub's form-urlencoded content type (payload field), routing the same fields", async () => {
+    const { agent, calls } = recordingAgent();
+    let seen: import("../src/github.ts").GithubDelivery | undefined;
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on(d, run) {
+        seen = d;
+        if (d.event === "pull_request") run({ session: "s", text: "x" });
+      },
+    });
+    const raw = `payload=${encodeURIComponent(JSON.stringify(PR_OPENED.body))}`; // GitHub's form shape
+    const sig = `sha256=${createHmac("sha256", SECRET).update(raw).digest("hex")}`; // signed over the raw form body
+    const { response, background } = await ch.fetch(
+      new Request("http://app/webhook", {
+        method: "POST",
+        body: raw,
+        headers: {
+          "x-hub-signature-256": sig,
+          "content-type": "application/x-www-form-urlencoded",
+          "x-github-event": "pull_request",
+          "x-github-delivery": "form1",
+        },
+      }),
+    );
+    expect(response.status).toBe(202);
+    expect(seen).toMatchObject({ event: "pull_request", action: "opened", repo: "o/r", number: 7 });
+    await background;
+    expect(calls).toEqual([{ session: "s", text: "x" }]);
+  });
+
   it("serialize: every same-session delivery runs in arrival order, none dropped", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, {

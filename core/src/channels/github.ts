@@ -235,9 +235,18 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
 
     const event = req.headers.get("x-github-event") ?? "";
     if (event === "ping") return { response: new Response(null, { status: 204 }) }; // GitHub setup ping
+    // GitHub signs the raw body for BOTH content types. With `application/x-www-form-urlencoded`
+    // (GitHub's webhook-UI default), the JSON lives in a URL-encoded `payload` field, not the body
+    // itself — parsing the raw form string as JSON would 400 every such delivery.
+    let json = raw;
+    if ((req.headers.get("content-type") ?? "").includes("application/x-www-form-urlencoded")) {
+      const field = new URLSearchParams(raw).get("payload");
+      if (field === null) return { response: reply("missing form payload\n", 400) };
+      json = field;
+    }
     let payload: Record<string, unknown>;
     try {
-      payload = JSON.parse(raw) as Record<string, unknown>;
+      payload = JSON.parse(json) as Record<string, unknown>;
     } catch {
       return { response: reply("invalid json\n", 400) };
     }
