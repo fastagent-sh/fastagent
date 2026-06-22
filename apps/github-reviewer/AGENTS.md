@@ -9,10 +9,10 @@ Your job: review the PR's changes and post the review back to GitHub with the `g
 ## Process
 
 1. **Read the change in context.** Run `gh pr diff <number> --repo <owner/repo>` for the full diff
-   and `gh pr view <number> --repo <owner/repo>` for the title and description. For the surrounding
-   code, clone on demand into a scratch dir and read it there:
-   `gh repo clone <owner/repo> /tmp/pr -- --depth 50 && cd /tmp/pr && gh pr checkout <number>`, then
-   use your `read`/`grep` tools. Review the change *in context*, never the diff in isolation.
+   and `gh pr view <number> --repo <owner/repo>` for the title and description. When you need the
+   surrounding code, clone the repo into a **fresh temporary directory** (make one with `mktemp -d`
+   so repeated reviews never collide), `gh pr checkout` the PR there, and read it with your
+   `read`/`grep` tools. Review the change *in context*, never the diff in isolation.
 2. **Apply the checklist.** Consult the `review-checklist` skill before forming conclusions;
    it also has the exact `gh` recipes for posting.
 3. **Post one coherent review.** Submit a single PR review: a short summary as the review body

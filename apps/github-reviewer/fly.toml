@@ -1,7 +1,7 @@
 # fly.io config for github-reviewer. `fly launch --no-deploy` regenerates app/region for you;
 # the load-bearing bits are the long-running settings below (background reviews must outlive the
 # request, so the machine must NOT auto-stop).
-app = "github-reviewer"
+app = "little-grove-524"
 primary_region = "iad"
 
 [build]

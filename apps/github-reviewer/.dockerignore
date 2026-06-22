@@ -1,0 +1,16 @@
+# Runtime secrets — never enter the image (provided via `fly secrets` / env at runtime).
+# COPY honors .dockerignore, NOT .gitignore, so a local .env would otherwise be baked in.
+.env
+.env.*
+
+# Reinstalled in the image (npm ci).
+node_modules
+
+# Machine state + build output — the image runs `fastagent build` itself.
+.fastagent
+
+# VCS history (not needed; `fastagent build` honors .gitignore without invoking git, so .gitignore
+# itself is kept in the context).
+.git
+
+*.log
