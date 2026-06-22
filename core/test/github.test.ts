@@ -124,6 +124,23 @@ describe("github channel", () => {
     expect(calls.map((c) => c.text)).toEqual(["a", "b", "c"]);
   });
 
+  it("uses the host's waitUntil when given a ctx (serverless), not the in-process runner", async () => {
+    const { agent, calls } = recordingAgent();
+    const pinned: Promise<unknown>[] = [];
+    const ctx = { waitUntil: (p: Promise<unknown>) => pinned.push(p) }; // stands in for Cloudflare/Vercel ctx
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on(d, run) {
+        if (d.event === "pull_request") run({ session: "s", text: "x" });
+      },
+    });
+    const res = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers), ctx);
+    expect(res.status).toBe(202);
+    expect(pinned).toHaveLength(1); // turn pinned via the host's waitUntil
+    await Promise.all(pinned); // the platform keeps the worker alive until it settles
+    expect(calls).toEqual([{ session: "s", text: "x" }]);
+  });
+
   it("an unhandled but verified event acks 202 and never invokes", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, {

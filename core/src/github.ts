@@ -8,5 +8,6 @@ export {
   type GithubChannel,
   type GithubChannelOptions,
   type GithubDelivery,
+  type GithubExecutionContext,
   type GithubRun,
 } from "./channels/github.ts";
