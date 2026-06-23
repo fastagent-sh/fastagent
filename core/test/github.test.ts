@@ -178,6 +178,41 @@ describe("github channel", () => {
     expect(calls.map((c) => c.text)).toEqual(["a", "b", "c"]);
   });
 
+  it("a folded same-session delivery still returns a background to pin (not undefined)", async () => {
+    // Hold the first turn open so the loop (and its gate) is definitely active when the second
+    // delivery arrives — forcing the FOLD path deterministically (not a fresh loop).
+    const calls: string[] = [];
+    let release!: () => void;
+    const blocked = new Promise<void>((r) => {
+      release = r;
+    });
+    let firstTurn = true;
+    const agent: Agent = {
+      async *invoke(_scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+        if (firstTurn) {
+          firstTurn = false;
+          await blocked;
+        }
+        calls.push(prompt.text);
+        yield { type: "completed" };
+      },
+    };
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on(d, run) {
+        run({ session: "s", text: d.action ?? "", concurrency: "serialize" });
+      },
+    });
+    const a = await ch(signed({ action: "a" }, { "x-github-event": "issue_comment", "x-github-delivery": "a" }));
+    await new Promise((r) => setTimeout(r, 5)); // loop starts; first turn now blocked, gate stays open
+    const b = await ch(signed({ action: "b" }, { "x-github-event": "issue_comment", "x-github-delivery": "b" }));
+    expect(a.background).toBeDefined();
+    expect(b.background).toBeDefined(); // the FOLDED delivery still gets a promise to pin (was undefined before)
+    release();
+    await Promise.all([a.background, b.background]);
+    expect(calls).toEqual(["a", "b"]); // both ran, in arrival order, under the one loop
+  });
+
   it("declares post-ACK work as `background` for the host to satisfy (serverless: ctx.waitUntil)", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, {

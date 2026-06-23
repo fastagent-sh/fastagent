@@ -122,6 +122,9 @@ interface Gate {
   mode: "coalesce" | "serialize";
   add(turn: Turn): void;
   take(): Turn | undefined;
+  /** The in-flight drain loop's promise — returned to every delivery (starter AND folded) so each
+   *  can hand it to its host (e.g. serverless `ctx.waitUntil`), not just the one that started it. */
+  loop?: Promise<void>;
 }
 
 function makeGate(mode: "coalesce" | "serialize", first: Turn): Gate {
@@ -183,9 +186,9 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): (req
     }
   };
 
-  // Schedule a session's turn per its trigger type (see GithubRun). Returns the post-ACK promise the
-  // host must keep alive when this delivery STARTS new work, or undefined when it folds into a loop
-  // already in flight (that loop's promise was returned to the delivery that started it).
+  // Schedule a session's turn per its trigger type (see GithubRun). Returns the post-ACK loop promise
+  // the host must keep alive — for the delivery that STARTS the loop AND for any that fold into it,
+  // so a folded turn isn't left relying solely on the starter's host lifetime (serverless waitUntil).
   const schedule = (session: string, concurrency: Concurrency, turn: Turn): Promise<void> | undefined => {
     if (concurrency === "reject") {
       // a concurrent same-session turn hits the engine lease and fails fast (after the ACK)
@@ -204,11 +207,11 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): (req
         );
       }
       existing.add(turn);
-      return undefined; // the in-flight loop (already declared to the host) will run it
+      return existing.loop; // fold under the SAME loop, and return it so this delivery's host pins it too
     }
     const gate = makeGate(concurrency, turn);
     gates.set(session, gate);
-    return (async () => {
+    gate.loop = (async () => {
       await defer(); // ACK-early: let fetch return the 202 before the turn's setup runs
       try {
         for (let t = gate.take(); t; t = gate.take()) await runTurn(session, t);
@@ -216,6 +219,7 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): (req
         gates.delete(session);
       }
     })();
+    return gate.loop;
   };
 
   const fetch = async (req: Request): Promise<FetchResult> => {
