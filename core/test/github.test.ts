@@ -119,6 +119,21 @@ describe("github channel", () => {
     expect(routed).toBe(false);
   });
 
+  it("an empty body with a signature header is 401, not 500 (verifier throw handled)", async () => {
+    const { agent } = recordingAgent();
+    let routed = false;
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on: () => {
+        routed = true;
+      },
+    });
+    // octokit verify() throws on an empty payload; the channel must fail closed (401), not 500.
+    const { response } = await ch(signedRaw("", { "x-github-event": "pull_request", "x-github-delivery": "e1" }));
+    expect(response.status).toBe(401);
+    expect(routed).toBe(false);
+  });
+
   it("acks a verified ping with 204, no routing", async () => {
     const { agent } = recordingAgent();
     let routed = false;

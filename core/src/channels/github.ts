@@ -223,10 +223,13 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): (req
     const body = await readBodyCapped(req, MAX_WEBHOOK_BYTES);
     if ("tooLarge" in body) return { response: reply("payload too large\n", 413) };
     const raw = body.text;
-    // @octokit/webhooks-methods verify (Web Crypto, runtime-agnostic); throws on a missing arg, so
-    // guard the header first. Signature is over the RAW body for both content types.
+    // @octokit/webhooks-methods verify (Web Crypto, runtime-agnostic). It throws on missing/empty
+    // args, so on this public endpoint fail CLOSED: any non-positive result — including a throw from
+    // an empty/malformed body — is a clean 401, never an unhandled 500. Signature is over the RAW body
+    // for both content types.
     const signature = req.headers.get("x-hub-signature-256");
-    if (!signature || !(await verify(secret, raw, signature))) return { response: reply("invalid signature\n", 401) };
+    const verified = signature !== null && raw !== "" && (await verify(secret, raw, signature).catch(() => false));
+    if (!verified) return { response: reply("invalid signature\n", 401) };
 
     const event = req.headers.get("x-github-event") ?? "";
     if (event === "ping") return { response: new Response(null, { status: 204 }) }; // GitHub setup ping
