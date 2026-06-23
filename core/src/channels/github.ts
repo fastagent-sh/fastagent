@@ -64,10 +64,6 @@ export type GithubRun = (turn: {
   concurrency?: "coalesce" | "serialize" | "reject";
 }) => void;
 
-/**
- * Execution-lifetime runner for the ACK-early turn (the Caller-side host port). It must run the
- * task to completion after the 202 is sent.
- */
 export interface GithubChannelOptions {
   /** Webhook secret — verifies inbound deliveries (HMAC-SHA256 over the raw body). */
   secret: string;
@@ -75,23 +71,14 @@ export interface GithubChannelOptions {
   on: (delivery: GithubDelivery, run: GithubRun) => void | Promise<void>;
 }
 
-export interface GithubFetchResult {
-  /** Return to the client immediately (ACK-early: 202 before the turn runs). */
-  response: Response;
-  /**
-   * Post-ACK work that MUST run to completion (the agent turn[s]) — already running, declared back to
-   * the host so it keeps execution alive past the response. The channel states the requirement; the
-   * host satisfies it with its platform mechanism: serverless via `ctx.waitUntil(background)`, a
-   * long-running host via `inProcessHost` (tracked + drained on shutdown). `undefined` when the
-   * delivery scheduled no new work.
-   */
-  background?: Promise<unknown>;
-}
-
-export interface GithubChannel {
-  /** Fetch-shaped handler — mount at your webhook route (POST). Returns the response + any post-ACK work. */
-  fetch: (req: Request) => Promise<GithubFetchResult>;
-}
+/**
+ * What the handler returns: the 202 to send immediately (ACK-early), plus the post-ACK turn work as
+ * `background` — already running, handed to the host to keep alive past the response (serverless
+ * `ctx.waitUntil(background)`, or the Node host's `serveNode` which tracks + drains it). `undefined`
+ * when the delivery scheduled no new work. Structurally a host `HostResult`, so the returned handler
+ * mounts directly in a `Routes` table; kept un-named/internal to avoid a duplicate public type.
+ */
+type FetchResult = { response: Response; background?: Promise<unknown> };
 
 const textHeaders = { "content-type": "text/plain" };
 const reply = (body: string, status: number): Response => new Response(body, { status, headers: textHeaders });
@@ -169,7 +156,7 @@ function makeGate(mode: "coalesce" | "serialize", first: Turn): Gate {
  * All correctness-critical machinery (verify, ACK-early, per-session concurrency, background, drain)
  * is internal.
  */
-export function githubChannel(agent: Agent, options: GithubChannelOptions): GithubChannel {
+export function githubChannel(agent: Agent, options: GithubChannelOptions): (req: Request) => Promise<FetchResult> {
   const { secret, on } = options;
   // ONE gate per session, across all modes — so a session never starts a second background loop
   // (which would collide on the engine lease and silently drop a delivery). The gate's mode is fixed
@@ -221,7 +208,7 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
     })();
   };
 
-  const fetch = async (req: Request): Promise<GithubFetchResult> => {
+  const fetch = async (req: Request): Promise<FetchResult> => {
     if (req.method !== "POST") return { response: reply("POST only\n", 405) };
     // Cap the body BEFORE verifying: this endpoint is public/unauthenticated, so an unbounded read
     // would let any client exhaust memory (a Content-Length check is bypassable with chunked bodies).
@@ -279,5 +266,5 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): Gith
     };
   };
 
-  return { fetch };
+  return fetch; // the channel IS a mountable handler (like createInvokeHandler), not a { fetch } wrapper
 }

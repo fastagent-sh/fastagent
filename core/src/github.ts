@@ -5,9 +5,7 @@
  */
 export {
   githubChannel,
-  type GithubChannel,
   type GithubChannelOptions,
   type GithubDelivery,
-  type GithubFetchResult,
   type GithubRun,
 } from "./channels/github.ts";
