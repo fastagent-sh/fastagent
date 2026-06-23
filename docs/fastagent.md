@@ -46,6 +46,8 @@ You can build products such as multi-channel assistants or A2A task systems on t
 | Document | Purpose |
 |---|---|
 | [SPEC](SPEC.md) | Locked v0.1 Agent Handler contract |
+| [quickstart](quickstart.md) | From an installed CLI to a running, deployable agent |
+| [github](github.md) | The GitHub webhook channel: declare via `config.channels`, serve on Node or serverless |
 | [core-design](core-design.md) | The pi reference implementation and current core architecture |
 | [positioning](positioning.md) | Product strategy, wedge, risks, and boundaries |
 | [comparisons](comparisons.md) | Comparison with Eve, Flue, OpenClaw, Claude Agent SDK, OpenCode, and pi |

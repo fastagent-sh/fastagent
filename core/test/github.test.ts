@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type GithubChannelOptions, githubChannel } from "../src/github.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
@@ -17,6 +17,40 @@ function recordingAgent() {
     },
   };
   return { agent, calls };
+}
+
+/**
+ * A faux Agent whose FIRST turn blocks until release(), so the per-session loop stays active while
+ * later deliveries arrive — forces the fold path deterministically. Records each turn's text in order.
+ */
+function gatedAgent() {
+  const order: string[] = [];
+  let release!: () => void;
+  const blocked = new Promise<void>((r) => {
+    release = r;
+  });
+  let first = true;
+  const agent: Agent = {
+    async *invoke(_scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+      if (first) {
+        first = false;
+        await blocked;
+      }
+      order.push(prompt.text);
+      yield { type: "completed" };
+    },
+  };
+  return { agent, order, release: () => release() };
+}
+
+/** Sign an arbitrary raw body (for content-type/parse edge cases the JSON `signed()` helper can't make). */
+function signedRaw(raw: string, headers: Record<string, string>): Request {
+  const sig = `sha256=${createHmac("sha256", SECRET).update(raw).digest("hex")}`;
+  return new Request("http://app/webhook", {
+    method: "POST",
+    body: raw,
+    headers: { "x-hub-signature-256": sig, ...headers },
+  });
 }
 
 const SECRET = "s3cret";
@@ -99,6 +133,43 @@ describe("github channel", () => {
     expect(routed).toBe(false);
   });
 
+  it("a verified body that isn't JSON is 400, no routing", async () => {
+    const { agent, calls } = recordingAgent();
+    let routed = false;
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on: () => {
+        routed = true;
+      },
+    });
+    const { response } = await ch(
+      signedRaw("not json{", { "x-github-event": "pull_request", "x-github-delivery": "j1" }),
+    );
+    expect(response.status).toBe(400);
+    expect(routed).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a verified form body without a payload field is 400", async () => {
+    const { agent } = recordingAgent();
+    let routed = false;
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on: () => {
+        routed = true;
+      },
+    });
+    const { response } = await ch(
+      signedRaw("foo=bar", {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-github-event": "pull_request",
+        "x-github-delivery": "f1",
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(routed).toBe(false);
+  });
+
   it("routes a verified PR event: 202, pre-extracted fields, agent invoked after drain", async () => {
     const { agent, calls } = recordingAgent();
     let seen: import("../src/github.ts").GithubDelivery | undefined;
@@ -156,6 +227,45 @@ describe("github channel", () => {
     expect(seen).toMatchObject({ event: "pull_request", action: "opened", repo: "o/r", number: 7 });
     await background;
     expect(calls).toEqual([{ session: "s", text: "x" }]);
+  });
+
+  it("coalesce (default): deliveries during a run collapse into one re-run of the LATEST", async () => {
+    const { agent, order, release } = gatedAgent();
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on(d, run) {
+        run({ session: "s", text: d.action ?? "" }); // default mode = coalesce
+      },
+    });
+    const r1 = await ch(signed({ action: "a" }, { "x-github-event": "issue_comment", "x-github-delivery": "a" }));
+    await new Promise((r) => setTimeout(r, 5)); // loop starts; first turn (a) blocks, gate stays open
+    await ch(signed({ action: "b" }, { "x-github-event": "issue_comment", "x-github-delivery": "b" })); // collapsed
+    const r3 = await ch(signed({ action: "c" }, { "x-github-event": "issue_comment", "x-github-delivery": "c" })); // latest
+    release();
+    await Promise.all([r1.background, r3.background]);
+    expect(order).toEqual(["a", "c"]); // b folded away; ≤1 in flight, only first + latest ran
+  });
+
+  it("mixing concurrency modes on one session warns and never drops the delivery", async () => {
+    const { agent, order, release } = gatedAgent();
+    const warnings: string[] = [];
+    const spy = vi.spyOn(console, "warn").mockImplementation((m) => {
+      warnings.push(String(m));
+    });
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on(d, run) {
+        run({ session: "s", text: d.action ?? "", concurrency: d.action === "a" ? "coalesce" : "serialize" });
+      },
+    });
+    const r1 = await ch(signed({ action: "a" }, { "x-github-event": "issue_comment", "x-github-delivery": "a" }));
+    await new Promise((r) => setTimeout(r, 5)); // coalesce gate active for session s
+    const r2 = await ch(signed({ action: "b" }, { "x-github-event": "issue_comment", "x-github-delivery": "b" })); // serialize → mismatch
+    release();
+    await Promise.all([r1.background, r2.background]);
+    expect(warnings.some((w) => /mixes concurrency modes/.test(w))).toBe(true);
+    expect(order).toEqual(["a", "b"]); // kept the first mode, ran both — not dropped
+    spy.mockRestore();
   });
 
   it("serialize: every same-session delivery runs in arrival order, none dropped", async () => {

@@ -4,13 +4,15 @@
  * The developer (often an AI coding agent) writes ONLY the routing `on(delivery, run)`: which
  * deliveries map to which `{ session, prompt }`. Everything correctness-critical is implicit and
  * unreachable — HMAC verification, `ping`/unhandled deliveries → 2xx, ACK-early (202 before the
- * turn runs), per-session concurrency (coalesce-to-latest), background execution + drain. The point:
+ * turn runs), per-session concurrency (coalesce/serialize), background execution + drain. The point:
  * the failure modes a reviewer keeps catching in hand-written webhook glue (lost ACK timing, dropped
- * re-reviews, swallowed failures) are not in the surface, so neither a human nor an AI can write
- * them here.
+ * re-reviews) are not in the surface, so neither a human nor an AI can write them here.
  *
  * The agent acts back via `gh` (agent-native), so the channel owns no OUTBOUND credentials — only
- * `secret`, for inbound verification. (A credential resolver / typed tools are a later option.)
+ * `secret`, for inbound verification. NOT yet solved: a turn that fails AFTER the 202 only surfaces
+ * in server logs — the trigger (e.g. the PR author) sees nothing and can't retry, since the channel
+ * has no way to report back. Surfacing turn status (a credential resolver / status API) is a later
+ * option; until then, failures are observable to operators, not to the responsible party.
  */
 import { verify } from "@octokit/webhooks-methods";
 import type { Schema } from "@octokit/webhooks-types";
@@ -53,16 +55,12 @@ export interface GithubDelivery {
  *   - "coalesce" (default): only the latest matters — ≤1 in flight per session; deliveries during a
  *     run collapse into one re-run of the LATEST turn afterward (PR push → review latest; rebuild);
  *   - "serialize": every delivery matters, in order — a per-session FIFO queue, one at a time, none
- *     dropped (comment-command bots, command sequences);
- *   - "reject": fail-fast via the engine lease (a second concurrent same-session turn fails).
+ *     dropped (comment-command bots, command sequences).
+ * Both modes gate the session to ≤1 in-flight turn, so the channel never collides on the engine lease.
  * Independent triggers (each delivery is its own task) need no mode — give them distinct sessions.
  * At-most-once (dedup by delivery id) is an orthogonal concern, not a concurrency mode.
  */
-export type GithubRun = (turn: {
-  session: string;
-  text: string;
-  concurrency?: "coalesce" | "serialize" | "reject";
-}) => void;
+export type GithubRun = (turn: { session: string; text: string; concurrency?: "coalesce" | "serialize" }) => void;
 
 export interface GithubChannelOptions {
   /** Webhook secret — verifies inbound deliveries (HMAC-SHA256 over the raw body). */
@@ -118,7 +116,7 @@ type Concurrency = NonNullable<Parameters<GithubRun>[0]["concurrency"]>;
 
 /** Per-session pending-work holder. One per active session, across modes (see schedule). */
 interface Gate {
-  /** Fixed by the first delivery for the session; "reject" never uses a gate. */
+  /** Fixed by the first delivery for the session (a later mismatch warns; see schedule). */
   mode: "coalesce" | "serialize";
   add(turn: Turn): void;
   take(): Turn | undefined;
@@ -171,13 +169,16 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): (req
   if (typeof on !== "function") {
     throw new Error("githubChannel: `on` must be a function (delivery, run) => void | Promise<void>");
   }
-  // ONE gate per session, across all modes — so a session never starts a second background loop
+  // ONE gate per session, across both modes — so a session never starts a second background loop
   // (which would collide on the engine lease and silently drop a delivery). The gate's mode is fixed
   // by the first delivery for that session; it holds pending work per that mode (coalesce: the latest
   // only; serialize: a FIFO queue).
   const gates = new Map<string, Gate>();
 
-  // A failed turn must never wedge or silently drop a session's pending work: surface it, keep going.
+  // The gate runs ≤1 turn per session at a time, and distinct sessions use distinct engine leases, so
+  // the channel never collides on the lease — a caught error here is a GENUINE turn failure, not a
+  // fail-fast rejection. Surface it (don't wedge/drop the rest), but note it ONLY reaches server logs;
+  // the trigger never sees it (see the file header).
   const runTurn = async (session: string, turn: Turn) => {
     try {
       await turn();
@@ -190,13 +191,6 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): (req
   // the host must keep alive — for the delivery that STARTS the loop AND for any that fold into it,
   // so a folded turn isn't left relying solely on the starter's host lifetime (serverless waitUntil).
   const schedule = (session: string, concurrency: Concurrency, turn: Turn): Promise<void> | undefined => {
-    if (concurrency === "reject") {
-      // a concurrent same-session turn hits the engine lease and fails fast (after the ACK)
-      return (async () => {
-        await defer();
-        await runTurn(session, turn);
-      })();
-    }
     const existing = gates.get(session);
     if (existing) {
       if (existing.mode !== concurrency) {
