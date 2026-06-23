@@ -58,6 +58,13 @@ export function assertRoutes(routes: unknown): Routes {
   if (routes === null || typeof routes !== "object") {
     throw new Error(`\`channels\` must return a Routes object (got ${routes === null ? "null" : typeof routes})`);
   }
+  if (Object.keys(routes).length === 0) {
+    // Declaring `channels` is opt-in, so zero routes is a bug (a forgotten return, a conditional that
+    // assembled nothing) — not a deployment that wants the default. Catch it, don't bind an all-404 server.
+    throw new Error(
+      "`channels` returned no routes \u2014 drop `channels` to serve the default POST /invoke, or return at least one route",
+    );
+  }
   for (const [key, handler] of Object.entries(routes)) {
     if (typeof handler !== "function") {
       throw new Error(`\`channels\` route "${key}" must be a handler function (got ${typeof handler})`);

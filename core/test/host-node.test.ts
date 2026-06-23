@@ -35,6 +35,10 @@ describe("host/node: assertRoutes", () => {
     expect(() => assertRoutes("nope")).toThrow(/Routes object/);
     expect(() => assertRoutes({ "POST /x": 1 })).toThrow(/handler function/);
   });
+
+  it("rejects an empty route table (the same silent-empty-server it guards against)", () => {
+    expect(() => assertRoutes({})).toThrow(/no routes/);
+  });
 });
 
 describe("host/node: serveNode", () => {
