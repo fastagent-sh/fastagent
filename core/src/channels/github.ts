@@ -255,6 +255,12 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): (req
     const requests: { session: string; concurrency: Concurrency; turn: Turn }[] = [];
     const delivery = toDelivery(event, req.headers.get("x-github-delivery") ?? "", payload);
     const run: GithubRun = ({ session, text, concurrency = "coalesce" }) => {
+      // TS types this to the two modes, but a .js/.mjs config can pass a typo ("serialise", a stale
+      // "reject"); without this it would silently fall through to coalesce and fold/drop deliveries the
+      // deployer meant to serialize. Fail visibly instead.
+      if (concurrency !== "coalesce" && concurrency !== "serialize") {
+        throw new Error(`github run: unknown concurrency "${concurrency}" (use "coalesce" or "serialize")`);
+      }
       requests.push({
         session,
         concurrency,

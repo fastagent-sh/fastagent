@@ -27,13 +27,14 @@ const textHeaders = { "content-type": "text/plain" };
  * 405 when the path exists under another method, 404 otherwise. No params/wildcards — channels mount
  * at fixed paths.
  */
+/** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
+function parseRouteKey(key: string): { method?: string; path: string } {
+  const sp = key.indexOf(" ");
+  return sp === -1 ? { path: key } : { method: key.slice(0, sp).toUpperCase(), path: key.slice(sp + 1) };
+}
+
 export function router(routes: Routes): ChannelHandler {
-  const entries = Object.entries(routes).map(([key, handler]) => {
-    const sp = key.indexOf(" ");
-    return sp === -1
-      ? { method: undefined as string | undefined, path: key, handler }
-      : { method: key.slice(0, sp).toUpperCase(), path: key.slice(sp + 1), handler };
-  });
+  const entries = Object.entries(routes).map(([key, handler]) => ({ ...parseRouteKey(key), handler }));
   return (req) => {
     const { pathname } = new URL(req.url);
     const onPath = entries.filter((e) => e.path === pathname);
@@ -68,6 +69,13 @@ export function assertRoutes(routes: unknown): Routes {
   for (const [key, handler] of Object.entries(routes)) {
     if (typeof handler !== "function") {
       throw new Error(`\`channels\` route "${key}" must be a handler function (got ${typeof handler})`);
+    }
+    // The path must start with "/": router matches it against `new URL(req.url).pathname` (always
+    // leading-slash), so a missing slash or stray whitespace would bind an unreachable, all-404 route.
+    if (!parseRouteKey(key).path.startsWith("/")) {
+      throw new Error(
+        `\`channels\` route key "${key}" must be "/path" or "METHOD /path" — the path must start with "/"`,
+      );
     }
   }
   return routes as Routes;
