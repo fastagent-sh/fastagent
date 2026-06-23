@@ -44,6 +44,28 @@ export function router(routes: Routes): ChannelHandler {
   };
 }
 
+/**
+ * Validate a channels-factory result before serving (fail visibly, not a silent empty server). The
+ * factory is meant to be synchronous: an `async channels` returns a Promise, which `router` would see
+ * as zero routes; a non-object or a non-function route value would 404/500 obscurely later.
+ */
+export function assertRoutes(routes: unknown): Routes {
+  if (typeof (routes as { then?: unknown })?.then === "function") {
+    throw new Error(
+      "`channels` must be synchronous and return a Routes object, but it returned a Promise \u2014 do any async setup at the config module's top level, then return the routes synchronously",
+    );
+  }
+  if (routes === null || typeof routes !== "object") {
+    throw new Error(`\`channels\` must return a Routes object (got ${routes === null ? "null" : typeof routes})`);
+  }
+  for (const [key, handler] of Object.entries(routes)) {
+    if (typeof handler !== "function") {
+      throw new Error(`\`channels\` route "${key}" must be a handler function (got ${typeof handler})`);
+    }
+  }
+  return routes as Routes;
+}
+
 /** A running Node host. */
 export interface NodeHost {
   /** Resolves with the bound port once listening (useful for port 0); rejects on a bind error

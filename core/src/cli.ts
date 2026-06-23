@@ -20,7 +20,7 @@ import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import type { Agent } from "./agent.ts";
 import { createInvokeHandler } from "./channels/http.ts";
-import { type NodeHost, type Routes, router, serveNode } from "./host/node.ts";
+import { type NodeHost, type Routes, assertRoutes, router, serveNode } from "./host/node.ts";
 import type { FastagentConfig } from "./engines/pi/config.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
@@ -475,7 +475,9 @@ async function runStart(): Promise<void> {
  * or the default invoke channel at POST /invoke when none are declared (zero-config still runs).
  */
 function routesFor(config: FastagentConfig, agent: Agent): Routes {
-  return config.channels ? config.channels(agent) : { "POST /invoke": createInvokeHandler(agent) };
+  // assertRoutes fails visibly if config.channels is misdeclared (e.g. async → returns a Promise),
+  // rather than binding a server with zero routes. (Wrapped in tryStartup at the call sites.)
+  return config.channels ? assertRoutes(config.channels(agent)) : { "POST /invoke": createInvokeHandler(agent) };
 }
 
 /**

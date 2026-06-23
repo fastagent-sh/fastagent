@@ -23,6 +23,7 @@ export { createInvokeHandler, nodeListener } from "./channels/http.ts";
 // platform lifecycle (binding, background, drain); router composes a Routes table; both consume only
 // the channel-agnostic HostResult. `fastagent start`/`dev` use these to serve `config.channels`.
 export {
+  assertRoutes,
   type ChannelHandler,
   type HostResult,
   type NodeHost,

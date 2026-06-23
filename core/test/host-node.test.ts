@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { type Routes, router, serveNode } from "../src/host/node.ts";
+import { type Routes, assertRoutes, router, serveNode } from "../src/host/node.ts";
 
 describe("host/node: router", () => {
   const routes: Routes = {
@@ -16,6 +16,24 @@ describe("host/node: router", () => {
     expect(((await handle(req("DELETE", "/any"))) as Response).status).toBe(200); // method-agnostic key
     expect(((await handle(req("GET", "/webhook"))) as Response).status).toBe(405); // path exists, wrong method
     expect(((await handle(req("GET", "/missing"))) as Response).status).toBe(404);
+  });
+});
+
+describe("host/node: assertRoutes", () => {
+  it("accepts a synchronous Routes object of handlers", () => {
+    const routes = { "POST /x": () => new Response(null) };
+    expect(assertRoutes(routes)).toBe(routes);
+  });
+
+  it("fails visibly when the factory is async (returns a Promise)", () => {
+    // what `channels: async (agent) => ({...})` produces
+    expect(() => assertRoutes(Promise.resolve({ "POST /x": () => new Response(null) }))).toThrow(/synchronous/);
+  });
+
+  it("rejects non-objects and non-function route values", () => {
+    expect(() => assertRoutes(null)).toThrow(/Routes object/);
+    expect(() => assertRoutes("nope")).toThrow(/Routes object/);
+    expect(() => assertRoutes({ "POST /x": 1 })).toThrow(/handler function/);
   });
 });
 
