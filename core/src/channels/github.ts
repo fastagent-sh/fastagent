@@ -153,22 +153,47 @@ function makeGate(mode: "coalesce" | "serialize", first: Turn): Gate {
 }
 
 /**
+ * The channel's option contract, checked at construction so a misconfig (e.g. an unset `secret` env
+ * var passed as `process.env.X!`) fails visibly here, not as a per-delivery 500 later.
+ */
+function assertChannelOptions(options: GithubChannelOptions): void {
+  if (typeof options.secret !== "string" || options.secret === "") {
+    throw new Error(
+      "githubChannel: `secret` must be a non-empty string (the webhook secret; e.g. set GITHUB_WEBHOOK_SECRET)",
+    );
+  }
+  if (typeof options.on !== "function") {
+    throw new Error("githubChannel: `on` must be a function (delivery, run) => void | Promise<void>");
+  }
+}
+
+/**
+ * The contract for a single `run({...})` routing call, checked BEFORE the ACK (mirrors the HTTP
+ * channel validating its body) so a malformed call — a .js/.mjs config passing a non-string session
+ * (e.g. `session: delivery.repo` on a repo-less event), non-string text, or a typo'd concurrency —
+ * fails visibly rather than 202-then-failing post-ACK in session setup (invisible to the trigger).
+ */
+function assertRunArgs(turn: { session: unknown; text: unknown; concurrency?: unknown }): void {
+  if (typeof turn.session !== "string" || turn.session === "") {
+    throw new Error(`github run: session must be a non-empty string (got ${typeof turn.session})`);
+  }
+  if (typeof turn.text !== "string") {
+    throw new Error(`github run: text must be a string (got ${typeof turn.text})`);
+  }
+  const concurrency = turn.concurrency ?? "coalesce";
+  if (concurrency !== "coalesce" && concurrency !== "serialize") {
+    throw new Error(`github run: unknown concurrency "${concurrency}" (use "coalesce" or "serialize")`);
+  }
+}
+
+/**
  * Build a GitHub channel for `agent`. Returns a Fetch handler to mount and a `drain` for shutdown.
  * All correctness-critical machinery (verify, ACK-early, per-session concurrency, background, drain)
  * is internal.
  */
 export function githubChannel(agent: Agent, options: GithubChannelOptions): (req: Request) => Promise<FetchResult> {
+  assertChannelOptions(options); // fail visibly at construction, not as a per-delivery 500
   const { secret, on } = options;
-  // Fail visibly at construction (startup), not as a 500 on every signed delivery: an unset env var
-  // (`secret: process.env.X!`) would otherwise reach verify() as undefined and throw per-request.
-  if (typeof secret !== "string" || secret === "") {
-    throw new Error(
-      "githubChannel: `secret` must be a non-empty string (the webhook secret; e.g. set GITHUB_WEBHOOK_SECRET)",
-    );
-  }
-  if (typeof on !== "function") {
-    throw new Error("githubChannel: `on` must be a function (delivery, run) => void | Promise<void>");
-  }
   // ONE gate per session, across both modes — so a session never starts a second background loop
   // (which would collide on the engine lease and silently drop a delivery). The gate's mode is fixed
   // by the first delivery for that session; it holds pending work per that mode (coalesce: the latest
@@ -254,23 +279,9 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): (req
     // could begin while `fetch` is still awaiting `on`, breaking ACK-early for async routing.
     const requests: { session: string; concurrency: Concurrency; turn: Turn }[] = [];
     const delivery = toDelivery(event, req.headers.get("x-github-delivery") ?? "", payload);
-    const run: GithubRun = ({ session, text, concurrency = "coalesce" }) => {
-      // Validate run's args BEFORE the ACK (mirrors the HTTP channel validating its body). A .js/.mjs
-      // config can pass a non-string session/text (e.g. `session: delivery.repo` on an event with no
-      // repository → undefined); unchecked, that 202s and then fails post-ACK in session setup —
-      // invisible to the trigger, not retried. Throw here → surfaced before the ACK instead.
-      if (typeof session !== "string" || session === "") {
-        throw new Error(`github run: session must be a non-empty string (got ${typeof session})`);
-      }
-      if (typeof text !== "string") {
-        throw new Error(`github run: text must be a string (got ${typeof text})`);
-      }
-      // TS types this to the two modes, but a .js/.mjs config can pass a typo ("serialise", a stale
-      // "reject"); without this it would silently fall through to coalesce and fold/drop deliveries the
-      // deployer meant to serialize. Fail visibly instead.
-      if (concurrency !== "coalesce" && concurrency !== "serialize") {
-        throw new Error(`github run: unknown concurrency "${concurrency}" (use "coalesce" or "serialize")`);
-      }
+    const run: GithubRun = (turn) => {
+      assertRunArgs(turn); // full contract for a routing call, checked before the ACK
+      const { session, text, concurrency = "coalesce" } = turn;
       requests.push({
         session,
         concurrency,

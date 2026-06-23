@@ -29,6 +29,22 @@ function parseRouteKey(key: string): { method?: string; path: string } {
 }
 
 /**
+ * Is `path` exactly a pathname `router` could match? router compares stored paths to
+ * `new URL(req.url).pathname`, so a valid path must equal what URL parsing yields for it — leading
+ * "/", no whitespace/encoded chars, no query/fragment. Validating against the REAL matching semantics
+ * is complete by construction, unlike a blocklist of known-bad formats.
+ */
+function isMatchablePath(path: string): boolean {
+  if (!path.startsWith("/")) return false;
+  try {
+    const u = new URL(path, "http://h");
+    return u.pathname === path && u.search === "" && u.hash === "";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Compose a {@link Routes} table into one handler: exact pathname match (optionally method-qualified),
  * 405 when the path exists under another method, 404 otherwise. No params/wildcards — channels mount
  * at fixed paths.
@@ -70,13 +86,12 @@ export function assertRoutes(routes: unknown): Routes {
     if (typeof handler !== "function") {
       throw new Error(`\`channels\` route "${key}" must be a handler function (got ${typeof handler})`);
     }
-    // router matches the path against `new URL(req.url).pathname` — a leading-slash, whitespace-free
-    // string with no query/fragment. A key that deviates (missing slash, stray space, "?"/"#") would
-    // bind an unreachable, all-404 route; reject it so the misconfig fails at startup instead.
+    // The path must be one router can actually match (see isMatchablePath) — else it binds an
+    // unreachable, all-404 route. Validated against the real matching semantics, not a format blocklist.
     const { path } = parseRouteKey(key);
-    if (!path.startsWith("/") || /[\s?#]/.test(path)) {
+    if (!isMatchablePath(path)) {
       throw new Error(
-        `\`channels\` route key "${key}" must be "/path" or "METHOD /path" — a plain pathname starting with "/" (no whitespace, query, or fragment)`,
+        `\`channels\` route key "${key}" must be "/path" or "METHOD /path" — the path must be a plain URL pathname (leading "/", no whitespace, query, or fragment)`,
       );
     }
   }

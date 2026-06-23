@@ -46,6 +46,7 @@ describe("host/node: assertRoutes", () => {
     expect(() => assertRoutes({ "POST  /webhook": h })).toThrow(/pathname/); // double space → path " /webhook"
     expect(() => assertRoutes({ "POST /webhook ": h })).toThrow(/pathname/); // trailing space
     expect(() => assertRoutes({ "GET /health?x=1": h })).toThrow(/pathname/); // query string
+    expect(() => assertRoutes({ "POST //webhook": h })).toThrow(/pathname/); // // → URL reads it as a host; a blocklist would miss this, round-trip catches it
   });
 });
 
