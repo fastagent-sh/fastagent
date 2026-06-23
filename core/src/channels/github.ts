@@ -158,6 +158,16 @@ function makeGate(mode: "coalesce" | "serialize", first: Turn): Gate {
  */
 export function githubChannel(agent: Agent, options: GithubChannelOptions): (req: Request) => Promise<FetchResult> {
   const { secret, on } = options;
+  // Fail visibly at construction (startup), not as a 500 on every signed delivery: an unset env var
+  // (`secret: process.env.X!`) would otherwise reach verify() as undefined and throw per-request.
+  if (typeof secret !== "string" || secret === "") {
+    throw new Error(
+      "githubChannel: `secret` must be a non-empty string (the webhook secret; e.g. set GITHUB_WEBHOOK_SECRET)",
+    );
+  }
+  if (typeof on !== "function") {
+    throw new Error("githubChannel: `on` must be a function (delivery, run) => void | Promise<void>");
+  }
   // ONE gate per session, across all modes — so a session never starts a second background loop
   // (which would collide on the engine lease and silently drop a delivery). The gate's mode is fixed
   // by the first delivery for that session; it holds pending work per that mode (coalesce: the latest

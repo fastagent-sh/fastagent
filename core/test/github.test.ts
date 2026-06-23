@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { githubChannel } from "../src/github.ts";
+import { type GithubChannelOptions, githubChannel } from "../src/github.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
 /** A faux Agent that records invocations (contract-only; proves the channel works with any Agent). */
@@ -51,6 +51,14 @@ describe("github channel", () => {
       const src = await readFile(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
       expect(src).not.toMatch(/from "node:/);
     }
+  });
+
+  it("fails visibly at construction on a missing/empty secret or non-function on", () => {
+    const { agent } = recordingAgent();
+    const bad = (opts: Partial<GithubChannelOptions>) => () => githubChannel(agent, opts as GithubChannelOptions);
+    expect(bad({ secret: undefined, on: () => {} })).toThrow(/secret/);
+    expect(bad({ secret: "", on: () => {} })).toThrow(/secret/);
+    expect(bad({ secret: SECRET, on: undefined })).toThrow(/on/);
   });
 
   it("rejects non-POST with 405", async () => {

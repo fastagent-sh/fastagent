@@ -316,7 +316,10 @@ async function serveOnce(): Promise<void> {
   reportAgentsSkillsTools(a);
   await reportAvailableGlobalSkills(a.definition);
   // dev == deployed: serve the same channels the artifact would (default invoke when none declared).
-  serve(routesFor(a.config, a.agent), portFlag ?? a.config.http?.port ?? 8787);
+  // routesFor runs config.channels(agent), which may throw on a misconfig (e.g. an unset secret) —
+  // surface it as a clean startup error, not an unhandled stack.
+  const routes = tryStartup(() => routesFor(a.config, a.agent));
+  serve(routes, portFlag ?? a.config.http?.port ?? 8787);
 }
 
 /**
@@ -456,10 +459,8 @@ async function runStart(): Promise<void> {
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
-  const host = serve(
-    routesFor(config, agent),
-    portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787,
-  );
+  const routes = tryStartup(() => routesFor(config, agent));
+  const host = serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787);
   // Production graceful shutdown: a host (fly.io, k8s) sends SIGTERM. Close FIRST (stop accepting),
   // then drain — so work accepted mid-shutdown is included, not killed by exit.
   process.on("SIGTERM", async () => {
@@ -515,6 +516,15 @@ function failStartup(error: unknown): never {
   if (error instanceof Error && error.constructor === Error) console.error(error.message);
   else console.error(error);
   process.exit(1);
+}
+
+/** Run a synchronous startup step, routing a thrown Error through {@link failStartup} (clean message). */
+function tryStartup<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (error) {
+    failStartup(error);
+  }
 }
 
 function reportDefinitionWarnings(
