@@ -412,7 +412,8 @@ describe("github channel", () => {
         });
       },
     });
-    // The handler rejects (the host turns that into a 500 + log) — surfaced, not a silent coalesce.
+    // At the handler level this surfaces as a rejection (not a silent coalesce); the Node host turns a
+    // handler rejection into a 500 + server log — verified in host-node.test.ts.
     await expect(ch(signed(PR_OPENED.body, PR_OPENED.headers))).rejects.toThrow(/unknown concurrency/);
   });
 

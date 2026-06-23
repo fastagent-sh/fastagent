@@ -22,17 +22,17 @@ export type Routes = Record<string, ChannelHandler>;
 
 const textHeaders = { "content-type": "text/plain" };
 
-/**
- * Compose a {@link Routes} table into one handler: exact pathname match (optionally method-qualified),
- * 405 when the path exists under another method, 404 otherwise. No params/wildcards — channels mount
- * at fixed paths.
- */
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 function parseRouteKey(key: string): { method?: string; path: string } {
   const sp = key.indexOf(" ");
   return sp === -1 ? { path: key } : { method: key.slice(0, sp).toUpperCase(), path: key.slice(sp + 1) };
 }
 
+/**
+ * Compose a {@link Routes} table into one handler: exact pathname match (optionally method-qualified),
+ * 405 when the path exists under another method, 404 otherwise. No params/wildcards — channels mount
+ * at fixed paths.
+ */
 export function router(routes: Routes): ChannelHandler {
   const entries = Object.entries(routes).map(([key, handler]) => ({ ...parseRouteKey(key), handler }));
   return (req) => {

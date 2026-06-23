@@ -121,8 +121,11 @@ async function pump(
     } as RequestInit & { duplex: "half" });
     response = await handler(request);
   } catch (error) {
+    // A handler exception is operator-relevant: log it server-side (some channels' only failure sink),
+    // and return a GENERIC body — don't leak the internal message to the client.
+    console.error(`[host] request handler failed: ${String(error)}`);
     if (!res.headersSent) res.writeHead(500, textHeaders);
-    res.end(`internal error: ${(error as Error).message}\n`);
+    res.end("internal error\n");
     return;
   }
 

@@ -255,6 +255,16 @@ export function githubChannel(agent: Agent, options: GithubChannelOptions): (req
     const requests: { session: string; concurrency: Concurrency; turn: Turn }[] = [];
     const delivery = toDelivery(event, req.headers.get("x-github-delivery") ?? "", payload);
     const run: GithubRun = ({ session, text, concurrency = "coalesce" }) => {
+      // Validate run's args BEFORE the ACK (mirrors the HTTP channel validating its body). A .js/.mjs
+      // config can pass a non-string session/text (e.g. `session: delivery.repo` on an event with no
+      // repository → undefined); unchecked, that 202s and then fails post-ACK in session setup —
+      // invisible to the trigger, not retried. Throw here → surfaced before the ACK instead.
+      if (typeof session !== "string" || session === "") {
+        throw new Error(`github run: session must be a non-empty string (got ${typeof session})`);
+      }
+      if (typeof text !== "string") {
+        throw new Error(`github run: text must be a string (got ${typeof text})`);
+      }
       // TS types this to the two modes, but a .js/.mjs config can pass a typo ("serialise", a stale
       // "reject"); without this it would silently fall through to coalesce and fold/drop deliveries the
       // deployer meant to serialize. Fail visibly instead.

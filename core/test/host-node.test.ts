@@ -72,6 +72,26 @@ describe("host/node: serveNode", () => {
     await host.close();
   });
 
+  it("turns a handler exception into a 500, logs it, and does not leak the message to the client", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((m) => {
+      errors.push(String(m));
+    });
+    const host = serveNode(
+      () => {
+        throw new Error("boom-secret-detail");
+      },
+      { port: 0 },
+    );
+    const port = await host.listening;
+    const res = await fetch(`http://127.0.0.1:${port}/x`, { method: "POST" });
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain("boom-secret-detail"); // generic body, no leak to the client
+    expect(errors.some((e) => e.includes("boom-secret-detail"))).toBe(true); // but logged operator-side
+    spy.mockRestore();
+    await host.close();
+  });
+
   it("a rejecting background is observed (no unhandled rejection) and still drains", async () => {
     const errors: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((m) => {
