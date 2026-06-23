@@ -1,18 +1,17 @@
 /**
- * GitHub channel: verified webhook ingress → agent turns, optimized for AI-authored glue.
+ * GitHub channel: verified webhook ingress → agent turns.
  *
- * The developer (often an AI coding agent) writes ONLY the routing `on(delivery, run)`: which
- * deliveries map to which `{ session, prompt }`. Everything correctness-critical is implicit and
- * unreachable — HMAC verification, `ping`/unhandled deliveries → 2xx, ACK-early (202 before the
- * turn runs), per-session concurrency (coalesce/serialize), background execution + drain. The point:
- * the failure modes a reviewer keeps catching in hand-written webhook glue (lost ACK timing, dropped
- * re-reviews) are not in the surface, so neither a human nor an AI can write them here.
+ * The developer writes ONLY the routing `on(event)`: which deliveries map to which `{ session, text }`
+ * intents. Everything else is internal — HMAC verification, body cap, `application/json` AND
+ * `x-www-form-urlencoded`, `ping`/unhandled → 2xx. The agent acts back via `gh` (agent-native), so the
+ * channel owns no OUTBOUND credentials — only `secret`, for inbound verification.
  *
- * The agent acts back via `gh` (agent-native), so the channel owns no OUTBOUND credentials — only
- * `secret`, for inbound verification. NOT yet solved: a turn that fails AFTER the 202 only surfaces
- * in server logs — the trigger (e.g. the PR author) sees nothing and can't retry, since the channel
- * has no way to report back. Surfacing turn status (a credential resolver / status API) is a later
- * option; until then, failures are observable to operators, not to the responsible party.
+ * Execution model: the endpoint ACKs 202 immediately and runs each turn fire-and-forget on this
+ * (long-running) process — the event loop keeps it alive to completion. Concurrency safety is the
+ * engine's per-session lease (a second concurrent same-session turn fails fast). A turn that fails
+ * after the 202 only surfaces in server logs; the trigger (e.g. the PR author) sees nothing and can't
+ * retry, and in-flight turns are lost on shutdown/redeploy — durable execution (queue + retry) is the
+ * real fix for both, deferred until there's a consumer.
  */
 import { verify } from "@octokit/webhooks-methods";
 import type { Schema } from "@octokit/webhooks-types";
@@ -23,286 +22,88 @@ import { readBodyCapped } from "./body.ts";
 /** Raw body cap before verification — GitHub caps webhook payloads at 25 MB; reject larger early. */
 const MAX_WEBHOOK_BYTES = 25 << 20;
 
-/** A verified delivery: common fields pre-extracted for ergonomic routing, plus the raw payload. */
-export interface GithubDelivery {
+/** A verified GitHub webhook event. Header fields plus the official typed payload. */
+export interface GithubEvent {
   /** `X-GitHub-Event` (e.g. "pull_request", "issue_comment"). */
   event: string;
-  /** `payload.action` (e.g. "opened"), when present. */
+  /** `payload.action` (e.g. "opened"), when present — the usual routing discriminant. */
   action?: string;
-  /** `X-GitHub-Delivery` — unique per delivery (for app-level dedup, if ever needed). */
+  /** `X-GitHub-Delivery` — unique per delivery. */
   deliveryId: string;
-  /** "owner/repo", from `payload.repository.full_name`, when present. */
-  repo?: string;
-  /** PR or issue number, when present. */
-  number?: number;
-  /** `payload.sender.login`, when present. */
-  sender?: string;
-  /** `payload.installation.id` (GitHub App), when present. */
-  installationId?: number;
   /**
-   * The native GitHub event payload, typed via `@octokit/webhooks-types` (the official source). It's
-   * the union of all events; narrow it for event-specific fields, e.g. `if ("pull_request" in
-   * delivery.payload)` or `if (delivery.payload.action === "opened")`. The pre-extracted fields above
-   * cover most routing without narrowing.
+   * The native payload, typed via `@octokit/webhooks-types` (the official source). It's the union of
+   * all events; narrow it for event-specific fields, e.g. `if ("pull_request" in event.payload)`.
    */
   payload: Schema;
 }
 
-/**
- * Run the agent for a delivery. Fire-and-ACK-early: schedules the turn, returns immediately.
- * `concurrency` is PER-CALL because one channel routes many event types with different semantics
- * (map your trigger type to a mode):
- *   - "coalesce" (default): only the latest matters — ≤1 in flight per session; deliveries during a
- *     run collapse into one re-run of the LATEST turn afterward (PR push → review latest; rebuild);
- *   - "serialize": every delivery matters, in order — a per-session FIFO queue, one at a time, none
- *     dropped (comment-command bots, command sequences).
- * Both modes gate the session to ≤1 in-flight turn, so the channel never collides on the engine lease.
- * Independent triggers (each delivery is its own task) need no mode — give them distinct sessions.
- * At-most-once (dedup by delivery id) is an orthogonal concern, not a concurrency mode.
- */
-export type GithubRun = (turn: { session: string; text: string; concurrency?: "coalesce" | "serialize" }) => void;
+/** What `on` returns per acted-on delivery: a session + the prompt text for the agent turn. */
+export interface Intent {
+  session: string;
+  text: string;
+}
 
 export interface GithubChannelOptions {
   /** Webhook secret — verifies inbound deliveries (HMAC-SHA256 over the raw body). */
   secret: string;
-  /** Route a verified delivery: call `run({ session, text })` for the deliveries this agent acts on. */
-  on: (delivery: GithubDelivery, run: GithubRun) => void | Promise<void>;
+  /** Map a verified event to the intents this agent acts on (empty array = ignore). */
+  on: (event: GithubEvent) => Intent[];
 }
-
-/**
- * What the handler returns: the 202 to send immediately (ACK-early), plus the post-ACK turn work as
- * `background` — already running, handed to the host to keep alive past the response (serverless
- * `ctx.waitUntil(background)`, or the Node host's `serveNode` which tracks + drains it). `undefined`
- * when the delivery scheduled no new work. Structurally a host `HostResult`, so the returned handler
- * mounts directly in a `Routes` table; kept un-named/internal to avoid a duplicate public type.
- */
-type FetchResult = { response: Response; background?: Promise<unknown> };
 
 const textHeaders = { "content-type": "text/plain" };
 const reply = (body: string, status: number): Response => new Response(body, { status, headers: textHeaders });
 
 /**
- * Yield a macrotask so `fetch` returns the 202 before ANY turn work begins — including the agent's
- * synchronous setup at the start of `invoke()` (lease/harness/auth). This is the channel's ACK-early
- * guarantee, independent of what `invoke()` does and of which host keeps `background` alive.
+ * Build a GitHub webhook channel for `agent`: a Fetch handler to mount at your webhook route (POST).
  */
-const defer = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-
-/** Pre-extract the common fields from a native GitHub payload (no full normalization). */
-function toDelivery(event: string, deliveryId: string, payload: Record<string, unknown>): GithubDelivery {
-  const obj = (v: unknown): Record<string, unknown> =>
-    v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-  const repository = obj(payload.repository);
-  const pull = obj(payload.pull_request);
-  const issue = obj(payload.issue);
-  const sender = obj(payload.sender);
-  const installation = obj(payload.installation);
-  const num = pull.number ?? issue.number ?? payload.number;
-  return {
-    event,
-    action: typeof payload.action === "string" ? payload.action : undefined,
-    deliveryId,
-    repo: typeof repository.full_name === "string" ? repository.full_name : undefined,
-    number: typeof num === "number" ? num : undefined,
-    sender: typeof sender.login === "string" ? sender.login : undefined,
-    installationId: typeof installation.id === "number" ? installation.id : undefined,
-    // Trust boundary: the verified body is a GitHub event — expose it under the official typed union.
-    payload: payload as unknown as Schema,
-  };
-}
-
-type Turn = () => Promise<void>;
-type Concurrency = NonNullable<Parameters<GithubRun>[0]["concurrency"]>;
-
-/** Per-session pending-work holder. One per active session, across modes (see schedule). */
-interface Gate {
-  /** Fixed by the first delivery for the session (a later mismatch warns; see schedule). */
-  mode: "coalesce" | "serialize";
-  add(turn: Turn): void;
-  take(): Turn | undefined;
-  /** The in-flight drain loop's promise — returned to every delivery (starter AND folded) so each
-   *  can hand it to its host (e.g. serverless `ctx.waitUntil`), not just the one that started it. */
-  loop?: Promise<void>;
-}
-
-function makeGate(mode: "coalesce" | "serialize", first: Turn): Gate {
-  if (mode === "serialize") {
-    // Every delivery, in arrival order — a FIFO queue.
-    const q: Turn[] = [first];
-    return {
-      mode,
-      add: (t) => {
-        q.push(t);
-      },
-      take: () => q.shift(),
-    };
-  }
-  // Coalesce — only the latest matters; deliveries during a run collapse into the next take.
-  let latest: Turn | undefined = first;
-  return {
-    mode,
-    add: (t) => {
-      latest = t;
-    },
-    take: () => {
-      const t = latest;
-      latest = undefined;
-      return t;
-    },
-  };
-}
-
-/**
- * The channel's option contract, checked at construction so a misconfig (e.g. an unset `secret` env
- * var passed as `process.env.X!`) fails visibly here, not as a per-delivery 500 later.
- */
-function assertChannelOptions(options: GithubChannelOptions): void {
-  if (typeof options.secret !== "string" || options.secret === "") {
-    throw new Error(
-      "githubChannel: `secret` must be a non-empty string (the webhook secret; e.g. set GITHUB_WEBHOOK_SECRET)",
-    );
-  }
-  if (typeof options.on !== "function") {
-    throw new Error("githubChannel: `on` must be a function (delivery, run) => void | Promise<void>");
-  }
-}
-
-/**
- * The contract for a single `run({...})` routing call, checked BEFORE the ACK (mirrors the HTTP
- * channel validating its body) so a malformed call — a .js/.mjs config passing a non-string session
- * (e.g. `session: delivery.repo` on a repo-less event), non-string text, or a typo'd concurrency —
- * fails visibly rather than 202-then-failing post-ACK in session setup (invisible to the trigger).
- */
-function assertRunArgs(turn: { session: unknown; text: unknown; concurrency?: unknown }): void {
-  if (typeof turn.session !== "string" || turn.session === "") {
-    throw new Error(`github run: session must be a non-empty string (got ${typeof turn.session})`);
-  }
-  if (typeof turn.text !== "string") {
-    throw new Error(`github run: text must be a string (got ${typeof turn.text})`);
-  }
-  const concurrency = turn.concurrency ?? "coalesce";
-  if (concurrency !== "coalesce" && concurrency !== "serialize") {
-    throw new Error(`github run: unknown concurrency "${concurrency}" (use "coalesce" or "serialize")`);
-  }
-}
-
-/**
- * Build a GitHub channel for `agent`. Returns a Fetch handler to mount and a `drain` for shutdown.
- * All correctness-critical machinery (verify, ACK-early, per-session concurrency, background, drain)
- * is internal.
- */
-export function githubChannel(agent: Agent, options: GithubChannelOptions): (req: Request) => Promise<FetchResult> {
-  assertChannelOptions(options); // fail visibly at construction, not as a per-delivery 500
-  const { secret, on } = options;
-  // ONE gate per session, across both modes — so a session never starts a second background loop
-  // (which would collide on the engine lease and silently drop a delivery). The gate's mode is fixed
-  // by the first delivery for that session; it holds pending work per that mode (coalesce: the latest
-  // only; serialize: a FIFO queue).
-  const gates = new Map<string, Gate>();
-
-  // The gate runs ≤1 turn per session at a time, and distinct sessions use distinct engine leases, so
-  // the channel never collides on the lease — a caught error here is a GENUINE turn failure, not a
-  // fail-fast rejection. Surface it (don't wedge/drop the rest), but note it ONLY reaches server logs;
-  // the trigger never sees it (see the file header).
-  const runTurn = async (session: string, turn: Turn) => {
-    try {
-      await turn();
-    } catch (error) {
-      console.error(`[github] turn failed for ${session}: ${String(error)}`);
-    }
-  };
-
-  // Schedule a session's turn per its trigger type (see GithubRun). Returns the post-ACK loop promise
-  // the host must keep alive — for the delivery that STARTS the loop AND for any that fold into it,
-  // so a folded turn isn't left relying solely on the starter's host lifetime (serverless waitUntil).
-  const schedule = (session: string, concurrency: Concurrency, turn: Turn): Promise<void> | undefined => {
-    const existing = gates.get(session);
-    if (existing) {
-      if (existing.mode !== concurrency) {
-        // Mixing modes on one session is incoherent (is it "latest wins" or "all in order"?). Keep
-        // the first mode and surface the mismatch — never silently drop the delivery.
-        console.warn(
-          `[github] session "${session}" mixes concurrency modes ("${existing.mode}" then "${concurrency}"); using "${existing.mode}"`,
-        );
-      }
-      existing.add(turn);
-      return existing.loop; // fold under the SAME loop, and return it so this delivery's host pins it too
-    }
-    const gate = makeGate(concurrency, turn);
-    gates.set(session, gate);
-    gate.loop = (async () => {
-      await defer(); // ACK-early: let fetch return the 202 before the turn's setup runs
-      try {
-        for (let t = gate.take(); t; t = gate.take()) await runTurn(session, t);
-      } finally {
-        gates.delete(session);
-      }
-    })();
-    return gate.loop;
-  };
-
-  const fetch = async (req: Request): Promise<FetchResult> => {
-    if (req.method !== "POST") return { response: reply("POST only\n", 405) };
+export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions): (req: Request) => Promise<Response> {
+  return async (req) => {
+    if (req.method !== "POST") return reply("POST only\n", 405);
     // Cap the body BEFORE verifying: this endpoint is public/unauthenticated, so an unbounded read
     // would let any client exhaust memory (a Content-Length check is bypassable with chunked bodies).
     const body = await readBodyCapped(req, MAX_WEBHOOK_BYTES);
-    if ("tooLarge" in body) return { response: reply("payload too large\n", 413) };
+    if ("tooLarge" in body) return reply("payload too large\n", 413);
     const raw = body.text;
-    // @octokit/webhooks-methods verify (Web Crypto, runtime-agnostic). It throws on a missing/empty
-    // payload, so fail CLOSED on this public endpoint: treat ANY verify exception as "not verified"
-    // — a clean 401, never an unhandled 500. (An empty body throws inside verify and is rejected here.)
+    // @octokit/webhooks-methods verify (Web Crypto, runtime-agnostic) throws on a missing/empty arg,
+    // so fail CLOSED: treat any verify exception (e.g. an empty body) as a clean 401, never a 500.
     // Signature is over the RAW body for both content types.
     const signature = req.headers.get("x-hub-signature-256");
-    const verified = signature !== null && (await verify(secret, raw, signature).catch(() => false));
-    if (!verified) return { response: reply("invalid signature\n", 401) };
+    if (!signature || !(await verify(secret, raw, signature).catch(() => false))) {
+      return reply("invalid signature\n", 401);
+    }
 
-    const event = req.headers.get("x-github-event") ?? "";
-    if (event === "ping") return { response: new Response(null, { status: 204 }) }; // GitHub setup ping
-    // GitHub signs the raw body for BOTH content types. With `application/x-www-form-urlencoded`
-    // (GitHub's webhook-UI default), the JSON lives in a URL-encoded `payload` field, not the body
-    // itself — parsing the raw form string as JSON would 400 every such delivery.
+    const eventName = req.headers.get("x-github-event") ?? "";
+    if (eventName === "ping") return new Response(null, { status: 204 }); // GitHub setup ping
+    // With `x-www-form-urlencoded` (GitHub's webhook-UI default) the JSON lives in a URL-encoded
+    // `payload` field, not the raw body; for `application/json` the body IS the JSON.
     let json = raw;
     if ((req.headers.get("content-type") ?? "").includes("application/x-www-form-urlencoded")) {
       const field = new URLSearchParams(raw).get("payload");
-      if (field === null) return { response: reply("missing form payload\n", 400) };
+      if (field === null) return reply("missing form payload\n", 400);
       json = field;
     }
     let payload: Record<string, unknown>;
     try {
       payload = JSON.parse(json) as Record<string, unknown>;
     } catch {
-      return { response: reply("invalid json\n", 400) };
+      return reply("invalid json\n", 400);
     }
 
-    // Routing only RECORDS turns; none start until `on` fully resolves. `on` may be async and await
-    // after calling `run` (telemetry, a lookup) — if a turn started at `run` time, its deferred work
-    // could begin while `fetch` is still awaiting `on`, breaking ACK-early for async routing.
-    const requests: { session: string; concurrency: Concurrency; turn: Turn }[] = [];
-    const delivery = toDelivery(event, req.headers.get("x-github-delivery") ?? "", payload);
-    const run: GithubRun = (turn) => {
-      assertRunArgs(turn); // full contract for a routing call, checked before the ACK
-      const { session, text, concurrency = "coalesce" } = turn;
-      requests.push({
-        session,
-        concurrency,
-        turn: async () => {
-          await collect(agent.invoke({ session }, { text })); // throws AgentFailure on a failed turn → sink
-        },
-      });
+    const event: GithubEvent = {
+      event: eventName,
+      action: typeof payload.action === "string" ? payload.action : undefined,
+      deliveryId: req.headers.get("x-github-delivery") ?? "",
+      payload: payload as unknown as Schema, // trust boundary: the verified body is a GitHub event
     };
-    await on(delivery, run);
 
-    // Routing done — now schedule. schedule still defers each turn past this response (ACK-early).
-    const started: Promise<unknown>[] = [];
-    for (const r of requests) {
-      const work = schedule(r.session, r.concurrency, r.turn);
-      if (work) started.push(work);
+    // ACK-early + fire-and-forget: start each turn, return 202 now. The long-running process keeps the
+    // promise alive to completion; .catch prevents an unhandled rejection and logs a post-ACK failure
+    // (the only sink — the trigger never sees it). Same-session concurrency is the engine's lease.
+    for (const { session, text } of on(event)) {
+      void collect(agent.invoke({ session }, { text })).catch((error) =>
+        console.error(`[github] turn failed for ${session}: ${String(error)}`),
+      );
     }
-    return {
-      response: new Response(null, { status: 202 }),
-      background: started.length ? Promise.allSettled(started) : undefined,
-    };
+    return new Response(null, { status: 202 });
   };
-
-  return fetch; // the channel IS a mountable handler (like createInvokeHandler), not a { fetch } wrapper
 }

@@ -6,6 +6,6 @@
 export {
   githubChannel,
   type GithubChannelOptions,
-  type GithubDelivery,
-  type GithubRun,
+  type GithubEvent,
+  type Intent,
 } from "./channels/github.ts";

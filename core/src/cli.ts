@@ -20,7 +20,7 @@ import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import type { Agent } from "./agent.ts";
 import { createInvokeHandler } from "./channels/http.ts";
-import { type NodeHost, type Routes, assertRoutes, router, serveNode } from "./host/node.ts";
+import { type Routes, router, serveNode } from "./host/node.ts";
 import type { FastagentConfig } from "./engines/pi/config.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
@@ -319,10 +319,6 @@ async function serveOnce(): Promise<void> {
   // routesFor runs config.channels(agent), which may throw on a misconfig (e.g. an unset secret) —
   // surface it as a clean startup error, not an unhandled stack.
   const routes = tryStartup(() => routesFor(a.config, a.agent));
-  // The dev worker intentionally does NOT drain on shutdown (unlike `start`, see runStart): the
-  // supervisor SIGTERMs it on every file change for a FAST reload, and any in-flight turn is running
-  // superseded code and is re-triggerable. Draining a multi-minute agent turn before each reload would
-  // wreck the dev loop; dropping accepted work matters in production, not here.
   serve(routes, portFlag ?? a.config.http?.port ?? 8787);
 }
 
@@ -464,14 +460,10 @@ async function runStart(): Promise<void> {
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
   const routes = tryStartup(() => routesFor(config, agent));
-  const host = serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787);
-  // Production graceful shutdown: a host (fly.io, k8s) sends SIGTERM. Close FIRST (stop accepting),
-  // then drain — so work accepted mid-shutdown is included, not killed by exit.
-  process.on("SIGTERM", async () => {
-    await host.close();
-    await host.drain();
-    process.exit(0);
-  });
+  serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787);
+  // No graceful drain: webhook turns run fire-and-forget and outlive a short shutdown grace anyway
+  // (the engine's lease is the only concurrency guard); SIGTERM just exits. In-flight turns are lost
+  // on redeploy — durable execution is the real fix (deferred).
 }
 
 /**
@@ -479,19 +471,16 @@ async function runStart(): Promise<void> {
  * or the default invoke channel at POST /invoke when none are declared (zero-config still runs).
  */
 function routesFor(config: FastagentConfig, agent: Agent): Routes {
-  // assertRoutes fails visibly if config.channels is misdeclared (e.g. async → returns a Promise),
-  // rather than binding a server with zero routes. (Wrapped in tryStartup at the call sites.)
-  return config.channels ? assertRoutes(config.channels(agent)) : { "POST /invoke": createInvokeHandler(agent) };
+  return config.channels ? config.channels(agent) : { "POST /invoke": createInvokeHandler(agent) };
 }
 
 /**
- * Serve `routes` via the Node host. The host owns mechanism (binding, background, drain); the CLI
- * owns the policy here: a clean message + exit(1) on a bind failure (EADDRINUSE is a startup problem,
- * not a bug), the dev-supervisor ready signal, and the startup log. Returns the host for shutdown.
+ * Serve `routes` via the Node host. serveNode owns binding; the CLI owns policy: a clean message +
+ * exit(1) on a bind failure (EADDRINUSE is a startup problem, not a bug), the dev-supervisor ready
+ * signal, and the startup log.
  */
-function serve(routes: Routes, port: number): NodeHost {
-  const host = serveNode(router(routes), { port });
-  host.listening.then(
+function serve(routes: Routes, port: number): void {
+  serveNode(router(routes), { port }).listening.then(
     (boundPort) => {
       process.send?.({ type: "ready" }); // tell the dev supervisor we bound (no-op without an IPC channel)
       console.error(`[fastagent] http channel on :${boundPort}`);
@@ -503,7 +492,6 @@ function serve(routes: Routes, port: number): NodeHost {
       process.exit(1);
     },
   );
-  return host;
 }
 
 /** .env (secrets) → process.env. Only a missing file is normal; surface anything else. */
