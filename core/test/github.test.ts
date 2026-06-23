@@ -417,6 +417,21 @@ describe("github channel", () => {
     await expect(ch(signed(PR_OPENED.body, PR_OPENED.headers))).rejects.toThrow(/unknown concurrency/);
   });
 
+  it("a non-string/empty session or non-string text fails visibly before the ACK", async () => {
+    const make = (turn: { session?: unknown; text?: unknown }) =>
+      githubChannel(recordingAgent().agent, {
+        secret: SECRET,
+        on(_d, run) {
+          // untyped on purpose: a .js/.mjs config could pass these; TS would catch it, JS wouldn't
+          (run as (t: unknown) => void)(turn);
+        },
+      });
+    const req = () => signed(PR_OPENED.body, PR_OPENED.headers);
+    await expect(make({ session: undefined, text: "x" })(req())).rejects.toThrow(/session must be/);
+    await expect(make({ session: "", text: "x" })(req())).rejects.toThrow(/session must be/);
+    await expect(make({ session: "s", text: undefined })(req())).rejects.toThrow(/text must be a string/);
+  });
+
   it("an unhandled but verified event acks 202 with no background work", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, {

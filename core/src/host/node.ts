@@ -70,11 +70,13 @@ export function assertRoutes(routes: unknown): Routes {
     if (typeof handler !== "function") {
       throw new Error(`\`channels\` route "${key}" must be a handler function (got ${typeof handler})`);
     }
-    // The path must start with "/": router matches it against `new URL(req.url).pathname` (always
-    // leading-slash), so a missing slash or stray whitespace would bind an unreachable, all-404 route.
-    if (!parseRouteKey(key).path.startsWith("/")) {
+    // router matches the path against `new URL(req.url).pathname` — a leading-slash, whitespace-free
+    // string with no query/fragment. A key that deviates (missing slash, stray space, "?"/"#") would
+    // bind an unreachable, all-404 route; reject it so the misconfig fails at startup instead.
+    const { path } = parseRouteKey(key);
+    if (!path.startsWith("/") || /[\s?#]/.test(path)) {
       throw new Error(
-        `\`channels\` route key "${key}" must be "/path" or "METHOD /path" — the path must start with "/"`,
+        `\`channels\` route key "${key}" must be "/path" or "METHOD /path" — a plain pathname starting with "/" (no whitespace, query, or fragment)`,
       );
     }
   }

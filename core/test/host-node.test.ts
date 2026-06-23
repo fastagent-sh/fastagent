@@ -40,9 +40,12 @@ describe("host/node: assertRoutes", () => {
     expect(() => assertRoutes({})).toThrow(/no routes/);
   });
 
-  it("rejects a route key whose path doesn't start with '/' (would be unreachable)", () => {
-    expect(() => assertRoutes({ "POST webhook": () => new Response(null) })).toThrow(/must start with/);
-    expect(() => assertRoutes({ "POST  /webhook": () => new Response(null) })).toThrow(/must start with/); // stray space
+  it("rejects route keys that wouldn't match a pathname (no slash / whitespace / query / fragment)", () => {
+    const h = () => new Response(null);
+    expect(() => assertRoutes({ "POST webhook": h })).toThrow(/pathname/); // missing leading slash
+    expect(() => assertRoutes({ "POST  /webhook": h })).toThrow(/pathname/); // double space → path " /webhook"
+    expect(() => assertRoutes({ "POST /webhook ": h })).toThrow(/pathname/); // trailing space
+    expect(() => assertRoutes({ "GET /health?x=1": h })).toThrow(/pathname/); // query string
   });
 });
 

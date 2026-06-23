@@ -319,6 +319,10 @@ async function serveOnce(): Promise<void> {
   // routesFor runs config.channels(agent), which may throw on a misconfig (e.g. an unset secret) —
   // surface it as a clean startup error, not an unhandled stack.
   const routes = tryStartup(() => routesFor(a.config, a.agent));
+  // The dev worker intentionally does NOT drain on shutdown (unlike `start`, see runStart): the
+  // supervisor SIGTERMs it on every file change for a FAST reload, and any in-flight turn is running
+  // superseded code and is re-triggerable. Draining a multi-minute agent turn before each reload would
+  // wreck the dev loop; dropping accepted work matters in production, not here.
   serve(routes, portFlag ?? a.config.http?.port ?? 8787);
 }
 
