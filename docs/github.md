@@ -6,11 +6,11 @@ status: current
 
 # GitHub channel
 
-Turn an agent into a GitHub webhook responder: a verified delivery routes to an agent turn, and the
-agent acts back through `gh` (agent-native — the channel holds no outbound credentials). The channel
-is the **N axis** (ingress); how it's served is the **K axis** (host).
+Turn an agent into a GitHub webhook responder: a verified delivery routes to one or more agent turns,
+and the agent acts back through `gh` (agent-native — the channel holds no outbound credentials). The
+channel is the **N axis** (ingress); how it's served is the **K axis** (host).
 
-## Declare it (the common path)
+## Declare it
 
 A deployment's HTTP surface is declared in `fastagent.config.ts` via `channels: (agent) => Routes` —
 no hand-written server. `fastagent start` / `fastagent dev` serve it.
@@ -21,79 +21,64 @@ import { githubChannel } from "@kid7st/fastagent/github";
 
 export default defineConfig({
   model: "openai-codex/gpt-5.5",
-  channels: (agent) => {
-    const webhook = githubChannel(agent, {
-      secret: process.env.GITHUB_WEBHOOK_SECRET ?? "", // throws at startup if unset/empty
-      on(delivery, run) {
-        if (delivery.event === "pull_request" && delivery.action === "opened") {
-          run({ session: `pr-${delivery.repo}#${delivery.number}`, text: `Review #${delivery.number}` });
-        }
-      },
-    });
-    return { "POST /webhook": webhook, "GET /health": () => new Response("ok") };
-  },
+  channels: (agent) => ({
+    "POST /webhook": githubChannel(agent, {
+      secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
+      // Map a verified event to the intents this agent acts on (empty array = ignore).
+      on: (event) =>
+        event.event === "pull_request" && event.action === "opened"
+          ? [{ session: `pr-${event.deliveryId}`, text: "Review the pull request in this event." }]
+          : [],
+    }),
+    "GET /health": () => new Response("ok"),
+  }),
 });
 ```
 
-You write **only** the routing `on(delivery, run)`. Everything correctness-critical is internal and
-unreachable: HMAC verification, `ping`/unhandled deliveries → 2xx, a body-size cap (413),
-`application/json` **and** `application/x-www-form-urlencoded` bodies, ACK-early (the 202 returns
-before any turn work — even an async `on`), per-session concurrency, and post-ACK execution + drain.
+You write **only** the routing `on(event) => Intent[]`. Everything else is internal: HMAC
+verification, a body-size cap (413), `application/json` **and** `application/x-www-form-urlencoded`
+bodies (GitHub's webhook-UI default), and `ping`/unhandled deliveries → 2xx. Point the GitHub
+webhook's URL at `…/webhook` and set its secret to `GITHUB_WEBHOOK_SECRET`.
 
-Point the GitHub webhook's URL at `…/webhook` and set its secret to `GITHUB_WEBHOOK_SECRET`. With no
-`channels` field, a deployment serves the default invoke channel at `POST /invoke`.
+### `GithubEvent` and `Intent`
 
-### `run({ session, text, concurrency? })`
+`on` receives a `GithubEvent` and returns `Intent[]`:
 
-`concurrency` is per call, because one channel routes many event types with different needs — map
-your trigger type to a mode (both gate the session to ≤1 in-flight turn, so the engine lease is never
-hit):
+- `GithubEvent` = `{ event, action?, deliveryId, payload }`. `event` is the `X-GitHub-Event` header,
+  `deliveryId` the `X-GitHub-Delivery` header, `action` is `payload.action` (the usual discriminant).
+  `payload` is the full event, typed via `@octokit/webhooks-types` (the official source) — narrow it
+  for event-specific fields, e.g. `if ("pull_request" in event.payload)`.
+- `Intent` = `{ session, text }` — a session id and the prompt text for an agent turn. Return one per
+  delivery you act on (or several for fan-out), `[]` to ignore.
 
-| mode | trigger type | behavior |
-|---|---|---|
-| `"coalesce"` (default) | state-latest (PR push → review latest) | deliveries during a run collapse into one re-run of the **latest** |
-| `"serialize"` | event-stream (comment commands) | per-session FIFO, one at a time, none dropped |
+## Execution model
 
-Independent triggers (each delivery its own task) need no mode — give them **distinct sessions**.
-At-most-once (dedup by `deliveryId`) is an orthogonal concern, not a concurrency mode.
-
-`GithubDelivery` pre-extracts the common fields (`event`, `action`, `repo`, `number`, `sender`,
-`installationId`) and carries the full typed `payload` (the `@octokit/webhooks-types` union — narrow
-it, e.g. `if ("pull_request" in delivery.payload)`).
+The endpoint **ACKs 202 immediately** and runs each turn **fire-and-forget** on the long-running
+process — the event loop keeps it alive to completion. There are no concurrency modes: same-session
+concurrency is bounded by the engine's per-session **lease** (a second concurrent same-session turn
+fails fast). For independent work, give each delivery a **distinct session**.
 
 ## Serving (the K axis)
 
-The channel handler returns `{ response, background? }`: the 202 to send now, plus any post-ACK turn
-work the host must keep alive. The host satisfies it with its platform's mechanism.
-
-- **Long-running host (Node / fly.io)** — `fastagent start` uses the bundled Node host (`serveNode`),
-  which runs the handler, keeps `background` alive in-process, and drains in-flight turns on SIGTERM.
-- **Serverless (Cloudflare / Vercel)** — mount the handler yourself and pin `background` with the
-  platform's `waitUntil`:
-
-  ```ts
-  export default {
-    fetch: async (req, env, ctx) => {
-      const { response, background } = await channel(req);
-      if (background) ctx.waitUntil(background);
-      return response;
-    },
-  };
-  ```
-
-  The channel uses only Web-standard APIs (Web Crypto for verification, `@octokit/webhooks-methods`),
-  so it loads on Fetch-only runtimes without Node compatibility.
+The channel is a plain Fetch handler (`(Request) => Response`). On a long-running host (Node / fly.io)
+`fastagent start` serves it via the bundled Node host (`serveNode` + `router`). The channel reads only
+Web-standard + `@octokit/webhooks-*` APIs, so it *loads* on Fetch-only runtimes — but its fire-and-forget
+turns need a process that stays alive, so **serverless is not supported** until durable execution exists.
 
 ## Deliberate divergence from `@octokit/webhooks`
 
 The channel reuses GitHub's official types (`@octokit/webhooks-types`) and verification
-(`@octokit/webhooks-methods`), but **not** the `Webhooks` dispatch/middleware: that awaits handlers
-before responding — the opposite of ACK-early. It also accepts `application/x-www-form-urlencoded`
-(GitHub's webhook-UI default), which `@octokit/webhooks` does not; the channel owns the raw read, so
-the raw-body-preservation hazard that motivates octokit's "JSON only" stance doesn't apply.
+(`@octokit/webhooks-methods`), but **not** the `Webhooks` dispatch/middleware (it awaits handlers
+before responding — the opposite of ACK-early). It also accepts `application/x-www-form-urlencoded`,
+which `@octokit/webhooks` does not; the channel owns the raw read, so the raw-body hazard behind
+octokit's "JSON only" stance doesn't apply.
 
-## Known gap
+## Known gaps
 
-A turn that fails **after** the 202 currently only surfaces in server logs. The trigger (e.g. the PR
-author) sees nothing and can't retry, because the channel has no way to report back. Surfacing turn
-status (a credential resolver / status API) is a later option.
+- A turn that fails **after** the 202 only reaches server logs; the trigger (e.g. the PR author) sees
+  nothing and can't retry.
+- **In-flight turns are lost on shutdown / redeploy.** A short platform grace (e.g. fly.io's default
+  5 s) can't drain a minute-long agent turn anyway, so the channel doesn't try.
+
+The real fix for both is **durable execution** (persist the intent, run it in a worker, retry across
+deploys) — deferred until there's a consumer.
