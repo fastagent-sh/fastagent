@@ -56,7 +56,7 @@ describe("github channel", () => {
   it("rejects non-POST with 405", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, { secret: SECRET, on: () => {} });
-    const { response, background } = await ch.fetch(new Request("http://app/webhook", { method: "GET" }));
+    const { response, background } = await ch(new Request("http://app/webhook", { method: "GET" }));
     expect(response.status).toBe(405);
     expect(background).toBeUndefined();
     expect(calls).toHaveLength(0);
@@ -72,7 +72,7 @@ describe("github channel", () => {
       },
     });
     // valid body, but signed with the wrong secret
-    const { response } = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers, "wrong"));
+    const { response } = await ch(signed(PR_OPENED.body, PR_OPENED.headers, "wrong"));
     expect(response.status).toBe(401);
     expect(routed).toBe(false);
   });
@@ -86,7 +86,7 @@ describe("github channel", () => {
         routed = true;
       },
     });
-    const { response } = await ch.fetch(signed({ zen: "hi" }, { "x-github-event": "ping", "x-github-delivery": "p1" }));
+    const { response } = await ch(signed({ zen: "hi" }, { "x-github-event": "ping", "x-github-delivery": "p1" }));
     expect(response.status).toBe(204);
     expect(routed).toBe(false);
   });
@@ -103,7 +103,7 @@ describe("github channel", () => {
         }
       },
     });
-    const { response, background } = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers));
+    const { response, background } = await ch(signed(PR_OPENED.body, PR_OPENED.headers));
     expect(response.status).toBe(202);
     expect(seen).toMatchObject({
       event: "pull_request",
@@ -132,7 +132,7 @@ describe("github channel", () => {
     });
     const raw = `payload=${encodeURIComponent(JSON.stringify(PR_OPENED.body))}`; // GitHub's form shape
     const sig = `sha256=${createHmac("sha256", SECRET).update(raw).digest("hex")}`; // signed over the raw form body
-    const { response, background } = await ch.fetch(
+    const { response, background } = await ch(
       new Request("http://app/webhook", {
         method: "POST",
         body: raw,
@@ -160,7 +160,7 @@ describe("github channel", () => {
     });
     const pending: Promise<unknown>[] = [];
     for (const action of ["a", "b", "c"]) {
-      const { response, background } = await ch.fetch(
+      const { response, background } = await ch(
         signed({ action }, { "x-github-event": "issue_comment", "x-github-delivery": action }),
       );
       expect(response.status).toBe(202);
@@ -179,7 +179,7 @@ describe("github channel", () => {
       },
     });
     // The channel only DECLARES the work; a serverless host satisfies it with ctx.waitUntil(background).
-    const { response, background } = await ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers));
+    const { response, background } = await ch(signed(PR_OPENED.body, PR_OPENED.headers));
     expect(response.status).toBe(202);
     expect(background).toBeDefined();
     expect(calls).toHaveLength(0); // ACK-early: nothing run before the host keeps it alive
@@ -202,7 +202,7 @@ describe("github channel", () => {
       body: big,
       headers: { "x-github-event": "pull_request", "x-github-delivery": "big" },
     });
-    const { response } = await ch.fetch(req);
+    const { response } = await ch(req);
     expect(response.status).toBe(413); // rejected before HMAC/JSON
     expect(routed).toBe(false);
     expect(calls).toHaveLength(0);
@@ -221,7 +221,7 @@ describe("github channel", () => {
         await slow; // then a slow async step (telemetry / a lookup) — on() stays pending
       },
     });
-    const fetchP = ch.fetch(signed(PR_OPENED.body, PR_OPENED.headers));
+    const fetchP = ch(signed(PR_OPENED.body, PR_OPENED.headers));
     await new Promise((r) => setTimeout(r, 10)); // give macrotasks a chance while on() is pending
     expect(calls).toHaveLength(0); // the turn must NOT have started while on() is pending
     release();
@@ -239,7 +239,7 @@ describe("github channel", () => {
         if (d.event === "pull_request") run({ session: "x", text: "y" }); // not a pull_request here
       },
     });
-    const { response, background } = await ch.fetch(
+    const { response, background } = await ch(
       signed({ action: "labeled" }, { "x-github-event": "label", "x-github-delivery": "d2" }),
     );
     expect(response.status).toBe(202);
