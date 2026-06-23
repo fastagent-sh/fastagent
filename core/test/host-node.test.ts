@@ -39,6 +39,11 @@ describe("host/node: assertRoutes", () => {
   it("rejects an empty route table (the same silent-empty-server it guards against)", () => {
     expect(() => assertRoutes({})).toThrow(/no routes/);
   });
+
+  it("rejects a route key whose path doesn't start with '/' (would be unreachable)", () => {
+    expect(() => assertRoutes({ "POST webhook": () => new Response(null) })).toThrow(/must start with/);
+    expect(() => assertRoutes({ "POST  /webhook": () => new Response(null) })).toThrow(/must start with/); // stray space
+  });
 });
 
 describe("host/node: serveNode", () => {

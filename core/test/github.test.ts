@@ -399,6 +399,23 @@ describe("github channel", () => {
     expect(calls).toEqual([{ session: "s", text: "x" }]);
   });
 
+  it("an unknown concurrency mode (e.g. a .js typo) fails visibly, not silently as coalesce", async () => {
+    const { agent } = recordingAgent();
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on(_d, run) {
+        // a .js/.mjs config could pass a typo'd mode; TS would catch it, JS wouldn't
+        (run as (t: { session: string; text: string; concurrency: string }) => void)({
+          session: "s",
+          text: "x",
+          concurrency: "serialise",
+        });
+      },
+    });
+    // The handler rejects (the host turns that into a 500 + log) — surfaced, not a silent coalesce.
+    await expect(ch(signed(PR_OPENED.body, PR_OPENED.headers))).rejects.toThrow(/unknown concurrency/);
+  });
+
   it("an unhandled but verified event acks 202 with no background work", async () => {
     const { agent, calls } = recordingAgent();
     const ch = githubChannel(agent, {
