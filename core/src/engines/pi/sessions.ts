@@ -9,8 +9,8 @@
  *
  * The name carries the `Pi` prefix on purpose: `openOrCreate` returns pi's `Session`,
  * so this port is pi-coupled, not an engine-neutral persistence contract. A neutral
- * session-log port (see docs/session.md) would be a separate abstraction, justified
- * only once a second engine provides the real requirement.
+ * session-log port would be a separate abstraction, justified only once a second engine
+ * provides the real requirement.
  *
  * Continuity contract: same backing store + same session id = same conversation.
  *   - in-memory: continuity bound to the store INSTANCE (gone on restart; tests/embedding);

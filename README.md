@@ -33,7 +33,6 @@ The package ships compiled JavaScript + type declarations (`dist/`). The runtime
 | [quickstart.md](docs/quickstart.md) | **Quickstart**: scaffold → run → add a tool → build/start, end to end |
 | [SPEC.md](docs/SPEC.md) | **Agent Handler protocol**: the engine-neutral contract layer. `status: locked` v0.1 |
 | [core-design.md](docs/core-design.md) | The pi-based reference implementation of the SPEC, plus the N × M × K layering model |
-| [session.md](docs/session.md) | Draft session-admin model: event-sourced conversation DAG, fork, and navigation. `status: design` |
 | [fastagent.md](docs/fastagent.md) | Product index and positioning overview |
 | [positioning.md](docs/positioning.md) · [comparisons.md](docs/comparisons.md) | Strategic positioning and competitive analysis |
 

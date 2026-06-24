@@ -1,11 +1,6 @@
-// Naming conventions across this surface:
-//   - Agent-level entry points: `create…From<input granularity>` (the assembly ladder, see create.ts);
-//   - leaf part constructors read as the part itself (inProcessLease → Lease, piHarnessFactory → PiHarnessFactory);
-//   - resolve* = multi-source precedence decisions; load* = disk → memory (result: Loaded*);
-//   - pi-coupled exports carry pi/Pi; Config = user-authored file shape, Options = function inputs.
-// Module organization: by lifecycle moment + domain — create.ts = configuration time
-// (parts + ladder), invoke.ts = request time (turn mechanism), definition.ts = the
-// definition data domain, config.ts/auth.ts = composition-root support.
+// Naming on this surface: `create…From<input>` = the assembly ladder (create.ts); `resolve*` =
+// multi-source precedence; `load*` = disk → memory (→ `Loaded*`); pi-coupled names carry `pi`/`Pi`;
+// `Config` = user-authored file shape, `Options` = function inputs.
 
 // Protocol contract (neutral, engine-free)
 export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.ts";

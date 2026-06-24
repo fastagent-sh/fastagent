@@ -161,8 +161,6 @@ This gives the reference implementation portable conformance in miniature: two s
 
 **Crash-safe reopen.** A turn that dies mid tool-execution leaves the session with an assistant `tool_use` whose result was never persisted (pi writes the assistant message at `message_end`, *before* the tools run). The stateless retry path — reopen the session, re-invoke — depends on that transcript staying valid, but pi reconciles nothing (neither `buildSessionContext` nor `convertToLlm`), so the next provider call rejects the dangling `tool_use` and the retry fails: a mid-turn crash poisons the session. So the store reconciles on every open of an *existing* session, appending an honest error tool result for each unmatched call — mirroring pi's own `createErrorToolResult` for aborted calls, at the recovery boundary pi's inline abort path cannot reach (the process was already dead). This restores transcript *validity* only; tool side-effect idempotency stays the tool's responsibility (SPEC §6 non-guarantee). The synthetic result's `content` is model-facing (neutral, decision-guiding, no "aborted" misread, no infra leak); the operational marker lives in `details`, which is never sent to the provider.
 
-Full fork/navigation session-admin is a separate draft: see [session](session.md).
-
 ## 8. Same-session concurrency
 
 Core provides only a corruption-prevention floor: one in-flight turn per session.

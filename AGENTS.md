@@ -13,7 +13,6 @@ The stable design center is the Agent Handler contract (`docs/SPEC.md`). The ref
 | `docs/SPEC.md` | The locked v0.1 Agent Handler contract. Do not change its semantics without an explicit decision. |
 | `docs/core-design.md` | The pi reference implementation and current architecture. |
 | `docs/fastagent.md` | Product overview and documentation index (landing page; `status: design`). |
-| `docs/session.md` | Draft session-admin model (not implemented; do not treat as built). |
 | `docs/positioning.md`, `docs/comparisons.md` | Strategy and competitive framing. |
 | `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review tiers). |
 
