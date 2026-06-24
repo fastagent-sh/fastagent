@@ -30,6 +30,7 @@
 import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadRootIgnore } from "./definition.ts";
+import { fastagentVersion } from "./version.ts";
 
 /** Identity persona (clean — it is the system prompt). The complete variant references the tool. */
 function agentsMd(minimal: boolean): string {
@@ -117,14 +118,16 @@ const ENV_EXAMPLE = `# Environment for this agent. Copy to .env (gitignored) and
 # FASTAGENT_SESSIONS_DIR=./fastagent-sessions
 `;
 
-/** package.json for the complete (code-tool) agent: ESM + the deps a defineTool tool imports. */
-function packageJson(name: string): string {
+/** package.json for the complete (code-tool) agent: ESM + the deps a defineTool tool imports.
+ *  The @kid7st/fastagent range tracks THIS build's version (0.x caret locks the minor), so a fresh
+ *  workspace installs a version that actually has the API/exports it was scaffolded against. */
+function packageJson(name: string, version: string): string {
   return `${JSON.stringify(
     {
       name,
       private: true,
       type: "module",
-      dependencies: { "@kid7st/fastagent": "^0.1.0", zod: "^4.0.0" },
+      dependencies: { "@kid7st/fastagent": `^${version}`, zod: "^4.0.0" },
     },
     null,
     2,
@@ -189,7 +192,7 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
   if (!minimal) {
     files.push(
       { rel: join("tools", "word-count.ts"), content: TOOL_TS },
-      { rel: "package.json", content: packageJson(toPackageName(dir)) },
+      { rel: "package.json", content: packageJson(toPackageName(dir), await fastagentVersion()) },
       { rel: ".npmrc", content: NPMRC },
     );
   }

@@ -12,10 +12,10 @@
  *
  * Build is non-destructive to the source: it only writes the (separate) outDir.
  */
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
+import { fastagentVersion } from "./version.ts";
 import {
   type LoadedDefinition,
   bundleAgentDefinition,
@@ -175,7 +175,7 @@ export async function buildPiArtifact(
       );
     }
     const manifest: ArtifactManifest = {
-      fastagentVersion: await readFastagentVersion(),
+      fastagentVersion: await fastagentVersion(),
       engine: "pi",
       builtAt: new Date().toISOString(),
       model,
@@ -229,12 +229,3 @@ async function realpathBase(p: string): Promise<string> {
 }
 
 /** Read this package's version for manifest provenance (best-effort; defaults if unreadable). */
-async function readFastagentVersion(): Promise<string> {
-  try {
-    const pkgPath = fileURLToPath(new URL("../../../package.json", import.meta.url));
-    const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as { version?: string };
-    return pkg.version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
