@@ -4,19 +4,21 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { fauxAssistantMessage, registerFauxProvider, type FauxResponseStep } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { inMemorySessionStore, jsonlSessionStore, type AgentEvent, type PiSessionStore } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
+import { makeFaux } from "./faux.ts";
 
 /** Agent over an injected store (the store is the variable under test). */
 function makeAgent(sessions: PiSessionStore, responses: FauxResponseStep[]) {
-  const faux = registerFauxProvider();
+  const { faux, models } = makeFaux();
   faux.setResponses(responses);
   return createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
       sessions,
       env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
       model: faux.getModel(),
       systemPrompt: "test",
     }),

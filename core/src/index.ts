@@ -110,12 +110,9 @@ export {
   inMemorySessionStore,
   jsonlSessionStore,
 } from "./engines/pi/sessions.ts";
-export {
-  type Auth,
-  type AuthResolver,
-  type PiAuthOptions,
-  envAuth,
-  piOAuthAuth,
-  probeAuthSource,
-  resolvePiAuth,
-} from "./engines/pi/auth.ts";
+// pi reference implementation — auth + the Models collection (model resolution +
+// per-request auth). createPiModels builds the default collection (built-in
+// providers; pi OAuth file → env vars); piCredentialStore is the auth.json reader.
+export { type PiAuthOptions, piCredentialStore } from "./engines/pi/auth.ts";
+export { type CreatePiModelsOptions, createPiModels, probeAuthSource } from "./engines/pi/models.ts";
+export type { Models } from "@earendil-works/pi-ai";

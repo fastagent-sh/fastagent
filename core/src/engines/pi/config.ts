@@ -29,7 +29,7 @@ import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { getModel, getModels, getProviders } from "@earendil-works/pi-ai";
+import type { Models } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./harness.ts";
 
 export interface FastagentConfig {
@@ -118,15 +118,19 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   return { config: c, path };
 }
 
-/** Resolve "provider/modelId" → a pi Model. Unknown specs throw a clear error (getModel returns undefined). */
-export function resolveModel(spec: string): AnyModel {
+/**
+ * Resolve "provider/modelId" → a pi Model from the given collection. Unknown
+ * specs throw a clear error. The model is looked up in `models` so the harness
+ * resolves its auth from the same collection.
+ */
+export function resolveModel(models: Models, spec: string): AnyModel {
   const slash = spec.indexOf("/");
   if (slash < 1 || slash === spec.length - 1) {
     throw new Error(`model must be "provider/modelId" (e.g. "openai-codex/gpt-5.5"), got "${spec}"`);
   }
   const provider = spec.slice(0, slash);
   const modelId = spec.slice(slash + 1);
-  const model = getModel(provider as never, modelId as never) as AnyModel | undefined;
+  const model = models.getModel(provider, modelId) as AnyModel | undefined;
   if (!model) {
     throw new Error(
       `unknown model "${spec}" (provider "${provider}" / id "${modelId}" not in registry); run \`fastagent models\` to list available specs`,
@@ -136,14 +140,14 @@ export function resolveModel(spec: string): AnyModel {
 }
 
 /**
- * All registered "provider/modelId" specs, sorted — the discovery list behind `fastagent models`.
- * Sourced from pi-ai's registry (getProviders × getModels), so it stays in sync with what
- * {@link resolveModel} accepts. Pure (no IO); the CLI prints it to stdout.
+ * All registered "provider/modelId" specs in `models`, sorted — the discovery
+ * list behind `fastagent models`. Sourced from the same collection {@link resolveModel}
+ * accepts, so they stay in sync. Pure (no IO); the CLI prints it to stdout.
  */
-export function listModels(): string[] {
+export function listModels(models: Models): string[] {
   const specs: string[] = [];
-  for (const provider of getProviders()) {
-    for (const model of getModels(provider)) specs.push(`${provider}/${model.id}`);
+  for (const provider of models.getProviders()) {
+    for (const model of provider.getModels()) specs.push(`${provider.id}/${model.id}`);
   }
   return specs.sort();
 }

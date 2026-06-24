@@ -27,6 +27,7 @@ import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { createPiAgentFromDefinition, piDefaultTools, resolveTools } from "./create.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, ensureStateDirSelfIgnored } from "./definition.ts";
+import { createPiModels } from "./models.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
 
@@ -87,8 +88,10 @@ export async function createPiAgentFromWorkspace(
   const stateDir = join(dir, ".fastagent");
   await mkdir(stateDir, { recursive: true });
   await ensureStateDirSelfIgnored(stateDir);
+  const models = createPiModels();
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
-    model: resolveModel(modelSpec),
+    models,
+    model: resolveModel(models, modelSpec),
     tools,
     // Definition-only by default (the agent is its folder); globals are an explicit
     // authoring-fidelity opt-in, never the deploy path (see create.ts ladder rule 2 + core-design §6).

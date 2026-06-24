@@ -15,6 +15,7 @@
 import { mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
+import { createPiModels } from "./models.ts";
 import { fastagentVersion } from "./version.ts";
 import {
   type LoadedDefinition,
@@ -87,7 +88,7 @@ export async function buildPiArtifact(
   }
   // Validate against the registry now, so a typo fails the build instead of being frozen
   // into the manifest and only failing later at start.
-  resolveModel(model);
+  resolveModel(createPiModels(), model);
 
   // Structural guard (the ONLY one): the output must not be the source or contain it — we
   // read src and publish over outDir, so out ⊇ src would destroy the input. realpath so a

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { access, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -147,7 +148,7 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
   it("assembled systemPrompt reaches the model; skills are injected as resources; read tool is present by default", async () => {
     let seenSystemPrompt: string | undefined;
     let seenTools: string[] = [];
-    const faux = registerFauxProvider();
+    const { faux, models } = makeFaux();
     faux.setResponses([
       (context) => {
         seenSystemPrompt = context.systemPrompt;
@@ -157,6 +158,7 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     ]);
 
     const { agent, definition } = await createPiAgentFromDefinition(fixtureDir, {
+      models,
       model: faux.getModel(),
       skillPaths: [], // hermetic: do not scan this dev machine's real globals
     });

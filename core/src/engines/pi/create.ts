@@ -67,11 +67,12 @@ import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
+import type { Models } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
-import type { AuthResolver } from "./auth.ts";
 import type { FastagentConfig } from "./config.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, piHarnessFactory } from "./harness.ts";
+import { createPiModels } from "./models.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
@@ -183,6 +184,12 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
 /** L1 options, grouped by the two-axis model (core-design §6.1). */
 export interface CreatePiAgentOptions {
   // ── M: what the agent is ───────────────────────────────────────────────
+  /**
+   * Provider collection for model requests + auth. Defaults to {@link createPiModels}
+   * (built-in providers; pi OAuth file then env vars). Inject a custom collection
+   * to change providers or auth. {@link model} must belong to it (same provider id).
+   */
+  models?: Models;
   model: AnyModel;
   /**
    * The FINAL assembled prompt (see §2 for assembly from parts), or a
@@ -199,9 +206,6 @@ export interface CreatePiAgentOptions {
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;
-  // ── auth: how it reaches the provider ──────────────────────────────────
-  /** Auth resolution. Defaults to resolvePiAuth() (pi OAuth first, then env vars). */
-  getApiKeyAndHeaders?: AuthResolver;
 }
 
 /** L1: batteries-included assembly. */
@@ -211,11 +215,11 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
     harnessFactory: piHarnessFactory({
       sessions: options.sessions ?? inMemorySessionStore(),
       env: options.env ?? new NodeExecutionEnv({ cwd: process.cwd() }),
+      models: options.models ?? createPiModels(),
       model: options.model,
       systemPrompt: options.systemPrompt,
       tools: options.tools,
       skills: options.skills,
-      getApiKeyAndHeaders: options.getApiKeyAndHeaders,
     }),
   });
 }
@@ -228,6 +232,8 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
  */
 export interface CreatePiAgentFromDefinitionOptions {
   // ── M ──────────────────────────────────────────────────────────────────
+  /** Provider collection for model requests + auth. Defaults to {@link createPiModels}. */
+  models?: Models;
   model: AnyModel;
   /** Override the base prompt (segment ①). Defaults to piBasePrompt({tools}) (engine-inherited). */
   base?: string;
@@ -239,8 +245,6 @@ export interface CreatePiAgentFromDefinitionOptions {
   sessions?: PiSessionStore;
   env?: ExecutionEnv;
   lease?: Lease;
-  // ── auth ───────────────────────────────────────────────────────────────
-  getApiKeyAndHeaders?: AuthResolver;
 }
 
 /**
@@ -257,6 +261,7 @@ export async function createPiAgentFromDefinition(
   const base = options.base ?? piBasePrompt({ tools });
   const agent = createPiAgent({
     // M — assembled here from the definition (no spread: every field deliberate)
+    models: options.models,
     model: options.model,
     // Factory, not a string: re-assembled per invoke so `date` is the date of the
     // turn, not of agent creation (long-running deployments would otherwise serve
@@ -276,7 +281,6 @@ export async function createPiAgentFromDefinition(
     sessions: options.sessions,
     env,
     lease: options.lease,
-    getApiKeyAndHeaders: options.getApiKeyAndHeaders,
   });
   return { agent, definition };
 }

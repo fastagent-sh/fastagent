@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { createPiAgentFromWorkspace, listModels, resolveModel } from "../src/index.ts";
+import { createPiAgentFromWorkspace, createPiModels, listModels, resolveModel } from "../src/index.ts";
 import { loadConfig, resolveModelSpec } from "../src/engines/pi/config.ts";
 import { resolveTools } from "../src/engines/pi/create.ts";
 
@@ -11,7 +11,8 @@ const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
 describe("config: listModels (fastagent models discovery)", () => {
   it("lists well-formed provider/modelId specs, sorted, that resolveModel accepts", () => {
-    const specs = listModels();
+    const models = createPiModels();
+    const specs = listModels(models);
     expect(specs.length).toBeGreaterThan(0);
     // every entry is a "provider/modelId" and round-trips through resolveModel (the list is the
     // discovery surface for exactly what --model / config accepts).
@@ -19,7 +20,7 @@ describe("config: listModels (fastagent models discovery)", () => {
       // provider (no slash) + "/" + non-empty modelId (which MAY contain slashes, e.g.
       // cloudflare-ai-gateway/workers-ai/@cf/...); resolveModel splits on the first slash.
       expect(spec).toMatch(/^[^/]+\/.+$/);
-      expect(() => resolveModel(spec)).not.toThrow();
+      expect(() => resolveModel(models, spec)).not.toThrow();
     }
     expect(specs).toEqual([...specs].sort()); // sorted
     expect(specs).toContain("openai-codex/gpt-5.5"); // the spec used across the repo
@@ -100,14 +101,15 @@ describe("config: resolveTools (append-after-defaults semantics)", () => {
 
 describe("config: resolveModel", () => {
   it('parses "provider/modelId"', () => {
-    const m = resolveModel("openai-codex/gpt-5.5");
+    const m = resolveModel(createPiModels(), "openai-codex/gpt-5.5");
     expect(m.provider).toBe("openai-codex");
     expect(m.id).toBe("gpt-5.5");
   });
 
   it("bad format / unknown model throws a clear error", () => {
-    expect(() => resolveModel("no-slash")).toThrow(/provider\/modelId/);
-    expect(() => resolveModel("nope/nothing")).toThrow(/unknown model/);
+    const models = createPiModels();
+    expect(() => resolveModel(models, "no-slash")).toThrow(/provider\/modelId/);
+    expect(() => resolveModel(models, "nope/nothing")).toThrow(/unknown model/);
   });
 });
 
