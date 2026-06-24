@@ -198,3 +198,21 @@ describe("init: scaffoldWorkspace", () => {
     expect(warnings).toEqual([]);
   });
 });
+
+describe("add: fastagent add github", () => {
+  it("scaffolds channels/github.ts (adapter import + on() glue) and refuses to clobber it", async () => {
+    const dir = await freshDir();
+    const out = await cliInit(["add", "github"], dir);
+    expect(out).toContain("channels/github.ts");
+
+    const src = await readFile(join(dir, "channels", "github.ts"), "utf8");
+    expect(src).toContain('from "@kid7st/fastagent/github"'); // the third-party adapter
+    expect(src).toContain("POST /webhook");
+    expect(src).toContain("on:"); // the app glue stub the user edits
+
+    // A second add must not overwrite authored glue.
+    const out2 = await cliInit(["add", "github"], dir);
+    expect(out2).toMatch(/already exists/);
+    expect(await readFile(join(dir, "channels", "github.ts"), "utf8")).toBe(src);
+  });
+});

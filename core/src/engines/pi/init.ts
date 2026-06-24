@@ -174,6 +174,52 @@ async function exists(p: string): Promise<boolean> {
   );
 }
 
+/** A scaffolded `channels/github.ts`: the third-party adapter import + a starter `on()` to edit. */
+const CHANNEL_GITHUB_TS = `import { githubChannel } from "@kid7st/fastagent/github";
+import type { ChannelModule } from "@kid7st/fastagent";
+
+// A channel = a third-party ADAPTER (githubChannel: verify + parse + ACK) wired to YOUR on() glue.
+// fastagent discovers this file under channels/ and serves the routes it returns. Set the webhook
+// secret in .env (GITHUB_WEBHOOK_SECRET) and point a GitHub webhook (JSON) at POST /webhook.
+const channel: ChannelModule = (agent) => ({
+  "POST /webhook": githubChannel(agent, {
+    secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
+    // Map a verified event to the intents the agent acts on (empty array = ignore). Each review is
+    // INDEPENDENT and idempotent (it reconciles against the PR's existing comments), so use a
+    // distinct per-delivery session (event.deliveryId): overlapping deliveries then run on their
+    // own session without a shared-lease drop.
+    on: (event) => {
+      if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
+        const { repository, pull_request } = event.payload;
+        return [
+          {
+            session: event.deliveryId,
+            text: \`Review pull request #\${pull_request.number} in \${repository.full_name}.\`,
+          },
+        ];
+      }
+      return [];
+    },
+  }),
+});
+
+export default channel;
+`;
+
+/**
+ * Scaffold `channels/<kind>.ts` into {@link dir}. Only `github` today. Never clobbers an existing
+ * file — the `on()` glue is authored content. Returns the written path.
+ */
+export async function scaffoldChannel(dir: string, kind: "github"): Promise<string> {
+  const file = join(dir, "channels", `${kind}.ts`);
+  if (await exists(file)) {
+    throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
+  }
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, CHANNEL_GITHUB_TS, { flag: "wx" });
+  return file;
+}
+
 /**
  * Scaffold a runnable workspace into {@link dir} (created if missing). Default is a complete
  * agent (instructions + skill + a code tool + package.json); `--minimal` is markdown-only.

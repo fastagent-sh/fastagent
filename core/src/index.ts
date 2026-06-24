@@ -14,7 +14,8 @@ export { createInvokeHandler, nodeListener } from "./channels/http.ts";
 // src/github.ts). It ACKs 202 and runs turns fire-and-forget on the long-running process.
 
 // Node host (K-side; a long-running-process target adapter). serveNode binds a route table on
-// node:http; router composes a Routes table. `fastagent start`/`dev` use these to serve `config.channels`.
+// node:http; router composes a Routes table. `fastagent start`/`dev` use these to serve the
+// workspace's discovered channels/.
 export { type ChannelHandler, type Routes, router, serveNode } from "./host/node.ts";
 
 // pi reference implementation — reusable assembly ladder (L1/L2; L0 below)
@@ -37,6 +38,10 @@ export {
   type ToolCollision,
 } from "./engines/pi/tool.ts";
 export { z } from "zod";
+
+// pi reference implementation — channel discovery: a channels/<name>.ts default-exports a
+// ChannelModule ((agent) => Routes); loadChannels merges them, surfacing route collisions.
+export { loadChannels, type ChannelModule, type ChannelCollision } from "./engines/pi/channel.ts";
 
 // pi reference implementation — dev (open a workspace into an agent, authoring posture).
 // The command opener that composes over L2; sibling of createPiAgentFromArtifact (start).

@@ -20,15 +20,16 @@ import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import type { Agent } from "./agent.ts";
 import { createInvokeHandler } from "./channels/http.ts";
+import { text } from "./channels/respond.ts";
 import { type Routes, router, serveNode } from "./host/node.ts";
-import type { FastagentConfig } from "./engines/pi/config.ts";
+import { loadChannels } from "./engines/pi/channel.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
-import { scaffoldWorkspace } from "./engines/pi/init.ts";
+import { scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
 import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
@@ -103,6 +104,7 @@ else if (command === "dev") await runDev();
 else if (command === "chat") await runChat();
 else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
+else if (command === "add") await runAdd();
 else usage(1);
 
 /** `fastagent models`: print every registered "provider/modelId" to stdout (pipe-friendly). */
@@ -192,6 +194,26 @@ async function runInit(): Promise<void> {
   if (rel !== "") console.error(`    cd ${rel}`);
   if (complete && (values["no-install"] || installFailed)) console.error(`    npm install`);
   console.error(`    fastagent dev   # serve locally and iterate`);
+}
+
+/**
+ * `fastagent add github [dir]`: scaffold `channels/<kind>.ts` — the third-party adapter import plus a
+ * starter `on()` to edit. A channel always needs glue, so it is a file (not a config entry). Only
+ * `github` today. Never clobbers an existing file (authored glue is not overwritten).
+ */
+async function runAdd(): Promise<void> {
+  const kind = positionals[1];
+  const target = resolve(positionals[2] ?? ".");
+  if (kind !== "github") {
+    console.error(`usage: fastagent add github [dir]   (the github channel is the only one today)`);
+    process.exit(1);
+  }
+  const file = await scaffoldChannel(target, kind).catch(failStartup);
+  console.error(`[fastagent] created ${relative(target, file)}`);
+  console.error(`  next steps:`);
+  console.error(`    set GITHUB_WEBHOOK_SECRET in .env`);
+  console.error(`    edit channels/github.ts — map events to intents in on()`);
+  console.error(`    fastagent dev   # serve the webhook locally`);
 }
 
 /** Run `npm install` in `cwd` (inherit stdio so the user sees progress). Returns the exit code. */
@@ -315,10 +337,10 @@ async function serveOnce(): Promise<void> {
   await reportAuth(a.modelSpec);
   reportAgentsSkillsTools(a);
   await reportAvailableGlobalSkills(a.definition);
-  // dev == deployed: serve the same channels the artifact would (default invoke when none declared).
-  // routesFor runs config.channels(agent), which may throw on a misconfig (e.g. an unset secret) —
-  // surface it as a clean startup error, not an unhandled stack.
-  const routes = tryStartup(() => routesFor(a.config, a.agent));
+  // dev == deployed: serve the same channels/ the artifact would (default invoke when none declared).
+  // routesFor constructs each discovered channel, which may throw on a misconfig (e.g. an unset
+  // secret) — surface it as a clean startup error, not an unhandled stack.
+  const routes = await routesFor(dir, a.agent).catch(failStartup);
   serve(routes, portFlag ?? a.config.http?.port ?? 8787);
 }
 
@@ -434,7 +456,7 @@ async function runStart(): Promise<void> {
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const { agent, definition, manifest, config, modelSpec, sessionsDir, toolNames, toolCollisions } =
+  const { agent, definition, manifest, modelSpec, sessionsDir, toolNames, toolCollisions } =
     await createPiAgentFromArtifact(dir, {
       model: values.model,
       sessionsDir: values["sessions-dir"] ? resolve(values["sessions-dir"]) : undefined,
@@ -459,7 +481,7 @@ async function runStart(): Promise<void> {
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
-  const routes = tryStartup(() => routesFor(config, agent));
+  const routes = await routesFor(dir, agent).catch(failStartup);
   serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787);
   // No graceful drain: webhook turns run fire-and-forget and outlive a short shutdown grace anyway
   // (the engine's lease is the only concurrency guard); SIGTERM just exits. In-flight turns are lost
@@ -467,11 +489,19 @@ async function runStart(): Promise<void> {
 }
 
 /**
- * The routes this deployment serves: the config's declared channels (passed the assembled agent),
- * or the default invoke channel at POST /invoke when none are declared (zero-config still runs).
+ * The routes this deployment serves: a default `GET /health` (deployment infra; a channel may
+ * override it) plus the workspace's discovered `channels/` — or the default invoke channel at
+ * POST /invoke when none are declared (zero-config still runs). Route collisions are surfaced.
  */
-function routesFor(config: FastagentConfig, agent: Agent): Routes {
-  return config.channels ? config.channels(agent) : { "POST /invoke": createInvokeHandler(agent) };
+async function routesFor(workspaceDir: string, agent: Agent): Promise<Routes> {
+  const { routes, collisions } = await loadChannels(workspaceDir, agent);
+  for (const c of collisions) {
+    console.error(
+      `[fastagent] warn: channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`,
+    );
+  }
+  const channels = Object.keys(routes).length > 0 ? routes : { "POST /invoke": createInvokeHandler(agent) };
+  return { "GET /health": () => text("ok\n", 200), ...channels };
 }
 
 /**
@@ -510,15 +540,6 @@ function failStartup(error: unknown): never {
   if (error instanceof Error && error.constructor === Error) console.error(error.message);
   else console.error(error);
   process.exit(1);
-}
-
-/** Run a synchronous startup step, routing a thrown Error through {@link failStartup} (clean message). */
-function tryStartup<T>(fn: () => T): T {
-  try {
-    return fn();
-  } catch (error) {
-    failStartup(error);
-  }
 }
 
 function reportDefinitionWarnings(

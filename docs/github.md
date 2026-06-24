@@ -10,36 +10,43 @@ Turn an agent into a GitHub webhook responder: a verified delivery routes to one
 and the agent acts back through `gh` (agent-native — the channel holds no outbound credentials). The
 channel is the **N axis** (ingress); how it's served is the **K axis** (host).
 
-## Declare it
+## Add it
 
-A deployment's HTTP surface is declared in `fastagent.config.ts` via `channels: (agent) => Routes` —
-no hand-written server. `fastagent start` / `fastagent dev` serve it.
+A channel is a file under `channels/` (discovered like `tools/`). Scaffold it:
 
-```ts
-import { defineConfig } from "@kid7st/fastagent";
-import { githubChannel } from "@kid7st/fastagent/github";
-
-export default defineConfig({
-  model: "openai-codex/gpt-5.5",
-  channels: (agent) => ({
-    "POST /webhook": githubChannel(agent, {
-      secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
-      // Each review is independent + idempotent (it reconciles against the PR's existing comments), so
-      // use a distinct per-delivery session — overlapping deliveries all run, none dropped.
-      on: (event) => {
-        if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
-          const { repository, pull_request } = event.payload;
-          return [{ session: event.deliveryId, text: `Review #${pull_request.number} in ${repository.full_name}` }];
-        }
-        return [];
-      },
-    }),
-    "GET /health": () => new Response("ok"),
-  }),
-});
+```
+fastagent add github
 ```
 
-You write **only** the routing `on(event) => Intent[]`. Everything else is internal: HMAC
+This writes `channels/github.ts` — the adapter import plus a starter `on()` to edit. A channel module
+default-exports `(agent) => Routes`; `fastagent start` / `fastagent dev` discover and serve it (no
+hand-written server, no config entry — a channel always needs app glue, so it is always a file).
+
+```ts
+// channels/github.ts
+import { githubChannel } from "@kid7st/fastagent/github";
+import type { ChannelModule } from "@kid7st/fastagent";
+
+const channel: ChannelModule = (agent) => ({
+  "POST /webhook": githubChannel(agent, {
+    secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
+    // Each review is independent + idempotent (it reconciles against the PR's existing comments), so
+    // use a distinct per-delivery session — overlapping deliveries all run, none dropped.
+    on: (event) => {
+      if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
+        const { repository, pull_request } = event.payload;
+        return [{ session: event.deliveryId, text: `Review #${pull_request.number} in ${repository.full_name}` }];
+      }
+      return [];
+    },
+  }),
+});
+
+export default channel;
+```
+
+(`GET /health` is provided by the host — you do not declare it.) You write **only** the routing
+`on(event) => Intent[]`. Everything else is internal: HMAC
 verification, a body-size cap (413), `application/json` **and** `application/x-www-form-urlencoded`
 bodies (GitHub's webhook-UI default), and `ping`/unhandled deliveries → 2xx. Point the GitHub
 webhook's URL at `…/webhook` and set its secret to `GITHUB_WEBHOOK_SECRET`.

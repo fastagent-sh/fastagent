@@ -80,19 +80,10 @@ describe("config: loadConfig", () => {
     await expect(loadConfig(dir)).rejects.toThrow(/tools\[0\].*name.*execute/);
   });
 
-  it("accepts a channels factory and rejects a non-function channels", async () => {
-    const ok = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(
-      join(ok, "fastagent.config.mjs"),
-      `export default { channels: (agent) => ({ "POST /webhook": () => new Response(null, { status: 202 }) }) };`,
-    );
-    const { config } = await loadConfig(ok);
-    expect(typeof config.channels).toBe("function");
-
-    // Fresh dir: ESM import() caches by URL, so a non-function must be a different file path.
-    const bad = await mkdtemp(join(tmpdir(), "fa-config-"));
-    await writeFile(join(bad, "fastagent.config.mjs"), `export default { channels: { "POST /x": 1 } };`);
-    await expect(loadConfig(bad)).rejects.toThrow(/"channels" must be a function/);
+  it("rejects a `channels` key (channels are files under channels/, not a config entry)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { channels: (agent) => ({}) };`);
+    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "channels"/);
   });
 });
 

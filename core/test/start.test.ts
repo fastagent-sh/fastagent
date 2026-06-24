@@ -207,3 +207,53 @@ describe("start: createPiAgentFromArtifact", () => {
     expect(config.tools?.map((t) => t.name)).toEqual(["ping"]);
   });
 });
+
+/** Boot the CLI until it binds; return the bound port and a kill fn (the caller stops the server). */
+function cliServe(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ port: number; kill: () => void }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, ...env } });
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`timeout before binding; stderr:\n${stderr}`));
+    }, 8000);
+    child.stderr.on("data", (d) => {
+      stderr += String(d);
+      const m = stderr.match(/http channel on :(\d+)/);
+      if (m) {
+        clearTimeout(timer);
+        resolve({ port: Number(m[1]), kill: () => child.kill("SIGKILL") });
+      }
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`exited (code ${code}) before binding; stderr:\n${stderr}`));
+    });
+  });
+}
+
+describe("start: serves discovered channels/ + a host health route", () => {
+  it("mounts channels/ routes, adds GET /health, and drops the default /invoke when channels exist", async () => {
+    const ws = await mkdtemp(join(tmpdir(), "fa-start-chan-ws-"));
+    await writeFile(join(ws, "AGENTS.md"), "# Chan Bot\n");
+    await writeFile(join(ws, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await mkdir(join(ws, "channels"));
+    // A fake channel (no package import) so the bundled artifact needs no node_modules to load it.
+    await writeFile(
+      join(ws, "channels", "hook.mjs"),
+      `export default () => ({ "POST /webhook": () => new Response("ok", { status: 202 }) });`,
+    );
+    const artifact = await mkdtemp(join(tmpdir(), "fa-start-chan-art-"));
+    await buildPiArtifact(ws, artifact, { force: true });
+
+    const { port, kill } = await cliServe(["start", artifact, "--port", "0", "--sessions-dir", await freshSessions()]);
+    try {
+      expect((await fetch(`http://127.0.0.1:${port}/health`)).status).toBe(200); // host-provided
+      expect((await fetch(`http://127.0.0.1:${port}/webhook`, { method: "POST" })).status).toBe(202); // discovered channel
+      // A declared channel replaces the default invoke channel: POST /invoke is not mounted.
+      expect((await fetch(`http://127.0.0.1:${port}/invoke`, { method: "POST" })).status).toBe(404);
+    } finally {
+      kill();
+    }
+  });
+});
