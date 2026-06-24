@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type GithubEvent, githubChannel } from "../src/github.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
@@ -168,6 +168,53 @@ describe("github channel", () => {
     expect(res.status).toBe(202);
     await flush();
     expect(calls).toHaveLength(0);
+  });
+
+  it("ACK-early: returns 202 BEFORE the turn completes (fire-and-forget)", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((r) => {
+      release = r;
+    });
+    const completed: string[] = [];
+    const agent: Agent = {
+      async *invoke(scope: Scope, _prompt: Prompt): AsyncIterable<AgentEvent> {
+        await blocked; // hold the turn open
+        completed.push(scope.session);
+        yield { type: "completed" };
+      },
+    };
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on: (e) => (e.event === "pull_request" ? [{ session: "s", text: "x" }] : []),
+    });
+    // If the channel awaited the turn to completion, this await would hang (the turn is blocked).
+    const res = await ch(signed(PR_OPENED.body, PR_OPENED.headers));
+    expect(res.status).toBe(202);
+    expect(completed).toHaveLength(0); // 202 returned while the turn is still in flight
+    release();
+    await flush();
+    expect(completed).toEqual(["s"]); // it does run to completion afterward
+  });
+
+  it("a turn that fails after the 202 is caught + logged, not an unhandled rejection", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((m) => {
+      errors.push(String(m));
+    });
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "failed", details: "boom", retryable: false }; // collect throws AgentFailure
+      },
+    };
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on: (e) => (e.event === "pull_request" ? [{ session: "s", text: "x" }] : []),
+    });
+    expect((await ch(signed(PR_OPENED.body, PR_OPENED.headers))).status).toBe(202);
+    await flush();
+    // The lone failure sink (.catch) ran: logged, and (since it ran) not an unhandled rejection.
+    expect(errors.some((e) => /turn failed for s/.test(e) && /boom/.test(e))).toBe(true);
+    spy.mockRestore();
   });
 
   it("depends on no node: builtins (loads on Fetch-only runtimes: Cloudflare/Deno/Bun)", async () => {

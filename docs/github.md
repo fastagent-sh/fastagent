@@ -24,11 +24,15 @@ export default defineConfig({
   channels: (agent) => ({
     "POST /webhook": githubChannel(agent, {
       secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
-      // Map a verified event to the intents this agent acts on (empty array = ignore).
-      on: (event) =>
-        event.event === "pull_request" && event.action === "opened"
-          ? [{ session: `pr-${event.deliveryId}`, text: "Review the pull request in this event." }]
-          : [],
+      // Key the session on the PR's identity (repo#number), not the per-delivery id, so a PR's pushes
+      // share a session and the engine's per-session lease serializes them.
+      on: (event) => {
+        if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
+          const { repository, pull_request } = event.payload;
+          return [{ session: `pr-${repository.full_name}#${pull_request.number}`, text: `Review #${pull_request.number}` }];
+        }
+        return [];
+      },
     }),
     "GET /health": () => new Response("ok"),
   }),
