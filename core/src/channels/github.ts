@@ -52,11 +52,8 @@ export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions
     const body = await readBodyCapped(req, MAX_WEBHOOK_BYTES);
     if ("tooLarge" in body) return text("payload too large\n", 413);
     const raw = body.text;
-    // @octokit/webhooks-methods verify (Web Crypto, runtime-agnostic) throws on a missing/empty arg,
-    // so fail CLOSED: treat any verify exception (e.g. an empty body) as a clean 401, never a 500.
-    // Signature is over the RAW body for both content types.
-    // Fail closed: octokit verify throws on empty/missing args — treat any error as 401, not 500.
-    // Signature is over the raw body (both content types).
+    // Fail closed: @octokit/webhooks-methods verify throws on an empty/missing arg, so treat any verify
+    // error (e.g. an empty body) as a clean 401, not a 500. Signature is over the raw body.
     const signature = req.headers.get("x-hub-signature-256");
     if (!signature || !(await verify(secret, raw, signature).catch(() => false))) {
       return text("invalid signature\n", 401);
