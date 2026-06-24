@@ -204,11 +204,17 @@ describe("add: fastagent add github", () => {
     const dir = await freshDir();
     const out = await cliInit(["add", "github"], dir);
     expect(out).toContain("channels/github.ts");
+    expect(out).toMatch(/npm install/); // the dep was added to package.json
 
     const src = await readFile(join(dir, "channels", "github.ts"), "utf8");
     expect(src).toContain('from "@kid7st/fastagent/github"'); // the third-party adapter
     expect(src).toContain("POST /webhook");
     expect(src).toContain("on:"); // the app glue stub the user edits
+
+    // The channel imports @kid7st/fastagent from the workspace, so add ensures package.json declares it.
+    const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
+    expect(pkg.dependencies["@kid7st/fastagent"]).toMatch(/^\^\d/);
+    expect(pkg.type).toBe("module");
 
     // A second add must not overwrite authored glue.
     const out2 = await cliInit(["add", "github"], dir);

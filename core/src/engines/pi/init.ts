@@ -27,7 +27,7 @@
  * It does NOT defend against every pathological pre-existing target state (TOCTOU, read-only
  * dirs, FIFOs, mid-write disk-full, …): a local scaffolding command recovered by delete-and-retry.
  */
-import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadRootIgnore } from "./definition.ts";
 import { fastagentVersion } from "./version.ts";
@@ -218,6 +218,39 @@ export async function scaffoldChannel(dir: string, kind: "github"): Promise<stri
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, CHANNEL_GITHUB_TS, { flag: "wx" });
   return file;
+}
+
+/**
+ * Ensure the workspace's package.json declares `@kid7st/fastagent` so an added channel's
+ * `import "@kid7st/fastagent/github"` resolves — the channel file is imported from the WORKSPACE
+ * (not the CLI install), so the dep must live in the workspace's node_modules. Creates a minimal ESM
+ * package.json when absent; adds the dep when missing (never overwrites an existing pin). Returns
+ * true when it created or changed package.json (so the caller can prompt for `npm install`).
+ */
+export async function ensureFastagentDep(dir: string): Promise<boolean> {
+  const pkgPath = join(dir, "package.json");
+  let raw: string | undefined;
+  try {
+    raw = await readFile(pkgPath, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  let pkg: { type?: string; dependencies?: Record<string, string>; [k: string]: unknown };
+  if (raw !== undefined) {
+    try {
+      pkg = JSON.parse(raw);
+    } catch {
+      throw new Error(`${pkgPath}: invalid JSON — fix it before adding a channel`);
+    }
+    if (typeof pkg.dependencies?.["@kid7st/fastagent"] === "string") return false; // already declared — leave the pin
+  } else {
+    pkg = { name: toPackageName(dir), private: true, type: "module" };
+  }
+  pkg.dependencies ??= {};
+  pkg.dependencies["@kid7st/fastagent"] = `^${await fastagentVersion()}`;
+  pkg.type ??= "module"; // a channel file uses ESM import
+  await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  return true;
 }
 
 /**

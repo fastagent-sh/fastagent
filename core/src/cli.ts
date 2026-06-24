@@ -29,7 +29,7 @@ import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
-import { scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
+import { ensureFastagentDep, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
 import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
@@ -209,9 +209,13 @@ async function runAdd(): Promise<void> {
     process.exit(1);
   }
   const file = await scaffoldChannel(target, kind).catch(failStartup);
+  // The channel file imports @kid7st/fastagent (resolved from the workspace, not the CLI install), so
+  // the workspace must declare it; ensure that before the user hits a module-not-found at `dev`.
+  const depAdded = await ensureFastagentDep(target).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
   console.error(`  next steps:`);
   console.error(`    set GITHUB_WEBHOOK_SECRET in .env`);
+  if (depAdded) console.error(`    npm install   # @kid7st/fastagent added to package.json`);
   console.error(`    edit channels/github.ts — map events to intents in on()`);
   console.error(`    fastagent dev   # serve the webhook locally`);
 }

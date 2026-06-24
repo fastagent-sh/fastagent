@@ -73,6 +73,12 @@ export async function loadChannels(
       // A channel constructed at startup may reject a misconfig (e.g. an unset secret) — name the file.
       throw new Error(`channels/${entry.name}: ${(error as Error).message}`);
     }
+    // The contract is synchronous `(agent) => Routes`. An async factory (easy to write in an untyped
+    // .js/.mjs) returns a Promise whose Object.entries is empty — it would silently mount no routes
+    // and fall back to /invoke. Reject it visibly instead.
+    if (declared && typeof (declared as { then?: unknown }).then === "function") {
+      throw new Error(`channels/${entry.name} must return Routes synchronously, not a Promise`);
+    }
     for (const [route, handler] of Object.entries(declared)) {
       if (route in routes) {
         collisions.push({ route, source: `channels/${entry.name}` });
