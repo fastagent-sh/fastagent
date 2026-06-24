@@ -1,13 +1,8 @@
 /**
- * Safe request-body reading, shared by channels. A streaming byte cap is the only robust defense
- * against an unauthenticated client buffering an arbitrarily large body on a public endpoint (a
- * Content-Length check is bypassable with chunked encoding), and it must live where the body is
- * consumed — hence here, used by each channel with its own limit, not in the transport.
- *
- * Platform-agnostic (web streams only): works on Node and serverless alike.
+ * Read a request body with a hard byte cap (real bytes, not JS chars). A streaming cap is the only
+ * robust guard against an unauthenticated client buffering an unbounded body (Content-Length is
+ * bypassable with chunked encoding); web-streams only, so it works on any runtime.
  */
-
-/** Read the request body with a hard byte cap (counts real bytes, not JS characters). */
 export async function readBodyCapped(req: Request, max: number): Promise<{ text: string } | { tooLarge: true }> {
   if (!req.body) return { text: "" };
   const reader = req.body.getReader();
