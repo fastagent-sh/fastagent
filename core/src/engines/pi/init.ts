@@ -221,13 +221,24 @@ export async function scaffoldChannel(dir: string, kind: "github"): Promise<stri
 }
 
 /**
- * Ensure the workspace's package.json declares `@kid7st/fastagent` so an added channel's
- * `import "@kid7st/fastagent/github"` resolves — the channel file is imported from the WORKSPACE
- * (not the CLI install), so the dep must live in the workspace's node_modules. Creates a minimal ESM
- * package.json when absent; adds the dep when missing (never overwrites an existing pin). Returns
- * true when it created or changed package.json (so the caller can prompt for `npm install`).
+ * Ensure the workspace can install and load an added channel: its file imports `@kid7st/fastagent`
+ * (and the `/github` subpath), and `loadChannels` imports that file from the WORKSPACE (not the CLI
+ * install), so both the dependency AND the registry mapping must live in the workspace. Ensures two
+ * files (each only when absent — never overwriting authored content), so `npm install` then works:
+ *   - `.npmrc`: maps the `@kid7st` scope to GitHub Packages (the default registry 404s otherwise);
+ *   - `package.json`: declares `@kid7st/fastagent` (a minimal ESM package.json is created if absent).
+ * Returns true when it created or changed either, so the caller can prompt for `npm install`.
  */
 export async function ensureFastagentDep(dir: string): Promise<boolean> {
+  let changed = false;
+
+  // @kid7st/fastagent is published to GitHub Packages; without the scope mapping `npm install` 404s.
+  const npmrcPath = join(dir, ".npmrc");
+  if (!(await exists(npmrcPath))) {
+    await writeFile(npmrcPath, NPMRC, { flag: "wx" });
+    changed = true;
+  }
+
   const pkgPath = join(dir, "package.json");
   let raw: string | undefined;
   try {
@@ -236,21 +247,26 @@ export async function ensureFastagentDep(dir: string): Promise<boolean> {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
   let pkg: { type?: string; dependencies?: Record<string, string>; [k: string]: unknown };
+  let needsWrite = false;
   if (raw !== undefined) {
     try {
       pkg = JSON.parse(raw);
     } catch {
       throw new Error(`${pkgPath}: invalid JSON — fix it before adding a channel`);
     }
-    if (typeof pkg.dependencies?.["@kid7st/fastagent"] === "string") return false; // already declared — leave the pin
+    needsWrite = typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string"; // absent — add it (keep an existing pin)
   } else {
     pkg = { name: toPackageName(dir), private: true, type: "module" };
+    needsWrite = true;
   }
-  pkg.dependencies ??= {};
-  pkg.dependencies["@kid7st/fastagent"] = `^${await fastagentVersion()}`;
-  pkg.type ??= "module"; // a channel file uses ESM import
-  await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-  return true;
+  if (needsWrite) {
+    pkg.dependencies ??= {};
+    pkg.dependencies["@kid7st/fastagent"] = `^${await fastagentVersion()}`;
+    pkg.type ??= "module"; // a channel file uses ESM import
+    await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+    changed = true;
+  }
+  return changed;
 }
 
 /**

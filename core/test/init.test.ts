@@ -211,10 +211,12 @@ describe("add: fastagent add github", () => {
     expect(src).toContain("POST /webhook");
     expect(src).toContain("on:"); // the app glue stub the user edits
 
-    // The channel imports @kid7st/fastagent from the workspace, so add ensures package.json declares it.
+    // The channel imports @kid7st/fastagent from the workspace, so add ensures it is installable there:
+    // package.json declares the dep AND .npmrc maps the @kid7st scope to GitHub Packages.
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
     expect(pkg.dependencies["@kid7st/fastagent"]).toMatch(/^\^\d/);
     expect(pkg.type).toBe("module");
+    expect(await readFile(join(dir, ".npmrc"), "utf8")).toContain("npm.pkg.github.com");
 
     // A second add must not overwrite authored glue.
     const out2 = await cliInit(["add", "github"], dir);
