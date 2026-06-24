@@ -57,9 +57,14 @@ describe("init: scaffoldWorkspace", () => {
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
     expect(pkg.type).toBe("module");
     // The fastagent dep tracks this build's version (not a stale hard-coded range), so a fresh
-    // workspace installs a version that has the API/exports it was scaffolded against.
-    const { fastagentVersion } = await import("../src/engines/pi/version.ts");
-    expect(pkg.dependencies["@kid7st/fastagent"]).toBe(`^${await fastagentVersion()}`);
+    // workspace installs a version that has the API/exports it was scaffolded against. Oracle is the
+    // package's real version read DIRECTLY (not fastagentVersion's output) so a corrupt read is caught.
+    const realVersion = (
+      JSON.parse(await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")) as {
+        version: string;
+      }
+    ).version;
+    expect(pkg.dependencies["@kid7st/fastagent"]).toBe(`^${realVersion}`);
     expect(pkg.dependencies.zod).toBeDefined();
     expect(await readFile(join(dir, "tools", "word-count.ts"), "utf8")).toContain('from "@kid7st/fastagent"');
     expect(await readFile(join(dir, ".npmrc"), "utf8")).toContain("npm.pkg.github.com");

@@ -1,6 +1,4 @@
 import { createHmac } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { type GithubEvent, githubChannel } from "../src/github.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
@@ -215,18 +213,5 @@ describe("github channel", () => {
     // The lone failure sink (.catch) ran: logged, and (since it ran) not an unhandled rejection.
     expect(errors.some((e) => /turn failed for s/.test(e) && /boom/.test(e))).toBe(true);
     spy.mockRestore();
-  });
-
-  it("depends on no node: builtins (must LOAD on Fetch-only runtimes; loading != supported)", async () => {
-    // The channel must load on Fetch-only runtimes (a node: import would break module load), even
-    // though its fire-and-forget turns only RUN on a long-running host. So a serverless runtime like
-    // Cloudflare Workers can load it but is NOT a supported target — without waitUntil the isolate
-    // recycles after the response and the turn is killed (see docs/github.md). This guards loadability
-    // only. (Deps are runtime-agnostic too: @octokit/webhooks-methods web build on Web Crypto;
-    // @octokit/webhooks-types is types-only.)
-    for (const rel of ["../src/channels/github.ts", "../src/channels/body.ts"]) {
-      const src = await readFile(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
-      expect(src).not.toMatch(/from "node:/);
-    }
   });
 });

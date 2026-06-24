@@ -175,7 +175,7 @@ export async function buildPiArtifact(
       );
     }
     const manifest: ArtifactManifest = {
-      fastagentVersion: await fastagentVersion(),
+      fastagentVersion: await fastagentVersion().catch(() => "0.0.0"), // provenance only — tolerate a read failure
       engine: "pi",
       builtAt: new Date().toISOString(),
       model,

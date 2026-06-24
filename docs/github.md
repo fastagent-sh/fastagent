@@ -63,8 +63,8 @@ concurrent same-session turn fails fast), so give independent work **distinct se
 sessions run concurrently — if you route recurring same-subject events (e.g. `synchronize`), make the
 agent's action idempotent and race-safe (a check-then-act on shared state can double-fire).
 
-Served on a long-running Node host (`fastagent start`). The channel loads on Fetch-only runtimes but
-its fire-and-forget turns need a live process, so **serverless is unsupported** for now.
+Served on a long-running Node host (`fastagent start`). The turns run fire-and-forget on the process,
+so **serverless is unsupported** — the channel is Node-only until durable execution lands.
 
 ## Known gaps
 
