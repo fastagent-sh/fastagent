@@ -78,7 +78,7 @@ export async function buildPiArtifact(
   ) {
     throw new Error(`source workspace "${srcDir}" does not exist (or is not a directory)`);
   }
-  const { config, path: configPath } = await loadConfig(srcDir);
+  const { config } = await loadConfig(srcDir);
   const model = resolveModelSpec(options.model, config);
   if (!model) {
     throw new Error(
@@ -172,24 +172,6 @@ export async function buildPiArtifact(
       throw new Error(
         `"${MANIFEST_FILE}" is reserved for the build manifest; the source ships an entry by that name ` +
           `at the artifact root — rename or exclude it (config goes in fastagent.config.ts/js/mjs)`,
-      );
-    }
-    // Code tools AND channels are functions — they live in fastagent.config.*, NOT the manifest
-    // (which carries only model/http). If the config defines either but its file was excluded from
-    // the artifact (a .gitignore/.fastagentignore rule), running from the artifact would silently
-    // drop them — tools missing, or webhook routes degrading to the default POST /invoke. Fail
-    // visibly (model/http survive via the manifest, so a config with neither being excluded is fine).
-    if (
-      ((config.tools?.length ?? 0) > 0 || config.channels !== undefined) &&
-      configPath !== undefined &&
-      !(await stat(join(staging, basename(configPath))).then(
-        () => true,
-        () => false,
-      ))
-    ) {
-      throw new Error(
-        `fastagent.config defines code tools or channels but ${basename(configPath)} is excluded from the artifact ` +
-          `(a .gitignore/.fastagentignore rule); un-ignore it — the manifest cannot carry functions.`,
       );
     }
     const manifest: ArtifactManifest = {
