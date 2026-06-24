@@ -1,10 +1,7 @@
 /**
- * The Node host (a K-axis target adapter): run channels on a long-running Node process.
- *
- * Channels (N-axis) are platform-agnostic Fetch handlers `(Request) => Response`. This host mounts a
- * route table on a node:http server. Post-ACK work (e.g. a webhook channel's fire-and-forget turns)
- * runs on this process's event loop — no host involvement; in-flight work is lost on shutdown (the
- * accepted tradeoff until durable execution exists).
+ * Node host (K-axis): mount a route table of Fetch handlers on a node:http server. Post-ACK work
+ * (e.g. a webhook channel's fire-and-forget turns) runs on this process's event loop and is lost on
+ * shutdown (the accepted tradeoff until durable execution exists).
  */
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";

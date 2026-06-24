@@ -57,32 +57,16 @@ webhook's URL at `…/webhook` and set its secret to `GITHUB_WEBHOOK_SECRET`.
 
 ## Execution model
 
-The endpoint **ACKs 202 immediately** and runs each turn **fire-and-forget** on the long-running
-process — the event loop keeps it alive to completion. There are no concurrency modes: same-session
-concurrency is bounded by the engine's per-session **lease** (a second concurrent same-session turn
-fails fast). For independent work, give each delivery a **distinct session**.
+The endpoint **ACKs 202** and runs each turn **fire-and-forget** on the long-running process. There
+are no concurrency modes: same-session concurrency is the engine's per-session **lease** (a second
+concurrent same-session turn fails fast), so give independent work **distinct sessions**. Distinct
+sessions run concurrently — if you route recurring same-subject events (e.g. `synchronize`), make the
+agent's action idempotent and race-safe (a check-then-act on shared state can double-fire).
 
-## Serving (the K axis)
-
-The channel is a plain Fetch handler (`(Request) => Response`). On a long-running host (Node / fly.io)
-`fastagent start` serves it via the bundled Node host (`serveNode` + `router`). The channel reads only
-Web-standard + `@octokit/webhooks-*` APIs, so it *loads* on Fetch-only runtimes — but its fire-and-forget
-turns need a process that stays alive, so **serverless is not supported** until durable execution exists.
-
-## Deliberate divergence from `@octokit/webhooks`
-
-The channel reuses GitHub's official types (`@octokit/webhooks-types`) and verification
-(`@octokit/webhooks-methods`), but **not** the `Webhooks` dispatch/middleware (it awaits handlers
-before responding — the opposite of ACK-early). It also accepts `application/x-www-form-urlencoded`,
-which `@octokit/webhooks` does not; the channel owns the raw read, so the raw-body hazard behind
-octokit's "JSON only" stance doesn't apply.
+Served on a long-running Node host (`fastagent start`). The channel loads on Fetch-only runtimes but
+its fire-and-forget turns need a live process, so **serverless is unsupported** for now.
 
 ## Known gaps
 
-- A turn that fails **after** the 202 only reaches server logs; the trigger (e.g. the PR author) sees
-  nothing and can't retry.
-- **In-flight turns are lost on shutdown / redeploy.** A short platform grace (e.g. fly.io's default
-  5 s) can't drain a minute-long agent turn anyway, so the channel doesn't try.
-
-The real fix for both is **durable execution** (persist the intent, run it in a worker, retry across
-deploys) — deferred until there's a consumer.
+A turn that fails after the 202, and any in-flight turn on shutdown/redeploy, is lost (server log
+only). The real fix is **durable execution** (persist the intent, retry across deploys), deferred.
