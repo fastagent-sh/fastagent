@@ -217,10 +217,13 @@ describe("github channel", () => {
     spy.mockRestore();
   });
 
-  it("depends on no node: builtins (loads on Fetch-only runtimes: Cloudflare/Deno/Bun)", async () => {
-    // The channel runs on Fetch-only runtimes; a node: import would break module load there. Guard the
-    // channel + its body helper. (Its deps are runtime-agnostic too: @octokit/webhooks-methods ships a
-    // web build on Web Crypto; @octokit/webhooks-types is types-only.)
+  it("depends on no node: builtins (must LOAD on Fetch-only runtimes; loading != supported)", async () => {
+    // The channel must load on Fetch-only runtimes (a node: import would break module load), even
+    // though its fire-and-forget turns only RUN on a long-running host. So a serverless runtime like
+    // Cloudflare Workers can load it but is NOT a supported target — without waitUntil the isolate
+    // recycles after the response and the turn is killed (see docs/github.md). This guards loadability
+    // only. (Deps are runtime-agnostic too: @octokit/webhooks-methods web build on Web Crypto;
+    // @octokit/webhooks-types is types-only.)
     for (const rel of ["../src/channels/github.ts", "../src/channels/body.ts"]) {
       const src = await readFile(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
       expect(src).not.toMatch(/from "node:/);
