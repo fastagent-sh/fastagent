@@ -46,6 +46,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
+import { createPiModels } from "./models.ts";
 import { defaultGlobalSkillPaths, loadAgentDefinition } from "./definition.ts";
 import { loadTools, mergeDiscoveredTools, type ToolCollision } from "./tool.ts";
 
@@ -75,7 +76,8 @@ export async function buildChatRuntime(
         `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
       );
     }
-    const model = resolveModel(modelSpec);
+    // Resolution only; chat's auth/login rides pi's native TUI machinery (see header).
+    const model = resolveModel(createPiModels(), modelSpec);
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(cwd, {
       env,

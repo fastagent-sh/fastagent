@@ -25,11 +25,11 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
-import type { AuthResolver } from "./auth.ts";
 import { type ArtifactManifest, MANIFEST_FILE } from "./build.ts";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { createPiAgentFromDefinition, piDefaultTools, resolveTools } from "./create.ts";
 import { type LoadedDefinition, ensureStateDirSelfIgnored } from "./definition.ts";
+import { createPiModels } from "./models.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
 
@@ -89,8 +89,6 @@ export interface CreatePiAgentFromArtifactOptions {
    * dir, not the artifact). Self-gitignored on create.
    */
   sessionsDir?: string;
-  /** Model auth resolution. Defaults to the L2 default (resolvePiAuth: pi OAuth → env vars). */
-  getApiKeyAndHeaders?: AuthResolver;
 }
 
 /**
@@ -139,14 +137,15 @@ export async function createPiAgentFromArtifact(
   const toolCollisions = [...discovered.collisions, ...crossCollisions];
   const defaultNames = new Set(piDefaultTools(artifactDir).map((t) => t.name));
   const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));
+  const models = createPiModels();
   const { agent, definition } = await createPiAgentFromDefinition(artifactDir, {
-    model: resolveModel(modelSpec),
+    models,
+    model: resolveModel(models, modelSpec),
     // Code tools shipped in fastagent.config.* (appended after pi defaults); model/http are
     // already frozen in the manifest, but tools are functions and only live in the config file.
     tools,
     // Continuity from an external store, reconstructed per invoke (SPEC portable conformance).
     sessions: jsonlSessionStore({ dir: sessionsDir, cwd: artifactDir }),
-    getApiKeyAndHeaders: options.getApiKeyAndHeaders,
   });
   return { agent, definition, manifest, config, modelSpec, sessionsDir, toolNames, toolCollisions };
 }

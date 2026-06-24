@@ -3,18 +3,20 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { fauxAssistantMessage, registerFauxProvider, type FauxResponseStep } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { createInvokeHandler, nodeListener, inMemorySessionStore, type Agent, type AgentEvent } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
+import { makeFaux } from "./faux.ts";
 
 function makeAgent(responses: FauxResponseStep[]): Agent {
-  const faux = registerFauxProvider();
+  const { faux, models } = makeFaux();
   faux.setResponses(responses);
   return createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
       sessions: inMemorySessionStore(),
       env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
       model: faux.getModel(),
       systemPrompt: "test",
     }),

@@ -268,7 +268,7 @@ Run a built agent in **production posture**. Differences from `dev`:
 |---|---|---|
 | config | executes `fastagent.config.ts` | reads the artifact's `fastagent.json` for the frozen model/http; runs from the artifact (cwd = artifact). config.ts ships in the artifact for code tools (needs `npm ci`); the strict no-`.ts`-at-runtime posture is a later hardening |
 | skills | definition-only (+ `--global-skills`) | artifact is the truth; **never scans globals** |
-| auth | pi OAuth → env | pluggable `AuthResolver` (§10.5); default still pi OAuth → env |
+| auth | pi OAuth → env | pluggable `Models` collection (§10.5); default still pi OAuth → env |
 | sessions | jsonl under `.fastagent/sessions` | jsonl **outside** the artifact (jsonl now; external/DDB later) |
 | model | `--model > FASTAGENT_MODEL > config` | `--model > FASTAGENT_MODEL > manifest.model` |
 | port | `--port > config` | `--port > PORT env > manifest.http.port > 8787` |
@@ -277,20 +277,20 @@ Run a built agent in **production posture**. Differences from `dev`:
 
 **Sessions live OUTSIDE the artifact** (the M/K split): the artifact is immutable and replaced wholesale on redeploy, so conversational state (K) kept inside it would be wiped on every deploy and every container restart. The default is the shell-cwd-relative, visible `./fastagent-sessions/` (precedence `--sessions-dir > FASTAGENT_SESSIONS_DIR > <cwd>/fastagent-sessions`), self-gitignored, **never** the artifact's own `.fastagent/`. The cwd-relative default's only footgun (continuity bound to launch dir) is loud (the resolved absolute path is in the startup report) and absent in containers (fixed `WORKDIR`); a sessions dir resolving inside the artifact emits a visible warning. dev keeps sessions under `<workspace>/.fastagent/` because the dev "artifact" is the mutable workspace itself — a deliberate difference, not an inconsistency.
 
-**Startup report (minimal observable surface):** `start` logs the run dir, model, **auth source** (`env (<KEY>)` or `oauth (<provider>)`), `AGENTS.md` presence, the **loaded skills** (enumerable), the session backend, and the bound port. It does **not** enumerate authored context files: they are ambient (§10.1a), so the only meaningful, bounded list is skills. This mirrors the `dev` startup report.
+**Startup report (minimal observable surface):** `start` logs the run dir, model, **auth source** (pi's resolved label + provider, e.g. `OAuth (anthropic)` or `ANTHROPIC_API_KEY (anthropic)`), `AGENTS.md` presence, the **loaded skills** (enumerable), the session backend, and the bound port. It does **not** enumerate authored context files: they are ambient (§10.1a), so the only meaningful, bounded list is skills. This mirrors the `dev` startup report.
 
 ### 10.5 Auth at runtime (env key or OAuth)
 
-Auth is a pluggable `AuthResolver`; `start` is **not** env-only. Two deploy-appropriate sources:
+Auth rides the pi `Models` collection, not a side channel; `start` is **not** env-only. Since pi 0.80 a `Models` (built by `createPiModels` → `builtinModels`) owns both model resolution and per-request auth: each provider carries its own `ProviderAuth`, resolved against a `CredentialStore` (stored credentials) plus an `AuthContext` (ambient env vars). Two deploy-appropriate sources, both upstream-native:
 
 | Source | Use | Refresh |
 |---|---|---|
-| env API key (`envAuth`) | simplest, stateless, metered API billing | none |
-| OAuth from a credential store | run a deployed agent on a Claude Pro/Max or ChatGPT subscription | required |
+| env API key (pi default `AuthContext`) | simplest, stateless, metered API billing | none |
+| OAuth from a credential store | run a deployed agent on a Claude Pro/Max or ChatGPT subscription | upstream-owned |
 
-Feasibility is confirmed in pi: `pi-ai`'s `getOAuthApiKey()` auto-refreshes and returns updated credentials, and `pi-coding-agent`'s `AuthStorage` does file-locked auto-refresh-and-persist. The current `piOAuthAuth` reads `~/.pi/agent/auth.json` and does **not** refresh — a refresh-capable resolver is needed for runtime OAuth.
+Resolution order is upstream-owned and matches the pre-0.80 default: a stored credential owns the provider; env is consulted only when nothing is stored. fastagent supplies `piCredentialStore`, a **read-only** `CredentialStore` over `~/.pi/agent/auth.json` (the file IS the store shape: `Record<providerId, Credential>` with `type:"oauth"`/`type:"api_key"`). The pi CLI owns login/logout and token persistence, so `piCredentialStore.modify` does **not** write back — an upstream OAuth refresh still produces a valid token for the in-flight request (a strict improvement over the old non-refreshing reader), it just is not persisted.
 
-Constraint: OAuth refresh tokens are single-use, so refresh must be serialized and the new credentials persisted back to the store. **Single machine/container**: a file-backed `AuthStorage` (its file lock) is sufficient — in scope for v1. **Multi-instance**: a credential broker with row-locked refresh over a shared store (the ketchup `worker_credentials` pattern) — same `AuthResolver` seam, deferred with the K-axis backends.
+Constraint, for a future persisting store: OAuth refresh tokens are single-use, so refresh must be serialized and the new credentials persisted back. **Single machine/container**: a file-backed store with a file lock suffices — pi's own `AuthStorage` already does file-locked auto-refresh-and-persist, available if fastagent wants persistence. **Multi-instance**: a credential broker with row-locked refresh over a shared store (the ketchup `worker_credentials` pattern) — same `CredentialStore` seam, injected via `createPiModels`'s collection, deferred with the K-axis backends.
 
 ### 10.6 Container recipe (v1, documented not generated)
 

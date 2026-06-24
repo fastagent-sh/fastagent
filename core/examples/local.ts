@@ -12,8 +12,7 @@
  */
 import { createInterface } from "node:readline/promises";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
-import { getModel } from "@earendil-works/pi-ai";
-import { AgentFailure, collect, createPiAgent, type AgentEvent } from "../src/index.ts";
+import { AgentFailure, collect, createPiAgent, createPiModels, resolveModel, type AgentEvent } from "../src/index.ts";
 
 // Process-level network config belongs to the application entry: Node's fetch does not
 // honor HTTPS_PROXY by itself; the local proxy is required to reach blocked providers.
@@ -21,8 +20,11 @@ import { AgentFailure, collect, createPiAgent, type AgentEvent } from "../src/in
 setGlobalDispatcher(new EnvHttpProxyAgent());
 installUndiciFetch();
 
+// One Models collection owns model resolution + auth; the model must come from it.
+const models = createPiModels();
 const agent = createPiAgent({
-  model: getModel("openai-codex", "gpt-5.5"),
+  models,
+  model: resolveModel(models, "openai-codex/gpt-5.5"),
   systemPrompt: "You are a concise, helpful assistant. Keep answers short.",
 });
 

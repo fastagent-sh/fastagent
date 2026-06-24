@@ -1,41 +1,27 @@
 /**
- * Auth resolution for the pi engine (the harness's `getApiKeyAndHeaders` injection).
+ * Auth for the pi engine: a {@link CredentialStore} over pi's local credentials
+ * file (`~/.pi/agent/auth.json`), consumed by the `Models` collection (see
+ * models.ts). pi 0.80 made auth first-class: providers carry their own
+ * `ProviderAuth`, the collection resolves per request through a `CredentialStore`
+ * (stored credentials) plus an `AuthContext` (ambient env vars). This module
+ * supplies the store; env fallback is upstream-automatic.
  *
- * This is **reusable pi engine wiring**, hence it lives in engines/pi — not in examples.
- * Process-level global side effects (e.g. the undici proxy dispatcher) do NOT belong
- * here: those are the application entry point's responsibility.
+ * The on-disk file IS the `CredentialStore` shape: a `Record<providerId, Credential>`
+ * where each `Credential` is `{type:"oauth",...}` or `{type:"api_key",...}`.
+ * So reading is a parse-and-index; fastagent never logs in (that is the pi CLI's
+ * job), so writes are intentionally NOT persisted — see {@link piCredentialStore}.
+ *
+ * Process-level global side effects (e.g. the undici proxy dispatcher) do NOT
+ * belong here: those are the application entry point's responsibility.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getEnvApiKey } from "@earendil-works/pi-ai";
-
-export type Auth = { apiKey: string; headers?: Record<string, string> } | undefined;
-/**
- * The parameter is just { provider } — all auth resolution needs; still assignable
- * wherever pi expects `(model: Model) => …` (contravariance).
- */
-export type AuthResolver = (model: { provider: string }) => Promise<Auth>;
+import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 
 /** pi's local credentials file (written by the pi CLI). */
 const PI_AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
 
-/** Resolve from environment variables (e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY). */
-export const envAuth: AuthResolver = (model) => {
-  const apiKey = getEnvApiKey(model.provider);
-  return Promise.resolve(apiKey ? { apiKey } : undefined);
-};
-
-/**
- * Resolve from pi's OAuth credentials file (`~/.pi/agent/auth.json`, consuming
- * coding-plan tokens). The access token is returned directly as apiKey — pi-ai's
- * providers auto-detect OAuth tokens (anthropic `sk-ant-oat` / openai-codex JWT)
- * and set the Bearer auth plus required request headers themselves.
- *
- * Note: **no token refresh** (expired → undefined; the user re-logs-in via pi).
- * Coupled to the pi CLI credentials format — an out-of-the-box convenience, not a
- * core contract.
- */
 export interface PiAuthOptions {
   /**
    * Sink for non-fatal auth anomalies (unreadable/corrupt credentials file).
@@ -45,9 +31,25 @@ export interface PiAuthOptions {
   warn?: (message: string) => void;
 }
 
-export function piOAuthAuth(authPath: string = PI_AUTH_PATH, options: PiAuthOptions = {}): AuthResolver {
+/**
+ * A read-only `CredentialStore` backed by pi's `~/.pi/agent/auth.json`.
+ *
+ * `read` parses the file and returns the provider's stored credential (OAuth
+ * coding-plan token or `api_key` entry). Missing file / missing entry = not
+ * configured (the collection then falls back to ambient env vars); a corrupt
+ * file is surfaced via `warn` (fail visibly) and treated as not configured.
+ *
+ * **Writes are not persisted.** The pi CLI owns login/logout and token
+ * persistence; fastagent only reads. `modify` therefore runs the caller's
+ * function against the freshly-read credential and returns the result WITHOUT
+ * writing back — so an upstream OAuth refresh still produces a valid token for
+ * the in-flight request (a strict improvement over the old reader, which failed
+ * on an expired token), it just is not saved. `delete` is a no-op.
+ */
+export function piCredentialStore(authPath: string = PI_AUTH_PATH, options: PiAuthOptions = {}): CredentialStore {
   const warn = options.warn ?? ((message: string) => console.warn(message));
-  return (model) => {
+
+  const read = (providerId: string): Promise<Credential | undefined> => {
     let raw: string;
     try {
       raw = readFileSync(authPath, "utf8");
@@ -58,7 +60,7 @@ export function piOAuthAuth(authPath: string = PI_AUTH_PATH, options: PiAuthOpti
       }
       return Promise.resolve(undefined);
     }
-    let creds: Record<string, { type?: string; access?: unknown; expires?: unknown }>;
+    let creds: Record<string, Credential>;
     try {
       creds = JSON.parse(raw);
     } catch {
@@ -67,33 +69,23 @@ export function piOAuthAuth(authPath: string = PI_AUTH_PATH, options: PiAuthOpti
       warn(`[fastagent] corrupt auth file ${authPath}; run pi to re-login`);
       return Promise.resolve(undefined);
     }
-    const cred = creds[model.provider];
-    if (cred?.type === "oauth" && typeof cred.access === "string") {
-      if (typeof cred.expires === "number" && cred.expires < Date.now()) {
-        // Expired ≠ not configured: surface it, or the root cause hides behind a
-        // downstream "missing API key".
-        warn(`[fastagent] pi OAuth token for "${model.provider}" expired; run pi to re-login`);
-        return Promise.resolve(undefined);
-      }
-      return Promise.resolve({ apiKey: cred.access });
+    const cred = creds[providerId];
+    // Guard the discriminator: a foreign/old entry must read as not-configured,
+    // not crash auth resolution downstream.
+    if (cred && (cred.type === "oauth" || cred.type === "api_key")) {
+      return Promise.resolve(cred);
     }
     return Promise.resolve(undefined);
   };
-}
 
-/** Default resolution: try pi OAuth (coding plan) first, then fall back to env vars. */
-export function resolvePiAuth(authPath?: string, options?: PiAuthOptions): AuthResolver {
-  const oauth = piOAuthAuth(authPath, options);
-  return async (model) => (await oauth(model)) ?? envAuth(model);
-}
-
-/**
- * Which source of the DEFAULT chain ({@link resolvePiAuth}: OAuth → env) currently has
- * credentials for `provider`. Reporting-only (e.g. the `start` startup line); mirrors the
- * default chain order, warns suppressed (the live resolver surfaces anomalies per invoke).
- */
-export async function probeAuthSource(provider: string, authPath?: string): Promise<"oauth" | "env" | "none"> {
-  if (await piOAuthAuth(authPath, { warn: () => {} })({ provider })) return "oauth";
-  if (await envAuth({ provider })) return "env";
-  return "none";
+  return {
+    read,
+    async modify(providerId, fn) {
+      // Non-persisting: run against current, return the result, do not write.
+      return fn(await read(providerId));
+    },
+    delete() {
+      return Promise.resolve();
+    },
+  };
 }

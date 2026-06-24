@@ -11,8 +11,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
-import { getModel } from "@earendil-works/pi-ai";
-import { createPiAgentFromDefinition, piDefaultTools } from "../src/index.ts";
+import { createPiAgentFromDefinition, createPiModels, piDefaultTools, resolveModel } from "../src/index.ts";
 import lookupOrderTool from "./agent/lookup-order-tool.ts";
 
 // install() aligns fetch with the dispatcher (same undici impl) — see cli.ts for why.
@@ -21,8 +20,10 @@ installUndiciFetch();
 
 // Custom code tool = explicit import + injection (type-checked, refactor-safe; no magic directory).
 const dir = join(dirname(fileURLToPath(import.meta.url)), "agent");
+const models = createPiModels();
 const { agent, definition } = await createPiAgentFromDefinition(dir, {
-  model: getModel("openai-codex", "gpt-5.5"),
+  models,
+  model: resolveModel(models, "openai-codex/gpt-5.5"),
   tools: [...piDefaultTools(dir), lookupOrderTool],
 });
 

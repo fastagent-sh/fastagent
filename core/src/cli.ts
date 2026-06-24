@@ -24,10 +24,10 @@ import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { loadChannels } from "./engines/pi/channel.ts";
-import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { fastagentVersion } from "./engines/pi/version.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
+import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 import {
   type LoadedDefinition,
   defaultGlobalSkillPaths,
@@ -122,7 +122,7 @@ else usage(1);
 
 /** `fastagent models`: print every registered "provider/modelId" to stdout (pipe-friendly). */
 function runModels(): void {
-  for (const spec of listModels()) console.log(spec);
+  for (const spec of listModels(createPiModels())) console.log(spec);
 }
 
 /**
@@ -281,9 +281,9 @@ function parsePort(value: string | undefined, source: string): number | undefine
  */
 async function reportAuth(modelSpec: string): Promise<void> {
   const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
-  const source = await probeAuthSource(provider);
-  console.error(`[fastagent] auth:   ${source === "none" ? "(none found)" : `${source} (${provider})`}`);
-  if (source === "none") {
+  const source = await probeAuthSource(createPiModels(), modelSpec);
+  console.error(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`}`);
+  if (source === undefined) {
     // Lead with `pi login`: the default model (openai-codex) is OAuth-only, and we cannot name
     // the right env var (it is provider-specific and pi-ai's mapping is not exported). Keep the
     // env path generic so we never advertise a key that can't satisfy the probed provider.

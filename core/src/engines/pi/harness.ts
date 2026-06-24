@@ -14,8 +14,7 @@
  */
 import { AgentHarness } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
-import { type AuthResolver, resolvePiAuth } from "./auth.ts";
+import type { Model, Models } from "@earendil-works/pi-ai";
 import type { PiSessionStore } from "./sessions.ts";
 
 /**
@@ -37,6 +36,12 @@ export interface PiHarnessFactoryOptions {
   /** Session persistence (see sessions.ts). Continuity = same backing store + same session id. */
   sessions: PiSessionStore;
   env: ExecutionEnv;
+  /**
+   * Provider collection used for all model requests; resolves auth through the
+   * providers' own `ProviderAuth`. {@link model} must belong to this collection
+   * (same provider id) for its auth to be in scope.
+   */
+  models: Models;
   model: AnyModel;
   tools?: AgentTool[];
   /**
@@ -46,8 +51,6 @@ export interface PiHarnessFactoryOptions {
   systemPrompt?: string | (() => string);
   /** Skills visible to the model / explicitly invokable (injected as harness resources). */
   skills?: Skill[];
-  /** Model auth resolution. Defaults to {@link resolvePiAuth}: pi OAuth (~/.pi/agent/auth.json) first, then env vars. */
-  getApiKeyAndHeaders?: AuthResolver;
 }
 
 /**
@@ -61,11 +64,11 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
     return new AgentHarness({
       env: options.env,
       session,
+      models: options.models,
       model: options.model,
       tools: options.tools,
       systemPrompt: typeof systemPrompt === "function" ? systemPrompt() : systemPrompt,
       resources: options.skills ? { skills: options.skills } : undefined,
-      getApiKeyAndHeaders: options.getApiKeyAndHeaders ?? resolvePiAuth(),
     });
   };
 }

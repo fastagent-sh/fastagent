@@ -12,12 +12,15 @@ Engine-, model-, and host-neutral. Built on the [pi](https://www.npmjs.com/packa
 ## Embed (library)
 
 ```ts
-import { createPiAgentFromDefinition, resolveModel, createInvokeHandler } from "@kid7st/fastagent";
+import { createPiAgentFromDefinition, createPiModels, resolveModel, createInvokeHandler } from "@kid7st/fastagent";
 
-// folder → agent, with your own session store / auth / tools injected
+// One Models collection owns model resolution + auth (pi OAuth file → env vars).
+const models = createPiModels();
+// folder → agent, with your own session store / models / tools injected
 const { agent } = await createPiAgentFromDefinition("./agent", {
-  model: resolveModel("openai-codex/gpt-5.5"),
-  // sessions, env, lease, getApiKeyAndHeaders, tools — all optional injection points
+  models,
+  model: resolveModel(models, "openai-codex/gpt-5.5"),
+  // sessions, env, lease, models, tools — all optional injection points
 });
 
 // createInvokeHandler is a Fetch handler: mount it in any host route
