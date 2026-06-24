@@ -20,11 +20,12 @@ describe("host/node: router", () => {
 });
 
 describe("host/node: serveNode", () => {
-  it("binds a handler and serves it over HTTP", async () => {
+  it("binds a handler, serves it over HTTP, and closes the socket", async () => {
     const host = serveNode((req) => new Response(`hi ${new URL(req.url).pathname}`), { port: 0 });
     const port = await host.listening;
     const res = await fetch(`http://127.0.0.1:${port}/x`, { method: "POST" });
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("hi /x");
+    await host.close(); // caller-owned shutdown — releases the listening socket
   });
 });

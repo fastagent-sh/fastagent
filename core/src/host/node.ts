@@ -6,14 +6,13 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { nodeListener } from "../channels/http.ts";
+import { text } from "../channels/respond.ts";
 
 /** A mounted request handler (a channel's fetch, or a plain route like health). */
 export type ChannelHandler = (req: Request) => Response | Promise<Response>;
 
 /** This deployment's HTTP surface: route key → handler. Key is `"/path"` or `"METHOD /path"`. */
 export type Routes = Record<string, ChannelHandler>;
-
-const textHeaders = { "content-type": "text/plain" };
 
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 function parseRouteKey(key: string): { method?: string; path: string } {
@@ -31,19 +30,22 @@ export function router(routes: Routes): ChannelHandler {
   return (req) => {
     const { pathname } = new URL(req.url);
     const onPath = entries.filter((e) => e.path === pathname);
-    if (onPath.length === 0) return new Response("not found\n", { status: 404, headers: textHeaders });
+    if (onPath.length === 0) return text("not found\n", 404);
     const match = onPath.find((e) => e.method === undefined || e.method === req.method);
-    if (!match) return new Response("method not allowed\n", { status: 405, headers: textHeaders });
+    if (!match) return text("method not allowed\n", 405);
     return match.handler(req);
   };
 }
 
 /**
- * Serve `handler` on a Node HTTP server. Thin mechanism: bind + report the port. No logging, signal
- * handling, or process.exit — the caller (CLI / app entry) owns those. `listening` resolves with the
- * bound port (useful for port 0) or rejects on a bind error (e.g. EADDRINUSE).
+ * Serve `handler` on a Node HTTP server. Thin mechanism: bind, report the port, and let the caller
+ * close it — no logging, signal handling, or process.exit (the CLI / app entry owns those).
+ * `listening` resolves with the bound port (useful for port 0) or rejects on a bind error (EADDRINUSE).
  */
-export function serveNode(handler: ChannelHandler, options: { port: number }): { listening: Promise<number> } {
+export function serveNode(
+  handler: ChannelHandler,
+  options: { port: number },
+): { listening: Promise<number>; close: () => Promise<void> } {
   const server = createServer(nodeListener(async (req) => handler(req)));
   const listening = new Promise<number>((resolve, reject) => {
     server.once("error", reject); // a bind failure surfaces here, before "listening"
@@ -52,5 +54,6 @@ export function serveNode(handler: ChannelHandler, options: { port: number }): {
       resolve((server.address() as AddressInfo).port);
     });
   });
-  return { listening };
+  const close = () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  return { listening, close };
 }

@@ -9,6 +9,7 @@ import type { Schema } from "@octokit/webhooks-types";
 import type { Agent } from "../agent.ts";
 import { collect } from "../collect.ts";
 import { readBodyCapped } from "./body.ts";
+import { text } from "./respond.ts";
 
 /** Raw body cap before verification — GitHub caps webhook payloads at 25 MB; reject larger early. */
 const MAX_WEBHOOK_BYTES = 25 << 20;
@@ -41,18 +42,15 @@ export interface GithubChannelOptions {
   on: (event: GithubEvent) => Intent[];
 }
 
-const textHeaders = { "content-type": "text/plain" };
-const reply = (body: string, status: number): Response => new Response(body, { status, headers: textHeaders });
-
 /**
  * Build a GitHub webhook channel for `agent`: a Fetch handler to mount at your webhook route (POST).
  */
 export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions): (req: Request) => Promise<Response> {
   return async (req) => {
-    if (req.method !== "POST") return reply("POST only\n", 405);
+    if (req.method !== "POST") return text("POST only\n", 405);
     // Cap before verify: a public endpoint must not buffer an unbounded body (chunked bypasses Content-Length).
     const body = await readBodyCapped(req, MAX_WEBHOOK_BYTES);
-    if ("tooLarge" in body) return reply("payload too large\n", 413);
+    if ("tooLarge" in body) return text("payload too large\n", 413);
     const raw = body.text;
     // @octokit/webhooks-methods verify (Web Crypto, runtime-agnostic) throws on a missing/empty arg,
     // so fail CLOSED: treat any verify exception (e.g. an empty body) as a clean 401, never a 500.
@@ -61,7 +59,7 @@ export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions
     // Signature is over the raw body (both content types).
     const signature = req.headers.get("x-hub-signature-256");
     if (!signature || !(await verify(secret, raw, signature).catch(() => false))) {
-      return reply("invalid signature\n", 401);
+      return text("invalid signature\n", 401);
     }
 
     const eventName = req.headers.get("x-github-event") ?? "";
@@ -70,14 +68,14 @@ export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions
     let json = raw;
     if ((req.headers.get("content-type") ?? "").includes("application/x-www-form-urlencoded")) {
       const field = new URLSearchParams(raw).get("payload");
-      if (field === null) return reply("missing form payload\n", 400);
+      if (field === null) return text("missing form payload\n", 400);
       json = field;
     }
     let payload: Record<string, unknown>;
     try {
       payload = JSON.parse(json) as Record<string, unknown>;
     } catch {
-      return reply("invalid json\n", 400);
+      return text("invalid json\n", 400);
     }
 
     const event: GithubEvent = {

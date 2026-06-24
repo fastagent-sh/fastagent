@@ -19,16 +19,12 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
+import { text, textHeaders } from "./respond.ts";
 
 /** Request body cap — prompts are text (+ base64 images later); 1 MiB is generous for v1. */
 const MAX_BODY_BYTES = 1 << 20;
 
 const encoder = new TextEncoder();
-const textHeaders = { "content-type": "text/plain" };
-
-function text(body: string, status: number): Response {
-  return new Response(body, { status, headers: textHeaders });
-}
 
 /**
  * Fetch-shaped invoke handler. Mount it at any route in the host app; it accepts POST only.
