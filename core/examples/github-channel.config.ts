@@ -16,15 +16,16 @@ export default defineConfig({
   channels: (agent) => ({
     "POST /webhook": githubChannel(agent, {
       secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
-      // Map a verified event to the intents this agent acts on (empty array = ignore). Key the session
-      // on the PR's IDENTITY (repo#number), not the delivery id (unique per delivery) — so a PR's pushes
-      // share a session and the engine's per-session lease serializes them.
+      // Map a verified event to the intents this agent acts on (empty array = ignore). Each review is
+      // INDEPENDENT and idempotent (it reconciles against the PR's existing comments), so use a
+      // distinct per-delivery session: overlapping deliveries then all run on their own session (no
+      // shared-session lease collision/drop) — "independent triggers → distinct sessions".
       on: (event) => {
         if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
           const { repository, pull_request } = event.payload;
           return [
             {
-              session: `pr-${repository.full_name}#${pull_request.number}`,
+              session: event.deliveryId,
               text: `Review pull request #${pull_request.number} in ${repository.full_name}.`,
             },
           ];
