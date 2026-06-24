@@ -208,10 +208,12 @@ async function runAdd(): Promise<void> {
     console.error(`usage: fastagent add github [dir]   (the github channel is the only one today)`);
     process.exit(1);
   }
-  const file = await scaffoldChannel(target, kind).catch(failStartup);
-  // The channel file imports @kid7st/fastagent (resolved from the workspace, not the CLI install), so
-  // the workspace must declare it; ensure that before the user hits a module-not-found at `dev`.
+  // Ensure the workspace can install + load a channel (ESM package, the @kid7st/fastagent dep, the
+  // registry mapping) BEFORE writing the file — a refusal (e.g. a CommonJS package) then leaves no
+  // orphan channels/ file. The file imports @kid7st/fastagent, resolved from the workspace, not the
+  // CLI install.
   const depAdded = await ensureFastagentDep(target).catch(failStartup);
+  const file = await scaffoldChannel(target, kind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
   console.error(`  next steps:`);
   console.error(`    set GITHUB_WEBHOOK_SECRET in .env`);

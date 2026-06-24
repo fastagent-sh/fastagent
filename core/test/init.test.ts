@@ -223,4 +223,13 @@ describe("add: fastagent add github", () => {
     expect(out2).toMatch(/already exists/);
     expect(await readFile(join(dir, "channels", "github.ts"), "utf8")).toBe(src);
   });
+
+  it("refuses on a non-module (CommonJS) package and writes no channel file", async () => {
+    const dir = await freshDir();
+    // A channel is ESM; fastagent must not silently flip an existing package's module type.
+    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "commonjs" }, null, 2)}\n`);
+    const out = await cliInit(["add", "github"], dir);
+    expect(out).toMatch(/"type": "module"/);
+    expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // refused before scaffolding
+  });
 });

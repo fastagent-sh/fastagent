@@ -230,15 +230,7 @@ export async function scaffoldChannel(dir: string, kind: "github"): Promise<stri
  * Returns true when it created or changed either, so the caller can prompt for `npm install`.
  */
 export async function ensureFastagentDep(dir: string): Promise<boolean> {
-  let changed = false;
-
-  // @kid7st/fastagent is published to GitHub Packages; without the scope mapping `npm install` 404s.
-  const npmrcPath = join(dir, ".npmrc");
-  if (!(await exists(npmrcPath))) {
-    await writeFile(npmrcPath, NPMRC, { flag: "wx" });
-    changed = true;
-  }
-
+  // Validate BEFORE writing anything, so a refusal leaves no orphan files.
   const pkgPath = join(dir, "package.json");
   let raw: string | undefined;
   try {
@@ -247,22 +239,39 @@ export async function ensureFastagentDep(dir: string): Promise<boolean> {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
   let pkg: { type?: string; dependencies?: Record<string, string>; [k: string]: unknown };
-  let needsWrite = false;
+  let writePkg = false;
   if (raw !== undefined) {
     try {
       pkg = JSON.parse(raw);
     } catch {
       throw new Error(`${pkgPath}: invalid JSON — fix it before adding a channel`);
     }
-    needsWrite = typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string"; // absent — add it (keep an existing pin)
+    // A channel file is ESM (it imports @kid7st/fastagent). Node treats a .ts by the package's module
+    // type, so a non-module package can't load it — and silently flipping `type` would change how Node
+    // treats the user's existing .js. Refuse; let the user own the switch (this also covers an absent
+    // `type`, which defaults to CommonJS).
+    if (pkg.type !== "module") {
+      throw new Error(
+        `${pkgPath}: fastagent channels are ESM — set "type": "module" first ` +
+          `(this changes how Node treats the package's .js/.ts files; review your existing code)`,
+      );
+    }
+    writePkg = typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string"; // dep absent — add it (keep an existing pin)
   } else {
-    pkg = { name: toPackageName(dir), private: true, type: "module" };
-    needsWrite = true;
+    pkg = { name: toPackageName(dir), private: true, type: "module" }; // greenfield: safe to set module
+    writePkg = true;
   }
-  if (needsWrite) {
+
+  let changed = false;
+  // @kid7st/fastagent is published to GitHub Packages; without the scope mapping `npm install` 404s.
+  const npmrcPath = join(dir, ".npmrc");
+  if (!(await exists(npmrcPath))) {
+    await writeFile(npmrcPath, NPMRC, { flag: "wx" });
+    changed = true;
+  }
+  if (writePkg) {
     pkg.dependencies ??= {};
     pkg.dependencies["@kid7st/fastagent"] = `^${await fastagentVersion()}`;
-    pkg.type ??= "module"; // a channel file uses ESM import
     await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
     changed = true;
   }
