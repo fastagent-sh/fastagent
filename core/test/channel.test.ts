@@ -52,4 +52,14 @@ describe("loadChannels (filesystem discovery)", () => {
     await writeFile(join(dir, "channels", "bad.mjs"), `export const notDefault = 1;`);
     await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must default-export \(agent\) => Routes/);
   });
+
+  it("rejects an async factory (the contract is synchronous; a Promise would mount zero routes)", async () => {
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    await writeFile(
+      join(dir, "channels", "async.mjs"),
+      `export default async () => ({ "POST /webhook": () => new Response("x") });`,
+    );
+    await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must return Routes synchronously/);
+  });
 });
