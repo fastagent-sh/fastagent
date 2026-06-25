@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineTool, loadTools, z } from "../src/index.ts";
+import { listToolFiles } from "../src/engines/pi/tool.ts";
 
 describe("defineTool", () => {
   it("builds a pi AgentTool: JSON-schema parameters, validated + auto-wrapped execute", async () => {
@@ -59,6 +60,18 @@ describe("loadTools (filesystem discovery)", () => {
     expect(tools.map((t) => t.name)).toEqual(["ping"]); // filename = name
     expect(collisions).toEqual([]);
     expect((await tools[0]!.execute("c", {})).details).toBe("pong");
+  });
+
+  it("listToolFiles lists tool names from filenames WITHOUT importing them (build summary, no execution)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-tools-"));
+    expect(await listToolFiles(dir)).toEqual([]); // no tools/ dir yet
+    await mkdir(join(dir, "tools"));
+    await writeFile(join(dir, "tools", "lookup-order.ts"), "throw new Error('would crash if imported')");
+    await writeFile(join(dir, "tools", "alpha.mjs"), "export default {}");
+    await writeFile(join(dir, "tools", "types.d.ts"), "export {}"); // excluded
+    await writeFile(join(dir, "tools", "notes.md"), "x"); // excluded (not a tool ext)
+    // Sorted basenames; the crashing .ts is listed (proving names come from the filesystem, not import).
+    expect(await listToolFiles(dir)).toEqual(["alpha", "lookup-order"]);
   });
 
   it("fails visibly when a tool file does not default-export a tool", async () => {
