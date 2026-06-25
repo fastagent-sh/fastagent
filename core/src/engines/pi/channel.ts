@@ -70,26 +70,22 @@ export async function loadChannels(
       // A channel constructed at startup may reject a misconfig (e.g. an unset secret) — name the file.
       throw new Error(`channels/${entry.name}: ${(error as Error).message}`);
     }
-    // The contract is a synchronous Routes object. Reject anything else: null/undefined or a wrong
-    // primitive would make Object.entries throw unwrapped, and a Promise (async factory) or an array
-    // would yield zero routes — silently falling back to /invoke. Validate positively, fail visibly.
-    const ok =
-      declared !== null &&
-      typeof declared === "object" &&
-      !Array.isArray(declared) &&
-      typeof (declared as { then?: unknown }).then !== "function";
-    if (!ok) {
-      const got =
-        declared === null
-          ? "null"
-          : Array.isArray(declared)
-            ? "an array"
-            : typeof (declared as { then?: unknown })?.then === "function"
-              ? "a Promise"
-              : typeof declared;
-      throw new Error(`channels/${entry.name} must return Routes ((agent) => Record<string, handler>), got ${got}`);
+    // The real invariant: an authored channels/ file must contribute at least one route. Assert that
+    // directly rather than enumerating bad shapes — a Promise (async factory), a Map/Set, an array, a
+    // primitive, or an empty object all yield zero Object.entries and would otherwise silently fall
+    // back to /invoke; null/undefined would throw unwrapped.
+    if (declared === null || typeof declared !== "object") {
+      throw new Error(
+        `channels/${entry.name} must return a Routes object, got ${declared === null ? "null" : typeof declared}`,
+      );
     }
-    for (const [route, handler] of Object.entries(declared)) {
+    const declaredRoutes = Object.entries(declared);
+    if (declaredRoutes.length === 0) {
+      throw new Error(
+        `channels/${entry.name} declared no routes — return a non-empty { "METHOD /path": handler } object (a Promise, Map, array, or {} yields none)`,
+      );
+    }
+    for (const [route, handler] of declaredRoutes) {
       if (typeof handler !== "function") {
         throw new Error(
           `channels/${entry.name}: route "${route}" must map to a handler function, got ${typeof handler}`,
