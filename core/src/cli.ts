@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import { watch as watchTree } from "chokidar";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import type { Agent } from "./agent.ts";
@@ -27,6 +28,8 @@ import { loadChannels } from "./engines/pi/channel.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { fastagentVersion } from "./engines/pi/version.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
+import { FASTAGENT_AUTH_PATH } from "./engines/pi/auth.ts";
+import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 import {
   type LoadedDefinition,
@@ -49,6 +52,7 @@ function usage(code: number): never {
   fastagent chat   [dir] [--model provider/modelId] [--global-skills]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
+  fastagent login [provider]
   fastagent --version
 
   dev    assemble the agent in dir (default .) and serve a local HTTP channel.
@@ -118,6 +122,7 @@ else if (command === "chat") await runChat();
 else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
 else if (command === "add") await runAdd();
+else if (command === "login") await runLogin();
 else usage(1);
 
 /** `fastagent models`: print every registered "provider/modelId" to stdout (pipe-friendly). */
@@ -247,6 +252,68 @@ async function runAdd(): Promise<void> {
   console.error(`    fastagent dev   # serve the webhook locally`);
 }
 
+/**
+ * `fastagent login [provider]`: authenticate a model provider into `~/.fastagent/auth.json`. An
+ * OAuth-capable provider runs the device/browser flow; any other provider id stores an API key. The
+ * flow logic lives in engines/pi/login.ts; here we supply the terminal IO (readline + browser open).
+ */
+async function runLogin(): Promise<void> {
+  const io = terminalLoginIO();
+  const result = await loginFlow(io, { provider: positionals[1] }).catch(failStartup);
+  console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${FASTAGENT_AUTH_PATH}`);
+}
+
+/** Best-effort open a URL in the default browser; failure is fine (the URL is always printed too). */
+function openBrowser(url: string): void {
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  spawn(cmd, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).on("error", () => {});
+}
+
+/** Read one line of input with NO echo (for API keys), via raw-mode stdin. */
+function readHidden(message: string): Promise<string> {
+  return new Promise((resolveLine, reject) => {
+    const stdin = process.stdin;
+    process.stderr.write(message);
+    const wasRaw = stdin.isRaw ?? false;
+    stdin.setRawMode?.(true);
+    stdin.resume();
+    let buf = "";
+    const done = (fn: () => void) => {
+      stdin.off("data", onData);
+      stdin.setRawMode?.(wasRaw);
+      stdin.pause();
+      process.stderr.write("\n");
+      fn();
+    };
+    const onData = (d: Buffer) => {
+      for (const ch of d.toString("utf8")) {
+        if (ch === "\r" || ch === "\n") return done(() => resolveLine(buf));
+        if (ch === "\u0003") return done(() => reject(new Error("cancelled"))); // Ctrl-C
+        if (ch === "\u007f" || ch === "\b") buf = buf.slice(0, -1);
+        else if (ch >= " ") buf += ch;
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+/** Terminal IO for the login flow: a fresh readline per visible prompt, raw-mode for hidden input. */
+function terminalLoginIO(): LoginIO {
+  return {
+    print: (line) => console.error(line),
+    prompt: async (message) => {
+      const rl = createInterface({ input: process.stdin, output: process.stderr });
+      try {
+        return await rl.question(message);
+      } finally {
+        rl.close();
+      }
+    },
+    promptHidden: (message) => readHidden(message),
+    openUrl: openBrowser,
+  };
+}
+
 /** Run `npm install` in `cwd` (inherit stdio so the user sees progress). Returns the exit code. */
 function npmInstall(cwd: string): Promise<number> {
   return new Promise((resolveCode) => {
@@ -288,7 +355,7 @@ async function reportAuth(modelSpec: string): Promise<void> {
     // the right env var (it is provider-specific and pi-ai's mapping is not exported). Keep the
     // env path generic so we never advertise a key that can't satisfy the probed provider.
     console.error(
-      `[fastagent] warn: no credentials for "${provider}" — set the provider's API key in .env (or place ~/.fastagent/auth.json); invokes will fail until then`,
+      `[fastagent] warn: no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
     );
   }
 }
