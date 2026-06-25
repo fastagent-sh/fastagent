@@ -207,12 +207,24 @@ const channel: ChannelModule = (agent) => ({
 export default channel;
 `;
 
+/** The path `add <kind>` scaffolds to. */
+function channelPath(dir: string, kind: "github"): string {
+  return join(dir, "channels", `${kind}.ts`);
+}
+
+/** Whether a channel file already exists — checked BEFORE any package mutation, so a no-clobber
+ *  re-add is a zero-side-effect failure (it must not leave dependency/registry writes behind). */
+export async function channelExists(dir: string, kind: "github"): Promise<boolean> {
+  return exists(channelPath(dir, kind));
+}
+
 /**
  * Scaffold `channels/<kind>.ts` into {@link dir}. Only `github` today. Never clobbers an existing
- * file — the `on()` glue is authored content. Returns the written path.
+ * file — the `on()` glue is authored content. Returns the written path. (Callers check
+ * {@link channelExists} first; the wx write here is the TOCTOU safety net.)
  */
 export async function scaffoldChannel(dir: string, kind: "github"): Promise<string> {
-  const file = join(dir, "channels", `${kind}.ts`);
+  const file = channelPath(dir, kind);
   if (await exists(file)) {
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
   }

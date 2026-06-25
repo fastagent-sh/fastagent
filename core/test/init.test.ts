@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -231,6 +231,19 @@ describe("add: fastagent add github", () => {
     const out = await cliInit(["add", "github"], dir);
     expect(out).toMatch(/"type": "module"/);
     expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // refused before scaffolding
+  });
+
+  it("a re-add (channel exists) fails without mutating package.json/.npmrc", async () => {
+    const dir = await freshDir();
+    await cliInit(["add", "github"], dir); // first add creates channel + package.json + .npmrc
+    // Simulate a workspace that kept the channel file but lost its deps/registry config.
+    await rm(join(dir, "package.json"));
+    await rm(join(dir, ".npmrc"));
+    const out = await cliInit(["add", "github"], dir);
+    expect(out).toMatch(/already exists/);
+    // The no-clobber failure must be side-effect-free: neither file is recreated.
+    expect(await exists(join(dir, "package.json"))).toBe(false);
+    expect(await exists(join(dir, ".npmrc"))).toBe(false);
   });
 
   it("appends the @kid7st registry mapping to an existing .npmrc that lacks it", async () => {
