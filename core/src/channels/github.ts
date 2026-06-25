@@ -93,14 +93,22 @@ export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions
     // is logged to stderr — after the 202 there is no response body, so these lines are the operator's
     // only signal that a turn ran (and the failure sink that keeps a post-ACK error from going
     // unhandled). Concurrency safety = the engine's per-session lease.
-    for (const { session, text } of on(event)) {
-      const label = event.action ? `${event.event}.${event.action}` : event.event;
-      console.error(`[github] turn start: session=${session} event=${label} delivery=${event.deliveryId}`);
+    const intents = on(event);
+    const label = event.action ? `${event.event}.${event.action}` : event.event;
+    for (let i = 0; i < intents.length; i++) {
+      const { session, text } = intents[i] as Intent;
+      // A per-turn correlation id: deliveryId is unique per webhook, the index disambiguates the
+      // multiple turns one delivery can fan out to (session, by contract, recurs across deliveries).
+      // It threads through start/done/failed so a terminal line joins back to its start.
+      const turn = `${event.deliveryId}#${i}`;
+      console.error(`[github] turn start: turn=${turn} session=${session} event=${label}`);
       const startedAt = Date.now();
       void collect(agent.invoke({ session }, { text })).then(
-        () => console.error(`[github] turn done: session=${session} (${Date.now() - startedAt}ms)`),
+        () => console.error(`[github] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`),
         (error) =>
-          console.error(`[github] turn failed: session=${session} (${Date.now() - startedAt}ms): ${String(error)}`),
+          console.error(
+            `[github] turn failed: turn=${turn} session=${session} (${Date.now() - startedAt}ms): ${String(error)}`,
+          ),
       );
     }
     return new Response(null, { status: 202 });

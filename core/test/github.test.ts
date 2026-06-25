@@ -215,8 +215,8 @@ describe("github channel", () => {
     });
     expect((await ch(signed(PR_OPENED.body, PR_OPENED.headers))).status).toBe(202);
     await flush();
-    // The failure sink ran: logged with the session, and (since it ran) not an unhandled rejection.
-    expect(errors.some((e) => /turn failed: session=s/.test(e) && /boom/.test(e))).toBe(true);
+    // The failure sink ran: logged with the turn correlation id, and (since it ran) not unhandled.
+    expect(errors.some((e) => /turn failed: turn=d1#0 session=s/.test(e) && /boom/.test(e))).toBe(true);
     spy.mockRestore();
   });
 
@@ -232,9 +232,12 @@ describe("github channel", () => {
     });
     expect((await ch(signed(PR_OPENED.body, PR_OPENED.headers))).status).toBe(202);
     await flush();
-    // start names the session + the trigger source (event.action), done confirms completion.
-    expect(errors.some((e) => /turn start: session=s/.test(e) && /event=pull_request\.opened/.test(e))).toBe(true);
-    expect(errors.some((e) => /turn done: session=s/.test(e))).toBe(true);
+    // start carries the per-turn correlation id (deliveryId#index) + trigger source; done repeats the
+    // id so it joins back to its start (the lifecycle log's whole point).
+    expect(errors.some((e) => /turn start: turn=d1#0 session=s/.test(e) && /event=pull_request\.opened/.test(e))).toBe(
+      true,
+    );
+    expect(errors.some((e) => /turn done: turn=d1#0 session=s/.test(e))).toBe(true);
     spy.mockRestore();
   });
 });
