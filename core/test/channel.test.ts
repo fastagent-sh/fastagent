@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent } from "../src/index.ts";
@@ -71,6 +71,18 @@ describe("loadChannels (filesystem discovery)", () => {
     const { routes, collisions } = await loadChannels(dir, fakeAgent);
     expect(Object.keys(routes).sort()).toEqual(["GET /x", "POST /x"]);
     expect(collisions).toEqual([]);
+  });
+
+  it("rejects a symlinked channels/ directory (the build omits it; dev would diverge)", async () => {
+    const dir = await freshDir();
+    const real = await freshDir();
+    await mkdir(join(real, "ch"));
+    await writeFile(
+      join(real, "ch", "github.mjs"),
+      `export default () => ({ "POST /webhook": () => new Response("x") });`,
+    );
+    await symlink(join(real, "ch"), join(dir, "channels"));
+    await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/symlink/);
   });
 
   it("fails visibly when a channel file does not default-export a function", async () => {
