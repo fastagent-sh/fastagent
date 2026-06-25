@@ -537,7 +537,12 @@ async function runBuild(): Promise<void> {
     force: values.force ?? false,
   }).catch(failStartup);
 
-  const toolFiles = await listToolFiles(outDir); // names from the bundled tools/, without importing them
+  // Names from the bundled tools/, without importing them. The build already succeeded, so a failure
+  // reading the summary's tool list must not fail the build — warn (visibly) and omit the line.
+  const toolFiles = await listToolFiles(outDir).catch((error: Error) => {
+    console.error(`[fastagent] warn: ${error.message}`);
+    return [] as string[];
+  });
   console.error(`[fastagent] built:  ${outDir}`);
   console.error(`[fastagent] model:  ${manifest.model}`);
   console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);

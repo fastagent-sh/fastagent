@@ -146,16 +146,23 @@ export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; coll
  * deps may not be installed at build time). Missing `tools/` returns none.
  */
 export async function listToolFiles(dir: string): Promise<string[]> {
+  const toolsDir = join(dir, "tools");
   let entries: Dirent[];
   try {
-    entries = await readdir(join(dir, "tools"), { withFileTypes: true });
-  } catch {
-    return [];
+    entries = await readdir(toolsDir, { withFileTypes: true });
+  } catch (error) {
+    // Mirror loadTools: a missing tools/ is normal (none); any other failure is real — surface it
+    // rather than swallowing an unreadable dir into a false "no tools".
+    if ((error as NodeJS.ErrnoException).code === "not_found" || (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw new Error(`cannot read ${toolsDir}: ${(error as Error).message}`);
   }
-  return entries
+  // Dedup by basename, mirroring loadTools' "names that actually load" (foo.ts + foo.js → one foo).
+  const names = entries
     .filter((e) => e.isFile() && TOOL_EXTS.has(extname(e.name)) && !e.name.endsWith(".d.ts"))
-    .map((e) => basename(e.name, extname(e.name)))
-    .sort((a, b) => a.localeCompare(b));
+    .map((e) => basename(e.name, extname(e.name)));
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b));
 }
 
 /**
