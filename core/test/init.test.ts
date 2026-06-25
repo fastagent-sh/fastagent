@@ -269,13 +269,19 @@ describe("add: fastagent add github", () => {
     expect(out).toMatch(/re-includes \.env|would ship the secret/);
   });
 
-  it("refuses a package-less workspace that has authored .js (would be ESM-flipped and break)", async () => {
-    const dir = await freshDir();
-    await writeFile(join(dir, "helper.js"), "module.exports = 1;\n"); // CommonJS, no package.json
-    const out = await cliInit(["add", "github"], dir);
-    expect(out).toMatch(/\.js files but no package\.json|"type": "module"/);
-    expect(await exists(join(dir, "package.json"))).toBe(false); // not auto-created
-    expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // refused before scaffolding
+  it("refuses a package-less workspace with authored .js/.ts (would be ESM-flipped and break)", async () => {
+    // The whole ambiguous-extension class, not just .js: a bare .ts is CommonJS-by-default too.
+    for (const [name, body] of [
+      ["helper.js", "module.exports = 1;\n"],
+      ["helper.ts", "const x: number = 1; module.exports = x;\n"],
+    ] as const) {
+      const dir = await freshDir();
+      await writeFile(join(dir, name), body); // CommonJS, no package.json
+      const out = await cliInit(["add", "github"], dir);
+      expect(out).toMatch(/no package\.json|"type": "module"/);
+      expect(await exists(join(dir, "package.json"))).toBe(false); // not auto-created
+      expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // refused before scaffolding
+    }
   });
 
   it("appends the @kid7st registry mapping to an existing .npmrc that lacks it", async () => {
