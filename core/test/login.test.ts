@@ -1,13 +1,12 @@
+import { AuthStorage, InMemoryAuthStorageBackend } from "@earendil-works/pi-coding-agent";
+import type { AuthStorageBackend } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { AuthStore, LoginIO } from "../src/engines/pi/login.ts";
 import { loginFlow } from "../src/engines/pi/login.ts";
 
-/** A fake AuthStore recording the calls the flow makes (anthropic/openai-codex are OAuth-capable). */
-function fakeStore(opts: { persistError?: Error } = {}) {
+/** A fake AuthStore for the ROUTING tests (anthropic/openai-codex are OAuth-capable); persistence ok. */
+function fakeStore() {
   const calls: { login?: string; set?: [string, { type: string; key: string }] } = {};
-  // Model pi's record-don't-throw persistence: set/login "succeed" at the call site but a recorded
-  // error remains, drained afterwards — exactly the silent-failure window assertPersisted must catch.
-  const errors = opts.persistError ? [opts.persistError] : [];
   const store: AuthStore = {
     getOAuthProviders: () => [
       { id: "anthropic", name: "Anthropic (Claude Pro/Max)" },
@@ -19,7 +18,7 @@ function fakeStore(opts: { persistError?: Error } = {}) {
     set: (provider, credential) => {
       calls.set = [provider, credential];
     },
-    drainErrors: () => errors.splice(0),
+    drainErrors: () => [],
   };
   return { store, calls };
 }
@@ -74,13 +73,67 @@ describe("loginFlow", () => {
     expect(calls.set).toBeUndefined();
   });
 
-  it("a silent persistence failure (recorded, not thrown) becomes a visible error — never a false success", async () => {
-    // Both routes: a corrupt/unwritable ~/.fastagent/auth.json makes AuthStorage record (not throw),
-    // so the flow must drain and surface it rather than reporting "saved".
-    for (const provider of ["anthropic", "openai"]) {
-      const { store } = fakeStore({ persistError: new Error("EACCES: permission denied") });
-      const io = fakeIO({ hidden: ["sk-123"] }).io;
-      await expect(loginFlow(io, { provider, store })).rejects.toThrow(/failed to save credentials.*EACCES/);
-    }
+  // The persistence-failure paths are tested against the REAL AuthStorage (not a mock of the binding the
+  // fix depends on): pi RECORDS failures into drainErrors() rather than throwing, and the flow must drain.
+  it("real AuthStorage: a corrupt auth file fails up front (preflight), before any prompt or OAuth round-trip", async () => {
+    const backend = new InMemoryAuthStorageBackend();
+    backend.withLock(() => ({ result: undefined, next: "{ not valid json" })); // corrupt content at construction
+    const store = AuthStorage.fromStorage(backend);
+    await expect(loginFlow(fakeIO({ hidden: ["sk"] }).io, { provider: "openai", store })).rejects.toThrow(
+      /auth file unusable/,
+    );
+  });
+
+  it("real AuthStorage: a write failure recorded by persistProviderChange surfaces as a thrown error", async () => {
+    // Reads clean at construction, throws on write — exercises the REAL persistProviderChange
+    // catch → recordError → drainErrors binding (the one new risk point, not a fake of it).
+    const backend: AuthStorageBackend = {
+      withLock: (fn) => {
+        const { result, next } = fn(undefined);
+        if (next !== undefined) throw new Error("EROFS: read-only file system");
+        return result;
+      },
+      withLockAsync: async (fn) => {
+        const { result, next } = await fn(undefined);
+        if (next !== undefined) throw new Error("EROFS: read-only file system");
+        return result;
+      },
+    };
+    const store = AuthStorage.fromStorage(backend);
+    await expect(loginFlow(fakeIO({ hidden: ["sk-x"] }).io, { provider: "openai", store })).rejects.toThrow(
+      /failed to save credentials.*EROFS/,
+    );
+  });
+
+  it("c1: a server win that leaves the manual-paste prompt pending is aborted, so the CLI does not hang", async () => {
+    let manualAborted = false;
+    const io: LoginIO = {
+      print: () => {},
+      // The manual-paste prompt never receives an answer (the browser won); it must be aborted, not hang.
+      prompt: (_message, signal) =>
+        new Promise<string>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            manualAborted = true;
+            reject(new Error("aborted"));
+          });
+        }),
+      promptHidden: async () => "",
+      openUrl: () => {},
+    };
+    const store: AuthStore = {
+      getOAuthProviders: () => [{ id: "anthropic", name: "Anthropic" }],
+      // pi starts the concurrent manual prompt, then the local server wins: resolve without awaiting it
+      // (and .catch it, as pi does, so the later abort-rejection stays handled).
+      login: async (_id, callbacks) => {
+        void callbacks.onManualCodeInput?.().catch(() => {});
+      },
+      set: () => {},
+      drainErrors: () => [],
+    };
+    await expect(loginFlow(io, { provider: "anthropic", store })).resolves.toEqual({
+      provider: "anthropic",
+      method: "oauth",
+    });
+    expect(manualAborted).toBe(true);
   });
 });

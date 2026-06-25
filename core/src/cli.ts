@@ -301,10 +301,10 @@ function readHidden(message: string): Promise<string> {
 function terminalLoginIO(): LoginIO {
   return {
     print: (line) => console.error(line),
-    prompt: async (message) => {
+    prompt: async (message, signal) => {
       const rl = createInterface({ input: process.stdin, output: process.stderr });
       try {
-        return await rl.question(message);
+        return await (signal ? rl.question(message, { signal }) : rl.question(message));
       } finally {
         rl.close();
       }
@@ -351,7 +351,7 @@ async function reportAuth(modelSpec: string): Promise<void> {
   const source = await probeAuthSource(createPiModels(), modelSpec);
   console.error(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`}`);
   if (source === undefined) {
-    // Lead with `pi login`: the default model (openai-codex) is OAuth-only, and we cannot name
+    // Lead with `fastagent login`: the default model (openai-codex) is OAuth-only, and we cannot name
     // the right env var (it is provider-specific and pi-ai's mapping is not exported). Keep the
     // env path generic so we never advertise a key that can't satisfy the probed provider.
     console.error(

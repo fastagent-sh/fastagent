@@ -12,8 +12,8 @@ import { FASTAGENT_AUTH_PATH } from "./auth.ts";
 /** Terminal interaction, injectable for tests (no real stdin/stdout or browser in unit tests). */
 export interface LoginIO {
   print(line: string): void;
-  /** Read a line of visible input (codes, selections). */
-  prompt(message: string): Promise<string>;
+  /** Read a line of visible input (codes, selections); rejects if `signal` aborts (cancellable paste). */
+  prompt(message: string, signal?: AbortSignal): Promise<string>;
   /** Read a line with no echo (API keys). */
   promptHidden(message: string): Promise<string>;
   /** Best-effort open a URL in the browser (printed regardless). */
@@ -55,7 +55,14 @@ async function chooseFromList(
   return options.find((o) => o.id === answer)?.id;
 }
 
-function oauthCallbacks(io: LoginIO, signal?: AbortSignal): OAuthLoginCallbacks {
+/**
+ * pi's anthropic/codex `onAuth` tells the user they may paste the redirect URL from another machine,
+ * but that paste is only offered CONCURRENTLY with the local callback server when `onManualCodeInput`
+ * is wired — otherwise the flow blocks on the server and the instruction is an empty promise. We wire
+ * it to a cancellable prompt (`manualPromptSignal`): a browser/server win leaves that prompt pending,
+ * so the caller aborts the signal to cancel it instead of hanging the one-shot CLI on stdin.
+ */
+function oauthCallbacks(io: LoginIO, manualPromptSignal: AbortSignal, signal?: AbortSignal): OAuthLoginCallbacks {
   return {
     onAuth: ({ url, instructions }) => {
       io.print(`Open this URL to authorize:\n  ${url}`);
@@ -67,6 +74,8 @@ function oauthCallbacks(io: LoginIO, signal?: AbortSignal): OAuthLoginCallbacks 
       io.openUrl(verificationUri);
     },
     onPrompt: ({ message }) => io.prompt(message),
+    onManualCodeInput: () =>
+      io.prompt("…or paste the final redirect URL here if your browser is on another machine: ", manualPromptSignal),
     onSelect: ({ message, options }) => chooseFromList(io, message, options),
     onProgress: (message) => io.print(`  ${message}`),
     signal,
@@ -83,6 +92,9 @@ export async function loginFlow(
   options: { provider?: string; authPath?: string; store?: AuthStore; signal?: AbortSignal } = {},
 ): Promise<LoginResult> {
   const store: AuthStore = options.store ?? AuthStorage.create(options.authPath ?? FASTAGENT_AUTH_PATH);
+  // A corrupt/unwritable file is recorded at construction and makes every later write a silent no-op;
+  // surface it before any prompt or the OAuth round-trip, not after the user has done the work.
+  preflightAuthFile(store);
   const oauthProviders = store.getOAuthProviders();
 
   let provider = options.provider;
@@ -96,7 +108,14 @@ export async function loginFlow(
   }
 
   if (oauthProviders.some((p) => p.id === provider)) {
-    await store.login(provider, oauthCallbacks(io, options.signal));
+    const promptAbort = new AbortController();
+    try {
+      await store.login(provider, oauthCallbacks(io, promptAbort.signal, options.signal));
+    } finally {
+      // A server/browser win leaves the concurrent manual-paste prompt pending on stdin; abort it so
+      // the one-shot CLI can exit (pi does not await that prompt once the server returns a code).
+      promptAbort.abort();
+    }
     assertPersisted(store, provider);
     return { provider, method: "oauth" };
   }
@@ -117,5 +136,17 @@ function assertPersisted(store: AuthStore, provider: string): void {
   const errors = store.drainErrors();
   if (errors.length > 0) {
     throw new Error(`failed to save credentials for "${provider}": ${errors.map((e) => e.message).join("; ")}`);
+  }
+}
+
+/**
+ * Drain errors recorded at AuthStorage construction (reload()'s corrupt/unwritable load) so a known-bad
+ * auth file fails up front — mirrors fastagentCredentialStore.read's "corrupt auth file" warning, and
+ * stops the user from completing an OAuth flow that persistProviderChange would silently refuse to save.
+ */
+function preflightAuthFile(store: AuthStore): void {
+  const errors = store.drainErrors();
+  if (errors.length > 0) {
+    throw new Error(`auth file unusable: ${errors.map((e) => e.message).join("; ")} — fix or remove it`);
   }
 }

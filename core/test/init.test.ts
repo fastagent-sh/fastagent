@@ -45,9 +45,9 @@ describe("init: scaffoldWorkspace", () => {
     expect(warnings).toEqual([]);
 
     // .env.example documents env knobs without misleading: all-commented (sets nothing), and it
-    // states the default model uses OAuth (`pi login`), never implying an API key is required.
+    // states the default model uses OAuth (`fastagent login`), never implying an API key is required.
     const envExample = await readFile(join(dir, ".env.example"), "utf8");
-    expect(envExample).toMatch(/pi login/);
+    expect(envExample).toMatch(/fastagent login/);
     expect(envExample).toMatch(/OAuth, not an API key/);
     for (const line of envExample.split("\n")) {
       if (line.trim() !== "") expect(line.startsWith("#")).toBe(true); // every non-blank line is a comment
