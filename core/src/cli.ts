@@ -288,7 +288,7 @@ async function reportAuth(modelSpec: string): Promise<void> {
     // the right env var (it is provider-specific and pi-ai's mapping is not exported). Keep the
     // env path generic so we never advertise a key that can't satisfy the probed provider.
     console.error(
-      `[fastagent] warn: no credentials for "${provider}" — authenticate with \`pi login\`, or set the provider's API key in .env; invokes will fail until then`,
+      `[fastagent] warn: no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
     );
   }
 }
