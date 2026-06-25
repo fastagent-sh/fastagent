@@ -29,7 +29,7 @@ import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
-import { ensureFastagentDep, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
+import { channelExists, ensureFastagentDep, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
 import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
@@ -208,10 +208,14 @@ async function runAdd(): Promise<void> {
     console.error(`usage: fastagent add github [dir]   (the github channel is the only one today)`);
     process.exit(1);
   }
-  // Ensure the workspace can install + load a channel (ESM package, the @kid7st/fastagent dep, the
-  // registry mapping) BEFORE writing the file — a refusal (e.g. a CommonJS package) then leaves no
-  // orphan channels/ file. The file imports @kid7st/fastagent, resolved from the workspace, not the
-  // CLI install.
+  // All preconditions BEFORE any write, so each failure is side-effect-free. (1) No-clobber: a re-add
+  // must not mutate package.json/.npmrc and then error on the existing file. (2) ensureFastagentDep
+  // validates the package is ESM (refusing a CommonJS one) before it writes deps, so that refusal
+  // leaves no orphan channel either. The channel file imports @kid7st/fastagent, resolved from the
+  // workspace (not the CLI install), so the dep + registry must live there.
+  if (await channelExists(target, kind).catch(failStartup)) {
+    failStartup(new Error(`channels/${kind}.ts already exists — edit it, or remove it to re-scaffold`));
+  }
   const { depAdded, npmrcAdded } = await ensureFastagentDep(target).catch(failStartup);
   const file = await scaffoldChannel(target, kind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
