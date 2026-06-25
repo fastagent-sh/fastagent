@@ -29,13 +29,7 @@ import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
-import {
-  channelExists,
-  ensureEnvIgnored,
-  ensureFastagentDep,
-  scaffoldChannel,
-  scaffoldWorkspace,
-} from "./engines/pi/init.ts";
+import { assertChannelReady, channelExists, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
 import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
@@ -214,28 +208,18 @@ async function runAdd(): Promise<void> {
     console.error(`usage: fastagent add github [dir]   (the github channel is the only one today)`);
     process.exit(1);
   }
-  // All preconditions BEFORE any write, so each failure is side-effect-free. (1) No-clobber: a re-add
-  // must not mutate package.json/.npmrc and then error on the existing file. (2) ensureFastagentDep
-  // validates the package is ESM (refusing a CommonJS one) before it writes deps, so that refusal
-  // leaves no orphan channel either. The channel file imports @kid7st/fastagent, resolved from the
-  // workspace (not the CLI install), so the dep + registry must live there.
+  // add SCAFFOLDS a channel into a ready workspace; it does not bootstrap one (that is `init`'s job).
+  // Preconditions before the write, so a refusal is side-effect-free: the channel must not already
+  // exist, and the workspace must be a fastagent-ready ESM package that declares the dependency.
   if (await channelExists(target, kind).catch(failStartup)) {
     failStartup(new Error(`channels/${kind}.ts already exists — edit it, or remove it to re-scaffold`));
   }
-  const { depAdded, npmrcAdded } = await ensureFastagentDep(target).catch(failStartup);
-  // Ignore .env before recommending the secret go there — else `fastagent build` ships it in the artifact.
-  const envStatus = await ensureEnvIgnored(target).catch(failStartup);
+  await assertChannelReady(target).catch(failStartup);
   const file = await scaffoldChannel(target, kind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
-  if (envStatus === "exposed") {
-    console.error(
-      `[fastagent] warn: a .fastagentignore rule re-includes .env — \`fastagent build\` would ship the secret; remove that rule or store the secret elsewhere`,
-    );
-  }
   console.error(`  next steps:`);
-  console.error(`    set GITHUB_WEBHOOK_SECRET in .env${envStatus === "added" ? " (added to .gitignore)" : ""}`);
-  if (depAdded) console.error(`    npm install   # added @kid7st/fastagent to package.json`);
-  else if (npmrcAdded) console.error(`    npm install   # .npmrc now maps @kid7st to GitHub Packages`);
+  console.error(`    npm install                      # if @kid7st/fastagent is not installed yet`);
+  console.error(`    put GITHUB_WEBHOOK_SECRET in a gitignored .env`);
   console.error(`    edit channels/github.ts — map events to intents in on()`);
   console.error(`    fastagent dev   # serve the webhook locally`);
 }

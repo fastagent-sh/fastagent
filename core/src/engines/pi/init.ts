@@ -27,9 +27,8 @@
  * It does NOT defend against every pathological pre-existing target state (TOCTOU, read-only
  * dirs, FIFOs, mid-write disk-full, …): a local scaffolding command recovered by delete-and-retry.
  */
-import type { Dirent } from "node:fs";
 import { access, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { loadRootIgnore } from "./definition.ts";
 import { fastagentVersion } from "./version.ts";
 
@@ -225,146 +224,53 @@ export async function channelExists(dir: string, kind: "github"): Promise<boolea
  * {@link channelExists} first; the wx write here is the TOCTOU safety net.)
  */
 export async function scaffoldChannel(dir: string, kind: "github"): Promise<string> {
+  const channelsDir = join(dir, "channels");
+  // A symlinked channels/ is served-then-rejected by loadChannels and skipped by the build, so a file
+  // written through it (outside the workspace) can neither load nor ship. Require a real directory.
+  const st = await lstat(channelsDir).catch(() => undefined);
+  if (st?.isSymbolicLink()) {
+    throw new Error(`${channelsDir} is a symlink — use a real directory (the build does not follow it)`);
+  }
   const file = channelPath(dir, kind);
   if (await exists(file)) {
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
   }
-  await mkdir(dirname(file), { recursive: true });
+  await mkdir(channelsDir, { recursive: true });
   await writeFile(file, CHANNEL_GITHUB_TS, { flag: "wx" });
   return file;
 }
 
 /**
- * Ensure the workspace can install and load an added channel: its file imports `@kid7st/fastagent`
- * (and the `/github` subpath), and `loadChannels` imports that file from the WORKSPACE (not the CLI
- * install), so both the dependency AND the registry mapping must live in the workspace. Ensures two
- * files (each only when absent — never overwriting authored content), so `npm install` then works:
- *   - `.npmrc`: maps the `@kid7st` scope to GitHub Packages (the default registry 404s otherwise);
- *   - `package.json`: declares `@kid7st/fastagent` (a minimal ESM package.json is created if absent).
- * Returns true when it created or changed either, so the caller can prompt for `npm install`.
+ * Verify the workspace is ready to host a channel: a package.json that is ESM (`type: "module"`) and
+ * declares `@kid7st/fastagent` (the channel file imports it, resolved from the workspace). `add` does
+ * NOT bootstrap this — creating package.json, choosing a module type, writing .npmrc, or ignoring
+ * .env is `fastagent init`'s job. Here we only CHECK and guide, never mutate; failures are actionable.
  */
-export async function ensureFastagentDep(dir: string): Promise<{ depAdded: boolean; npmrcAdded: boolean }> {
-  // Validate BEFORE writing anything, so a refusal leaves no orphan files.
+export async function assertChannelReady(dir: string): Promise<void> {
   const pkgPath = join(dir, "package.json");
-  let raw: string | undefined;
+  let raw: string;
   try {
     raw = await readFile(pkgPath, "utf8");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`${dir}: not a fastagent code workspace (no package.json) — run \`fastagent init\` here first`);
+    }
+    throw e;
   }
-  let pkg: { type?: string; dependencies?: Record<string, string>; [k: string]: unknown };
-  let depAbsent: boolean;
-  if (raw !== undefined) {
-    try {
-      pkg = JSON.parse(raw);
-    } catch {
-      throw new Error(`${pkgPath}: invalid JSON — fix it before adding a channel`);
-    }
-    // A channel file is ESM (it imports @kid7st/fastagent). Node treats a .ts by the package's module
-    // type, so a non-module package can't load it — and silently flipping `type` would change how Node
-    // treats the user's existing .js. Refuse; let the user own the switch (this also covers an absent
-    // `type`, which defaults to CommonJS).
-    if (pkg.type !== "module") {
-      throw new Error(
-        `${pkgPath}: fastagent channels are ESM — set "type": "module" first ` +
-          `(this changes how Node treats the package's .js/.ts files; review your existing code)`,
-      );
-    }
-    depAbsent = typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string"; // keep an existing pin
-  } else {
-    // No package.json: Node treats .js as CommonJS by default. Creating one with type:module would
-    // flip any authored .js to ESM and break it — the implicit version of the explicit non-module
-    // refusal above. Only auto-create when there is no .js to break; otherwise refuse, same as above.
-    if (await hasAuthoredCode(dir)) {
-      throw new Error(
-        `${dir}: this workspace has .js/.ts files but no package.json (CommonJS by default), and fastagent ` +
-          `channels are ESM — add a package.json with "type": "module" (and migrate those files) first`,
-      );
-    }
-    pkg = { name: toPackageName(dir), private: true, type: "module" }; // greenfield: safe to set module
-    depAbsent = true;
-  }
-
-  // .npmrc must MAP the @kid7st scope to GitHub Packages (the dep is published there, not the default
-  // registry). Check the mapping, not just the file: append it to an existing .npmrc that lacks it.
-  const npmrcPath = join(dir, ".npmrc");
-  let npmrc: string | undefined;
+  let pkg: { type?: string; dependencies?: Record<string, string> };
   try {
-    npmrc = await readFile(npmrcPath, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-  }
-  let npmrcAdded = false;
-  if (npmrc === undefined) {
-    await writeFile(npmrcPath, NPMRC, { flag: "wx" });
-    npmrcAdded = true;
-  } else if (!/^@kid7st:registry=/m.test(npmrc)) {
-    await writeFile(
-      npmrcPath,
-      `${npmrc}${npmrc.endsWith("\n") ? "" : "\n"}@kid7st:registry=https://npm.pkg.github.com\n`,
-    );
-    npmrcAdded = true;
-  }
-
-  let depAdded = false;
-  if (depAbsent) {
-    pkg.dependencies ??= {};
-    pkg.dependencies["@kid7st/fastagent"] = `^${await fastagentVersion()}`;
-    await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-    depAdded = true;
-  }
-  return { depAdded, npmrcAdded };
-}
-
-/**
- * Whether the workspace has authored code whose module type DEPENDS on package.json "type" — i.e. a
- * bare `.js/.jsx/.ts/.tsx` (CommonJS by default) that flipping to type:module would break. The
- * explicit `.mjs/.cjs/.mts/.cts` are type-independent (always ESM/CJS), so they are safe and ignored.
- */
-const SKIP_SCAN_DIRS = new Set(["node_modules", ".git", ".fastagent"]);
-const AMBIGUOUS_EXTS = new Set([".js", ".jsx", ".ts", ".tsx"]);
-async function hasAuthoredCode(dir: string): Promise<boolean> {
-  let entries: Dirent[];
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
+    pkg = JSON.parse(raw);
   } catch {
-    return false;
+    throw new Error(`${pkgPath}: invalid JSON`);
   }
-  for (const e of entries) {
-    if (e.isSymbolicLink()) continue; // don't follow symlinks (consistent with the build)
-    if (e.isDirectory()) {
-      if (!SKIP_SCAN_DIRS.has(e.name) && (await hasAuthoredCode(join(dir, e.name)))) return true;
-    } else if (e.isFile() && AMBIGUOUS_EXTS.has(extname(e.name))) {
-      return true;
-    }
+  if (pkg.type !== "module") {
+    throw new Error(`${pkgPath}: fastagent channels are ESM — set "type": "module"`);
   }
-  return false;
-}
-
-/**
- * Ensure `.env` is git/build-ignored before recommending the user put a secret there. `fastagent
- * build` does NOT special-case secrets — it excludes only what the root `.gitignore`/`.fastagentignore`
- * say (loadRootIgnore) — so an un-ignored `.env` would ship the webhook secret in the artifact.
- * Mirrors init: append `.env` to `.gitignore` (created if absent) unless it is already ignored.
- *   - "already": .env was already ignored, nothing written;
- *   - "added": appended to .gitignore and the build now excludes it;
- *   - "exposed": appended, but a `.fastagentignore` rule (applied last) re-includes .env — the build
- *     would still ship it, so the caller must warn.
- */
-export async function ensureEnvIgnored(dir: string): Promise<"already" | "added" | "exposed"> {
-  if ((await loadRootIgnore(dir))?.ignores(".env")) return "already";
-  const gitignorePath = join(dir, ".gitignore");
-  let current = "";
-  try {
-    current = await readFile(gitignorePath, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  if (typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string") {
+    throw new Error(
+      `${pkgPath}: add "@kid7st/fastagent" to dependencies (then \`npm install\`) — the channel file imports it`,
+    );
   }
-  const sep = current === "" || current.endsWith("\n") ? "" : "\n";
-  await writeFile(gitignorePath, `${current}${sep}# secret — never commit, never ship in the build artifact\n.env\n`);
-  // Verify the postcondition against the authoritative matcher: a `.fastagentignore` `!.env` (fa is
-  // applied after .gitignore) can re-include it, so a successful write does not guarantee exclusion.
-  return (await loadRootIgnore(dir))?.ignores(".env") ? "added" : "exposed";
 }
 
 /**

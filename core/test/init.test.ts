@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,23 +200,33 @@ describe("init: scaffoldWorkspace", () => {
 });
 
 describe("add: fastagent add github", () => {
-  it("scaffolds channels/github.ts (adapter import + on() glue) and refuses to clobber it", async () => {
+  // A fastagent-ready workspace, as `fastagent init` produces it: an ESM package declaring the dep.
+  // `add` scaffolds INTO this; it never bootstraps it (that is init's job).
+  async function readyWorkspace(): Promise<string> {
     const dir = await freshDir();
+    await writeFile(
+      join(dir, "package.json"),
+      `${JSON.stringify({ type: "module", dependencies: { "@kid7st/fastagent": "^0.4.0" } }, null, 2)}\n`,
+    );
+    return dir;
+  }
+
+  it("scaffolds channels/github.ts into a ready workspace, mutates nothing else, and refuses to clobber", async () => {
+    const dir = await readyWorkspace();
     const out = await cliInit(["add", "github"], dir);
     expect(out).toContain("channels/github.ts");
-    expect(out).toMatch(/npm install/); // the dep was added to package.json
 
     const src = await readFile(join(dir, "channels", "github.ts"), "utf8");
     expect(src).toContain('from "@kid7st/fastagent/github"'); // the third-party adapter
     expect(src).toContain("POST /webhook");
     expect(src).toContain("on:"); // the app glue stub the user edits
 
-    // The channel imports @kid7st/fastagent from the workspace, so add ensures it is installable there:
-    // package.json declares the dep AND .npmrc maps the @kid7st scope to GitHub Packages.
-    const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
-    expect(pkg.dependencies["@kid7st/fastagent"]).toMatch(/^\^\d/);
-    expect(pkg.type).toBe("module");
-    expect(await readFile(join(dir, ".npmrc"), "utf8")).toContain("npm.pkg.github.com");
+    // add does NOT bootstrap: package.json is untouched and no .npmrc/.gitignore is written.
+    expect(JSON.parse(await readFile(join(dir, "package.json"), "utf8"))).toEqual({
+      type: "module",
+      dependencies: { "@kid7st/fastagent": "^0.4.0" },
+    });
+    expect(await exists(join(dir, ".npmrc"))).toBe(false);
 
     // A second add must not overwrite authored glue.
     const out2 = await cliInit(["add", "github"], dir);
@@ -224,73 +234,41 @@ describe("add: fastagent add github", () => {
     expect(await readFile(join(dir, "channels", "github.ts"), "utf8")).toBe(src);
   });
 
-  it("refuses on a non-module (CommonJS) package and writes no channel file", async () => {
-    const dir = await freshDir();
-    // A channel is ESM; fastagent must not silently flip an existing package's module type.
-    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "commonjs" }, null, 2)}\n`);
-    const out = await cliInit(["add", "github"], dir);
-    expect(out).toMatch(/"type": "module"/);
-    expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // refused before scaffolding
-  });
-
-  it("a re-add (channel exists) fails without mutating package.json/.npmrc", async () => {
-    const dir = await freshDir();
-    await cliInit(["add", "github"], dir); // first add creates channel + package.json + .npmrc
-    // Simulate a workspace that kept the channel file but lost its deps/registry config.
-    await rm(join(dir, "package.json"));
-    await rm(join(dir, ".npmrc"));
-    const out = await cliInit(["add", "github"], dir);
-    expect(out).toMatch(/already exists/);
-    // The no-clobber failure must be side-effect-free: neither file is recreated.
-    expect(await exists(join(dir, "package.json"))).toBe(false);
-    expect(await exists(join(dir, ".npmrc"))).toBe(false);
-  });
-
-  it("ignores .env so `fastagent build` won't ship the webhook secret", async () => {
-    const dir = await freshDir();
-    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
-    await cliInit(["add", "github"], dir);
-    expect((await readFile(join(dir, ".gitignore"), "utf8")).match(/^\.env$/gm)?.length).toBe(1); // added once
-  });
-
-  it("does not duplicate an already-ignored .env", async () => {
-    const dir = await freshDir();
-    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
-    await writeFile(join(dir, ".gitignore"), ".env\n");
-    await cliInit(["add", "github"], dir);
-    expect((await readFile(join(dir, ".gitignore"), "utf8")).match(/^\.env$/gm)?.length).toBe(1); // unchanged
-  });
-
-  it("warns when a .fastagentignore !.env re-includes .env (build still ships it)", async () => {
-    const dir = await freshDir();
-    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
-    await writeFile(join(dir, ".fastagentignore"), "!.env\n"); // explicitly re-includes .env for the build
-    const out = await cliInit(["add", "github"], dir);
-    expect(out).toMatch(/re-includes \.env|would ship the secret/);
-  });
-
-  it("refuses a package-less workspace with authored .js/.ts (would be ESM-flipped and break)", async () => {
-    // The whole ambiguous-extension class, not just .js: a bare .ts is CommonJS-by-default too.
-    for (const [name, body] of [
-      ["helper.js", "module.exports = 1;\n"],
-      ["helper.ts", "const x: number = 1; module.exports = x;\n"],
-    ] as const) {
-      const dir = await freshDir();
-      await writeFile(join(dir, name), body); // CommonJS, no package.json
+  it("refuses (writing nothing) when the workspace is not channel-ready, with an actionable message", async () => {
+    const cases: Array<[() => Promise<string>, RegExp]> = [
+      [() => freshDir(), /no package\.json|fastagent init/], // no package.json
+      [
+        async () => {
+          const d = await freshDir();
+          await writeFile(join(d, "package.json"), `${JSON.stringify({ type: "commonjs" }, null, 2)}\n`);
+          return d;
+        },
+        /"type": "module"/, // present but not ESM
+      ],
+      [
+        async () => {
+          const d = await freshDir();
+          await writeFile(join(d, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
+          return d;
+        },
+        /@kid7st\/fastagent.*dependencies/, // ESM but missing the dep
+      ],
+    ];
+    for (const [make, msg] of cases) {
+      const dir = await make();
       const out = await cliInit(["add", "github"], dir);
-      expect(out).toMatch(/no package\.json|"type": "module"/);
-      expect(await exists(join(dir, "package.json"))).toBe(false); // not auto-created
-      expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // refused before scaffolding
+      expect(out).toMatch(msg);
+      expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // nothing scaffolded
     }
   });
 
-  it("appends the @kid7st registry mapping to an existing .npmrc that lacks it", async () => {
-    const dir = await freshDir();
-    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
-    await writeFile(join(dir, ".npmrc"), "save-exact=true\n"); // unrelated existing setting, no @kid7st mapping
-    await cliInit(["add", "github"], dir);
-    const npmrc = await readFile(join(dir, ".npmrc"), "utf8");
-    expect(npmrc).toContain("save-exact=true"); // preserved
-    expect(npmrc).toContain("@kid7st:registry=https://npm.pkg.github.com"); // appended
+  it("refuses a symlinked channels/ directory (the build won't follow it)", async () => {
+    const dir = await readyWorkspace();
+    const real = await freshDir();
+    await mkdir(join(real, "ch"));
+    await symlink(join(real, "ch"), join(dir, "channels"));
+    const out = await cliInit(["add", "github"], dir);
+    expect(out).toMatch(/symlink/);
+    expect(await exists(join(real, "ch", "github.ts"))).toBe(false); // not written through the symlink
   });
 });
