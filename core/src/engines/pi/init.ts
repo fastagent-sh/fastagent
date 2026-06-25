@@ -275,9 +275,9 @@ export async function ensureFastagentDep(dir: string): Promise<{ depAdded: boole
     // No package.json: Node treats .js as CommonJS by default. Creating one with type:module would
     // flip any authored .js to ESM and break it — the implicit version of the explicit non-module
     // refusal above. Only auto-create when there is no .js to break; otherwise refuse, same as above.
-    if (await hasAuthoredJs(dir)) {
+    if (await hasAuthoredCode(dir)) {
       throw new Error(
-        `${dir}: this workspace has .js files but no package.json (CommonJS by default), and fastagent ` +
+        `${dir}: this workspace has .js/.ts files but no package.json (CommonJS by default), and fastagent ` +
           `channels are ESM — add a package.json with "type": "module" (and migrate those files) first`,
       );
     }
@@ -316,9 +316,14 @@ export async function ensureFastagentDep(dir: string): Promise<{ depAdded: boole
   return { depAdded, npmrcAdded };
 }
 
-/** Whether the workspace has an authored `.js` file (CommonJS by default) that type:module would break. */
+/**
+ * Whether the workspace has authored code whose module type DEPENDS on package.json "type" — i.e. a
+ * bare `.js/.jsx/.ts/.tsx` (CommonJS by default) that flipping to type:module would break. The
+ * explicit `.mjs/.cjs/.mts/.cts` are type-independent (always ESM/CJS), so they are safe and ignored.
+ */
 const SKIP_SCAN_DIRS = new Set(["node_modules", ".git", ".fastagent"]);
-async function hasAuthoredJs(dir: string): Promise<boolean> {
+const AMBIGUOUS_EXTS = new Set([".js", ".jsx", ".ts", ".tsx"]);
+async function hasAuthoredCode(dir: string): Promise<boolean> {
   let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -328,8 +333,8 @@ async function hasAuthoredJs(dir: string): Promise<boolean> {
   for (const e of entries) {
     if (e.isSymbolicLink()) continue; // don't follow symlinks (consistent with the build)
     if (e.isDirectory()) {
-      if (!SKIP_SCAN_DIRS.has(e.name) && (await hasAuthoredJs(join(dir, e.name)))) return true;
-    } else if (e.isFile() && extname(e.name) === ".js") {
+      if (!SKIP_SCAN_DIRS.has(e.name) && (await hasAuthoredCode(join(dir, e.name)))) return true;
+    } else if (e.isFile() && AMBIGUOUS_EXTS.has(extname(e.name))) {
       return true;
     }
   }
