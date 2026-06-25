@@ -112,8 +112,8 @@ export {
 } from "./engines/pi/sessions.ts";
 // pi reference implementation — auth + the Models collection (model resolution +
 // per-request auth). createPiModels builds the default collection (built-in
-// providers; pi OAuth file → env vars); piCredentialStore is the auth.json store
-// (reads credentials; persists the upstream OAuth refresh).
-export { type PiAuthOptions, piCredentialStore } from "./engines/pi/auth.ts";
+// providers; ~/.fastagent/auth.json → env vars); fastagentCredentialStore is the
+// read-write store fastagent owns (refresh persists in place).
+export { FASTAGENT_AUTH_PATH, type FastagentAuthOptions, fastagentCredentialStore } from "./engines/pi/auth.ts";
 export { type CreatePiModelsOptions, createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 export type { Models } from "@earendil-works/pi-ai";

@@ -13,28 +13,27 @@
  */
 import { type Models, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { type PiAuthOptions, piCredentialStore } from "./auth.ts";
+import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 
-export interface CreatePiModelsOptions extends PiAuthOptions {
-  /** Override pi's credentials file path (`~/.pi/agent/auth.json`). */
+export interface CreatePiModelsOptions extends FastagentAuthOptions {
+  /** Override the credentials file path (default `~/.fastagent/auth.json`). */
   authPath?: string;
 }
 
 /**
  * A `Models` with every built-in pi provider registered, wired to fastagent's
  * default auth:
- * - **stored credentials** from pi's `~/.pi/agent/auth.json` (OAuth coding-plan
- *   tokens or `api_key` entries) via {@link piCredentialStore}, and
+ * - **stored credentials** from fastagent's own `~/.fastagent/auth.json` (OAuth
+ *   tokens or `api_key` entries, written by `fastagent login`) via
+ *   {@link fastagentCredentialStore}, refreshed and persisted in place, and
  * - **ambient env vars** (e.g. `ANTHROPIC_API_KEY`) via pi's default auth context.
  *
  * Resolution order is upstream-owned: a stored credential owns the provider;
- * env is consulted only when nothing is stored. This mirrors the pre-0.80
- * default (`resolvePiAuth`: OAuth first, then env) — and additionally gains
- * upstream OAuth token refresh, which the old reader did not do.
+ * env is consulted only when nothing is stored.
  */
 export function createPiModels(options: CreatePiModelsOptions = {}): Models {
   return builtinModels({
-    credentials: piCredentialStore(options.authPath, { warn: options.warn }),
+    credentials: fastagentCredentialStore(options.authPath, { warn: options.warn }),
     authContext: defaultProviderAuthContext(),
   });
 }
