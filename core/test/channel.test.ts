@@ -46,6 +46,33 @@ describe("loadChannels (filesystem discovery)", () => {
     expect(collisions).toEqual([{ route: "POST /webhook", source: "channels/b.mjs" }]);
   });
 
+  it("detects a method-overlap collision (any-method vs specific, same path)", async () => {
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    // a.mjs (sorts first) mounts any-method /webhook; b's POST /webhook would be shadowed by it.
+    await writeFile(join(dir, "channels", "a.mjs"), `export default () => ({ "/webhook": () => new Response("a") });`);
+    await writeFile(
+      join(dir, "channels", "b.mjs"),
+      `export default () => ({ "POST /webhook": () => new Response("b") });`,
+    );
+    const { routes, collisions } = await loadChannels(dir, fakeAgent);
+    expect(Object.keys(routes)).toEqual(["/webhook"]); // a wins; b dropped, not silently shadowed
+    expect(collisions).toEqual([{ route: "POST /webhook", source: "channels/b.mjs" }]);
+  });
+
+  it("allows two channels on one path with distinct methods (both reachable)", async () => {
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    await writeFile(join(dir, "channels", "get.mjs"), `export default () => ({ "GET /x": () => new Response("g") });`);
+    await writeFile(
+      join(dir, "channels", "post.mjs"),
+      `export default () => ({ "POST /x": () => new Response("p") });`,
+    );
+    const { routes, collisions } = await loadChannels(dir, fakeAgent);
+    expect(Object.keys(routes).sort()).toEqual(["GET /x", "POST /x"]);
+    expect(collisions).toEqual([]);
+  });
+
   it("fails visibly when a channel file does not default-export a function", async () => {
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
@@ -53,11 +80,21 @@ describe("loadChannels (filesystem discovery)", () => {
     await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must default-export \(agent\) => Routes/);
   });
 
-  it("rejects any factory return that yields no routes (Promise, null, primitive, array, Map, {})", async () => {
-    // The invariant is 'a channel file contributes >=1 route'. Each of these otherwise throws
-    // unwrapped or silently mounts zero routes → falls back to /invoke.
+  it("rejects an async factory with a Promise-specific error (and no unhandled rejection)", async () => {
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    // Rejects after the (microtask) tick — the guard must mark it handled, not leave it unhandled.
+    await writeFile(
+      join(dir, "channels", "async.mjs"),
+      `export default async () => { throw new Error("setup boom"); };`,
+    );
+    await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/not a Promise|async factory is not supported/);
+  });
+
+  it("rejects any non-async return that yields no routes (null, primitive, array, Map, {})", async () => {
+    // The invariant is 'a channel file contributes >=1 route'. Each otherwise throws unwrapped or
+    // silently mounts zero routes → falls back to /invoke.
     for (const [name, body] of [
-      ["async", `export default async () => ({ "POST /webhook": () => new Response("x") });`],
       ["nullish", `export default () => null;`],
       ["number", `export default () => 42;`],
       ["array", `export default () => [];`],

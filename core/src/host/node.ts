@@ -15,7 +15,7 @@ export type ChannelHandler = (req: Request) => Response | Promise<Response>;
 export type Routes = Record<string, ChannelHandler>;
 
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
-function parseRouteKey(key: string): { method?: string; path: string } {
+export function parseRouteKey(key: string): { method?: string; path: string } {
   const sp = key.indexOf(" ");
   return sp === -1 ? { path: key } : { method: key.slice(0, sp).toUpperCase(), path: key.slice(sp + 1) };
 }
