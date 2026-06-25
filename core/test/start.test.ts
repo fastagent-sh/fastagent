@@ -256,4 +256,25 @@ describe("start: serves discovered channels/ + a host health route", () => {
       kill();
     }
   });
+
+  it("lets a channel's any-method /health override the built-in for GET (not just exact GET /health)", async () => {
+    const ws = await mkdtemp(join(tmpdir(), "fa-start-health-ws-"));
+    await writeFile(join(ws, "AGENTS.md"), "# Health Bot\n");
+    await writeFile(join(ws, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    await mkdir(join(ws, "channels"));
+    await writeFile(
+      join(ws, "channels", "health.mjs"),
+      `export default () => ({ "/health": () => new Response("custom", { status: 200 }) });`,
+    );
+    const artifact = await mkdtemp(join(tmpdir(), "fa-start-health-art-"));
+    await buildPiArtifact(ws, artifact, { force: true });
+
+    const { port, kill } = await cliServe(["start", artifact, "--port", "0", "--sessions-dir", await freshSessions()]);
+    try {
+      // GET reaches the channel's custom handler, not the built-in 'ok' (the default is skipped).
+      expect(await (await fetch(`http://127.0.0.1:${port}/health`)).text()).toBe("custom");
+    } finally {
+      kill();
+    }
+  });
 });
