@@ -13,7 +13,7 @@ async function authFile(contents: string): Promise<string> {
   return path;
 }
 
-describe("piCredentialStore (read-only auth.json reader; fail-visibly discipline)", () => {
+describe("piCredentialStore (read-write auth.json store; fail-visibly discipline)", () => {
   it("missing file → undefined, no warning (normal not-configured)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cred = await piCredentialStore("/nonexistent/auth.json").read("anthropic");
@@ -61,20 +61,63 @@ describe("piCredentialStore (read-only auth.json reader; fail-visibly discipline
     expect(await piCredentialStore(path).read("anthropic")).toBeUndefined();
   });
 
-  it("modify does NOT persist (pi CLI owns writes) but returns the function's result", async () => {
-    const original = { anthropic: { type: "oauth", access: "old", expires: 1 } };
-    const path = await authFile(JSON.stringify(original));
+  it("modify persists the rotated credential and returns it (next request reads the new token)", async () => {
+    const path = await authFile(
+      JSON.stringify({ anthropic: { type: "oauth", access: "old", refresh: "r0", expires: 1 } }),
+    );
     const store = piCredentialStore(path);
-    const next = { type: "oauth", access: "refreshed", refresh: "r", expires: 2 } as const;
+    const next = { type: "oauth", access: "refreshed", refresh: "r1", expires: 2 } as const;
     const result = await store.modify("anthropic", async () => next);
-    expect(result).toEqual(next); // refreshed token is usable for the in-flight request
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual(original); // file untouched
+    expect(result).toEqual(next); // usable for the in-flight request
+    expect(await store.read("anthropic")).toEqual(next); // persisted: a later read sees the rotated token
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ anthropic: next });
   });
 
-  it("delete is a no-op (read-only store)", async () => {
-    const path = await authFile(JSON.stringify({ anthropic: { type: "oauth", access: "x", expires: 1 } }));
+  it("modify preserves other providers' entries (writes only the target key)", async () => {
+    const openai = { type: "api_key", key: "sk-openai" };
+    const path = await authFile(
+      JSON.stringify({ openai, anthropic: { type: "oauth", access: "old", refresh: "r0", expires: 1 } }),
+    );
+    const next = { type: "oauth", access: "new", refresh: "r1", expires: 2 } as const;
+    await piCredentialStore(path).modify("anthropic", async () => next);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ openai, anthropic: next });
+  });
+
+  it("modify returns current unchanged when fn returns undefined (no write)", async () => {
+    const current = { type: "oauth", access: "live", refresh: "r", expires: Date.now() + 60_000 };
+    const path = await authFile(JSON.stringify({ anthropic: current }));
+    const result = await piCredentialStore(path).modify("anthropic", async () => undefined);
+    expect(result).toEqual(current);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ anthropic: current });
+  });
+
+  it("modify refuses to overwrite a corrupt file (fail visibly, not clobber)", async () => {
+    const path = await authFile("{not valid json");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      piCredentialStore(path).modify("anthropic", async () => ({
+        type: "oauth",
+        access: "x",
+        refresh: "r",
+        expires: 1,
+      })),
+    ).rejects.toThrow(/corrupt auth file/);
+    expect(await readFile(path, "utf8")).toBe("{not valid json"); // untouched
+  });
+
+  it("delete removes the provider's entry, preserving the rest", async () => {
+    const openai = { type: "api_key", key: "sk" };
+    const path = await authFile(
+      JSON.stringify({ openai, anthropic: { type: "oauth", access: "x", refresh: "r", expires: 1 } }),
+    );
     const store = piCredentialStore(path);
+    await store.delete("anthropic");
+    expect(await store.read("anthropic")).toBeUndefined();
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ openai });
+  });
+
+  it("delete of a missing entry / file is a no-op that does not create the file", async () => {
+    const store = piCredentialStore("/nonexistent/dir/auth.json");
     await expect(store.delete("anthropic")).resolves.toBeUndefined();
-    expect(await store.read("anthropic")).toBeDefined(); // still there
   });
 });
