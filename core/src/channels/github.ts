@@ -89,11 +89,18 @@ export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions
       payload: payload as unknown as Schema, // trust boundary: the verified body is a GitHub event
     };
 
-    // Fire each turn, return 202; the long-running process runs them to completion. `.catch` is the
-    // only failure sink (server log). Concurrency safety = the engine's per-session lease.
+    // Fire each turn, return 202; the long-running process runs them to completion. The turn lifecycle
+    // is logged to stderr — after the 202 there is no response body, so these lines are the operator's
+    // only signal that a turn ran (and the failure sink that keeps a post-ACK error from going
+    // unhandled). Concurrency safety = the engine's per-session lease.
     for (const { session, text } of on(event)) {
-      void collect(agent.invoke({ session }, { text })).catch((error) =>
-        console.error(`[github] turn failed for ${session}: ${String(error)}`),
+      const label = event.action ? `${event.event}.${event.action}` : event.event;
+      console.error(`[github] turn start: session=${session} event=${label} delivery=${event.deliveryId}`);
+      const startedAt = Date.now();
+      void collect(agent.invoke({ session }, { text })).then(
+        () => console.error(`[github] turn done: session=${session} (${Date.now() - startedAt}ms)`),
+        (error) =>
+          console.error(`[github] turn failed: session=${session} (${Date.now() - startedAt}ms): ${String(error)}`),
       );
     }
     return new Response(null, { status: 202 });

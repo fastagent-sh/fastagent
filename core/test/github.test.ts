@@ -215,8 +215,26 @@ describe("github channel", () => {
     });
     expect((await ch(signed(PR_OPENED.body, PR_OPENED.headers))).status).toBe(202);
     await flush();
-    // The lone failure sink (.catch) ran: logged, and (since it ran) not an unhandled rejection.
-    expect(errors.some((e) => /turn failed for s/.test(e) && /boom/.test(e))).toBe(true);
+    // The failure sink ran: logged with the session, and (since it ran) not an unhandled rejection.
+    expect(errors.some((e) => /turn failed: session=s/.test(e) && /boom/.test(e))).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("logs the turn lifecycle (start with trigger source, done) so a fire-and-forget turn is observable", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((m) => {
+      errors.push(String(m));
+    });
+    const { agent } = recordingAgent(); // resolves normally
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      on: (e) => (e.event === "pull_request" ? [{ session: "s", text: "x" }] : []),
+    });
+    expect((await ch(signed(PR_OPENED.body, PR_OPENED.headers))).status).toBe(202);
+    await flush();
+    // start names the session + the trigger source (event.action), done confirms completion.
+    expect(errors.some((e) => /turn start: session=s/.test(e) && /event=pull_request\.opened/.test(e))).toBe(true);
+    expect(errors.some((e) => /turn done: session=s/.test(e))).toBe(true);
     spy.mockRestore();
   });
 });
