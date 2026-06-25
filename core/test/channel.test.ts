@@ -53,18 +53,21 @@ describe("loadChannels (filesystem discovery)", () => {
     await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must default-export \(agent\) => Routes/);
   });
 
-  it("rejects a factory that does not return a Routes object (Promise, null, primitive, array)", async () => {
-    // Each of these would otherwise throw unwrapped or silently mount zero routes → fall back to /invoke.
+  it("rejects any factory return that yields no routes (Promise, null, primitive, array, Map, {})", async () => {
+    // The invariant is 'a channel file contributes >=1 route'. Each of these otherwise throws
+    // unwrapped or silently mounts zero routes → falls back to /invoke.
     for (const [name, body] of [
       ["async", `export default async () => ({ "POST /webhook": () => new Response("x") });`],
       ["nullish", `export default () => null;`],
       ["number", `export default () => 42;`],
       ["array", `export default () => [];`],
+      ["map", `export default () => new Map([["POST /webhook", () => new Response("x")]]);`],
+      ["empty", `export default () => ({});`],
     ] as const) {
       const dir = await freshDir();
       await mkdir(join(dir, "channels"));
       await writeFile(join(dir, "channels", `${name}.mjs`), body);
-      await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must return Routes/);
+      await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must return a Routes object|declared no routes/);
     }
   });
 
