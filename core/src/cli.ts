@@ -26,7 +26,12 @@ import { loadChannels } from "./engines/pi/channel.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
-import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
+import {
+  type LoadedDefinition,
+  defaultGlobalSkillPaths,
+  loadAgentDefinition,
+  loadRootIgnore,
+} from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
 import { assertChannelReady, channelExists, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
@@ -217,9 +222,18 @@ async function runAdd(): Promise<void> {
   await assertChannelReady(target).catch(failStartup);
   const file = await scaffoldChannel(target, kind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
+  // Read-only secret-hygiene check (no mutation): `fastagent build` ships whatever the root
+  // .gitignore/.fastagentignore don't exclude, so warn (don't refuse — on() may read a real env var)
+  // when .env is not ignored, rather than blindly recommending the user put a secret there.
+  const envIgnored = (await loadRootIgnore(target).catch(failStartup))?.ignores(".env") ?? false;
+  if (!envIgnored) {
+    console.error(
+      `[fastagent] warn: .env is not gitignored — \`fastagent build\` would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
+    );
+  }
   console.error(`  next steps:`);
   console.error(`    npm install                      # if @kid7st/fastagent is not installed yet`);
-  console.error(`    put GITHUB_WEBHOOK_SECRET in a gitignored .env`);
+  console.error(`    set GITHUB_WEBHOOK_SECRET${envIgnored ? " in .env (gitignored)" : ""}`);
   console.error(`    edit channels/github.ts — map events to intents in on()`);
   console.error(`    fastagent dev   # serve the webhook locally`);
 }

@@ -262,6 +262,19 @@ describe("add: fastagent add github", () => {
     }
   });
 
+  it("warns (but does not refuse) when .env is not gitignored; stays quiet when it is", async () => {
+    // readyWorkspace has no .gitignore — a secret in .env would be shipped by the build.
+    const exposed = await readyWorkspace();
+    const out = await cliInit(["add", "github"], exposed);
+    expect(out).toMatch(/\.env is not gitignored/);
+    expect(await exists(join(exposed, "channels", "github.ts"))).toBe(true); // warned, not refused
+
+    const safe = await readyWorkspace();
+    await writeFile(join(safe, ".gitignore"), ".env\n");
+    const out2 = await cliInit(["add", "github"], safe);
+    expect(out2).not.toMatch(/not gitignored/);
+  });
+
   it("refuses a symlinked channels/ directory (the build won't follow it)", async () => {
     const dir = await readyWorkspace();
     const real = await freshDir();
