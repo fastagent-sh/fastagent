@@ -126,4 +126,17 @@ describe("loadChannels (filesystem discovery)", () => {
     await writeFile(join(dir, "channels", "bad.mjs"), `export default () => ({ "POST /webhook": 42 });`);
     await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must map to a handler function/);
   });
+
+  it("rejects a malformed route key (a handler array's numeric key, or a missing leading slash)", async () => {
+    // Both pass the value-is-a-function + >=1-entry checks but mount at an unreachable path.
+    for (const body of [
+      `export default () => [() => new Response("x")];`, // array → key "0"
+      `export default () => ({ "webhook": () => new Response("x") });`, // missing leading /
+    ]) {
+      const dir = await freshDir();
+      await mkdir(join(dir, "channels"));
+      await writeFile(join(dir, "channels", "bad.mjs"), body);
+      await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/is not a valid route key/);
+    }
+  });
 });

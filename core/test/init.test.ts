@@ -261,6 +261,23 @@ describe("add: fastagent add github", () => {
     expect((await readFile(join(dir, ".gitignore"), "utf8")).match(/^\.env$/gm)?.length).toBe(1); // unchanged
   });
 
+  it("warns when a .fastagentignore !.env re-includes .env (build still ships it)", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
+    await writeFile(join(dir, ".fastagentignore"), "!.env\n"); // explicitly re-includes .env for the build
+    const out = await cliInit(["add", "github"], dir);
+    expect(out).toMatch(/re-includes \.env|would ship the secret/);
+  });
+
+  it("refuses a package-less workspace that has authored .js (would be ESM-flipped and break)", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, "helper.js"), "module.exports = 1;\n"); // CommonJS, no package.json
+    const out = await cliInit(["add", "github"], dir);
+    expect(out).toMatch(/\.js files but no package\.json|"type": "module"/);
+    expect(await exists(join(dir, "package.json"))).toBe(false); // not auto-created
+    expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // refused before scaffolding
+  });
+
   it("appends the @kid7st registry mapping to an existing .npmrc that lacks it", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);

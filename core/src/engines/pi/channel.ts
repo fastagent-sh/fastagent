@@ -119,6 +119,14 @@ export async function loadChannels(
           `channels/${entry.name}: route "${route}" must map to a handler function, got ${typeof handler}`,
         );
       }
+      // The KEY must be a well-formed route spec (the router matches on a path that starts with "/").
+      // Without this, a non-empty array of handlers (numeric keys like "0") or a missing-slash key
+      // would pass the value check yet mount at an unreachable path — silently serving nothing.
+      if (!parseRouteKey(route).path.startsWith("/")) {
+        throw new Error(
+          `channels/${entry.name}: route "${route}" is not a valid route key (expected "METHOD /path" or "/path")`,
+        );
+      }
       // Overlap, not literal-key, equality: the router treats a bare `/path` as any-method, so
       // `/webhook` and `POST /webhook` would both mount yet shadow each other. Two routes clash when
       // they share a path and either is any-method (or the methods match); `GET /x` vs `POST /x` is fine.

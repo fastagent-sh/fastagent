@@ -224,11 +224,16 @@ async function runAdd(): Promise<void> {
   }
   const { depAdded, npmrcAdded } = await ensureFastagentDep(target).catch(failStartup);
   // Ignore .env before recommending the secret go there — else `fastagent build` ships it in the artifact.
-  const envIgnored = await ensureEnvIgnored(target).catch(failStartup);
+  const envStatus = await ensureEnvIgnored(target).catch(failStartup);
   const file = await scaffoldChannel(target, kind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
+  if (envStatus === "exposed") {
+    console.error(
+      `[fastagent] warn: a .fastagentignore rule re-includes .env — \`fastagent build\` would ship the secret; remove that rule or store the secret elsewhere`,
+    );
+  }
   console.error(`  next steps:`);
-  console.error(`    set GITHUB_WEBHOOK_SECRET in .env${envIgnored ? " (added to .gitignore)" : ""}`);
+  console.error(`    set GITHUB_WEBHOOK_SECRET in .env${envStatus === "added" ? " (added to .gitignore)" : ""}`);
   if (depAdded) console.error(`    npm install   # added @kid7st/fastagent to package.json`);
   else if (npmrcAdded) console.error(`    npm install   # .npmrc now maps @kid7st to GitHub Packages`);
   console.error(`    edit channels/github.ts — map events to intents in on()`);

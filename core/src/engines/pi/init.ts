@@ -27,8 +27,9 @@
  * It does NOT defend against every pathological pre-existing target state (TOCTOU, read-only
  * dirs, FIFOs, mid-write disk-full, …): a local scaffolding command recovered by delete-and-retry.
  */
+import type { Dirent } from "node:fs";
 import { access, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { loadRootIgnore } from "./definition.ts";
 import { fastagentVersion } from "./version.ts";
 
@@ -271,6 +272,15 @@ export async function ensureFastagentDep(dir: string): Promise<{ depAdded: boole
     }
     depAbsent = typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string"; // keep an existing pin
   } else {
+    // No package.json: Node treats .js as CommonJS by default. Creating one with type:module would
+    // flip any authored .js to ESM and break it — the implicit version of the explicit non-module
+    // refusal above. Only auto-create when there is no .js to break; otherwise refuse, same as above.
+    if (await hasAuthoredJs(dir)) {
+      throw new Error(
+        `${dir}: this workspace has .js files but no package.json (CommonJS by default), and fastagent ` +
+          `channels are ESM — add a package.json with "type": "module" (and migrate those files) first`,
+      );
+    }
     pkg = { name: toPackageName(dir), private: true, type: "module" }; // greenfield: safe to set module
     depAbsent = true;
   }
@@ -306,16 +316,38 @@ export async function ensureFastagentDep(dir: string): Promise<{ depAdded: boole
   return { depAdded, npmrcAdded };
 }
 
+/** Whether the workspace has an authored `.js` file (CommonJS by default) that type:module would break. */
+const SKIP_SCAN_DIRS = new Set(["node_modules", ".git", ".fastagent"]);
+async function hasAuthoredJs(dir: string): Promise<boolean> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const e of entries) {
+    if (e.isSymbolicLink()) continue; // don't follow symlinks (consistent with the build)
+    if (e.isDirectory()) {
+      if (!SKIP_SCAN_DIRS.has(e.name) && (await hasAuthoredJs(join(dir, e.name)))) return true;
+    } else if (e.isFile() && extname(e.name) === ".js") {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Ensure `.env` is git/build-ignored before recommending the user put a secret there. `fastagent
  * build` does NOT special-case secrets — it excludes only what the root `.gitignore`/`.fastagentignore`
  * say (loadRootIgnore) — so an un-ignored `.env` would ship the webhook secret in the artifact.
  * Mirrors init: append `.env` to `.gitignore` (created if absent) unless it is already ignored.
- * Returns true when it changed `.gitignore`.
+ *   - "already": .env was already ignored, nothing written;
+ *   - "added": appended to .gitignore and the build now excludes it;
+ *   - "exposed": appended, but a `.fastagentignore` rule (applied last) re-includes .env — the build
+ *     would still ship it, so the caller must warn.
  */
-export async function ensureEnvIgnored(dir: string): Promise<boolean> {
-  const ignore = await loadRootIgnore(dir);
-  if (ignore?.ignores(".env")) return false; // already protected (by .gitignore or .fastagentignore)
+export async function ensureEnvIgnored(dir: string): Promise<"already" | "added" | "exposed"> {
+  if ((await loadRootIgnore(dir))?.ignores(".env")) return "already";
   const gitignorePath = join(dir, ".gitignore");
   let current = "";
   try {
@@ -325,7 +357,9 @@ export async function ensureEnvIgnored(dir: string): Promise<boolean> {
   }
   const sep = current === "" || current.endsWith("\n") ? "" : "\n";
   await writeFile(gitignorePath, `${current}${sep}# secret — never commit, never ship in the build artifact\n.env\n`);
-  return true;
+  // Verify the postcondition against the authoritative matcher: a `.fastagentignore` `!.env` (fa is
+  // applied after .gitignore) can re-include it, so a successful write does not guarantee exclusion.
+  return (await loadRootIgnore(dir))?.ignores(".env") ? "added" : "exposed";
 }
 
 /**
