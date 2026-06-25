@@ -15,6 +15,7 @@
  */
 import { spawn } from "node:child_process";
 import { watch as watchTree } from "chokidar";
+import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
@@ -25,6 +26,7 @@ import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { loadChannels } from "./engines/pi/channel.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
+import { fastagentVersion } from "./engines/pi/version.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
 import {
   type LoadedDefinition,
@@ -47,6 +49,7 @@ function usage(code: number): never {
   fastagent chat   [dir] [--model provider/modelId] [--global-skills]
   fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
+  fastagent --version
 
   dev    assemble the agent in dir (default .) and serve a local HTTP channel.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
@@ -94,8 +97,13 @@ const { positionals, values } = parseArgs({
     "no-install": { type: "boolean" },
     "no-watch": { type: "boolean" },
     help: { type: "boolean", short: "h" },
+    version: { type: "boolean", short: "v" },
   },
 });
+if (values.version) {
+  console.log(await fastagentVersion());
+  process.exit(0);
+}
 if (values.help) usage(0);
 
 const [command, dirArg] = positionals;
@@ -196,7 +204,8 @@ async function runInit(): Promise<void> {
   // instruction a newcomer can't act on yet is noise.
   console.error(`  next steps:`);
   const rel = relative(process.cwd(), dir);
-  if (rel !== "") console.error(`    cd ${rel}`);
+  // A relative target that climbs out of cwd (e.g. ../../../tmp/x) is noise — show the absolute path.
+  if (rel !== "") console.error(`    cd ${rel.startsWith("..") ? dir : rel}`);
   if (complete && (values["no-install"] || installFailed)) console.error(`    npm install`);
   console.error(`    fastagent dev   # serve locally and iterate`);
 }
@@ -467,6 +476,14 @@ async function runBuild(): Promise<void> {
   console.error(
     `[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
   );
+  // The build excludes a gitignored .env (secrets must not ship), so an agent that reads a secret
+  // from process.env needs it supplied by the DEPLOY environment, not the workspace .env. Remind the
+  // operator at the boundary where the .env is left behind.
+  if (existsSync(join(dir, ".env"))) {
+    console.error(
+      `[fastagent] note: .env is not in the artifact — provide its secrets via the deploy environment (e.g. GITHUB_WEBHOOK_SECRET)`,
+    );
+  }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 }
 
