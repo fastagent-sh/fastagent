@@ -3,8 +3,11 @@ import type { AuthStore, LoginIO } from "../src/engines/pi/login.ts";
 import { loginFlow } from "../src/engines/pi/login.ts";
 
 /** A fake AuthStore recording the calls the flow makes (anthropic/openai-codex are OAuth-capable). */
-function fakeStore() {
+function fakeStore(opts: { persistError?: Error } = {}) {
   const calls: { login?: string; set?: [string, { type: string; key: string }] } = {};
+  // Model pi's record-don't-throw persistence: set/login "succeed" at the call site but a recorded
+  // error remains, drained afterwards — exactly the silent-failure window assertPersisted must catch.
+  const errors = opts.persistError ? [opts.persistError] : [];
   const store: AuthStore = {
     getOAuthProviders: () => [
       { id: "anthropic", name: "Anthropic (Claude Pro/Max)" },
@@ -16,6 +19,7 @@ function fakeStore() {
     set: (provider, credential) => {
       calls.set = [provider, credential];
     },
+    drainErrors: () => errors.splice(0),
   };
   return { store, calls };
 }
@@ -68,5 +72,15 @@ describe("loginFlow", () => {
     const { store, calls } = fakeStore();
     await expect(loginFlow(fakeIO({ hidden: [""] }).io, { provider: "openai", store })).rejects.toThrow(/no API key/);
     expect(calls.set).toBeUndefined();
+  });
+
+  it("a silent persistence failure (recorded, not thrown) becomes a visible error — never a false success", async () => {
+    // Both routes: a corrupt/unwritable ~/.fastagent/auth.json makes AuthStorage record (not throw),
+    // so the flow must drain and surface it rather than reporting "saved".
+    for (const provider of ["anthropic", "openai"]) {
+      const { store } = fakeStore({ persistError: new Error("EACCES: permission denied") });
+      const io = fakeIO({ hidden: ["sk-123"] }).io;
+      await expect(loginFlow(io, { provider, store })).rejects.toThrow(/failed to save credentials.*EACCES/);
+    }
   });
 });

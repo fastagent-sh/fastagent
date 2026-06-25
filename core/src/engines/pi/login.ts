@@ -25,6 +25,12 @@ export interface AuthStore {
   getOAuthProviders(): Array<{ id: string; name: string }>;
   login(providerId: string, callbacks: OAuthLoginCallbacks): Promise<void>;
   set(provider: string, credential: { type: "api_key"; key: string }): void;
+  /**
+   * pi's `AuthStorage` RECORDS persistence failures (corrupt file → `persistProviderChange`
+   * early-returns; write IO failure → caught) instead of throwing, so a failed save looks like a
+   * success at the call site. We must drain after a write to surface them (see {@link assertPersisted}).
+   */
+  drainErrors(): Error[];
 }
 
 export interface LoginResult {
@@ -39,7 +45,9 @@ async function chooseFromList(
   options: Array<{ id: string; label: string }>,
 ): Promise<string | undefined> {
   io.print(message);
-  options.forEach((o, i) => io.print(`  ${i + 1}. ${o.label}`));
+  options.forEach((o, i) => {
+    io.print(`  ${i + 1}. ${o.label}`);
+  });
   const answer = (await io.prompt("> ")).trim();
   if (answer === "") return undefined;
   const n = Number(answer);
@@ -89,11 +97,25 @@ export async function loginFlow(
 
   if (oauthProviders.some((p) => p.id === provider)) {
     await store.login(provider, oauthCallbacks(io, options.signal));
+    assertPersisted(store, provider);
     return { provider, method: "oauth" };
   }
 
   const key = (await io.promptHidden(`API key for "${provider}": `)).trim();
   if (!key) throw new Error(`no API key entered for "${provider}"`);
   store.set(provider, { type: "api_key", key });
+  assertPersisted(store, provider);
   return { provider, method: "api_key" };
+}
+
+/**
+ * Turn pi's RECORDED persistence failures into a visible throw, so `fastagent login` never reports
+ * success on a save that silently no-op'd (corrupt/unwritable ~/.fastagent/auth.json) — the
+ * fail-visibly boundary that AuthStorage's record-don't-throw contract would otherwise swallow.
+ */
+function assertPersisted(store: AuthStore, provider: string): void {
+  const errors = store.drainErrors();
+  if (errors.length > 0) {
+    throw new Error(`failed to save credentials for "${provider}": ${errors.map((e) => e.message).join("; ")}`);
+  }
 }
