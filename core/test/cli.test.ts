@@ -35,12 +35,25 @@ describe("cli papercuts", () => {
     expect(stderr).not.toMatch(/cd \.\./); // never the ../../.. noise
   });
 
-  it("build warns that a .env is not bundled (its secrets must come from the deploy env)", async () => {
+  async function envWorkspace(): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), "fa-cli-env-"));
     await writeFile(join(dir, "AGENTS.md"), "# Bot\n");
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
     await writeFile(join(dir, ".env"), "GITHUB_WEBHOOK_SECRET=x\n");
+    return dir;
+  }
+
+  it("build: a gitignored .env is left out of the artifact — note that secrets come from the deploy env", async () => {
+    const dir = await envWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n"); // .env IS excluded from the build
     const { stderr } = await run(["build", dir]);
-    expect(stderr).toMatch(/\.env is not in the artifact/);
+    expect(stderr).toMatch(/\.env is gitignored, so it is not in the artifact/);
+    expect(stderr).not.toMatch(/SHIPPED/);
+  });
+
+  it("build: a NON-gitignored .env is shipped into the artifact — warn about the leaked secret", async () => {
+    const dir = await envWorkspace(); // no .gitignore → the build copies .env (secret leak)
+    const { stderr } = await run(["build", dir]);
+    expect(stderr).toMatch(/\.env is NOT gitignored.*SHIPPED/s);
   });
 });
