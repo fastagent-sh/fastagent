@@ -141,6 +141,24 @@ export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; coll
 }
 
 /**
+ * List the code-tool names in `<dir>/tools/` WITHOUT importing them — the tool name is the filename
+ * (authoritative), so the build summary can report what it bundled without executing tool code (whose
+ * deps may not be installed at build time). Missing `tools/` returns none.
+ */
+export async function listToolFiles(dir: string): Promise<string[]> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(join(dir, "tools"), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((e) => e.isFile() && TOOL_EXTS.has(extname(e.name)) && !e.name.endsWith(".d.ts"))
+    .map((e) => basename(e.name, extname(e.name)))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/**
  * Merge already-resolved tools (pi defaults + `config.tools`) with discovered `tools/` tools,
  * deduping by name. Existing tools win a name clash (a discovered tool may not shadow a default or
  * a configured one); the dropped discovered tools are surfaced as collisions, never silent.

@@ -40,7 +40,7 @@ import {
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
 import { assertChannelReady, channelExists, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
-import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
+import { listToolFiles, loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {
@@ -537,12 +537,14 @@ async function runBuild(): Promise<void> {
     force: values.force ?? false,
   }).catch(failStartup);
 
+  const toolFiles = await listToolFiles(outDir); // names from the bundled tools/, without importing them
   console.error(`[fastagent] built:  ${outDir}`);
   console.error(`[fastagent] model:  ${manifest.model}`);
   console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
   console.error(
     `[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
   );
+  if (toolFiles.length > 0) console.error(`[fastagent] tools:  ${toolFiles.join(", ")}`);
   // The build copies a .env only if the root .gitignore/.fastagentignore do NOT exclude it (the build
   // does not special-case secrets — definition.ts), so check the authoritative matcher, not mere
   // existence: an ignored .env is left behind (remind: secrets come from the deploy env); an
