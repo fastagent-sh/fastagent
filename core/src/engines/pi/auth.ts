@@ -11,15 +11,17 @@
  *   - the engine binding must not write the user's global pi state, nor be coupled to pi's private
  *     file location/format (engine-neutrality: a future engine binding owns its own auth).
  *
- * Persistence + locking reuse pi's `FileAuthStorageBackend` (a cross-process file lock). The lock is
- * the ONLY thing reused — every other write-safety property is enforced here, because the backend
- * writes in place (not atomic temp+rename): so all access (incl. `read`) goes through the lock to
- * avoid torn reads, the write path refuses to overwrite a corrupt file (never clobbering other
- * providers' credentials), and `delete` is a no-op that does not create the file.
+ * Persistence + locking reuse pi's `FileAuthStorageBackend` (a cross-process file lock) on the WRITE
+ * path only. `read` is pi-ai's per-request hot path (`resolveProviderAuth` reads on every request,
+ * "valid tokens cost zero locks"), so it stays UNLOCKED; the backend's in-place write opens only a
+ * sub-millisecond torn-read window (during a rare OAuth rotation), which `read` absorbs by re-reading
+ * rather than dragging a lock onto the hot path. The write path refuses to overwrite a corrupt file
+ * (never clobbering other providers' credentials), and `delete` is a no-op that does not create it.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { FileAuthStorageBackend } from "@earendil-works/pi-coding-agent";
 
@@ -75,27 +77,30 @@ export function fastagentCredentialStore(
 
   return {
     async read(providerId) {
-      // Missing file = not configured (normal); pre-check so a read never CREATES the file.
-      if (!existsSync(authPath)) return undefined;
-      try {
-        // Same lock the writes take (the backend writes in place), so a concurrent OAuth-rotation
-        // write can't be seen torn. Under the lock, a parse failure IS real corruption, not a race.
-        return await backend.withLockAsync(async (current) => {
-          if (!current) return { result: undefined };
-          let creds: Creds;
+      // Missing file = not configured (normal). UNLOCKED — this is pi-ai's per-request hot path; the
+      // only race is a sub-millisecond in-place write during an OAuth rotation, which can yield an
+      // empty/partial file. Re-read a few times before concluding the file is genuinely corrupt; a
+      // valid `{}` (provider simply absent) returns immediately, so a not-configured read costs nothing.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let raw: string;
+        try {
+          raw = readFileSync(authPath, "utf8");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; // missing/deleted
+          warn(`[fastagent] cannot read ${authPath}: ${(error as Error).message}`);
+          return undefined;
+        }
+        if (raw !== "") {
           try {
-            creds = JSON.parse(current) as Creds;
+            return pick(JSON.parse(raw) as Creds, providerId);
           } catch {
-            warn(`[fastagent] corrupt auth file ${authPath} — fix or remove it`);
-            return { result: undefined };
+            // A partial read mid-write parses as garbage — fall through and retry.
           }
-          return { result: pick(creds, providerId) };
-        });
-      } catch (error) {
-        // read is display/status — never throw (a lock/IO error degrades to not-configured + a warn).
-        warn(`[fastagent] cannot read ${authPath}: ${(error as Error).message}`);
-        return undefined;
+        }
+        if (attempt < 2) await sleep(2); // the write window is tiny; let it finish, then re-read
       }
+      warn(`[fastagent] corrupt auth file ${authPath} — fix or remove it`); // still bad after retries
+      return undefined;
     },
     modify(providerId, fn) {
       return backend.withLockAsync(async (current) => {
