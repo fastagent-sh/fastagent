@@ -37,7 +37,6 @@ describe("init: scaffoldWorkspace", () => {
         join("tools", "word-count.ts"),
         "fastagent.config.mjs",
         "package.json",
-        ".npmrc",
         ".gitignore",
         ".env.example",
       ]),
@@ -67,7 +66,6 @@ describe("init: scaffoldWorkspace", () => {
     expect(pkg.dependencies["@kid7st/fastagent"]).toBe(`^${realVersion}`);
     expect(pkg.dependencies.zod).toBeDefined();
     expect(await readFile(join(dir, "tools", "word-count.ts"), "utf8")).toContain('from "@kid7st/fastagent"');
-    expect(await readFile(join(dir, ".npmrc"), "utf8")).toContain("npm.pkg.github.com");
 
     // AGENTS.md + skill load as a definition offline (loadAgentDefinition does not touch tools/).
     const def = await loadAgentDefinition(dir);

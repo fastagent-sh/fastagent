@@ -6,16 +6,7 @@ This repository is a from-scratch implementation of the locked [Agent Handler SP
 
 ## Install
 
-`@kid7st/fastagent` is published to **GitHub Packages** (private), so installs authenticate with a GitHub token that has `read:packages`. Put the scope registry and token in your **user** npm config (`~/.npmrc`) so it applies to both a global CLI install and a project dependency, from any directory:
-
-```
-@kid7st:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
-
-(A per-project `.npmrc` is only read when you run npm from within that project, and a global `npm i -g` is usually run from elsewhere — so the user config is the reliable place. If you commit a project `.npmrc`, keep only the registry line there and supply the token via env / `~/.npmrc`; never commit the token.)
-
-Then install (requires Node ≥ 22.19):
+`@kid7st/fastagent` is published to **npm** (public). Install it directly (requires Node ≥ 22.19):
 
 ```bash
 npm i -g @kid7st/fastagent   # the `fastagent` CLI on PATH

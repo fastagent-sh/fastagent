@@ -11,7 +11,7 @@ From an installed CLI to a running, deployable agent in a few minutes. Everythin
 ## Prerequisites
 
 - **Node ≥ 22.19** (`node -v`). The package ships compiled JavaScript; consuming projects do not need a build step for FastAgent itself.
-- **The `fastagent` CLI** — see [Install](../README.md#install): `npm i -g @kid7st/fastagent`, with the `@kid7st` scope registry + a GitHub token in your `~/.npmrc`.
+- **The `fastagent` CLI** — see [Install](../README.md#install): `npm i -g @kid7st/fastagent` (published to npm, public).
 - **Model credentials** — either `fastagent login` (OAuth) or a provider API key in the workspace's `.env` (e.g. `OPENAI_API_KEY=…`). Run `fastagent models` to list the available `provider/modelId` specs.
 
 ## 1. Scaffold an agent

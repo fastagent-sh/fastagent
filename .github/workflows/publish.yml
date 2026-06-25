@@ -1,20 +1,19 @@
 name: Publish
 
-# Publish @kid7st/fastagent to GitHub Packages when a GitHub Release is published.
+# Publish @kid7st/fastagent to npm when a GitHub Release is published.
 # The release tag is the manual gate; the job re-verifies (typecheck + test) before
 # publishing so a non-green tag never ships. Version comes from core/package.json —
-# bump it before tagging (GitHub Packages rejects re-publishing an existing version).
+# bump it before tagging (npm rejects re-publishing an existing version).
 on:
   release:
     types: [published]
 
 permissions:
   contents: read
-  packages: write # required to publish to GitHub Packages
 
 jobs:
   publish:
-    name: Publish to GitHub Packages
+    name: Publish to npm
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -27,7 +26,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '26'
-          registry-url: 'https://npm.pkg.github.com'
+          registry-url: 'https://registry.npmjs.org'
           scope: '@kid7st'
           cache: npm
           cache-dependency-path: core/package-lock.json
@@ -44,4 +43,4 @@ jobs:
       - name: Publish
         run: npm publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
