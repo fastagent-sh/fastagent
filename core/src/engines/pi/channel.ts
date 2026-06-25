@@ -11,7 +11,7 @@ import { readdir } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Agent } from "../../agent.ts";
-import type { Routes } from "../../host/node.ts";
+import { parseRouteKey, type Routes } from "../../host/node.ts";
 import { moduleLoadHint } from "./loader.ts";
 
 /** A `channels/<name>.ts` default export: receives the assembled agent, returns the routes it mounts. */
@@ -70,10 +70,23 @@ export async function loadChannels(
       // A channel constructed at startup may reject a misconfig (e.g. an unset secret) — name the file.
       throw new Error(`channels/${entry.name}: ${(error as Error).message}`);
     }
-    // The real invariant: an authored channels/ file must contribute at least one route. Assert that
-    // directly rather than enumerating bad shapes — a Promise (async factory), a Map/Set, an array, a
-    // primitive, or an empty object all yield zero Object.entries and would otherwise silently fall
-    // back to /invoke; null/undefined would throw unwrapped.
+    // A Promise (async factory) needs its own branch BEFORE the object check (a Promise is an object):
+    // it must be marked handled so a rejected setup is not an unhandled rejection, and it earns a
+    // precise message rather than the generic zero-routes one below.
+    if (
+      declared !== null &&
+      typeof declared === "object" &&
+      typeof (declared as { then?: unknown }).then === "function"
+    ) {
+      (declared as unknown as Promise<unknown>).catch(() => {}); // a rejected async factory must not go unhandled
+      throw new Error(
+        `channels/${entry.name} must return Routes synchronously, not a Promise (an async factory is not supported)`,
+      );
+    }
+    // The real invariant for everything else: an authored channels/ file must contribute at least one
+    // route. Assert that directly rather than enumerating bad shapes — a Map/Set, an array, a primitive,
+    // or an empty object all yield zero Object.entries and would otherwise silently fall back to
+    // /invoke; null/undefined would throw unwrapped.
     if (declared === null || typeof declared !== "object") {
       throw new Error(
         `channels/${entry.name} must return a Routes object, got ${declared === null ? "null" : typeof declared}`,
@@ -91,7 +104,18 @@ export async function loadChannels(
           `channels/${entry.name}: route "${route}" must map to a handler function, got ${typeof handler}`,
         );
       }
-      if (route in routes) {
+      // Overlap, not literal-key, equality: the router treats a bare `/path` as any-method, so
+      // `/webhook` and `POST /webhook` would both mount yet shadow each other. Two routes clash when
+      // they share a path and either is any-method (or the methods match); `GET /x` vs `POST /x` is fine.
+      const parsed = parseRouteKey(route);
+      const clash = Object.keys(routes).some((k) => {
+        const e = parseRouteKey(k);
+        return (
+          e.path === parsed.path &&
+          (e.method === undefined || parsed.method === undefined || e.method === parsed.method)
+        );
+      });
+      if (clash) {
         collisions.push({ route, source: `channels/${entry.name}` });
         continue;
       }
