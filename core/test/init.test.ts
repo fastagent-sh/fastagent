@@ -246,6 +246,21 @@ describe("add: fastagent add github", () => {
     expect(await exists(join(dir, ".npmrc"))).toBe(false);
   });
 
+  it("ignores .env so `fastagent build` won't ship the webhook secret", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
+    await cliInit(["add", "github"], dir);
+    expect((await readFile(join(dir, ".gitignore"), "utf8")).match(/^\.env$/gm)?.length).toBe(1); // added once
+  });
+
+  it("does not duplicate an already-ignored .env", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    await cliInit(["add", "github"], dir);
+    expect((await readFile(join(dir, ".gitignore"), "utf8")).match(/^\.env$/gm)?.length).toBe(1); // unchanged
+  });
+
   it("appends the @kid7st registry mapping to an existing .npmrc that lacks it", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);

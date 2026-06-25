@@ -29,7 +29,13 @@ import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveTools } from "./engines/pi/create.ts";
-import { channelExists, ensureFastagentDep, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
+import {
+  channelExists,
+  ensureEnvIgnored,
+  ensureFastagentDep,
+  scaffoldChannel,
+  scaffoldWorkspace,
+} from "./engines/pi/init.ts";
 import { loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
@@ -217,10 +223,12 @@ async function runAdd(): Promise<void> {
     failStartup(new Error(`channels/${kind}.ts already exists — edit it, or remove it to re-scaffold`));
   }
   const { depAdded, npmrcAdded } = await ensureFastagentDep(target).catch(failStartup);
+  // Ignore .env before recommending the secret go there — else `fastagent build` ships it in the artifact.
+  const envIgnored = await ensureEnvIgnored(target).catch(failStartup);
   const file = await scaffoldChannel(target, kind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
   console.error(`  next steps:`);
-  console.error(`    set GITHUB_WEBHOOK_SECRET in .env`);
+  console.error(`    set GITHUB_WEBHOOK_SECRET in .env${envIgnored ? " (added to .gitignore)" : ""}`);
   if (depAdded) console.error(`    npm install   # added @kid7st/fastagent to package.json`);
   else if (npmrcAdded) console.error(`    npm install   # .npmrc now maps @kid7st to GitHub Packages`);
   console.error(`    edit channels/github.ts — map events to intents in on()`);

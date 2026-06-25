@@ -307,6 +307,28 @@ export async function ensureFastagentDep(dir: string): Promise<{ depAdded: boole
 }
 
 /**
+ * Ensure `.env` is git/build-ignored before recommending the user put a secret there. `fastagent
+ * build` does NOT special-case secrets — it excludes only what the root `.gitignore`/`.fastagentignore`
+ * say (loadRootIgnore) — so an un-ignored `.env` would ship the webhook secret in the artifact.
+ * Mirrors init: append `.env` to `.gitignore` (created if absent) unless it is already ignored.
+ * Returns true when it changed `.gitignore`.
+ */
+export async function ensureEnvIgnored(dir: string): Promise<boolean> {
+  const ignore = await loadRootIgnore(dir);
+  if (ignore?.ignores(".env")) return false; // already protected (by .gitignore or .fastagentignore)
+  const gitignorePath = join(dir, ".gitignore");
+  let current = "";
+  try {
+    current = await readFile(gitignorePath, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  const sep = current === "" || current.endsWith("\n") ? "" : "\n";
+  await writeFile(gitignorePath, `${current}${sep}# secret — never commit, never ship in the build artifact\n.env\n`);
+  return true;
+}
+
+/**
  * Scaffold a runnable workspace into {@link dir} (created if missing). Default is a complete
  * agent (instructions + skill + a code tool + package.json); `--minimal` is markdown-only.
  * Refuses to overwrite an existing agent identity (AGENTS.md or any fastagent.config.*); other
