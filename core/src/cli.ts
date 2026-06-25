@@ -21,7 +21,7 @@ import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher }
 import type { Agent } from "./agent.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
-import { type Routes, router, serveNode } from "./host/node.ts";
+import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { loadChannels } from "./engines/pi/channel.ts";
 import { probeAuthSource } from "./engines/pi/auth.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
@@ -512,7 +512,14 @@ async function routesFor(workspaceDir: string, agent: Agent): Promise<Routes> {
     );
   }
   const channels = Object.keys(routes).length > 0 ? routes : { "POST /invoke": createInvokeHandler(agent) };
-  return { "GET /health": () => text("ok\n", 200), ...channels };
+  // Add a default GET /health unless a channel already covers it. Overlap, not exact-key: an
+  // any-method `/health` also handles GET, so the built-in must step aside (an exact `GET /health`
+  // would too). `POST /health` does NOT cover GET, so the default stays alongside it.
+  const healthCovered = Object.keys(channels).some((k) => {
+    const e = parseRouteKey(k);
+    return e.path === "/health" && (e.method === undefined || e.method === "GET");
+  });
+  return healthCovered ? channels : { "GET /health": () => text("ok\n", 200), ...channels };
 }
 
 /**
