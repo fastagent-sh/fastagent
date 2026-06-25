@@ -3,7 +3,7 @@
  *
  * Default = a COMPLETE agent (instructions + a skill + a code tool): AGENTS.md, a house-style
  * skill, tools/word-count.ts (defineTool), fastagent.config.mjs, package.json (ESM + the
- * @kid7st/fastagent + zod deps), .npmrc (scope registry), .gitignore. A complete agent is
+ * @kid7st/fastagent + zod deps), .gitignore. A complete agent is
  * instructions + tools, so that is what `init` produces; the CLI then runs `npm install`.
  *
  * `--minimal` = the markdown-only unit (AGENTS.md + skill + config + .gitignore): zero npm
@@ -77,12 +77,6 @@ export default {
   model: "openai-codex/gpt-5.5",
   http: { port: 8787 },
 };
-`;
-
-const NPMRC = `; @kid7st/fastagent is published to GitHub Packages.
-; This maps the @kid7st scope to that registry; authenticate with a GitHub token
-; (read:packages) in your user ~/.npmrc — never commit the token.
-@kid7st:registry=https://npm.pkg.github.com
 `;
 
 const GITIGNORE = `# secrets — never commit, never ship in the build artifact
@@ -243,8 +237,8 @@ export async function scaffoldChannel(dir: string, kind: "github"): Promise<stri
 /**
  * Verify the workspace is ready to host a channel: a package.json that is ESM (`type: "module"`) and
  * declares `@kid7st/fastagent` (the channel file imports it, resolved from the workspace). `add` does
- * NOT bootstrap this — creating package.json, choosing a module type, writing .npmrc, or ignoring
- * .env is `fastagent init`'s job. Here we only CHECK and guide, never mutate; failures are actionable.
+ * NOT bootstrap this — creating package.json, choosing a module type, or ignoring .env is
+ * `fastagent init`'s job. Here we only CHECK and guide, never mutate; failures are actionable.
  */
 export async function assertChannelReady(dir: string): Promise<void> {
   const pkgPath = join(dir, "package.json");
@@ -292,7 +286,6 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
     files.push(
       { rel: join("tools", "word-count.ts"), content: TOOL_TS },
       { rel: "package.json", content: packageJson(toPackageName(dir), await fastagentVersion()) },
-      { rel: ".npmrc", content: NPMRC },
     );
   }
 
