@@ -12,6 +12,7 @@ import { extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Agent } from "../../agent.ts";
 import type { Routes } from "../../host/node.ts";
+import { moduleLoadHint } from "./loader.ts";
 
 /** A `channels/<name>.ts` default export: receives the assembled agent, returns the routes it mounts. */
 export type ChannelModule = (agent: Agent) => Routes;
@@ -54,13 +55,9 @@ export async function loadChannels(
     try {
       mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
     } catch (error) {
-      // Same two hints as tools/: a missing dependency, or a non-ESM workspace.
-      const e = error as NodeJS.ErrnoException;
-      const hint =
-        e.code === "ERR_MODULE_NOT_FOUND" || /Cannot find (package|module)/.test(e.message)
-          ? `  (a dependency is not installed — run \`npm install\` in the workspace)`
-          : `  (a channel workspace must be ESM — set "type": "module" in package.json)`;
-      throw new Error(`cannot load channels/${entry.name}: ${e.message}\n${hint}`);
+      throw new Error(
+        `cannot load channels/${entry.name}: ${(error as Error).message}${moduleLoadHint(error as NodeJS.ErrnoException)}`,
+      );
     }
     const factory = mod.default;
     if (typeof factory !== "function") {
@@ -73,13 +70,31 @@ export async function loadChannels(
       // A channel constructed at startup may reject a misconfig (e.g. an unset secret) — name the file.
       throw new Error(`channels/${entry.name}: ${(error as Error).message}`);
     }
-    // The contract is synchronous `(agent) => Routes`. An async factory (easy to write in an untyped
-    // .js/.mjs) returns a Promise whose Object.entries is empty — it would silently mount no routes
-    // and fall back to /invoke. Reject it visibly instead.
-    if (declared && typeof (declared as { then?: unknown }).then === "function") {
-      throw new Error(`channels/${entry.name} must return Routes synchronously, not a Promise`);
+    // The contract is a synchronous Routes object. Reject anything else: null/undefined or a wrong
+    // primitive would make Object.entries throw unwrapped, and a Promise (async factory) or an array
+    // would yield zero routes — silently falling back to /invoke. Validate positively, fail visibly.
+    const ok =
+      declared !== null &&
+      typeof declared === "object" &&
+      !Array.isArray(declared) &&
+      typeof (declared as { then?: unknown }).then !== "function";
+    if (!ok) {
+      const got =
+        declared === null
+          ? "null"
+          : Array.isArray(declared)
+            ? "an array"
+            : typeof (declared as { then?: unknown })?.then === "function"
+              ? "a Promise"
+              : typeof declared;
+      throw new Error(`channels/${entry.name} must return Routes ((agent) => Record<string, handler>), got ${got}`);
     }
     for (const [route, handler] of Object.entries(declared)) {
+      if (typeof handler !== "function") {
+        throw new Error(
+          `channels/${entry.name}: route "${route}" must map to a handler function, got ${typeof handler}`,
+        );
+      }
       if (route in routes) {
         collisions.push({ route, source: `channels/${entry.name}` });
         continue;

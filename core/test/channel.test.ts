@@ -53,13 +53,25 @@ describe("loadChannels (filesystem discovery)", () => {
     await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must default-export \(agent\) => Routes/);
   });
 
-  it("rejects an async factory (the contract is synchronous; a Promise would mount zero routes)", async () => {
+  it("rejects a factory that does not return a Routes object (Promise, null, primitive, array)", async () => {
+    // Each of these would otherwise throw unwrapped or silently mount zero routes → fall back to /invoke.
+    for (const [name, body] of [
+      ["async", `export default async () => ({ "POST /webhook": () => new Response("x") });`],
+      ["nullish", `export default () => null;`],
+      ["number", `export default () => 42;`],
+      ["array", `export default () => [];`],
+    ] as const) {
+      const dir = await freshDir();
+      await mkdir(join(dir, "channels"));
+      await writeFile(join(dir, "channels", `${name}.mjs`), body);
+      await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must return Routes/);
+    }
+  });
+
+  it("rejects a route whose value is not a handler function", async () => {
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
-    await writeFile(
-      join(dir, "channels", "async.mjs"),
-      `export default async () => ({ "POST /webhook": () => new Response("x") });`,
-    );
-    await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must return Routes synchronously/);
+    await writeFile(join(dir, "channels", "bad.mjs"), `export default () => ({ "POST /webhook": 42 });`);
+    await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must map to a handler function/);
   });
 });

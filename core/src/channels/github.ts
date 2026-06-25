@@ -46,6 +46,13 @@ export interface GithubChannelOptions {
  * Build a GitHub webhook channel for `agent`: a Fetch handler to mount at your webhook route (POST).
  */
 export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions): (req: Request) => Promise<Response> {
+  // A non-empty secret is mandatory: verify() against an empty key accepts a signature anyone can
+  // compute, so an unset secret must fail at construction (startup), never silently run forgeable.
+  if (!secret) {
+    throw new Error(
+      "githubChannel requires a non-empty secret (the GitHub webhook secret, e.g. GITHUB_WEBHOOK_SECRET)",
+    );
+  }
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
     // Cap before verify: a public endpoint must not buffer an unbounded body (chunked bypasses Content-Length).

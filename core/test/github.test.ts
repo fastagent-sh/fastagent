@@ -46,6 +46,11 @@ describe("github channel", () => {
     expect((await ch(new Request("http://app/webhook", { method: "GET" }))).status).toBe(405);
   });
 
+  it("refuses an empty secret at construction (an empty HMAC key accepts forged deliveries)", () => {
+    const { agent } = recordingAgent();
+    expect(() => githubChannel(agent, { secret: "", on: () => [] })).toThrow(/requires a non-empty secret/);
+  });
+
   it("rejects a bad/missing signature with 401 and never routes", async () => {
     const { agent } = recordingAgent();
     let routed = false;

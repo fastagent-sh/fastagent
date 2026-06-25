@@ -28,6 +28,7 @@ import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
+import { moduleLoadHint } from "./loader.ts";
 
 /** Runtime context passed to a tool's `execute`. Minimal today; reserved for growth (session, …). */
 export interface ToolContext {
@@ -121,15 +122,9 @@ export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; coll
     try {
       mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
     } catch (error) {
-      // Two common causes get a specific hint instead of a raw stack: a missing dependency
-      // (deps not installed — run `npm install`) and a non-ESM workspace (the tool's `import`
-      // needs package.json "type": "module").
-      const e = error as NodeJS.ErrnoException;
-      const hint =
-        e.code === "ERR_MODULE_NOT_FOUND" || /Cannot find (package|module)/.test(e.message)
-          ? `  (a dependency is not installed — run \`npm install\` in the workspace)`
-          : `  (a code-tool workspace must be ESM — set "type": "module" in package.json)`;
-      throw new Error(`cannot load tools/${entry.name}: ${e.message}\n${hint}`);
+      throw new Error(
+        `cannot load tools/${entry.name}: ${(error as Error).message}${moduleLoadHint(error as NodeJS.ErrnoException)}`,
+      );
     }
     const tool = mod.default as Partial<AgentTool> | undefined;
     if (!tool || typeof tool.execute !== "function") {

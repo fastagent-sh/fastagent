@@ -232,4 +232,14 @@ describe("add: fastagent add github", () => {
     expect(out).toMatch(/"type": "module"/);
     expect(await exists(join(dir, "channels", "github.ts"))).toBe(false); // refused before scaffolding
   });
+
+  it("appends the @kid7st registry mapping to an existing .npmrc that lacks it", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
+    await writeFile(join(dir, ".npmrc"), "save-exact=true\n"); // unrelated existing setting, no @kid7st mapping
+    await cliInit(["add", "github"], dir);
+    const npmrc = await readFile(join(dir, ".npmrc"), "utf8");
+    expect(npmrc).toContain("save-exact=true"); // preserved
+    expect(npmrc).toContain("@kid7st:registry=https://npm.pkg.github.com"); // appended
+  });
 });

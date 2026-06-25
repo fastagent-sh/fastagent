@@ -212,12 +212,13 @@ async function runAdd(): Promise<void> {
   // registry mapping) BEFORE writing the file — a refusal (e.g. a CommonJS package) then leaves no
   // orphan channels/ file. The file imports @kid7st/fastagent, resolved from the workspace, not the
   // CLI install.
-  const depAdded = await ensureFastagentDep(target).catch(failStartup);
+  const { depAdded, npmrcAdded } = await ensureFastagentDep(target).catch(failStartup);
   const file = await scaffoldChannel(target, kind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
   console.error(`  next steps:`);
   console.error(`    set GITHUB_WEBHOOK_SECRET in .env`);
-  if (depAdded) console.error(`    npm install   # @kid7st/fastagent added to package.json`);
+  if (depAdded) console.error(`    npm install   # added @kid7st/fastagent to package.json`);
+  else if (npmrcAdded) console.error(`    npm install   # .npmrc now maps @kid7st to GitHub Packages`);
   console.error(`    edit channels/github.ts — map events to intents in on()`);
   console.error(`    fastagent dev   # serve the webhook locally`);
 }

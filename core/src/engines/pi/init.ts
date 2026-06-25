@@ -179,8 +179,9 @@ const CHANNEL_GITHUB_TS = `import { githubChannel } from "@kid7st/fastagent/gith
 import type { ChannelModule } from "@kid7st/fastagent";
 
 // A channel = a third-party ADAPTER (githubChannel: verify + parse + ACK) wired to YOUR on() glue.
-// fastagent discovers this file under channels/ and serves the routes it returns. Set the webhook
-// secret in .env (GITHUB_WEBHOOK_SECRET) and point a GitHub webhook (JSON) at POST /webhook.
+// fastagent discovers this file under channels/ and serves the routes it returns. Set
+// GITHUB_WEBHOOK_SECRET in .env (a missing secret fails at startup — an empty key would accept forged
+// deliveries) and point a GitHub webhook (JSON) at POST /webhook.
 const channel: ChannelModule = (agent) => ({
   "POST /webhook": githubChannel(agent, {
     secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
@@ -229,7 +230,7 @@ export async function scaffoldChannel(dir: string, kind: "github"): Promise<stri
  *   - `package.json`: declares `@kid7st/fastagent` (a minimal ESM package.json is created if absent).
  * Returns true when it created or changed either, so the caller can prompt for `npm install`.
  */
-export async function ensureFastagentDep(dir: string): Promise<boolean> {
+export async function ensureFastagentDep(dir: string): Promise<{ depAdded: boolean; npmrcAdded: boolean }> {
   // Validate BEFORE writing anything, so a refusal leaves no orphan files.
   const pkgPath = join(dir, "package.json");
   let raw: string | undefined;
@@ -239,7 +240,7 @@ export async function ensureFastagentDep(dir: string): Promise<boolean> {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
   let pkg: { type?: string; dependencies?: Record<string, string>; [k: string]: unknown };
-  let writePkg = false;
+  let depAbsent: boolean;
   if (raw !== undefined) {
     try {
       pkg = JSON.parse(raw);
@@ -256,26 +257,41 @@ export async function ensureFastagentDep(dir: string): Promise<boolean> {
           `(this changes how Node treats the package's .js/.ts files; review your existing code)`,
       );
     }
-    writePkg = typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string"; // dep absent — add it (keep an existing pin)
+    depAbsent = typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string"; // keep an existing pin
   } else {
     pkg = { name: toPackageName(dir), private: true, type: "module" }; // greenfield: safe to set module
-    writePkg = true;
+    depAbsent = true;
   }
 
-  let changed = false;
-  // @kid7st/fastagent is published to GitHub Packages; without the scope mapping `npm install` 404s.
+  // .npmrc must MAP the @kid7st scope to GitHub Packages (the dep is published there, not the default
+  // registry). Check the mapping, not just the file: append it to an existing .npmrc that lacks it.
   const npmrcPath = join(dir, ".npmrc");
-  if (!(await exists(npmrcPath))) {
-    await writeFile(npmrcPath, NPMRC, { flag: "wx" });
-    changed = true;
+  let npmrc: string | undefined;
+  try {
+    npmrc = await readFile(npmrcPath, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
-  if (writePkg) {
+  let npmrcAdded = false;
+  if (npmrc === undefined) {
+    await writeFile(npmrcPath, NPMRC, { flag: "wx" });
+    npmrcAdded = true;
+  } else if (!/^@kid7st:registry=/m.test(npmrc)) {
+    await writeFile(
+      npmrcPath,
+      `${npmrc}${npmrc.endsWith("\n") ? "" : "\n"}@kid7st:registry=https://npm.pkg.github.com\n`,
+    );
+    npmrcAdded = true;
+  }
+
+  let depAdded = false;
+  if (depAbsent) {
     pkg.dependencies ??= {};
     pkg.dependencies["@kid7st/fastagent"] = `^${await fastagentVersion()}`;
     await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-    changed = true;
+    depAdded = true;
   }
-  return changed;
+  return { depAdded, npmrcAdded };
 }
 
 /**
