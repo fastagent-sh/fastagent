@@ -64,7 +64,7 @@ function usage(code: number): never {
          as dev; pi handles login, sessions, and /resume natively.
   init   scaffold a runnable agent in dir (default .) and run npm install. Default is a
          complete agent: AGENTS.md, a skill, tools/word-count.ts (a code tool), config,
-         package.json, .npmrc, .gitignore. Refuses to overwrite an existing workspace.
+         package.json, .gitignore. Refuses to overwrite an existing workspace.
          --minimal      markdown-only (no package.json/tool/install) — a prompt+skills agent
          --no-install   scaffold but skip npm install
   models list the available "provider/modelId" specs (use one with --model or in the config).

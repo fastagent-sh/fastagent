@@ -31,7 +31,7 @@ my-agent/
 ├── fastagent.config.mjs         # deployment choices: model, http port
 ├── package.json                 # ESM + the @kid7st/fastagent + zod deps
 ├── .env.example                 # optional env knobs (model/keys/port) — copy to .env
-└── .gitignore / .npmrc
+└── .gitignore
 ```
 
 For a pure prompt+skills agent with no code and no dependencies, use `fastagent init my-agent --minimal`.
