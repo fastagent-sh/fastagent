@@ -240,4 +240,29 @@ describe("github channel", () => {
     expect(errors.some((e) => /turn done: turn=d1#0 session=s/.test(e))).toBe(true);
     spy.mockRestore();
   });
+
+  it("disambiguates multiple turns from one delivery via the index (d1#0, d1#1)", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((m) => {
+      errors.push(String(m));
+    });
+    const { agent } = recordingAgent();
+    const ch = githubChannel(agent, {
+      secret: SECRET,
+      // One delivery fans out to two turns (distinct sessions — they run concurrently, no lease clash).
+      on: (e) =>
+        e.event === "pull_request"
+          ? [
+              { session: "a", text: "x" },
+              { session: "b", text: "y" },
+            ]
+          : [],
+    });
+    expect((await ch(signed(PR_OPENED.body, PR_OPENED.headers))).status).toBe(202);
+    await flush();
+    // The index disambiguates the two turns of the same delivery: d1#0 and d1#1, not two d1#0.
+    expect(errors.some((e) => /turn start: turn=d1#0 session=a/.test(e))).toBe(true);
+    expect(errors.some((e) => /turn start: turn=d1#1 session=b/.test(e))).toBe(true);
+    spy.mockRestore();
+  });
 });
