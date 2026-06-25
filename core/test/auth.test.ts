@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,5 +87,26 @@ describe("fastagentCredentialStore (read-write ~/.fastagent/auth.json; fail-visi
     await store.delete("anthropic");
     expect(await store.read("anthropic")).toBeUndefined();
     expect(await store.read("openai")).toBeDefined();
+  });
+
+  it("modify REFUSES to overwrite a corrupt file (never clobbers other providers' credentials)", async () => {
+    const corrupt = '{ "anthropic": {"type":"oauth"}, CORRUPT';
+    const path = await authPath(corrupt);
+    const store = fastagentCredentialStore(path);
+    await expect(store.modify("openai", async () => ({ type: "api_key", key: "sk" }))).rejects.toThrow(
+      /corrupt auth file/,
+    );
+    expect(await readFile(path, "utf8")).toBe(corrupt); // file left intact for the user to fix
+  });
+
+  it("delete of a missing entry / file is a no-op that does not create the file", async () => {
+    const missing = await authPath(); // no file at all
+    await fastagentCredentialStore(missing).delete("anthropic");
+    expect(existsSync(missing)).toBe(false); // not created
+
+    const present = await authPath(JSON.stringify({ openai: { type: "api_key", key: "k" } }));
+    const before = await readFile(present, "utf8");
+    await fastagentCredentialStore(present).delete("anthropic"); // provider absent
+    expect(await readFile(present, "utf8")).toBe(before); // unchanged (no write)
   });
 });
