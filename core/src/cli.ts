@@ -476,13 +476,20 @@ async function runBuild(): Promise<void> {
   console.error(
     `[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
   );
-  // The build excludes a gitignored .env (secrets must not ship), so an agent that reads a secret
-  // from process.env needs it supplied by the DEPLOY environment, not the workspace .env. Remind the
-  // operator at the boundary where the .env is left behind.
+  // The build copies a .env only if the root .gitignore/.fastagentignore do NOT exclude it (the build
+  // does not special-case secrets — definition.ts), so check the authoritative matcher, not mere
+  // existence: an ignored .env is left behind (remind: secrets come from the deploy env); an
+  // un-ignored .env was just SHIPPED into the artifact (a secret there is now in the deployable — warn).
   if (existsSync(join(dir, ".env"))) {
-    console.error(
-      `[fastagent] note: .env is not in the artifact — provide its secrets via the deploy environment (e.g. GITHUB_WEBHOOK_SECRET)`,
-    );
+    if ((await loadRootIgnore(dir))?.ignores(".env")) {
+      console.error(
+        `[fastagent] note: .env is gitignored, so it is not in the artifact — provide its secrets via the deploy environment (e.g. GITHUB_WEBHOOK_SECRET)`,
+      );
+    } else {
+      console.error(
+        `[fastagent] warn: .env is NOT gitignored — the build SHIPPED it into the artifact; gitignore .env (or move the secret out) and rebuild`,
+      );
+    }
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 }
