@@ -1,32 +1,33 @@
 /**
- * Dev: open a workspace into an agent in AUTHORING posture (`fastagent dev`).
+ * Open a definition directory into an agent — the single opener BOTH `fastagent dev` and
+ * `fastagent start` drive (despite the file name, this is not dev-only).
  *
- * `dev` is the authoring-time counterpart of `start` (production, `start.ts`). Both are thin
- * "openers" — open a source → resolve model/tools → inject K-wiring → call L2
- * `createPiAgentFromDefinition`. They are NOT ladder rungs (the reusable assembly ladder is
- * L0–L2 in create.ts/invoke.ts); they are command-posture compositions over L2. The two differ
- * only in their source and K defaults:
+ * A thin command-posture composition over L2 `createPiAgentFromDefinition`: open the directory →
+ * resolve model (flag > env > config) and tools (append-after-defaults) → pick session storage →
+ * call L2. NOT a ladder rung (the reusable ladder is L0–L2 in create.ts/invoke.ts). dev and start
+ * share the SAME assembly here — single source of truth, so what you iterate is what you serve;
+ * they differ only at the CLI:
  *
- *   | concern  | dev (from workspace, here)            | start (from artifact, start.ts)        |
- *   |----------|----------------------------------------|-----------------------------------------|
- *   | model    | fastagent.config.ts (flag > env > cfg) | manifest.model (frozen at build)        |
- *   | tools    | loadConfig → resolveTools              | loadConfig → resolveTools (same)        |
- *   | skills   | definition-only (+ --global-skills)    | definition-only (artifact is the truth) |
- *   | sessions | jsonl under <ws>/.fastagent/sessions   | jsonl OUTSIDE the artifact              |
+ *   | concern  | dev (fastagent dev)                  | start (fastagent start)                |
+ *   |----------|--------------------------------------|----------------------------------------|
+ *   | watch    | yes (restart the worker on edits)    | no (stable process)                    |
+ *   | sessions | <dir>/.fastagent/sessions (default)  | same default, overridable to a volume  |
+ *   | posture  | authoring                            | production                             |
  *
- * dev keeps sessions under the workspace's own `.fastagent/` because the dev "artifact" is the
- * mutable workspace itself — restart-surviving local continuity, faithful to local pi. (start
- * deliberately differs: its artifact is immutable, so sessions live outside it — see start.ts.)
+ * There is no build/artifact: the directory IS the agent, run directly (model/http from
+ * fastagent.config.ts, frozen by git). Sessions default under the definition's own `.fastagent/`
+ * (restart-surviving local continuity, faithful to local pi); start can point them at a mounted
+ * volume (sessionsDir) so a redeploy that replaces the directory does not wipe conversations.
  *
  * Node composition-root module (IO policy, see definition.ts): loads config + sets up the
- * `.fastagent/` state dir on disk; the invoke path itself stays disk-free.
+ * session state dir on disk; the invoke path itself stays disk-free.
  */
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
-import { type LoadedDefinition, defaultGlobalSkillPaths, ensureStateDirSelfIgnored } from "./definition.ts";
+import { type LoadedDefinition, ensureStateDirSelfIgnored } from "./definition.ts";
 import { createPiModels } from "./models.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
@@ -35,12 +36,11 @@ export interface CreatePiAgentFromWorkspaceOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
   /**
-   * Also load the machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`) on top of
-   * the definition's own `skills/`. Default false = definition-only, so dev mirrors deployment.
-   * This is an authoring-fidelity opt-in (e.g. `fastagent dev --global-skills`); to ship a global
-   * skill, materialize it into the artifact (build --global-skills) — do not rely on this at deploy.
+   * Session store directory. Default `<dir>/.fastagent/sessions` (machine state, gitignored).
+   * `start` overrides it (--sessions-dir / FASTAGENT_SESSIONS_DIR / a mounted volume) so production
+   * continuity survives redeploys; dev keeps the local default (restart-surviving, like local pi).
    */
-  globalSkills?: boolean;
+  sessionsDir?: string;
 }
 
 /**
@@ -64,6 +64,8 @@ export async function createPiAgentFromWorkspace(
   configPath?: string;
   /** The resolved "provider/modelId" spec actually in use. */
   modelSpec: string;
+  /** Absolute session store directory in use (for the startup report). */
+  sessionsDir: string;
   /** Non-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
   /** Discovered tools dropped on a name clash with a default/config tool (surfaced, not silent). */
@@ -79,23 +81,20 @@ export async function createPiAgentFromWorkspace(
   // Discover tools/ and merge with pi defaults + config.tools (existing win) — the same resolution
   // start and `fastagent tool` use, so the dev server mounts exactly what gets served.
   const { tools, toolNames, toolCollisions } = await resolveWorkspaceTools(config, dir);
-  // The dev opener owns workspace state: .fastagent/ (machine state — gitignored, deletable,
-  // rebuildable) is created HERE, not in the CLI, so library callers get the same
-  // self-gitignored dir (vite/next-style).
-  const stateDir = join(dir, ".fastagent");
-  await mkdir(stateDir, { recursive: true });
-  await ensureStateDirSelfIgnored(stateDir);
+  // Sessions: default under the definition's own .fastagent/ (machine state — gitignored,
+  // deletable). Created HERE (not the CLI), so library callers get the self-gitignored dir too
+  // (vite/next-style). When start points sessionsDir outside (a volume), self-ignore that dir.
+  const sessionsDir = options.sessionsDir ?? join(dir, ".fastagent", "sessions");
+  await mkdir(sessionsDir, { recursive: true });
+  await ensureStateDirSelfIgnored(options.sessionsDir ? sessionsDir : join(dir, ".fastagent"));
   const models = createPiModels();
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
     models,
     model: resolveModel(models, modelSpec),
     tools,
-    // Definition-only by default (the agent is its folder); globals are an explicit
-    // authoring-fidelity opt-in, never the deploy path (see create.ts ladder rule 2 + core-design §6).
-    skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
-    // Sessions persist under the state dir: `fastagent dev` restarts keep conversations —
-    // faithful to local pi, which persists sessions too.
-    sessions: jsonlSessionStore({ dir: join(stateDir, "sessions"), cwd: dir }),
+    // Skills are definition-only (the agent is its folder) — no global/external mount, so dev
+    // mirrors deployment exactly (see create.ts ladder rule 2 + core-design §6).
+    sessions: jsonlSessionStore({ dir: sessionsDir, cwd: dir }),
   });
-  return { agent, definition, config, configPath, modelSpec, toolNames, toolCollisions };
+  return { agent, definition, config, configPath, modelSpec, sessionsDir, toolNames, toolCollisions };
 }

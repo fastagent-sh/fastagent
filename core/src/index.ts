@@ -43,38 +43,20 @@ export { z } from "zod";
 // ChannelModule ((agent) => Routes); loadChannels merges them, surfacing route collisions.
 export { loadChannels, type ChannelModule, type ChannelCollision } from "./engines/pi/channel.ts";
 
-// pi reference implementation — dev (open a workspace into an agent, authoring posture).
-// The command opener that composes over L2; sibling of createPiAgentFromArtifact (start).
+// pi reference implementation — the command opener: point at a definition directory → agent.
+// Composes over L2; `dev` and `start` both drive it (dev watches, start runs production posture).
 export {
   createPiAgentFromWorkspace,
   type CreatePiAgentFromWorkspaceOptions,
 } from "./engines/pi/dev.ts";
 
 // pi reference implementation — definition domain (load).
-// bundleAgentDefinition is intentionally NOT exported: it does a destructive `rm -rf
-// outDir` and the overwrite guard lives in buildPiArtifact, the public build entry point.
 export {
   loadAgentDefinition,
-  defaultGlobalSkillPaths,
   type LoadedDefinition,
   type LoadAgentDefinitionOptions,
   type SkillCollision,
 } from "./engines/pi/definition.ts";
-
-// pi reference implementation — build (compile a workspace into a self-contained artifact)
-export {
-  buildPiArtifact,
-  type ArtifactManifest,
-  type BuildPiArtifactOptions,
-} from "./engines/pi/build.ts";
-
-// pi reference implementation — start (run a built artifact in production posture).
-// Deploy-time sibling of L3 createPiAgentFromWorkspace; both are thin orchestrations over L2.
-export {
-  createPiAgentFromArtifact,
-  loadManifest,
-  type CreatePiAgentFromArtifactOptions,
-} from "./engines/pi/start.ts";
 
 // pi reference implementation — engine assets (prompt base + toolsets, in create.ts).
 // Internal assembly helpers (assembleSystemPrompt, resolveTools) are NOT public:

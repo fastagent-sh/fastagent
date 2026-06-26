@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -153,28 +153,17 @@ describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the
     expect(await readFile(join(dir, ".fastagent", ".gitignore"), "utf8")).toBe("*\n");
   });
 
-  it("globalSkills opt-in loads the machine's global skills; default stays definition-only", async () => {
-    // Point homedir at a temp dir holding one global skill, so defaultGlobalSkillPaths
-    // resolves to it (hermetic: does not depend on the test machine's real ~/.pi).
-    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
-    await mkdir(join(home, ".pi", "agent", "skills", "global-greeter"), { recursive: true });
-    await writeFile(
-      join(home, ".pi", "agent", "skills", "global-greeter", "SKILL.md"),
-      "---\nname: global-greeter\ndescription: A global greeter skill.\n---\nSay hi.\n",
-    );
+  it("sessionsDir overrides the default <dir>/.fastagent/sessions (start's deploy posture)", async () => {
+    // dev defaults sessions under <dir>/.fastagent/sessions; start points them elsewhere (a mounted
+    // volume) so a redeploy that replaces the dir does not wipe conversations. Lock that the override
+    // wins and the default lands under .fastagent (the single opener both commands drive).
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
-    const savedHome = process.env.HOME;
-    process.env.HOME = home;
-    try {
-      const off = await createPiAgentFromWorkspace(dir);
-      expect(off.definition.skills.map((s) => s.name)).not.toContain("global-greeter"); // definition-only
-      const on = await createPiAgentFromWorkspace(dir, { globalSkills: true });
-      expect(on.definition.skills.map((s) => s.name)).toContain("global-greeter"); // opt-in loads it
-    } finally {
-      if (savedHome !== undefined) process.env.HOME = savedHome;
-      else delete process.env.HOME;
-    }
+    const ext = await mkdtemp(join(tmpdir(), "fa-sessions-"));
+    const overridden = await createPiAgentFromWorkspace(dir, { sessionsDir: ext });
+    expect(overridden.sessionsDir).toBe(ext);
+    const defaulted = await createPiAgentFromWorkspace(dir);
+    expect(defaulted.sessionsDir).toBe(join(dir, ".fastagent", "sessions"));
   });
 
   it("missing every model source throws a clear startup error (fail visibly)", async () => {

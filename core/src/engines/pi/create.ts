@@ -25,14 +25,12 @@
  *       "Adapt engine wiring to the Agent contract": adds only the concurrency/
  *       stream shell. For tests and fully custom wiring.
  *
- * Above L2 sit the COMMAND OPENERS — not ladder rungs, but command-posture
- * compositions that open a source, resolve model/tools, inject K-wiring, then call L2:
- *   createPiAgentFromWorkspace (dev.ts, authoring posture) and
- *   createPiAgentFromArtifact (start.ts, production posture). They live in their own
- *   command modules (alongside build.ts) so dev/build/start stay symmetric and create.ts
- *   stays the pure REUSABLE ladder. The openers own command policy (config/manifest
- *   precedence, the .fastagent state dir vs external sessions, --global-skills); the
- *   ladder owns engine assembly.
+ * Above L2 sits the COMMAND OPENER — not a ladder rung, but a command-posture
+ * composition that opens a directory, resolves model/tools, picks session storage, then
+ * calls L2: createPiAgentFromWorkspace (dev.ts), which BOTH `dev` and `start` drive (the
+ * directory IS the agent — no build, no artifact). It owns command policy (config
+ * precedence, the .fastagent session dir, the sessionsDir override); the ladder owns
+ * engine assembly.
  *
  * Each rung only calls the one below; options narrow as you go up (L2 owns
  * systemPrompt/skills itself — they come from the definition; the openers own model/tools —
@@ -52,11 +50,10 @@
  *      - sessions / lease (deployment backends)  → reach L2 (embedding developer);
  *        the openers pick their own default (dev: jsonl under .fastagent/; start: jsonl
  *        outside the artifact) without exposing a choice;
- *      - base / raw skillPaths (definition-assembly) → stop at L2 (L2 owns prompt/skill mounting);
+ *      - base (definition-assembly)               → stop at L2 (L2 owns prompt/skill mounting);
  *      - retryClassifier (engine adaptation)     → stays at L0 (custom-wiring persona);
- *      - an opener exposes only what an operator may say: the model flag, and (dev)
- *        `globalSkills` (a semantic authoring-scope toggle, not raw skillPaths; raw
- *        paths stay an L2/embedder concern).
+ *      - an opener exposes only what an operator may say: the model flag. Skills are
+ *        always definition-only (your folder is the agent — no scope toggle, no mount path).
  *    KNOWN DEBT: "the openers accept no K" is a v1 line, not an invariant — sessions/env
  *    ARE deployment choices semantically. When backend #2 lands (DDB / sandbox env),
  *    this boundary must be re-cut: either config grows K keys (the openers inherit them)
@@ -197,8 +194,8 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
 
 // ── §3 the reusable assembly ladder: L1 / L2 (L0 lives in invoke.ts) ─────────
 //
-// The command openers (createPiAgentFromWorkspace in dev.ts, createPiAgentFromArtifact
-// in start.ts) compose OVER L2 and live in their own command modules — see the header.
+// The command opener (createPiAgentFromWorkspace in dev.ts) composes OVER L2 and lives in its
+// own command module — see the header. Both `dev` and `start` drive it.
 
 /** L1 options, grouped by the two-axis model (core-design §6.1). */
 export interface CreatePiAgentOptions {
@@ -258,8 +255,6 @@ export interface CreatePiAgentFromDefinitionOptions {
   base?: string;
   /** Override tools. Defaults to piDefaultTools (full pi toolset, fidelity; lock down with a custom list). */
   tools?: AgentTool[];
-  /** Extra skills mount directories (see LoadAgentDefinitionOptions.skillPaths). */
-  skillPaths?: string[];
   // ── K ──────────────────────────────────────────────────────────────────
   sessions?: PiSessionStore;
   env?: ExecutionEnv;
@@ -275,7 +270,7 @@ export async function createPiAgentFromDefinition(
   options: CreatePiAgentFromDefinitionOptions,
 ): Promise<{ agent: Agent; definition: LoadedDefinition }> {
   const env = options.env ?? new NodeExecutionEnv({ cwd: dir });
-  const definition = await loadAgentDefinition(dir, { env, skillPaths: options.skillPaths });
+  const definition = await loadAgentDefinition(dir, { env });
   const tools = options.tools ?? piDefaultTools(env.cwd);
   const base = options.base ?? piBasePrompt({ tools });
   const agent = createPiAgent({
@@ -304,8 +299,6 @@ export async function createPiAgentFromDefinition(
   return { agent, definition };
 }
 
-// The command OPENERS that compose over L2 live in their own command modules:
-//   dev   → createPiAgentFromWorkspace  (dev.ts)
-//   start → createPiAgentFromArtifact   (start.ts)
-//   build → buildPiArtifact             (build.ts)
+// The command OPENER that composes over L2 lives in its own command module:
+//   dev / start → createPiAgentFromWorkspace  (dev.ts)
 // keeping create.ts the pure reusable ladder (L0–L2 + engine assets). See the header.

@@ -151,7 +151,7 @@ describe("init: scaffoldWorkspace", () => {
     expect(cwd).toMatch(/fastagent dev/);
   });
 
-  it("keeps a pre-existing .gitignore; warns when it does not ignore .env (build could ship secrets)", async () => {
+  it("keeps a pre-existing .gitignore; warns when it does not ignore .env (a deploy could ship secrets)", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, ".gitignore"), "custom\n"); // no .env rule
     const { created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir);

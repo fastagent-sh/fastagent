@@ -6,16 +6,14 @@
  *   fastagent init  [dir] — scaffold a minimal runnable workspace
  *   fastagent models      — list available "provider/modelId" specs
  *   fastagent tool  <name> '<json>' [dir] — run one tool directly (no model)
- *   fastagent dev   [dir] — assemble + serve a local HTTP channel (iteration)
- *   fastagent build [dir] — compile a self-contained artifact (core-design §10.3)
- *   fastagent start [dir] — run a built artifact in production posture (core-design §10.4)
+ *   fastagent dev   [dir] — assemble + serve a local HTTP channel, watch + reload (iteration)
+ *   fastagent start [dir] — run the same directory in production posture, no watch (core-design §10.3)
  *
  * Process-level side effects (proxy dispatcher, .env loading) belong here — the CLI
  * is the application entry point.
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
@@ -25,40 +23,29 @@ import { text } from "./channels/respond.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { runDevSupervisor } from "./dev-supervisor.ts";
 import { loadChannels } from "./engines/pi/channel.ts";
-import { buildPiArtifact } from "./engines/pi/build.ts";
 import { fastagentVersion } from "./engines/pi/version.ts";
 import { listModels, loadConfig } from "./engines/pi/config.ts";
 import { FASTAGENT_AUTH_PATH } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
-import {
-  type LoadedDefinition,
-  defaultGlobalSkillPaths,
-  loadAgentDefinition,
-  loadRootIgnore,
-} from "./engines/pi/definition.ts";
+import { loadRootIgnore } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import { assertChannelReady, channelExists, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
-import { listToolFiles } from "./engines/pi/tool.ts";
-import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {
   console.error(`usage:
   fastagent init   [dir] [--minimal] [--no-install]
   fastagent models
   fastagent tool   <name> '<json-args>' [dir]
-  fastagent dev    [dir] [--port N] [--model provider/modelId] [--global-skills] [--no-watch]
-  fastagent chat   [dir] [--model provider/modelId] [--global-skills]
-  fastagent build [dir] [--out dir] [--model provider/modelId] [--global-skills] [--force]
+  fastagent dev    [dir] [--port N] [--model provider/modelId] [--no-watch]
+  fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
   fastagent login [provider]
   fastagent --version
 
   dev    assemble the agent in dir (default .) and serve a local HTTP channel.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
-         --global-skills   also load the machine's global skills (~/.pi/agent/skills,
-                           ~/.agents/skills); default is definition-only (dev == deployed)
   chat   open the SAME assembled agent in pi's interactive TUI (the real harness, not a
          crude REPL) — to try it locally before serving. Same model/tool/skill resolution
          as dev; pi handles login, sessions, and /resume natively.
@@ -70,21 +57,13 @@ function usage(code: number): never {
   models list the available "provider/modelId" specs (use one with --model or in the config).
   tool   run one tool (from tools/ or config.tools) directly with JSON args — no model, no
          server, no tokens. Fast feedback while authoring: fastagent tool add '{"a":2,"b":3}'
-  build  compile dir into a self-contained, relocatable artifact (default out:
-         .fastagent/build): the source tree + materialized skills + manifest, minus
-         node_modules/.git and anything .gitignore/.fastagentignore excludes (honored
-         via a library, git is never invoked). Secrets are NOT auto-excluded — keep them
-         in .gitignore or .fastagentignore. Source is untouched. The out dir is REPLACED
-         wholesale (built to a temp dir, then published atomically); an in-tree --out must
-         be under .fastagent/, else use an out-of-tree path with --force.
-         --global-skills   materialize the machine's global skills into the artifact
-         --force           allow an --out OUTSIDE the source tree (it will be replaced)
-  start  run a built artifact (default dir .) in production posture: model/http come from
-         the artifact's fastagent.json; skills are the artifact (never global).
-         model precedence: --model > FASTAGENT_MODEL > manifest.model
-         port precedence:  --port > PORT env > manifest.http.port > 8787
-         sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > ./fastagent-sessions
-                   (kept OUTSIDE the artifact so a redeploy never wipes conversations)`);
+  start  run the agent in dir (default .) in production posture — the SAME assembly as dev
+         (your folder is the agent), just no file-watching. No build step: start reads the
+         definition directly; model/http come from fastagent.config.ts (frozen by git, not a manifest).
+         model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
+         port precedence:  --port > PORT env > fastagent.config.ts http.port > 8787
+         sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions
+                   (point FASTAGENT_SESSIONS_DIR at a volume so a redeploy never wipes conversations)`);
   process.exit(code);
 }
 
@@ -93,10 +72,7 @@ const { positionals, values } = parseArgs({
   options: {
     port: { type: "string" },
     model: { type: "string" },
-    out: { type: "string" },
     "sessions-dir": { type: "string" },
-    force: { type: "boolean" },
-    "global-skills": { type: "boolean" },
     minimal: { type: "boolean" },
     "no-install": { type: "boolean" },
     "no-watch": { type: "boolean" },
@@ -112,14 +88,12 @@ if (values.help) usage(0);
 
 const [command, dirArg] = positionals;
 const dir = resolve(dirArg ?? ".");
-const globalSkills = values["global-skills"] ?? false;
 
 if (command === "init") await runInit();
 else if (command === "models") runModels();
 else if (command === "tool") await runTool();
 else if (command === "dev") await runDev();
 else if (command === "chat") await runChat();
-else if (command === "build") await runBuild();
 else if (command === "start") await runStart();
 else if (command === "add") await runAdd();
 else if (command === "login") await runLogin();
@@ -235,13 +209,13 @@ async function runAdd(): Promise<void> {
   await assertChannelReady(target).catch(failStartup);
   const file = await scaffoldChannel(target, kind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
-  // Read-only secret-hygiene check (no mutation): `fastagent build` ships whatever the root
-  // .gitignore/.fastagentignore don't exclude, so warn (don't refuse — on() may read a real env var)
-  // when .env is not ignored, rather than blindly recommending the user put a secret there.
+  // Read-only secret-hygiene check (no mutation): a deploy that copies the directory ships whatever
+  // the root .gitignore/.fastagentignore don't exclude, so warn (don't refuse — on() may read a real
+  // env var) when .env is not ignored, rather than blindly recommending the user put a secret there.
   const envIgnored = (await loadRootIgnore(target).catch(failStartup))?.ignores(".env") ?? false;
   if (!envIgnored) {
     console.error(
-      `[fastagent] warn: .env is not gitignored — \`fastagent build\` would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
+      `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
     );
   }
   console.error(`  next steps:`);
@@ -364,24 +338,10 @@ type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;
 /** The agents/skills/tools/collisions report lines. */
 function reportAgentsSkillsTools(a: Assembled): void {
   console.error(`[fastagent] agents: ${a.definition.instructions ? "AGENTS.md" : "(none)"}`);
-  console.error(
-    `[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
-  );
+  console.error(`[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (a.toolNames.length > 0) console.error(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
   reportToolCollisions(a.toolCollisions);
   reportDefinitionWarnings(a.definition.collisions, a.definition.diagnostics);
-}
-
-/** Startup-only diagnostic: machine global skills that exist but were not loaded (definition-only). */
-async function reportAvailableGlobalSkills(definition: LoadedDefinition): Promise<void> {
-  if (globalSkills) return;
-  const loaded = definition.skills.map((s) => s.name);
-  const withGlobals = await loadAgentDefinition(dir, { skillPaths: defaultGlobalSkillPaths() }).catch(() => undefined);
-  const available = (withGlobals?.skills ?? []).map((s) => s.name).filter((n) => !loaded.includes(n));
-  if (available.length > 0) {
-    console.error(`[fastagent] ${available.length} global skill(s) available but not loaded: ${available.join(", ")}`);
-    console.error(`            use in dev: --global-skills | ship: copy into skills/ (or build --global-skills)`);
-  }
 }
 
 /**
@@ -414,7 +374,7 @@ async function runChat(): Promise<void> {
   // import would load it on EVERY command; headless `start`/`dev` never need it. Runtime hygiene
   // only — the dependency (and install size) is unchanged.
   const { runPiChat } = await import("./engines/pi/chat.ts");
-  await runPiChat(dir, { model: values.model, globalSkills }).catch(failStartup);
+  await runPiChat(dir, { model: values.model }).catch(failStartup);
 }
 
 /** Assemble the workspace agent and serve it once (the dev worker; also the --no-watch path). */
@@ -427,61 +387,17 @@ async function serveOnce(): Promise<void> {
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const a = await createPiAgentFromWorkspace(dir, { model: values.model, globalSkills }).catch(failStartup);
+  const a = await createPiAgentFromWorkspace(dir, { model: values.model }).catch(failStartup);
   console.error(`[fastagent] dir:    ${a.definition.dir}`);
   console.error(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
   console.error(`[fastagent] model:  ${a.modelSpec}`);
   await reportAuth(a.modelSpec);
   reportAgentsSkillsTools(a);
-  await reportAvailableGlobalSkills(a.definition);
   // dev == deployed: serve the same channels/ the artifact would (default invoke when none declared).
   // routesFor constructs each discovered channel, which may throw on a misconfig (e.g. an unset
   // secret) — surface it as a clean startup error, not an unhandled stack.
   const routes = await routesFor(dir, a.agent).catch(failStartup);
   serve(routes, portFlag ?? a.config.http?.port ?? 8787);
-}
-
-async function runBuild(): Promise<void> {
-  loadDotEnv(dir); // the model may come from FASTAGENT_MODEL in .env
-  // Resolve a relative --out against the SOURCE dir (not the shell cwd), matching the
-  // default (dir/.fastagent/build) and the in-tree guard — so `build pkg --out .fastagent/
-  // build` targets pkg's, not cwd's. Absolute --out is unaffected.
-  const outDir = values.out !== undefined ? resolve(dir, values.out) : join(dir, ".fastagent", "build");
-  const { manifest, definition } = await buildPiArtifact(dir, outDir, {
-    model: values.model,
-    globalSkills,
-    force: values.force ?? false,
-  }).catch(failStartup);
-
-  // Names from the bundled tools/, without importing them. The build already succeeded, so a failure
-  // reading the summary's tool list must not fail the build — warn (visibly) and omit the line.
-  const toolFiles = await listToolFiles(outDir).catch((error: Error) => {
-    console.error(`[fastagent] warn: ${error.message}`);
-    return [] as string[];
-  });
-  console.error(`[fastagent] built:  ${outDir}`);
-  console.error(`[fastagent] model:  ${manifest.model}`);
-  console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
-  console.error(
-    `[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}${globalSkills ? " (incl. global)" : ""}`,
-  );
-  if (toolFiles.length > 0) console.error(`[fastagent] tools:  ${toolFiles.join(", ")}`);
-  // The build copies a .env only if the root .gitignore/.fastagentignore do NOT exclude it (the build
-  // does not special-case secrets — definition.ts), so check the authoritative matcher, not mere
-  // existence: an ignored .env is left behind (remind: secrets come from the deploy env); an
-  // un-ignored .env was just SHIPPED into the artifact (a secret there is now in the deployable — warn).
-  if (existsSync(join(dir, ".env"))) {
-    if ((await loadRootIgnore(dir))?.ignores(".env")) {
-      console.error(
-        `[fastagent] note: .env is gitignored, so it is not in the artifact — provide its secrets via the deploy environment (e.g. GITHUB_WEBHOOK_SECRET)`,
-      );
-    } else {
-      console.error(
-        `[fastagent] warn: .env is NOT gitignored — the build SHIPPED it into the artifact; gitignore .env (or move the secret out) and rebuild`,
-      );
-    }
-  }
-  reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 }
 
 async function runStart(): Promise<void> {
@@ -492,11 +408,16 @@ async function runStart(): Promise<void> {
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  const { agent, definition, manifest, modelSpec, sessionsDir, toolNames, toolCollisions } =
-    await createPiAgentFromArtifact(dir, {
-      model: values.model,
-      sessionsDir: values["sessions-dir"] ? resolve(values["sessions-dir"]) : undefined,
-    }).catch(failStartup);
+  // start runs the definition directory in production posture — the SAME opener dev uses (single
+  // assembly source), just no watch. Sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > the
+  // <dir>/.fastagent/sessions default (resolved inside the opener).
+  const sessionsDirOverride = values["sessions-dir"]
+    ? resolve(values["sessions-dir"])
+    : process.env.FASTAGENT_SESSIONS_DIR
+      ? resolve(process.env.FASTAGENT_SESSIONS_DIR)
+      : undefined;
+  const { agent, definition, config, modelSpec, sessionsDir, toolNames, toolCollisions } =
+    await createPiAgentFromWorkspace(dir, { model: values.model, sessionsDir: sessionsDirOverride }).catch(failStartup);
 
   console.error(`[fastagent] start:  ${dir}`);
   console.error(`[fastagent] model:  ${modelSpec}`);
@@ -506,19 +427,18 @@ async function runStart(): Promise<void> {
   if (toolNames.length > 0) console.error(`[fastagent] tools:  ${toolNames.join(", ")}`);
   reportToolCollisions(toolCollisions);
   console.error(`[fastagent] sessions: ${sessionsDir}`);
-  // Visible footgun guard: a sessions dir inside the artifact is wiped by a redeploy that
-  // replaces the artifact wholesale. Warn, don't block (running in place is legitimate).
-  const rel = relative(dir, sessionsDir);
-  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+  // Sessions default under the definition dir, which a redeploy may replace wholesale. Remind the
+  // operator (only when using the default) to point them at a volume so conversations survive.
+  if (sessionsDirOverride === undefined) {
     console.error(
-      `[fastagent] warn: sessions dir is INSIDE the artifact; a redeploy that replaces the artifact ` +
-        `will wipe conversations — use --sessions-dir to place them outside.`,
+      `[fastagent] note: sessions live under the definition dir; set FASTAGENT_SESSIONS_DIR to a ` +
+        `persistent volume so a redeploy that replaces the dir does not wipe conversations.`,
     );
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
   const routes = await routesFor(dir, agent).catch(failStartup);
-  serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? manifest.http?.port ?? 8787);
+  serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787);
   // No graceful drain: webhook turns run fire-and-forget and outlive a short shutdown grace anyway
   // (the engine's lease is the only concurrency guard); SIGTERM just exits. In-flight turns are lost
   // on redeploy — durable execution is the real fix (deferred).

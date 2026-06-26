@@ -47,14 +47,12 @@ import {
 import { loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
 import { createPiModels } from "./models.ts";
-import { defaultGlobalSkillPaths, loadAgentDefinition } from "./definition.ts";
+import { loadAgentDefinition } from "./definition.ts";
 import { loadTools, mergeDiscoveredTools, type ToolCollision } from "./tool.ts";
 
 export interface RunPiChatOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
-  /** Also load the machine's global skills on top of the definition's own (authoring-fidelity opt-in). */
-  globalSkills?: boolean;
 }
 
 /**
@@ -79,10 +77,7 @@ export async function buildChatRuntime(
     // Resolution only; chat's auth/login rides pi's native TUI machinery (see header).
     const model = resolveModel(createPiModels(), modelSpec);
     const env = new NodeExecutionEnv({ cwd });
-    const definition = await loadAgentDefinition(cwd, {
-      env,
-      skillPaths: options.globalSkills ? defaultGlobalSkillPaths() : [],
-    });
+    const definition = await loadAgentDefinition(cwd, { env });
     reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
     // Same tool resolution as the dev opener (defaults + config.tools + discovered tools/, deduped),

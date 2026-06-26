@@ -342,15 +342,15 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
       }
     }
 
-    // Security wiring: `fastagent build` excludes secrets ONLY via .gitignore/.fastagentignore
-    // (core-design §10.1). If a kept .gitignore does not ignore .env, the scaffold's secret line
-    // silently did not take effect. Use the EXACT matcher build uses (loadRootIgnore) so the
-    // advisory matches what ships; it can throw on an unreadable ignore file (kept in the rollback
-    // scope so such a throw leaves no half-scaffold).
+    // Security wiring: a deploy that copies the directory ships secrets unless .gitignore/
+    // .fastagentignore exclude them. If a kept .gitignore does not ignore .env, the scaffold's
+    // secret line silently did not take effect. Use loadRootIgnore (the same matcher) so the
+    // advisory matches what would ship; it can throw on an unreadable ignore file (kept in the
+    // rollback scope so such a throw leaves no half-scaffold).
     const rootIgnore = await loadRootIgnore(dir);
     if (!rootIgnore?.ignores(".env")) {
       warnings.push(
-        `your .gitignore/.fastagentignore does not exclude ".env" — add it, or \`fastagent build\` may ship secrets into the artifact`,
+        `your .gitignore/.fastagentignore does not exclude ".env" — add it, or a deploy that copies the directory may ship secrets`,
       );
     }
     // A kept package.json won't carry the tool's deps — the example tool would not resolve.
