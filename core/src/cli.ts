@@ -14,7 +14,6 @@
  * is the application entry point.
  */
 import { spawn } from "node:child_process";
-import { watch as watchTree } from "chokidar";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -24,6 +23,7 @@ import type { Agent } from "./agent.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
+import { runDevSupervisor } from "./dev-supervisor.ts";
 import { loadChannels } from "./engines/pi/channel.ts";
 import { buildPiArtifact } from "./engines/pi/build.ts";
 import { fastagentVersion } from "./engines/pi/version.ts";
@@ -399,7 +399,7 @@ async function runDev(): Promise<void> {
     return;
   }
   parsePort(values.port, "--port"); // flag-shape check (a non-integer port fails before spawning)
-  runDevSupervisor();
+  runDevSupervisor(dir);
 }
 
 /** Open the workspace agent in pi's interactive TUI (the pi-specific `chat` command). */
@@ -439,89 +439,6 @@ async function serveOnce(): Promise<void> {
   // secret) — surface it as a clean startup error, not an unhandled stack.
   const routes = await routesFor(dir, a.agent).catch(failStartup);
   serve(routes, portFlag ?? a.config.http?.port ?? 8787);
-}
-
-/**
- * Supervisor: spawn the worker and restart it on debounced workspace edits. Each restart is a
- * fresh process (always-latest, no stale module cache). The supervisor itself never exits on a bad
- * edit — the worker fails loudly (its own startup error) and the supervisor waits for the next save.
- */
-function runDevSupervisor(): void {
-  let worker: ReturnType<typeof spawn> | undefined;
-  let reloadPending = false;
-  let everServed = false; // has any worker successfully bound (sent `ready`) yet?
-  let timer: NodeJS.Timeout | undefined;
-
-  const spawnWorker = (): void => {
-    // ipc fd so the worker can signal readiness once it binds; stdio otherwise inherited.
-    // biome-ignore lint/style/noNonNullAssertion: argv[1] is always the script path under a node entry
-    const w = spawn(process.execPath, [process.argv[1]!, ...process.argv.slice(2)], {
-      stdio: ["inherit", "inherit", "inherit", "ipc"],
-      env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
-    });
-    worker = w;
-    w.on("message", (m: { type?: string }) => {
-      if (m?.type === "ready") everServed = true;
-    });
-    w.on("exit", (code, signal) => {
-      if (worker !== w) return; // already superseded
-      worker = undefined;
-      if (reloadPending) {
-        reloadPending = false;
-        spawnWorker(); // restart requested: the old worker has now exited, so the port is free
-      } else if (!everServed) {
-        // The worker failed BEFORE ever serving — a non-editable startup failure (bad flag,
-        // EADDRINUSE, broken initial workspace) that saving cannot fix. Propagate the exit code so
-        // `fastagent dev` fails like the old CLI did (and smoke tests don't hang). The worker
-        // already printed the specific error (inherited stdio).
-        process.exit(code ?? 1);
-      } else {
-        // A worker that HAD been serving stopped (a broken edit, or a crash). The edit is fixable;
-        // the error is already printed. Wait for the next save to retry, do not loop or exit.
-        console.error(`[fastagent] dev stopped (worker exited: ${signal ?? code}) — save a change to retry`);
-      }
-    });
-  };
-
-  const triggerReload = (): void => {
-    console.error(`[fastagent] change detected — restarting…`);
-    if (worker) {
-      reloadPending = true;
-      worker.kill("SIGTERM"); // the exit handler respawns once the port is released
-    } else {
-      spawnWorker(); // worker was down (broken edit) — retry now
-    }
-  };
-
-  // Recursively watch the workspace, structurally ignoring machine-state dirs. The worker writes
-  // jsonl sessions DEEP under .fastagent on every invoke, so watching it would restart dev on its
-  // own writes; node_modules/.git are noise. Everything else is watched — tools, skills, AND helper
-  // dirs a tool/config imports (e.g. lib/) — so a saved transitive import triggers the fresh-process
-  // reload too. chokidar gives reliable cross-platform recursion + structural ignore that native
-  // fs.watch cannot (its `filename` is not guaranteed, defeating a path-based filter).
-  const watcher = watchTree(dir, {
-    ignoreInitial: true, // the startup scan is not a change
-    ignored: /(?:^|[\\/])(?:\.fastagent|node_modules|\.git)(?:[\\/]|$)/,
-  });
-  watcher.on("all", () => {
-    clearTimeout(timer);
-    timer = setTimeout(triggerReload, 200);
-  });
-  watcher.on("error", (error) =>
-    console.error(
-      `[fastagent] warn: file watching error (${(error as Error).message}); some edits may need a manual restart`,
-    ),
-  );
-  console.error(`[fastagent] watching for changes — edits restart the dev worker (--no-watch to disable)`);
-
-  const shutdown = (): never => {
-    worker?.kill("SIGTERM");
-    void watcher.close();
-    process.exit(0);
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-  spawnWorker();
 }
 
 async function runBuild(): Promise<void> {
