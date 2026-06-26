@@ -31,7 +31,13 @@ import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 import { loadRootIgnore } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveWorkspaceTools } from "./engines/pi/create.ts";
-import { assertChannelReady, channelExists, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
+import {
+  assertChannelReady,
+  channelExists,
+  scaffoldChannel,
+  scaffoldWorkspace,
+  vendorSkill,
+} from "./engines/pi/init.ts";
 
 function usage(code: number): never {
   console.error(`usage:
@@ -41,6 +47,7 @@ function usage(code: number): never {
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--no-watch]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
+  fastagent add   github | skill <source> [dir]
   fastagent login [provider]
   fastagent --version
 
@@ -195,9 +202,10 @@ async function runInit(): Promise<void> {
  */
 async function runAdd(): Promise<void> {
   const kind = positionals[1];
+  if (kind === "skill") return runAddSkill();
   const target = resolve(positionals[2] ?? ".");
   if (kind !== "github") {
-    console.error(`usage: fastagent add github [dir]   (the github channel is the only one today)`);
+    console.error(`usage: fastagent add github [dir]  |  fastagent add skill <source> [dir]`);
     process.exit(1);
   }
   // add SCAFFOLDS a channel into a ready workspace; it does not bootstrap one (that is `init`'s job).
@@ -223,6 +231,40 @@ async function runAdd(): Promise<void> {
   console.error(`    set GITHUB_WEBHOOK_SECRET${envIgnored ? " in .env (gitignored)" : ""}`);
   console.error(`    edit channels/github.ts — map events to intents in on()`);
   console.error(`    fastagent dev   # serve the webhook locally`);
+}
+
+/**
+ * `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/.
+ * source = a git ref (owner/repo/path, github default), a local path, or a bare name resolved
+ * against your local global skill dirs. Copy-in, git-tracked (the filesystem is the registry);
+ * validated with the runtime loader; refuses to overwrite. Adding a skill is still unfamiliar, so
+ * the no-arg usage teaches BOTH paths (write-your-own vibe + vendor) and never implies a command.
+ */
+async function runAddSkill(): Promise<void> {
+  const source = positionals[2];
+  const target = resolve(positionals[3] ?? ".");
+  if (!source) {
+    console.error(
+      `add a skill — two ways:\n` +
+        `  1. write your own (vibe): create skills/<name>/SKILL.md with name + description\n` +
+        `     frontmatter; it's auto-discovered. No command needed — this is the common path.\n` +
+        `  2. vendor an existing Agent Skills skill (copied in, git-tracked):\n` +
+        `       fastagent add skill <source> [dir]\n` +
+        `     source: a git ref (owner/repo/path, github default), a local path (./x, /abs), or a\n` +
+        `             bare name found in your global skill dirs (~/.agents/skills, ~/.pi/agent/skills)`,
+    );
+    process.exit(1);
+  }
+  const { name, description, dest, hasScripts, diagnostics } = await vendorSkill(target, source).catch(failStartup);
+  console.error(`[fastagent] vendored skill "${name}" → ${dest}/`);
+  if (description) console.error(`  ${description.length > 100 ? `${description.slice(0, 100)}…` : description}`);
+  for (const d of diagnostics) console.error(`  warn: ${d.message}`);
+  if (hasScripts) {
+    console.error(
+      `  warn: this skill ships scripts/ (executable code that runs in your agent) — review it before deploying`,
+    );
+  }
+  console.error(`  next: mention "${name}" in AGENTS.md so the model knows when to use it; then \`fastagent dev\``);
 }
 
 /**

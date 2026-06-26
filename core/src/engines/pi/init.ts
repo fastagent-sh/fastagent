@@ -27,9 +27,12 @@
  * It does NOT defend against every pathological pre-existing target state (TOCTOU, read-only
  * dirs, FIFOs, mid-write disk-full, …): a local scaffolding command recovered by delete-and-retry.
  */
-import { access, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
-import { loadRootIgnore } from "./definition.ts";
+import { access, cp, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { downloadTemplate } from "giget";
+import { type LoadedDefinition, loadAgentDefinition, loadRootIgnore } from "./definition.ts";
 import { fastagentVersion } from "./version.ts";
 
 /** Identity persona (clean — it is the system prompt). The complete variant references the tool. */
@@ -265,6 +268,108 @@ export async function assertChannelReady(dir: string): Promise<void> {
       `${pkgPath}: add "@kid7st/fastagent" to dependencies (then \`npm install\`) — the channel file imports it`,
     );
   }
+}
+
+/** Derive the destination skill name from a source ref: the last path segment, sans `#ref`. */
+function skillNameFromSource(source: string): string {
+  const noRef = source.split("#")[0] ?? source;
+  return basename(noRef.replace(/\/+$/, ""));
+}
+
+/** A local source is an explicit path (./x, ../x, /abs); anything else is a giget ref or a bare name. */
+function isLocalSource(source: string): boolean {
+  return source.startsWith("./") || source.startsWith("../") || source === "." || isAbsolute(source);
+}
+
+/** A bare name (no `/`, no `scheme:`) resolves against the local global skill dirs (see below). */
+function isBareName(source: string): boolean {
+  return !source.includes("/") && !/^[a-z][a-z0-9+.-]*:/i.test(source);
+}
+
+/**
+ * Local "global" skill dirs (skills you've collected via other Agent Skills tools). Used ONLY as an
+ * add-time vendoring SOURCE — a bare `add skill <name>` copies the match in (git-tracked). This is
+ * NOT the removed runtime global-skill scan: nothing is loaded from here at run time; the result is a
+ * plain copy inside the definition, which stays self-contained.
+ */
+function findGlobalSkillSource(name: string): string | undefined {
+  for (const root of [join(homedir(), ".agents", "skills"), join(homedir(), ".pi", "agent", "skills")]) {
+    if (existsSync(join(root, name, "SKILL.md"))) return join(root, name);
+  }
+  return undefined;
+}
+
+export interface VendoredSkill {
+  /** The skill's real name (from SKILL.md frontmatter, per the Agent Skills spec). */
+  name: string;
+  description?: string;
+  /** Workspace-relative destination (e.g. `skills/pdf`). */
+  dest: string;
+  /** The skill ships a `scripts/` dir (executable code) — a trust signal for the caller. */
+  hasScripts: boolean;
+  /** Spec diagnostics for THIS skill from the runtime loader (e.g. name ≠ dir). */
+  diagnostics: LoadedDefinition["diagnostics"];
+}
+
+/**
+ * Vendor an Agent Skills skill into `<workspace>/skills/<name>/` from a giget ref
+ * (`owner/repo/sub/dir[#ref]`, github default), a LOCAL path (`./x`, `../x`, `/abs`), or a BARE
+ * name (`pdf`) resolved against the local global skill dirs (~/.agents/skills, ~/.pi/agent/skills).
+ *
+ * Copy-in, not link: the skill becomes a git-tracked part of the definition ("your folder is the
+ * agent" — there is no registry; the filesystem is the registry, git is the distribution, the user
+ * owns trust). Refuses to overwrite an existing skill (side-effect-free check first), and validates
+ * the result with the SAME loader the runtime uses, so a non-spec skill surfaces immediately.
+ */
+export async function vendorSkill(workspaceDir: string, source: string): Promise<VendoredSkill> {
+  const name = skillNameFromSource(source);
+  if (name === "" || name === "." || name === "..") {
+    throw new Error(`cannot derive a skill name from "${source}" — point at a skill directory (…/skills/<name>)`);
+  }
+  const dest = join(workspaceDir, "skills", name);
+  // Side-effect-free refusal: never overwrite an existing skill.
+  if (existsSync(dest)) {
+    throw new Error(`skills/${name} already exists — remove it to re-vendor, or rename the target`);
+  }
+  await mkdir(join(workspaceDir, "skills"), { recursive: true });
+  if (isLocalSource(source)) {
+    const src = resolve(source);
+    if (!existsSync(join(src, "SKILL.md"))) {
+      throw new Error(`"${source}" has no SKILL.md — an Agent Skills skill is a directory containing SKILL.md`);
+    }
+    await cp(src, dest, { recursive: true });
+  } else if (isBareName(source)) {
+    // bare name → vendor from a local global skill dir (add-time copy, not a runtime scan).
+    const src = findGlobalSkillSource(source);
+    if (!src) {
+      throw new Error(
+        `no skill "${source}" in your global skill dirs (~/.agents/skills, ~/.pi/agent/skills) — ` +
+          `give a git ref (owner/repo/path) or a local path instead`,
+      );
+    }
+    await cp(src, dest, { recursive: true });
+  } else {
+    // giget defaults a BARE ref to its own template registry, not github — so default the provider to
+    // github for a plain `owner/repo/path` (an explicit `github:`/`gh:`/`gitlab:`… scheme is kept).
+    // Supports a subdir + #ref, fetched via the tar API (no git binary).
+    const ref = /^[a-z][a-z0-9+.-]*:/i.test(source) ? source : `github:${source}`;
+    await downloadTemplate(ref, { dir: dest, force: true });
+  }
+  if (!existsSync(join(dest, "SKILL.md"))) {
+    await rm(dest, { recursive: true, force: true }); // not a skill — leave no half-vendor
+    throw new Error(`"${source}" did not yield a SKILL.md — expected an Agent Skills skill directory`);
+  }
+  // Validate with the runtime loader: name/description + any spec diagnostics for THIS skill.
+  const def = await loadAgentDefinition(workspaceDir);
+  const skill =
+    def.skills.find((s) => s.filePath.includes(`skills/${name}/`)) ?? def.skills.find((s) => s.name === name);
+  return {
+    name: skill?.name ?? name,
+    description: skill?.description,
+    dest: `skills/${name}`,
+    hasScripts: existsSync(join(dest, "scripts")),
+    diagnostics: def.diagnostics.filter((d) => d.path?.includes(`skills/${name}`)),
+  };
 }
 
 /**

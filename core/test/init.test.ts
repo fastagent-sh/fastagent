@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromWorkspace, loadAgentDefinition, scaffoldWorkspace } from "../src/index.ts";
+import { vendorSkill } from "../src/engines/pi/init.ts";
 
 const freshDir = () => mkdtemp(join(tmpdir(), "fa-init-"));
 async function exists(p: string): Promise<boolean> {
@@ -281,5 +282,77 @@ describe("add: fastagent add github", () => {
     const out = await cliInit(["add", "github"], dir);
     expect(out).toMatch(/symlink/);
     expect(await exists(join(real, "ch", "github.ts"))).toBe(false); // not written through the symlink
+  });
+});
+
+describe("add: fastagent add skill (vendor)", () => {
+  it("vendors a local Agent Skills skill into skills/<name>/ (copy, validated, scripts flagged, refuse-overwrite)", async () => {
+    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
+    await mkdir(join(srcRoot, "greeter", "scripts"), { recursive: true });
+    await writeFile(
+      join(srcRoot, "greeter", "SKILL.md"),
+      "---\nname: greeter\ndescription: Greet the user warmly and by name.\n---\nSay hello.\n",
+    );
+    await writeFile(join(srcRoot, "greeter", "scripts", "hi.sh"), "echo hi\n");
+
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await writeFile(join(ws, "AGENTS.md"), "# Bot\n");
+
+    const r = await vendorSkill(ws, join(srcRoot, "greeter"));
+    expect(r.name).toBe("greeter"); // from SKILL.md frontmatter
+    expect(r.description).toContain("Greet");
+    expect(r.dest).toBe("skills/greeter");
+    expect(r.hasScripts).toBe(true); // scripts/ → trust-warning path
+    expect(r.diagnostics).toEqual([]); // spec-clean, no name/desc warnings
+    expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true);
+    expect(await exists(join(ws, "skills", "greeter", "scripts", "hi.sh"))).toBe(true);
+    const def = await loadAgentDefinition(ws);
+    expect(def.skills.map((s) => s.name)).toContain("greeter"); // really mounted by the runtime loader
+
+    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/already exists/); // refuse overwrite
+  });
+
+  it("rejects a source with no SKILL.md (not an Agent Skills skill), leaving no half-vendor", async () => {
+    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
+    await mkdir(join(srcRoot, "notaskill"), { recursive: true });
+    await writeFile(join(srcRoot, "notaskill", "readme.txt"), "x\n");
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await expect(vendorSkill(ws, join(srcRoot, "notaskill"))).rejects.toThrow(/SKILL\.md/);
+    expect(await exists(join(ws, "skills", "notaskill"))).toBe(false); // no half-vendor left behind
+  });
+
+  it("vendors a bare name from a local global skill dir (~/.agents/skills) — add-time copy, not a runtime scan", async () => {
+    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
+    await mkdir(join(home, ".agents", "skills", "greeter"), { recursive: true });
+    await writeFile(
+      join(home, ".agents", "skills", "greeter", "SKILL.md"),
+      "---\nname: greeter\ndescription: Greet the user warmly.\n---\nHi.\n",
+    );
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const r = await vendorSkill(ws, "greeter");
+      expect(r.name).toBe("greeter");
+      expect(r.dest).toBe("skills/greeter");
+      expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true); // copied in (git-tracked)
+    } finally {
+      if (saved !== undefined) process.env.HOME = saved;
+      else delete process.env.HOME;
+    }
+  });
+
+  it("a bare name absent from every global skill dir fails with guidance (never treated as a github repo)", async () => {
+    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      await expect(vendorSkill(ws, "nonesuch")).rejects.toThrow(/global skill dirs/);
+      expect(await exists(join(ws, "skills", "nonesuch"))).toBe(false);
+    } finally {
+      if (saved !== undefined) process.env.HOME = saved;
+      else delete process.env.HOME;
+    }
   });
 });
