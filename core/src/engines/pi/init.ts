@@ -31,7 +31,6 @@ import { access, cp, lstat, mkdir, readFile, readdir, rm, writeFile } from "node
 import { existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { downloadTemplate } from "giget";
 import { type LoadedDefinition, loadAgentDefinition, loadRootIgnore } from "./definition.ts";
 import { fastagentVersion } from "./version.ts";
 
@@ -309,6 +308,8 @@ export interface VendoredSkill {
   hasScripts: boolean;
   /** Spec diagnostics for THIS skill from the runtime loader (e.g. name ≠ dir). */
   diagnostics: LoadedDefinition["diagnostics"];
+  /** True when an existing skill was overwritten (--update); false for a fresh vendor. */
+  overwritten: boolean;
 }
 
 /**
@@ -318,20 +319,30 @@ export interface VendoredSkill {
  *
  * Copy-in, not link: the skill becomes a git-tracked part of the definition ("your folder is the
  * agent" — there is no registry; the filesystem is the registry, git is the distribution, the user
- * owns trust). Refuses to overwrite an existing skill (side-effect-free check first), and validates
+ * owns trust). Refuses to overwrite an existing skill UNLESS `options.update` — and then it is a plain
+ * git-tracked overwrite (review/rollback via your repo's git diff/checkout), never a merge. Validates
  * the result with the SAME loader the runtime uses, so a non-spec skill surfaces immediately.
  */
-export async function vendorSkill(workspaceDir: string, source: string): Promise<VendoredSkill> {
+export async function vendorSkill(
+  workspaceDir: string,
+  source: string,
+  options: { update?: boolean } = {},
+): Promise<VendoredSkill> {
   const name = skillNameFromSource(source);
   if (name === "" || name === "." || name === "..") {
     throw new Error(`cannot derive a skill name from "${source}" — point at a skill directory (…/skills/<name>)`);
   }
   const dest = join(workspaceDir, "skills", name);
-  // Side-effect-free refusal: never overwrite an existing skill.
-  if (existsSync(dest)) {
-    throw new Error(`skills/${name} already exists — remove it to re-vendor, or rename the target`);
+  // Refuse to clobber unless --update; the check is side-effect-free, and a git-tracked overwrite is
+  // safe (review with `git diff`, undo with `git checkout`).
+  const overwritten = existsSync(dest);
+  if (overwritten && !options.update) {
+    throw new Error(
+      `skills/${name} already exists — re-run with --update to overwrite it (git tracks the change), or remove it`,
+    );
   }
   await mkdir(join(workspaceDir, "skills"), { recursive: true });
+  if (overwritten) await rm(dest, { recursive: true, force: true }); // --update: replace wholesale, then re-fetch
   if (isLocalSource(source)) {
     const src = resolve(source);
     if (!existsSync(join(src, "SKILL.md"))) {
@@ -353,6 +364,9 @@ export async function vendorSkill(workspaceDir: string, source: string): Promise
     // github for a plain `owner/repo/path` (an explicit `github:`/`gh:`/`gitlab:`… scheme is kept).
     // Supports a subdir + #ref, fetched via the tar API (no git binary).
     const ref = /^[a-z][a-z0-9+.-]*:/i.test(source) ? source : `github:${source}`;
+    // Lazy import: giget is only needed for a git ref, so the serve path (index.ts → init.ts) and the
+    // local/bare-name sources never load it.
+    const { downloadTemplate } = await import("giget");
     await downloadTemplate(ref, { dir: dest, force: true });
   }
   if (!existsSync(join(dest, "SKILL.md"))) {
@@ -369,6 +383,7 @@ export async function vendorSkill(workspaceDir: string, source: string): Promise
     dest: `skills/${name}`,
     hasScripts: existsSync(join(dest, "scripts")),
     diagnostics: def.diagnostics.filter((d) => d.path?.includes(`skills/${name}`)),
+    overwritten,
   };
 }
 

@@ -355,4 +355,27 @@ describe("add: fastagent add skill (vendor)", () => {
       else delete process.env.HOME;
     }
   });
+
+  it("--update overwrites an existing skill (git-tracked re-fetch); without it, refuses and leaves it untouched", async () => {
+    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
+    await mkdir(join(srcRoot, "greeter"), { recursive: true });
+    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: v1.\n---\nOne.\n");
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+
+    const first = await vendorSkill(ws, join(srcRoot, "greeter"));
+    expect(first.overwritten).toBe(false);
+
+    // upstream changes
+    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: v2 updated.\n---\nTwo.\n");
+
+    // without --update: refuses, on-disk skill stays v1 (mutation-proof: a no-op overwrite would pass)
+    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/--update/);
+    expect(await readFile(join(ws, "skills", "greeter", "SKILL.md"), "utf8")).toContain("One.");
+
+    // with --update: overwrites to v2
+    const updated = await vendorSkill(ws, join(srcRoot, "greeter"), { update: true });
+    expect(updated.overwritten).toBe(true);
+    expect(updated.description).toContain("v2");
+    expect(await readFile(join(ws, "skills", "greeter", "SKILL.md"), "utf8")).toContain("Two.");
+  });
 });
