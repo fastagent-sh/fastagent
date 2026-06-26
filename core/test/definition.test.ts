@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
@@ -57,6 +57,39 @@ describe("definition: loadAgentDefinition", () => {
     const def = await loadAgentDefinition(fixtureDir);
     expect(def.skills.map((s) => s.name)).toEqual(["season-words"]);
     expect(def.collisions).toEqual([]);
+  });
+
+  it("vendors an Agent Skills standard skill verbatim (cp into skills/): unsupported optional field + progressive disclosure", async () => {
+    // Locks the agentskills.io compatibility claim: any standard skill dropped into skills/ Just Works.
+    // This is an anthropics/skills-shaped SKILL.md — required name+description plus an OPTIONAL field pi
+    // does not model (`license`). Vendoring (a plain cp) must: parse name/description + the full body,
+    // IGNORE the unknown optional field WITHOUT a diagnostic, and disclose progressively (name+description
+    // in the startup prompt; the body only on activation).
+    const dir = await mkdtemp(join(tmpdir(), "fa-vendor-skill-"));
+    await writeFile(join(dir, "AGENTS.md"), "# PDF Assistant\n");
+    await mkdir(join(dir, "skills", "pdf"), { recursive: true });
+    await writeFile(
+      join(dir, "skills", "pdf", "SKILL.md"),
+      '---\nname: pdf\ndescription: Use this skill whenever the user works with PDF files — extract text, merge, split, or fill forms.\nlicense: Proprietary. LICENSE.txt has complete terms\n---\n\n# PDF Processing Guide\n\nRead a PDF with pypdf: `PdfReader("document.pdf")`.\n',
+    );
+
+    const def = await loadAgentDefinition(dir);
+    // The unsupported optional `license` field is ignored WITHOUT a diagnostic (graceful degradation).
+    expect(def.diagnostics).toEqual([]);
+    const pdf = def.skills.find((s) => s.name === "pdf");
+    expect(pdf?.description).toContain("PDF files");
+    expect(pdf?.content).toContain("pypdf"); // the full SKILL.md body is loaded (for activation)
+
+    // Progressive disclosure: name + description in the startup prompt; the body is deferred.
+    const prompt = assembleSystemPrompt({
+      base: piBasePrompt(),
+      instructions: def.instructions,
+      instructionsPath: join(dir, "AGENTS.md"),
+      skills: def.skills,
+    });
+    expect(prompt).toContain("<name>pdf</name>");
+    expect(prompt).toContain("PDF files"); // description disclosed at stage 1
+    expect(prompt).not.toContain("pypdf"); // body NOT disclosed until the skill activates
   });
 });
 
