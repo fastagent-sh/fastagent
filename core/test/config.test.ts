@@ -54,6 +54,12 @@ describe("config: loadConfig", () => {
     await expect(loadConfig(dir)).rejects.toThrow(/fastagent\.config\.mjs: /);
   });
 
+  it("a config that imports a missing dep gets the same npm-install hint as tools/channels", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `import "totally-not-installed-pkg";\nexport default {};`);
+    await expect(loadConfig(dir)).rejects.toThrow(/fastagent\.config\.mjs: .*npm install/s);
+  });
+
   it("validates http shape as well: non-numeric/out-of-range http.port throws", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { port: "oops" } };`);

@@ -31,6 +31,7 @@ import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Models } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./harness.ts";
+import { moduleLoadHint } from "./loader.ts";
 
 export interface FastagentConfig {
   /** "provider/modelId", e.g. "openai-codex/gpt-5.5". Precedence: CLI --model > FASTAGENT_MODEL > config. */
@@ -74,8 +75,9 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
   } catch (error) {
     // A syntax/load error in the config would otherwise surface as a raw SyntaxError with a Node ESM
-    // internal stack; name the file and keep the message, matching the shape errors below.
-    throw new Error(`${path}: ${(error as Error).message}`);
+    // internal stack; name the file and append the same load hint as loadTools/loadChannels (config
+    // fails for the same reasons: non-ESM package.json, an uninstalled dep imported by the config).
+    throw new Error(`${path}: ${(error as Error).message}${moduleLoadHint(error as NodeJS.ErrnoException)}`);
   }
   const config = mod.default;
   if (!config || typeof config !== "object") {
