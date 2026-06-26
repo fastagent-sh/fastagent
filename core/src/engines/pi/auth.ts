@@ -62,8 +62,9 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
  * A read-write `CredentialStore` backed by `~/.fastagent/auth.json`.
  *
  * - `read` returns the provider's stored credential (missing file/entry = not configured → the
- *   collection falls back to ambient env). Read under the lock, so a concurrent in-place write is
- *   never seen torn; a genuinely corrupt file reads lenient (warn + not-configured, no throw).
+ *   collection falls back to ambient env). UNLOCKED (pi-ai's per-request hot path): a concurrent
+ *   in-place write's sub-ms torn read is absorbed by re-reading; a genuinely corrupt file reads
+ *   lenient (warn + not-configured, no throw).
  * - `modify` is the serialized read-modify-write `Models.getAuth()` runs OAuth refresh inside: it
  *   locks the file, applies `fn`, and PERSISTS the result — a rotated refresh token is saved, not lost.
  * - `delete` removes the entry (logout); a no-op when nothing is stored, never creating the file.

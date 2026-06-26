@@ -1,13 +1,24 @@
 /**
- * `fastagent login`: authenticate a model provider into fastagent's OWN `~/.fastagent/auth.json`
- * (read by {@link fastagentCredentialStore}), using pi's `AuthStorage`. An OAuth-capable provider
- * (Anthropic Claude Pro/Max, ChatGPT Codex, GitHub Copilot) runs the device/browser flow; any other
- * provider id stores an API key. The terminal IO is INJECTED ({@link LoginIO}) so the flow is testable
- * without a real OAuth round-trip or stdin.
+ * `fastagent login`: authenticate a model provider into fastagent's OWN `~/.fastagent/auth.json` via
+ * the SAME {@link fastagentCredentialStore} the runtime uses — ONE writer over the file, ONE
+ * corruption/lock semantics. The OAuth device/browser flow comes from pi-ai/oauth
+ * (`getOAuthProvider().login`); the result is persisted with `store.modify`, which refuses to clobber a
+ * corrupt file — so a failed save fails visibly without any extra reconciliation machinery. An
+ * OAuth-capable provider (Anthropic Claude Pro/Max, ChatGPT Codex, GitHub Copilot) runs the flow; any
+ * other provider id stores an API key.
+ *
+ * Why not pi's `AuthStorage`: the runtime resolves auth through pi-ai's `CredentialStore` port (Models
+ * consumes it), and pi ships no file-backed `CredentialStore` — so `fastagentCredentialStore` is
+ * mandatory and already owns the file. `AuthStorage` is pi-coding-agent's CLI-world manager (a
+ * different port, record-don't-throw persistence); routing login through it put two stores over one
+ * file. Login joins the engine-world store instead.
+ *
+ * The terminal IO and the OAuth flow are INJECTED ({@link LoginIO}, {@link OAuthFlow}) so the routing
+ * is testable against a real store without real stdin or a real OAuth round-trip.
  */
-import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai";
-import { AuthStorage } from "@earendil-works/pi-coding-agent";
-import { FASTAGENT_AUTH_PATH } from "./auth.ts";
+import type { Credential, CredentialStore, OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+import { getOAuthProvider, getOAuthProviderInfoList } from "@earendil-works/pi-ai/oauth";
+import { FASTAGENT_AUTH_PATH, fastagentCredentialStore } from "./auth.ts";
 
 /** Terminal interaction, injectable for tests (no real stdin/stdout or browser in unit tests). */
 export interface LoginIO {
@@ -20,18 +31,14 @@ export interface LoginIO {
   openUrl(url: string): void;
 }
 
-/** The slice of pi's `AuthStorage` the flow uses (so a test can pass a fake). `AuthStorage` satisfies it. */
-export interface AuthStore {
-  getOAuthProviders(): Array<{ id: string; name: string }>;
-  login(providerId: string, callbacks: OAuthLoginCallbacks): Promise<void>;
-  set(provider: string, credential: { type: "api_key"; key: string }): void;
-  /**
-   * pi's `AuthStorage` RECORDS persistence failures (corrupt file → `persistProviderChange`
-   * early-returns; write IO failure → caught) instead of throwing, so a failed save looks like a
-   * success at the call site. We must drain after a write to surface them (see {@link assertPersisted}).
-   */
-  drainErrors(): Error[];
-}
+/** The OAuth device/browser flow for a provider — injected so the routing is testable without a round-trip. */
+export type OAuthFlow = (providerId: string, callbacks: OAuthLoginCallbacks) => Promise<OAuthCredentials>;
+
+const defaultOAuthFlow: OAuthFlow = (providerId, callbacks) => {
+  const provider = getOAuthProvider(providerId);
+  if (!provider) throw new Error(`unknown OAuth provider "${providerId}"`);
+  return provider.login(callbacks);
+};
 
 export interface LoginResult {
   provider: string;
@@ -83,19 +90,24 @@ function oauthCallbacks(io: LoginIO, manualPromptSignal: AbortSignal, signal?: A
 }
 
 /**
- * Resolve the provider (argument or interactive select among the OAuth providers), then either run
- * the OAuth flow (OAuth-capable provider) or prompt for and store an API key (any other id). Both
- * persist to `~/.fastagent/auth.json` via `AuthStorage`.
+ * Resolve the provider (argument or interactive select among the OAuth providers), then either run the
+ * OAuth flow or prompt for an API key, and persist via `store.modify`. The persist refuses to overwrite
+ * a corrupt file, so it fails visibly on its own; a no-op `modify` up front runs that same check BEFORE
+ * the OAuth round-trip / key prompt, so a known-bad file fails fast instead of after the user's work.
  */
 export async function loginFlow(
   io: LoginIO,
-  options: { provider?: string; authPath?: string; store?: AuthStore; signal?: AbortSignal } = {},
+  options: {
+    provider?: string;
+    authPath?: string;
+    store?: CredentialStore;
+    oauthFlow?: OAuthFlow;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<LoginResult> {
-  const store: AuthStore = options.store ?? AuthStorage.create(options.authPath ?? FASTAGENT_AUTH_PATH);
-  // A corrupt/unwritable file is recorded at construction and makes every later write a silent no-op;
-  // surface it before any prompt or the OAuth round-trip, not after the user has done the work.
-  preflightAuthFile(store);
-  const oauthProviders = store.getOAuthProviders();
+  const store = options.store ?? fastagentCredentialStore(options.authPath ?? FASTAGENT_AUTH_PATH);
+  const oauthFlow = options.oauthFlow ?? defaultOAuthFlow;
+  const oauthProviders = getOAuthProviderInfoList();
 
   let provider = options.provider;
   if (!provider) {
@@ -107,46 +119,26 @@ export async function loginFlow(
     if (!provider) throw new Error("no provider selected");
   }
 
+  // Preflight: a no-op modify runs the store's refuse-corrupt check (and surfaces an unwritable file)
+  // before any OAuth round-trip or key prompt — so the user is not made to do the work only to fail.
+  await store.modify(provider, async () => undefined);
+
   if (oauthProviders.some((p) => p.id === provider)) {
     const promptAbort = new AbortController();
+    let credentials: OAuthCredentials;
     try {
-      await store.login(provider, oauthCallbacks(io, promptAbort.signal, options.signal));
+      credentials = await oauthFlow(provider, oauthCallbacks(io, promptAbort.signal, options.signal));
     } finally {
       // A server/browser win leaves the concurrent manual-paste prompt pending on stdin; abort it so
       // the one-shot CLI can exit (pi does not await that prompt once the server returns a code).
       promptAbort.abort();
     }
-    assertPersisted(store, provider);
+    await store.modify(provider, async (): Promise<Credential> => ({ type: "oauth", ...credentials }));
     return { provider, method: "oauth" };
   }
 
   const key = (await io.promptHidden(`API key for "${provider}": `)).trim();
   if (!key) throw new Error(`no API key entered for "${provider}"`);
-  store.set(provider, { type: "api_key", key });
-  assertPersisted(store, provider);
+  await store.modify(provider, async (): Promise<Credential> => ({ type: "api_key", key }));
   return { provider, method: "api_key" };
-}
-
-/**
- * Turn pi's RECORDED persistence failures into a visible throw, so `fastagent login` never reports
- * success on a save that silently no-op'd (corrupt/unwritable ~/.fastagent/auth.json) — the
- * fail-visibly boundary that AuthStorage's record-don't-throw contract would otherwise swallow.
- */
-function assertPersisted(store: AuthStore, provider: string): void {
-  const errors = store.drainErrors();
-  if (errors.length > 0) {
-    throw new Error(`failed to save credentials for "${provider}": ${errors.map((e) => e.message).join("; ")}`);
-  }
-}
-
-/**
- * Drain errors recorded at AuthStorage construction (reload()'s corrupt/unwritable load) so a known-bad
- * auth file fails up front — mirrors fastagentCredentialStore.read's "corrupt auth file" warning, and
- * stops the user from completing an OAuth flow that persistProviderChange would silently refuse to save.
- */
-function preflightAuthFile(store: AuthStore): void {
-  const errors = store.drainErrors();
-  if (errors.length > 0) {
-    throw new Error(`auth file unusable: ${errors.map((e) => e.message).join("; ")} — fix or remove it`);
-  }
 }

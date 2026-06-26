@@ -1,115 +1,105 @@
-import { AuthStorage, InMemoryAuthStorageBackend } from "@earendil-works/pi-coding-agent";
-import type { AuthStorageBackend } from "@earendil-works/pi-coding-agent";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getOAuthProviderInfoList } from "@earendil-works/pi-ai/oauth";
+import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import type { AuthStore, LoginIO } from "../src/engines/pi/login.ts";
+import { fastagentCredentialStore } from "../src/engines/pi/auth.ts";
+import type { LoginIO, OAuthFlow } from "../src/engines/pi/login.ts";
 import { loginFlow } from "../src/engines/pi/login.ts";
 
-/** A fake AuthStore for the ROUTING tests (anthropic/openai-codex are OAuth-capable); persistence ok. */
-function fakeStore() {
-  const calls: { login?: string; set?: [string, { type: string; key: string }] } = {};
-  const store: AuthStore = {
-    getOAuthProviders: () => [
-      { id: "anthropic", name: "Anthropic (Claude Pro/Max)" },
-      { id: "openai-codex", name: "ChatGPT Codex" },
-    ],
-    login: async (providerId) => {
-      calls.login = providerId;
-    },
-    set: (provider, credential) => {
-      calls.set = [provider, credential];
-    },
-    drainErrors: () => [],
-  };
-  return { store, calls };
+// The store is the REAL fastagentCredentialStore over a temp file — the same writer the runtime uses,
+// so these tests exercise the actual persist/corruption semantics, not a mock of them. Only the OAuth
+// device/browser flow (external) is injected.
+async function tmpAuth(content?: string): Promise<string> {
+  const path = join(await mkdtemp(join(tmpdir(), "fa-login-")), "auth.json");
+  if (content !== undefined) await writeFile(path, content);
+  return path;
 }
+const readAuth = async (path: string) => JSON.parse(await readFile(path, "utf8"));
 
-/** A fake terminal: scripted prompt/hidden answers, captured prints, no real stdin/browser. */
-function fakeIO(answers: { prompt?: string[]; hidden?: string[] } = {}) {
-  const printed: string[] = [];
+/** A fake terminal: scripted prompt/hidden answers, no real stdin/browser. */
+function fakeIO(answers: { prompt?: string[]; hidden?: string[] } = {}): LoginIO {
   const prompts = [...(answers.prompt ?? [])];
   const hiddens = [...(answers.hidden ?? [])];
-  const io: LoginIO = {
-    print: (l) => printed.push(l),
+  return {
+    print: () => {},
     prompt: async () => prompts.shift() ?? "",
     promptHidden: async () => hiddens.shift() ?? "",
     openUrl: () => {},
   };
-  return { io, printed };
 }
 
+const fakeCreds = { access: "tok", refresh: "rt", expires: Date.now() + 3_600_000 } as unknown as OAuthCredentials;
+const oauthOk: OAuthFlow = async () => fakeCreds;
+
 describe("loginFlow", () => {
-  it("an OAuth-capable provider runs the login flow (no api_key write)", async () => {
-    const { store, calls } = fakeStore();
-    const res = await loginFlow(fakeIO().io, { provider: "anthropic", store });
+  it("an OAuth-capable provider runs the flow and persists {type:oauth} via the store", async () => {
+    const path = await tmpAuth();
+    const store = fastagentCredentialStore(path);
+    const res = await loginFlow(fakeIO(), { provider: "anthropic", store, oauthFlow: oauthOk });
     expect(res).toEqual({ provider: "anthropic", method: "oauth" });
-    expect(calls.login).toBe("anthropic");
-    expect(calls.set).toBeUndefined();
+    expect((await readAuth(path)).anthropic).toMatchObject({ type: "oauth", access: "tok" });
   });
 
-  it("any other provider prompts (hidden) for and stores an API key (no OAuth)", async () => {
-    const { store, calls } = fakeStore();
-    const res = await loginFlow(fakeIO({ hidden: ["sk-123"] }).io, { provider: "openai", store });
+  it("any non-OAuth provider prompts (hidden) for and persists {type:api_key}", async () => {
+    const path = await tmpAuth();
+    const store = fastagentCredentialStore(path);
+    const res = await loginFlow(fakeIO({ hidden: ["sk-123"] }), { provider: "openai", store, oauthFlow: oauthOk });
     expect(res).toEqual({ provider: "openai", method: "api_key" });
-    expect(calls.set).toEqual(["openai", { type: "api_key", key: "sk-123" }]);
-    expect(calls.login).toBeUndefined();
+    expect((await readAuth(path)).openai).toEqual({ type: "api_key", key: "sk-123" });
   });
 
-  it("no provider → interactive select among the OAuth providers (by number or id)", async () => {
-    const byNumber = await loginFlow(fakeIO({ prompt: ["2"] }).io, { store: fakeStore().store });
-    expect(byNumber.provider).toBe("openai-codex");
-    const byId = await loginFlow(fakeIO({ prompt: ["anthropic"] }).io, { store: fakeStore().store });
+  it("no provider → interactive select among the real OAuth providers (by number or id)", async () => {
+    const first = getOAuthProviderInfoList()[0]?.id; // the list is pi's; assert against it, not a hardcode
+    const byNumber = await loginFlow(fakeIO({ prompt: ["1"] }), {
+      store: fastagentCredentialStore(await tmpAuth()),
+      oauthFlow: oauthOk,
+    });
+    expect(byNumber.provider).toBe(first);
+    const byId = await loginFlow(fakeIO({ prompt: ["anthropic"] }), {
+      store: fastagentCredentialStore(await tmpAuth()),
+      oauthFlow: oauthOk,
+    });
     expect(byId.provider).toBe("anthropic");
   });
 
   it("an empty selection fails visibly", async () => {
-    await expect(loginFlow(fakeIO({ prompt: [""] }).io, { store: fakeStore().store })).rejects.toThrow(
-      /no provider selected/,
-    );
+    await expect(
+      loginFlow(fakeIO({ prompt: [""] }), { store: fastagentCredentialStore(await tmpAuth()), oauthFlow: oauthOk }),
+    ).rejects.toThrow(/no provider selected/);
   });
 
-  it("an empty API key fails visibly and writes nothing", async () => {
-    const { store, calls } = fakeStore();
-    await expect(loginFlow(fakeIO({ hidden: [""] }).io, { provider: "openai", store })).rejects.toThrow(/no API key/);
-    expect(calls.set).toBeUndefined();
+  it("an empty API key fails visibly and persists no credential", async () => {
+    const path = await tmpAuth();
+    await expect(
+      loginFlow(fakeIO({ hidden: [""] }), {
+        provider: "openai",
+        store: fastagentCredentialStore(path),
+        oauthFlow: oauthOk,
+      }),
+    ).rejects.toThrow(/no API key/);
+    // The preflight modify may touch the file ("{}"), but no openai credential was written.
+    expect((await readAuth(path).catch(() => ({}))).openai).toBeUndefined();
   });
 
-  // The persistence-failure paths are tested against the REAL AuthStorage (not a mock of the binding the
-  // fix depends on): pi RECORDS failures into drainErrors() rather than throwing, and the flow must drain.
-  it("real AuthStorage: a corrupt auth file fails up front (preflight), before any prompt or OAuth round-trip", async () => {
-    const backend = new InMemoryAuthStorageBackend();
-    backend.withLock(() => ({ result: undefined, next: "{ not valid json" })); // corrupt content at construction
-    const store = AuthStorage.fromStorage(backend);
-    await expect(loginFlow(fakeIO({ hidden: ["sk"] }).io, { provider: "openai", store })).rejects.toThrow(
-      /auth file unusable/,
-    );
-  });
-
-  it("real AuthStorage: a write failure recorded by persistProviderChange surfaces as a thrown error", async () => {
-    // Reads clean at construction, throws on write — exercises the REAL persistProviderChange
-    // catch → recordError → drainErrors binding (the one new risk point, not a fake of it).
-    const backend: AuthStorageBackend = {
-      withLock: (fn) => {
-        const { result, next } = fn(undefined);
-        if (next !== undefined) throw new Error("EROFS: read-only file system");
-        return result;
-      },
-      withLockAsync: async (fn) => {
-        const { result, next } = await fn(undefined);
-        if (next !== undefined) throw new Error("EROFS: read-only file system");
-        return result;
-      },
+  it("a corrupt auth file fails up front (preflight), before the OAuth round-trip", async () => {
+    const path = await tmpAuth("{ not valid json");
+    let flowRan = false;
+    const oauthFlow: OAuthFlow = async () => {
+      flowRan = true;
+      return fakeCreds;
     };
-    const store = AuthStorage.fromStorage(backend);
-    await expect(loginFlow(fakeIO({ hidden: ["sk-x"] }).io, { provider: "openai", store })).rejects.toThrow(
-      /failed to save credentials.*EROFS/,
-    );
+    await expect(
+      loginFlow(fakeIO(), { provider: "anthropic", store: fastagentCredentialStore(path), oauthFlow }),
+    ).rejects.toThrow(/corrupt auth file/);
+    expect(flowRan).toBe(false); // preflight threw before the flow — no wasted round-trip
   });
 
   it("c1: a server win that leaves the manual-paste prompt pending is aborted, so the CLI does not hang", async () => {
     let manualAborted = false;
     const io: LoginIO = {
       print: () => {},
-      // The manual-paste prompt never receives an answer (the browser won); it must be aborted, not hang.
       prompt: (_message, signal) =>
         new Promise<string>((_resolve, reject) => {
           signal?.addEventListener("abort", () => {
@@ -120,20 +110,14 @@ describe("loginFlow", () => {
       promptHidden: async () => "",
       openUrl: () => {},
     };
-    const store: AuthStore = {
-      getOAuthProviders: () => [{ id: "anthropic", name: "Anthropic" }],
-      // pi starts the concurrent manual prompt, then the local server wins: resolve without awaiting it
-      // (and .catch it, as pi does, so the later abort-rejection stays handled).
-      login: async (_id, callbacks) => {
-        void callbacks.onManualCodeInput?.().catch(() => {});
-      },
-      set: () => {},
-      drainErrors: () => [],
+    // The flow starts the concurrent manual prompt, then the server wins: resolve without awaiting it.
+    const oauthFlow: OAuthFlow = async (_id, callbacks) => {
+      void callbacks.onManualCodeInput?.().catch(() => {});
+      return fakeCreds;
     };
-    await expect(loginFlow(io, { provider: "anthropic", store })).resolves.toEqual({
-      provider: "anthropic",
-      method: "oauth",
-    });
+    await expect(
+      loginFlow(io, { provider: "anthropic", store: fastagentCredentialStore(await tmpAuth()), oauthFlow }),
+    ).resolves.toEqual({ provider: "anthropic", method: "oauth" });
     expect(manualAborted).toBe(true);
   });
 });
