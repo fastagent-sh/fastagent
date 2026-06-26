@@ -63,9 +63,9 @@ The moat is not code volume (the engine is pi, which Flue also uses). The durabl
 3. stateless multi-session execution that can move across hosts;
 4. target adapters that encode hard runtime differences.
 
-**Proof points today:** embed in an Astro/Next route — one endpoint, injected session/auth, one deploy unit (see [comparisons](comparisons.md)); and `build`/`start` — an `AGENTS.md` + `skills/` folder running as a standalone service with sessions outside the artifact. Both prove the same thing: a small serving contract can either compose into an app or run as its own service.
+**Proof points today:** embed in an Astro/Next route — one endpoint, injected session/auth, one deploy unit (see [comparisons](comparisons.md)); and `start` — an `AGENTS.md` + `skills/` folder running directly as a standalone service (no build step), sessions overridable to a deploy volume. Both prove the same thing: a small serving contract can either compose into an app or run as its own service.
 
-**Planned target proof:** AgentCore — same artifact shape, external sessions, and distributed locking — remains target-adapter work, not a current capability.
+**Planned target proof:** AgentCore — same definition shape, external sessions, and distributed locking — remains target-adapter work, not a current capability.
 
 **Direction (a bet, not yet built): the composability flywheel.** Because each port is a small, stable interface with a conformance suite, writing an adapter for a long-tail stack (your Postgres/Supabase/Convex session store, your auth) becomes an AI-fillable, self-verifiable task. The growth model is not "official builds every N×M×K cell" (unwinnable vs a funded team) but "anyone fills their own cell with an AI agent, and conformance proves it correct." This requires per-port conformance suites + seed adapters + a light registry — not yet built; treat as the intended lever, not a current capability.
 

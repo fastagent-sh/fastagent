@@ -21,7 +21,7 @@ The package ships compiled JavaScript + type declarations (`dist/`). The runtime
 
 | Document | Purpose |
 |---|---|
-| [quickstart.md](docs/quickstart.md) | **Quickstart**: scaffold → run → add a tool → build/start, end to end |
+| [quickstart.md](docs/quickstart.md) | **Quickstart**: scaffold → run → add a tool → start, end to end |
 | [SPEC.md](docs/SPEC.md) | **Agent Handler protocol**: the engine-neutral contract layer. `status: locked` v0.1 |
 | [core-design.md](docs/core-design.md) | The pi-based reference implementation of the SPEC, plus the N × M × K layering model |
 | [fastagent.md](docs/fastagent.md) | Product index and positioning overview |
@@ -29,7 +29,7 @@ The package ships compiled JavaScript + type declarations (`dist/`). The runtime
 
 ## API stability
 
-This repository is pre-1.0. The stable design center is the Agent Handler contract in [SPEC.md](docs/SPEC.md). The root export (`@kid7st/fastagent`) is deliberately scoped to the supported public surface; pi-coupled internals are not exported and may change freely while `build`, `start`, and the first target adapters land.
+This repository is pre-1.0. The stable design center is the Agent Handler contract in [SPEC.md](docs/SPEC.md). The root export (`@kid7st/fastagent`) is deliberately scoped to the supported public surface; pi-coupled internals are not exported and may change freely while `start`, `deploy`, and the first target adapters land.
 
 Public surface tiers:
 

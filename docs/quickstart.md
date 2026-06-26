@@ -87,16 +87,15 @@ fastagent tool reverse '{"text":"hello"}'
 
 `fastagent dev` **reloads on save** — it restarts the worker on any edit to `AGENTS.md` / skills / tools / config, so the served agent is always your latest code (including modules a tool imports). A broken edit stops the worker with the error printed and waits for the next save; the `dev` command never crashes. Mention the tool in `AGENTS.md` so the model knows when to use it. (`input` is a [Zod](https://zod.dev) schema: the args are validated before `execute`, and an invalid call is reported back to the model, not a crash.)
 
-## 4. Build and run the artifact
+## 4. Run in production
 
 ```bash
-fastagent build                  # → .fastagent/build : a self-contained, relocatable artifact
-fastagent start .fastagent/build # run it in production posture
+fastagent start                  # run the SAME directory in production posture (no watch, no build)
 ```
 
-`build` compiles the workspace (instructions + skills + tools + config) into an artifact whose manifest freezes the model and http port. `start` runs that artifact with sessions kept **outside** it (so a redeploy never wipes conversations). To deploy: copy the artifact directory anywhere with Node ≥ 22.19, run `npm ci`, then `fastagent start`.
+There is **no build step** — the directory IS the agent. `start` runs it exactly as `dev` did, minus file-watching: model and http come from `fastagent.config.ts` (frozen by git, not a manifest), and sessions persist under `.fastagent/sessions` (override with `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` to point at a deploy volume so a redeploy never wipes conversations). To deploy: copy the directory anywhere with Node ≥ 22.19, run `npm ci`, then `fastagent start`.
 
 ## Where next
 
 - [SPEC](SPEC.md) — the Agent Handler contract (`invoke(scope, prompt) => AsyncIterable<AgentEvent>`) the whole thing rests on.
-- [core-design](core-design.md) — the pi reference implementation, the N × M × K layering, and the build/start deployment model.
+- [core-design](core-design.md) — the pi reference implementation, the N × M × K layering, and the dev/start deployment model.

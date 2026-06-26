@@ -17,9 +17,9 @@ The product has three pieces:
 
 1. **Contract** — the [Agent Handler SPEC](SPEC.md): `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 2. **Reference implementation** — a pi-based engine binding that fans pi's harness events into the SPEC stream.
-3. **Deployment toolchain** — point at a folder, build an artifact, and run it on a target runtime.
+3. **Deployment toolchain** — point at a folder and run it on a target runtime (the directory is the agent; no build step).
 
-FastAgent is not an agent-writing framework. The agent already exists as markdown-native definition files created in tools such as pi, Claude Code, or Codex. FastAgent serves and deploys that artifact.
+FastAgent is not an agent-writing framework. The agent already exists as markdown-native definition files created in tools such as pi, Claude Code, or Codex. FastAgent serves and deploys that definition directory.
 
 ## Why this product exists
 
@@ -36,7 +36,7 @@ Local interactive tools do not solve either problem. Full frameworks (Flue, Eve)
 
 FastAgent owns the serving layer:
 
-- **In scope:** the Agent Handler contract, the pi reference implementation, local dev, build/start, and target adapters.
+- **In scope:** the Agent Handler contract, the pi reference implementation, local dev, start, deploy, and target adapters.
 - **Out of scope:** inventing a new agent definition format, replacing the harness engine, building a full workflow/task orchestration product, or becoming a code-first agent framework.
 
 You can build products such as multi-channel assistants or A2A task systems on top of FastAgent, but those products are not FastAgent itself.
@@ -57,10 +57,10 @@ You can build products such as multi-channel assistants or A2A task systems on t
 Core v0.1 local development is closed:
 
 - SPEC reference implementation over pi,
-- L0–L2 assembly ladder + dev/build/start command openers,
+- L0–L2 assembly ladder + the dev/start command opener,
 - HTTP/SSE channel,
 - `fastagent dev`,
 - persistent jsonl sessions under `.fastagent/sessions`,
 - executable SPEC conformance tests.
 
-Next product step: `fastagent build` and `fastagent start`, then an AgentCore target adapter.
+Next product step: `fastagent deploy` (multi-target push + a hosted platform), then an AgentCore target adapter.

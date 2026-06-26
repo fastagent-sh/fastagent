@@ -33,9 +33,8 @@ export const POST = createInvokeHandler(agent);
 
 ```bash
 fastagent init my-agent && cd my-agent
-fastagent dev                 # local HTTP/SSE on :8787
-fastagent build               # → a self-contained artifact
-fastagent start .fastagent/build
+fastagent dev                 # local HTTP/SSE on :8787 (watch + reload)
+fastagent start               # run the same directory in production posture (no build step)
 ```
 
 ## Documentation

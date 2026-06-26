@@ -95,13 +95,11 @@ Naming rule: `From<source>` means inputs are derived from that source. No suffix
 
 L0 lives in `invoke.ts` because its body is the request-time turn mechanism; L1–L2 live in `create.ts` because they are configuration-time assembly.
 
-**Command openers (above L2).** The three CLI commands are thin compositions over L2 that open a source, resolve model/tools, inject command-posture K-wiring, then call L2. They are **not** ladder rungs and live in their own command modules so dev/build/start stay symmetric and `create.ts` stays the pure reusable ladder:
+**The command opener (above L2).** `dev` and `start` are the SAME thin composition over L2 — open a directory, resolve model/tools, pick session storage, call L2 — living in one command module so `create.ts` stays the pure reusable ladder. There is no build/artifact: the directory IS the agent, run directly (see §10).
 
 | Command | Function | Module | Posture |
 |---|---|---|---|
-| `dev` | `createPiAgentFromWorkspace(dir, { model?, globalSkills? })` | `dev.ts` | authoring (config.ts, `.fastagent/` sessions) |
-| `start` | `createPiAgentFromArtifact(dir, { model?, sessionsDir? })` | `start.ts` | production (manifest, sessions outside the artifact) |
-| `build` | `buildPiArtifact(src, out, options)` | `build.ts` | compile (produces an artifact, not an Agent) |
+| `dev` / `start` | `createPiAgentFromWorkspace(dir, { model?, sessionsDir? })` | `dev.ts` | one opener; `dev` watches (authoring), `start` runs production posture (no watch) |
 
 ## 5. Config v1
 
@@ -125,24 +123,11 @@ Deliberately not in v1: session/env backend selection, auth overrides, base prom
 
 ## 6. Tools and skills
 
-Skills are markdown/file assets. Loading is **definition-only by default**: an agent is exactly its folder (`AGENTS.md` + `skills/`). This is the structural form of "your folder is the agent" — the same definition loads the same skills on every machine, and dev behavior equals deployed behavior. Definition-local skills win name collisions (the deployable unit is authoritative); collisions are surfaced as diagnostics, not swallowed.
+Skills are markdown/file assets. Loading is **definition-only, period**: an agent is exactly its folder (`AGENTS.md` + `skills/`). This is the structural form of "your folder is the agent" — the same definition loads the same skills on every machine, and dev behavior equals deployed behavior, with **no exceptions**. There is no global-skill mount and no `skillPaths` escape hatch: skills come ONLY from the definition's own `skills/`.
 
-The machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`, via `defaultGlobalSkillPaths()`) are an **explicit opt-in**, never a silent default. Defaulting to them would make the agent depend on ambient machine state, break reproducibility, and recreate the "works on my machine, breaks deployed" trap fastagent exists to kill.
+Loading the machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`) was removed deliberately. It made the agent depend on ambient machine state and recreated the "works on my machine, breaks deployed" trap fastagent exists to kill — the same reason Flask/FastAPI run the code you wrote, not code injected from your home directory. The principle is general: **the definition directory is the agent's only source of truth; nothing the code can't see is loaded into its behavior** (credentials and env are deployment config, not behavior — they stay outside the directory by design). To ship a skill, put it in `skills/`.
 
-### Skills lifecycle across dev / build / start (spec)
-
-| Stage | Default | Opt-in to globals |
-|---|---|---|
-| `createPiAgentFromDefinition` (L2) | definition-only | caller passes `skillPaths` |
-| `fastagent dev` | definition-only (dev == deployed) | `--global-skills` (ephemeral: loads globals for local-authoring fidelity this run only; does not change the artifact) |
-| `fastagent build` | definition-only | `--global-skills` materializes the winning globals into the artifact's `skills/` (the deliberate "I want these to ship" action) |
-| `fastagent start` | always definition-only | n/a — the artifact is already self-contained |
-
-`fastagent dev` must not silently drop globals: when run definition-only, it reports which global skills exist but were not loaded, plus the one-liners to use them (`--global-skills`) or ship them (copy into `skills/` / `build --global-skills`). The "what is actually in my agent?" question is thus answered at dev time (cheap), not at deploy time (expensive).
-
-**Red line:** the only way a global skill reaches production is being materialized into the artifact (`build --global-skills` or copied into `skills/`). `fastagent.config.ts` must never carry a machine path like `~/.agents/skills/foo` as a deploy mechanism — that path does not exist on a teammate's machine, CI, or the server, reintroducing the machine-state dependency. Config describes deployment choices, not "go fetch files from a directory on the build machine."
-
-`bundleAgentDefinition` is the build-time step that materializes the resolved skill set into a self-contained artifact. Dropped skills are removed on rebuild so the artifact is the truth.
+Definition-local skills win name collisions (the deployable unit is authoritative); collisions are surfaced as diagnostics, not swallowed.
 
 Code tools are TypeScript/JavaScript modules. The vibe path is `defineTool` + filesystem discovery: drop a file in `tools/`, default-export `defineTool({ description, input, execute })`, and it is auto-discovered, named from the filename (authoritative), schema-validated, and injected — no `name` field, no manual registration. `defineTool` takes a Zod `input` schema (re-exported as `z` from the package), converts it to JSON Schema for the model, validates the model's arguments before `execute` (a validation failure becomes an error result the model can correct, not a crash), and wraps a plain return value into pi's result shape.
 
@@ -184,102 +169,69 @@ Core does not queue. Dedupe, retry, user-visible “busy” messages, and steeri
 
 The HTTP channel consumes only the neutral `Agent` contract.
 
-## 10. Deployment: build / start (design)
+## 10. Running and deployment (design)
 
-This section is the agreed design for `fastagent build` / `fastagent start`. The first implementation targets a single machine or container; AWS AgentCore is deferred.
+The directory IS the agent: there is no build step and no artifact. `dev` and `start` both run the definition directory directly (§4 opener). An agent has no compile output — instructions and skills are markdown, code tools are imported directly in dev and start alike — so packaging was never a *runtime* prerequisite. Packaging for remote deploy (exclude dev cruft, pin a model, push) returns later as an internal step of a future **`deploy`** command (multi-target push + a hosted platform), not a build the author must run by hand.
 
-### 10.1 What an agent is (the deployable unit)
+### 10.1 What an agent is (the M/K seam)
 
 An agent splits into two halves along the N×M×K seam:
 
-| Half | Contents | Bundled into the artifact? |
+| Half | Contents | In the definition directory? |
 |---|---|---|
-| **M — what the agent is** | the authored **source tree**: `AGENTS.md` + `skills/` (markdown + bundled `scripts/`/`references/`/`assets/`) + **authored context files** (reference docs, schemas, data samples, sub-instruction files the agent reads on demand) + code tools + `fastagent.config.ts` + `.mcp.json` | **yes** |
-| **K — where/how it runs** | conversational context (sessions), execution environment (fs/shell/sandbox), auth/secrets | **no** — host-provided at runtime; **secrets are never bundled** |
+| **M — what the agent is** | the definition tree: `AGENTS.md` + `skills/` + authored context files (reference docs, schemas, data the agent reads on demand) + code tools + `fastagent.config.ts` | **yes — it IS the directory** |
+| **K — where/how it runs** | conversational context (sessions), execution env (fs/shell/sandbox), auth/secrets | **no** — host-provided at runtime; secrets stay outside the directory |
 
-Two distinct things are both called "context"; they live on opposite sides:
+Two distinct things are called "context"; they live on opposite sides:
 
-- **authored context** (static files the author wrote) is part of M and ships. It is consumed by the agent's `read`/`grep` tools on demand — it is file access rooted at the run directory (cwd), **not** prompt-loading, so it needs no new mechanism beyond "the file is present in the run dir."
-- **conversational context** (cross-turn history/memory) is K, lives in an external session store, and is reconstructed per invoke (§7).
+- **authored context** (static files the author wrote) is part of M and lives in the directory. The agent's `read`/`grep` tools consume it on demand — file access rooted at the run directory (cwd), not prompt-loading, so it needs no mechanism beyond "the file is in the run dir."
+- **conversational context** (cross-turn history) is K, lives in an external session store, reconstructed per invoke (§7).
 
-So `definition` is **not** just `AGENTS.md` — it is the authored source tree. The artifact is produced as **two independent things**, so it equals the reported agent by construction: (1) the **authored context tree** (AGENTS.md, docs/, config, tool source, …) **minus** the build root's **flat** `.gitignore` + `.fastagentignore` (one combined matcher, `.fastagentignore` last/authoritative, applied artifact-relative via the `ignore` library), EXCLUDING `skills/`; and (2) `skills/` produced from the **resolved skill model** — each winning skill (local or mounted) materialized to `skills/<name>`.
+So `definition` is **not** just `AGENTS.md` — it is the whole directory. Skills come ONLY from `skills/` (§6, no external or global mount). Definition-local skills win name collisions; collisions surface as diagnostics, not swallowed.
 
-**Ignore is deliberately simple, not git-faithful.** We honor only the **root** `.gitignore`/`.fastagentignore` (the `ignore` library handles git's per-file pattern syntax — negation, anchoring, `**`, dir-slash — faithfully). We do **not** reproduce git's full engine: nested `.gitignore` down the tree and ancestor `.gitignore` up a monorepo are **not** read, and we do **not** call git (so the result is reproducible regardless of the build machine's git). For finer or monorepo-package control, put rules in the root `.fastagentignore`. Reimplementing git's nested/ancestor/symlink ignore semantics by hand was an open-ended edge factory; a flat, specifiable contract is the deliberate trade. **Symlinks are not followed** — a symlink entry is skipped (the artifact is self-contained, with no links to dereference and no "link aliases an excluded tree" edges); only the build ROOT is realpath'd, so building through a symlinked path still resolves the real tree.
-
-**Skills are self-contained units ("Fork A").** A skill ships its own directory minus its OWN root `.gitignore`/`.fastagentignore`; the consuming workspace's ignores govern *authored context*, not the skill set (a skill is like an npm package: its own ignore governs it, not the consumer's). To drop a skill, remove it — workspace ignores don't. This makes "artifact == reported agent" hold by construction (collision losers and non-loaded skills never appear; names are unique so destinations never collide).
-
-On top of that, a small unconditional **hard-exclude** set — things never meaningful to ship:
-
-| Never bundled | Why |
-|---|---|
-| dependencies (`node_modules`) | reinstalled by the runtime (`npm ci` at deploy) |
-| machine state (`.fastagent/`) | runtime sessions + the build output; rebuildable, not authored |
-| VCS (`.git`) | irrelevant to the running agent |
-
-**Security is the user's responsibility, by design.** Secrets like `.env` are **not** special-cased: the user excludes them via `.gitignore` (the convention, honored without invoking git) or `.fastagentignore`. fastagent provides the ignore mechanisms (like Docker `.dockerignore` / `npm publish`); it does not scan for or guarantee secret exclusion. A symlink pointing at a secret, if not ignored, ships — their call.
-
-**Path red line (a sibling of the config secret red line):** every path inside M is resolved **relative to the agent root**. Authored context and skills MUST be referenced by root-relative paths — never absolute paths or `~`, which are machine-specific and break on deploy. Machine-specific paths belong to K and are injected by the host.
+**Path red line:** every path inside M resolves **relative to the agent root**. Authored context and skills MUST be root-relative — never absolute or `~` (machine-specific, breaks on deploy). Machine-specific paths belong to K and are injected by the host.
 
 ### 10.1a Authored-context discovery
 
-Authored context is **not loaded** the way skills are; it is ambient files the agent reads on demand. The model is deliberately minimal:
+Authored context is **not loaded** the way skills are; it is ambient files the agent reads on demand. Minimal model:
 
 | Invariant | Meaning |
 |---|---|
-| **One root** | the run directory (tool `cwd`) = the directory holding `AGENTS.md` = the root of the authored source tree. dev: workspace; container: project; data bundle: artifact dir |
-| **Relative resolution** | `AGENTS.md` / skills reference authored files by root-relative paths; the `cwd`-rooted `read`/`grep`/`find` tools resolve them. The prompt's env segment already reports `Current working directory`, so the model knows the root |
-| **No prompt enumeration** | authored context is **not** listed in the system prompt (unlike the `<available_skills>` listing). It is discovered by explicit reference in `AGENTS.md` or by the agent exploring (`ls`/`grep`/`find`). The filesystem is the registry |
-| **Skill-scoped vs project-scoped** | skill resources live under `skills/<name>/references|assets/` (bundled with the skill); project-scoped context lives at the root and ships as part of the source tree (§10.2) |
-| **Confinement is the env's job** | the tool layer is not the security boundary; in the v1 single-machine/container tier the container is the boundary (verify pi `read`'s cwd handling at implementation) |
+| **One root** | the run directory (tool `cwd`) = the directory holding `AGENTS.md` = the root of the definition tree. dev/start: that directory; container: wherever it is COPY'd (e.g. `/app`) |
+| **Relative resolution** | `AGENTS.md` / skills reference authored files by root-relative paths; the `cwd`-rooted `read`/`grep`/`find` tools resolve them. The prompt's env segment reports `Current working directory`, so the model knows the root |
+| **No prompt enumeration** | authored context is **not** listed in the system prompt (unlike the `<available_skills>` listing). It is discovered by explicit reference in `AGENTS.md` or by exploring (`ls`/`grep`/`find`). The filesystem is the registry |
+| **Confinement is the env's job** | the tool layer is not the security boundary; in the single-machine/container tier the container is the boundary |
 
-Consequence: skills need progressive disclosure (a prompt listing); authored context does not. Enumerating the source tree into the prompt would be noise and would duplicate the filesystem. This is why `start` reports skills but not authored files (§10.4).
+Consequence: skills need progressive disclosure (a prompt listing); authored context does not. This is why `start` reports skills but not authored files (§10.3).
 
-### 10.2 Two packaging tiers
+### 10.2 cwd: one root, persistent and writable
 
-The real axis is **bundled vs runtime-provided**, not "data vs code." Code (skill `scripts/`, code tools) is part of the agent and ships; the open question is only whether its *npm dependencies* travel with it.
+The agent's working directory (tool `cwd`, where `read`/`bash`/`write` operate) = the definition directory = the directory holding `AGENTS.md`. With no separate artifact, cwd is a **real, persistent, writable** directory (your repo locally; the COPY'd project in a container) — never an ephemeral build output that a rebuild replaces. Two consequences:
 
-`build` produces **one** artifact: a self-contained, relocatable directory that does not depend on the source location. The "tiers" are then just deploy targets of that same artifact, not different artifact shapes:
+- **No write-to-ephemeral footgun.** Tools write into a durable directory, not one the next build wipes (the old build/artifact made cwd the throwaway `.fastagent/build`).
+- **Self-modification is coherent.** An agent that edits its own `AGENTS.md`/`skills/` edits a real, git-versioned directory (revertable, reviewable) — a deliberate option, should it ever be wanted, not an accident of where cwd points.
 
-| Deploy target | How the artifact runs | npm-dependent code tools |
-|---|---|---|
-| **local / container** | `start <artifact>` (cwd = artifact) | `npm ci` at deploy installs deps; the artifact carries `package.json` + tool source, not `node_modules` |
-| **AgentCore (later)** | OCI-wrap the same artifact | same |
+Durable *runtime output* still belongs outside the directory (object storage / DB / the response), and in a stateless multi-instance deployment the working dir is per-replica scratch — but the *definition* it roots on is the persistent directory, not a throwaway.
 
-The artifact = the cleaned source **tree** (AGENTS.md, skills/, authored context, `fastagent.config.ts`, tool source, `package.json`, …) with opted-in globals materialized into `skills/`, **minus** the §10.1 hard excludes (`node_modules`, `.git`, `.fastagent`) and anything `.gitignore`/`.fastagentignore` excludes (honored via the `ignore` library, not git). Secrets are **not** auto-excluded — they are the user's responsibility (§10.1); inject them at runtime and keep them out via .gitignore/.fastagentignore. Pure markdown/skills agents need only `@kid7st/fastagent` to run; code-tool agents add `npm ci`.
+### 10.3 `fastagent dev` / `fastagent start`
 
-### 10.3 `fastagent build`
-
-`buildPiArtifact(srcDir, outDir, { model?, globalSkills? })` compiles a workspace into the self-contained artifact (§10.2). Build-time (`node:fs` is fine here):
-
-1. Load + validate config; resolve the model and validate it against the registry (fail visibly on a missing/unknown model — before anything is written, never frozen into the manifest to fail later at start).
-2. Materialize the artifact (`bundleAgentDefinition`, two independent productions — see §10.1): the authored-context tree (minus `skills/`) copied via the ignore-aware walk, and `skills/` produced from the resolved skill model. Written into a fresh STAGING dir, never the target.
-3. Write `<staging>/fastagent.json` (data only): `{ fastagentVersion, engine, builtAt, model, http }`. The skill list is **not** duplicated — `skills/` is the single source of truth.
-4. **Publish** atomically: move any existing target aside, rename staging into place, drop the old (a failure restores the old; the target is never deleted before a complete artifact exists).
-
-Default out: `.fastagent/build` (self-gitignored); `--out` overrides. `--global-skills` materializes the machine's globals into the artifact (never into the source). Build is **non-destructive to the source**.
-
-Structural output guards (no content/preciousness judgment — only "don't destroy the input / don't ship a broken agent"): reject `outDir` realpath-equal to `srcDir` or containing it (you can't publish over the input you read); reject an existing **file** target (output is a directory); require `--force` for an **out-of-tree** target (a typo there deletes unrelated data, cf. Vite's `emptyOutDir`); and require an **in-tree** target to be under `.fastagent/` (the designated, hard-excluded build-state area) — any other in-tree path is authored content the publish would delete and the artifact would lack. Deterministic rebuild: a file dropped from the source does not survive (the target is replaced wholesale).
-
-### 10.4 `fastagent start`
-
-Run a built agent in **production posture**. Differences from `dev`:
+One opener (§4), two postures — both reuse **L2** (`createPiAgentFromDefinition`) via the single `createPiAgentFromWorkspace`, so what you iterate is what you serve (single assembly source, no drift):
 
 | Aspect | dev | start |
 |---|---|---|
-| config | executes `fastagent.config.ts` | reads the artifact's `fastagent.json` for the frozen model/http; runs from the artifact (cwd = artifact). config.ts ships in the artifact for code tools (needs `npm ci`); the strict no-`.ts`-at-runtime posture is a later hardening |
-| skills | definition-only (+ `--global-skills`) | artifact is the truth; **never scans globals** |
-| auth | pi OAuth → env | pluggable `Models` collection (§10.5); default still pi OAuth → env |
-| sessions | jsonl under `.fastagent/sessions` | jsonl **outside** the artifact (jsonl now; external/DDB later) |
-| model | `--model > FASTAGENT_MODEL > config` | `--model > FASTAGENT_MODEL > manifest.model` |
-| port | `--port > config` | `--port > PORT env > manifest.http.port > 8787` |
+| watch | restart the worker on edits | none (stable process) |
+| model/http | `fastagent.config.ts` (flag > env > config) | same — read directly, frozen by git, **no manifest** |
+| skills | definition-only | definition-only (same) |
+| sessions | `<dir>/.fastagent/sessions` | same default; `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` override to a volume |
+| posture | authoring (verbose) | production (stable, no watch) |
 
-`start` reuses **L2** (`createPiAgentFromDefinition`) with production wiring injected — no new ladder rung — which is exactly what L2's injection points exist for. It depends on zero builder-machine state. The entry point is `createPiAgentFromArtifact(artifactDir, options)` (in `engines/pi/start.ts`): a deploy-time orchestration sibling of `createPiAgentFromWorkspace` (dev), not a ladder rung. It reads `fastagent.json` (frozen model/http) + the shipped `fastagent.config.*` (code tools), resolves the model/sessions, then calls L2.
+`start` depends on zero builder-machine state: it reads the directory + `fastagent.config.ts`, resolves model/sessions, calls L2 — no manifest, no frozen copy.
 
-**Sessions live OUTSIDE the artifact** (the M/K split): the artifact is immutable and replaced wholesale on redeploy, so conversational state (K) kept inside it would be wiped on every deploy and every container restart. The default is the shell-cwd-relative, visible `./fastagent-sessions/` (precedence `--sessions-dir > FASTAGENT_SESSIONS_DIR > <cwd>/fastagent-sessions`), self-gitignored, **never** the artifact's own `.fastagent/`. The cwd-relative default's only footgun (continuity bound to launch dir) is loud (the resolved absolute path is in the startup report) and absent in containers (fixed `WORKDIR`); a sessions dir resolving inside the artifact emits a visible warning. dev keeps sessions under `<workspace>/.fastagent/` because the dev "artifact" is the mutable workspace itself — a deliberate difference, not an inconsistency.
+**Sessions** default under the definition's own `.fastagent/sessions` (restart-surviving local continuity, faithful to local pi). A container may replace the definition directory wholesale on redeploy, so point `FASTAGENT_SESSIONS_DIR` at a mounted volume to keep conversations — `start` reminds the operator when running on the default. Precedence `--sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions`.
 
-**Startup report (minimal observable surface):** `start` logs the run dir, model, **auth source** (pi's resolved label + provider, e.g. `OAuth (anthropic)` or `ANTHROPIC_API_KEY (anthropic)`), `AGENTS.md` presence, the **loaded skills** (enumerable), the session backend, and the bound port. It does **not** enumerate authored context files: they are ambient (§10.1a), so the only meaningful, bounded list is skills. This mirrors the `dev` startup report.
+**Startup report (minimal observable surface):** run dir, model, **auth source** (pi's resolved label + provider, e.g. `OAuth (anthropic)` or `ANTHROPIC_API_KEY (anthropic)`), `AGENTS.md` presence, the **loaded skills** (enumerable), the session dir, and the bound port. It does **not** enumerate authored context files: they are ambient (§10.1a), so the only meaningful, bounded list is skills.
 
-### 10.5 Auth at runtime (env key or OAuth)
+### 10.4 Auth at runtime (env key or OAuth)
 
 Auth rides the pi `Models` collection, not a side channel; `start` is **not** env-only. Since pi 0.80 a `Models` (built by `createPiModels` → `builtinModels`) owns both model resolution and per-request auth: each provider carries its own `ProviderAuth`, resolved against a `CredentialStore` (stored credentials) plus an `AuthContext` (ambient env vars). Two deploy-appropriate sources, both upstream-native:
 
@@ -292,15 +244,23 @@ Resolution order is upstream-owned: a stored credential owns the provider; env i
 
 OAuth refresh tokens are single-use, so refresh is serialized (the file lock) and the new credentials written back — the persistence above. **Single machine/container** is covered by that file lock. **Multi-instance**: a credential broker with row-locked refresh over a shared store (the ketchup `worker_credentials` pattern) — same `CredentialStore` seam, injected via `createPiModels`'s collection, deferred with the K-axis backends.
 
-### 10.6 Container recipe (v1, documented not generated)
+### 10.5 Container recipe (v1, documented not generated)
 
-The container is the v1 "machine-state independence" boundary: copy the project, `npm ci`, `fastagent build`, then `CMD fastagent start`. Secrets and (optionally) OAuth credentials are injected as env/mounted files; `PORT` is honored. A Dockerfile sample ships with the implementation.
+The container is the v1 "machine-state independence" boundary, and with no build step it is trivial:
+
+```dockerfile
+COPY . /app                          # the definition directory
+RUN  npm ci                          # code-tool deps (skip for pure markdown/skills agents)
+CMD  ["fastagent", "start", "/app"]  # cwd = /app
+```
+
+Sessions go to a mounted volume (`FASTAGENT_SESSIONS_DIR=/data/sessions`) so a redeploy never wipes them; secrets and (optionally) OAuth credentials are injected as env/mounted files; `PORT` is honored. Excluding dev cruft from the image is `.dockerignore`'s job until the future `deploy` command owns packaging. A Dockerfile sample ships with the implementation.
 
 ## 11. Current open work
 
-- `fastagent build` / `fastagent start` per §10 are implemented (single-machine tier); the documented container recipe (§10.6) is not yet shipped.
-- Refresh-capable runtime OAuth resolver (§10.5); multi-instance credential broker deferred.
-- Portable data-bundle scoping (§10.2): bundle the source tree under the §10.1 boundary, secret exclusion enforced — lands with the AgentCore target adapter.
+- `fastagent dev` / `fastagent start` per §10 are implemented (single-machine tier, the directory is the agent); the documented container recipe (§10.5) is not yet shipped as a generated Dockerfile.
+- `fastagent deploy` (multi-target push + a hosted platform): packaging (exclude dev cruft, pin a model) returns here as an internal step, not a user-facing build. Future milestone.
+- Refresh-capable runtime OAuth resolver (§10.4); multi-instance credential broker deferred.
 - AgentCore target adapter with external sessions and distributed locking (the async `Lease` port).
 - Production observability sink for cleanup anomalies (§3) without violating SPEC terminal discipline.
 - Engine #2, which will prove which pi-specific seams (e.g. `PiSessionStore`) should become engine-neutral abstractions.
