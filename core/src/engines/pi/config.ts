@@ -69,7 +69,14 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   // Exactly one config file at this point (0 and >1 handled above).
   // biome-ignore lint/style/noNonNullAssertion: length checked above — exactly one element here
   const path = found[0]!;
-  const mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
+  let mod: { default?: unknown };
+  try {
+    mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
+  } catch (error) {
+    // A syntax/load error in the config would otherwise surface as a raw SyntaxError with a Node ESM
+    // internal stack; name the file and keep the message, matching the shape errors below.
+    throw new Error(`${path}: ${(error as Error).message}`);
+  }
   const config = mod.default;
   if (!config || typeof config !== "object") {
     throw new Error(`${path}: must default-export defineConfig({...})`);

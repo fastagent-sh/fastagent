@@ -48,6 +48,12 @@ describe("config: loadConfig", () => {
     await expect(loadConfig(join(fixtures, "bad-config"))).rejects.toThrow(/must default-export/);
   });
 
+  it("a config SYNTAX error names the file (not a raw SyntaxError + ESM stack)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: `); // truncated = parse error
+    await expect(loadConfig(dir)).rejects.toThrow(/fastagent\.config\.mjs: /);
+  });
+
   it("validates http shape as well: non-numeric/out-of-range http.port throws", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { port: "oops" } };`);
