@@ -38,9 +38,9 @@ import {
   loadRootIgnore,
 } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
-import { resolveTools } from "./engines/pi/create.ts";
+import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import { assertChannelReady, channelExists, scaffoldChannel, scaffoldWorkspace } from "./engines/pi/init.ts";
-import { listToolFiles, loadTools, mergeDiscoveredTools } from "./engines/pi/tool.ts";
+import { listToolFiles } from "./engines/pi/tool.ts";
 import { createPiAgentFromArtifact } from "./engines/pi/start.ts";
 
 function usage(code: number): never {
@@ -145,12 +145,11 @@ async function runTool(): Promise<void> {
   }
   loadDotEnv(toolDir); // a tool may read a key from .env
   const { config } = await loadConfig(toolDir).catch(failStartup);
-  const discovered = await loadTools(toolDir).catch(failStartup);
   // Same tool set dev/start mount (pi defaults + config.tools + discovered, deduped) so the
   // runner exercises exactly what gets served — a tool shadowed by a default/config tool is not
   // run here either; surface that collision instead of silently testing the wrong implementation.
-  const { tools, collisions } = mergeDiscoveredTools(resolveTools(config, toolDir), discovered.tools);
-  for (const c of [...discovered.collisions, ...collisions]) {
+  const { tools, toolCollisions } = await resolveWorkspaceTools(config, toolDir).catch(failStartup);
+  for (const c of toolCollisions) {
     console.error(
       `[fastagent] warn: tool "${c.name}" (${c.source}) is shadowed by a default/config tool — not mounted`,
     );

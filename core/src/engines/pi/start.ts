@@ -27,11 +27,11 @@ import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { type ArtifactManifest, MANIFEST_FILE } from "./build.ts";
 import { type FastagentConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { createPiAgentFromDefinition, piDefaultTools, resolveTools } from "./create.ts";
+import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
 import { type LoadedDefinition, ensureStateDirSelfIgnored } from "./definition.ts";
 import { createPiModels } from "./models.ts";
 import { jsonlSessionStore } from "./sessions.ts";
-import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
+import type { ToolCollision } from "./tool.ts";
 
 /**
  * Read + validate `<artifactDir>/fastagent.json`. The manifest is machine-generated, so this
@@ -128,15 +128,9 @@ export async function createPiAgentFromArtifact(
   // start run inside a git repo does not show conversations as untracked).
   await mkdir(sessionsDir, { recursive: true });
   await ensureStateDirSelfIgnored(sessionsDir);
-  // Discover tools/ (ships in the artifact as authored context) and merge with config.tools + defaults.
-  const discovered = await loadTools(artifactDir);
-  const { tools, collisions: crossCollisions } = mergeDiscoveredTools(
-    resolveTools(config, artifactDir),
-    discovered.tools,
-  );
-  const toolCollisions = [...discovered.collisions, ...crossCollisions];
-  const defaultNames = new Set(piDefaultTools(artifactDir).map((t) => t.name));
-  const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));
+  // The same tool resolution dev and `fastagent tool` use (pi defaults + config.tools + discovered
+  // tools/, existing win) — tools/ ships in the artifact as authored context.
+  const { tools, toolNames, toolCollisions } = await resolveWorkspaceTools(config, artifactDir);
   const models = createPiModels();
   const { agent, definition } = await createPiAgentFromDefinition(artifactDir, {
     models,

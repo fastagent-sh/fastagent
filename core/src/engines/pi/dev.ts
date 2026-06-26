@@ -25,11 +25,11 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
-import { createPiAgentFromDefinition, piDefaultTools, resolveTools } from "./create.ts";
+import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
 import { type LoadedDefinition, defaultGlobalSkillPaths, ensureStateDirSelfIgnored } from "./definition.ts";
 import { createPiModels } from "./models.ts";
 import { jsonlSessionStore } from "./sessions.ts";
-import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
+import type { ToolCollision } from "./tool.ts";
 
 export interface CreatePiAgentFromWorkspaceOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -76,12 +76,9 @@ export async function createPiAgentFromWorkspace(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  // Discover tools/ and merge with pi defaults + config.tools (existing win name clashes).
-  const discovered = await loadTools(dir);
-  const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, dir), discovered.tools);
-  const toolCollisions = [...discovered.collisions, ...crossCollisions];
-  const defaultNames = new Set(piDefaultTools(dir).map((t) => t.name));
-  const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));
+  // Discover tools/ and merge with pi defaults + config.tools (existing win) — the same resolution
+  // start and `fastagent tool` use, so the dev server mounts exactly what gets served.
+  const { tools, toolNames, toolCollisions } = await resolveWorkspaceTools(config, dir);
   // The dev opener owns workspace state: .fastagent/ (machine state — gitignored, deletable,
   // rebuildable) is created HERE, not in the CLI, so library callers get the same
   // self-gitignored dir (vite/next-style).
