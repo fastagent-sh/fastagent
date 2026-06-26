@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getOAuthProviderInfoList } from "@earendil-works/pi-ai/oauth";
@@ -95,6 +95,29 @@ describe("loginFlow", () => {
     ).rejects.toThrow(/corrupt auth file/);
     expect(flowRan).toBe(false); // preflight threw before the flow — no wasted round-trip
   });
+
+  // The #51 invariant: the SECOND modify (the real in-place write, AFTER a successful flow) must fail
+  // visibly — never a false success. The corrupt-preflight test above only exercises the parse throw on
+  // the FIRST (no-op) modify; this one drives the write-IO path the preflight never reaches. A read-only
+  // (0444) file lets the preflight pass (read + lock, no write) and the flow run, then the persist write
+  // hits EACCES. (Skipped under root, which bypasses the permission check.)
+  it.skipIf(process.getuid?.() === 0)(
+    "a persist write failure after a successful OAuth flow rejects, persisting nothing",
+    async () => {
+      const path = await tmpAuth(JSON.stringify({ existing: { type: "api_key", key: "x" } })); // valid JSON
+      await chmod(path, 0o444); // read-only file; parent dir stays writable so the lock can still be taken
+      let flowRan = false;
+      const oauthFlow: OAuthFlow = async () => {
+        flowRan = true;
+        return fakeCreds;
+      };
+      await expect(
+        loginFlow(fakeIO(), { provider: "anthropic", store: fastagentCredentialStore(path), oauthFlow }),
+      ).rejects.toThrow(/EACCES|permission/i);
+      expect(flowRan).toBe(true); // got past preflight + flow; only the persist write failed
+      expect((await readAuth(path)).anthropic).toBeUndefined(); // no false success — nothing landed
+    },
+  );
 
   it("c1: a server win that leaves the manual-paste prompt pending is aborted, so the CLI does not hang", async () => {
     let manualAborted = false;
