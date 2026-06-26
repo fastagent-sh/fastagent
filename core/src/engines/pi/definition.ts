@@ -22,12 +22,36 @@
  *   - non-fatal load findings (bad skill files, name collisions) are returned as
  *     data (diagnostics/collisions) for the caller to surface — visible, not fatal.
  */
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, realpath, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import ignore, { type Ignore } from "ignore";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+
+/**
+ * Refuse a workspace subdir (`channels/`, …) that resolves OUTSIDE the workspace via a symlink. Part
+ * of "the directory is the agent": an escaping subdir puts part of the agent outside its own directory
+ * — a deploy that copies the dir would not include it (dev/deployed diverge), and a write through it
+ * lands outside the workspace. An IN-workspace symlink is self-contained and allowed; a missing subdir
+ * is fine. Both ends are realpath'd so a symlinked workspace root (/tmp → /private/tmp) is not a false escape.
+ */
+export async function assertInsideWorkspace(workspaceDir: string, name: string): Promise<void> {
+  const target = join(workspaceDir, name);
+  const real = await realpath(target).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === "ENOENT" || e.code === "not_found") return undefined; // not there yet — nothing to check
+    throw e;
+  });
+  if (real === undefined) return;
+  const root = await realpath(workspaceDir).catch(() => resolve(workspaceDir));
+  const rel = relative(root, real);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(
+      `${target} resolves outside the workspace (${real}) — it must live inside the definition directory; ` +
+        `use a real directory or a symlink that stays within it`,
+    );
+  }
+}
 
 /** A same-name skill collision (the discarded side). Must surface, never swallowed (fail visibly). */
 export interface SkillCollision {

@@ -12,6 +12,7 @@ import { extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Agent } from "../../agent.ts";
 import { parseRouteKey, type Routes } from "../../host/node.ts";
+import { assertInsideWorkspace } from "./definition.ts";
 import { moduleLoadHint } from "./loader.ts";
 
 /** A `channels/<name>.ts` default export: receives the assembled agent, returns the routes it mounts. */
@@ -36,9 +37,11 @@ export async function loadChannels(
   agent: Agent,
 ): Promise<{ routes: Routes; collisions: ChannelCollision[] }> {
   const channelsDir = join(dir, "channels");
-  // A symlinked channels/ is simply followed: with no build/artifact, dev and start read the directory
-  // through the same opener, so a symlink cannot make them diverge. (Top-level non-file entries —
-  // including symlinks-to-files — are skipped by the isFile() filter below; only real channel files load.)
+  // A symlinked channels/ is followed only if it stays INSIDE the workspace: an escaping symlink would
+  // put the agent's channels outside its own directory, and a deploy that copies the dir would not
+  // include them — dev/deployed diverge, exactly what "the directory is the agent" forbids. (Top-level
+  // non-file entries — including symlinks-to-files — are skipped by the isFile() filter below.)
+  await assertInsideWorkspace(dir, "channels");
   let entries: Dirent[];
   try {
     entries = await readdir(channelsDir, { withFileTypes: true });

@@ -274,14 +274,23 @@ describe("add: fastagent add github", () => {
     expect(out2).not.toMatch(/not gitignored/);
   });
 
-  it("follows a symlinked channels/ directory when scaffolding (no build to diverge from)", async () => {
+  it("scaffolds through an IN-workspace symlinked channels/, but rejects one that ESCAPES (no outside write)", async () => {
+    // in-workspace symlink (channels → ./real): followed, github.ts written inside the workspace
     const dir = await readyWorkspace();
-    const real = await freshDir();
-    await mkdir(join(real, "ch"));
-    await symlink(join(real, "ch"), join(dir, "channels"));
+    await mkdir(join(dir, "real"));
+    await symlink(join(dir, "real"), join(dir, "channels"));
     const out = await cliInit(["add", "github"], dir);
     expect(out).toMatch(/created/);
-    expect(await exists(join(real, "ch", "github.ts"))).toBe(true); // written through the symlink (followed)
+    expect(await exists(join(dir, "real", "github.ts"))).toBe(true); // written through the in-workspace symlink
+
+    // escaping symlink (channels → external dir): rejected, nothing written outside the workspace
+    const esc = await readyWorkspace();
+    const ext = await freshDir();
+    await mkdir(join(ext, "ch"));
+    await symlink(join(ext, "ch"), join(esc, "channels"));
+    const out2 = await cliInit(["add", "github"], esc);
+    expect(out2).toMatch(/outside the workspace/);
+    expect(await exists(join(ext, "ch", "github.ts"))).toBe(false); // not written outside
   });
 });
 

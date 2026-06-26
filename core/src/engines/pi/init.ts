@@ -31,7 +31,7 @@ import { access, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } fr
 import { existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
-import { type LoadedDefinition, loadAgentDefinition, loadRootIgnore } from "./definition.ts";
+import { type LoadedDefinition, assertInsideWorkspace, loadAgentDefinition, loadRootIgnore } from "./definition.ts";
 import { fastagentVersion } from "./version.ts";
 
 /** Identity persona (clean — it is the system prompt). The complete variant references the tool. */
@@ -221,6 +221,9 @@ export async function channelExists(dir: string, kind: "github"): Promise<boolea
  */
 export async function scaffoldChannel(dir: string, kind: "github"): Promise<string> {
   const channelsDir = join(dir, "channels");
+  // Don't write through a channels/ symlink that escapes the workspace (github.ts would land outside
+  // the definition); an in-workspace symlink is fine. Mirrors loadChannels + scaffoldWorkspace's guard.
+  await assertInsideWorkspace(dir, "channels");
   const file = channelPath(dir, kind);
   if (await exists(file)) {
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);

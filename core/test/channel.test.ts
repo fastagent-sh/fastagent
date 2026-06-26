@@ -73,18 +73,25 @@ describe("loadChannels (filesystem discovery)", () => {
     expect(collisions).toEqual([]);
   });
 
-  it("follows a symlinked channels/ directory — no build to diverge from (dev == start read it identically)", async () => {
+  it("follows an IN-workspace symlinked channels/, but rejects one that ESCAPES the workspace", async () => {
+    // in-workspace symlink (channels → ./real-channels): self-contained → followed
     const dir = await freshDir();
-    const real = await freshDir();
-    await mkdir(join(real, "ch"));
+    await mkdir(join(dir, "real-channels"));
     await writeFile(
-      join(real, "ch", "github.mjs"),
+      join(dir, "real-channels", "github.mjs"),
       `export default () => ({ "POST /webhook": () => new Response("x") });`,
     );
-    await symlink(join(real, "ch"), join(dir, "channels"));
-    // followed, not rejected: the channel in the symlink target is discovered
+    await symlink(join(dir, "real-channels"), join(dir, "channels"));
     const { routes } = await loadChannels(dir, fakeAgent);
-    expect(Object.keys(routes)).toEqual(["POST /webhook"]);
+    expect(Object.keys(routes)).toEqual(["POST /webhook"]); // followed
+
+    // escaping symlink (channels → an external dir): channels would live outside the agent and a deploy
+    // copying the dir would not include them (dev/deployed diverge) → rejected.
+    const esc = await freshDir();
+    const ext = await freshDir();
+    await mkdir(join(ext, "ch"));
+    await symlink(join(ext, "ch"), join(esc, "channels"));
+    await expect(loadChannels(esc, fakeAgent)).rejects.toThrow(/outside the workspace/);
   });
 
   it("fails visibly when a channel file does not default-export a function", async () => {
