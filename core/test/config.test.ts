@@ -2,12 +2,24 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createPiAgentFromWorkspace, createPiModels, listModels, resolveModel } from "../src/index.ts";
-import { loadConfig, resolveModelSpec } from "../src/engines/pi/config.ts";
+import { loadConfig, resolveModelSpec, resolveSessionsDirOverride } from "../src/engines/pi/config.ts";
 import { resolveTools } from "../src/engines/pi/create.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+
+describe("config: resolveSessionsDirOverride (start's sessions precedence)", () => {
+  it("precedence --sessions-dir > FASTAGENT_SESSIONS_DIR > none; a given value resolves to absolute", () => {
+    const env = { FASTAGENT_SESSIONS_DIR: "envdir" } as NodeJS.ProcessEnv;
+    // the footgun this guards: a regression here silently drops sessions back to the in-tree default,
+    // so a redeploy wipes conversations. Distinct, non-tautological assertions per precedence tier:
+    expect(resolveSessionsDirOverride("flagdir", env)).toBe(resolve("flagdir")); // flag beats env
+    expect(resolveSessionsDirOverride(undefined, env)).toBe(resolve("envdir")); // env when no flag
+    expect(resolveSessionsDirOverride(undefined, {} as NodeJS.ProcessEnv)).toBeUndefined(); // neither → opener default
+    expect(resolveSessionsDirOverride("/mnt/vol", {} as NodeJS.ProcessEnv)).toBe("/mnt/vol"); // absolute kept as-is
+  });
+});
 
 describe("config: listModels (fastagent models discovery)", () => {
   it("lists well-formed provider/modelId specs, sorted, that resolveModel accepts", () => {

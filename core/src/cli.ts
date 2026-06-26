@@ -24,7 +24,7 @@ import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { runDevSupervisor } from "./dev-supervisor.ts";
 import { loadChannels } from "./engines/pi/channel.ts";
 import { fastagentVersion } from "./engines/pi/version.ts";
-import { listModels, loadConfig } from "./engines/pi/config.ts";
+import { listModels, loadConfig, resolveSessionsDirOverride } from "./engines/pi/config.ts";
 import { FASTAGENT_AUTH_PATH } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
@@ -409,13 +409,9 @@ async function runStart(): Promise<void> {
   installUndiciFetch();
 
   // start runs the definition directory in production posture — the SAME opener dev uses (single
-  // assembly source), just no watch. Sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > the
-  // <dir>/.fastagent/sessions default (resolved inside the opener).
-  const sessionsDirOverride = values["sessions-dir"]
-    ? resolve(values["sessions-dir"])
-    : process.env.FASTAGENT_SESSIONS_DIR
-      ? resolve(process.env.FASTAGENT_SESSIONS_DIR)
-      : undefined;
+  // assembly source), just no watch. Sessions precedence (--sessions-dir > FASTAGENT_SESSIONS_DIR >
+  // the opener's <dir>/.fastagent/sessions default) lives in resolveSessionsDirOverride (unit-tested).
+  const sessionsDirOverride = resolveSessionsDirOverride(values["sessions-dir"]);
   const { agent, definition, config, modelSpec, sessionsDir, toolNames, toolCollisions } =
     await createPiAgentFromWorkspace(dir, { model: values.model, sessionsDir: sessionsDirOverride }).catch(failStartup);
 

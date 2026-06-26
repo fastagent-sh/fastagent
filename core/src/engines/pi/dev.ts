@@ -81,12 +81,13 @@ export async function createPiAgentFromWorkspace(
   // Discover tools/ and merge with pi defaults + config.tools (existing win) — the same resolution
   // start and `fastagent tool` use, so the dev server mounts exactly what gets served.
   const { tools, toolNames, toolCollisions } = await resolveWorkspaceTools(config, dir);
-  // Sessions: default under the definition's own .fastagent/ (machine state — gitignored,
-  // deletable). Created HERE (not the CLI), so library callers get the self-gitignored dir too
-  // (vite/next-style). When start points sessionsDir outside (a volume), self-ignore that dir.
+  // Sessions: default under the definition's own .fastagent/ (machine state — gitignored, deletable).
   const sessionsDir = options.sessionsDir ?? join(dir, ".fastagent", "sessions");
   await mkdir(sessionsDir, { recursive: true });
-  await ensureStateDirSelfIgnored(options.sessionsDir ? sessionsDir : join(dir, ".fastagent"));
+  // Self-ignore ONLY the default in-tree state dir, so dev/start don't show <dir>/.fastagent as
+  // untracked. An explicit sessionsDir is the operator's path (e.g. a mounted volume) — never write
+  // our `.gitignore` into it; that path's git-hygiene is theirs, and the volume isn't in the git tree.
+  if (!options.sessionsDir) await ensureStateDirSelfIgnored(join(dir, ".fastagent"));
   const models = createPiModels();
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
     models,

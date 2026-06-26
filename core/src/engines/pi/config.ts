@@ -18,7 +18,7 @@
  *
  * Deliberately NOT in v1 (kept as library-API escape hatches):
  *   - sessions/env backend selection — K axis; the hosting knife shapes it from real backends;
- *   - base/auth/skillPaths overrides — the defaults are almost always right; putting them
+ *   - base/auth overrides — the defaults are almost always right; putting them
  *     in config invites misuse.
  *
  * Red line: config describes "choices for this deployment", never the agent's identity
@@ -26,7 +26,7 @@
  * a runnable zero-config agent (model via --model / FASTAGENT_MODEL).
  */
 import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Models } from "@earendil-works/pi-ai";
@@ -168,4 +168,17 @@ export function resolveModelSpec(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return flag ?? env.FASTAGENT_MODEL ?? config.model;
+}
+
+/**
+ * `start`'s sessions-dir override: `--sessions-dir` flag > `FASTAGENT_SESSIONS_DIR` env > undefined
+ * (undefined = let the opener fall back to the in-tree `<dir>/.fastagent/sessions` default). A given
+ * value is resolved to an absolute path so the store and the startup report agree regardless of cwd.
+ */
+export function resolveSessionsDirOverride(
+  flag: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const raw = flag ?? env.FASTAGENT_SESSIONS_DIR;
+  return raw ? resolve(raw) : undefined;
 }
