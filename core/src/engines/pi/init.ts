@@ -14,7 +14,7 @@
  *     "what to do next" is printed to the console by the CLI, not baked into a file.
  *   - tools/ is auto-discovered (filename = tool name), so the config needs no `tools: []`.
  *   - .gitignore lists `.env` so the "secrets are the user's responsibility" model
- *     (core-design §10.1) is wired up from the first commit (build honors .gitignore).
+ *     (core-design §10.1) is wired up from the first commit.
  *   - .env.example documents the (optional) env knobs and is committable (only `.env` is ignored);
  *     it is all-commented and states the default model uses OAuth (`fastagent login`), not an API key, so
  *     it never implies a key is required.
@@ -81,13 +81,13 @@ export default {
 };
 `;
 
-const GITIGNORE = `# secrets — never commit, never ship in the build artifact
+const GITIGNORE = `# secrets — never commit (kept out of git and any deploy copy)
 .env
 
 # dependencies (reinstalled at deploy)
 node_modules/
 
-# fastagent machine state (dev sessions + build output)
+# fastagent machine state (dev/start sessions)
 .fastagent/
 `;
 
@@ -439,7 +439,7 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
   // Preflight scaffold parent dirs (e.g. `skills`, `tools`): a pre-existing NON-directory there
   // would make mkdir fail mid-loop (ENOTDIR) AFTER the first write, leaving a half-scaffold the
   // identity guard then blocks on retry. Detect it BEFORE any write (lstat, not stat: a symlinked
-  // parent must be rejected, not followed outside the dir — matches build's no-follow stance).
+  // parent must be rejected, not followed: a symlink here would write outside the workspace).
   const parents = new Set<string>();
   for (const file of files) {
     let p = dirname(file.rel);

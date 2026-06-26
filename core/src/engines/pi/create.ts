@@ -34,7 +34,7 @@
  *
  * Each rung only calls the one below; options narrow as you go up (L2 owns
  * systemPrompt/skills itself — they come from the definition; the openers own model/tools —
- * they come from the config/manifest resolution, so L2's options deliberately do not
+ * they come from the config resolution, so L2's options deliberately do not
  * accept them as the openers' job).
  *
  * Two ladder-wide rules, written down so the per-rung choices stay explainable:
@@ -48,8 +48,8 @@
  * 2. An injection point climbs only as high as the last persona who owns the
  *    decision, then stops:
  *      - sessions / lease (deployment backends)  → reach L2 (embedding developer);
- *        the openers pick their own default (dev: jsonl under .fastagent/; start: jsonl
- *        outside the artifact) without exposing a choice;
+ *        the openers pick their own default (jsonl under <dir>/.fastagent/, which start can
+ *        override to a mounted volume) without exposing a choice;
  *      - base (definition-assembly)               → stop at L2 (L2 owns prompt/skill mounting);
  *      - retryClassifier (engine adaptation)     → stays at L0 (custom-wiring persona);
  *      - an opener exposes only what an operator may say: the model flag. Skills are
@@ -104,7 +104,7 @@ export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] 
 }
 
 /**
- * Resolve the full tool set a workspace/artifact mounts: pi defaults + `config.tools` + discovered
+ * Resolve the full tool set a workspace mounts: pi defaults + `config.tools` + discovered
  * `tools/` (deduped, existing win), plus the non-default tool names and the collisions to report.
  * The single source of this resolution for the dev/start openers AND `fastagent tool` — they must
  * mount exactly the same set, so it lives here once instead of being copied per opener.

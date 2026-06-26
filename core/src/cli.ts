@@ -440,7 +440,7 @@ async function serveOnce(): Promise<void> {
   console.error(`[fastagent] model:  ${a.modelSpec}`);
   await reportAuth(a.modelSpec);
   reportAgentsSkillsTools(a);
-  // dev == deployed: serve the same channels/ the artifact would (default invoke when none declared).
+  // dev == deployed: serve the same channels/ a deploy would (default invoke when none declared).
   // routesFor constructs each discovered channel, which may throw on a misconfig (e.g. an unset
   // secret) — surface it as a clean startup error, not an unhandled stack.
   const routes = await routesFor(dir, a.agent).catch(failStartup);
