@@ -378,4 +378,43 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(updated.description).toContain("v2");
     expect(await readFile(join(ws, "skills", "greeter", "SKILL.md"), "utf8")).toContain("Two.");
   });
+
+  it("--update failure leaves the existing skill intact (validate-before-replace, not destructive-first)", async () => {
+    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
+    await mkdir(join(srcRoot, "greeter"), { recursive: true });
+    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: v1.\n---\nOne.\n");
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await vendorSkill(ws, join(srcRoot, "greeter")); // vendor v1
+
+    // --update from an INVALID source (no SKILL.md): under destructive-first the old skill would be
+    // deleted before the failure; validate-before-replace must leave v1 fully intact.
+    const bad = await mkdtemp(join(tmpdir(), "fa-bad-"));
+    await mkdir(join(bad, "greeter"), { recursive: true });
+    await writeFile(join(bad, "greeter", "readme.txt"), "x\n"); // no SKILL.md
+    await expect(vendorSkill(ws, join(bad, "greeter"), { update: true })).rejects.toThrow(/SKILL\.md/);
+    expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true); // old skill survived
+    expect(await readFile(join(ws, "skills", "greeter", "SKILL.md"), "utf8")).toContain("One.");
+    expect(await exists(join(ws, "skills", ".greeter.vendoring"))).toBe(false); // no staging leftover
+  });
+
+  it("attributes diagnostics by exact skill dir, not a loose prefix (pdf must not absorb pdf-tools')", async () => {
+    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
+    // pdf-tools: frontmatter name ≠ dir → a real spec diagnostic, at skills/pdf-tools/
+    await mkdir(join(srcRoot, "pdf-tools"), { recursive: true });
+    await writeFile(join(srcRoot, "pdf-tools", "SKILL.md"), "---\nname: wrongname\ndescription: tools.\n---\nx\n");
+    // pdf: spec-clean
+    await mkdir(join(srcRoot, "pdf"), { recursive: true });
+    await writeFile(join(srcRoot, "pdf", "SKILL.md"), "---\nname: pdf\ndescription: clean pdf skill.\n---\nx\n");
+
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await writeFile(join(ws, "AGENTS.md"), "# Bot\n");
+    await vendorSkill(ws, join(srcRoot, "pdf-tools")); // carries a diagnostic
+    const r = await vendorSkill(ws, join(srcRoot, "pdf")); // clean
+
+    // `skills/pdf` ⊂ `skills/pdf-tools`: a loose-prefix filter would wrongly pull pdf-tools' diagnostic
+    // into pdf's. Exact dir match → pdf is clean.
+    expect(r.name).toBe("pdf");
+    expect(r.description).toContain("clean");
+    expect(r.diagnostics).toEqual([]);
+  });
 });
