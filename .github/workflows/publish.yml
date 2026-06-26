@@ -1,8 +1,9 @@
 name: Publish
 
 # Publish @kid7st/fastagent to npm when a GitHub Release is published, via npm Trusted Publishing
-# (OIDC) — no NPM_TOKEN secret; provenance comes from the explicit --provenance flag below (npm did NOT
-# auto-attach it under OIDC), which needs the id-token: write permission. Requires a trusted publisher
+# (OIDC) — no NPM_TOKEN secret. Provenance is NOT attached: npm requires a PUBLIC source repository to
+# verify a provenance bundle (`422 ... Unsupported ... visibility: "private"`), and this repo is private.
+# Re-add `npm publish --provenance` once the repo is public. Requires a trusted publisher
 # configured on npmjs (org/user kid7st, repo fastagent, workflow publish.yml) and npm >= 11.5.1 (Node 26
 # ships 11.12.1). The release tag is the manual gate; the job re-verifies (typecheck + test) before
 # publishing so a non-green tag never ships. Version comes from core/package.json — bump it before
@@ -46,6 +47,6 @@ jobs:
 
       - name: Publish
         # Trusted Publishing (OIDC) authenticates from the id-token; access/registry come from publishConfig.
-        # --provenance is explicit: npm 11.12.1 did NOT auto-attach it under OIDC (despite the docs), so the
-        # flag is what actually generates the supply-chain provenance attestation (needs id-token: write).
-        run: npm publish --provenance
+        # No --provenance: npm rejects a provenance publish from a PRIVATE source repo (it can't be verified
+        # against public source). Add it back when the repo goes public.
+        run: npm publish
