@@ -1,6 +1,6 @@
 {
   "name": "@kid7st/fastagent",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Flask/WSGI for agents: serve or embed an existing agent folder (AGENTS.md + skills/) as a production capability. Engine-, model-, and host-neutral.",
   "keywords": [
     "agent",
