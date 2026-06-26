@@ -74,6 +74,7 @@ import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
+import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
 // ── §1 tools: pi's real built-in core coding tools (engine assets) ───────────
@@ -103,6 +104,24 @@ export function piDefaultTools(cwd: string): AgentTool[] {
 export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] {
   const defaults = piDefaultTools(cwd);
   return config.tools ? [...defaults, ...config.tools] : defaults;
+}
+
+/**
+ * Resolve the full tool set a workspace/artifact mounts: pi defaults + `config.tools` + discovered
+ * `tools/` (deduped, existing win), plus the non-default tool names and the collisions to report.
+ * The single source of this resolution for the dev/start openers AND `fastagent tool` — they must
+ * mount exactly the same set, so it lives here once instead of being copied per opener.
+ */
+export async function resolveWorkspaceTools(
+  config: FastagentConfig,
+  dir: string,
+): Promise<{ tools: AgentTool[]; toolNames: string[]; toolCollisions: ToolCollision[] }> {
+  const discovered = await loadTools(dir);
+  const { tools, collisions } = mergeDiscoveredTools(resolveTools(config, dir), discovered.tools);
+  const toolCollisions = [...discovered.collisions, ...collisions];
+  const defaultNames = new Set(piDefaultTools(dir).map((t) => t.name));
+  const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));
+  return { tools, toolNames, toolCollisions };
 }
 
 // ── §2 prompt: four-segment systemPrompt assembly (core-design §2) ───────────
