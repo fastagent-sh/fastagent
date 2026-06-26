@@ -44,4 +44,7 @@ jobs:
         run: npm test
 
       - name: Publish
-        run: npm publish # Trusted Publishing (OIDC) authenticates from the id-token; access/registry come from publishConfig
+        # Trusted Publishing (OIDC) authenticates from the id-token; access/registry come from publishConfig.
+        # --provenance is explicit: npm 11.12.1 did NOT auto-attach it under OIDC (despite the docs), so the
+        # flag is what actually generates the supply-chain provenance attestation (needs id-token: write).
+        run: npm publish --provenance
