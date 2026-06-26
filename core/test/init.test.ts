@@ -274,14 +274,14 @@ describe("add: fastagent add github", () => {
     expect(out2).not.toMatch(/not gitignored/);
   });
 
-  it("refuses a symlinked channels/ directory (the build won't follow it)", async () => {
+  it("follows a symlinked channels/ directory when scaffolding (no build to diverge from)", async () => {
     const dir = await readyWorkspace();
     const real = await freshDir();
     await mkdir(join(real, "ch"));
     await symlink(join(real, "ch"), join(dir, "channels"));
     const out = await cliInit(["add", "github"], dir);
-    expect(out).toMatch(/symlink/);
-    expect(await exists(join(real, "ch", "github.ts"))).toBe(false); // not written through the symlink
+    expect(out).toMatch(/created/);
+    expect(await exists(join(real, "ch", "github.ts"))).toBe(true); // written through the symlink (followed)
   });
 });
 

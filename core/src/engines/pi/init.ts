@@ -221,12 +221,6 @@ export async function channelExists(dir: string, kind: "github"): Promise<boolea
  */
 export async function scaffoldChannel(dir: string, kind: "github"): Promise<string> {
   const channelsDir = join(dir, "channels");
-  // A symlinked channels/ is served-then-rejected by loadChannels and skipped by the build, so a file
-  // written through it (outside the workspace) can neither load nor ship. Require a real directory.
-  const st = await lstat(channelsDir).catch(() => undefined);
-  if (st?.isSymbolicLink()) {
-    throw new Error(`${channelsDir} is a symlink — use a real directory (the build does not follow it)`);
-  }
   const file = channelPath(dir, kind);
   if (await exists(file)) {
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
