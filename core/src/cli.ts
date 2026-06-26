@@ -83,6 +83,7 @@ const { positionals, values } = parseArgs({
     minimal: { type: "boolean" },
     "no-install": { type: "boolean" },
     "no-watch": { type: "boolean" },
+    update: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean", short: "v" },
   },
@@ -237,7 +238,7 @@ async function runAdd(): Promise<void> {
  * `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/.
  * source = a git ref (owner/repo/path, github default), a local path, or a bare name resolved
  * against your local global skill dirs. Copy-in, git-tracked (the filesystem is the registry);
- * validated with the runtime loader; refuses to overwrite. Adding a skill is still unfamiliar, so
+ * validated with the runtime loader; refuses to overwrite unless --update. Adding a skill is still unfamiliar, so
  * the no-arg usage teaches BOTH paths (write-your-own vibe + vendor) and never implies a command.
  */
 async function runAddSkill(): Promise<void> {
@@ -251,12 +252,16 @@ async function runAddSkill(): Promise<void> {
         `  2. vendor an existing Agent Skills skill (copied in, git-tracked):\n` +
         `       fastagent add skill <source> [dir]\n` +
         `     source: a git ref (owner/repo/path, github default), a local path (./x, /abs), or a\n` +
-        `             bare name found in your global skill dirs (~/.agents/skills, ~/.pi/agent/skills)`,
+        `             bare name found in your global skill dirs (~/.agents/skills, ~/.pi/agent/skills)\n` +
+        `     --update overwrites an existing skill (re-fetch from source); review with git diff`,
     );
     process.exit(1);
   }
-  const { name, description, dest, hasScripts, diagnostics } = await vendorSkill(target, source).catch(failStartup);
-  console.error(`[fastagent] vendored skill "${name}" → ${dest}/`);
+  const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
+    update: values.update ?? false,
+  }).catch(failStartup);
+  console.error(`[fastagent] ${overwritten ? "updated" : "vendored"} skill "${name}" → ${dest}/`);
+  if (overwritten) console.error(`  overwrote it — \`git diff ${dest}\` to review, \`git checkout ${dest}\` to revert`);
   if (description) console.error(`  ${description.length > 100 ? `${description.slice(0, 100)}…` : description}`);
   for (const d of diagnostics) console.error(`  warn: ${d.message}`);
   if (hasScripts) {
