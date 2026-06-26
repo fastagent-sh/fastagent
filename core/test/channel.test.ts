@@ -73,7 +73,7 @@ describe("loadChannels (filesystem discovery)", () => {
     expect(collisions).toEqual([]);
   });
 
-  it("rejects a symlinked channels/ directory (the build omits it; dev would diverge)", async () => {
+  it("follows a symlinked channels/ directory — no build to diverge from (dev == start read it identically)", async () => {
     const dir = await freshDir();
     const real = await freshDir();
     await mkdir(join(real, "ch"));
@@ -82,7 +82,9 @@ describe("loadChannels (filesystem discovery)", () => {
       `export default () => ({ "POST /webhook": () => new Response("x") });`,
     );
     await symlink(join(real, "ch"), join(dir, "channels"));
-    await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/symlink/);
+    // followed, not rejected: the channel in the symlink target is discovered
+    const { routes } = await loadChannels(dir, fakeAgent);
+    expect(Object.keys(routes)).toEqual(["POST /webhook"]);
   });
 
   it("fails visibly when a channel file does not default-export a function", async () => {

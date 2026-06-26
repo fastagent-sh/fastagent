@@ -7,7 +7,7 @@
  * may list inline).
  */
 import type { Dirent } from "node:fs";
-import { lstat, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Agent } from "../../agent.ts";
@@ -36,27 +36,15 @@ export async function loadChannels(
   agent: Agent,
 ): Promise<{ routes: Routes; collisions: ChannelCollision[] }> {
   const channelsDir = join(dir, "channels");
-  // lstat (does not follow the link) first: the build skips symlinks (definition.ts), so a symlinked
-  // channels/ would serve in dev but be omitted from the artifact — dev and deployed would diverge.
-  // Reject it rather than silently follow it. (Symlinked FILES inside channels/ are skipped below by
-  // the isFile() check, matching the build, so they need no special case here.)
-  let stat: Awaited<ReturnType<typeof lstat>>;
-  try {
-    stat = await lstat(channelsDir);
-  } catch (error) {
-    const e = error as NodeJS.ErrnoException;
-    if (e.code === "ENOENT" || e.code === "not_found") return { routes: {}, collisions: [] };
-    throw new Error(`cannot read ${channelsDir}: ${(error as Error).message}`);
-  }
-  if (stat.isSymbolicLink()) {
-    throw new Error(
-      `${channelsDir} is a symlink — the build does not follow it, so dev and deployed would diverge; use a real directory`,
-    );
-  }
+  // A symlinked channels/ is simply followed: with no build/artifact, dev and start read the directory
+  // through the same opener, so a symlink cannot make them diverge. (Top-level non-file entries —
+  // including symlinks-to-files — are skipped by the isFile() filter below; only real channel files load.)
   let entries: Dirent[];
   try {
     entries = await readdir(channelsDir, { withFileTypes: true });
   } catch (error) {
+    const e = error as NodeJS.ErrnoException;
+    if (e.code === "ENOENT" || e.code === "not_found") return { routes: {}, collisions: [] }; // no channels/ is normal
     throw new Error(`cannot read ${channelsDir}: ${(error as Error).message}`);
   }
   const routes: Routes = {};
