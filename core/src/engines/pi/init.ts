@@ -27,9 +27,9 @@
  * It does NOT defend against every pathological pre-existing target state (TOCTOU, read-only
  * dirs, FIFOs, mid-write disk-full, …): a local scaffolding command recovered by delete-and-retry.
  */
-import { access, cp, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { type LoadedDefinition, loadAgentDefinition, loadRootIgnore } from "./definition.ts";
 import { fastagentVersion } from "./version.ts";
@@ -320,8 +320,9 @@ export interface VendoredSkill {
  * Copy-in, not link: the skill becomes a git-tracked part of the definition ("your folder is the
  * agent" — there is no registry; the filesystem is the registry, git is the distribution, the user
  * owns trust). Refuses to overwrite an existing skill UNLESS `options.update` — and then it is a plain
- * git-tracked overwrite (review/rollback via your repo's git diff/checkout), never a merge. Validates
- * the result with the SAME loader the runtime uses, so a non-spec skill surfaces immediately.
+ * git-tracked overwrite (review/rollback via your repo's git diff/checkout), never a merge. Fetches
+ * into a staging dir and validates BEFORE replacing, so a failed/invalid fetch never destroys an
+ * existing skill. Validation uses the SAME loader the runtime uses, so a non-spec skill surfaces now.
  */
 export async function vendorSkill(
   workspaceDir: string,
@@ -332,7 +333,8 @@ export async function vendorSkill(
   if (name === "" || name === "." || name === "..") {
     throw new Error(`cannot derive a skill name from "${source}" — point at a skill directory (…/skills/<name>)`);
   }
-  const dest = join(workspaceDir, "skills", name);
+  const skillsDir = join(workspaceDir, "skills");
+  const dest = join(skillsDir, name);
   // Refuse to clobber unless --update; the check is side-effect-free, and a git-tracked overwrite is
   // safe (review with `git diff`, undo with `git checkout`).
   const overwritten = existsSync(dest);
@@ -341,48 +343,66 @@ export async function vendorSkill(
       `skills/${name} already exists — re-run with --update to overwrite it (git tracks the change), or remove it`,
     );
   }
-  await mkdir(join(workspaceDir, "skills"), { recursive: true });
-  if (overwritten) await rm(dest, { recursive: true, force: true }); // --update: replace wholesale, then re-fetch
-  if (isLocalSource(source)) {
-    const src = resolve(source);
-    if (!existsSync(join(src, "SKILL.md"))) {
-      throw new Error(`"${source}" has no SKILL.md — an Agent Skills skill is a directory containing SKILL.md`);
+  await mkdir(skillsDir, { recursive: true });
+
+  // Fetch into a STAGING dir adjacent to dest (same filesystem → atomic rename), validate it, and only
+  // THEN replace dest. So a failed/invalid fetch — a transient network blip on a git ref, a source with
+  // no SKILL.md — never destroys an existing skill: --update means "swap to a new VALID version", not
+  // "delete then hope". The leading "." keeps the loader from ever treating staging as a skill, and a
+  // first-time vendor that fails leaves no half-written skill either.
+  const staging = join(skillsDir, `.${name}.vendoring`);
+  await rm(staging, { recursive: true, force: true }); // clear any leftover from a prior crash
+  try {
+    if (isLocalSource(source)) {
+      const src = resolve(source);
+      if (!existsSync(join(src, "SKILL.md"))) {
+        throw new Error(`"${source}" has no SKILL.md — an Agent Skills skill is a directory containing SKILL.md`);
+      }
+      await cp(src, staging, { recursive: true });
+    } else if (isBareName(source)) {
+      // bare name → vendor from a local global skill dir (add-time copy, not a runtime scan).
+      const src = findGlobalSkillSource(source);
+      if (!src) {
+        throw new Error(
+          `no skill "${source}" in your global skill dirs (~/.agents/skills, ~/.pi/agent/skills) — ` +
+            `give a git ref (owner/repo/path) or a local path instead`,
+        );
+      }
+      await cp(src, staging, { recursive: true });
+    } else {
+      // giget defaults a BARE ref to its own template registry, not github — so default the provider to
+      // github for a plain `owner/repo/path` (an explicit `github:`/`gh:`/`gitlab:`… scheme is kept).
+      // Supports a subdir + #ref, fetched via the tar API (no git binary).
+      const ref = /^[a-z][a-z0-9+.-]*:/i.test(source) ? source : `github:${source}`;
+      // Lazy import: giget is only needed for a git ref, so the serve path (index.ts → init.ts) and the
+      // local/bare-name sources never load it.
+      const { downloadTemplate } = await import("giget");
+      await downloadTemplate(ref, { dir: staging, force: true });
     }
-    await cp(src, dest, { recursive: true });
-  } else if (isBareName(source)) {
-    // bare name → vendor from a local global skill dir (add-time copy, not a runtime scan).
-    const src = findGlobalSkillSource(source);
-    if (!src) {
-      throw new Error(
-        `no skill "${source}" in your global skill dirs (~/.agents/skills, ~/.pi/agent/skills) — ` +
-          `give a git ref (owner/repo/path) or a local path instead`,
-      );
+    if (!existsSync(join(staging, "SKILL.md"))) {
+      throw new Error(`"${source}" did not yield a SKILL.md — expected an Agent Skills skill directory`);
     }
-    await cp(src, dest, { recursive: true });
-  } else {
-    // giget defaults a BARE ref to its own template registry, not github — so default the provider to
-    // github for a plain `owner/repo/path` (an explicit `github:`/`gh:`/`gitlab:`… scheme is kept).
-    // Supports a subdir + #ref, fetched via the tar API (no git binary).
-    const ref = /^[a-z][a-z0-9+.-]*:/i.test(source) ? source : `github:${source}`;
-    // Lazy import: giget is only needed for a git ref, so the serve path (index.ts → init.ts) and the
-    // local/bare-name sources never load it.
-    const { downloadTemplate } = await import("giget");
-    await downloadTemplate(ref, { dir: dest, force: true });
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true }); // failed/invalid: drop staging, leave dest intact
+    throw error;
   }
-  if (!existsSync(join(dest, "SKILL.md"))) {
-    await rm(dest, { recursive: true, force: true }); // not a skill — leave no half-vendor
-    throw new Error(`"${source}" did not yield a SKILL.md — expected an Agent Skills skill directory`);
-  }
-  // Validate with the runtime loader: name/description + any spec diagnostics for THIS skill.
+  // Validated. Replace atomically — the old skill survived every failure path above.
+  if (overwritten) await rm(dest, { recursive: true, force: true });
+  await rename(staging, dest);
+
+  // Report via the runtime loader, matching THIS skill by EXACT directory. A substring
+  // `includes("skills/<name>")` both prefix-pollutes a sibling `<name>-x` (no trailing separator) and,
+  // hardcoding `/`, matches nothing on Windows (loader paths use `\`) — dropping the very
+  // description/diagnostics we validate for. relative()+dirname() compare is precise and cross-platform.
   const def = await loadAgentDefinition(workspaceDir);
-  const skill =
-    def.skills.find((s) => s.filePath.includes(`skills/${name}/`)) ?? def.skills.find((s) => s.name === name);
+  const rel = join("skills", name);
+  const skill = def.skills.find((sk) => relative(workspaceDir, dirname(sk.filePath)) === rel);
   return {
     name: skill?.name ?? name,
     description: skill?.description,
-    dest: `skills/${name}`,
+    dest: rel,
     hasScripts: existsSync(join(dest, "scripts")),
-    diagnostics: def.diagnostics.filter((d) => d.path?.includes(`skills/${name}`)),
+    diagnostics: def.diagnostics.filter((d) => d.path !== undefined && relative(workspaceDir, dirname(d.path)) === rel),
     overwritten,
   };
 }
