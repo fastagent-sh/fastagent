@@ -1,7 +1,8 @@
 name: Publish
 
 # Publish @kid7st/fastagent to npm when a GitHub Release is published, via npm Trusted Publishing
-# (OIDC) — no NPM_TOKEN secret, and provenance is attached automatically. Requires a trusted publisher
+# (OIDC) — no NPM_TOKEN secret; provenance comes from the explicit --provenance flag below (npm did NOT
+# auto-attach it under OIDC), which needs the id-token: write permission. Requires a trusted publisher
 # configured on npmjs (org/user kid7st, repo fastagent, workflow publish.yml) and npm >= 11.5.1 (Node 26
 # ships 11.12.1). The release tag is the manual gate; the job re-verifies (typecheck + test) before
 # publishing so a non-green tag never ships. Version comes from core/package.json — bump it before
