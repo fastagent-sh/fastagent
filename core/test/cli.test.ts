@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,5 +100,15 @@ describe("cli papercuts", () => {
     const info = JSON.parse(stdout);
     expect(info.skills).toEqual([]); // the malformed skill is skipped, not loaded
     expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // and surfaced as a diagnostic
+  });
+
+  it("info refuses a channels/ symlink that escapes the workspace (matches loadChannels #66)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-info-"));
+    const outside = await mkdtemp(join(tmpdir(), "fa-outside-"));
+    await writeFile(join(outside, "github.ts"), "export default () => ({});\n");
+    await symlink(outside, join(dir, "channels")); // channels/ -> outside the workspace
+    const { code, stderr } = await run(["info", dir, "--model", "x/y"]);
+    expect(code).not.toBe(0); // dev/start would refuse it (#66); info must not report it as a clean surface
+    expect(stderr).toMatch(/outside the workspace/);
   });
 });

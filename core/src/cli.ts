@@ -30,7 +30,8 @@ import { listModels, loadConfig, resolveModelSpec, resolveSessionsDirOverride } 
 import { FASTAGENT_AUTH_PATH } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
-import { loadAgentDefinition, loadRootIgnore } from "./engines/pi/definition.ts";
+import { assertInsideWorkspace, loadAgentDefinition, loadRootIgnore } from "./engines/pi/definition.ts";
+import { runInvokeStream } from "./invoke-stream.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import {
@@ -203,22 +204,24 @@ async function runInvoke(): Promise<void> {
   installUndiciFetch();
   const { agent, modelSpec } = await createPiAgentFromWorkspace(invokeDir, { model: values.model }).catch(failStartup);
   console.error(`[fastagent] invoke: ${invokeDir} (${modelSpec})`);
-  // A fresh session per invoke (one-shot — no resume); the reply streams to stdout as it arrives.
-  let failed = false;
-  for await (const event of agent.invoke({ session: randomUUID() }, { text: message })) {
-    if (event.type === "text") process.stdout.write(event.delta);
-    else if (event.type === "tool_started") console.error(`\n[tool] ${event.name}`);
-    else if (event.type === "failed") {
-      failed = true;
-      console.error(`\n[fastagent] failed: ${event.details}${event.retryable ? " (retryable)" : ""}`);
-    }
-  }
-  process.stdout.write("\n");
-  if (failed) process.exit(1); // a failed turn is a non-zero exit so CI can gate on it
+  // A fresh session per invoke (one-shot — no resume). The event→IO mapping is a pure, tested function
+  // (runInvokeStream): reply text→stdout, tool start/error + the failure reason→stderr, exit code 1 iff
+  // the turn failed so CI can gate on it.
+  const exitCode = await runInvokeStream(
+    agent.invoke({ session: randomUUID() }, { text: message }),
+    (text) => process.stdout.write(text),
+    (line) => console.error(line),
+  );
+  process.stdout.write("\n"); // end the streamed reply line
+  if (exitCode !== 0) process.exit(exitCode);
 }
 
 /** List channel file basenames in <dir>/channels/ — the authoring view (no import, unlike loadChannels). */
 async function discoverChannelFiles(workspaceDir: string): Promise<string[]> {
+  // The same containment guard loadChannels uses (#66): reject a channels/ symlink that escapes the
+  // workspace, so info reports the SAME surface dev/start would accept — never a channels/ they'd
+  // refuse. Pure realpath, no channel import, so info keeps its no-import-channels choice.
+  await assertInsideWorkspace(workspaceDir, "channels");
   let names: string[];
   try {
     names = await readdir(join(workspaceDir, "channels"));
