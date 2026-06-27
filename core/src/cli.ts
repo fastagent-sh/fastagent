@@ -32,6 +32,7 @@ import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 import { assertInsideWorkspace, loadAgentDefinition, loadRootIgnore } from "./engines/pi/definition.ts";
 import { runInvokeStream } from "./invoke-stream.ts";
+import { reportDefinitionWarnings, reportToolCollisions } from "./engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import {
@@ -79,7 +80,7 @@ function usage(code: number): never {
          counterpart of tool, for CI smoke and quick checks. Same model resolution as dev.
   start  run the agent in dir (default .) in production posture — the SAME assembly as dev
          (your folder is the agent), just no file-watching. No build step: start reads the
-         definition directly; model/http come from fastagent.config.ts (frozen by git, not a manifest).
+         definition directly; model/http come from fastagent.config.ts (frozen by git).
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          port precedence:  --port > PORT env > fastagent.config.ts http.port > 8787
          sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions
@@ -652,24 +653,4 @@ function failStartup(error: unknown): never {
   if (error instanceof Error && error.constructor === Error) console.error(error.message);
   else console.error(error);
   process.exit(1);
-}
-
-function reportDefinitionWarnings(
-  collisions: { name: string; winnerPath: string; loserPath: string }[],
-  diagnostics: { code: string; message: string; path: string }[],
-): void {
-  for (const c of collisions) {
-    console.error(`[fastagent] warn: skill "${c.name}" collision — using ${c.winnerPath}, ignoring ${c.loserPath}`);
-  }
-  for (const d of diagnostics) {
-    console.error(`[fastagent] warn: ${d.code}: ${d.message} (${d.path})`);
-  }
-}
-
-function reportToolCollisions(collisions: { name: string; source: string }[]): void {
-  for (const c of collisions) {
-    console.error(
-      `[fastagent] warn: tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`,
-    );
-  }
 }

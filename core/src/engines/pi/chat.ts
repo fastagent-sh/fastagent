@@ -48,7 +48,8 @@ import { loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
 import { createPiModels } from "./models.ts";
 import { loadAgentDefinition } from "./definition.ts";
-import { loadTools, mergeDiscoveredTools, type ToolCollision } from "./tool.ts";
+import { loadTools, mergeDiscoveredTools } from "./tool.ts";
+import { reportDefinitionWarnings, reportToolCollisions } from "./report.ts";
 
 export interface RunPiChatOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -188,26 +189,6 @@ export async function buildChatRuntime(
   });
   enforceWorkspaceScopedSessionSwitches(runtime, rootCwd);
   return runtime;
-}
-
-function reportDefinitionWarnings(
-  collisions: { name: string; winnerPath: string; loserPath: string }[],
-  diagnostics: { code: string; message: string; path: string }[],
-): void {
-  for (const c of collisions) {
-    console.error(`[fastagent] warn: skill "${c.name}" collision — using ${c.winnerPath}, ignoring ${c.loserPath}`);
-  }
-  for (const d of diagnostics) {
-    console.error(`[fastagent] warn: ${d.code}: ${d.message} (${d.path})`);
-  }
-}
-
-function reportToolCollisions(collisions: ToolCollision[]): void {
-  for (const c of collisions) {
-    console.error(
-      `[fastagent] warn: tool "${c.name}" (${c.source}) dropped — a default/config tool already uses that name`,
-    );
-  }
 }
 
 function workspaceScopeError(targetCwd: string): Error {
