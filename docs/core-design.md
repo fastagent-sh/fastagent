@@ -31,7 +31,7 @@ FastAgent consumes existing definition artifacts:
 workspace/
 ├── AGENTS.md
 ├── skills/
-├── fastagent.config.ts
+├── fastagent.config.mjs
 └── .fastagent/          # generated machine state, ignored by git
 ```
 
@@ -103,7 +103,7 @@ L0 lives in `invoke.ts` because its body is the request-time turn mechanism; L1�
 
 ## 5. Config v1
 
-`fastagent.config.ts` currently has three keys:
+`fastagent.config.mjs` currently has three keys:
 
 ```ts
 export default defineConfig({
@@ -181,7 +181,7 @@ An agent splits into two halves along the N×M×K seam:
 
 | Half | Contents | In the definition directory? |
 |---|---|---|
-| **M — what the agent is** | the definition tree: `AGENTS.md` + `skills/` + authored context files (reference docs, schemas, data the agent reads on demand) + code tools + `fastagent.config.ts` | **yes — it IS the directory** |
+| **M — what the agent is** | the definition tree: `AGENTS.md` + `skills/` + authored context files (reference docs, schemas, data the agent reads on demand) + code tools + `fastagent.config.mjs` | **yes — it IS the directory** |
 | **K — where/how it runs** | conversational context (sessions), execution env (fs/shell/sandbox), auth/secrets | **no** — host-provided at runtime; secrets stay outside the directory |
 
 Two distinct things are called "context"; they live on opposite sides:
@@ -222,12 +222,12 @@ One opener (§4), two postures — both reuse **L2** (`createPiAgentFromDefiniti
 | Aspect | dev | start |
 |---|---|---|
 | watch | restart the worker on edits | none (stable process) |
-| model/http | `fastagent.config.ts` (flag > env > config) | same — read directly, frozen by git, **no manifest** |
+| model/http | `fastagent.config.mjs` (flag > env > config) | same — read directly, frozen by git, **no manifest** |
 | skills | definition-only | definition-only (same) |
 | sessions | `<dir>/.fastagent/sessions` | same default; `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` override to a volume |
 | posture | authoring (verbose) | production (stable, no watch) |
 
-`start` depends on zero builder-machine state: it reads the directory + `fastagent.config.ts`, resolves model/sessions, calls L2 — no manifest, no frozen copy.
+`start` depends on zero builder-machine state: it reads the directory + `fastagent.config.mjs`, resolves model/sessions, calls L2 — no manifest, no frozen copy.
 
 **Sessions** default under the definition's own `.fastagent/sessions` (restart-surviving local continuity, faithful to local pi). A container may replace the definition directory wholesale on redeploy, so point `FASTAGENT_SESSIONS_DIR` at a mounted volume to keep conversations — `start` reminds the operator when running on the default. Precedence `--sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions`.
 

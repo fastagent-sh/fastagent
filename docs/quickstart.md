@@ -103,7 +103,7 @@ fastagent tool reverse '{"text":"hello"}'
 fastagent start                  # run the SAME directory in production posture (no watch, no build)
 ```
 
-There is **no build step** — the directory IS the agent. `start` runs it exactly as `dev` did, minus file-watching: model and http come from `fastagent.config.ts` (frozen by git, not a manifest), and sessions persist under `.fastagent/sessions` (override with `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` to point at a deploy volume so a redeploy never wipes conversations). To deploy: copy the directory anywhere with Node ≥ 22.19, run `npm ci`, then `fastagent start`.
+There is **no build step** — the directory IS the agent. `start` runs it exactly as `dev` did, minus file-watching: model and http come from `fastagent.config.mjs` (frozen by git, not a manifest), and sessions persist under `.fastagent/sessions` (override with `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` to point at a deploy volume so a redeploy never wipes conversations). To deploy: copy the directory anywhere with Node ≥ 22.19, run `npm ci`, then `fastagent start`.
 
 ## Where next
 
