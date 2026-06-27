@@ -1,19 +1,12 @@
 /**
  * HTTP/SSE channel: fan one invoke stream out to Server-Sent Events.
  *
- * The handler is **Fetch-shaped** (`(Request) => Promise<Response>`) on purpose: that is the
- * cross-runtime form every embedding host speaks (Next/Astro/Hono/Bun/Deno/Cloudflare), so the
- * same handler mounts inside an existing app's own route. It is path-agnostic — the host owns the
- * route; this handler only turns a POST body `{session,text}` into an SSE stream. Cancellation,
- * backpressure, and the body cap are all native to the web stream primitives:
- *   - consumer cancels the response body (client disconnect) → ReadableStream.cancel() →
- *     iterator.return() → invoke cancellation (SPEC MUST 3);
- *   - pull-based ReadableStream applies backpressure (next event is pulled when wanted);
- *   - concurrent same-session requests → the agent's fail-fast lease (invoke.ts) makes the second
- *     receive `failed{session busy}`.
+ * The handler is Fetch-shaped (`(Request) => Promise<Response>`) — the cross-runtime form every
+ * embedding host speaks, so it mounts inside an existing app's own route. It is path-agnostic. The
+ * web stream primitives give cancellation (consumer disconnect → cancel() → iterator.return() →
+ * invoke cancellation), backpressure (pull-based), and the body cap natively.
  *
- * `nodeListener` is the thin node:http adapter (used by the standalone `fastagent dev/start`
- * server). The SSE logic lives once in the Fetch handler; node:http is just transport.
+ * `nodeListener` is the thin node:http adapter for the standalone `fastagent dev/start` server.
  */
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -21,7 +14,7 @@ import type { Agent } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
 import { text, textHeaders } from "./respond.ts";
 
-/** Request body cap — prompts are text (+ base64 images later); 1 MiB is generous for v1. */
+/** Request body cap (1 MiB). */
 const MAX_BODY_BYTES = 1 << 20;
 
 const encoder = new TextEncoder();
@@ -48,9 +41,8 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
       return text('need { "session": string, "text": string }\n', 400);
     }
 
-    // Take the iterator explicitly so the stream's cancel() (consumer disconnect) can return() it
-    // and run invoke's cancellation cleanup (SPEC MUST 3). pull = backpressure: the next event is
-    // produced only when the consumer wants it.
+    // Take the iterator explicitly so the stream's cancel() (consumer disconnect) can return() it and
+    // run invoke's cancellation cleanup. pull = backpressure: the next event is produced on demand.
     const iterator = agent.invoke({ session }, { text: promptText })[Symbol.asyncIterator]();
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {
@@ -117,8 +109,8 @@ async function pump(
     } as RequestInit & { duplex: "half" });
     response = await handler(request);
   } catch (error) {
-    // A handler exception is operator-relevant: log it server-side (some channels' only failure sink),
-    // and return a GENERIC body — don't leak the internal message to the client.
+    // Log server-side (some channels' only failure sink), but return a generic body — don't leak the
+    // internal message to the client.
     console.error(`[host] request handler failed: ${String(error)}`);
     if (!res.headersSent) res.writeHead(500, textHeaders);
     res.end("internal error\n");
@@ -141,10 +133,9 @@ async function pump(
     for (;;) {
       const { done, value } = await reader.read();
       if (done || res.destroyed) break;
-      // Backpressure: wait for drain, but ALSO resolve on close. If the client disconnects after
-      // write() returned false, Node never emits 'drain' on the closed socket, so waiting on 'drain'
-      // alone would suspend pump() forever (leaking the request/stream) even though the close handler
-      // cancelled the reader.
+      // Backpressure: wait for drain, but ALSO resolve on close. A client disconnect after write()
+      // returned false never emits 'drain' on the closed socket, so waiting on 'drain' alone would
+      // suspend pump() forever (leaking the request/stream).
       if (!res.write(value)) {
         await new Promise<void>((resolve) => {
           const done = () => {

@@ -1,29 +1,10 @@
 /**
- * The config subsystem: schema (defineConfig), loading (loadConfig), and
- * interpretation of config values (resolveModelSpec for source precedence,
- * resolveModel for the `model` string). One concern: everything about
- * fastagent.config.ts, nothing else.
+ * The config subsystem: schema (defineConfig), loading (loadConfig), and value interpretation
+ * (resolveModel, resolveModelSpec). One concern: everything about fastagent.config.ts.
  *
- * fastagent.config.ts — layer 2 of the three-layer workspace (production source):
- * deployment/assembly choices. Checked into git; secrets go in .env.
- *
- * v1 keys (each passes the "explainable in one sentence + has a near-term story" bar):
- *   - model:    which LLM ("provider/modelId" string — serializable; a repo default overridden by env/CLI);
- *   - tools:    extra custom tools, appended after pi's default tools;
- *   - http:     serving options for the built-in HTTP channel (bind port).
- *
- * The deployment's inbound surface (webhook channels) is NOT a config key: a channel always needs
- * app glue (its `on()` handler), so it is authored as a file under `channels/` (discovered like
- * `tools/`), never listed inline. Absent any channel = the default invoke channel at POST /invoke.
- *
- * Deliberately NOT in v1 (kept as library-API escape hatches):
- *   - sessions/env backend selection — K axis; the hosting knife shapes it from real backends;
- *   - base/auth overrides — the defaults are almost always right; putting them
- *     in config invites misuse.
- *
- * Red line: config describes "choices for this deployment", never the agent's identity
- * or behavior (that lives in AGENTS.md + skills). Deleting the config must still leave
- * a runnable zero-config agent (model via --model / FASTAGENT_MODEL).
+ * Red line: config describes "choices for this deployment" (model / extra tools / http port), never
+ * the agent's identity or behavior (that lives in AGENTS.md + skills). Deleting the config must
+ * still leave a runnable zero-config agent (model via --model / FASTAGENT_MODEL).
  */
 import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -34,11 +15,10 @@ import type { AnyModel } from "./harness.ts";
 import { moduleLoadHint } from "./loader.ts";
 
 export interface FastagentConfig {
-  /** "provider/modelId", e.g. "openai-codex/gpt-5.5". Precedence: CLI --model > FASTAGENT_MODEL > config. */
+  /** "provider/modelId". Precedence: CLI --model > FASTAGENT_MODEL > config. */
   model?: string;
-  /** Extra custom tools, appended after pi defaults — never replaces them (materialized by resolveTools in create.ts). */
+  /** Extra custom tools, appended after pi defaults — never replaces them. */
   tools?: AgentTool[];
-  /** Built-in HTTP channel options. */
   http?: { port?: number };
 }
 
@@ -53,10 +33,12 @@ export interface LoadedConfig {
   path?: string;
 }
 
-/**
- * Load `<dir>/fastagent.config.ts|.js|.mjs`. No file = zero-config ({});
- * a file with the wrong shape throws (fail visibly).
- */
+/** A valid bindable port. */
+export function isValidPort(n: number): boolean {
+  return Number.isInteger(n) && n >= 0 && n <= 65535;
+}
+
+/** Load `<dir>/fastagent.config.ts|.js|.mjs`. No file = zero-config; a wrong-shape file throws. */
 export async function loadConfig(dir: string): Promise<LoadedConfig> {
   const names = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"];
   const found = names.map((name) => join(dir, name)).filter((path) => existsSync(path));
@@ -67,16 +49,12 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     );
   }
 
-  // Exactly one config file at this point (0 and >1 handled above).
   // biome-ignore lint/style/noNonNullAssertion: length checked above — exactly one element here
   const path = found[0]!;
   let mod: { default?: unknown };
   try {
     mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
   } catch (error) {
-    // A syntax/load error in the config would otherwise surface as a raw SyntaxError with a Node ESM
-    // internal stack; name the file and append the same load hint as loadTools/loadChannels (config
-    // fails for the same reasons: non-ESM package.json, an uninstalled dep imported by the config).
     throw new Error(`${path}: ${(error as Error).message}${moduleLoadHint(error as NodeJS.ErrnoException)}`);
   }
   const config = mod.default;
@@ -84,8 +62,8 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: must default-export defineConfig({...})`);
   }
   const c = config as FastagentConfig;
-  // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a
-  // .js/.mjs config (`modle:`) must not silently degrade to zero-config.
+  // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a .js/.mjs config
+  // (`modle:`) must not silently degrade to zero-config.
   for (const key of Object.keys(c)) {
     if (key !== "model" && key !== "tools" && key !== "http") {
       throw new Error(`${path}: unknown key "${key}" (valid keys: model, tools, http)`);
@@ -111,27 +89,18 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   if (c.http !== undefined && (typeof c.http !== "object" || c.http === null)) {
     throw new Error(`${path}: "http" must be an object`);
   }
-  // Same typo discipline one level down: { http: { porrt } } must not silently
-  // fall back to the default port.
   for (const key of Object.keys(c.http ?? {})) {
     if (key !== "port") {
       throw new Error(`${path}: unknown key "http.${key}" (valid keys: port)`);
     }
   }
-  if (
-    c.http?.port !== undefined &&
-    (typeof c.http.port !== "number" || !Number.isInteger(c.http.port) || c.http.port < 0 || c.http.port > 65535)
-  ) {
+  if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {
     throw new Error(`${path}: "http.port" must be an integer 0-65535`);
   }
   return { config: c, path };
 }
 
-/**
- * Resolve "provider/modelId" → a pi Model from the given collection. Unknown
- * specs throw a clear error. The model is looked up in `models` so the harness
- * resolves its auth from the same collection.
- */
+/** Resolve "provider/modelId" → a pi Model from `models`, so the harness resolves auth from the same collection. */
 export function resolveModel(models: Models, spec: string): AnyModel {
   const slash = spec.indexOf("/");
   if (slash < 1 || slash === spec.length - 1) {
@@ -148,11 +117,7 @@ export function resolveModel(models: Models, spec: string): AnyModel {
   return model;
 }
 
-/**
- * All registered "provider/modelId" specs in `models`, sorted — the discovery
- * list behind `fastagent models`. Sourced from the same collection {@link resolveModel}
- * accepts, so they stay in sync. Pure (no IO); the CLI prints it to stdout.
- */
+/** All registered "provider/modelId" specs in `models`, sorted — the list behind `fastagent models`. */
 export function listModels(models: Models): string[] {
   const specs: string[] = [];
   for (const provider of models.getProviders()) {
@@ -161,7 +126,7 @@ export function listModels(models: Models): string[] {
   return specs.sort();
 }
 
-/** Model selection precedence: CLI flag > FASTAGENT_MODEL env var > config default. All absent = undefined (caller errors). */
+/** Model selection precedence: CLI flag > FASTAGENT_MODEL env > config default. */
 export function resolveModelSpec(
   flag: string | undefined,
   config: FastagentConfig,
@@ -172,8 +137,8 @@ export function resolveModelSpec(
 
 /**
  * `start`'s sessions-dir override: `--sessions-dir` flag > `FASTAGENT_SESSIONS_DIR` env > undefined
- * (undefined = let the opener fall back to the in-tree `<dir>/.fastagent/sessions` default). A given
- * value is resolved to an absolute path so the store and the startup report agree regardless of cwd.
+ * (the opener then falls back to `<dir>/.fastagent/sessions`). Resolved to absolute so the store and
+ * the startup report agree regardless of cwd.
  */
 export function resolveSessionsDirOverride(
   flag: string | undefined,

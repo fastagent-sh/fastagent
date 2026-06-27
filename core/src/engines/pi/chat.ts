@@ -1,34 +1,19 @@
 /**
- * Chat: open a workspace into pi's interactive TUI (`fastagent chat`).
+ * Chat: open a workspace into pi's interactive TUI (`fastagent chat`). A pi-specific COMMAND, not an
+ * engine-neutral channel: it drives pi's full session API (InteractiveMode) for fidelity, so it lives
+ * under engines/pi/ and is not re-exported.
  *
- * `chat` is a pi-specific COMMAND, beside dev.ts/start.ts — NOT an engine-neutral channel. The HTTP
- * channel (channels/http.ts) consumes only the Agent contract (agent.ts), so it works with any
- * engine; `chat` instead drives pi's full session API (`InteractiveMode` — editor, streaming
- * render, tool-call display, slash commands, model cycling, session tree/fork, compaction) and
- * never touches the contract. It HAS to be engine-coupled: the contract is a minimal turn-based
- * `invoke`, while a real TUI needs the engine's whole session lifecycle — forcing it through the
- * contract would collapse it to the crude REPL this command exists to avoid. chat trades
- * neutrality for fidelity, so it lives under engines/pi/ (and is not re-exported from index.ts).
+ * FIDELITY: chat must run the SAME agent dev/start serve, not pi's vanilla discovery (which would walk
+ * AGENTS.md up to the repo root and discover skills from pi's own global dirs). So fastagent's
+ * assembly is INJECTED into pi's session:
+ *   - prompt  → systemPromptOverride = base + instructions ONLY; pi appends the skill section and env
+ *               (date/cwd) itself (including them here would duplicate both).
+ *   - skills  → skillsOverride (fastagent's skills, for the section + invocation).
+ *   - tools   → default coding tools by NAME (pi rebuilds them cwd-bound for rich rendering) +
+ *               fastagent's custom tools via pi's customTools path (so they survive /new, /resume, fork).
  *
- * FIDELITY CONTRACT — chat must run the SAME agent dev/start serve, not pi's vanilla discovery.
- * pi's DefaultResourceLoader would walk AGENTS.md up to the repo root and discover skills under its
- * own `.pi/skills`/`.agents/skills` convention — neither matches fastagent's "the agent is its
- * folder" (dir-only AGENTS.md + `skills/` + `tools/`). So we INJECT fastagent's assembly into pi's
- * session:
- *   - model      → fromServices({ model })            (fastagent's flag>env>config resolution)
- *   - prompt     → resourceLoaderOptions.systemPromptOverride = fastagent's base + instructions
- *                  ONLY; pi appends the skill section and env (date/cwd) itself, so including them
- *                  here would duplicate both. The result equals what dev/start serve (pi's skill/env
- *                  renderers are the ones assembleSystemPrompt mirrors).
- *   - skills     → resourceLoaderOptions.skillsOverride  (fastagent's skills, for the section + invocation)
- *   - tools      → default coding tools by NAME (pi rebuilds them cwd-bound, keeping its rich TUI
- *                  rendering) + fastagent's custom tools registered via pi's customTools path, so
- *                  they survive the TUI rebuilding the session on /new, /resume, and fork
- *
- * Auth/login, model HTTP, and same-workspace sessions ride pi's native machinery on purpose (the
- * login dialog, OAuth, and /resume are part of the "real harness" experience this command exists to
- * show). Cross-workspace session switches are rejected: `.env` is process-global, so one chat TUI is
- * one workspace; run `fastagent chat <other-dir>` for another workspace.
+ * Cross-workspace session switches are rejected: `.env` is process-global, so one chat TUI is one
+ * workspace.
  */
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -81,16 +66,14 @@ export async function buildChatRuntime(
     const definition = await loadAgentDefinition(cwd, { env });
     reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
-    // Same tool resolution as the dev opener (defaults + config.tools + discovered tools/, deduped),
-    // then split: defaults go to pi by NAME (so pi rebuilds them cwd-bound, keeping rich TUI
-    // rendering); customs go through pi's `customTools` path so they survive /new, /resume, fork.
+    // Same tool resolution as the dev opener, then split: defaults go to pi by NAME (rebuilt cwd-bound
+    // for rich rendering); customs go through pi's `customTools` path so they survive /new, /resume, fork.
     const discovered = await loadTools(cwd);
     const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
     reportToolCollisions([...discovered.collisions, ...crossCollisions]);
     const defaultNames = piDefaultTools(cwd).map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));
-    // Adapt fastagent's AgentTool to pi's ToolDefinition. (`parameters` is plain JSON-Schema; pi
-    // accepts it. The extra execute args onUpdate/ctx are unused by fastagent tools.)
+    // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts it).
     const customToolDefs = customTools.map((t) => ({
       name: t.name,
       label: t.name,
@@ -99,9 +82,8 @@ export async function buildChatRuntime(
       execute: (id: string, params: unknown, signal: AbortSignal | undefined) => t.execute(id, params, signal),
     })) as unknown as ToolDefinition[];
 
-    // base + instructions ONLY. pi appends the skill section (from skillsOverride) and the env
-    // (date/cwd) itself; including them here would duplicate both — chat must match what dev/start
-    // serve, and pi's renderers are the ones fastagent's assembleSystemPrompt mirrors.
+    // base + instructions ONLY — pi appends the skill section and env (date/cwd) itself (including
+    // them here would duplicate both).
     const systemPrompt = assembleSystemPrompt({
       base: piBasePrompt({ tools }),
       instructions: definition.instructions,
@@ -111,20 +93,16 @@ export async function buildChatRuntime(
     return { model, definition, defaultNames, customTools, customToolDefs, systemPrompt };
   }
 
-  // pi calls the factory again on /new, /resume, switch, and fork. Dynamic imports for config/tools
-  // are cached by Node, so trying to treat same-cwd rebuilds as hot reload would silently produce a
-  // half-fresh agent (new AGENTS.md/skills from fs, stale config/tools from ESM cache). Keep chat a
-  // coherent startup snapshot instead: restart `fastagent chat` to load edits.
-  //
-  // Also keep chat workspace-scoped. `.env` is process-global and is loaded by the CLI for the
-  // startup workspace; switching the same TUI process to another cwd would either inherit those env
-  // values or require mutating global env at runtime (secrets/leakage footgun). Fail visibly and ask
-  // the user to run a separate `fastagent chat <dir>` for that workspace.
+  // pi calls the factory again on /new, /resume, switch, and fork. Config/tools dynamic imports are
+  // ESM-cached, so treating same-cwd rebuilds as hot reload would yield a half-fresh agent (fresh
+  // AGENTS.md/skills, stale config/tools). Keep chat a coherent startup snapshot: restart to load
+  // edits. And keep it workspace-scoped — `.env` is process-global, so a switch to another cwd would
+  // leak env or require mutating global env at runtime.
   const rootCwd = canonicalCwd(dir);
   let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {
-    // Compare canonical paths: process.cwd() (pi's fallback) returns the realpath, so a workspace
-    // reached through a symlink would otherwise mismatch a non-realpath rootCwd.
+    // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would
+    // otherwise mismatch a non-realpath rootCwd.
     const activeCwd = canonicalCwd(cwd);
     if (activeCwd !== rootCwd) {
       throw workspaceScopeError(activeCwd);
@@ -139,19 +117,16 @@ export async function buildChatRuntime(
     const services = await createAgentSessionServices({
       cwd,
       resourceLoaderOptions: {
-        // Definition-only, like dev/start: suppress pi's machine-global discovery (the developer's
-        // own ~/.pi extensions, slash commands, global AGENTS.md, and APPEND_SYSTEM.md append
-        // prompts) so chat runs the SAME agent that gets served, not the authoring machine's pi
-        // setup layered on top. (noContextFiles covers AGENTS.md context only; the append prompt is
-        // discovered separately and needs its own override.)
+        // Definition-only, like dev/start: suppress pi's machine-global discovery (the developer's own
+        // ~/.pi extensions, slash commands, global AGENTS.md, APPEND_SYSTEM.md) so chat runs the same
+        // agent that gets served, not the authoring machine's pi setup on top.
         noExtensions: true,
         noPromptTemplates: true,
         noContextFiles: true,
         systemPromptOverride: () => systemPrompt,
         appendSystemPromptOverride: () => [],
-        // Replace pi's discovered skills with fastagent's resolved skills (so the agent's skills are
-        // invocable and match the prompt's listing). fastagent's Skill (pi-agent-core: content
-        // inline) is reshaped to pi-coding-agent's (read from filePath/baseDir at invocation time).
+        // Replace pi's discovered skills with fastagent's. fastagent's Skill (content inline) is
+        // reshaped to pi-coding-agent's (read from filePath/baseDir at invocation time).
         skillsOverride: (base) => ({
           skills: definition.skills.map((s) => ({
             name: s.name,
@@ -223,15 +198,10 @@ function readSessionHeaderCwd(sessionPath: string): string | undefined {
 }
 
 /**
- * Keep resume/import inside the chat's single workspace, deciding BEFORE delegating to pi.
- *
- * The chat process is chdir'd into rootCwd at startup (see runChat), so pi's `?? process.cwd()`
- * fallback for a session with no cwd header already resolves to rootCwd on EVERY replacement path
- * (resume, import, fork, new). The one remaining gap is a session that EXPLICITLY records a
- * different workspace cwd: pi would bind that foreign cwd and the runtime factory would reject it —
- * but only AFTER tearing the live session down, leaving the TUI on an invalidated session. Reject
- * such a switch up front. (fork/new carry no foreign target: fork reopens the current, already
- * vetted session; new reuses the current cwd.)
+ * Keep resume/import inside the chat's single workspace, deciding BEFORE delegating to pi. The chat
+ * process is chdir'd into rootCwd, so a session with no cwd header already lands on rootCwd. The gap
+ * is a session that EXPLICITLY records a different cwd: pi would bind it and the factory would reject
+ * it — but only AFTER tearing the live session down. Reject such a switch up front.
  */
 function enforceWorkspaceScopedSessionSwitches(runtime: AgentSessionRuntime, rootCwd: string): void {
   const rejectForeignTarget = (sessionPath: string, cwdOverride: string | undefined): void => {

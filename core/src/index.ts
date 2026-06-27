@@ -1,24 +1,20 @@
-// Naming on this surface: `create…From<input>` = the assembly ladder (create.ts); `resolve*` =
-// multi-source precedence; `load*` = disk → memory (→ `Loaded*`); pi-coupled names carry `pi`/`Pi`;
-// `Config` = user-authored file shape, `Options` = function inputs.
+// Naming: `create…From<input>` = the assembly ladder; `resolve*` = multi-source precedence;
+// `load*` = disk → memory (→ `Loaded*`); pi-coupled names carry `pi`/`Pi`; `Config` = user file
+// shape, `Options` = function inputs.
 
 // Protocol contract (neutral, engine-free)
 export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.ts";
 export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 
-// Channels (N-side; consume only the Agent contract)
-// createInvokeHandler is Fetch-shaped ((Request) => Promise<Response>) so it mounts in any host
-// route; nodeListener bridges it onto node:http for the standalone server.
+// Channels (N-side; consume only the Agent contract). createInvokeHandler is Fetch-shaped so it
+// mounts in any host route; nodeListener bridges it onto node:http. The GitHub channel is a subpath
+// export: `@kid7st/fastagent/github`.
 export { createInvokeHandler, nodeListener } from "./channels/http.ts";
-// The GitHub channel is a platform-specific subpath export: `@kid7st/fastagent/github` (see
-// src/github.ts). It ACKs 202 and runs turns fire-and-forget on the long-running process.
 
-// Node host (K-side; a long-running-process target adapter). serveNode binds a route table on
-// node:http; router composes a Routes table. `fastagent start`/`dev` use these to serve the
-// workspace's discovered channels/.
+// Node host (K-side). serveNode binds a route table on node:http; router composes a Routes table.
 export { type ChannelHandler, type Routes, router, serveNode } from "./host/node.ts";
 
-// pi reference implementation — reusable assembly ladder (L1/L2; L0 below)
+// pi reference implementation — the reusable assembly ladder (L1/L2; L0 is internal to invoke.ts).
 export {
   createPiAgent,
   createPiAgentFromDefinition,
@@ -26,10 +22,10 @@ export {
   type CreatePiAgentFromDefinitionOptions,
 } from "./engines/pi/create.ts";
 
-// pi reference implementation — init (scaffold a minimal runnable workspace).
+// init: scaffold a runnable workspace.
 export { scaffoldWorkspace, type ScaffoldResult } from "./engines/pi/init.ts";
 
-// pi reference implementation — tool authoring: defineTool (+ re-exported z) and tools/ discovery.
+// Tool authoring: defineTool (+ re-exported z) and tools/ discovery.
 export {
   defineTool,
   loadTools,
@@ -39,18 +35,16 @@ export {
 } from "./engines/pi/tool.ts";
 export { z } from "zod";
 
-// pi reference implementation — channel discovery: a channels/<name>.ts default-exports a
-// ChannelModule ((agent) => Routes); loadChannels merges them, surfacing route collisions.
+// Channel discovery: a channels/<name>.ts default-exports a ChannelModule ((agent) => Routes).
 export { loadChannels, type ChannelModule, type ChannelCollision } from "./engines/pi/channel.ts";
 
-// pi reference implementation — the command opener: point at a definition directory → agent.
-// Composes over L2; `dev` and `start` both drive it (dev watches, start runs production posture).
+// The command opener `dev` and `start` both drive: point at a definition directory → agent.
 export {
   createPiAgentFromWorkspace,
   type CreatePiAgentFromWorkspaceOptions,
 } from "./engines/pi/dev.ts";
 
-// pi reference implementation — definition domain (load).
+// Definition domain (load).
 export {
   loadAgentDefinition,
   type LoadedDefinition,
@@ -58,13 +52,11 @@ export {
   type SkillCollision,
 } from "./engines/pi/definition.ts";
 
-// pi reference implementation — engine assets (prompt base + toolsets, in create.ts).
-// Internal assembly helpers (assembleSystemPrompt, resolveTools) are NOT public:
-// the ladder rungs own assembly; embedders compose via L1/L2/L3.
+// Engine assets (prompt base + toolset). Internal assembly helpers (assembleSystemPrompt,
+// resolveTools) are NOT public: the ladder rungs own assembly.
 export { piBasePrompt, piDefaultTools } from "./engines/pi/create.ts";
 
-// pi reference implementation — config subsystem.
-// loadConfig is internal (L3 owns config loading); resolveModel bridges a
+// Config subsystem. loadConfig is internal (L3 owns config loading); resolveModel bridges a
 // "provider/modelId" string to a model for L1/L2 embedders.
 export {
   defineConfig,
@@ -73,29 +65,24 @@ export {
   type FastagentConfig,
 } from "./engines/pi/config.ts";
 
-// pi reference implementation — injection ports referenced by the ladder options.
-// L0 (createPiAgentFromHarness) and the pi harness-factory wiring are deliberately
-// NOT exported: they expose pi's two-port shape and would pin the engine-coupled
-// surface as a public promise before engine #2 exists. Reach them via internal
-// modules for custom wiring/tests.
+// Injection ports referenced by the ladder options. L0 (createPiAgentFromHarness) and the pi
+// harness-factory wiring are deliberately NOT exported (they would pin pi's engine-coupled shape as
+// a public promise before engine #2 exists); reach them via internal modules for custom wiring/tests.
 export {
   type Lease,
   type Release,
   inProcessLease,
 } from "./engines/pi/invoke.ts";
 export type { AnyModel } from "./engines/pi/harness.ts";
-// ExecutionEnv is the K-axis env port referenced by the ladder's `env` option (L1/L2): export the
-// type so embedders can inject a sandbox env without reaching into pi-agent-core directly.
+// ExecutionEnv is the K-axis env port referenced by the ladder's `env` option.
 export type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 export {
   type PiSessionStore,
   inMemorySessionStore,
   jsonlSessionStore,
 } from "./engines/pi/sessions.ts";
-// pi reference implementation — auth + the Models collection (model resolution +
-// per-request auth). createPiModels builds the default collection (built-in
-// providers; ~/.fastagent/auth.json → env vars); fastagentCredentialStore is the
-// read-write store fastagent owns (refresh persists in place).
+// Auth + the Models collection. createPiModels builds the default collection (built-in providers;
+// ~/.fastagent/auth.json → env vars); fastagentCredentialStore is the read-write store fastagent owns.
 export { FASTAGENT_AUTH_PATH, type FastagentAuthOptions, fastagentCredentialStore } from "./engines/pi/auth.ts";
 export { type CreatePiModelsOptions, createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 export type { Models } from "@earendil-works/pi-ai";

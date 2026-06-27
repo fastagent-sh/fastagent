@@ -1,32 +1,15 @@
 /**
- * The turn mechanism — everything REQUEST-TIME lives in this module.
- * (Division of labor: create.ts decides WHAT parts an agent is assembled from,
- * configuration time; this module decides HOW a turn runs, request time.)
- *
- * pi reference implementation: fans pi AgentHarness's two ports (subscribe event
- * side-channel + prompt final value) into SPEC's single event stream. The module
- * is organized as the L0 entry plus the three mechanism parts it owns — they are
- * consumer-owned: each exists only because this orchestration needs it:
+ * The turn mechanism (request-time): fan pi AgentHarness's two ports (subscribe event side-channel
+ * + prompt final value) into SPEC's single event stream, under a single-writer-per-session lease.
  *
  *   §1 Lease       — single-writer concurrency floor (injectable port + in-process default)
  *   §2 translate   — the single pi↔SPEC translation point (both directions)
  *   §3 EventQueue  — push→pull plumbing for pi's two-port shape
- *   §4 createPiAgentFromHarness — the L0 rung: composes §1–§3 into Agent.invoke
+ *   §4 createPiAgentFromHarness — composes §1–§3 into Agent.invoke
  *
- * createPiAgentFromHarness returns an object that **implements the Agent contract**
- * (composition, not inheritance).
- *
- * Concurrency: at most one in-flight turn per session. Contention = fail-fast: the
- * second invoke immediately yields `failed{retryable}` ("session busy"), leaving
- * dedupe/queueing/steering UX decisions to the channel.
- * Each invoke spins up a fresh harness bound to the session, discarded after use
- * (stateless multi-session). Session construction and env/model/tools injection all
- * live in the caller-provided harness factory.
- *
- * KNOWN DEBT: the orchestration skeleton here (lease + queue + single-stream terminal
- * discipline) is engine-generic, but the module is pi-coupled via PiHarnessFactory's
- * two-port shape (subscribe + prompt). When engine #2 lands, lift the skeleton out of
- * engines/pi instead of copying it — do not generalize before then.
+ * Concurrency: at most one in-flight turn per session; a second invoke fails fast with
+ * `failed{retryable}` ("session busy"), leaving dedupe/queueing/steering to the channel. Each
+ * invoke builds a fresh harness bound to the session and discards it (stateless multi-session).
  */
 import type { AgentHarnessEvent } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
@@ -35,21 +18,10 @@ import type { PiHarnessFactory } from "./harness.ts";
 
 // ── §1 Lease: single-writer concurrency floor ───────────────────────────────
 //
-// **Contention policy = fail-fast, no queueing**: when already held, `tryAcquire`
-// returns null and the caller emits `failed{retryable:true}` ("session busy").
-// This is a corruption-prevention floor only — it does not pick a UX for any
-// scenario: dedupe / queueing / steering are channel/upper-layer decisions
-// (they know the trigger semantics).
-//
-// Why not queue: real same-session concurrency is mostly "duplicate intent"
-// (dedupe) or "single user firing follow-ups" (steering), not "two real turns";
-// FIFO serialization fits only the multi-participant case, and introduces an
-// unbounded queue plus a slot-leak deadlock when a queued waiter is cancelled.
-//
-// Synchronous, no awaits: nothing interleaves between acquire and entering try,
-// so cancellation at any point still releases in finally — no deadlock class.
-// Cross-process/multi-instance distributed locking (TTL + fencing) is a separate
-// future interface, not this one.
+// Corruption-prevention floor only: it does not pick a UX. Fail-fast over queueing because real
+// same-session concurrency is mostly duplicate intent or a user firing follow-ups, not two real
+// turns; a queue would also leak a slot when a waiter is cancelled. Synchronous (no awaits) so
+// nothing interleaves between acquire and entering try — cancellation always releases in finally.
 
 export type Release = () => void;
 
@@ -58,7 +30,6 @@ export interface Lease {
   tryAcquire(session: string): Release | null;
 }
 
-/** In-process single-writer: a per-session occupancy set. */
 export function inProcessLease(): Lease {
   const busy = new Set<string>();
   return {
@@ -67,7 +38,7 @@ export function inProcessLease(): Lease {
       busy.add(session);
       let released = false;
       return () => {
-        if (released) return; // idempotent
+        if (released) return;
         released = true;
         busy.delete(session);
       };
@@ -75,31 +46,12 @@ export function inProcessLease(): Lease {
   };
 }
 
-// ── §2 translate: the single pi↔SPEC translation point (both directions) ────
-//
-//   pi → SPEC:
-//   - toAgentEvent: in-stream events (text / tool_*); all other pi events return null (dropped).
-//   - toTerminal:   the AssistantMessage resolved by pi `prompt()` → completed / failed.
-//   - errorToTerminal: catch-all for genuine throws → failed.
-//   SPEC → pi:
-//   - toPiPromptOptions: SPEC Prompt images → pi prompt options.
+// ── §2 translate: the single pi↔SPEC translation point ───────────────────────
 
-/**
- * Classifies a failure's `details` as worth re-sending with the same session.
- * The SPEC `retryable` field is contract semantics; making the classifier an
- * injectable strategy keeps the contract from being hard-wired to one heuristic.
- */
-export type RetryClassifier = (details: string) => boolean;
-
-/**
- * Default: minimal string heuristic (pi's _isRetryableError is not exported —
- * KNOWN DEBT: replace with structured error classification if pi exports one).
- * Matching a transient-looking error pattern means "worth re-sending".
- */
+/** Whether a failure's `details` is worth re-sending with the same session (transient-looking). */
 const RETRYABLE =
   /\b(429|5\d\d|timeout|timed out|rate.?limit|overloaded|ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|socket hang up)\b/i;
-
-export const defaultRetryClassifier: RetryClassifier = (details) => RETRYABLE.test(details);
+const isRetryable = (details: string): boolean => RETRYABLE.test(details);
 
 /** In-stream event mapping. Non text/tool_* pi events (turn_start, message_start, …) are dropped. */
 function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
@@ -110,31 +62,20 @@ function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
       }
       return null;
     case "tool_execution_start":
-      return {
-        type: "tool_started",
-        id: pe.toolCallId,
-        name: pe.toolName,
-        args: pe.args as Json,
-      };
+      return { type: "tool_started", id: pe.toolCallId, name: pe.toolName, args: pe.args as Json };
     case "tool_execution_end":
-      return {
-        type: "tool_ended",
-        id: pe.toolCallId,
-        isError: pe.isError,
-        content: pe.result as Json,
-      };
+      return { type: "tool_ended", id: pe.toolCallId, isError: pe.isError, content: pe.result as Json };
     default:
       return null;
   }
 }
 
 /**
- * Terminal mapping. **Decided by the resolved message's stopReason** (core-design §8):
- * pi's prompt() does not necessarily throw on model error/abort — the normal path is
- * resolving a message with stopReason "error" | "aborted". Relying on catch alone would
- * miss this entire failure class (violating MUST 1).
+ * Terminal mapping, decided by the resolved message's stopReason: pi's prompt() resolves a message
+ * with stopReason "error"/"aborted" rather than throwing, so relying on catch alone would miss this
+ * entire failure class (violating "the stream must terminate").
  */
-function toTerminal(message: AssistantMessage, isRetryable: RetryClassifier): AgentEvent {
+function toTerminal(message: AssistantMessage): AgentEvent {
   if (message.stopReason === "error" || message.stopReason === "aborted") {
     const details = message.errorMessage ?? `model stopped: ${message.stopReason}`;
     return { type: "failed", details, retryable: isRetryable(details) };
@@ -142,29 +83,20 @@ function toTerminal(message: AssistantMessage, isRetryable: RetryClassifier): Ag
   return { type: "completed" };
 }
 
-/** Catch-all: genuinely thrown exceptions → failed. */
-function errorToTerminal(error: unknown, isRetryable: RetryClassifier): AgentEvent {
+function errorToTerminal(error: unknown): AgentEvent {
   const details = error instanceof Error ? error.message : String(error);
   return { type: "failed", details, retryable: isRetryable(details) };
 }
 
-/** SPEC Prompt → pi prompt options (the reverse direction: images attachment). */
 function toPiPromptOptions(prompt: Prompt): { images?: ImageContent[] } | undefined {
   if (!prompt.images || prompt.images.length === 0) return undefined;
-  return {
-    images: prompt.images.map((img) => ({
-      type: "image",
-      data: img.data,
-      mimeType: img.mimeType,
-    })),
-  };
+  return { images: prompt.images.map((img) => ({ type: "image", data: img.data, mimeType: img.mimeType })) };
 }
 
 // ── §3 EventQueue: push→pull plumbing for pi's two-port shape ────────────────
 //
-// Single-consumer async queue. It exists because of that shape: engines that are
-// natively async-iterable (e.g. the claude SDK) would not need it.
-// Single-threaded JS: no await interleaves between push and drain, so no locking.
+// Single-consumer async queue; single-threaded JS means no await interleaves between push and
+// drain, so no locking. Engines that are natively async-iterable would not need it.
 
 class EventQueue<T> {
   private buffer: T[] = [];
@@ -178,9 +110,8 @@ class EventQueue<T> {
   }
 
   /**
-   * Yield pushed events in order until `done` settles AND the buffer is drained.
-   * Does not yield the result of `done` — the terminal is produced separately by the
-   * caller (toTerminal). Rejections of `done` are swallowed here (the caller awaits
+   * Yield pushed events in order until `done` settles AND the buffer is drained. The terminal is
+   * produced separately (toTerminal); rejections of `done` are swallowed here (the caller awaits
    * `run` itself) to avoid unhandled rejections.
    */
   async *drainUntil(done: Promise<unknown>): AsyncGenerator<T> {
@@ -206,26 +137,19 @@ class EventQueue<T> {
   }
 }
 
-// ── §4 L0: createPiAgentFromHarness ─────────────────────────────────────────
-//
-// Lives here, not in create.ts: its body IS the turn mechanism (ladder rule 1).
+// ── §4 createPiAgentFromHarness ──────────────────────────────────────────────
 
 export interface CreatePiAgentFromHarnessOptions {
   harnessFactory: PiHarnessFactory;
   /** Single-writer lease. Defaults to the in-process per-session fail-fast lease. */
   lease?: Lease;
-  /** Strategy for the `failed.retryable` field. Defaults to defaultRetryClassifier (string heuristic). */
-  retryClassifier?: RetryClassifier;
 }
 
-/** L0 of the assembly ladder: "from a harness factory" — engine wired by the caller, adds only the concurrency/stream shell. */
+/** "From a harness factory": engine wired by the caller; adds only the concurrency/stream shell. */
 export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOptions): Agent {
-  const { harnessFactory, lease = inProcessLease(), retryClassifier = defaultRetryClassifier } = options;
+  const { harnessFactory, lease = inProcessLease() } = options;
 
   async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-    // Fail-fast single writer: if the session already has an in-flight turn, report
-    // busy immediately — no queueing. tryAcquire is synchronous, so no await sits
-    // between acquiring and entering try: cancellation anywhere still releases.
     const release = lease.tryAcquire(scope.session);
     if (!release) {
       yield {
@@ -240,9 +164,8 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       try {
         harness = await harnessFactory(scope.session);
       } catch (error) {
-        // Setup failures (session open / auth / …) MUST also surface as a failed
-        // event, never as a throw.
-        yield errorToTerminal(error, retryClassifier);
+        // Setup failures (session open / auth / …) MUST surface as a failed event, never a throw.
+        yield errorToTerminal(error);
         return;
       }
 
@@ -253,25 +176,17 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       });
       try {
         const run = harness.prompt(prompt.text, toPiPromptOptions(prompt));
-        // Yield text / tool_* as they happen, until run settles and the buffer drains.
         yield* queue.drainUntil(run);
-        // Terminal is decided by the resolved message's stopReason; catch only
-        // covers genuine throws.
         let terminal: AgentEvent;
         try {
-          terminal = toTerminal(await run, retryClassifier);
+          terminal = toTerminal(await run);
         } catch (error) {
-          terminal = errorToTerminal(error, retryClassifier);
+          terminal = errorToTerminal(error);
         }
         yield terminal;
       } finally {
-        // Both cancel (generator return → finally) and normal completion pass here.
-        // Cleanup MUST NOT throw: an abort()/unsub() exception after the terminal
-        // was yielded would make iteration throw, polluting an already-closed
-        // event stream (violating SPEC MUST 2 / MUST 3). So we contain the throw
-        // here — but a cleanup failure is abnormal (resource/abort regression), so
-        // surface it visibly instead of swallowing it (fail visibly). A pluggable
-        // sink can replace console.warn once the production logging seam exists.
+        // Cleanup MUST NOT throw after the terminal was yielded — that would make an already-closed
+        // event stream throw on iteration. Contain it, but surface it (a cleanup failure is abnormal).
         try {
           unsub();
         } catch (error) {
@@ -284,7 +199,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         }
       }
     } finally {
-      release(); // release after cleanup so the next invoke for this session can enter
+      release(); // after cleanup, so the next invoke for this session can enter
     }
   }
 

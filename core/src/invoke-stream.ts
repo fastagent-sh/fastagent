@@ -1,16 +1,10 @@
 /**
- * Render an Agent event stream to two output sinks plus an exit code — the `fastagent invoke` contract,
- * pulled out of cli.ts as a PURE function (IO injected, no process/stream access) so the contract is
- * unit-testable rather than resting on a live-model smoke run:
+ * Render an Agent event stream to two sinks plus an exit code — the `fastagent invoke` contract, a
+ * PURE function (IO injected) so it is unit-testable: text deltas → `out`; tool start + an ERRORED
+ * tool_ended → `err`; `failed` → `err` + a non-zero exit code (the CI-gating guarantee).
  *
- *   - `text` deltas → `out` (the reply, streamed; stdout at the CLI),
- *   - `tool_started` and a `tool_ended` that ERRORED → `err` (diagnostics; stderr at the CLI),
- *   - `failed` → `err` (the reason) and a non-zero exit code (the CI-gating guarantee).
- *
- * A `tool_ended` with `isError: true` inside an otherwise-`completed` turn must still surface — a
- * failed tool that does not fail the turn is exactly the diagnostic the operator needs. Its event
- * carries no name, so the name is remembered from the matching `tool_started`. The trailing newline
- * that ends the streamed reply is the caller's concern (only it knows the output device).
+ * An errored tool inside an otherwise-completed turn still surfaces (the diagnostic the operator
+ * needs); tool_ended carries no name, so it is remembered from the matching tool_started.
  */
 import type { AgentEvent } from "./agent.ts";
 

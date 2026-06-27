@@ -1,8 +1,7 @@
 /**
  * GitHub webhook channel: verify → route via `on(event)` → fire-and-forget agent turns, ACK 202.
  * The developer writes only `on`. Concurrency safety is the engine's per-session lease. A turn that
- * fails after the 202, or any in-flight turn on shutdown, is lost (server log only). The agent acts
- * back via `gh`, so the channel holds no outbound credentials beyond `secret` (inbound verification).
+ * fails after the 202, or an in-flight turn on shutdown, is lost (server log only).
  */
 import { verify } from "@octokit/webhooks-methods";
 import type { Schema } from "@octokit/webhooks-types";
@@ -22,10 +21,7 @@ export interface GithubEvent {
   action?: string;
   /** `X-GitHub-Delivery` — unique per delivery. */
   deliveryId: string;
-  /**
-   * The native payload, typed via `@octokit/webhooks-types` (the official source). It's the union of
-   * all events; narrow it for event-specific fields, e.g. `if ("pull_request" in event.payload)`.
-   */
+  /** The native payload (union of all events); narrow it, e.g. `if ("pull_request" in event.payload)`. */
   payload: Schema;
 }
 
@@ -47,7 +43,7 @@ export interface GithubChannelOptions {
  */
 export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions): (req: Request) => Promise<Response> {
   // A non-empty secret is mandatory: verify() against an empty key accepts a signature anyone can
-  // compute, so an unset secret must fail at construction (startup), never silently run forgeable.
+  // compute, so an unset secret must fail at construction, never silently run forgeable.
   if (!secret) {
     throw new Error(
       "githubChannel requires a non-empty secret (the GitHub webhook secret, e.g. GITHUB_WEBHOOK_SECRET)",
@@ -59,8 +55,7 @@ export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions
     const body = await readBodyCapped(req, MAX_WEBHOOK_BYTES);
     if ("tooLarge" in body) return text("payload too large\n", 413);
     const raw = body.text;
-    // Fail closed: @octokit/webhooks-methods verify throws on an empty/missing arg, so treat any verify
-    // error (e.g. an empty body) as a clean 401, not a 500. Signature is over the raw body.
+    // Fail closed: verify() throws on an empty/missing arg, so treat any verify error as a clean 401.
     const signature = req.headers.get("x-hub-signature-256");
     if (!signature || !(await verify(secret, raw, signature).catch(() => false))) {
       return text("invalid signature\n", 401);
@@ -89,17 +84,15 @@ export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions
       payload: payload as unknown as Schema, // trust boundary: the verified body is a GitHub event
     };
 
-    // Fire each turn, return 202; the long-running process runs them to completion. The turn lifecycle
-    // is logged to stderr — after the 202 there is no response body, so these lines are the operator's
-    // only signal that a turn ran (and the failure sink that keeps a post-ACK error from going
-    // unhandled). Concurrency safety = the engine's per-session lease.
+    // Fire each turn, return 202; the process runs them to completion. The lifecycle is logged to
+    // stderr — after the 202 there is no response body, so these lines are the operator's only signal
+    // (and the sink that keeps a post-ACK error from going unhandled).
     const intents = on(event);
     const label = event.action ? `${event.event}.${event.action}` : event.event;
     for (let i = 0; i < intents.length; i++) {
       const { session, text } = intents[i] as Intent;
-      // A per-turn correlation id: deliveryId is unique per webhook, the index disambiguates the
-      // multiple turns one delivery can fan out to (session, by contract, recurs across deliveries).
-      // It threads through start/done/failed so a terminal line joins back to its start.
+      // Per-turn correlation id (deliveryId is unique per webhook; the index disambiguates fan-out),
+      // threaded through start/done/failed so a terminal line joins back to its start.
       const turn = `${event.deliveryId}#${i}`;
       console.error(`[github] turn start: turn=${turn} session=${session} event=${label}`);
       const startedAt = Date.now();

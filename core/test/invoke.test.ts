@@ -311,27 +311,6 @@ describe("systemPrompt factory (re-evaluated per invoke)", () => {
   });
 });
 
-describe("retryClassifier injection (failed.retryable policy is replaceable)", () => {
-  it("injected policy overrides the default string heuristic", async () => {
-    const { faux, models } = makeFaux();
-    // "weird custom failure" does not match the default regex, so the default would be retryable:false
-    faux.setResponses([fauxAssistantMessage("x", { stopReason: "error", errorMessage: "weird custom failure" })]);
-    const agent = createPiAgentFromHarness({
-      retryClassifier: () => true,
-      harnessFactory: piHarnessFactory({
-        sessions: inMemorySessionStore(),
-        env: new NodeExecutionEnv({ cwd: process.cwd() }),
-        models,
-        model: faux.getModel(),
-        systemPrompt: "test",
-      }),
-    });
-
-    const events = await drain(agent.invoke({ session: "r" }, { text: "hi" }));
-    expect(events.at(-1)).toMatchObject({ type: "failed", retryable: true });
-  });
-});
-
 describe("inProcessLease (fail-fast single writer)", () => {
   it("occupied session makes the second tryAcquire return null (no queue)", () => {
     const lease = inProcessLease();

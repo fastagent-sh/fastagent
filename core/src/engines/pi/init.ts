@@ -1,31 +1,12 @@
 /**
- * Init: scaffold a runnable fastagent workspace.
+ * Init: scaffold a runnable fastagent workspace. Default = a COMPLETE agent (AGENTS.md, a house-style
+ * skill, tools/word-count.ts, fastagent.config.mjs, package.json, .gitignore); `--minimal` is the
+ * markdown-only unit (no package.json/tool/install). AGENTS.md is a clean persona because it IS the
+ * system prompt; tools/ is auto-discovered; .gitignore lists `.env`.
  *
- * Default = a COMPLETE agent (instructions + a skill + a code tool): AGENTS.md, a house-style
- * skill, tools/word-count.ts (defineTool), fastagent.config.mjs, package.json (ESM + the
- * @kid7st/fastagent + zod deps), .gitignore. A complete agent is
- * instructions + tools, so that is what `init` produces; the CLI then runs `npm install`.
- *
- * `--minimal` = the markdown-only unit (AGENTS.md + skill + config + .gitignore): zero npm
- * dependencies, no package.json, no install — for a pure prompt+skills agent.
- *
- * Scaffold conventions:
- *   - AGENTS.md is a CLEAN persona (no meta "edit me" text) because it IS the system prompt;
- *     "what to do next" is printed to the console by the CLI, not baked into a file.
- *   - tools/ is auto-discovered (filename = tool name), so the config needs no `tools: []`.
- *   - .gitignore lists `.env` so the "secrets are the user's responsibility" model
- *     (core-design §10.1) is wired up from the first commit.
- *   - .env.example documents the (optional) env knobs and is committable (only `.env` is ignored);
- *     it is all-commented and states the default model uses OAuth (`fastagent login`), not an API key, so
- *     it never implies a key is required.
- *
- * Node composition-root module: writes template files (the CLI handles `npm install`).
- *
- * Scope boundary (deliberate — do not keep hardening past it): init is best-effort atomic for
- * ORDINARY inputs. It guards the common, recoverable cases — never overwrites an existing
- * workspace, preflights non-directory/symlink scaffold parents, and rolls back a partial write.
- * It does NOT defend against every pathological pre-existing target state (TOCTOU, read-only
- * dirs, FIFOs, mid-write disk-full, …): a local scaffolding command recovered by delete-and-retry.
+ * Scope: init is best-effort atomic for ORDINARY inputs — it never overwrites an existing workspace,
+ * preflights non-directory scaffold parents, and rolls back a partial write. It does not defend
+ * against every pathological target state (TOCTOU, FIFOs, disk-full): recover by delete-and-retry.
  */
 import { access, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -114,9 +95,8 @@ const ENV_EXAMPLE = `# Environment for this agent. Copy to .env (gitignored) and
 # FASTAGENT_SESSIONS_DIR=./fastagent-sessions
 `;
 
-/** package.json for the complete (code-tool) agent: ESM + the deps a defineTool tool imports.
- *  The @kid7st/fastagent range tracks THIS build's version (0.x caret locks the minor), so a fresh
- *  workspace installs a version that actually has the API/exports it was scaffolded against. */
+/** package.json for the complete agent: ESM + the deps a defineTool tool imports. The
+ *  @kid7st/fastagent range tracks THIS build's version, so a fresh workspace installs an API-matching version. */
 function packageJson(name: string, version: string): string {
   return `${JSON.stringify(
     {
@@ -208,21 +188,18 @@ function channelPath(dir: string, kind: "github"): string {
   return join(dir, "channels", `${kind}.ts`);
 }
 
-/** Whether a channel file already exists — checked BEFORE any package mutation, so a no-clobber
- *  re-add is a zero-side-effect failure (it must not leave dependency/registry writes behind). */
+/** Whether a channel file already exists — checked before any mutation, so a no-clobber re-add is side-effect-free. */
 export async function channelExists(dir: string, kind: "github"): Promise<boolean> {
   return exists(channelPath(dir, kind));
 }
 
 /**
- * Scaffold `channels/<kind>.ts` into {@link dir}. Only `github` today. Never clobbers an existing
- * file — the `on()` glue is authored content. Returns the written path. (Callers check
- * {@link channelExists} first; the wx write here is the TOCTOU safety net.)
+ * Scaffold `channels/<kind>.ts` into {@link dir}. Never clobbers an existing file (the `on()` glue is
+ * authored content). The wx write is the TOCTOU safety net behind {@link channelExists}.
  */
 export async function scaffoldChannel(dir: string, kind: "github"): Promise<string> {
   const channelsDir = join(dir, "channels");
-  // Don't write through a channels/ symlink that escapes the workspace (github.ts would land outside
-  // the definition); an in-workspace symlink is fine. Mirrors loadChannels + scaffoldWorkspace's guard.
+  // Don't write through a channels/ symlink that escapes the workspace; an in-workspace one is fine.
   await assertInsideWorkspace(dir, "channels");
   const file = channelPath(dir, kind);
   if (await exists(file)) {
@@ -234,10 +211,9 @@ export async function scaffoldChannel(dir: string, kind: "github"): Promise<stri
 }
 
 /**
- * Verify the workspace is ready to host a channel: a package.json that is ESM (`type: "module"`) and
- * declares `@kid7st/fastagent` (the channel file imports it, resolved from the workspace). `add` does
- * NOT bootstrap this — creating package.json, choosing a module type, or ignoring .env is
- * `fastagent init`'s job. Here we only CHECK and guide, never mutate; failures are actionable.
+ * Verify the workspace is ready to host a channel: an ESM package.json that declares
+ * `@kid7st/fastagent` (the channel file imports it). `add` checks and guides, never bootstraps — that
+ * is `init`'s job.
  */
 export async function assertChannelReady(dir: string): Promise<void> {
   const pkgPath = join(dir, "package.json");
@@ -282,12 +258,8 @@ function isBareName(source: string): boolean {
   return !source.includes("/") && !/^[a-z][a-z0-9+.-]*:/i.test(source);
 }
 
-/**
- * Local "global" skill dirs (skills you've collected via other Agent Skills tools). Used ONLY as an
- * add-time vendoring SOURCE — a bare `add skill <name>` copies the match in (git-tracked). This is
- * NOT the removed runtime global-skill scan: nothing is loaded from here at run time; the result is a
- * plain copy inside the definition, which stays self-contained.
- */
+/** Local "global" skill dirs, used ONLY as an add-time vendoring source (a bare `add skill <name>`
+ *  copies the match in, git-tracked) — nothing is loaded from here at run time. */
 function findGlobalSkillSource(name: string): string | undefined {
   for (const root of [join(homedir(), ".agents", "skills"), join(homedir(), ".pi", "agent", "skills")]) {
     if (existsSync(join(root, name, "SKILL.md"))) return join(root, name);
@@ -310,16 +282,11 @@ export interface VendoredSkill {
 }
 
 /**
- * Vendor an Agent Skills skill into `<workspace>/skills/<name>/` from a giget ref
- * (`owner/repo/sub/dir[#ref]`, github default), a LOCAL path (`./x`, `../x`, `/abs`), or a BARE
- * name (`pdf`) resolved against the local global skill dirs (~/.agents/skills, ~/.pi/agent/skills).
- *
- * Copy-in, not link: the skill becomes a git-tracked part of the definition ("your folder is the
- * agent" — there is no registry; the filesystem is the registry, git is the distribution, the user
- * owns trust). Refuses to overwrite an existing skill UNLESS `options.update` — and then it is a plain
- * git-tracked overwrite (review/rollback via your repo's git diff/checkout), never a merge. Fetches
- * into a staging dir and validates BEFORE replacing, so a failed/invalid fetch never destroys an
- * existing skill. Validation uses the SAME loader the runtime uses, so a non-spec skill surfaces now.
+ * Vendor an Agent Skills skill into `<workspace>/skills/<name>/` from a giget ref (github default), a
+ * local path, or a bare name (resolved against the local global skill dirs). Copy-in, git-tracked.
+ * Refuses to overwrite unless `options.update` (then a plain git-tracked overwrite, never a merge).
+ * Validates a staging copy with the runtime loader BEFORE replacing, so a bad fetch never destroys an
+ * existing skill.
  */
 export async function vendorSkill(
   workspaceDir: string,
@@ -342,11 +309,9 @@ export async function vendorSkill(
   }
   await mkdir(skillsDir, { recursive: true });
 
-  // Fetch into a STAGING dir adjacent to dest (same filesystem → atomic rename), validate it, and only
-  // THEN replace dest. So a failed/invalid fetch — a transient network blip on a git ref, a source with
-  // no SKILL.md — never destroys an existing skill: --update means "swap to a new VALID version", not
-  // "delete then hope". The leading "." keeps the loader from ever treating staging as a skill, and a
-  // first-time vendor that fails leaves no half-written skill either.
+  // Fetch into a STAGING dir (same filesystem → atomic rename), validate, and only THEN replace dest,
+  // so a failed/invalid fetch never destroys an existing skill. The leading "." keeps the loader from
+  // treating staging as a skill.
   const staging = join(skillsDir, `.${name}.vendoring`);
   await rm(staging, { recursive: true, force: true }); // clear any leftover from a prior crash
   try {
@@ -387,10 +352,8 @@ export async function vendorSkill(
   if (overwritten) await rm(dest, { recursive: true, force: true });
   await rename(staging, dest);
 
-  // Report via the runtime loader, matching THIS skill by EXACT directory. A substring
-  // `includes("skills/<name>")` both prefix-pollutes a sibling `<name>-x` (no trailing separator) and,
-  // hardcoding `/`, matches nothing on Windows (loader paths use `\`) — dropping the very
-  // description/diagnostics we validate for. relative()+dirname() compare is precise and cross-platform.
+  // Report via the runtime loader, matching THIS skill by EXACT directory (a substring match would
+  // prefix-pollute a sibling `<name>-x` and break on Windows path separators).
   const def = await loadAgentDefinition(workspaceDir);
   const rel = join("skills", name);
   const skill = def.skills.find((sk) => relative(workspaceDir, dirname(sk.filePath)) === rel);
@@ -439,10 +402,9 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
   // Was the target non-empty BEFORE we wrote anything? (missing dir = empty).
   const intoNonEmpty = (await readdir(dir).catch(() => [] as string[])).length > 0;
 
-  // Preflight scaffold parent dirs (e.g. `skills`, `tools`): a pre-existing NON-directory there
-  // would make mkdir fail mid-loop (ENOTDIR) AFTER the first write, leaving a half-scaffold the
-  // identity guard then blocks on retry. Detect it BEFORE any write (lstat, not stat: a symlinked
-  // parent must be rejected, not followed: a symlink here would write outside the workspace).
+  // Preflight scaffold parent dirs: a pre-existing non-directory there would make mkdir fail mid-loop
+  // AFTER the first write, leaving a half-scaffold. Detect it before any write (lstat, not stat: a
+  // symlinked parent must be rejected, not followed — it would write outside the workspace).
   const parents = new Set<string>();
   for (const file of files) {
     let p = dirname(file.rel);
@@ -464,8 +426,8 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
   const created: string[] = [];
   const skipped: string[] = [];
   const warnings: string[] = [];
-  // ONE rollback scope over all post-write work: any failure removes files written THIS run
-  // (guard + wx guarantee they are ours), so scaffoldWorkspace is atomic (retryable on failure).
+  // ONE rollback scope: any failure removes files written THIS run (guard + wx guarantee they are
+  // ours), so scaffoldWorkspace is atomic.
   try {
     for (const file of files) {
       const abs = join(dir, file.rel);
@@ -479,11 +441,9 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
       }
     }
 
-    // Security wiring: a deploy that copies the directory ships secrets unless .gitignore/
-    // .fastagentignore exclude them. If a kept .gitignore does not ignore .env, the scaffold's
-    // secret line silently did not take effect. Use loadRootIgnore (the same matcher) so the
-    // advisory matches what would ship; it can throw on an unreadable ignore file (kept in the
-    // rollback scope so such a throw leaves no half-scaffold).
+    // A deploy that copies the dir ships secrets unless .gitignore/.fastagentignore exclude them. Use
+    // loadRootIgnore (the same matcher) so the advisory matches what would ship; a kept .gitignore
+    // that doesn't ignore .env means the scaffold's secret line silently didn't take effect.
     const rootIgnore = await loadRootIgnore(dir);
     if (!rootIgnore?.ignores(".env")) {
       warnings.push(

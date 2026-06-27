@@ -1,16 +1,7 @@
 #!/usr/bin/env node
 /**
- * fastagent CLI — the consumer of fastagent.config.ts (product entry point,
- * replacing hand-written entry scripts).
- *
- *   fastagent init  [dir] — scaffold a minimal runnable workspace
- *   fastagent models      — list available "provider/modelId" specs
- *   fastagent tool  <name> '<json>' [dir] — run one tool directly (no model)
- *   fastagent dev   [dir] — assemble + serve a local HTTP channel, watch + reload (iteration)
- *   fastagent start [dir] — run the same directory in production posture, no watch (core-design §10.3)
- *
- * Process-level side effects (proxy dispatcher, .env loading) belong here — the CLI
- * is the application entry point.
+ * fastagent CLI — the product entry point and consumer of fastagent.config.ts. Process-level side
+ * effects (proxy dispatcher, .env loading) belong here.
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -25,8 +16,15 @@ import { text } from "./channels/respond.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { runDevSupervisor } from "./dev-supervisor.ts";
 import { loadChannels } from "./engines/pi/channel.ts";
+import { isModuleFile } from "./engines/pi/loader.ts";
 import { fastagentVersion } from "./engines/pi/version.ts";
-import { listModels, loadConfig, resolveModelSpec, resolveSessionsDirOverride } from "./engines/pi/config.ts";
+import {
+  isValidPort,
+  listModels,
+  loadConfig,
+  resolveModelSpec,
+  resolveSessionsDirOverride,
+} from "./engines/pi/config.ts";
 import { FASTAGENT_AUTH_PATH } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
@@ -87,7 +85,7 @@ function usage(code: number): never {
                    (point FASTAGENT_SESSIONS_DIR at a volume so a redeploy never wipes conversations)
   add    github: scaffold channels/<kind>.ts (third-party adapter glue, an on() to edit). skill
          <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a local
-         path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff).
+         path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   login  authenticate a model provider into ~/.fastagent/auth.json: pick a method (subscription/OAuth
          or API key), then a provider that offers it (configured status shown). [provider] takes the
          method from what that provider supports, asked only when it offers both.`);
@@ -130,10 +128,7 @@ else if (command === "add") await runAdd();
 else if (command === "login") await runLogin();
 else usage(1);
 
-/**
- * `fastagent models [search]`: print every registered "provider/modelId" to stdout (pipe-friendly).
- * `[search]` filters by case-insensitive substring (the full list is long — 35 providers).
- */
+/** `fastagent models [search]`: print every registered "provider/modelId"; `[search]` filters by substring. */
 function runModels(): void {
   const search = positionals[1]?.toLowerCase();
   const specs = listModels(createPiModels());
@@ -142,11 +137,7 @@ function runModels(): void {
   if (search && shown.length === 0) console.error(`no model matches "${positionals[1]}"`);
 }
 
-/**
- * `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model,
- * no server, no tokens. The tightest authoring feedback loop. Args are validated by the tool's
- * own schema (a defineTool tool returns an "Invalid arguments" result the same way the model sees).
- */
+/** `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model. */
 async function runTool(): Promise<void> {
   const name = positionals[1];
   const argsJson = positionals[2] ?? "{}";
@@ -157,9 +148,8 @@ async function runTool(): Promise<void> {
   }
   loadDotEnv(toolDir); // a tool may read a key from .env
   const { config } = await loadConfig(toolDir).catch(failStartup);
-  // Same tool set dev/start mount (pi defaults + config.tools + discovered, deduped) so the
-  // runner exercises exactly what gets served — a tool shadowed by a default/config tool is not
-  // run here either; surface that collision instead of silently testing the wrong implementation.
+  // The same tool set dev/start mount (defaults + config.tools + discovered, deduped), so the runner
+  // exercises exactly what gets served — a shadowed tool is surfaced, not silently run.
   const { tools, toolCollisions } = await resolveWorkspaceTools(config, toolDir).catch(failStartup);
   for (const c of toolCollisions) {
     console.error(
@@ -186,13 +176,7 @@ async function runTool(): Promise<void> {
   console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2));
 }
 
-/**
- * `fastagent invoke <message> [dir]`: run ONE turn against the assembled agent, then exit — no server,
- * no TUI. The SAME assembly as dev/start (the folder is the agent), so it answers exactly as the
- * served agent would. The reply text streams to stdout; tool and diagnostic lines go to stderr; a
- * `failed` event exits non-zero. The all-agent counterpart of `tool` (one tool, no model): for CI
- * smoke and quick "what does it answer to X" checks while authoring.
- */
+/** `fastagent invoke <message> [dir]`: run ONE turn against the assembled agent, then exit. */
 async function runInvoke(): Promise<void> {
   const message = positionals[1];
   if (!message) {
@@ -200,49 +184,40 @@ async function runInvoke(): Promise<void> {
     process.exit(2);
   }
   const invokeDir = resolve(positionals[2] ?? ".");
-  loadDotEnv(invokeDir); // model API key from .env, like start
+  loadDotEnv(invokeDir);
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
   const { agent, modelSpec } = await createPiAgentFromWorkspace(invokeDir, { model: values.model }).catch(failStartup);
   console.error(`[fastagent] invoke: ${invokeDir} (${modelSpec})`);
-  // A fresh session per invoke (one-shot — no resume). The event→IO mapping is a pure, tested function
-  // (runInvokeStream): reply text→stdout, tool start/error + the failure reason→stderr, exit code 1 iff
-  // the turn failed so CI can gate on it.
+  // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
+  // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).
   const exitCode = await runInvokeStream(
     agent.invoke({ session: randomUUID() }, { text: message }),
     (text) => process.stdout.write(text),
     (line) => console.error(line),
   );
-  process.stdout.write("\n"); // end the streamed reply line
+  process.stdout.write("\n");
   if (exitCode !== 0) process.exit(exitCode);
 }
 
 /** List channel file basenames in <dir>/channels/ — the authoring view (no import, unlike loadChannels). */
 async function discoverChannelFiles(workspaceDir: string): Promise<string[]> {
-  // The same containment guard loadChannels uses (#66): reject a channels/ symlink that escapes the
-  // workspace, so info reports the SAME surface dev/start would accept — never a channels/ they'd
-  // refuse. Pure realpath, no channel import, so info keeps its no-import-channels choice.
+  // The same containment guard loadChannels uses, so info reports the surface dev/start would accept.
   await assertInsideWorkspace(workspaceDir, "channels");
   let names: string[];
   try {
     names = await readdir(join(workspaceDir, "channels"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; // no channels/ is normal
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
   return names
-    .filter((n) => /\.(ts|js|mjs)$/.test(n) && !n.endsWith(".d.ts"))
+    .filter(isModuleFile)
     .map((n) => n.replace(/\.(ts|js|mjs)$/, ""))
     .sort();
 }
 
-/**
- * `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into — model, AGENTS.md, skills,
- * tools (with collisions), channels, sessions dir, and load diagnostics — WITHOUT booting a server.
- * Read-only inspection: it never creates the sessions dir or writes .gitignore (unlike dev/start), and
- * an unset model is reported, not fatal. The discovery counterpart of `tool`/`invoke` (which RUN
- * things): run it first when something looks off (faster than dev), or `--json` it in CI.
- */
+/** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. Read-only. */
 async function runInfo(): Promise<void> {
   loadDotEnv(dir); // skills/tools may read env at load time
   const { config, path: configPath } = await loadConfig(dir).catch(failStartup);
@@ -302,10 +277,7 @@ async function runInit(): Promise<void> {
   }
   for (const w of warnings) console.error(`[fastagent] warn: ${w}`);
 
-  // A complete agent has a tool that imports @kid7st/fastagent, so its deps must be installed.
-  // Run `npm install` for the developer (the package is public; users handling a private package
-  // will have run `npm login`). --no-install skips it; --minimal has no deps at all. A kept
-  // (pre-existing) package.json is not ours, so we do not install over it.
+  // Install deps only for a complete agent whose package.json we just wrote (a kept one is not ours).
   const willInstall = complete && !values["no-install"] && created.includes("package.json");
   let installFailed = false;
   if (willInstall) {
@@ -315,23 +287,15 @@ async function runInit(): Promise<void> {
       console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
   }
 
-  // Next steps act on the scaffolded dir. For a named target (`fastagent init my-agent`) lead with
-  // a `cd` so bare `fastagent dev` (which defaults to .) is correct. Credentials are NOT mentioned
-  // here — `dev`/`start` prompt for them in context when missing (reportAuth); front-loading an
-  // instruction a newcomer can't act on yet is noise.
   console.error(`  next steps:`);
   const rel = relative(process.cwd(), dir);
-  // A relative target that climbs out of cwd (e.g. ../../../tmp/x) is noise — show the absolute path.
+  // A relative target that climbs out of cwd (../../../tmp/x) is noise — show the absolute path.
   if (rel !== "") console.error(`    cd ${rel.startsWith("..") ? dir : rel}`);
   if (complete && (values["no-install"] || installFailed)) console.error(`    npm install`);
   console.error(`    fastagent dev   # serve locally and iterate`);
 }
 
-/**
- * `fastagent add github [dir]`: scaffold `channels/<kind>.ts` — the third-party adapter import plus a
- * starter `on()` to edit. A channel always needs glue, so it is a file (not a config entry). Only
- * `github` today. Never clobbers an existing file (authored glue is not overwritten).
- */
+/** `fastagent add github [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
 async function runAdd(): Promise<void> {
   const kind = positionals[1];
   if (kind === "skill") return runAddSkill();
@@ -340,18 +304,15 @@ async function runAdd(): Promise<void> {
     console.error(`usage: fastagent add github [dir]  |  fastagent add skill <source> [dir]`);
     process.exit(1);
   }
-  // add SCAFFOLDS a channel into a ready workspace; it does not bootstrap one (that is `init`'s job).
-  // Preconditions before the write, so a refusal is side-effect-free: the channel must not already
-  // exist, and the workspace must be a fastagent-ready ESM package that declares the dependency.
+  // Preconditions before the write, so a refusal is side-effect-free.
   if (await channelExists(target, kind).catch(failStartup)) {
     failStartup(new Error(`channels/${kind}.ts already exists — edit it, or remove it to re-scaffold`));
   }
   await assertChannelReady(target).catch(failStartup);
   const file = await scaffoldChannel(target, kind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
-  // Read-only secret-hygiene check (no mutation): a deploy that copies the directory ships whatever
-  // the root .gitignore/.fastagentignore don't exclude, so warn (don't refuse — on() may read a real
-  // env var) when .env is not ignored, rather than blindly recommending the user put a secret there.
+  // Secret-hygiene check (read-only): warn when .env is not ignored, since a deploy that copies the
+  // directory would ship a secret placed there. Warn, not refuse — on() may read a real env var.
   const envIgnored = (await loadRootIgnore(target).catch(failStartup))?.ignores(".env") ?? false;
   if (!envIgnored) {
     console.error(
@@ -365,13 +326,7 @@ async function runAdd(): Promise<void> {
   console.error(`    fastagent dev   # serve the webhook locally`);
 }
 
-/**
- * `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/.
- * source = a git ref (owner/repo/path, github default), a local path, or a bare name resolved
- * against your local global skill dirs. Copy-in, git-tracked (the filesystem is the registry);
- * validated with the runtime loader; refuses to overwrite unless --update. Adding a skill is still unfamiliar, so
- * the no-arg usage teaches BOTH paths (write-your-own vibe + vendor) and never implies a command.
- */
+/** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */
 async function runAddSkill(): Promise<void> {
   const source = positionals[2];
   const target = resolve(positionals[3] ?? ".");
@@ -403,13 +358,7 @@ async function runAddSkill(): Promise<void> {
   console.error(`  next: mention "${name}" in AGENTS.md so the model knows when to use it; then \`fastagent dev\``);
 }
 
-/**
- * `fastagent login [provider]`: authenticate a model provider into `~/.fastagent/auth.json`. Pick an
- * authentication method (subscription/OAuth or API key), then a provider that offers it (with its
- * configured status). A `[provider]` argument skips the provider picker and takes the method from what
- * that provider supports — asked only when it offers both. The flow logic lives in engines/pi/login.ts;
- * here we supply the terminal IO (@clack/prompts + browser open).
- */
+/** `fastagent login [provider]`: authenticate a model provider into `~/.fastagent/auth.json`. */
 async function runLogin(): Promise<void> {
   const io = terminalLoginIO();
   const result = await loginFlow(io, { provider: positionals[1] }).catch(failStartup);
@@ -426,7 +375,6 @@ function openBrowser(url: string): void {
 function terminalLoginIO(): LoginIO {
   return {
     async select(message, options) {
-      // autocomplete (searchable) once the list is long (the API-key providers); plain select otherwise.
       const r = await (options.length > 7 ? autocomplete : select)({ message, options });
       return isCancel(r) ? undefined : (r as string);
     },
@@ -441,46 +389,39 @@ function terminalLoginIO(): LoginIO {
   };
 }
 
-/** Run `npm install` in `cwd` (inherit stdio so the user sees progress). Returns the exit code. */
+/** Run `npm install` in `cwd` (inherit stdio). Returns the exit code. */
 function npmInstall(cwd: string): Promise<number> {
   return new Promise((resolveCode) => {
     const child = spawn("npm", ["install"], { cwd, stdio: "inherit" });
     child.on("close", (code) => resolveCode(code ?? 1));
-    child.on("error", () => resolveCode(1)); // npm not on PATH, etc.
+    child.on("error", () => resolveCode(1));
   });
 }
 
 /**
- * Parse + range-check a port string (CLI flag or env). Empty/whitespace (e.g. `PORT=` in an
- * env file) is treated as "not set" → undefined, so the `??` precedence chain falls through to
- * the next source instead of binding port 0 (an ephemeral port) — `Number("")` is 0. A
- * non-empty but non-decimal/out-of-range value is an argument error → exit 1. Strict `^\d+$`
- * (not `Number`) rejects hex/exponent/negative/whitespace coercion quirks.
+ * Parse + range-check a port string (CLI flag or env). Empty/whitespace is "not set" → undefined, so
+ * the `??` chain falls through instead of binding port 0 (`Number("")` is 0). A non-decimal or
+ * out-of-range value is an argument error → exit 1.
  */
 function parsePort(value: string | undefined, source: string): number | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
-  if (!/^\d+$/.test(trimmed) || Number(trimmed) > 65535) {
+  if (!/^\d+$/.test(trimmed) || !isValidPort(Number(trimmed))) {
     console.error(`invalid ${source} "${value}": must be an integer 0-65535`);
     process.exit(1);
   }
   return Number(trimmed);
 }
 
-/**
- * Report which source provides the model's credentials — and, when none is found, surface a
- * remediation hint at STARTUP (dev and start alike) rather than letting the agent fail silently
- * at first invoke. Non-blocking: you may be iterating on prompts, or set credentials afterward.
- */
+/** Report which source provides the model's credentials, surfacing a remediation hint at startup. Non-blocking. */
 async function reportAuth(modelSpec: string): Promise<void> {
   const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
   const source = await probeAuthSource(createPiModels(), modelSpec);
   console.error(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`}`);
   if (source === undefined) {
-    // Lead with `fastagent login`: the default model (openai-codex) is OAuth-only, and we cannot name
-    // the right env var (it is provider-specific and pi-ai's mapping is not exported). Keep the
-    // env path generic so we never advertise a key that can't satisfy the probed provider.
+    // Lead with `fastagent login`: the default model (openai-codex) is OAuth-only, and the
+    // provider-specific env var name is not exported, so keep the env path generic.
     console.error(
       `[fastagent] warn: no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
     );
@@ -499,34 +440,25 @@ function reportAgentsSkillsTools(a: Assembled): void {
 }
 
 /**
- * `fastagent dev` hot-reload is process-restart, not in-process swap: the dev command is a
- * SUPERVISOR that spawns a worker (this same command with FASTAGENT_DEV_WORKER set) to assemble +
- * serve, and restarts that worker on any workspace edit. A fresh process per reload means what is
- * served is ALWAYS your latest code — no in-process module-cache staleness, including modules a
- * tool/config imports (the reason in-process busting was dropped). The supervisor never crashes;
- * a broken edit stops the worker with a loud error and waits for the next save to retry.
+ * `fastagent dev`: a SUPERVISOR that spawns a worker (this command with FASTAGENT_DEV_WORKER set) to
+ * assemble + serve, restarting it on workspace edits. A fresh process per reload means what is served
+ * is always the latest code, including modules a tool/config imports.
  */
 async function runDev(): Promise<void> {
-  // Worker (spawned by the supervisor) or `--no-watch`: assemble + serve once, no watching.
   if (process.env.FASTAGENT_DEV_WORKER === "1" || values["no-watch"]) {
     await serveOnce();
     return;
   }
-  parsePort(values.port, "--port"); // flag-shape check (a non-integer port fails before spawning)
+  parsePort(values.port, "--port"); // flag-shape check before spawning
   runDevSupervisor(dir);
 }
 
-/** Open the workspace agent in pi's interactive TUI (the pi-specific `chat` command). */
 async function runChat(): Promise<void> {
-  loadDotEnv(dir); // model spec + provider API keys may come from .env
-  // Run the chat process IN the workspace. chat is workspace-scoped, and pi resolves a session's
-  // cwd as `header.cwd ?? process.cwd()`; aligning process.cwd() with the workspace makes that
-  // fallback land on the workspace for every session-replacement path (resume/import/fork/new),
-  // so a cwd-less legacy/imported session never drifts to the launch directory. `dir` is absolute.
+  loadDotEnv(dir);
+  // Run the chat process IN the workspace: pi resolves a session's cwd as `header.cwd ?? process.cwd()`,
+  // so aligning process.cwd() with the workspace keeps a cwd-less session on the workspace. `dir` is absolute.
   process.chdir(dir);
-  // Lazy-import: chat pulls pi's interactive TUI module graph (InteractiveMode, pi-tui). A static
-  // import would load it on EVERY command; headless `start`/`dev` never need it. Runtime hygiene
-  // only — the dependency (and install size) is unchanged.
+  // Lazy-import: chat pulls pi's interactive TUI module graph; headless start/dev never need it.
   const { runPiChat } = await import("./engines/pi/chat.ts");
   await runPiChat(dir, { model: values.model }).catch(failStartup);
 }
@@ -535,9 +467,8 @@ async function runChat(): Promise<void> {
 async function serveOnce(): Promise<void> {
   const portFlag = parsePort(values.port, "--port");
   loadDotEnv(dir);
-  // Node's fetch does not honor HTTPS_PROXY by itself; route through the local proxy, and keep
-  // fetch + dispatcher on the SAME undici implementation (pi's core/http-dispatcher; otherwise
-  // Node 26's bundled fetch skips gzip decompression — empty stopReason:"stop" messages).
+  // Route fetch through the local proxy and keep fetch + dispatcher on the same undici implementation
+  // (otherwise Node's bundled fetch skips gzip decompression — empty stopReason:"stop" messages).
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
@@ -547,24 +478,17 @@ async function serveOnce(): Promise<void> {
   console.error(`[fastagent] model:  ${a.modelSpec}`);
   await reportAuth(a.modelSpec);
   reportAgentsSkillsTools(a);
-  // dev == deployed: serve the same channels/ a deploy would (default invoke when none declared).
-  // routesFor constructs each discovered channel, which may throw on a misconfig (e.g. an unset
-  // secret) — surface it as a clean startup error, not an unhandled stack.
   const routes = await routesFor(dir, a.agent).catch(failStartup);
   serve(routes, portFlag ?? a.config.http?.port ?? 8787);
 }
 
 async function runStart(): Promise<void> {
   const portFlag = parsePort(values.port, "--port");
-  loadDotEnv(dir); // env API keys + an optional PORT/FASTAGENT_MODEL override
-  // Same proxy/undici setup as dev (see runDev): route fetch through the local proxy and
-  // keep fetch + dispatcher on the same undici implementation.
+  loadDotEnv(dir);
   setGlobalDispatcher(new EnvHttpProxyAgent());
   installUndiciFetch();
 
-  // start runs the definition directory in production posture — the SAME opener dev uses (single
-  // assembly source), just no watch. Sessions precedence (--sessions-dir > FASTAGENT_SESSIONS_DIR >
-  // the opener's <dir>/.fastagent/sessions default) lives in resolveSessionsDirOverride (unit-tested).
+  // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(values["sessions-dir"]);
   const { agent, definition, config, modelSpec, sessionsDir, toolNames, toolCollisions } =
     await createPiAgentFromWorkspace(dir, { model: values.model, sessionsDir: sessionsDirOverride }).catch(failStartup);
@@ -577,8 +501,7 @@ async function runStart(): Promise<void> {
   if (toolNames.length > 0) console.error(`[fastagent] tools:  ${toolNames.join(", ")}`);
   reportToolCollisions(toolCollisions);
   console.error(`[fastagent] sessions: ${sessionsDir}`);
-  // Sessions default under the definition dir, which a redeploy may replace wholesale. Remind the
-  // operator (only when using the default) to point them at a volume so conversations survive.
+  // Sessions default under the definition dir, which a redeploy may replace wholesale.
   if (sessionsDirOverride === undefined) {
     console.error(
       `[fastagent] note: sessions live under the definition dir; set FASTAGENT_SESSIONS_DIR to a ` +
@@ -589,15 +512,13 @@ async function runStart(): Promise<void> {
 
   const routes = await routesFor(dir, agent).catch(failStartup);
   serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787);
-  // No graceful drain: webhook turns run fire-and-forget and outlive a short shutdown grace anyway
-  // (the engine's lease is the only concurrency guard); SIGTERM just exits. In-flight turns are lost
-  // on redeploy — durable execution is the real fix (deferred).
+  // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits, losing in-flight turns
+  // (durable execution is the real fix, deferred).
 }
 
 /**
- * The routes this deployment serves: a default `GET /health` (deployment infra; a channel may
- * override it) plus the workspace's discovered `channels/` — or the default invoke channel at
- * POST /invoke when none are declared (zero-config still runs). Route collisions are surfaced.
+ * The routes this deployment serves: a default `GET /health` plus the workspace's discovered
+ * `channels/` — or the default invoke channel at POST /invoke when none are declared.
  */
 async function routesFor(workspaceDir: string, agent: Agent): Promise<Routes> {
   const { routes, collisions } = await loadChannels(workspaceDir, agent);
@@ -607,9 +528,8 @@ async function routesFor(workspaceDir: string, agent: Agent): Promise<Routes> {
     );
   }
   const channels = Object.keys(routes).length > 0 ? routes : { "POST /invoke": createInvokeHandler(agent) };
-  // Add a default GET /health unless a channel already covers it. Overlap, not exact-key: an
-  // any-method `/health` also handles GET, so the built-in must step aside (an exact `GET /health`
-  // would too). `POST /health` does NOT cover GET, so the default stays alongside it.
+  // Add a default GET /health unless a channel already covers it (overlap, not exact-key: an
+  // any-method `/health` also handles GET, so the built-in steps aside).
   const healthCovered = Object.keys(channels).some((k) => {
     const e = parseRouteKey(k);
     return e.path === "/health" && (e.method === undefined || e.method === "GET");
@@ -617,11 +537,7 @@ async function routesFor(workspaceDir: string, agent: Agent): Promise<Routes> {
   return healthCovered ? channels : { "GET /health": () => text("ok\n", 200), ...channels };
 }
 
-/**
- * Serve `routes` via the Node host. serveNode owns binding; the CLI owns policy: a clean message +
- * exit(1) on a bind failure (EADDRINUSE is a startup problem, not a bug), the dev-supervisor ready
- * signal, and the startup log.
- */
+/** Serve `routes` via the Node host. serveNode owns binding; the CLI owns policy (errors, ready signal, log). */
 function serve(routes: Routes, port: number): void {
   serveNode(router(routes), { port }).listening.then(
     (boundPort) => {
@@ -646,9 +562,10 @@ function loadDotEnv(d: string): void {
   }
 }
 
-/** User-fixable startup problems (missing model / bad config / broken definition) are
- *  thrown as plain `Error` with actionable messages — print just the message. Anything
- *  else (TypeError, non-Error, …) is a bug: keep the full stack visible. */
+/**
+ * User-fixable startup problems (missing model / bad config / broken definition) are thrown as plain
+ * `Error` — print just the message. Anything else (TypeError, non-Error) is a bug: keep the stack.
+ */
 function failStartup(error: unknown): never {
   if (error instanceof Error && error.constructor === Error) console.error(error.message);
   else console.error(error);

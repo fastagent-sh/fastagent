@@ -1,15 +1,8 @@
 /**
- * The pi `Models` collection — the single hub that owns BOTH model resolution
- * (provider/modelId lookup) AND auth (per-request credential resolution).
- *
- * pi 0.80 folded the old split — a global model registry (`getModel`/`getModels`)
- * plus a harness-injected `getApiKeyAndHeaders` callback — into one `Models`
- * object built from provider factories. Providers carry their own `ProviderAuth`,
- * so auth resolves through the collection (`Models.getAuth`), not a side channel.
- *
- * fastagent builds one `Models` per opener (dev/start) and threads it into the
- * harness alongside the selected `model`; the two must come from the same
- * collection so the selected model's provider auth is in scope.
+ * The pi `Models` collection — the single hub that owns BOTH model resolution (provider/modelId
+ * lookup) AND auth (per-request credential resolution). fastagent builds one per opener and threads
+ * it into the harness alongside the selected `model`; the two must come from the same collection so
+ * the model's provider auth is in scope.
  */
 import { type Models, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
@@ -21,15 +14,9 @@ export interface CreatePiModelsOptions extends FastagentAuthOptions {
 }
 
 /**
- * A `Models` with every built-in pi provider registered, wired to fastagent's
- * default auth:
- * - **stored credentials** from fastagent's own `~/.fastagent/auth.json` (OAuth
- *   tokens or `api_key` entries, written by `fastagent login`) via
- *   {@link fastagentCredentialStore}, refreshed and persisted in place, and
- * - **ambient env vars** (e.g. `ANTHROPIC_API_KEY`) via pi's default auth context.
- *
- * Resolution order is upstream-owned: a stored credential owns the provider;
- * env is consulted only when nothing is stored.
+ * A `Models` with every built-in pi provider, wired to fastagent's auth: stored credentials from
+ * `~/.fastagent/auth.json` (via {@link fastagentCredentialStore}), then ambient env vars. A stored
+ * credential owns the provider; env is consulted only when nothing is stored (resolution order is upstream-owned).
  */
 export function createPiModels(options: CreatePiModelsOptions = {}): Models {
   return builtinModels({
@@ -39,10 +26,9 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
 }
 
 /**
- * Which source currently satisfies auth for `spec` — a startup diagnostic
- * (dev/start print it). Returns the upstream `AuthResult.source` label
- * (e.g. "OAuth", "ANTHROPIC_API_KEY") or undefined when unconfigured.
- * Reporting-only; never throws (a failed OAuth refresh reports unconfigured).
+ * Which source currently satisfies auth for `spec` — a startup diagnostic. Returns the upstream
+ * `AuthResult.source` label (e.g. "OAuth", "ANTHROPIC_API_KEY") or undefined when unconfigured.
+ * Reporting-only; never throws.
  */
 export async function probeAuthSource(models: Models, spec: string): Promise<string | undefined> {
   const slash = spec.indexOf("/");

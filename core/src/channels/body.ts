@@ -1,7 +1,6 @@
 /**
- * Read a request body with a hard byte cap (real bytes, not JS chars). A streaming cap is the only
- * robust guard against an unauthenticated client buffering an unbounded body (Content-Length is
- * bypassable with chunked encoding); web-streams only, so it works on any runtime.
+ * Read a request body with a hard byte cap (real bytes). A streaming cap is the only robust guard
+ * against an unbounded body (Content-Length is bypassable with chunked encoding). Web-streams only.
  */
 export async function readBodyCapped(req: Request, max: number): Promise<{ text: string } | { tooLarge: true }> {
   if (!req.body) return { text: "" };

@@ -1,56 +1,30 @@
 /**
- * Tool authoring: `defineTool` (the vibe surface) and `loadTools` (filesystem discovery).
- *
- * The two together let a developer add a code tool with no ceremony: drop a file in `tools/`,
- * default-export `defineTool({...})`, and it is discovered, named from the filename, validated,
- * and injected — no `name` field, no manual registration in the config.
+ * Tool authoring: `defineTool` (the authoring surface) and `loadTools` (filesystem discovery).
+ * Drop a file in `tools/`, default-export `defineTool({...})`, and it is discovered, named from
+ * the filename, validated, and injected.
  *
  *   // tools/lookup-order.ts            → tool "lookup-order"
- *   import { defineTool, z } from "@kid7st/fastagent";
  *   export default defineTool({
  *     description: "Look up an order by id.",
  *     input: z.object({ orderId: z.string() }),
- *     async execute({ orderId }) { return await db.find(orderId); },  // plain value, auto-wrapped
+ *     async execute({ orderId }) { return await db.find(orderId); },
  *   });
- *
- * defineTool produces a pi `AgentTool` (folded-M): it converts the Zod schema to JSON Schema for
- * the model, validates the model's arguments before calling `execute` (a validation failure is
- * returned to the model as an error result, not a crash), and wraps a plain return value into the
- * pi result shape. The `parameters` field is a plain JSON-Schema object — pi accepts it (the
- * `TSchema` bound is compile-time only; there is no TypeBox runtime dependency on this path).
- *
- * Node composition-root module: `loadTools` dynamically imports the workspace's tool modules
- * (local files, not node_modules — so Node strips their types); the invoke path stays disk-free.
  */
-import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
-import { moduleLoadHint } from "./loader.ts";
+import { loadModuleDir } from "./loader.ts";
 
-/** Runtime context passed to a tool's `execute`. Minimal today; reserved for growth (session, …). */
 export interface ToolContext {
   /** Abort signal for the current turn — honor it to cancel in-flight work on cancellation. */
   signal?: AbortSignal;
 }
 
 export interface DefineToolOptions<I extends z.ZodType> {
-  /**
-   * Explicit tool name. Usually omitted: a tool in `tools/<name>.ts` is named from its filename
-   * (authoritative). Set this only when injecting programmatically via `config.tools`.
-   */
+  /** Explicit name. Usually omitted — a `tools/<name>.ts` tool is named from its filename. */
   name?: string;
-  /** What the tool does — the text the model reads to decide when to call it. */
   description: string;
-  /** Input parameters as a Zod schema; `execute` receives the parsed, typed value. */
   input: I;
-  /**
-   * The tool body. Receives the validated input and a {@link ToolContext}. Return a plain value
-   * (string/object/…) and it is wrapped for the model; return a full `{ content, details }` result
-   * for control over content blocks.
-   */
   execute: (input: z.infer<I>, ctx: ToolContext) => unknown | Promise<unknown>;
 }
 
@@ -63,12 +37,7 @@ function wrapResult(value: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details: value };
 }
 
-/**
- * Define a tool from a Zod input schema and an `execute` body. Returns a pi `AgentTool` with a
- * JSON-Schema `parameters`, schema-validated arguments, and auto-wrapped results.
- */
 export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): AgentTool {
-  // Zod → JSON Schema for the model. Drop `$schema` (providers don't need the dialect marker).
   const { $schema: _drop, ...parameters } = z.toJSONSchema(options.input) as Record<string, unknown>;
   const tool = {
     name: options.name ?? "",
@@ -93,46 +62,18 @@ export interface ToolCollision {
   source: string;
 }
 
-const TOOL_EXTS = new Set([".ts", ".js", ".mjs"]);
-
-/**
- * Discover code tools in `<dir>/tools/`: each top-level `*.ts|*.js|*.mjs` is dynamically imported,
- * its default export taken as the tool, and named from the filename (authoritative). Missing
- * `tools/` is normal (returns none). A file that does not default-export a tool fails visibly.
- */
+/** Discover code tools in `<dir>/tools/`: each `*.ts|.js|.mjs` default-exports a tool, named from its filename. */
 export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; collisions: ToolCollision[] }> {
-  const toolsDir = join(dir, "tools");
-  let entries: Dirent[];
-  try {
-    entries = await readdir(toolsDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "not_found" || (error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { tools: [], collisions: [] };
-    }
-    throw new Error(`cannot read ${toolsDir}: ${(error as Error).message}`);
-  }
+  const modules = await loadModuleDir(join(dir, "tools"));
   const byName = new Map<string, AgentTool>();
   const collisions: ToolCollision[] = [];
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isFile()) continue;
-    const ext = extname(entry.name);
-    if (!TOOL_EXTS.has(ext) || entry.name.endsWith(".d.ts")) continue;
-    const file = join(toolsDir, entry.name);
-    let mod: { default?: unknown };
-    try {
-      mod = (await import(pathToFileURL(file).href)) as { default?: unknown };
-    } catch (error) {
-      throw new Error(
-        `cannot load tools/${entry.name}: ${(error as Error).message}${moduleLoadHint(error as NodeJS.ErrnoException)}`,
-      );
-    }
+  for (const { name, label, mod } of modules) {
     const tool = mod.default as Partial<AgentTool> | undefined;
     if (!tool || typeof tool.execute !== "function") {
-      throw new Error(`tools/${entry.name} must default-export defineTool({...})`);
+      throw new Error(`${label} must default-export defineTool({...})`);
     }
-    const name = basename(entry.name, ext); // filename is the tool name (authoritative)
     if (byName.has(name)) {
-      collisions.push({ name, source: `tools/${entry.name}` });
+      collisions.push({ name, source: label });
       continue;
     }
     byName.set(name, { ...(tool as AgentTool), name });
@@ -141,9 +82,8 @@ export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; coll
 }
 
 /**
- * Merge already-resolved tools (pi defaults + `config.tools`) with discovered `tools/` tools,
- * deduping by name. Existing tools win a name clash (a discovered tool may not shadow a default or
- * a configured one); the dropped discovered tools are surfaced as collisions, never silent.
+ * Merge resolved tools (pi defaults + `config.tools`) with discovered `tools/`, deduped by name.
+ * Existing tools win; dropped discovered tools surface as collisions.
  */
 export function mergeDiscoveredTools(
   existing: AgentTool[],

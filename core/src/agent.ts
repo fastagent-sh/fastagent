@@ -1,8 +1,7 @@
 /**
- * Agent Handler protocol v0.1 — the contract layer. Pure types, zero dependencies (sansio).
- * This is the engine-neutral abstraction (see docs/SPEC.md): both callers and engines
- * depend on it. Importing any engine implementation here is forbidden
- * (`@earendil-works/pi-*` may only appear under engines/).
+ * Agent Handler protocol v0.1 — the engine-neutral contract (docs/SPEC.md). Pure types, zero
+ * dependencies. Importing any engine implementation here is forbidden (`@earendil-works/pi-*` may
+ * only appear under engines/).
  */
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -34,10 +33,9 @@ export type AgentEvent =
   | { type: "failed"; details: string; retryable: boolean };
 
 /**
- * One turn = one invoke. Returns a single async event stream.
- * The stream MUST terminate with exactly one of completed / failed, or be cancelled
- * by the caller (no terminal event). Agent is a contract (interface), not a base class:
- * any AsyncIterable producer that implements it conforms.
+ * One turn = one invoke, returning a single async event stream. The stream MUST terminate with
+ * exactly one of completed / failed, or be cancelled by the caller (no terminal event). Any
+ * AsyncIterable producer that implements this conforms (interface, not base class).
  */
 export interface Agent {
   invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent>;

@@ -1,8 +1,6 @@
 /**
  * Render assembly warnings to stderr — the one place both the CLI runners and the `chat` runtime show
- * non-fatal definition/tool findings. The loaders return these as DATA (definition.ts: findings are
- * surfaced by the caller, not thrown), so the surfacing is the entry point's job; keeping a single copy
- * means the wording can't drift between the two callers.
+ * the non-fatal definition/tool findings the loaders return as data. One copy so the wording can't drift.
  */
 import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import type { SkillCollision } from "./definition.ts";

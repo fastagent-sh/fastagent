@@ -1,11 +1,8 @@
 /**
- * The `fastagent dev` process supervisor — the watch-and-restart mechanism behind the dev command.
- *
- * It re-spawns the CLI itself as a worker (`FASTAGENT_DEV_WORKER=1`) and restarts that worker on
- * debounced workspace edits. Each restart is a FRESH process (always-latest, no stale module cache).
- * The supervisor never exits on a bad edit — the worker fails loudly (its own startup error) and the
- * supervisor waits for the next save. This is process orchestration, not assembly: it lives outside
- * cli.ts's command dispatch (and outside the engine), holding only the dev process lifecycle.
+ * The `fastagent dev` process supervisor: re-spawn the CLI as a worker (`FASTAGENT_DEV_WORKER=1`) and
+ * restart it on debounced workspace edits. Each restart is a fresh process (always-latest, no stale
+ * module cache). The supervisor never exits on a bad edit — the worker fails loudly and it waits for
+ * the next save.
  */
 import { spawn } from "node:child_process";
 import { watch as watchTree } from "chokidar";
@@ -33,16 +30,14 @@ export function runDevSupervisor(dir: string): void {
       worker = undefined;
       if (reloadPending) {
         reloadPending = false;
-        spawnWorker(); // restart requested: the old worker has now exited, so the port is free
+        spawnWorker(); // restart requested: the old worker has exited, so the port is free
       } else if (!everServed) {
-        // The worker failed BEFORE ever serving — a non-editable startup failure (bad flag,
-        // EADDRINUSE, broken initial workspace) that saving cannot fix. Propagate the exit code so
-        // `fastagent dev` fails like the old CLI did (and smoke tests don't hang). The worker
-        // already printed the specific error (inherited stdio).
+        // Failed BEFORE ever serving — a non-editable startup failure (bad flag, EADDRINUSE, broken
+        // initial workspace) that saving cannot fix. Propagate the exit code (the worker already
+        // printed the error via inherited stdio).
         process.exit(code ?? 1);
       } else {
-        // A worker that HAD been serving stopped (a broken edit, or a crash). The edit is fixable;
-        // the error is already printed. Wait for the next save to retry, do not loop or exit.
+        // A worker that HAD been serving stopped (broken edit or crash). Fixable; wait for the next save.
         console.error(`[fastagent] dev stopped (worker exited: ${signal ?? code}) — save a change to retry`);
       }
     });
@@ -58,12 +53,11 @@ export function runDevSupervisor(dir: string): void {
     }
   };
 
-  // Recursively watch the workspace, structurally ignoring machine-state dirs. The worker writes
-  // jsonl sessions DEEP under .fastagent on every invoke, so watching it would restart dev on its
-  // own writes; node_modules/.git are noise. Everything else is watched — tools, skills, AND helper
-  // dirs a tool/config imports (e.g. lib/) — so a saved transitive import triggers the fresh-process
-  // reload too. chokidar gives reliable cross-platform recursion + structural ignore that native
-  // fs.watch cannot (its `filename` is not guaranteed, defeating a path-based filter).
+  // Recursively watch the workspace, structurally ignoring machine-state dirs: the worker writes
+  // jsonl sessions under .fastagent on every invoke (watching it would restart dev on its own
+  // writes); node_modules/.git are noise. Everything else — tools, skills, helper dirs a tool/config
+  // imports — is watched. chokidar gives reliable cross-platform recursion + structural ignore that
+  // native fs.watch cannot.
   const watcher = watchTree(dir, {
     ignoreInitial: true, // the startup scan is not a change
     ignored: /(?:^|[\\/])(?:\.fastagent|node_modules|\.git)(?:[\\/]|$)/,

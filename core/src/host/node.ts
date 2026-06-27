@@ -22,8 +22,7 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
 
 /**
  * Compose a {@link Routes} table into one handler: exact pathname match (optionally method-qualified),
- * 405 when the path exists under another method, 404 otherwise. No params/wildcards — channels mount
- * at fixed paths.
+ * 405 when the path exists under another method, 404 otherwise. No params/wildcards.
  */
 export function router(routes: Routes): ChannelHandler {
   const entries = Object.entries(routes).map(([key, handler]) => ({ ...parseRouteKey(key), handler }));
@@ -38,9 +37,9 @@ export function router(routes: Routes): ChannelHandler {
 }
 
 /**
- * Serve `handler` on a Node HTTP server. Thin mechanism: bind, report the port, and let the caller
- * close it — no logging, signal handling, or process.exit (the CLI / app entry owns those).
- * `listening` resolves with the bound port (useful for port 0) or rejects on a bind error (EADDRINUSE).
+ * Serve `handler` on a Node HTTP server. Thin mechanism: bind, report the port, let the caller close
+ * it — no logging/signals/exit (the CLI owns those). `listening` resolves with the bound port (useful
+ * for port 0) or rejects on a bind error.
  */
 export function serveNode(
   handler: ChannelHandler,
