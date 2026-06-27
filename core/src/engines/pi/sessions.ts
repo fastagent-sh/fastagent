@@ -25,6 +25,8 @@ export interface PiSessionStore {
  * persists the assistant message before the tool runs). The next turn would then hand the provider an
  * `assistant(tool_use) -> user` sequence that Anthropic/OpenAI reject — the session is poisoned. We
  * append an honest "interrupted" error result for each dangling call, restoring a valid transcript.
+ * Tool side-effect idempotency stays the tool's responsibility (SPEC §6); this only restores
+ * transcript validity, not exactly-once execution.
  *
  * Pairing is TURN-LOCAL: a tool_use is paired only by a toolResult that immediately follows it (up to
  * the next non-toolResult). tool-call ids are not unique across turns (a local model may restart ids

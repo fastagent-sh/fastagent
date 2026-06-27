@@ -4,7 +4,7 @@
  * The handler is Fetch-shaped (`(Request) => Promise<Response>`) — the cross-runtime form every
  * embedding host speaks, so it mounts inside an existing app's own route. It is path-agnostic. The
  * web stream primitives give cancellation (consumer disconnect → cancel() → iterator.return() →
- * invoke cancellation), backpressure (pull-based), and the body cap natively.
+ * invoke cancellation, SPEC MUST 3), backpressure (pull-based), and the body cap natively.
  *
  * `nodeListener` is the thin node:http adapter for the standalone `fastagent dev/start` server.
  */
@@ -42,7 +42,7 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
     }
 
     // Take the iterator explicitly so the stream's cancel() (consumer disconnect) can return() it and
-    // run invoke's cancellation cleanup. pull = backpressure: the next event is produced on demand.
+    // run invoke's cancellation cleanup (SPEC MUST 3). pull = backpressure: the next event is produced on demand.
     const iterator = agent.invoke({ session }, { text: promptText })[Symbol.asyncIterator]();
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {
