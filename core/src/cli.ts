@@ -273,9 +273,11 @@ async function runAddSkill(): Promise<void> {
 }
 
 /**
- * `fastagent login [provider]`: authenticate a model provider into `~/.fastagent/auth.json`. An
- * OAuth-capable provider runs the device/browser flow; any other provider id stores an API key. The
- * flow logic lives in engines/pi/login.ts; here we supply the terminal IO (@clack/prompts + browser open).
+ * `fastagent login [provider]`: authenticate a model provider into `~/.fastagent/auth.json`. Pick an
+ * authentication method (subscription/OAuth or API key), then a provider that offers it (with its
+ * configured status). A `[provider]` argument skips the provider picker and takes the method from what
+ * that provider supports — asked only when it offers both. The flow logic lives in engines/pi/login.ts;
+ * here we supply the terminal IO (@clack/prompts + browser open).
  */
 async function runLogin(): Promise<void> {
   const io = terminalLoginIO();
