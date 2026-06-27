@@ -33,7 +33,9 @@ export const POST = createInvokeHandler(agent);
 
 ```bash
 fastagent init my-agent && cd my-agent
+fastagent info                # inspect what the folder assembles into — model/skills/tools/channels (no server)
 fastagent dev                 # local HTTP/SSE on :8787 (watch + reload)
+fastagent invoke "hello"       # run one turn and exit — no server, no TUI (CI smoke / scripting)
 fastagent start               # run the same directory in production posture (no build step)
 ```
 
