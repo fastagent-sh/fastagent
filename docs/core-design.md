@@ -233,6 +233,8 @@ One opener (§4), two postures — both reuse **L2** (`createPiAgentFromDefiniti
 
 **Startup report (minimal observable surface):** run dir, model, **auth source** (pi's resolved label + provider, e.g. `OAuth (anthropic)` or `ANTHROPIC_API_KEY (anthropic)`), `AGENTS.md` presence, the **loaded skills** (enumerable), the session dir, and the bound port. It does **not** enumerate authored context files: they are ambient (§10.1a), so the only meaningful, bounded list is skills.
 
+**Authoring commands (same assembly, no serving).** `fastagent info` is a read-only inspect of that same surface (model/skills/tools+collisions/channels/diagnostics) without booting a server — it composes the no-side-effect loaders, so it never creates the sessions dir and an unset model is reported, not fatal. `fastagent invoke <message>` runs ONE turn through the same opener and exits (reply text→stdout, tool/diagnostics→stderr, a `failed` event→non-zero exit, so CI can gate on it). Both reuse the dev/start assembly, so they report and answer exactly as the served agent would — the all-agent counterpart of `fastagent tool` (one tool, no model).
+
 ### 10.4 Auth at runtime (env key or OAuth)
 
 Auth rides the pi `Models` collection, not a side channel; `start` is **not** env-only. Since pi 0.80 a `Models` (built by `createPiModels` → `builtinModels`) owns both model resolution and per-request auth: each provider carries its own `ProviderAuth`, resolved against a `CredentialStore` (stored credentials) plus an `AuthContext` (ambient env vars). Two deploy-appropriate sources, both upstream-native:

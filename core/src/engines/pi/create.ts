@@ -28,7 +28,7 @@
  * Above L2 sits the COMMAND OPENER — not a ladder rung, but a command-posture
  * composition that opens a directory, resolves model/tools, picks session storage, then
  * calls L2: createPiAgentFromWorkspace (dev.ts), which BOTH `dev` and `start` drive (the
- * directory IS the agent — no build, no artifact). It owns command policy (config
+ * directory IS the agent). It owns command policy (config
  * precedence, the .fastagent session dir, the sessionsDir override); the ladder owns
  * engine assembly.
  *

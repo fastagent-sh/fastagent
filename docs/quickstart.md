@@ -38,6 +38,8 @@ For a pure prompt+skills agent with no code and no dependencies, use `fastagent 
 
 ## 2. Run it
 
+First, `fastagent info` prints what the directory assembles into — model, `AGENTS.md`, skills, tools (with any collisions), channels, and load diagnostics — without starting anything (run it whenever something looks off; `--json` for scripts). Then serve it:
+
 ```bash
 fastagent dev
 ```
@@ -61,6 +63,14 @@ data: {"type":"completed"}
 Reuse the same `session` value to continue a conversation; conversations persist under `.fastagent/sessions`, so a `dev` restart keeps them.
 
 To try the agent interactively instead of over HTTP, run `fastagent chat`. It opens the **same** assembled agent (same model, tools, skills, instructions) in pi's full interactive TUI — streaming, tool rendering, `/` commands, model switching, session resume — so you can vibe-check what you'll serve without writing a client.
+
+For a quick non-interactive check — one turn in, one reply out, no server and no TUI — run `fastagent invoke`:
+
+```bash
+fastagent invoke "How many words are in: the quick brown fox jumps"
+```
+
+The reply streams to stdout, tool and diagnostic lines to stderr, and a failed turn exits non-zero — handy for CI smoke or scripting. It is the all-agent counterpart of `fastagent tool` (one tool, no model).
 
 ## 3. Add a tool
 
