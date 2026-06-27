@@ -8,9 +8,13 @@ import { fileURLToPath } from "node:url";
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 /** Run the CLI to completion; capture stdout, stderr, exit code. */
-function run(args: string[], cwd?: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function run(
+  args: string[],
+  cwd?: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], cwd ? { cwd } : {});
+    const child = spawn(process.execPath, [CLI, ...args], { ...(cwd ? { cwd } : {}), env: env ?? process.env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -33,5 +37,32 @@ describe("cli papercuts", () => {
     const { stderr } = await run(["init", target, "--minimal"], cwd);
     expect(stderr).toMatch(/cd \/.*fa-cli-tgt/); // absolute path
     expect(stderr).not.toMatch(/cd \.\./); // never the ../../.. noise
+  });
+
+  it("models [search] filters by substring; a no-match prints nothing to stdout", async () => {
+    const hit = await run(["models", "openai"]);
+    expect(hit.code).toBe(0);
+    expect(hit.stdout.trim().length).toBeGreaterThan(0);
+    for (const line of hit.stdout.trim().split("\n")) expect(line.toLowerCase()).toContain("openai");
+    const miss = await run(["models", "zzznope"]);
+    expect(miss.stdout).toBe(""); // a no-match leaves stdout empty (pipe-friendly)
+    expect(miss.stderr).toMatch(/no model matches/);
+  });
+
+  it("invoke without a message prints usage to stderr and exits 2 (stdout clean)", async () => {
+    const { code, stdout, stderr } = await run(["invoke"]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/usage: fastagent invoke/);
+    expect(stdout).toBe("");
+  });
+
+  it("invoke surfaces a startup error to stderr, keeps stdout empty, exits non-zero", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fa-cli-inv-"));
+    const env = { ...process.env };
+    delete env.FASTAGENT_MODEL; // no model source → assembly fails before any model call (no auth needed)
+    const { code, stdout, stderr } = await run(["invoke", "hi", cwd], undefined, env);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/missing model/);
+    expect(stdout).toBe(""); // a failure never pollutes stdout
   });
 });

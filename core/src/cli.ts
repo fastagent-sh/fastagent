@@ -13,6 +13,7 @@
  * is the application entry point.
  */
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import { autocomplete, isCancel, log, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
@@ -42,8 +43,9 @@ import {
 function usage(code: number): never {
   console.error(`usage:
   fastagent init   [dir] [--minimal] [--no-install]
-  fastagent models
+  fastagent models [search]
   fastagent tool   <name> '<json-args>' [dir]
+  fastagent invoke <message> [dir] [--model provider/modelId]
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--no-watch]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
@@ -61,16 +63,26 @@ function usage(code: number): never {
          package.json, .gitignore. Refuses to overwrite an existing workspace.
          --minimal      markdown-only (no package.json/tool/install) — a prompt+skills agent
          --no-install   scaffold but skip npm install
-  models list the available "provider/modelId" specs (use one with --model or in the config).
+  models list the available "provider/modelId" specs ([search] filters by substring; use one with
+         --model or in the config).
   tool   run one tool (from tools/ or config.tools) directly with JSON args — no model, no
          server, no tokens. Fast feedback while authoring: fastagent tool add '{"a":2,"b":3}'
+  invoke run ONE turn against the assembled agent and exit — no server, no TUI. The reply streams
+         to stdout, tool/diagnostics to stderr, a failed turn exits non-zero. The all-agent
+         counterpart of tool, for CI smoke and quick checks. Same model resolution as dev.
   start  run the agent in dir (default .) in production posture — the SAME assembly as dev
          (your folder is the agent), just no file-watching. No build step: start reads the
          definition directly; model/http come from fastagent.config.ts (frozen by git, not a manifest).
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          port precedence:  --port > PORT env > fastagent.config.ts http.port > 8787
          sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions
-                   (point FASTAGENT_SESSIONS_DIR at a volume so a redeploy never wipes conversations)`);
+                   (point FASTAGENT_SESSIONS_DIR at a volume so a redeploy never wipes conversations)
+  add    github: scaffold channels/<kind>.ts (third-party adapter glue, an on() to edit). skill
+         <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a local
+         path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff).
+  login  authenticate a model provider into ~/.fastagent/auth.json: pick a method (subscription/OAuth
+         or API key), then a provider that offers it (configured status shown). [provider] takes the
+         method from what that provider supports, asked only when it offers both.`);
   process.exit(code);
 }
 
@@ -100,6 +112,7 @@ const dir = resolve(dirArg ?? ".");
 if (command === "init") await runInit();
 else if (command === "models") runModels();
 else if (command === "tool") await runTool();
+else if (command === "invoke") await runInvoke();
 else if (command === "dev") await runDev();
 else if (command === "chat") await runChat();
 else if (command === "start") await runStart();
@@ -107,9 +120,16 @@ else if (command === "add") await runAdd();
 else if (command === "login") await runLogin();
 else usage(1);
 
-/** `fastagent models`: print every registered "provider/modelId" to stdout (pipe-friendly). */
+/**
+ * `fastagent models [search]`: print every registered "provider/modelId" to stdout (pipe-friendly).
+ * `[search]` filters by case-insensitive substring (the full list is long — 35 providers).
+ */
 function runModels(): void {
-  for (const spec of listModels(createPiModels())) console.log(spec);
+  const search = positionals[1]?.toLowerCase();
+  const specs = listModels(createPiModels());
+  const shown = search ? specs.filter((spec) => spec.toLowerCase().includes(search)) : specs;
+  for (const spec of shown) console.log(spec);
+  if (search && shown.length === 0) console.error(`no model matches "${positionals[1]}"`);
 }
 
 /**
@@ -154,6 +174,39 @@ async function runTool(): Promise<void> {
       ? result.details
       : (result?.content ?? []).map((c) => ("text" in c ? c.text : "")).join("");
   console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2));
+}
+
+/**
+ * `fastagent invoke <message> [dir]`: run ONE turn against the assembled agent, then exit — no server,
+ * no TUI. The SAME assembly as dev/start (the folder is the agent), so it answers exactly as the
+ * served agent would. The reply text streams to stdout; tool and diagnostic lines go to stderr; a
+ * `failed` event exits non-zero. The all-agent counterpart of `tool` (one tool, no model): for CI
+ * smoke and quick "what does it answer to X" checks while authoring.
+ */
+async function runInvoke(): Promise<void> {
+  const message = positionals[1];
+  if (!message) {
+    console.error(`usage: fastagent invoke <message> [dir]`);
+    process.exit(2);
+  }
+  const invokeDir = resolve(positionals[2] ?? ".");
+  loadDotEnv(invokeDir); // model API key from .env, like start
+  setGlobalDispatcher(new EnvHttpProxyAgent());
+  installUndiciFetch();
+  const { agent, modelSpec } = await createPiAgentFromWorkspace(invokeDir, { model: values.model }).catch(failStartup);
+  console.error(`[fastagent] invoke: ${invokeDir} (${modelSpec})`);
+  // A fresh session per invoke (one-shot — no resume); the reply streams to stdout as it arrives.
+  let failed = false;
+  for await (const event of agent.invoke({ session: randomUUID() }, { text: message })) {
+    if (event.type === "text") process.stdout.write(event.delta);
+    else if (event.type === "tool_started") console.error(`\n[tool] ${event.name}`);
+    else if (event.type === "failed") {
+      failed = true;
+      console.error(`\n[fastagent] failed: ${event.details}${event.retryable ? " (retryable)" : ""}`);
+    }
+  }
+  process.stdout.write("\n");
+  if (failed) process.exit(1); // a failed turn is a non-zero exit so CI can gate on it
 }
 
 async function runInit(): Promise<void> {
