@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,5 +64,41 @@ describe("cli papercuts", () => {
     expect(code).toBe(1);
     expect(stderr).toMatch(/missing model/);
     expect(stdout).toBe(""); // a failure never pollutes stdout
+  });
+
+  it("info reports the assembled surface as JSON, read-only (no sessions dir created)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-info-"));
+    await mkdir(join(dir, "skills", "greet"), { recursive: true });
+    await mkdir(join(dir, "channels"), { recursive: true });
+    await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
+    await writeFile(
+      join(dir, "skills", "greet", "SKILL.md"),
+      "---\nname: greet\ndescription: Greet warmly.\n---\nHi.\n",
+    );
+    await writeFile(
+      join(dir, "channels", "github.ts"),
+      'export default () => ({ "POST /x": () => new Response("ok") });\n',
+    );
+    const env = { ...process.env };
+    delete env.FASTAGENT_MODEL;
+    const { code, stdout } = await run(["info", dir, "--json"], undefined, env);
+    expect(code).toBe(0); // an unset model is reported, not fatal
+    const info = JSON.parse(stdout);
+    expect(info.model).toBeNull();
+    expect(info.instructions).toBe(true);
+    expect(info.skills.map((s: { name: string }) => s.name)).toEqual(["greet"]);
+    expect(info.channels).toEqual(["github"]);
+    await expect(stat(join(dir, ".fastagent"))).rejects.toThrow(); // read-only: never creates sessions dir
+  });
+
+  it("info surfaces a malformed skill as a diagnostic instead of crashing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-info-"));
+    await mkdir(join(dir, "skills", "bad"), { recursive: true });
+    await writeFile(join(dir, "skills", "bad", "SKILL.md"), "---\nname: bad\n---\nno description.\n"); // no description
+    const { code, stdout } = await run(["info", dir, "--json", "--model", "x/y"]);
+    expect(code).toBe(0);
+    const info = JSON.parse(stdout);
+    expect(info.skills).toEqual([]); // the malformed skill is skipped, not loaded
+    expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // and surfaced as a diagnostic
   });
 });

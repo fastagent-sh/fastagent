@@ -14,6 +14,7 @@
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { autocomplete, isCancel, log, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
@@ -25,11 +26,11 @@ import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { runDevSupervisor } from "./dev-supervisor.ts";
 import { loadChannels } from "./engines/pi/channel.ts";
 import { fastagentVersion } from "./engines/pi/version.ts";
-import { listModels, loadConfig, resolveSessionsDirOverride } from "./engines/pi/config.ts";
+import { listModels, loadConfig, resolveModelSpec, resolveSessionsDirOverride } from "./engines/pi/config.ts";
 import { FASTAGENT_AUTH_PATH } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
-import { loadRootIgnore } from "./engines/pi/definition.ts";
+import { loadAgentDefinition, loadRootIgnore } from "./engines/pi/definition.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import {
@@ -44,6 +45,7 @@ function usage(code: number): never {
   console.error(`usage:
   fastagent init   [dir] [--minimal] [--no-install]
   fastagent models [search]
+  fastagent info   [dir] [--json]
   fastagent tool   <name> '<json-args>' [dir]
   fastagent invoke <message> [dir] [--model provider/modelId]
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--no-watch]
@@ -65,6 +67,10 @@ function usage(code: number): never {
          --no-install   scaffold but skip npm install
   models list the available "provider/modelId" specs ([search] filters by substring; use one with
          --model or in the config).
+  info   print what dir (default .) ASSEMBLES into — model, AGENTS.md, skills, tools (+ collisions),
+         channels, sessions, load diagnostics — WITHOUT serving. Read-only (never creates sessions /
+         writes .gitignore); an unset model is reported, not fatal. --json for CI. Run it first when
+         something looks off.
   tool   run one tool (from tools/ or config.tools) directly with JSON args — no model, no
          server, no tokens. Fast feedback while authoring: fastagent tool add '{"a":2,"b":3}'
   invoke run ONE turn against the assembled agent and exit — no server, no TUI. The reply streams
@@ -96,6 +102,7 @@ const { positionals, values } = parseArgs({
     "no-install": { type: "boolean" },
     "no-watch": { type: "boolean" },
     update: { type: "boolean" },
+    json: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean", short: "v" },
   },
@@ -113,6 +120,7 @@ if (command === "init") await runInit();
 else if (command === "models") runModels();
 else if (command === "tool") await runTool();
 else if (command === "invoke") await runInvoke();
+else if (command === "info") await runInfo();
 else if (command === "dev") await runDev();
 else if (command === "chat") await runChat();
 else if (command === "start") await runStart();
@@ -207,6 +215,72 @@ async function runInvoke(): Promise<void> {
   }
   process.stdout.write("\n");
   if (failed) process.exit(1); // a failed turn is a non-zero exit so CI can gate on it
+}
+
+/** List channel file basenames in <dir>/channels/ — the authoring view (no import, unlike loadChannels). */
+async function discoverChannelFiles(workspaceDir: string): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await readdir(join(workspaceDir, "channels"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; // no channels/ is normal
+    throw error;
+  }
+  return names
+    .filter((n) => /\.(ts|js|mjs)$/.test(n) && !n.endsWith(".d.ts"))
+    .map((n) => n.replace(/\.(ts|js|mjs)$/, ""))
+    .sort();
+}
+
+/**
+ * `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into — model, AGENTS.md, skills,
+ * tools (with collisions), channels, sessions dir, and load diagnostics — WITHOUT booting a server.
+ * Read-only inspection: it never creates the sessions dir or writes .gitignore (unlike dev/start), and
+ * an unset model is reported, not fatal. The discovery counterpart of `tool`/`invoke` (which RUN
+ * things): run it first when something looks off (faster than dev), or `--json` it in CI.
+ */
+async function runInfo(): Promise<void> {
+  loadDotEnv(dir); // skills/tools may read env at load time
+  const { config, path: configPath } = await loadConfig(dir).catch(failStartup);
+  const modelSpec = resolveModelSpec(values.model, config);
+  const definition = await loadAgentDefinition(dir).catch(failStartup);
+  const { toolNames, toolCollisions } = await resolveWorkspaceTools(config, dir).catch(failStartup);
+  const channels = await discoverChannelFiles(dir).catch(failStartup);
+  // The default sessions path WITHOUT creating it (info is read-only; dev/start mkdir it, info must not).
+  const sessionsDir = resolveSessionsDirOverride(values["sessions-dir"]) ?? join(dir, ".fastagent", "sessions");
+
+  if (values.json) {
+    console.log(
+      JSON.stringify(
+        {
+          dir,
+          configPath: configPath ?? null,
+          model: modelSpec ?? null,
+          instructions: definition.instructions !== undefined,
+          skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
+          tools: toolNames,
+          channels,
+          sessionsDir,
+          diagnostics: definition.diagnostics,
+          skillCollisions: definition.collisions,
+          toolCollisions,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  console.log(`dir:      ${dir}`);
+  console.log(`config:   ${configPath ?? "(none)"}`);
+  console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
+  console.log(`agents:   ${definition.instructions ? "AGENTS.md" : "(none)"}`);
+  console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
+  console.log(`tools:    ${toolNames.join(", ") || "(none)"}`);
+  console.log(`channels: ${channels.join(", ") || "(none)"}`);
+  console.log(`sessions: ${sessionsDir}`);
+  reportToolCollisions(toolCollisions);
+  reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 }
 
 async function runInit(): Promise<void> {
