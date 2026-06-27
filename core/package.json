@@ -59,6 +59,7 @@
     "format": "biome check --write src test examples"
   },
   "dependencies": {
+    "@clack/prompts": "^1.6.0",
     "@earendil-works/pi-agent-core": "^0.80.2",
     "@earendil-works/pi-ai": "^0.80.2",
     "@earendil-works/pi-coding-agent": "^0.80.2",
