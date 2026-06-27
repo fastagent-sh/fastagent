@@ -14,7 +14,7 @@
  */
 import { spawn } from "node:child_process";
 import { join, relative, resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
+import { autocomplete, isCancel, log, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
 import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import type { Agent } from "./agent.ts";
@@ -275,7 +275,7 @@ async function runAddSkill(): Promise<void> {
 /**
  * `fastagent login [provider]`: authenticate a model provider into `~/.fastagent/auth.json`. An
  * OAuth-capable provider runs the device/browser flow; any other provider id stores an API key. The
- * flow logic lives in engines/pi/login.ts; here we supply the terminal IO (readline + browser open).
+ * flow logic lives in engines/pi/login.ts; here we supply the terminal IO (@clack/prompts + browser open).
  */
 async function runLogin(): Promise<void> {
   const io = terminalLoginIO();
@@ -289,47 +289,21 @@ function openBrowser(url: string): void {
   spawn(cmd, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).on("error", () => {});
 }
 
-/** Read one line of input with NO echo (for API keys), via raw-mode stdin. */
-function readHidden(message: string): Promise<string> {
-  return new Promise((resolveLine, reject) => {
-    const stdin = process.stdin;
-    process.stderr.write(message);
-    const wasRaw = stdin.isRaw ?? false;
-    stdin.setRawMode?.(true);
-    stdin.resume();
-    let buf = "";
-    const done = (fn: () => void) => {
-      stdin.off("data", onData);
-      stdin.setRawMode?.(wasRaw);
-      stdin.pause();
-      process.stderr.write("\n");
-      fn();
-    };
-    const onData = (d: Buffer) => {
-      for (const ch of d.toString("utf8")) {
-        if (ch === "\r" || ch === "\n") return done(() => resolveLine(buf));
-        if (ch === "\u0003") return done(() => reject(new Error("cancelled"))); // Ctrl-C
-        if (ch === "\u007f" || ch === "\b") buf = buf.slice(0, -1);
-        else if (ch >= " ") buf += ch;
-      }
-    };
-    stdin.on("data", onData);
-  });
-}
-
-/** Terminal IO for the login flow: a fresh readline per visible prompt, raw-mode for hidden input. */
+/** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. */
 function terminalLoginIO(): LoginIO {
   return {
-    print: (line) => console.error(line),
-    prompt: async (message, signal) => {
-      const rl = createInterface({ input: process.stdin, output: process.stderr });
-      try {
-        return await (signal ? rl.question(message, { signal }) : rl.question(message));
-      } finally {
-        rl.close();
-      }
+    async select(message, options) {
+      // autocomplete (searchable) once the list is long (the API-key providers); plain select otherwise.
+      const r = await (options.length > 7 ? autocomplete : select)({ message, options });
+      return isCancel(r) ? undefined : (r as string);
     },
-    promptHidden: (message) => readHidden(message),
+    async prompt(message, opts) {
+      const r = opts?.hidden
+        ? await password({ message, signal: opts.signal })
+        : await clackText({ message, signal: opts?.signal });
+      return isCancel(r) ? undefined : (r as string);
+    },
+    note: (message) => log.info(message),
     openUrl: openBrowser,
   };
 }
