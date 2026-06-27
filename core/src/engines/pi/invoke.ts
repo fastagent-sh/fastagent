@@ -73,7 +73,7 @@ function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
 /**
  * Terminal mapping, decided by the resolved message's stopReason: pi's prompt() resolves a message
  * with stopReason "error"/"aborted" rather than throwing, so relying on catch alone would miss this
- * entire failure class (violating "the stream must terminate").
+ * entire failure class (violating SPEC MUST 1).
  */
 function toTerminal(message: AssistantMessage): AgentEvent {
   if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -186,7 +186,8 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         yield terminal;
       } finally {
         // Cleanup MUST NOT throw after the terminal was yielded — that would make an already-closed
-        // event stream throw on iteration. Contain it, but surface it (a cleanup failure is abnormal).
+        // event stream throw on iteration (violating SPEC MUST 2 / MUST 3). Contain it, but surface it
+        // (a cleanup failure is abnormal).
         try {
           unsub();
         } catch (error) {
