@@ -183,13 +183,75 @@ const channel: ChannelModule = (agent) => ({
 export default channel;
 `;
 
+/** A scaffolded `channels/telegram.ts`: the Telegram adapter import + a starter `on()` to edit. */
+const CHANNEL_TELEGRAM_TS = `import { telegramChannel } from "@kid7st/fastagent/telegram";
+import type { ChannelModule } from "@kid7st/fastagent";
+
+// A channel = a third-party ADAPTER (telegramChannel: verify + run + reply) wired to YOUR on() glue.
+// fastagent discovers this file under channels/ and serves the routes it returns. Setup:
+//   1. @BotFather → /newbot → put the bot token in TELEGRAM_BOT_TOKEN
+//   2. pick a random TELEGRAM_SECRET_TOKEN (verifies that inbound updates really come from Telegram)
+//   3. register the webhook once, pointing Telegram at POST /telegram with that secret:
+//        curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \\
+//          -d url=https://your.host/telegram -d secret_token=$TELEGRAM_SECRET_TOKEN
+const channel: ChannelModule = (agent) => ({
+  "POST /telegram": telegramChannel(agent, {
+    secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "", // missing → fails at startup (would accept forged updates)
+    botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",       // used to send the agent's reply back to the chat
+    // Map a verified update to the intents the agent acts on (empty array = ignore). session = chat id
+    // gives each chat its own multi-turn memory; chatId is where the reply goes.
+    on: (update) =>
+      update.message?.text
+        ? [{ session: \`\${update.message.chat.id}\`, text: update.message.text, chatId: update.message.chat.id }]
+        : [],
+  }),
+});
+
+export default channel;
+`;
+
+export type ChannelKind = "github" | "telegram";
+
+interface ChannelScaffold {
+  template: string;
+  /** Env vars the channel reads (printed as `set X` next steps; checked against .env hygiene). */
+  env: string[];
+  /** Channel-specific next-step lines, printed after the env lines and before `fastagent dev`. */
+  steps: string[];
+}
+
+const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
+  github: {
+    template: CHANNEL_GITHUB_TS,
+    env: ["GITHUB_WEBHOOK_SECRET"],
+    steps: ["edit channels/github.ts — map events to intents in on()"],
+  },
+  telegram: {
+    template: CHANNEL_TELEGRAM_TS,
+    env: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"],
+    steps: [
+      "edit channels/telegram.ts — map updates to intents in on()",
+      'register the webhook: curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" -d url=https://<host>/telegram -d secret_token=$TELEGRAM_SECRET_TOKEN',
+    ],
+  },
+};
+
+/** The channel kinds `fastagent add <kind>` can scaffold. */
+export const CHANNEL_KINDS = Object.keys(CHANNEL_SCAFFOLDS) as ChannelKind[];
+
+/** The env vars + next-step lines a scaffolded channel needs (for the CLI to print). */
+export function channelSetup(kind: ChannelKind): { env: string[]; steps: string[] } {
+  const { env, steps } = CHANNEL_SCAFFOLDS[kind];
+  return { env, steps };
+}
+
 /** The path `add <kind>` scaffolds to. */
-function channelPath(dir: string, kind: "github"): string {
+function channelPath(dir: string, kind: ChannelKind): string {
   return join(dir, "channels", `${kind}.ts`);
 }
 
 /** Whether a channel file already exists — checked before any mutation, so a no-clobber re-add is side-effect-free. */
-export async function channelExists(dir: string, kind: "github"): Promise<boolean> {
+export async function channelExists(dir: string, kind: ChannelKind): Promise<boolean> {
   return exists(channelPath(dir, kind));
 }
 
@@ -197,7 +259,7 @@ export async function channelExists(dir: string, kind: "github"): Promise<boolea
  * Scaffold `channels/<kind>.ts` into {@link dir}. Never clobbers an existing file (the `on()` glue is
  * authored content). The wx write is the TOCTOU safety net behind {@link channelExists}.
  */
-export async function scaffoldChannel(dir: string, kind: "github"): Promise<string> {
+export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<string> {
   const channelsDir = join(dir, "channels");
   // Don't write through a channels/ symlink that escapes the workspace; an in-workspace one is fine.
   await assertInsideWorkspace(dir, "channels");
@@ -206,7 +268,7 @@ export async function scaffoldChannel(dir: string, kind: "github"): Promise<stri
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
   }
   await mkdir(channelsDir, { recursive: true });
-  await writeFile(file, CHANNEL_GITHUB_TS, { flag: "wx" });
+  await writeFile(file, CHANNEL_SCAFFOLDS[kind].template, { flag: "wx" });
   return file;
 }
 

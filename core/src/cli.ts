@@ -34,8 +34,11 @@ import { reportDefinitionWarnings, reportToolCollisions } from "./engines/pi/rep
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
 import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import {
+  type ChannelKind,
+  CHANNEL_KINDS,
   assertChannelReady,
   channelExists,
+  channelSetup,
   scaffoldChannel,
   scaffoldWorkspace,
   vendorSkill,
@@ -51,7 +54,7 @@ function usage(code: number): never {
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--no-watch]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
-  fastagent add   github | skill <source> [dir]
+  fastagent add   github | telegram | skill <source> [dir]
   fastagent login [provider]
   fastagent --version
 
@@ -83,9 +86,9 @@ function usage(code: number): never {
          port precedence:  --port > PORT env > fastagent.config.ts http.port > 8787
          sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions
                    (point FASTAGENT_SESSIONS_DIR at a volume so a redeploy never wipes conversations)
-  add    github: scaffold channels/<kind>.ts (third-party adapter glue, an on() to edit). skill
-         <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a local
-         path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
+  add    github | telegram: scaffold channels/<kind>.ts (third-party adapter glue, an on() to edit).
+         skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
+         local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   login  authenticate a model provider into ~/.fastagent/auth.json: pick a method (subscription/OAuth
          or API key), then a provider that offers it (configured status shown). [provider] takes the
          method from what that provider supports, asked only when it offers both.`);
@@ -295,21 +298,22 @@ async function runInit(): Promise<void> {
   console.error(`    fastagent dev   # serve locally and iterate`);
 }
 
-/** `fastagent add github [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
+/** `fastagent add <channel> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
 async function runAdd(): Promise<void> {
   const kind = positionals[1];
   if (kind === "skill") return runAddSkill();
   const target = resolve(positionals[2] ?? ".");
-  if (kind !== "github") {
-    console.error(`usage: fastagent add github [dir]  |  fastagent add skill <source> [dir]`);
+  if (!CHANNEL_KINDS.includes(kind as ChannelKind)) {
+    console.error(`usage: fastagent add ${CHANNEL_KINDS.join(" | ")} [dir]  |  fastagent add skill <source> [dir]`);
     process.exit(1);
   }
+  const channelKind = kind as ChannelKind;
   // Preconditions before the write, so a refusal is side-effect-free.
-  if (await channelExists(target, kind).catch(failStartup)) {
-    failStartup(new Error(`channels/${kind}.ts already exists — edit it, or remove it to re-scaffold`));
+  if (await channelExists(target, channelKind).catch(failStartup)) {
+    failStartup(new Error(`channels/${channelKind}.ts already exists — edit it, or remove it to re-scaffold`));
   }
   await assertChannelReady(target).catch(failStartup);
-  const file = await scaffoldChannel(target, kind).catch(failStartup);
+  const file = await scaffoldChannel(target, channelKind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
   // Secret-hygiene check (read-only): warn when .env is not ignored, since a deploy that copies the
   // directory would ship a secret placed there. Warn, not refuse — on() may read a real env var.
@@ -319,11 +323,12 @@ async function runAdd(): Promise<void> {
       `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
     );
   }
+  const { env, steps } = channelSetup(channelKind);
   console.error(`  next steps:`);
   console.error(`    npm install                      # if @kid7st/fastagent is not installed yet`);
-  console.error(`    set GITHUB_WEBHOOK_SECRET${envIgnored ? " in .env (gitignored)" : ""}`);
-  console.error(`    edit channels/github.ts — map events to intents in on()`);
-  console.error(`    fastagent dev   # serve the webhook locally`);
+  for (const v of env) console.error(`    set ${v}${envIgnored ? " in .env (gitignored)" : ""}`);
+  for (const s of steps) console.error(`    ${s}`);
+  console.error(`    fastagent dev   # serve locally`);
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

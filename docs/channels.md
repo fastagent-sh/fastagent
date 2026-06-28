@@ -33,7 +33,7 @@ channels/
 
 ## Two layers: adapter + glue
 
-Every channel is an **adapter** (reusable verify + parse + ACK logic, possibly with an SDK) wired to your **`on()` glue** (which maps events to agent intents). You write only the glue.
+Every channel is an **adapter** (reusable verify + parse + ACK logic, possibly with an SDK) wired to your **`on()` glue** (which maps events to agent intents). You write only the glue. For the first-party channels, `fastagent add github` / `fastagent add telegram` scaffold the file below (with the env vars + setup steps printed as next steps).
 
 **GitHub** (`@kid7st/fastagent/github`) — fire-and-forget; the agent replies out-of-band (e.g. via `gh`). The channel holds only the inbound secret.
 

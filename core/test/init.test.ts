@@ -198,7 +198,7 @@ describe("init: scaffoldWorkspace", () => {
   });
 });
 
-describe("add: fastagent add github", () => {
+describe("add: fastagent add <channel> (github / telegram)", () => {
   // A fastagent-ready workspace, as `fastagent init` produces it: an ESM package declaring the dep.
   // `add` scaffolds INTO this; it never bootstraps it (that is init's job).
   async function readyWorkspace(): Promise<string> {
@@ -231,6 +231,25 @@ describe("add: fastagent add github", () => {
     const out2 = await cliInit(["add", "github"], dir);
     expect(out2).toMatch(/already exists/);
     expect(await readFile(join(dir, "channels", "github.ts"), "utf8")).toBe(src);
+  });
+
+  it("scaffolds channels/telegram.ts (a second channel kind) and coexists with github", async () => {
+    const dir = await readyWorkspace();
+    const out = await cliInit(["add", "telegram"], dir);
+    expect(out).toContain("channels/telegram.ts");
+    const src = await readFile(join(dir, "channels", "telegram.ts"), "utf8");
+    expect(src).toContain('from "@kid7st/fastagent/telegram"'); // the adapter
+    expect(src).toContain("POST /telegram");
+    expect(src).toContain("on:"); // the app glue stub
+    // next steps carry this channel's env vars + the setWebhook reminder (not github's)
+    expect(out).toContain("TELEGRAM_BOT_TOKEN");
+    expect(out).toContain("setWebhook");
+    expect(out).not.toContain("GITHUB_WEBHOOK_SECRET");
+
+    // two channels coexist in one workspace (the discovery/merge mechanism handles many)
+    await cliInit(["add", "github"], dir);
+    expect(await exists(join(dir, "channels", "github.ts"))).toBe(true);
+    expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true);
   });
 
   it("refuses (writing nothing) when the workspace is not channel-ready, with an actionable message", async () => {
