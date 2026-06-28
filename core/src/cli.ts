@@ -9,8 +9,8 @@ import { readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { autocomplete, isCancel, log, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
-import { EnvHttpProxyAgent, install as installUndiciFetch, setGlobalDispatcher } from "undici";
 import type { Agent } from "./agent.ts";
+import { installProxyFetch } from "./proxy.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
@@ -55,7 +55,7 @@ function usage(code: number): never {
   fastagent invoke <message> [dir] [--model provider/modelId]
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
-  fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
+  fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--tunnel]
   fastagent add   github | telegram | skill <source> [dir]
   fastagent login [provider]
   fastagent --version
@@ -90,6 +90,8 @@ function usage(code: number): never {
          port precedence:  --port > PORT env > fastagent.config.ts http.port > 8787
          sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions
                    (point FASTAGENT_SESSIONS_DIR at a volume so a redeploy never wipes conversations)
+         --tunnel  same as dev: a public HTTPS URL + auto-registered webhooks, for hosting a bot from
+                   your own box without deploying (the quick-tunnel URL is ephemeral, not for production)
   add    github | telegram: scaffold channels/<kind>.ts (third-party adapter glue, an on() to edit).
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
@@ -193,8 +195,7 @@ async function runInvoke(): Promise<void> {
   }
   const invokeDir = resolve(positionals[2] ?? ".");
   loadDotEnv(invokeDir);
-  setGlobalDispatcher(new EnvHttpProxyAgent());
-  installUndiciFetch();
+  installProxyFetch();
   const { agent, modelSpec } = await createPiAgentFromWorkspace(invokeDir, { model: values.model }).catch(failStartup);
   console.error(`[fastagent] invoke: ${invokeDir} (${modelSpec})`);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
@@ -205,7 +206,9 @@ async function runInvoke(): Promise<void> {
     (line) => console.error(line),
   );
   process.stdout.write("\n");
-  if (exitCode !== 0) process.exit(exitCode);
+  // Always exit explicitly: the undici proxy agent's keep-alive sockets would otherwise hold the
+  // event loop open after a successful one-shot turn.
+  process.exit(exitCode);
 }
 
 /** List channel file basenames in <dir>/channels/ — the authoring view (no import, unlike loadChannels). */
@@ -376,9 +379,12 @@ async function runAddSkill(): Promise<void> {
 
 /** `fastagent login [provider]`: authenticate a model provider into `~/.fastagent/auth.json`. */
 async function runLogin(): Promise<void> {
+  loadDotEnv(dir); // a proxy (HTTPS_PROXY) may be configured in the workspace .env
+  installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
   const io = terminalLoginIO();
   const result = await loginFlow(io, { provider: positionals[1] }).catch(failStartup);
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${FASTAGENT_AUTH_PATH}`);
+  process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
 }
 
 /** Best-effort open a URL in the default browser; failure is fine (the URL is always printed too). */
@@ -477,12 +483,21 @@ async function runDev(): Promise<void> {
 function maybeTunnel(workspaceDir: string, boundPort: number): void {
   if (!values.tunnel || process.env.FASTAGENT_DEV_WORKER === "1") return;
   void startCloudflareTunnel(boundPort).then((t) => {
-    if (t) void announceWebhooks(workspaceDir, t.url);
+    if (!t) return;
+    void announceWebhooks(workspaceDir, t.url);
+    // Single-process (start / --no-watch): close the tunnel on exit (watch mode's supervisor owns its own).
+    const cleanup = (): never => {
+      t.close();
+      process.exit(0);
+    };
+    process.once("SIGINT", cleanup);
+    process.once("SIGTERM", cleanup);
   });
 }
 
 async function runChat(): Promise<void> {
   loadDotEnv(dir);
+  installProxyFetch(); // model calls (and the login dialog) must go through the proxy too
   // Run the chat process IN the workspace: pi resolves a session's cwd as `header.cwd ?? process.cwd()`,
   // so aligning process.cwd() with the workspace keeps a cwd-less session on the workspace. `dir` is absolute.
   process.chdir(dir);
@@ -495,10 +510,7 @@ async function runChat(): Promise<void> {
 async function serveOnce(): Promise<void> {
   const portFlag = parsePort(values.port, "--port");
   loadDotEnv(dir);
-  // Route fetch through the local proxy and keep fetch + dispatcher on the same undici implementation
-  // (otherwise Node's bundled fetch skips gzip decompression — empty stopReason:"stop" messages).
-  setGlobalDispatcher(new EnvHttpProxyAgent());
-  installUndiciFetch();
+  installProxyFetch();
 
   const a = await createPiAgentFromWorkspace(dir, { model: values.model }).catch(failStartup);
   console.error(`[fastagent] dir:    ${a.definition.dir}`);
@@ -513,8 +525,7 @@ async function serveOnce(): Promise<void> {
 async function runStart(): Promise<void> {
   const portFlag = parsePort(values.port, "--port");
   loadDotEnv(dir);
-  setGlobalDispatcher(new EnvHttpProxyAgent());
-  installUndiciFetch();
+  installProxyFetch();
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(values["sessions-dir"]);

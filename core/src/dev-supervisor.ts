@@ -6,6 +6,7 @@
  */
 import { spawn } from "node:child_process";
 import { watch as watchTree } from "chokidar";
+import { installProxyFetch } from "./proxy.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** Spawn the dev worker and restart it on workspace edits; supervise its lifecycle until the process exits. */
@@ -17,6 +18,9 @@ export function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}
   // The supervisor owns the tunnel so the public URL survives worker reloads (a fresh tunnel per save
   // would mean a new URL + re-registering the webhook on every edit).
   let tunnel: Tunnel | undefined;
+  // The supervisor itself calls the channel webhook APIs (setWebhook) when announcing the tunnel, so
+  // it needs the proxy too (workers install their own). A region-blocked api.telegram.org fails otherwise.
+  if (options.tunnel) installProxyFetch();
 
   const spawnWorker = (): void => {
     // ipc fd so the worker can signal readiness once it binds; stdio otherwise inherited.
