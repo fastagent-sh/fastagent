@@ -107,5 +107,6 @@ There is **no build step** — the directory IS the agent. `start` runs it exact
 
 ## Where next
 
+- [embedding](embedding.md) — use FastAgent as a library instead of the CLI: get an agent, consume the stream, mount it in your own route (Next/Hono/Bun/Node).
 - [SPEC](SPEC.md) — the Agent Handler contract (`invoke(scope, prompt) => AsyncIterable<AgentEvent>`) the whole thing rests on.
 - [core-design](core-design.md) — the pi reference implementation, the N × M × K layering, and the dev/start deployment model.
