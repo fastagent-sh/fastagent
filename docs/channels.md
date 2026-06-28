@@ -96,6 +96,16 @@ export default channel;
 
 `fastagent start` discovers `channels/slack.ts`; the Slack SDK is in the **workspace's** `node_modules`, not the main package. This is the same discovery/merge mechanism as multiple channels — long-tail and multi-channel are one mechanism.
 
+## Local development: a public URL
+
+Webhooks need a public HTTPS URL, but `fastagent dev` serves `localhost`. `--tunnel` bridges the gap:
+
+```bash
+fastagent dev --tunnel
+```
+
+It starts the server, opens a [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) (needs `cloudflared` installed — it prints an install hint if missing, and serves without a tunnel), prints the public URL, and **auto-registers the first-party webhooks**: it calls Telegram `setWebhook` (using the `.env` tokens) and prints the GitHub Payload URL to paste into repo settings. The tunnel is owned by the watch supervisor, so the URL **survives reloads** — edit and save without re-registering. `fastagent add telegram` scaffolds the `.env` vars (with a generated secret) and points you straight at `fastagent dev --tunnel`.
+
 ## Authoring an adapter
 
 An adapter is a `(agent, options) => (req: Request) => Promise<Response>`. It needs only the public `@kid7st/fastagent` surface — the **channel-authoring kit** — so a third-party package depends on nothing else:

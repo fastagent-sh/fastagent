@@ -235,16 +235,23 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
 
   it("scaffolds channels/telegram.ts (a second channel kind) and coexists with github", async () => {
     const dir = await readyWorkspace();
+    await writeFile(join(dir, ".env.example"), "# env\n"); // add injects channel env vars here
     const out = await cliInit(["add", "telegram"], dir);
     expect(out).toContain("channels/telegram.ts");
     const src = await readFile(join(dir, "channels", "telegram.ts"), "utf8");
     expect(src).toContain('from "@kid7st/fastagent/telegram"'); // the adapter
     expect(src).toContain("POST /telegram");
     expect(src).toContain("on:"); // the app glue stub
-    // next steps carry this channel's env vars + the setWebhook reminder (not github's)
+    // next steps carry this channel's env vars (with hints), not github's
     expect(out).toContain("TELEGRAM_BOT_TOKEN");
-    expect(out).toContain("setWebhook");
+    expect(out).toContain("@BotFather");
+    expect(out).toContain("--tunnel");
     expect(out).not.toContain("GITHUB_WEBHOOK_SECRET");
+
+    // env vars are injected into .env.example so a copy-to-.env finds them
+    const envExample = await readFile(join(dir, ".env.example"), "utf8");
+    expect(envExample).toContain("telegram channel");
+    expect(envExample).toContain("TELEGRAM_SECRET_TOKEN");
 
     // two channels coexist in one workspace (the discovery/merge mechanism handles many)
     await cliInit(["add", "github"], dir);

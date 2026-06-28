@@ -4,7 +4,7 @@
  * effects (proxy dispatcher, .env loading) belong here.
  */
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { autocomplete, isCancel, log, password, select, text as clackText } from "@clack/prompts";
@@ -15,6 +15,7 @@ import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { runDevSupervisor } from "./dev-supervisor.ts";
+import { announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 import { loadChannels } from "./engines/pi/channel.ts";
 import { isModuleFile } from "./engines/pi/loader.ts";
 import { fastagentVersion } from "./engines/pi/version.ts";
@@ -36,6 +37,7 @@ import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import {
   type ChannelKind,
   CHANNEL_KINDS,
+  appendChannelEnv,
   assertChannelReady,
   channelExists,
   channelSetup,
@@ -51,7 +53,7 @@ function usage(code: number): never {
   fastagent info   [dir] [--json]
   fastagent tool   <name> '<json-args>' [dir]
   fastagent invoke <message> [dir] [--model provider/modelId]
-  fastagent dev    [dir] [--port N] [--model provider/modelId] [--no-watch]
+  fastagent dev    [dir] [--port N] [--model provider/modelId] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir]
   fastagent add   github | telegram | skill <source> [dir]
@@ -60,6 +62,8 @@ function usage(code: number): never {
 
   dev    assemble the agent in dir (default .) and serve a local HTTP channel.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
+         --tunnel  expose it on a public HTTPS URL via a Cloudflare quick tunnel (needs cloudflared)
+                   and auto-register the webhook channels (telegram setWebhook; github prints the URL)
   chat   open the SAME assembled agent in pi's interactive TUI (the real harness, not a
          crude REPL) — to try it locally before serving. Same model/tool/skill resolution
          as dev; pi handles login, sessions, and /resume natively.
@@ -104,6 +108,7 @@ const { positionals, values } = parseArgs({
     minimal: { type: "boolean" },
     "no-install": { type: "boolean" },
     "no-watch": { type: "boolean" },
+    tunnel: { type: "boolean" },
     update: { type: "boolean" },
     json: { type: "boolean" },
     help: { type: "boolean", short: "h" },
@@ -315,6 +320,9 @@ async function runAdd(): Promise<void> {
   await assertChannelReady(target).catch(failStartup);
   const file = await scaffoldChannel(target, channelKind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
+  if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
+    console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
+  }
   // Secret-hygiene check (read-only): warn when .env is not ignored, since a deploy that copies the
   // directory would ship a secret placed there. Warn, not refuse — on() may read a real env var.
   const envIgnored = (await loadRootIgnore(target).catch(failStartup))?.ignores(".env") ?? false;
@@ -326,9 +334,12 @@ async function runAdd(): Promise<void> {
   const { env, steps } = channelSetup(channelKind);
   console.error(`  next steps:`);
   console.error(`    npm install                      # if @kid7st/fastagent is not installed yet`);
-  for (const v of env) console.error(`    set ${v}${envIgnored ? " in .env (gitignored)" : ""}`);
+  for (const e of env) {
+    const value = e.generate ? `=${randomBytes(24).toString("hex")}` : "";
+    console.error(`    set ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
+  }
   for (const s of steps) console.error(`    ${s}`);
-  console.error(`    fastagent dev   # serve locally`);
+  console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */
@@ -455,7 +466,19 @@ async function runDev(): Promise<void> {
     return;
   }
   parsePort(values.port, "--port"); // flag-shape check before spawning
-  runDevSupervisor(dir);
+  runDevSupervisor(dir, { tunnel: values.tunnel ?? false });
+}
+
+/**
+ * Start a Cloudflare tunnel + announce/register webhooks once the server is bound — unless this is a
+ * watch-supervisor worker, where the supervisor owns the long-lived tunnel so the public URL survives
+ * reloads.
+ */
+function maybeTunnel(workspaceDir: string, boundPort: number): void {
+  if (!values.tunnel || process.env.FASTAGENT_DEV_WORKER === "1") return;
+  void startCloudflareTunnel(boundPort).then((t) => {
+    if (t) void announceWebhooks(workspaceDir, t.url);
+  });
 }
 
 async function runChat(): Promise<void> {
@@ -484,7 +507,7 @@ async function serveOnce(): Promise<void> {
   await reportAuth(a.modelSpec);
   reportAgentsSkillsTools(a);
   const routes = await routesFor(dir, a.agent).catch(failStartup);
-  serve(routes, portFlag ?? a.config.http?.port ?? 8787);
+  serve(routes, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.definition.dir, p));
 }
 
 async function runStart(): Promise<void> {
@@ -516,7 +539,9 @@ async function runStart(): Promise<void> {
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
   const routes = await routesFor(dir, agent).catch(failStartup);
-  serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787);
+  serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787, (p) =>
+    maybeTunnel(dir, p),
+  );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits, losing in-flight turns
   // (durable execution is the real fix, deferred).
 }
@@ -543,12 +568,13 @@ async function routesFor(workspaceDir: string, agent: Agent): Promise<Routes> {
 }
 
 /** Serve `routes` via the Node host. serveNode owns binding; the CLI owns policy (errors, ready signal, log). */
-function serve(routes: Routes, port: number): void {
+function serve(routes: Routes, port: number, onListening?: (boundPort: number) => void): void {
   serveNode(router(routes), { port }).listening.then(
     (boundPort) => {
-      process.send?.({ type: "ready" }); // tell the dev supervisor we bound (no-op without an IPC channel)
+      process.send?.({ type: "ready", port: boundPort }); // tell the dev supervisor we bound + on which port
       console.error(`[fastagent] http channel on :${boundPort}`);
       console.error(`[fastagent] routes: ${Object.keys(routes).join(", ") || "(none)"}`);
+      onListening?.(boundPort);
     },
     (error: NodeJS.ErrnoException) => {
       if (error.code === "EADDRINUSE") console.error(`port ${port} is already in use; choose another with --port`);

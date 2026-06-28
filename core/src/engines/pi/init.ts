@@ -8,7 +8,7 @@
  * preflights non-directory scaffold parents, and rolls back a partial write. It does not defend
  * against every pathological target state (TOCTOU, FIFOs, disk-full): recover by delete-and-retry.
  */
-import { access, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, appendFile, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -212,27 +212,42 @@ export default channel;
 
 export type ChannelKind = "github" | "telegram";
 
+/** An env var a scaffolded channel reads. `generate` = a random-string secret the CLI can pre-fill. */
+export interface ChannelEnv {
+  name: string;
+  hint: string;
+  generate?: boolean;
+}
+
 interface ChannelScaffold {
   template: string;
-  /** Env vars the channel reads (printed as `set X` next steps; checked against .env hygiene). */
-  env: string[];
-  /** Channel-specific next-step lines, printed after the env lines and before `fastagent dev`. */
+  env: ChannelEnv[];
+  /** Channel-specific next-step lines, printed after the env lines and before the `dev` line. */
   steps: string[];
 }
 
 const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   github: {
     template: CHANNEL_GITHUB_TS,
-    env: ["GITHUB_WEBHOOK_SECRET"],
-    steps: ["edit channels/github.ts — map events to intents in on()"],
+    env: [
+      {
+        name: "GITHUB_WEBHOOK_SECRET",
+        hint: "any random string; set the same value in the GitHub webhook",
+        generate: true,
+      },
+    ],
+    steps: [
+      "edit channels/github.ts — map events to intents in on()",
+      "add the webhook in your repo (Settings → Webhooks): Payload URL = <public-url>/webhook, content type application/json",
+    ],
   },
   telegram: {
     template: CHANNEL_TELEGRAM_TS,
-    env: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"],
-    steps: [
-      "edit channels/telegram.ts — map updates to intents in on()",
-      'register the webhook: curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" -d url=https://<host>/telegram -d secret_token=$TELEGRAM_SECRET_TOKEN',
+    env: [
+      { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot" },
+      { name: "TELEGRAM_SECRET_TOKEN", hint: "any random string; verifies inbound updates", generate: true },
     ],
+    steps: ["edit channels/telegram.ts — map updates to intents in on()"],
   },
 };
 
@@ -240,9 +255,30 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
 export const CHANNEL_KINDS = Object.keys(CHANNEL_SCAFFOLDS) as ChannelKind[];
 
 /** The env vars + next-step lines a scaffolded channel needs (for the CLI to print). */
-export function channelSetup(kind: ChannelKind): { env: string[]; steps: string[] } {
+export function channelSetup(kind: ChannelKind): { env: ChannelEnv[]; steps: string[] } {
   const { env, steps } = CHANNEL_SCAFFOLDS[kind];
   return { env, steps };
+}
+
+/**
+ * Append a channel's env vars (commented placeholders + hints) to `.env.example`, so a developer who
+ * copies it to `.env` finds the vars already there. No-op when there is no `.env.example` or the block
+ * is already present. Placeholders only — no real secret lands in the committable template.
+ */
+export async function appendChannelEnv(dir: string, kind: ChannelKind): Promise<boolean> {
+  const file = join(dir, ".env.example");
+  let current: string;
+  try {
+    current = await readFile(file, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
+  }
+  const marker = `# --- ${kind} channel ---`;
+  if (current.includes(marker)) return false;
+  const block = `\n${marker}\n${CHANNEL_SCAFFOLDS[kind].env.map((e) => `# ${e.name}=   # ${e.hint}`).join("\n")}\n`;
+  await appendFile(file, block);
+  return true;
 }
 
 /** The path `add <kind>` scaffolds to. */

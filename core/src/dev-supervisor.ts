@@ -6,13 +6,17 @@
  */
 import { spawn } from "node:child_process";
 import { watch as watchTree } from "chokidar";
+import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** Spawn the dev worker and restart it on workspace edits; supervise its lifecycle until the process exits. */
-export function runDevSupervisor(dir: string): void {
+export function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}): void {
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
   let timer: NodeJS.Timeout | undefined;
+  // The supervisor owns the tunnel so the public URL survives worker reloads (a fresh tunnel per save
+  // would mean a new URL + re-registering the webhook on every edit).
+  let tunnel: Tunnel | undefined;
 
   const spawnWorker = (): void => {
     // ipc fd so the worker can signal readiness once it binds; stdio otherwise inherited.
@@ -22,8 +26,18 @@ export function runDevSupervisor(dir: string): void {
       env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
     });
     worker = w;
-    w.on("message", (m: { type?: string }) => {
-      if (m?.type === "ready") everServed = true;
+    w.on("message", (m: { type?: string; port?: number }) => {
+      if (m?.type !== "ready") return;
+      everServed = true;
+      // Start the tunnel once, on the first worker that binds; reuse it across reloads.
+      if (options.tunnel && !tunnel && typeof m.port === "number") {
+        void startCloudflareTunnel(m.port).then((t) => {
+          if (t) {
+            tunnel = t;
+            void announceWebhooks(dir, t.url);
+          }
+        });
+      }
     });
     w.on("exit", (code, signal) => {
       if (worker !== w) return; // already superseded
@@ -75,6 +89,7 @@ export function runDevSupervisor(dir: string): void {
 
   const shutdown = (): never => {
     worker?.kill("SIGTERM");
+    tunnel?.close();
     void watcher.close();
     process.exit(0);
   };
