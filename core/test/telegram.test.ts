@@ -35,6 +35,22 @@ const echoOn = (u: TelegramUpdate) => {
   return m?.text ? [{ session: `${m.chat.id}`, text: m.text, chatId: m.chat.id }] : [];
 };
 
+/** Mirrors the scaffold's auto-adapting on(): per-thread session + reply-in-thread when present. */
+const threadOn = (u: TelegramUpdate) => {
+  const m = u.message;
+  if (!m?.text) return [];
+  const session = m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`;
+  return [{ session, text: m.text, chatId: m.chat.id, threadId: m.message_thread_id }];
+};
+
+/** fetch calls to a given Bot API method (endsWith disambiguates sendMessage vs sendMessageDraft). */
+const callsTo = (m: ReturnType<typeof vi.fn>, method: string) =>
+  m.mock.calls.filter((c) => String(c[0]).endsWith(`/${method}`)) as [string, RequestInit][];
+const bodyOf = (call: [string, RequestInit] | undefined) => {
+  if (!call) throw new Error("expected a matching fetch call");
+  return JSON.parse(String(call[1].body));
+};
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("telegram channel", () => {
@@ -99,10 +115,52 @@ describe("telegram channel", () => {
     await flush();
 
     expect(calls).toEqual([{ session: "42", text: "hi" }]);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe(`${API}/botBOT/sendMessage`);
-    expect(JSON.parse(String(init.body))).toMatchObject({ chat_id: 42, text: "hello back" });
+    expect(callsTo(fetchMock, "sendMessageDraft").length).toBeGreaterThan(0); // streamed live, not just final
+    const sent = callsTo(fetchMock, "sendMessage");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.[0]).toBe(`${API}/botBOT/sendMessage`);
+    expect(bodyOf(sent[0])).toMatchObject({ chat_id: 42, text: "hello back" });
+  });
+
+  it("auto-adapts to Threaded Mode: per-thread session + reply sent into the same thread", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent, calls } = replyingAgent("yo");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: threadOn, apiBaseUrl: API });
+    const threaded: TelegramUpdate = {
+      update_id: 7,
+      message: { message_id: 2, text: "hi", message_thread_id: 99, chat: { id: 42, type: "private" } },
+    };
+    expect((await ch(tgRequest(threaded))).status).toBe(200);
+    await flush();
+    expect(calls).toEqual([{ session: "42:99", text: "hi" }]);
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0])).toMatchObject({
+      chat_id: 42,
+      message_thread_id: 99,
+      text: "yo",
+    });
+  });
+
+  it("streams tool activity into the draft (process is visible) and persists only the clean final text", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "tool_started", id: "t1", name: "word-count", args: { text: "the quick brown fox" } };
+        yield { type: "tool_ended", id: "t1", isError: false, content: { words: 4 } };
+        yield { type: "text", delta: "4 words" };
+        yield { type: "completed" };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: echoOn, apiBaseUrl: API });
+    expect((await ch(tgRequest(MSG))).status).toBe(200);
+    await flush();
+    const draftTexts = callsTo(fetchMock, "sendMessageDraft").map((c) => bodyOf(c).text as string);
+    // The tool call shows its name AND a preview of its args, so the process is legible.
+    expect(draftTexts.some((t) => /word-count the quick brown fox/.test(t))).toBe(true);
+    const sent = callsTo(fetchMock, "sendMessage");
+    expect(sent).toHaveLength(1);
+    expect(bodyOf(sent[0]).text).toBe("4 words"); // persisted message is the clean answer, no tool noise
   });
 
   it("does not call sendMessage when the agent reply is empty", async () => {
@@ -112,7 +170,26 @@ describe("telegram channel", () => {
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: echoOn, apiBaseUrl: API });
     expect((await ch(tgRequest(MSG))).status).toBe(200);
     await flush();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(0); // no final message (a draft may have shown “Thinking…”)
+  });
+
+  it("a failing live draft is logged once (not swallowed) and the final reply still sends", async () => {
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errors.push(String(m));
+    });
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).endsWith("/sendMessageDraft")
+        ? new Response("nope", { status: 400 })
+        : new Response('{"ok":true}', { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("final answer");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: echoOn, apiBaseUrl: API });
+    expect((await ch(tgRequest(MSG))).status).toBe(200);
+    await flush();
+    expect(errors.filter((e) => /live draft failed/.test(e))).toHaveLength(1); // surfaced once, not per attempt
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toBe("final answer"); // final still sent
   });
 
   it("an update the routing ignores acks 200 and never invokes", async () => {
@@ -131,6 +208,8 @@ describe("telegram channel", () => {
     const spy = vi.spyOn(console, "error").mockImplementation((m) => {
       errors.push(String(m));
     });
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
     const agent: Agent = {
       async *invoke(): AsyncIterable<AgentEvent> {
         yield { type: "failed", details: "boom", retryable: false };
@@ -139,7 +218,32 @@ describe("telegram channel", () => {
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: echoOn, apiBaseUrl: API });
     expect((await ch(tgRequest(MSG))).status).toBe(200);
     await flush();
+    // dev-facing: the full details reach the operator log.
     expect(errors.some((e) => /turn failed: turn=5#0 session=42/.test(e) && /boom/.test(e))).toBe(true);
+    // customer-facing default: the user gets a neutral message, NOT the raw details.
+    const userText = bodyOf(callsTo(fetchMock, "sendMessage")[0]).text as string;
+    expect(userText).not.toMatch(/boom/);
+    expect(userText).toMatch(/something went wrong/i);
     spy.mockRestore();
+  });
+
+  it("onError lets a dev bot surface the raw details to the chat (the customer/dev split is configurable)", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "failed", details: "boom", retryable: false };
+      },
+    };
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      on: echoOn,
+      apiBaseUrl: API,
+      onError: (f) => `RAW: ${f.details}`,
+    });
+    expect((await ch(tgRequest(MSG))).status).toBe(200);
+    await flush();
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toBe("RAW: boom");
   });
 });

@@ -198,12 +198,20 @@ const channel: ChannelModule = (agent) => ({
   "POST /telegram": telegramChannel(agent, {
     secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "", // missing → fails at startup (would accept forged updates)
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",       // used to send the agent's reply back to the chat
-    // Map a verified update to the intents the agent acts on (empty array = ignore). session = chat id
-    // gives each chat its own multi-turn memory; chatId is where the reply goes.
-    on: (update) =>
-      update.message?.text
-        ? [{ session: \`\${update.message.chat.id}\`, text: update.message.text, chatId: update.message.chat.id }]
-        : [],
+    // Map a verified update to the intents the agent acts on (empty array = ignore). session per
+    // (chat, thread) gives each conversation its own multi-turn memory; chatId is where the reply
+    // goes. Auto-adapts: Threaded Mode supplies message_thread_id (own session + reply in-thread); a
+    // linear chat has none and falls back to one session per chat.
+    on: (update) => {
+      const m = update.message;
+      if (!m?.text) return [];
+      const session = m.message_thread_id ? \`\${m.chat.id}:\${m.message_thread_id}\` : \`\${m.chat.id}\`;
+      return [{ session, text: m.text, chatId: m.chat.id, threadId: m.message_thread_id }];
+    },
+    // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
+    // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
+    // full details always go to the server log regardless.
+    onError: (failed) => \`⚠️ \${failed.details}\`,
   }),
 });
 

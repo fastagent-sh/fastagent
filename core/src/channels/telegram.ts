@@ -1,26 +1,56 @@
 /**
  * Telegram bot channel: verify the webhook secret token → route via `on(update)` → run the turn →
- * send the agent's reply back to the chat, ACK 200. Reply model A: the channel holds the bot token
+ * stream the agent's reply back to the chat, ACK 200. Reply model A: the channel holds the bot token
  * and posts the reply itself (chat UX), unlike the github channel's fire-and-forget. No SDK — inbound
  * is a JSON POST, outbound is a `fetch` to the Bot API. The developer writes only `on`.
  *
+ * Live streaming: tool calls + partial text stream into an ephemeral draft (sendMessageDraft, a 30s
+ * animated preview); the final text is persisted with sendMessage. Threaded Mode (topics in private
+ * chats, a @BotFather toggle) is auto-adapted: an update carrying message_thread_id replies into that
+ * thread; without one the chat is linear. Same code, both modes.
+ *
  * Authored against the public `@kid7st/fastagent` surface only (the contract + the channel-authoring
- * kit: readBodyCapped / text / collect), so it is exactly what a third-party `fastagent-channel-*`
- * package would write.
+ * kit: readBodyCapped / text), so it is exactly what a third-party `fastagent-channel-*` package would write.
  */
 import { timingSafeEqual } from "node:crypto";
-import type { Agent } from "../agent.ts";
-import { collect } from "../collect.ts";
+import type { Agent, AgentEvent, Json } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
 
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
 
+/** How often (ms) to push a streamed draft update; tool events flush immediately for snappy feedback. */
+const DRAFT_THROTTLE_MS = 800;
+
+/** Max length of a tool's arg preview in the live view. */
+const TOOL_ARG_MAX = 48;
+
+/** One-line, truncated: collapse whitespace so a multi-line command/arg stays on one line. */
+function clip(s: string): string {
+  const one = s.replace(/\s+/g, " ").trim();
+  return one.length > TOOL_ARG_MAX ? `${one.slice(0, TOOL_ARG_MAX - 1)}…` : one;
+}
+
+/**
+ * A compact, human-readable preview of a tool call's args so the live view reads `🔧 read AGENTS.md`
+ * rather than just `🔧 read`. Generic (the channel knows no tool schemas): show the salient value — the
+ * first primitive field, conventionally the subject (path / command / query / url) — else compact JSON.
+ */
+function summarizeArgs(args: Json): string {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return clip(String(args));
+  const values = Object.values(args);
+  const primary = values.find((v) => typeof v === "string" || typeof v === "number");
+  if (primary !== undefined) return clip(String(primary));
+  return values.length > 0 ? clip(JSON.stringify(args)) : "";
+}
+
 /** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */
 export interface TelegramMessage {
   message_id: number;
   text?: string;
+  /** Present in Threaded Mode (topics in private chats); reply with the same id to stay in-thread. */
+  message_thread_id?: number;
   chat: { id: number; type: string; [k: string]: unknown };
   from?: { id: number; username?: string; [k: string]: unknown };
   [k: string]: unknown;
@@ -36,12 +66,20 @@ export interface TelegramUpdate {
   [k: string]: unknown;
 }
 
-/** What `on` returns per acted-on update: a session + the prompt + the chat to reply to. */
+/** A terminal failure, as the channel hands it to `onError`. */
+export interface TelegramFailure {
+  details: string;
+  retryable: boolean;
+}
+
+/** What `on` returns per acted-on update: a session + the prompt + where (chat, optionally thread) to reply. */
 export interface TelegramIntent {
   session: string;
   text: string;
   /** Chat the agent's reply is sent to (usually `update.message.chat.id`). */
   chatId: number | string;
+  /** Thread to reply into (Threaded Mode); omit for a linear chat. Usually `update.message.message_thread_id`. */
+  threadId?: number;
 }
 
 export interface TelegramChannelOptions {
@@ -51,8 +89,20 @@ export interface TelegramChannelOptions {
   botToken: string;
   /** Map a verified update to the intents this agent acts on (empty array = ignore). */
   on: (update: TelegramUpdate) => TelegramIntent[];
+  /**
+   * Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
+   * log). Return a string to send it, or undefined/"" to stay silent. Default: a neutral message keyed
+   * on `retryable`. A developer's own bot can surface the raw details, e.g. `(f) => `⚠️ ${f.details}``.
+   */
+  onError?: (failed: TelegramFailure) => string | undefined;
   /** Bot API base, for tests. Defaults to the public Telegram endpoint. */
   apiBaseUrl?: string;
+}
+
+/** Where a reply goes: a chat, optionally a thread (Threaded Mode). */
+interface Target {
+  chatId: number | string;
+  threadId?: number;
 }
 
 /** Constant-time compare so the secret-token check leaks no timing signal. */
@@ -62,19 +112,114 @@ function tokenMatches(header: string, secret: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-async function sendMessage(apiBaseUrl: string, botToken: string, chatId: number | string, body: string): Promise<void> {
-  const res = await fetch(`${apiBaseUrl}/bot${botToken}/sendMessage`, {
+/** Persist a final reply. `message_thread_id` is dropped from the JSON when undefined (linear chat). */
+async function sendMessage(api: string, botToken: string, t: Target, body: string): Promise<void> {
+  const res = await fetch(`${api}/bot${botToken}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text: body }),
+    body: JSON.stringify({ chat_id: t.chatId, message_thread_id: t.threadId, text: body }),
   });
   if (!res.ok) throw new Error(`telegram sendMessage failed: ${res.status}`);
+}
+
+/** Push an ephemeral draft (animated preview). Same draft_id across a turn animates the updates. */
+async function sendMessageDraft(
+  api: string,
+  botToken: string,
+  t: Target,
+  draftId: number,
+  body: string,
+): Promise<void> {
+  const res = await fetch(`${api}/bot${botToken}/sendMessageDraft`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chat_id: t.chatId, message_thread_id: t.threadId, draft_id: draftId, text: body }),
+  });
+  if (!res.ok) throw new Error(`telegram sendMessageDraft failed: ${res.status}`);
+}
+
+/**
+ * Consume one turn's event stream into a Telegram chat, live. Tool calls + partial text stream into an
+ * ephemeral draft; the final text is persisted with sendMessage (the draft is a 30s preview, so the
+ * real message MUST be sent to keep it). Draft updates are best-effort: they are only a preview, and
+ * the authoritative sendMessage surfaces any real failure (bad token, etc.) — a client that does not
+ * support drafts simply degrades to "final message only".
+ */
+/** The customer-facing default: neutral, no leaked internals; differentiate only on whether to retry. */
+function defaultErrorMessage(failed: TelegramFailure): string {
+  return failed.retryable ? "⚠️ Temporary problem — please try again." : "⚠️ Sorry, something went wrong.";
+}
+
+async function streamReply(
+  events: AsyncIterable<AgentEvent>,
+  api: string,
+  botToken: string,
+  target: Target,
+  draftId: number,
+  formatError: (failed: TelegramFailure) => string | undefined,
+): Promise<void> {
+  const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
+  const toolIndexById = new Map<string, number>();
+  let answer = "";
+  let lastDraftAt = 0;
+  let draftErrLogged = false;
+
+  const mark = { running: "…", ok: "✓", error: "✗" } as const;
+  const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
+  const view = (): string =>
+    [toolView(), answer]
+      .filter((s) => s.trim() !== "")
+      .join("\n\n")
+      .trim();
+  const draft = async (force: boolean): Promise<void> => {
+    if (!force && Date.now() - lastDraftAt < DRAFT_THROTTLE_MS) return;
+    lastDraftAt = Date.now();
+    try {
+      await sendMessageDraft(api, botToken, target, draftId, view());
+    } catch (e) {
+      // The live preview is best-effort (the final sendMessage is authoritative), but a failing draft
+      // must be visible — log it once per turn so a draft that never renders is diagnosable, not silent.
+      if (!draftErrLogged) {
+        draftErrLogged = true;
+        console.error(`[telegram] live draft failed (preview may not render; final reply still sends): ${String(e)}`);
+      }
+    }
+  };
+
+  await draft(true); // empty view → Telegram shows a "Thinking…" placeholder immediately
+
+  for await (const e of events) {
+    if (e.type === "text") {
+      answer += e.delta;
+      await draft(false);
+    } else if (e.type === "tool_started") {
+      const arg = summarizeArgs(e.args);
+      toolIndexById.set(e.id, tools.length);
+      tools.push({ label: arg ? `${e.name} ${arg}` : e.name, status: "running" });
+      await draft(true);
+    } else if (e.type === "tool_ended") {
+      const i = toolIndexById.get(e.id);
+      const t = i === undefined ? undefined : tools[i];
+      if (t) t.status = e.isError ? "error" : "ok";
+      await draft(true);
+    } else if (e.type === "completed") {
+      if (answer.trim() !== "") await sendMessage(api, botToken, target, answer);
+      return;
+    } else if (e.type === "failed") {
+      // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
+      // log (dev-facing — the full details, via the throw below + the handler's catch).
+      const msg = formatError({ details: e.details, retryable: e.retryable });
+      if (msg && msg.trim() !== "") await sendMessage(api, botToken, target, msg).catch(() => {});
+      throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
+    }
+  }
+  throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
 }
 
 /** Build a Telegram bot channel for `agent`: a Fetch handler to mount at your webhook route (POST). */
 export function telegramChannel(
   agent: Agent,
-  { secretToken, botToken, on, apiBaseUrl = "https://api.telegram.org" }: TelegramChannelOptions,
+  { secretToken, botToken, on, onError, apiBaseUrl = "https://api.telegram.org" }: TelegramChannelOptions,
 ): (req: Request) => Promise<Response> {
   // Both are mandatory: an unset secret_token would accept forged updates (the endpoint is public);
   // the bot token is required to send the reply. Fail at construction (startup), not silently.
@@ -86,6 +231,8 @@ export function telegramChannel(
   if (!botToken) {
     throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
   }
+  const formatError = onError ?? defaultErrorMessage;
+  let draftSeq = 0; // non-zero, per-turn draft ids (process-lived; the route handler is built once)
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
     // Fail closed: a missing/wrong secret token is 401, never routed.
@@ -101,24 +248,32 @@ export function telegramChannel(
       return text("invalid json\n", 400);
     }
 
-    // Run each intent and reply, ACK 200 immediately (the turn may outlast the webhook timeout). The
-    // lifecycle is logged to stderr — after the 200 there is no response body, so these lines are the
-    // operator's only signal (and the sink that keeps a post-ACK error from going unhandled).
-    // Concurrency safety = the engine's per-session lease.
+    // Run each intent and stream the reply, ACK 200 immediately (the turn may outlast the webhook
+    // timeout). The lifecycle is logged to stderr — after the 200 there is no response body, so these
+    // lines are the operator's only signal. Concurrency safety = the engine's per-session lease.
     const intents = on(update);
     for (let i = 0; i < intents.length; i++) {
-      const { session, text: prompt, chatId } = intents[i] as TelegramIntent;
+      const intent = intents[i] as TelegramIntent;
+      const target: Target = { chatId: intent.chatId, threadId: intent.threadId };
+      draftSeq = (draftSeq % 1_000_000_000) + 1;
+      const draftId = draftSeq;
       const turn = `${update.update_id}#${i}`;
-      console.error(`[telegram] turn start: turn=${turn} session=${session} chat=${chatId}`);
+      const where = `chat=${intent.chatId}${intent.threadId !== undefined ? ` thread=${intent.threadId}` : ""}`;
+      console.error(`[telegram] turn start: turn=${turn} session=${intent.session} ${where}`);
       const startedAt = Date.now();
-      void collect(agent.invoke({ session }, { text: prompt })).then(
-        async ({ text: reply }) => {
-          if (reply.trim() !== "") await sendMessage(apiBaseUrl, botToken, chatId, reply);
-          console.error(`[telegram] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`);
-        },
+      void streamReply(
+        agent.invoke({ session: intent.session }, { text: intent.text }),
+        apiBaseUrl,
+        botToken,
+        target,
+        draftId,
+        formatError,
+      ).then(
+        () =>
+          console.error(`[telegram] turn done: turn=${turn} session=${intent.session} (${Date.now() - startedAt}ms)`),
         (error) =>
           console.error(
-            `[telegram] turn failed: turn=${turn} session=${session} (${Date.now() - startedAt}ms): ${String(error)}`,
+            `[telegram] turn failed: turn=${turn} session=${intent.session} (${Date.now() - startedAt}ms): ${String(error)}`,
           ),
       );
     }
