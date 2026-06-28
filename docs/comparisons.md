@@ -86,13 +86,11 @@ A product team is building a SaaS in Astro (with their own auth and Postgres) an
 
 ```ts
 // src/lib/agent.ts
-import { createPiAgentFromDefinition, createPiModels, resolveModel } from "@kid7st/fastagent";
+import { createPiAgentFromDefinition } from "@kid7st/fastagent";
 import { postgresSessionStore } from "./sessions"; // your adapter
 
-const models = createPiModels();
 export const { agent } = await createPiAgentFromDefinition("./agent", {
-  models,
-  model: resolveModel(models, process.env.FASTAGENT_MODEL ?? "openai-codex/gpt-5.5"),
+  model: process.env.FASTAGENT_MODEL ?? "openai-codex/gpt-5.5", // "provider/modelId" spec
   sessions: postgresSessionStore,
 });
 
@@ -121,7 +119,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 };
 ```
 
-The embed entry point is `createPiAgentFromDefinition` (L2): point at the folder, pass a `Models` collection plus a resolved model (`resolveModel(models, "provider/modelId")`) and your own K ports (sessions/env/lease), and inject tools explicitly. Auth rides the `Models` collection (model resolution + per-request credentials in one object); inject a custom one to change providers or credentials. There is deliberately no separate embed opener — L2 already gives folder + K injection + a fully replaceable toolset (pass an app-specific set to drop the default coding tools).
+The embed entry point is `createPiAgentFromDefinition` (L2): point at the folder, pass a `model` spec string (`"provider/modelId"`), and optionally your own K ports (sessions/env/lease) and tools. Auth is invisible by default — it resolves from `~/.fastagent/auth.json` (written by `fastagent login`) then ambient env vars; pass a custom `models` collection only to change providers or credentials (Tier 2). No folder? `createPiAgent({ model, instructions, tools })` assembles the same agent from typed parts. There is deliberately no separate embed opener — L2 already gives folder + injection + a fully replaceable toolset (pass an app-specific set to drop the default coding tools).
 
 One build, one deploy, one auth, your database. The transport-neutral `invoke` contract (no bundled HTTP framework) is what lets the agent live inside the host's own route. This is the demo that makes the abstract positioning concrete — and the sweet spot is explicit: a relatively *light* agent feature (interactive/generation/trigger-response) in a *TS/Node* product with an *existing stack*. A *heavy* agent (long autonomy, swarm, sandbox isolation, many channels) tilts back toward Flue's batteries-included path even as a feature.
 

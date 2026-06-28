@@ -17,9 +17,9 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import type { Models } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
-import type { FastagentConfig } from "./config.ts";
+import { type FastagentConfig, resolveModel } from "./config.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
-import { type AnyModel, piHarnessFactory } from "./harness.ts";
+import { piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
@@ -123,20 +123,69 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
 
 // ── §3 the reusable assembly ladder: L1 / L2 ────────────────────────────────
 
-/** L1 options, grouped by the two-axis model: M (what the agent is) + K (where/how it runs). */
-export interface CreatePiAgentOptions {
-  // ── M ───────────────────────────────────────────────────────────────────
-  /**
-   * Provider collection for model requests + auth. Defaults to {@link createPiModels}. {@link model}
-   * must belong to it (same provider id).
-   */
+/**
+ * Shared low-level wiring: resolve the model spec against the collection, default the K ports, build
+ * the agent. Internal — the public rungs decide the systemPrompt (L1 from instructions, L2 from the
+ * folder) and route through here.
+ */
+function buildPiAgent(opts: {
+  model: string;
   models?: Models;
-  model: AnyModel;
-  /** The FINAL assembled prompt, or a factory re-evaluated per invoke (keeps time-sensitive segments fresh). */
   systemPrompt?: string | (() => string);
   tools?: AgentTool[];
   skills?: Skill[];
-  // ── K ───────────────────────────────────────────────────────────────────
+  sessions?: PiSessionStore;
+  env?: ExecutionEnv;
+  lease?: Lease;
+}): Agent {
+  const models = opts.models ?? createPiModels();
+  return createPiAgentFromHarness({
+    lease: opts.lease,
+    harnessFactory: piHarnessFactory({
+      sessions: opts.sessions ?? inMemorySessionStore(),
+      env: opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: resolveModel(models, opts.model),
+      systemPrompt: opts.systemPrompt,
+      tools: opts.tools,
+      skills: opts.skills,
+    }),
+  });
+}
+
+/**
+ * L1 system prompt: `instructions` ARE the prompt (no engine base, no wrapping); the skills listing
+ * is appended only when skills are mounted (the model must know what it can invoke). A factory so a
+ * dynamic `instructions` and per-invoke freshness both work; undefined when there is nothing to send.
+ */
+function instructionsPrompt(
+  instructions: string | (() => string) | undefined,
+  skills: Skill[] | undefined,
+): (() => string) | undefined {
+  const hasSkills = skills !== undefined && skills.length > 0;
+  if (instructions === undefined && !hasSkills) return undefined;
+  return () => {
+    const prose = typeof instructions === "function" ? instructions() : (instructions ?? "");
+    const listing = hasSkills ? formatSkillsForSystemPrompt(skills as Skill[]) : "";
+    return [prose, listing].filter((s) => s !== "").join("\n");
+  };
+}
+
+/** L1 options. Tier 1: model (spec) + instructions + tools. Tier 2: the injectable ports. */
+export interface CreatePiAgentOptions {
+  /** Model spec "provider/modelId" (e.g. "openai-codex/gpt-5.5"), resolved against {@link models}. */
+  model: string;
+  /**
+   * The system prompt — your agent's persona, the code-side equivalent of AGENTS.md. A plain string
+   * or a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
+   * No engine persona is prepended (that is a folder-fidelity concern of createPiAgentFromDefinition).
+   */
+  instructions?: string | (() => string);
+  tools?: AgentTool[];
+  skills?: Skill[];
+  // ── Tier 2: injectable ports ──────────────────────────────────────────────
+  /** Provider collection for model resolution + auth. Defaults to {@link createPiModels}. */
+  models?: Models;
   /** Session persistence. Defaults to in-memory; inject jsonlSessionStore for restart-surviving continuity. */
   sessions?: PiSessionStore;
   /** Tool execution environment. Defaults to local NodeExecutionEnv (cwd); production injects a sandbox. */
@@ -145,41 +194,40 @@ export interface CreatePiAgentOptions {
   lease?: Lease;
 }
 
-/** L1: batteries-included assembly. */
+/** L1: assemble from typed parts. */
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
-  return createPiAgentFromHarness({
+  return buildPiAgent({
+    model: options.model,
+    models: options.models,
+    systemPrompt: instructionsPrompt(options.instructions, options.skills),
+    tools: options.tools,
+    skills: options.skills,
+    sessions: options.sessions,
+    env: options.env,
     lease: options.lease,
-    harnessFactory: piHarnessFactory({
-      sessions: options.sessions ?? inMemorySessionStore(),
-      env: options.env ?? new NodeExecutionEnv({ cwd: process.cwd() }),
-      models: options.models ?? createPiModels(),
-      model: options.model,
-      systemPrompt: options.systemPrompt,
-      tools: options.tools,
-      skills: options.skills,
-    }),
   });
 }
 
 /**
- * L2 options. `systemPrompt` and `skills` are absent by design: they are assembled from the
- * definition folder — the whole point of L2.
+ * L2 options. `instructions`/`skills` are absent by design — they come from the definition folder
+ * (AGENTS.md + skills/), which is the whole point of L2.
  */
 export interface CreatePiAgentFromDefinitionOptions {
-  models?: Models;
-  model: AnyModel;
-  /** Override the base prompt (segment ①). Defaults to piBasePrompt({tools}). */
+  /** Model spec "provider/modelId", resolved against {@link models}. */
+  model: string;
+  /** Override the engine base prompt (segment ①). Defaults to piBasePrompt({tools}). */
   base?: string;
   /** Override tools. Defaults to piDefaultTools (lock down with a custom list). */
   tools?: AgentTool[];
+  models?: Models;
   sessions?: PiSessionStore;
   env?: ExecutionEnv;
   lease?: Lease;
 }
 
 /**
- * L2: "point at a folder → agent": load + assemble + L1 in one call. Returns the definition so
- * callers can surface diagnostics/collisions.
+ * L2: "point at a folder → agent": load + assemble (base + AGENTS.md + skills + env) + L1 in one
+ * call. Returns the definition so callers can surface diagnostics/collisions.
  */
 export async function createPiAgentFromDefinition(
   dir: string,
@@ -189,9 +237,9 @@ export async function createPiAgentFromDefinition(
   const definition = await loadAgentDefinition(dir, { env });
   const tools = options.tools ?? piDefaultTools(env.cwd);
   const base = options.base ?? piBasePrompt({ tools });
-  const agent = createPiAgent({
-    models: options.models,
+  const agent = buildPiAgent({
     model: options.model,
+    models: options.models,
     // Factory, not a string: re-assembled per invoke so `date` is the date of the turn, not of agent
     // creation (a long-running deployment would otherwise serve the boot date forever).
     systemPrompt: () =>

@@ -11,10 +11,9 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
-import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
+import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
 import { type LoadedDefinition, ensureStateDirSelfIgnored } from "./definition.ts";
-import { createPiModels } from "./models.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
 
@@ -63,10 +62,8 @@ export async function createPiAgentFromWorkspace(
   // Self-ignore only the default in-tree state dir. An explicit sessionsDir is the operator's path
   // (e.g. a mounted volume) — never write our `.gitignore` into it.
   if (!options.sessionsDir) await ensureStateDirSelfIgnored(join(dir, ".fastagent"));
-  const models = createPiModels();
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
-    models,
-    model: resolveModel(models, modelSpec),
+    model: modelSpec,
     tools,
     // Skills are definition-only (the agent is its folder), so dev mirrors deployment exactly.
     sessions: jsonlSessionStore({ dir: sessionsDir, cwd: dir }),

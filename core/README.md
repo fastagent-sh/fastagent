@@ -12,19 +12,28 @@ Engine-, model-, and host-neutral. Built on the [pi](https://www.npmjs.com/packa
 ## Embed (library)
 
 ```ts
-import { createPiAgentFromDefinition, createPiModels, resolveModel, createInvokeHandler } from "@kid7st/fastagent";
+import { createPiAgentFromDefinition, createInvokeHandler } from "@kid7st/fastagent";
 
-// One Models collection owns model resolution + auth (pi OAuth file → env vars).
-const models = createPiModels();
-// folder → agent, with your own session store / models / tools injected
+// folder → agent. model is a "provider/modelId" spec; auth resolves from ~/.fastagent/auth.json
+// (fastagent login) → env vars. sessions / env / lease / models / tools are optional injection points.
 const { agent } = await createPiAgentFromDefinition("./agent", {
-  models,
-  model: resolveModel(models, "openai-codex/gpt-5.5"),
-  // sessions, env, lease, models, tools — all optional injection points
+  model: "openai-codex/gpt-5.5",
 });
 
 // createInvokeHandler is a Fetch handler: mount it in any host route
 export const POST = createInvokeHandler(agent);
+```
+
+No folder? Assemble from typed parts — `model` (spec string) + `instructions` + `tools`:
+
+```ts
+import { createPiAgent, defineTool, z } from "@kid7st/fastagent";
+
+const agent = createPiAgent({
+  model: "openai-codex/gpt-5.5",
+  instructions: "You are a support assistant. Use lookup-order to answer order questions.",
+  tools: [lookupOrder],
+});
 ```
 
 `agent.invoke(scope, prompt)` returns an `AsyncIterable<AgentEvent>` (text deltas, tool events, a terminal `completed`/`failed`). Consume it as a stream, or buffer it with `collect()`.

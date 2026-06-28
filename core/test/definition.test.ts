@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
   collect,
+  createPiAgent,
   createPiAgentFromDefinition,
   loadAgentDefinition,
   piBasePrompt,
@@ -135,13 +136,13 @@ describe("create: assembleSystemPrompt (four segments)", () => {
 });
 
 describe("create L2: types only promise options the implementation honors", () => {
-  it("L2 options do not accept skills/systemPrompt because they come from the definition directory", () => {
-    const base: CreatePiAgentFromDefinitionOptions = { model: {} as never };
+  it("L2 options do not accept skills/instructions because they come from the definition directory", () => {
+    const base: CreatePiAgentFromDefinitionOptions = { model: "p/m" };
     expect(base.model).toBeDefined();
     // @ts-expect-error -- skills must come from the definition folder, not the caller
-    const withSkills: CreatePiAgentFromDefinitionOptions = { model: {} as never, skills: [] };
-    // @ts-expect-error -- systemPrompt is assembled from the definition, not passed in
-    const withPrompt: CreatePiAgentFromDefinitionOptions = { model: {} as never, systemPrompt: "x" };
+    const withSkills: CreatePiAgentFromDefinitionOptions = { model: "p/m", skills: [] };
+    // @ts-expect-error -- instructions are assembled from the definition (AGENTS.md), not passed in
+    const withPrompt: CreatePiAgentFromDefinitionOptions = { model: "p/m", instructions: "x" };
     expect(withSkills).toBeDefined();
     expect(withPrompt).toBeDefined();
   });
@@ -162,7 +163,7 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
 
     const { agent, definition } = await createPiAgentFromDefinition(fixtureDir, {
       models,
-      model: faux.getModel(),
+      model: "faux/faux-1",
     });
     expect(definition.skills).toHaveLength(1);
     expect(definition.diagnostics).toHaveLength(0);
@@ -176,6 +177,55 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("- read:");
     // default = pi core toolset (fidelity); custom code tools = explicit tools: injection, no magic dir
     expect(seenTools.sort()).toEqual(["bash", "edit", "read", "write"]);
+  });
+});
+
+describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
+  it("resolves a model spec string and sends instructions verbatim — no engine base prepended", async () => {
+    let seen: string | undefined;
+    const { faux, models } = makeFaux();
+    faux.setResponses([
+      (ctx) => {
+        seen = ctx.systemPrompt;
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const agent = createPiAgent({ models, model: "faux/faux-1", instructions: "You are a support bot." });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    expect(seen).toBe("You are a support bot."); // verbatim: instructions ARE the prompt
+    expect(seen).not.toContain("operating inside pi"); // no coding base (that is L2/folder fidelity)
+  });
+
+  it("appends the skills listing when skills are mounted", async () => {
+    let seen: string | undefined;
+    const { faux, models } = makeFaux();
+    faux.setResponses([
+      (ctx) => {
+        seen = ctx.systemPrompt;
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const { skills } = await loadAgentDefinition(fixtureDir);
+    const agent = createPiAgent({ models, model: "faux/faux-1", instructions: "P", skills });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    expect(seen).toContain("P");
+    expect(seen).toContain("season-words"); // listed so the model can invoke it
+  });
+
+  it("no instructions → pi's neutral harness default, never the coding base", async () => {
+    let seen: string | undefined;
+    const { faux, models } = makeFaux();
+    faux.setResponses([
+      (ctx) => {
+        seen = ctx.systemPrompt;
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const agent = createPiAgent({ models, model: "faux/faux-1" });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    // L1 sends no system prompt; pi fills its own neutral default. The invariant we own: the coding
+    // base persona is NOT forced onto a hand-built agent.
+    expect(seen ?? "").not.toContain("operating inside pi");
   });
 });
 
