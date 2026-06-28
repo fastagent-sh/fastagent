@@ -21,6 +21,7 @@
     "directory": "core"
   },
   "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=22.19.0"
   },

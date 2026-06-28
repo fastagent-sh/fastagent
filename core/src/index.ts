@@ -26,6 +26,10 @@ export {
 export { scaffoldWorkspace, type ScaffoldResult } from "./engines/pi/init.ts";
 
 // Tool authoring: defineTool (+ re-exported z) and tools/ discovery.
+// Re-export rule: the engine-neutral contract (agent.ts) owns its types; the pi reference-impl
+// surface is openly engine-coupled, so every pi type that appears in its signatures is re-exported
+// (named, never `export *`) so embedders never reach into `@earendil-works/*`. Author tool schemas
+// with the `z` re-exported here (one zod copy — see DefineToolOptions).
 export {
   defineTool,
   loadTools,
@@ -34,6 +38,7 @@ export {
   type ToolCollision,
 } from "./engines/pi/tool.ts";
 export { z } from "zod";
+export type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 
 // Channel discovery: a channels/<name>.ts default-exports a ChannelModule ((agent) => Routes).
 export { loadChannels, type ChannelModule, type ChannelCollision } from "./engines/pi/channel.ts";
@@ -51,6 +56,7 @@ export {
   type LoadAgentDefinitionOptions,
   type SkillCollision,
 } from "./engines/pi/definition.ts";
+export type { Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 
 // Engine assets (prompt base + toolset). Internal assembly helpers (assembleSystemPrompt,
 // resolveTools) are NOT public: the ladder rungs own assembly.
@@ -81,6 +87,8 @@ export {
   inMemorySessionStore,
   jsonlSessionStore,
 } from "./engines/pi/sessions.ts";
+// Session is pi's session object that PiSessionStore.openOrCreate returns (custom stores produce it).
+export type { Session } from "@earendil-works/pi-agent-core";
 // Auth + the Models collection. createPiModels builds the default collection (built-in providers;
 // ~/.fastagent/auth.json → env vars); fastagentCredentialStore is the read-write store fastagent owns.
 export { FASTAGENT_AUTH_PATH, type FastagentAuthOptions, fastagentCredentialStore } from "./engines/pi/auth.ts";
@@ -90,3 +98,5 @@ export type { Models } from "@earendil-works/pi-ai";
 // option. createProvider builds one from parts; its wire-protocol `api` comes from
 // `@earendil-works/pi-ai/api/*`. Most agents never touch this — a `model` spec selects a built-in.
 export { createProvider, type Provider, type ProviderAuth } from "@earendil-works/pi-ai";
+// Model is the model descriptor a createProvider({ models }) author supplies.
+export type { Model } from "@earendil-works/pi-ai";

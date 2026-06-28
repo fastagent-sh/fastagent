@@ -63,6 +63,8 @@ const agent = createPiAgent({
 });
 ```
 
+Author tool schemas with the `z` re-exported from `@kid7st/fastagent` (as above), not a separately installed `zod` — `defineTool` converts the schema with its own zod, so a single shared copy avoids version-skew surprises. Every type on this surface (`AgentTool`, `Skill`, `Session`, `Model`, …) is re-exported too, so you never import from `@earendil-works/*` (the one exception is a provider's wire-protocol `api`, see §5).
+
 `model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. (The folder path assembles `AGENTS.md` differently: it adds the pi engine base + skills + env for fidelity with local pi. See [core-design §2](core-design.md).)
 
 ## 2. Consume the stream (three ways)

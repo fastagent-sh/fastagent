@@ -5,3 +5,6 @@ export {
   type GithubEvent,
   type Intent,
 } from "./channels/github.ts";
+// `GithubEvent.payload` is typed as Schema (the official octokit union); re-exported so `on()`
+// authors can name it without importing @octokit/webhooks-types.
+export type { Schema } from "@octokit/webhooks-types";
