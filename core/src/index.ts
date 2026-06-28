@@ -38,7 +38,7 @@ export {
   type ToolCollision,
 } from "./engines/pi/tool.ts";
 export { z } from "zod";
-export type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+export type { AgentTool } from "@earendil-works/pi-agent-core";
 
 // Channel discovery: a channels/<name>.ts default-exports a ChannelModule ((agent) => Routes).
 export { loadChannels, type ChannelModule, type ChannelCollision } from "./engines/pi/channel.ts";
