@@ -48,6 +48,7 @@ You can build products such as multi-channel assistants or A2A task systems on t
 | [SPEC](SPEC.md) | Locked v0.1 Agent Handler contract |
 | [quickstart](quickstart.md) | From an installed CLI to a running, deployable agent |
 | [embedding](embedding.md) | Use FastAgent as a library: get an agent, consume the stream, mount it in your own route |
+| [channels](channels.md) | The N axis: the `ChannelModule` contract, `channels/` discovery, multiple channels, built-in vs external adapter packages |
 | [github](github.md) | The GitHub webhook channel: add via `fastagent add github` (a `channels/` file), serve on a long-running Node host |
 | [core-design](core-design.md) | The pi reference implementation and current core architecture |
 | [positioning](positioning.md) | Product strategy, wedge, risks, and boundaries |

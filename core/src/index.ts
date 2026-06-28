@@ -10,6 +10,11 @@ export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 // mounts in any host route; nodeListener bridges it onto node:http. The GitHub channel is a subpath
 // export: `@kid7st/fastagent/github`.
 export { createInvokeHandler, nodeListener } from "./channels/http.ts";
+// Channel-authoring kit: an adapter (built-in, or a third-party `fastagent-channel-*` package) needs
+// these to read a capped request body and build plain responses — so it depends only on
+// @kid7st/fastagent. `collect` (below) drives the turn; `Routes`/`ChannelHandler` (host) type the return.
+export { readBodyCapped } from "./channels/body.ts";
+export { text, textHeaders } from "./channels/respond.ts";
 
 // Node host (K-side). serveNode binds a route table on node:http; router composes a Routes table.
 export { type ChannelHandler, type Routes, router, serveNode } from "./host/node.ts";
