@@ -152,7 +152,7 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
   it("assembled systemPrompt reaches the model; skills are injected as resources; read tool is present by default", async () => {
     let seenSystemPrompt: string | undefined;
     let seenTools: string[] = [];
-    const { faux, models } = makeFaux();
+    const { faux } = makeFaux();
     faux.setResponses([
       (context) => {
         seenSystemPrompt = context.systemPrompt;
@@ -162,7 +162,7 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     ]);
 
     const { agent, definition } = await createPiAgentFromDefinition(fixtureDir, {
-      models,
+      providers: [faux.provider],
       model: "faux/faux-1",
     });
     expect(definition.skills).toHaveLength(1);
@@ -183,14 +183,18 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
 describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
   it("resolves a model spec string and sends instructions verbatim — no engine base prepended", async () => {
     let seen: string | undefined;
-    const { faux, models } = makeFaux();
+    const { faux } = makeFaux();
     faux.setResponses([
       (ctx) => {
         seen = ctx.systemPrompt;
         return fauxAssistantMessage("ok");
       },
     ]);
-    const agent = createPiAgent({ models, model: "faux/faux-1", instructions: "You are a support bot." });
+    const agent = createPiAgent({
+      providers: [faux.provider],
+      model: "faux/faux-1",
+      instructions: "You are a support bot.",
+    });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     expect(seen).toBe("You are a support bot."); // verbatim: instructions ARE the prompt
     expect(seen).not.toContain("operating inside pi"); // no coding base (that is L2/folder fidelity)
@@ -198,7 +202,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 
   it("appends the skills listing when skills are mounted", async () => {
     let seen: string | undefined;
-    const { faux, models } = makeFaux();
+    const { faux } = makeFaux();
     faux.setResponses([
       (ctx) => {
         seen = ctx.systemPrompt;
@@ -206,7 +210,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       },
     ]);
     const { skills } = await loadAgentDefinition(fixtureDir);
-    const agent = createPiAgent({ models, model: "faux/faux-1", instructions: "P", skills });
+    const agent = createPiAgent({ providers: [faux.provider], model: "faux/faux-1", instructions: "P", skills });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     expect(seen).toContain("P");
     expect(seen).toContain("season-words"); // listed so the model can invoke it
@@ -214,14 +218,14 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 
   it("no instructions → pi's neutral harness default, never the coding base", async () => {
     let seen: string | undefined;
-    const { faux, models } = makeFaux();
+    const { faux } = makeFaux();
     faux.setResponses([
       (ctx) => {
         seen = ctx.systemPrompt;
         return fauxAssistantMessage("ok");
       },
     ]);
-    const agent = createPiAgent({ models, model: "faux/faux-1" });
+    const agent = createPiAgent({ providers: [faux.provider], model: "faux/faux-1" });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     // L1 sends no system prompt; pi fills its own neutral default. The invariant we own: the coding
     // base persona is NOT forced onto a hand-built agent.

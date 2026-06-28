@@ -4,13 +4,15 @@
  * it into the harness alongside the selected `model`; the two must come from the same collection so
  * the model's provider auth is in scope.
  */
-import { type Models, defaultProviderAuthContext } from "@earendil-works/pi-ai";
+import { type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
   /** Override the credentials file path (default `~/.fastagent/auth.json`). */
   authPath?: string;
+  /** Extra providers registered on top of the built-ins (same id overrides a built-in). */
+  providers?: Provider[];
 }
 
 /**
@@ -19,10 +21,12 @@ export interface CreatePiModelsOptions extends FastagentAuthOptions {
  * credential owns the provider; env is consulted only when nothing is stored (resolution order is upstream-owned).
  */
 export function createPiModels(options: CreatePiModelsOptions = {}): Models {
-  return builtinModels({
+  const models = builtinModels({
     credentials: fastagentCredentialStore(options.authPath, { warn: options.warn }),
     authContext: defaultProviderAuthContext(),
   });
+  for (const provider of options.providers ?? []) models.setProvider(provider);
+  return models;
 }
 
 /**
