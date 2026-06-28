@@ -36,6 +36,10 @@
       "types": "./dist/github.d.ts",
       "default": "./dist/github.js"
     },
+    "./telegram": {
+      "types": "./dist/telegram.d.ts",
+      "default": "./dist/telegram.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {

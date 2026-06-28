@@ -50,6 +50,12 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
     expect(staticPackageGraph("github.ts")).toContain("@octokit/webhooks-methods");
   });
 
+  it("the ./telegram subpath is neutral — no engine, no third-party SDK (it is fetch-only)", () => {
+    const pkgs = staticPackageGraph("telegram.ts");
+    expect([...pkgs].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
+    expect(pkgs).not.toContain("@octokit/webhooks-methods");
+  });
+
   it("the CLI entry is where the CLI-only deps actually live (the guard has teeth)", () => {
     const pkgs = staticPackageGraph("cli.ts");
     expect(pkgs).toContain("@clack/prompts");
