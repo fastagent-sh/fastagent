@@ -8,6 +8,7 @@
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export interface Tunnel {
   url: string;
@@ -83,12 +84,34 @@ export async function announceWebhooks(dir: string, baseUrl: string): Promise<vo
     /* no .env is fine */
   }
   const channels = channelBasenames(dir);
+  if (channels.length === 0) return;
+  // A fresh quick tunnel returns Cloudflare 530 for ~20-30s before its origin connects; registering a
+  // webhook before then fails with "Failed to resolve host". Wait until /health actually serves.
+  console.error("[fastagent] waiting for the tunnel to come up…");
+  if (!(await waitForTunnel(baseUrl))) {
+    console.error(`[fastagent] tunnel did not respond in time; webhook registration may fail (URL: ${baseUrl})`);
+  }
   if (channels.includes("telegram")) await registerTelegram(baseUrl);
   if (channels.includes("github")) {
     console.error(
       `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
   }
+}
+
+/** Poll the tunnel's `/health` until it serves a 2xx (a fresh quick tunnel returns 530 until its origin connects). */
+async function waitForTunnel(baseUrl: string, timeoutMs = 60000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) return true;
+    } catch {
+      /* edge not reachable yet */
+    }
+    await sleep(3000);
+  }
+  return false;
 }
 
 async function registerTelegram(baseUrl: string): Promise<void> {
@@ -101,21 +124,49 @@ async function registerTelegram(baseUrl: string): Promise<void> {
     );
     return;
   }
+  // Backstop after waitForTunnel: Telegram's resolver may lag our health poll by a moment.
+  const ATTEMPTS = 3;
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    if (attempt > 0) await sleep(5000);
+    const result = await trySetWebhook(botToken, webhookUrl, secret);
+    if (result.ok) {
+      console.error(`[fastagent] telegram: webhook registered → ${webhookUrl}`);
+      return;
+    }
+    // Only network-transient errors are worth retrying. A fresh tunnel's "bad webhook: Failed to
+    // resolve host" is caught by `resolve host`; a permanent "Bad webhook: HTTPS url must be provided"
+    // is a config error, not transient, so `bad webhook` is deliberately NOT a trigger.
+    const transient = /resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout/i.test(result.error);
+    if (!transient) {
+      console.error(
+        `[fastagent] telegram: setWebhook failed (${result.error}). Register manually with url=${webhookUrl}`,
+      );
+      return;
+    }
+    if (attempt < ATTEMPTS - 1)
+      console.error(`[fastagent] telegram: tunnel not resolvable yet, retrying… (${attempt + 1}/${ATTEMPTS - 1})`);
+  }
+  console.error(
+    `[fastagent] telegram: webhook still failing after retries (the tunnel may need another moment). Register manually with url=${webhookUrl}`,
+  );
+}
+
+/** One setWebhook attempt. Resolves { ok } or { ok: false, error } (HTTP status + description, or a thrown message). */
+async function trySetWebhook(
+  botToken: string,
+  url: string,
+  secret: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const res = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url: webhookUrl, secret_token: secret }),
+      body: JSON.stringify({ url, secret_token: secret }),
     });
     const data = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string };
-    if (res.ok && data.ok) {
-      console.error(`[fastagent] telegram: webhook registered → ${webhookUrl}`);
-    } else {
-      console.error(
-        `[fastagent] telegram: setWebhook failed (${res.status}${data.description ? `: ${data.description}` : ""}). Register manually with url=${webhookUrl}`,
-      );
-    }
+    if (res.ok && data.ok) return { ok: true };
+    return { ok: false, error: `${res.status}${data.description ? `: ${data.description}` : ""}` };
   } catch (e) {
-    console.error(`[fastagent] telegram: setWebhook error (${String(e)}). Register manually with url=${webhookUrl}`);
+    return { ok: false, error: String(e) };
   }
 }
