@@ -46,6 +46,8 @@ workspace/
 
 `assembleSystemPrompt` is pure: callers provide date/cwd. L2 uses a factory so long-running processes re-evaluate time-sensitive context per invocation.
 
+This four-segment assembly is the **folder path** (L2/opener): it wraps `AGENTS.md` and prepends the engine base for fidelity with how the author vibed in local pi. **L1 `createPiAgent` is different on purpose**: its `instructions` ARE the system prompt (verbatim, no engine base, no wrapping) — the skills listing is the only thing appended, and only when skills are mounted. So `AGENTS.md ≡ instructions` in *role* (author-written instructions), but the folder path additionally bases/wraps them; a hand-built agent is not forced into the coding persona.
+
 ## 3. pi reference implementation
 
 The reference implementation is built on `pi-agent-core` `AgentHarness`, not the TUI-oriented `pi-coding-agent` session wrapper.
@@ -88,7 +90,7 @@ The reusable ladder is three rungs (L0–L2); each upper rung delegates downward
 | Rung | Function | Meaning |
 |---|---|---|
 | L2 `[LOAD]` | `createPiAgentFromDefinition(dir, options)` | load `AGENTS.md` + skills, assemble prompt, then L1 |
-| L1 `[ASSEMBLE]` | `createPiAgent(options)` | assemble from typed parts: model, prompt, tools, sessions, env, auth |
+| L1 `[ASSEMBLE]` | `createPiAgent(options)` | assemble from typed parts: `model` (spec string) + `instructions` + tools (+ sessions/env/lease/models) |
 | L0 `[ADAPT]` | `createPiAgentFromHarness({ harnessFactory })` | adapt pi harness wiring into the Agent Handler stream |
 
 Naming rule: `From<source>` means inputs are derived from that source. No suffix (`createPiAgent`) means typed parts are supplied directly.
