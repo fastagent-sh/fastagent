@@ -216,7 +216,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     expect(seen).toContain("season-words"); // listed so the model can invoke it
   });
 
-  it("no instructions → pi's neutral harness default, never the coding base", async () => {
+  it("no instructions → no coding base forced on a hand-built agent", async () => {
     let seen: string | undefined;
     const { faux } = makeFaux();
     faux.setResponses([
@@ -227,9 +227,10 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     ]);
     const agent = createPiAgent({ providers: [faux.provider], model: "faux/faux-1" });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    // L1 sends no system prompt; pi fills its own neutral default. The invariant we own: the coding
-    // base persona is NOT forced onto a hand-built agent.
-    expect(seen ?? "").not.toContain("operating inside pi");
+    // The invariant fastagent owns: a hand-built agent is never forced into pi's coding persona.
+    // (pi fills its own neutral default; that exact string is pi's behavior, not our contract.)
+    expect(seen).toBeDefined(); // a system prompt did reach the model — guards against a vacuous pass
+    expect(seen).not.toContain("operating inside pi");
   });
 });
 
