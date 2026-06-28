@@ -90,7 +90,7 @@ The reusable ladder is three rungs (L0–L2); each upper rung delegates downward
 | Rung | Function | Meaning |
 |---|---|---|
 | L2 `[LOAD]` | `createPiAgentFromDefinition(dir, options)` | load `AGENTS.md` + skills, assemble prompt, then L1 |
-| L1 `[ASSEMBLE]` | `createPiAgent(options)` | assemble from typed parts: `model` (spec string) + `instructions` + tools (+ sessions/env/lease/models) |
+| L1 `[ASSEMBLE]` | `createPiAgent(options)` | assemble from typed parts: `model` (spec string) + `instructions` + tools (+ sessions/env/lease/providers) |
 | L0 `[ADAPT]` | `createPiAgentFromHarness({ harnessFactory })` | adapt pi harness wiring into the Agent Handler stream |
 
 Naming rule: `From<source>` means inputs are derived from that source. No suffix (`createPiAgent`) means typed parts are supplied directly.

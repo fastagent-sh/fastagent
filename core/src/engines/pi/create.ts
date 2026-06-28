@@ -15,7 +15,7 @@ import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
-import type { Models } from "@earendil-works/pi-ai";
+import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, resolveModel } from "./config.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
@@ -130,7 +130,7 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
  */
 function buildPiAgent(opts: {
   model: string;
-  models?: Models;
+  providers?: Provider[];
   systemPrompt?: string | (() => string);
   tools?: AgentTool[];
   skills?: Skill[];
@@ -138,7 +138,7 @@ function buildPiAgent(opts: {
   env?: ExecutionEnv;
   lease?: Lease;
 }): Agent {
-  const models = opts.models ?? createPiModels();
+  const models = createPiModels({ providers: opts.providers });
   return createPiAgentFromHarness({
     lease: opts.lease,
     harnessFactory: piHarnessFactory({
@@ -183,9 +183,13 @@ export interface CreatePiAgentOptions {
   instructions?: string | (() => string);
   tools?: AgentTool[];
   skills?: Skill[];
-  // ── Tier 2: injectable ports ──────────────────────────────────────────────
-  /** Provider collection for model resolution + auth. Defaults to {@link createPiModels}. */
-  models?: Models;
+  // ── Tier 2: injectable ports ───────────────────────────────────────────────
+  /**
+   * Extra providers registered on top of the built-ins — your own gateway / self-hosted endpoint /
+   * test fake — selected by the `model` spec's provider id. Built-ins cover the rest; static keys
+   * still come from `~/.fastagent/auth.json` (fastagent login) or env, not from here.
+   */
+  providers?: Provider[];
   /** Session persistence. Defaults to in-memory; inject jsonlSessionStore for restart-surviving continuity. */
   sessions?: PiSessionStore;
   /** Tool execution environment. Defaults to local NodeExecutionEnv (cwd); production injects a sandbox. */
@@ -198,7 +202,7 @@ export interface CreatePiAgentOptions {
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
   return buildPiAgent({
     model: options.model,
-    models: options.models,
+    providers: options.providers,
     systemPrompt: instructionsPrompt(options.instructions, options.skills),
     tools: options.tools,
     skills: options.skills,
@@ -219,7 +223,8 @@ export interface CreatePiAgentFromDefinitionOptions {
   base?: string;
   /** Override tools. Defaults to piDefaultTools (lock down with a custom list). */
   tools?: AgentTool[];
-  models?: Models;
+  /** Extra providers registered on top of the built-ins (your own gateway / self-hosted endpoint). */
+  providers?: Provider[];
   sessions?: PiSessionStore;
   env?: ExecutionEnv;
   lease?: Lease;
@@ -239,7 +244,7 @@ export async function createPiAgentFromDefinition(
   const base = options.base ?? piBasePrompt({ tools });
   const agent = buildPiAgent({
     model: options.model,
-    models: options.models,
+    providers: options.providers,
     // Factory, not a string: re-assembled per invoke so `date` is the date of the turn, not of agent
     // creation (a long-running deployment would otherwise serve the boot date forever).
     systemPrompt: () =>

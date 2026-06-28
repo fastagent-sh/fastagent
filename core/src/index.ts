@@ -86,3 +86,7 @@ export {
 export { FASTAGENT_AUTH_PATH, type FastagentAuthOptions, fastagentCredentialStore } from "./engines/pi/auth.ts";
 export { type CreatePiModelsOptions, createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 export type { Models } from "@earendil-works/pi-ai";
+// Provider injection (Tier 2: your own gateway / self-hosted endpoint), passed via the `providers`
+// option. createProvider builds one from parts; its wire-protocol `api` comes from
+// `@earendil-works/pi-ai/api/*`. Most agents never touch this — a `model` spec selects a built-in.
+export { createProvider, type Provider, type ProviderAuth } from "@earendil-works/pi-ai";
