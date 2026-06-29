@@ -287,7 +287,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       { name: "TELEGRAM_SECRET_TOKEN", hint: "any random string; verifies inbound updates", generate: true },
     ],
     steps: [
-      "edit channels/telegram.ts — map updates to intents in on()",
+      "edit channels/telegram.ts — customise routing with route() (optional; the defaults already work)",
       "the agent can send files back by calling the scaffolded tools/telegram-send.ts tool",
     ],
     tool: { name: "telegram-send", template: TELEGRAM_SEND_TOOL_TS },
