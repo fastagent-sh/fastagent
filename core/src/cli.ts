@@ -43,9 +43,9 @@ import {
   channelExists,
   channelSetup,
   scaffoldChannel,
-  scaffoldWorkspace,
-  vendorSkill,
-} from "./engines/pi/init.ts";
+} from "./engines/pi/add-channel.ts";
+import { scaffoldWorkspace } from "./engines/pi/init.ts";
+import { vendorSkill } from "./engines/pi/vendor-skill.ts";
 
 function usage(code: number): never {
   console.error(`usage:
