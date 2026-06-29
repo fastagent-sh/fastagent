@@ -59,7 +59,7 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
     expect(defaultTelegramRoute(mention, { botUsername: "mybot" })).toEqual({});
   });
 
-  it("composes a context envelope: chat/thread/from + reply + the user's text", () => {
+  it("composes a context envelope: chat/thread/sender + reply (with msg id) + the user's text", () => {
     const env = telegramEnvelope({
       message_id: 2,
       text: "what is this",
@@ -74,8 +74,34 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
       },
     });
     expect(env).toMatch(/\[telegram: chat 42 \(private\), thread 9, from @alice\]/);
-    expect(env).toMatch(/\[reply to @bob: the log\]/);
+    expect(env).toMatch(/\[in reply to @bob \(msg 1\): the log\]/);
     expect(env).toMatch(/what is this$/);
+  });
+
+  it("attributes a username-less sender by name + id (a shared session must still tell who is who)", () => {
+    const env = telegramEnvelope({
+      message_id: 3,
+      text: "hi",
+      chat: { id: -100, type: "supergroup" },
+      from: { id: 99, first_name: "Carol" },
+    });
+    expect(env).toMatch(/from Carol \(id 99\)/);
+  });
+
+  it("summarizes a replied-to attachment when it has no text ('summarize this file')", () => {
+    const env = telegramEnvelope({
+      message_id: 4,
+      text: "summarize this",
+      chat: { id: 42, type: "private" },
+      from: { id: 7, username: "alice" },
+      reply_to_message: {
+        message_id: 1,
+        chat: { id: 42, type: "private" },
+        from: { id: 8, username: "bob" },
+        document: { file_id: "doc1", file_name: "report.pdf", mime_type: "application/pdf" },
+      },
+    });
+    expect(env).toMatch(/\[in reply to @bob \(msg 1\): \[document: report\.pdf \(application\/pdf\)\]\]/);
   });
 });
 

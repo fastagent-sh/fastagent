@@ -325,31 +325,63 @@ function extractImages(m: TelegramMessage): string[] {
   );
 }
 
-/** file_ids to download to disk for the agent's tools (document/voice/video/audio). */
+/** file_ids to download to disk for the agent's tools: this message's files + a replied-to message's
+ *  (so "summarize this file" works when the user replies to a document with the mention). */
 function extractFiles(m: TelegramMessage): string[] {
-  return [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter((id): id is string =>
-    Boolean(id),
-  );
+  const r = m.reply_to_message;
+  return [
+    m.document?.file_id,
+    m.voice?.file_id,
+    m.video?.file_id,
+    m.audio?.file_id,
+    r?.document?.file_id,
+    r?.voice?.file_id,
+    r?.video?.file_id,
+    r?.audio?.file_id,
+  ].filter((id): id is string => Boolean(id));
+}
+
+/** A stable sender label for attribution. In a shared (multi-user) session the model must tell who is
+ *  who across turns; a username-less user still gets a name + id rather than vanishing. */
+function fromLabel(from: TelegramMessage["from"]): string | undefined {
+  if (!from) return undefined;
+  return from.username ? `@${from.username}` : `${from.first_name ?? "user"} (id ${from.id})`;
+}
+
+/** A one-line description of a message's attachment, so the envelope names what was sent even before
+ *  the agent opens it (and so a media-only message isn't blank). */
+function attachmentSummary(m: TelegramMessage): string | undefined {
+  if (m.photo?.length) return "[photo]";
+  if (m.document) {
+    return `[document: ${m.document.file_name ?? "file"}${m.document.mime_type ? ` (${m.document.mime_type})` : ""}]`;
+  }
+  if (m.voice) return "[voice message]";
+  if (m.video) return "[video]";
+  if (m.audio) return "[audio]";
+  return undefined;
 }
 
 /**
- * The default base prompt: a context envelope (chat/thread/from + reply) then the user's text/caption
- * and a compact rendering of structured payloads (location/contact/poll). Exported so a custom `route`
- * can reuse it, e.g. `text: `${telegramEnvelope(m)}\n\n[extra]``. The channel still appends attachments.
+ * The default base prompt: a context envelope (chat/thread/sender + reply) then the user's text/caption
+ * and a compact rendering of structured payloads (location/contact/poll). The sender is named on every
+ * message — in a shared multi-user session that is how the model tells participants apart. The reply
+ * block carries the replied-to sender, message id, and text/caption or an attachment summary (and the
+ * channel downloads a replied-to file/photo too). Exported so a custom `route` can reuse it, e.g.
+ * `text: `${telegramEnvelope(m)}\n\n[extra]``. The channel still appends downloaded attachments.
  */
 export function telegramEnvelope(m: TelegramMessage): string {
   const r = m.reply_to_message;
   const meta = [
     `chat ${m.chat.id} (${m.chat.type})`,
     m.message_thread_id ? `thread ${m.message_thread_id}` : undefined,
-    m.from?.username ? `from @${m.from.username}` : undefined,
+    fromLabel(m.from) ? `from ${fromLabel(m.from)}` : undefined,
   ]
     .filter(Boolean)
     .join(", ");
   const replyTo = r
-    ? `\n[reply to ${r.from?.username ? `@${r.from.username}` : `msg ${r.message_id}`}: ${(r.text ?? r.caption ?? "(media)").slice(0, 200)}]`
+    ? `\n[in reply to ${fromLabel(r.from) ?? `msg ${r.message_id}`} (msg ${r.message_id}): ${(r.text ?? r.caption ?? attachmentSummary(r) ?? "(empty)").slice(0, 280)}]`
     : "";
-  const parts = [m.text ?? m.caption ?? ""];
+  const parts = [m.text ?? m.caption ?? attachmentSummary(m) ?? ""];
   if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);
   if (m.contact) parts.push(`[contact: ${m.contact.first_name} ${m.contact.phone_number ?? ""}]`);
   if (m.poll) parts.push(`[poll: ${m.poll.question} — ${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]`);
