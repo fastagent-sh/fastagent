@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Agent } from "../src/index.ts";
 import { loadChannels } from "../src/index.ts";
+import { discoverChannelFiles } from "../src/engines/pi/channel.ts";
 
 const fakeAgent = {} as Agent; // loadChannels only forwards it to the factory; these factories ignore it
 const freshDir = () => mkdtemp(join(tmpdir(), "fa-chan-"));
@@ -147,5 +148,25 @@ describe("loadChannels (filesystem discovery)", () => {
       await writeFile(join(dir, "channels", "bad.mjs"), body);
       await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/is not a valid route key/);
     }
+  });
+});
+
+describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
+  it("lists channel basenames (sorted, no import); empty when there is no channels/", async () => {
+    const dir = await freshDir();
+    expect(await discoverChannelFiles(dir)).toEqual([]);
+    await mkdir(join(dir, "channels"));
+    await writeFile(join(dir, "channels", "telegram.ts"), "export default () => ({});\n");
+    await writeFile(join(dir, "channels", "github.ts"), "export default () => ({});\n");
+    expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
+  });
+
+  it("enforces containment on its OWN path: rejects a channels/ symlink escaping the workspace", async () => {
+    // info goes through this, not loadChannels — the boundary guard must hold here independently.
+    const dir = await freshDir();
+    const ext = await freshDir();
+    await mkdir(join(ext, "ch"));
+    await symlink(join(ext, "ch"), join(dir, "channels"));
+    await expect(discoverChannelFiles(dir)).rejects.toThrow(/outside the workspace/);
   });
 });

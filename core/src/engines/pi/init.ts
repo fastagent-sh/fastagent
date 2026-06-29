@@ -12,7 +12,7 @@
  * content they and this module write lives in scaffold-templates.ts.
  */
 import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { loadRootIgnore } from "./definition.ts";
 import {
   CONFIG_MJS,
@@ -48,6 +48,17 @@ export interface ScaffoldResult {
   intoNonEmpty: boolean;
   /** Non-fatal advisories the caller MUST surface. */
   warnings: string[];
+}
+
+/** The `cd` target to show in `init`'s next-steps: the relative path when the target is inside `cwd`,
+ *  the absolute path when it climbs out (a `../../..` is noise), or undefined when already in `cwd`. */
+export function nextStepCd(cwd: string, dir: string): string | undefined {
+  const rel = relative(cwd, dir);
+  if (rel === "") return undefined;
+  // "Climbs out" is a path-SEGMENT check — rel is ".." or starts with "../" (or "..\" on Windows). A
+  // bare startsWith("..") would wrongly flag an in-cwd directory literally named "..agent".
+  const escapes = rel === ".." || /^\.\.[/\\]/.test(rel);
+  return escapes ? dir : rel;
 }
 
 /** Does a path exist? (async; shared with the sibling scaffold modules). */

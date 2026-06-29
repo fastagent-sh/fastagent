@@ -39,6 +39,15 @@ describe("definition: loadAgentDefinition", () => {
     expect(def.skills).toEqual([]);
   });
 
+  it("skips a skill whose SKILL.md has no description and surfaces it as a diagnostic (not a crash)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-bad-skill-"));
+    await mkdir(join(dir, "skills", "bad"), { recursive: true });
+    await writeFile(join(dir, "skills", "bad", "SKILL.md"), "---\nname: bad\n---\nno description.\n");
+    const def = await loadAgentDefinition(dir);
+    expect(def.skills).toEqual([]); // the malformed skill is skipped, not loaded
+    expect(JSON.stringify(def.diagnostics)).toMatch(/description/); // and surfaced, not silently dropped
+  });
+
   it("AGENTS.md read errors other than not_found throw instead of silently becoming missing instructions", async () => {
     class DeniedEnv extends NodeExecutionEnv {
       override async readTextFile(path: string) {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromWorkspace, loadAgentDefinition, scaffoldWorkspace } from "../src/index.ts";
+import { nextStepCd } from "../src/engines/pi/init.ts";
 import { vendorSkill } from "../src/engines/pi/vendor-skill.ts";
 
 const freshDir = () => mkdtemp(join(tmpdir(), "fa-init-"));
@@ -27,6 +28,13 @@ function cliInit(args: string[], cwd: string): Promise<string> {
 }
 
 describe("init: scaffoldWorkspace", () => {
+  it("nextStepCd: relative inside cwd, absolute when the target climbs out, nothing for cwd itself", () => {
+    expect(nextStepCd("/a/b", "/a/b/x")).toBe("x"); // inside cwd → relative
+    expect(nextStepCd("/a/b", "/a/b/..agent")).toBe("..agent"); // a dir literally named "..agent" is INSIDE cwd
+    expect(nextStepCd("/a/b", "/a/b")).toBeUndefined(); // already in cwd → no cd step
+    expect(nextStepCd("/a/b", "/tmp/x")).toBe("/tmp/x"); // outside → absolute, not ../../tmp/x noise
+  });
+
   it("default scaffolds a COMPLETE agent (instructions + skill + a code tool + package.json)", async () => {
     const dir = await freshDir();
     const { complete, created, warnings } = await scaffoldWorkspace(dir);
