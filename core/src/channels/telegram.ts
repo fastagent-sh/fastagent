@@ -175,8 +175,9 @@ async function sendMessageDraft(
   }
 }
 
-/** Cap on a single fetched image (base64 inflates ~33%); a larger Telegram file is rejected, not silently dropped. */
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/** Download sanity cap (Telegram's own getFile limit); a larger file is rejected visibly. The engine
+ *  resizes images to the model's needs, so this is a transport guard, not the model size limit. */
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 function mimeFromPath(path: string): string {
   const ext = path.toLowerCase().split(".").pop();
@@ -192,11 +193,11 @@ async function fetchTelegramImage(api: string, botToken: string, fileId: string)
   }).then((r) => r.json())) as { ok?: boolean; result?: { file_path?: string; file_size?: number } };
   const path = meta.result?.file_path;
   if (!meta.ok || !path) throw new Error(`getFile failed for ${fileId}`);
-  if ((meta.result?.file_size ?? 0) > MAX_IMAGE_BYTES) throw new Error("image is too large (max 5 MB)");
+  if ((meta.result?.file_size ?? 0) > MAX_IMAGE_BYTES) throw new Error("image is too large (max 20 MB)");
   const res = await fetch(`${api}/file/bot${botToken}/${path}`);
   if (!res.ok) throw new Error(`download failed: ${res.status}`);
   const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("image is too large (max 5 MB)");
+  if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("image is too large (max 20 MB)");
   return { mimeType: mimeFromPath(path), data: bytes.toString("base64") };
 }
 

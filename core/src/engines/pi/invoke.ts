@@ -89,9 +89,28 @@ function errorToTerminal(error: unknown): AgentEvent {
   return { type: "failed", details, retryable: isRetryable(details) };
 }
 
-function toPiPromptOptions(prompt: Prompt): { images?: ImageContent[] } | undefined {
+/**
+ * Map prompt images to pi ImageContent, resizing each to model-friendly dimensions/size with pi's
+ * Photon resizer (reused from pi-coding-agent, lazy-imported so the common no-image headless path never
+ * loads the TUI module graph). A null resize (unresizable / Photon unavailable) keeps the original
+ * bytes — the provider then applies its own limit.
+ */
+async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: ImageContent[] } | undefined> {
   if (!prompt.images || prompt.images.length === 0) return undefined;
-  return { images: prompt.images.map((img) => ({ type: "image", data: img.data, mimeType: img.mimeType })) };
+  const { resizeImage } = await import("@earendil-works/pi-coding-agent");
+  const images = await Promise.all(
+    prompt.images.map(async (img): Promise<ImageContent> => {
+      const resized = await resizeImage(Buffer.from(img.data, "base64"), img.mimeType, {
+        maxWidth: 1568,
+        maxHeight: 1568,
+        maxBytes: 5 * 1024 * 1024,
+      }).catch(() => null);
+      return resized
+        ? { type: "image", data: resized.data, mimeType: resized.mimeType }
+        : { type: "image", data: img.data, mimeType: img.mimeType };
+    }),
+  );
+  return { images };
 }
 
 // ── §3 EventQueue: push→pull plumbing for pi's two-port shape ────────────────
@@ -176,7 +195,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         if (event) queue.push(event);
       });
       try {
-        const run = harness.prompt(prompt.text, toPiPromptOptions(prompt));
+        const run = harness.prompt(prompt.text, await toPiPromptOptions(prompt));
         yield* queue.drainUntil(run);
         let terminal: AgentEvent;
         try {
