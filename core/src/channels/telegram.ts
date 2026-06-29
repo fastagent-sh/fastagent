@@ -59,12 +59,16 @@ export interface TelegramMessage {
   caption?: string;
   /** Photo sizes, smallest → largest. Pass the last one's `file_id` as an intent image for vision. */
   photo?: { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }[];
+  /** Structured payloads worth rendering into the prompt as text (no new modality needed). */
+  location?: { latitude: number; longitude: number; [k: string]: unknown };
+  contact?: { phone_number?: string; first_name: string; last_name?: string; [k: string]: unknown };
+  poll?: { question: string; options?: { text: string }[]; [k: string]: unknown };
   /** Present in Threaded Mode (topics in private chats); reply with the same id to stay in-thread. */
   message_thread_id?: number;
   /** The message this one replies to, if any — inject its text/media so the agent has the referent. */
   reply_to_message?: TelegramMessage;
   chat: { id: number; type: string; [k: string]: unknown };
-  from?: { id: number; username?: string; [k: string]: unknown };
+  from?: { id: number; username?: string; is_bot?: boolean; first_name?: string; [k: string]: unknown };
   [k: string]: unknown;
 }
 
@@ -74,6 +78,7 @@ export interface TelegramUpdate {
   message?: TelegramMessage;
   edited_message?: TelegramMessage;
   channel_post?: TelegramMessage;
+  edited_channel_post?: TelegramMessage;
   callback_query?: { id: string; data?: string; message?: TelegramMessage; [k: string]: unknown };
   [k: string]: unknown;
 }

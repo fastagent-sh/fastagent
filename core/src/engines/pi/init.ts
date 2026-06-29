@@ -203,19 +203,38 @@ const channel: ChannelModule = (agent) => ({
     // goes. Auto-adapts: Threaded Mode supplies message_thread_id (own session + reply in-thread); a
     // linear chat has none and falls back to one session per chat.
     on: (update) => {
-      const m = update.message ?? update.edited_message ?? update.channel_post;
+      const m = update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
       if (!m) return [];
-      const body = m.text ?? m.caption ?? "";
       const r = m.reply_to_message;
+      const t = m.text ?? "";
+      // command + deep-link payload: "/start abc" → cmd "start", payload "abc"; "/help@bot" → "help"
+      const cmd = t.startsWith("/") ? t.slice(1).split(" ")[0].split("@")[0] : undefined;
+      const payload = cmd && t.includes(" ") ? t.slice(t.indexOf(" ") + 1).trim() : undefined;
+      // group summon: in groups, only act when addressed (command / reply-to-bot / @mention). Set
+      // BOT_USERNAME to your bot's @username to enable mention-summon. Private chats always pass.
+      const BOT_USERNAME = "";
+      const summoned =
+        m.chat.type === "private" ||
+        Boolean(cmd) ||
+        r?.from?.is_bot === true ||
+        (BOT_USERNAME !== "" && t.includes(\`@\${BOT_USERNAME}\`));
+      if (!summoned) return [];
+      // body: text/caption + a compact rendering of structured payloads (kept as plain text)
+      const parts = [m.text ?? m.caption ?? ""];
+      if (m.location) parts.push(\`[location: \${m.location.latitude},\${m.location.longitude}]\`);
+      if (m.contact) parts.push(\`[contact: \${m.contact.first_name} \${m.contact.phone_number ?? ""}]\`);
+      if (m.poll) parts.push(\`[poll: \${m.poll.question} — \${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]\`);
+      const body = parts.filter(Boolean).join("\\n");
       // images: largest photo of this message and/or the one it replies to (so "reply to a photo + ask" works)
       const imageFileIds = [m.photo?.at(-1)?.file_id, r?.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
-      if (!body && imageFileIds.length === 0) return []; // nothing to act on
+      if (!body && imageFileIds.length === 0) return [];
       const session = m.message_thread_id ? \`\${m.chat.id}:\${m.message_thread_id}\` : \`\${m.chat.id}\`;
-      // A small editable context envelope: where we are + what this replies to. Edit freely, this is your glue.
+      // A small editable context envelope — edit freely, this is your glue.
       const meta = [
         \`chat \${m.chat.id} (\${m.chat.type})\`,
         m.message_thread_id ? \`thread \${m.message_thread_id}\` : undefined,
         m.from?.username ? \`from @\${m.from.username}\` : undefined,
+        cmd ? \`command /\${cmd}\${payload ? \` \${payload}\` : ""}\` : undefined,
       ]
         .filter(Boolean)
         .join(", ");
