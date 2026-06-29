@@ -202,7 +202,7 @@ const channel: ChannelModule = (agent) => ({
     // on is OPTIONAL: omitted, it defaults to standard routing — message/edited/channel_post +
     // text/caption, photo→image, document/voice/video/audio→file (downloaded to disk), reply context,
     // a metadata envelope, per-thread session, and group summon (private always; groups on a command
-    // or a reply to the bot). Pass your own on() to customize, e.g.:
+    // a reply to the bot, or @mention). Pass your own on() to customize, e.g.:
     //   on: (update) =>
     //     update.message?.text
     //       ? [{ session: \`\${update.message.chat.id}\`, text: update.message.text, chatId: update.message.chat.id }]

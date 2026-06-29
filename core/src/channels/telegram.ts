@@ -136,6 +136,14 @@ interface Target {
   threadId?: number;
 }
 
+/** Resolve the bot's own @username (getMe) so default routing can recognise group @mentions. */
+async function resolveBotUsername(api: string, botToken: string): Promise<string | undefined> {
+  const res = await fetch(`${api}/bot${botToken}/getMe`);
+  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { username?: string } };
+  if (!res.ok || !data.ok) throw new Error(`getMe failed: ${res.status}`);
+  return data.result?.username;
+}
+
 /** Constant-time compare so the secret-token check leaks no timing signal. */
 function tokenMatches(header: string, secret: string): boolean {
   const a = Buffer.from(header);
@@ -456,15 +464,17 @@ async function streamReply(
  * routes message/edited_message/channel_post/edited_channel_post; text/caption + structured payloads
  * (location/contact/poll) as text; photo→image, document/voice/video/audio→file; reply context; a
  * metadata envelope; per-thread session; and a group-summon gate — private chats always pass, groups
- * only on a command or a reply to the bot (@mention needs your bot's username, so write your own `on`).
+ * only on a command, a reply to the bot, or an @mention (when `botUsername` is supplied; telegramChannel
+ * resolves it via getMe).
  */
-export function defaultTelegramOn(update: TelegramUpdate): TelegramIntent[] {
+export function defaultTelegramOn(update: TelegramUpdate, options?: { botUsername?: string }): TelegramIntent[] {
   const m = update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
   if (!m) return [];
   const r = m.reply_to_message;
   const t = m.text ?? "";
   const cmd = t.startsWith("/") ? t.slice(1).split(" ")[0]?.split("@")[0] : undefined;
-  if (!(m.chat.type === "private" || Boolean(cmd) || r?.from?.is_bot === true)) return []; // group summon
+  const mentioned = options?.botUsername ? t.includes(`@${options.botUsername}`) : false;
+  if (!(m.chat.type === "private" || Boolean(cmd) || r?.from?.is_bot === true || mentioned)) return []; // group summon
   const parts = [m.text ?? m.caption ?? ""];
   if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);
   if (m.contact) parts.push(`[contact: ${m.contact.first_name} ${m.contact.phone_number ?? ""}]`);
@@ -514,7 +524,18 @@ export function telegramChannel(
     throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
   }
   const formatError = onError ?? defaultErrorMessage;
-  const route = on ?? defaultTelegramOn;
+  // Only the default routing needs the bot's @username (for group @mention summon); resolve it once via
+  // getMe when `on` is omitted. A custom `on` owns its own routing, so no getMe call is made for it.
+  let botUsername: string | undefined;
+  if (!on) {
+    void resolveBotUsername(apiBaseUrl, botToken).then(
+      (u) => {
+        botUsername = u;
+      },
+      (e) => console.error(`[telegram] getMe failed; group @mention summon disabled: ${String(e)}`),
+    );
+  }
+  const route = on ?? ((update: TelegramUpdate) => defaultTelegramOn(update, { botUsername }));
   let draftSeq = 0; // non-zero, per-turn draft ids (process-lived; the route handler is built once)
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);

@@ -88,6 +88,10 @@ describe("defaultTelegramOn (the built-in routing used when on is omitted)", () 
     const group = { id: -100, type: "supergroup" };
     expect(defaultTelegramOn({ update_id: 1, message: { message_id: 2, text: "chatter", chat: group } })).toEqual([]);
     expect(defaultTelegramOn({ update_id: 1, message: { message_id: 2, text: "/ask", chat: group } })).toHaveLength(1);
+    // @mention summons only when the bot's username is supplied (telegramChannel resolves it via getMe)
+    const mention: TelegramUpdate = { update_id: 1, message: { message_id: 2, text: "hey @mybot help", chat: group } };
+    expect(defaultTelegramOn(mention)).toEqual([]);
+    expect(defaultTelegramOn(mention, { botUsername: "mybot" })).toHaveLength(1);
   });
 });
 
