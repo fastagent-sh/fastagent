@@ -141,6 +141,29 @@ describe("telegram channel", () => {
     });
   });
 
+  it("streams model reasoning into the draft (💭) but keeps it out of the persisted final message", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "thinking", delta: "weighing options" };
+        // a tool event force-flushes a draft, capturing the accumulated reasoning (text deltas throttle)
+        yield { type: "tool_started", id: "t1", name: "read", args: {} };
+        yield { type: "tool_ended", id: "t1", isError: false, content: {} };
+        yield { type: "text", delta: "the answer" };
+        yield { type: "completed" };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: echoOn, apiBaseUrl: API });
+    expect((await ch(tgRequest(MSG))).status).toBe(200);
+    await flush();
+    const draftTexts = callsTo(fetchMock, "sendMessageDraft").map((c) => bodyOf(c).text as string);
+    expect(draftTexts.some((t) => /💭/.test(t) && /weighing options/.test(t))).toBe(true); // reasoning shown live
+    const sent = callsTo(fetchMock, "sendMessage");
+    expect(sent).toHaveLength(1);
+    expect(bodyOf(sent[0]).text).toBe("the answer"); // final excludes the reasoning
+  });
+
   it("streams tool activity into the draft (process is visible) and persists only the clean final text", async () => {
     const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

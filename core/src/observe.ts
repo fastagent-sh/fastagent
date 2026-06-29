@@ -25,16 +25,20 @@ export function logAgentLoop(agent: Agent, log: (line: string) => void = (line) 
       const s = scope.session;
       log(`[agent] ▶ turn session=${s} ← ${oneLine(prompt.text)}`);
       const toolName = new Map<string, string>(); // tool_ended carries no name — remember it from tool_started
+      let thinking = "";
       let reply = "";
       for await (const e of agent.invoke(scope, prompt)) {
         if (e.type === "text") {
           reply += e.delta;
+        } else if (e.type === "thinking") {
+          thinking += e.delta;
         } else if (e.type === "tool_started") {
           toolName.set(e.id, e.name);
           log(`[agent]   tool → ${e.name}(${preview(e.args)})`);
         } else if (e.type === "tool_ended") {
           log(`[agent]   tool ${e.isError ? "✗" : "✓"} ${toolName.get(e.id) ?? e.id} → ${preview(e.content)}`);
         } else if (e.type === "completed") {
+          if (thinking.trim() !== "") log(`[agent]   thinking: ${oneLine(thinking)}`);
           log(`[agent]   reply: ${oneLine(reply) || "(empty)"}`);
           log(`[agent] ■ completed session=${s}`);
         } else if (e.type === "failed") {

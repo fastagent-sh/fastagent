@@ -56,11 +56,12 @@ const isRetryable = (details: string): boolean => RETRYABLE.test(details);
 /** In-stream event mapping. Non text/tool_* pi events (turn_start, message_start, …) are dropped. */
 function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
   switch (pe.type) {
-    case "message_update":
-      if (pe.assistantMessageEvent.type === "text_delta") {
-        return { type: "text", delta: pe.assistantMessageEvent.delta };
-      }
+    case "message_update": {
+      const ev = pe.assistantMessageEvent;
+      if (ev.type === "text_delta") return { type: "text", delta: ev.delta };
+      if (ev.type === "thinking_delta") return { type: "thinking", delta: ev.delta };
       return null;
+    }
     case "tool_execution_start":
       return { type: "tool_started", id: pe.toolCallId, name: pe.toolName, args: pe.args as Json };
     case "tool_execution_end":
