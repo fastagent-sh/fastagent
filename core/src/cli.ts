@@ -32,7 +32,7 @@ import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 import { loadAgentDefinition, loadRootIgnore } from "./engines/pi/definition.ts";
 import { runInvokeStream } from "./invoke-stream.ts";
 import { reportDefinitionWarnings, reportToolCollisions } from "./engines/pi/report.ts";
-import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
+import { createPiAgentFromWorkspace } from "./engines/pi/workspace.ts";
 import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import {
   type ChannelKind,
@@ -42,9 +42,9 @@ import {
   channelExists,
   channelSetup,
   scaffoldChannel,
-} from "./engines/pi/add-channel.ts";
-import { nextStepCd, scaffoldWorkspace } from "./engines/pi/init.ts";
-import { vendorSkill } from "./engines/pi/vendor-skill.ts";
+} from "./engines/pi/scaffold/add-channel.ts";
+import { nextStepCd, scaffoldWorkspace } from "./engines/pi/scaffold/init.ts";
+import { vendorSkill } from "./engines/pi/scaffold/vendor-skill.ts";
 
 function usage(code: number): never {
   console.error(`usage:

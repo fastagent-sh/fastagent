@@ -1,15 +1,15 @@
 ---
 title: fastagent — Core design
 type: design-doc
-status: design
-updated: 2026-06-11
+status: current
+updated: 2026-06-29
 ---
 
 # fastagent core design
 
-This document describes the current pi-based reference implementation of the [Agent Handler SPEC](SPEC.md). The code source of truth is `core/`.
+This document describes the current pi-based reference implementation of the [Agent Handler SPEC](../SPEC.md). The code source of truth is `core/`.
 
-FastAgent is WSGI for agent serving: a small internal handler contract plus a reference implementation and deployment tooling around existing agent definitions.
+Technical analogy: FastAgent plays the WSGI-like layer for agent serving — a small internal handler contract plus a reference implementation and deployment tooling around existing agent definitions.
 
 ## 1. Layering: N × M × K
 
@@ -97,11 +97,11 @@ Naming rule: `From<source>` means inputs are derived from that source. No suffix
 
 L0 lives in `invoke.ts` because its body is the request-time turn mechanism; L1–L2 live in `create.ts` because they are configuration-time assembly.
 
-**The command opener (above L2).** `dev` and `start` are the SAME thin composition over L2 — open a directory, resolve model/tools, pick session storage, call L2 — living in one command module so `create.ts` stays the pure reusable ladder. There is no build/artifact: the directory IS the agent, run directly (see §10).
+**The workspace opener (above L2).** `dev` and `start` are the SAME thin composition over L2 — open a directory, resolve model/tools, pick session storage, call L2 — living in one workspace module so `create.ts` stays the pure reusable ladder. There is no build/artifact: the directory IS the agent, run directly (see §10).
 
 | Command | Function | Module | Posture |
 |---|---|---|---|
-| `dev` / `start` | `createPiAgentFromWorkspace(dir, { model?, sessionsDir? })` | `dev.ts` | one opener; `dev` watches (authoring), `start` runs production posture (no watch) |
+| `dev` / `start` | `createPiAgentFromWorkspace(dir, { model?, sessionsDir? })` | `workspace.ts` | one opener; `dev` watches (authoring), `start` runs production posture (no watch) |
 
 ## 5. Config v1
 
@@ -129,13 +129,13 @@ Skills are markdown/file assets. Loading is **definition-only, period**: an agen
 
 The `skills/` format is **Agent Skills** ([agentskills.io](https://agentskills.io)) compatible — a `skills/<name>/SKILL.md` with `name`/`description` frontmatter and progressive disclosure (name+description at startup, the body on activation), as implemented by pi's `loadSkills`. Any standard skill (e.g. from [anthropics/skills](https://github.com/anthropics/skills)) works by **vendoring**: copy the folder into `skills/`, git-tracked, and it Just Works — unsupported optional fields (`license`, `metadata`, `compatibility`) are ignored without error. **There is no registry, and none is needed**: the filesystem is the registry, git is the distribution, and the user owns trust (a vendored skill's `scripts/` is code they audit, like an npm dependency). fastagent is the serving layer, not a skill marketplace.
 
-Loading the machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`) was removed deliberately. It made the agent depend on ambient machine state and recreated the "works on my machine, breaks deployed" trap fastagent exists to kill — the same reason Flask/FastAPI run the code you wrote, not code injected from your home directory. The principle is general: **the definition directory is the agent's only source of truth; nothing the code can't see is loaded into its behavior** (credentials and env are deployment config, not behavior — they stay outside the directory by design). To ship a skill, put it in `skills/`.
+Loading the machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`) was removed deliberately. It made the agent depend on ambient machine state and recreated the "works on my machine, breaks deployed" trap fastagent exists to kill. The principle is general: **the definition directory is the agent's only source of truth; nothing the code can't see is loaded into its behavior** (credentials and env are deployment config, not behavior — they stay outside the directory by design). To ship a skill, put it in `skills/`.
 
 Definition-local skills win name collisions (the deployable unit is authoritative); collisions are surfaced as diagnostics, not swallowed.
 
 Code tools are TypeScript/JavaScript modules. The vibe path is `defineTool` + filesystem discovery: drop a file in `tools/`, default-export `defineTool({ description, input, execute })`, and it is auto-discovered, named from the filename (authoritative), schema-validated, and injected — no `name` field, no manual registration. `defineTool` takes a Zod `input` schema (re-exported as `z` from the package), converts it to JSON Schema for the model, validates the model's arguments before `execute` (a validation failure becomes an error result the model can correct, not a crash), and wraps a plain return value into pi's result shape.
 
-> Reversal: an earlier draft said "FastAgent does not auto-load a magic `tools/` directory." That rationale conflated dependency installation with registration — they are orthogonal. Vercel's eve (same "agent is a directory" thesis) auto-discovers `tools/` despite tools being TS-with-deps, and it is the bigger DX win (it removes both the `name` field and the wiring). So fastagent now auto-discovers `tools/`.
+> Reversal: an earlier draft said "FastAgent does not auto-load a magic `tools/` directory." That rationale conflated dependency installation with registration — they are orthogonal. Filesystem discovery is the bigger DX win because it removes both the `name` field and the wiring. So fastagent now auto-discovers `tools/`.
 
 `config.tools` remains as the programmatic/advanced injection path; discovered tools are merged after pi defaults + `config.tools`, deduped by name (existing win; dropped tools are surfaced, not silent). A code-tool workspace must be ESM (`"type": "module"` in package.json) so a tool's `import` resolves. `fastagent tool <name> '<json>'` runs one tool's body directly — no model, no server, no tokens — the tightest authoring feedback loop. Declarative MCP tool mounting via `.mcp.json` is future support, not implemented today.
 
@@ -175,7 +175,7 @@ The HTTP channel consumes only the neutral `Agent` contract.
 
 ## 10. Running and deployment (design)
 
-The directory IS the agent: there is no build step and no artifact. `dev` and `start` both run the definition directory directly (§4 opener). An agent has no compile output — instructions and skills are markdown, code tools are imported directly in dev and start alike — so packaging was never a *runtime* prerequisite. Packaging for remote deploy (exclude dev cruft, pin a model, push) returns later as an internal step of a future **`deploy`** command (multi-target push + a hosted platform), not a build the author must run by hand.
+The directory IS the agent: there is no build step and no artifact. `dev` and `start` both run the definition directory directly (§4 opener). An agent has no compile output — instructions and skills are markdown, code tools are imported directly in dev and start alike — so packaging was never a *runtime* prerequisite. Packaging for remote deployment (exclude dev cruft, pin a model, push) returns later as an internal step of a future **`deploy`** command, not a build the author must run by hand.
 
 ### 10.1 What an agent is (the M/K seam)
 
@@ -248,7 +248,7 @@ Auth rides the pi `Models` collection, not a side channel; `start` is **not** en
 
 Resolution order is upstream-owned: a stored credential owns the provider; env is consulted only when nothing is stored. fastagent supplies `fastagentCredentialStore`, a **read-write** `CredentialStore` over its OWN `~/.fastagent/auth.json` (the file IS the store shape: `Record<providerId, Credential>` with `type:"oauth"`/`type:"api_key"`). It is deliberately **separate** from the pi CLI's `~/.pi/agent/auth.json`: two stores cannot share one OAuth refresh lifecycle (a rotated refresh token consumed by one breaks the other), and the engine binding must not write the user's global pi state. `fastagent login` populates the file; `modify` — the serialized read-modify-write `Models.getAuth()` runs OAuth refresh inside — **persists** the rotated token, reusing pi's `FileAuthStorageBackend` for the cross-process file lock.
 
-OAuth refresh tokens are single-use, so refresh is serialized (the file lock) and the new credentials written back — the persistence above. **Single machine/container** is covered by that file lock. **Multi-instance**: a credential broker with row-locked refresh over a shared store (the ketchup `worker_credentials` pattern) — same `CredentialStore` seam, injected via `createPiModels`'s collection, deferred with the K-axis backends.
+OAuth refresh tokens are single-use, so refresh is serialized (the file lock) and the new credentials written back — the persistence above. **Single machine/container** is covered by that file lock. **Multi-instance** deployments need a shared credential store with row-locked refresh; that uses the same `CredentialStore` seam and is deferred with the K-axis backends.
 
 ### 10.5 Container recipe (v1, documented not generated)
 
@@ -260,14 +260,14 @@ RUN  npm ci                          # code-tool deps (skip for pure markdown/sk
 CMD  ["fastagent", "start", "/app"]  # cwd = /app
 ```
 
-Sessions go to a mounted volume (`FASTAGENT_SESSIONS_DIR=/data/sessions`) so a redeploy never wipes them; secrets and (optionally) OAuth credentials are injected as env/mounted files; `PORT` is honored. Excluding dev cruft from the image is `.dockerignore`'s job until the future `deploy` command owns packaging. A Dockerfile sample ships with the implementation.
+Sessions go to a mounted volume (`FASTAGENT_SESSIONS_DIR=/data/sessions`) so a redeploy never wipes them; secrets and (optionally) OAuth credentials are injected as env/mounted files; `PORT` is honored. Excluding dev cruft from the image is `.dockerignore`'s job until the future `deploy` command owns packaging. The recipe is documented here rather than generated or shipped as a Dockerfile.
 
 ## 11. Current open work
 
 - `fastagent dev` / `fastagent start` per §10 are implemented (single-machine tier, the directory is the agent); the documented container recipe (§10.5) is not yet shipped as a generated Dockerfile.
-- `fastagent deploy` (multi-target push + a hosted platform): packaging (exclude dev cruft, pin a model) returns here as an internal step, not a user-facing build. Future milestone.
-- Refresh-capable runtime OAuth resolver (§10.4); multi-instance credential broker deferred.
-- AgentCore target adapter with external sessions and distributed locking (the async `Lease` port).
+- `fastagent deploy`: packaging (exclude dev cruft, pin a model, push to a target runtime) returns here as an internal step, not a user-facing build. Future milestone.
+- Multi-instance credential broker for OAuth refresh (§10.4); single-machine/container credential refresh is covered by the file-backed store.
+- Target adapters with external sessions and distributed locking (the async `Lease` port).
 - Production observability sink for cleanup anomalies (§3) without violating SPEC terminal discipline.
 - Engine #2, which will prove which pi-specific seams (e.g. `PiSessionStore`) should become engine-neutral abstractions.
 - Crash-safe reopen (§7) is reconciled in fastagent's session store today; the more fundamental fix is upstream in pi's `buildSessionContext` (the single context-rebuild point). If accepted there, the fastagent-layer reconciliation retires.

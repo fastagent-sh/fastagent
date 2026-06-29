@@ -20,11 +20,11 @@ The full local loop is fast:
 cd core
 npm install
 npm run lint           # biome check (format + lint, read-only); `npm run format` to fix
-npm run typecheck      # tsc --noEmit (covers src, test, examples)
+npm run typecheck      # tsc --noEmit (covers src and test)
 npm test               # vitest --run
 ```
 
-Tests use faux models by default, so they validate serving mechanics without network or credentials. A live-model smoke test against a real provider is optional and manual (see `core/examples/`), and requires pi OAuth in `~/.pi/agent/auth.json` plus, behind a proxy, a working `HTTPS_PROXY`.
+Tests use faux models by default, so they validate serving mechanics without network or credentials. A live-model smoke test against a real provider is optional and manual; use a temporary agent from `fastagent init`, and authenticate with `fastagent login` or provider API keys. Behind a proxy, set a working `HTTPS_PROXY`.
 
 ## Pull request loop
 

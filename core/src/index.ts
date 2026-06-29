@@ -28,7 +28,7 @@ export {
 } from "./engines/pi/create.ts";
 
 // init: scaffold a runnable workspace.
-export { scaffoldWorkspace, type ScaffoldResult } from "./engines/pi/init.ts";
+export { scaffoldWorkspace, type ScaffoldResult } from "./engines/pi/scaffold/init.ts";
 
 // Tool authoring: defineTool (+ re-exported z) and tools/ discovery.
 // Re-export rule: the engine-neutral contract (agent.ts) owns its types; the pi reference-impl
@@ -52,7 +52,7 @@ export { loadChannels, type ChannelModule, type ChannelCollision } from "./engin
 export {
   createPiAgentFromWorkspace,
   type CreatePiAgentFromWorkspaceOptions,
-} from "./engines/pi/dev.ts";
+} from "./engines/pi/workspace.ts";
 
 // Definition domain (load).
 export {

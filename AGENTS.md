@@ -2,7 +2,7 @@
 
 ## What this is
 
-fastagent is WSGI for agent serving: it turns an existing agent definition (`AGENTS.md` + `skills/`) into a production service without rewriting it. Engine-neutral, model-neutral, cloud-neutral.
+fastagent is "Vibe first. Then FastAgent" for agent folders: it turns an existing agent definition (`AGENTS.md` + `skills/`) into a running agent service inside an app, reviewing GitHub PRs, helping users in Telegram, or running behind a custom channel without rewriting it. Engine-neutral, model-neutral, cloud-neutral.
 
 The stable design center is the Agent Handler contract (`docs/SPEC.md`). The reference implementation is built on pi (`@earendil-works/pi-*`).
 
@@ -11,9 +11,8 @@ The stable design center is the Agent Handler contract (`docs/SPEC.md`). The ref
 | Document | Purpose |
 |---|---|
 | `docs/SPEC.md` | The locked v0.1 Agent Handler contract. Do not change its semantics without an explicit decision. |
-| `docs/core-design.md` | The pi reference implementation and current architecture. |
-| `docs/fastagent.md` | Product overview and documentation index (landing page; `status: design`). |
-| `docs/positioning.md`, `docs/comparisons.md` | Strategy and competitive framing. |
+| `docs/design/core.md` | The pi reference implementation and current architecture. |
+| `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
 | `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review tiers). |
 
 Code truth is `core/`.
@@ -31,11 +30,9 @@ core/
 │   └── engines/pi/              # the pi reference implementation
 │       ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
 │       ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
-│       ├── init.ts              # `init`: scaffold a runnable agent (complete by default; --minimal)
-│       ├── dev.ts               # `dev` opener: open a workspace → agent (authoring posture)
+│       ├── workspace.ts         # shared opener: workspace → agent for dev/start/invoke
 │       ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
-│       ├── build.ts             # `build`: compile a workspace → self-contained artifact
-│       ├── start.ts             # `start` opener: run a built artifact (production posture)
+│       ├── scaffold/            # `init`, `add <channel>`, `add skill`, and scaffold templates
 │       ├── tool.ts              # defineTool (Zod) + tools/ filesystem discovery
 │       ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
 │       ├── harness.ts           # pi harness wiring (factory)
@@ -44,7 +41,6 @@ core/
 │       ├── auth.ts              # pi OAuth / env auth resolution
 │       └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
 ├── test/                        # vitest; faux models by default
-└── examples/                    # library + config usage
 docs/                            # SPEC, design, positioning
 ```
 
