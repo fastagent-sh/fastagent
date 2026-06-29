@@ -66,7 +66,7 @@ export interface TelegramMessage {
   location?: { latitude: number; longitude: number; [k: string]: unknown };
   contact?: { phone_number?: string; first_name: string; last_name?: string; [k: string]: unknown };
   poll?: { question: string; options?: { text: string }[]; [k: string]: unknown };
-  /** Files (downloaded to disk by the channel when listed in an intent's `fileIds`). */
+  /** Files — the channel downloads document/voice/video/audio on a routed message to disk. */
   document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number; [k: string]: unknown };
   voice?: { file_id: string; [k: string]: unknown };
   video?: { file_id: string; [k: string]: unknown };
