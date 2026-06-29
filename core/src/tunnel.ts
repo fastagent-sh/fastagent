@@ -5,7 +5,7 @@
  *
  * Process orchestration, not assembly — lives outside the engine, beside dev-supervisor.ts.
  */
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -22,43 +22,92 @@ export function parseTunnelUrl(chunk: string): string | undefined {
   return chunk.match(TUNNEL_URL_RE)?.[0];
 }
 
+const TUNNEL_ATTEMPTS = 3;
+const TUNNEL_RETRY_MS = 2000;
+
+/** How cloudflared is launched; injectable so tests can drive the child without a real process. */
+type SpawnCloudflared = (port: number) => ChildProcess;
+const spawnCloudflared: SpawnCloudflared = (port) =>
+  spawn("cloudflared", ["tunnel", "--url", `http://localhost:${port}`], { stdio: ["ignore", "pipe", "pipe"] });
+
+type TunnelSpawn =
+  | { tunnel: Tunnel }
+  | { tunnel?: undefined; fatal: true; message: string }
+  | { tunnel?: undefined; fatal: false; detail?: string };
+
 /**
- * Start a Cloudflare quick tunnel to localhost:`port`, resolving once its public URL appears. Resolves
- * to undefined (with an actionable hint) if cloudflared is not installed — serving continues either way.
+ * Start a Cloudflare quick tunnel to localhost:`port`, resolving once its public URL appears.
+ * cloudflared sometimes exits before printing a URL (a transient trycloudflare API error), so retry a
+ * few times. ALWAYS resolves to undefined WITH an operator log saying why — missing binary, the exit
+ * reason, or "gave up after retries" — never silently; serving continues without a tunnel either way.
+ * (Edge warmup AFTER the URL appears is the caller's concern: announceWebhooks polls /health.)
  */
-export function startCloudflareTunnel(port: number): Promise<Tunnel | undefined> {
+export async function startCloudflareTunnel(
+  port: number,
+  spawnFn: SpawnCloudflared = spawnCloudflared,
+): Promise<Tunnel | undefined> {
+  for (let attempt = 1; attempt <= TUNNEL_ATTEMPTS; attempt++) {
+    const r = await spawnTunnelOnce(port, spawnFn);
+    if (r.tunnel) return r.tunnel;
+    if (r.fatal) {
+      console.error(r.message); // missing binary — retrying cannot help
+      return undefined;
+    }
+    const more = attempt < TUNNEL_ATTEMPTS;
+    console.error(
+      `[fastagent] --tunnel: cloudflared exited before a public URL appeared${r.detail ? ` (${r.detail})` : ""}` +
+        (more ? ` — retrying (${attempt}/${TUNNEL_ATTEMPTS - 1})…` : ". Serving without a tunnel."),
+    );
+    if (more) await sleep(TUNNEL_RETRY_MS);
+  }
+  return undefined;
+}
+
+/** One cloudflared launch: a Tunnel on the first URL, or a failure (missing binary / exit before a URL). */
+function spawnTunnelOnce(port: number, spawnFn: SpawnCloudflared): Promise<TunnelSpawn> {
   return new Promise((resolve) => {
-    const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${port}`], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawnFn(port);
     let settled = false;
+    let tail = ""; // recent output, surfaced as the failure reason
     const onChunk = (buf: Buffer): void => {
+      tail = (tail + String(buf)).slice(-600);
       if (settled) return;
       const url = parseTunnelUrl(String(buf));
       if (url) {
         settled = true;
-        resolve({ url, close: () => child.kill("SIGTERM") });
+        resolve({ tunnel: { url, close: () => child.kill("SIGTERM") } });
       }
     };
-    child.stdout.on("data", onChunk);
-    child.stderr.on("data", onChunk); // cloudflared prints the URL on stderr
+    child.stdout?.on("data", onChunk);
+    child.stderr?.on("data", onChunk); // cloudflared prints the URL (and its errors) on stderr
     child.on("error", (e: NodeJS.ErrnoException) => {
       if (settled) return;
       settled = true;
-      console.error(
-        e.code === "ENOENT"
-          ? "[fastagent] --tunnel needs cloudflared — install it (e.g. `brew install cloudflared`), then re-run. Serving without a tunnel."
-          : `[fastagent] cloudflared failed: ${e.message}. Serving without a tunnel.`,
-      );
-      resolve(undefined);
-    });
-    child.on("exit", () => {
-      if (!settled) {
-        settled = true;
-        resolve(undefined); // exited before printing a URL
+      if (e.code === "ENOENT") {
+        resolve({
+          fatal: true,
+          message:
+            "[fastagent] --tunnel needs cloudflared — install it (e.g. `brew install cloudflared`), then re-run. Serving without a tunnel.",
+        });
+      } else {
+        resolve({ fatal: false, detail: e.message });
       }
     });
+    child.on("exit", () => {
+      if (settled) return;
+      settled = true;
+      resolve({ fatal: false, detail: lastErrorLine(tail) });
+    });
   });
+}
+
+/** The most informative line of cloudflared's output tail (prefer an error line) for a failure log. */
+function lastErrorLine(tail: string): string {
+  const lines = tail
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return ([...lines].reverse().find((l) => /err|error|failed/i.test(l)) ?? lines.at(-1) ?? "").slice(0, 200);
 }
 
 /** Channel basenames present in `<dir>/channels/`. */

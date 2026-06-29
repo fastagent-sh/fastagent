@@ -1,8 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { announceWebhooks, parseTunnelUrl } from "../src/tunnel.ts";
+import { announceWebhooks, parseTunnelUrl, startCloudflareTunnel } from "../src/tunnel.ts";
+
+// Mirrors TUNNEL_RETRY_MS in tunnel.ts (the constant is not exported).
+const TUNNEL_RETRY_MS = 2000;
+
+/** A fake cloudflared child: EventEmitter with stdout/stderr emitters, drivable from a test. */
+function fakeCloudflared(): ChildProcess {
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+    kill: vi.fn(),
+  });
+  return child as unknown as ChildProcess;
+}
+
+/** Collect console.error lines for assertions. */
+function captureErrors(): string[] {
+  const errs: string[] = [];
+  vi.spyOn(console, "error").mockImplementation((m) => {
+    errs.push(String(m));
+  });
+  return errs;
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -30,6 +54,49 @@ async function workspace(channels: string[]): Promise<string> {
   for (const c of channels) await writeFile(join(dir, "channels", `${c}.ts`), "export default () => ({});\n");
   return dir;
 }
+
+describe("tunnel: startCloudflareTunnel", () => {
+  it("resolves a tunnel on the first URL cloudflared prints", async () => {
+    const child = fakeCloudflared();
+    const p = startCloudflareTunnel(8800, () => child);
+    await Promise.resolve(); // let the listeners attach
+    child.stderr?.emit("data", Buffer.from("INF +-+ https://blue-cat-42.trycloudflare.com +-+\n"));
+    const t = await p;
+    expect(t?.url).toBe("https://blue-cat-42.trycloudflare.com");
+  });
+
+  it("does not retry a missing cloudflared (ENOENT); logs the install hint", async () => {
+    const errs = captureErrors();
+    let spawns = 0;
+    const child = fakeCloudflared();
+    const p = startCloudflareTunnel(8800, () => {
+      spawns++;
+      return child;
+    });
+    await Promise.resolve();
+    child.emit("error", Object.assign(new Error("spawn cloudflared"), { code: "ENOENT" }));
+    expect(await p).toBeUndefined();
+    expect(spawns).toBe(1); // fatal — no retry
+    expect(errs.some((e) => /needs cloudflared/.test(e))).toBe(true);
+  });
+
+  it("does not fail silently: an exit-before-URL is logged and retried, then it gives up", async () => {
+    vi.useFakeTimers();
+    const errs = captureErrors();
+    let spawns = 0;
+    const p = startCloudflareTunnel(8800, () => {
+      spawns++;
+      const child = fakeCloudflared();
+      queueMicrotask(() => child.emit("exit", 1, null)); // every attempt exits before a URL
+      return child;
+    });
+    await vi.advanceTimersByTimeAsync(TUNNEL_RETRY_MS * 3 + 100); // through both retry backoffs
+    expect(await p).toBeUndefined();
+    expect(spawns).toBe(3); // retried, not a single silent attempt
+    expect(errs.some((e) => /exited before a public URL/.test(e) && /retrying/.test(e))).toBe(true);
+    expect(errs.some((e) => /Serving without a tunnel/.test(e))).toBe(true);
+  });
+});
 
 describe("tunnel: parseTunnelUrl", () => {
   it("extracts a trycloudflare URL from cloudflared output", () => {
