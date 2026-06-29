@@ -216,6 +216,7 @@ describe("telegram channel", () => {
     expect((await ch(tgRequest(MSG))).status).toBe(200);
     await flush();
     const drafts = callsTo(fetchMock, "sendMessageDraft").map((c) => bodyOf(c).text as string);
+    expect(drafts[0]).toBe("💭 Thinking…"); // initial draft is an explicit placeholder, never an empty "…"
     expect(drafts.some((t) => /💭/.test(t) && /weighing options/.test(t))).toBe(true);
     expect(drafts.some((t) => /word-count the quick brown fox/.test(t))).toBe(true);
     const sent = callsTo(fetchMock, "sendMessage");

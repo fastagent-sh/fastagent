@@ -213,11 +213,15 @@ async function streamReply(
     if (t === "") return "";
     return `💭 ${t.length > THINKING_PREVIEW ? `…${t.slice(t.length - THINKING_PREVIEW + 1)}` : t}`;
   };
-  const view = (): string =>
-    [thinkingView(), toolView(), answer]
+  const view = (): string => {
+    const v = [thinkingView(), toolView(), answer]
       .filter((s) => s.trim() !== "")
       .join("\n\n")
       .trim();
+    // Before the first reasoning/tool/text arrives the draft is empty — Telegram renders an empty draft
+    // as a bare "…", so show an explicit placeholder instead (this is also what the keepalive re-pushes).
+    return v === "" ? "💭 Thinking…" : v;
+  };
   const draft = async (force: boolean): Promise<void> => {
     if (!force && Date.now() - lastDraftAt < DRAFT_THROTTLE_MS) return;
     lastDraftAt = Date.now();
@@ -233,7 +237,7 @@ async function streamReply(
     }
   };
 
-  await draft(true); // empty view → Telegram shows a "Thinking…" placeholder immediately
+  await draft(true); // show the "💭 Thinking…" placeholder immediately (view() fills the empty state)
 
   // A draft is a ~30s ephemeral preview; a long tool / arg-generation step emits no events, so without
   // a heartbeat the preview lapses and the chat looks dead. Re-push the current view to keep it alive.
