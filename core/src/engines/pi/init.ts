@@ -227,7 +227,11 @@ const channel: ChannelModule = (agent) => ({
       const body = parts.filter(Boolean).join("\\n");
       // images: largest photo of this message and/or the one it replies to (so "reply to a photo + ask" works)
       const imageFileIds = [m.photo?.at(-1)?.file_id, r?.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
-      if (!body && imageFileIds.length === 0) return [];
+      // files: documents/voice/video/audio → channel downloads them to disk; the agent reads them with its tools
+      const fileIds = [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter(
+        (id): id is string => Boolean(id),
+      );
+      if (!body && imageFileIds.length === 0 && fileIds.length === 0) return [];
       const session = m.message_thread_id ? \`\${m.chat.id}:\${m.message_thread_id}\` : \`\${m.chat.id}\`;
       // A small editable context envelope — edit freely, this is your glue.
       const meta = [
@@ -248,6 +252,7 @@ const channel: ChannelModule = (agent) => ({
           chatId: m.chat.id,
           threadId: m.message_thread_id,
           imageFileIds: imageFileIds.length ? imageFileIds : undefined,
+          fileIds: fileIds.length ? fileIds : undefined,
         },
       ];
     },
@@ -259,6 +264,40 @@ const channel: ChannelModule = (agent) => ({
 });
 
 export default channel;
+`;
+
+/** A scaffolded `tools/telegram-send.ts`: the outbound action — the agent uploads a local file to a chat. */
+const TELEGRAM_SEND_TOOL_TS = `import { defineTool, z } from "@kid7st/fastagent";
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
+
+// Send a local file back to a Telegram chat. The agent passes a chatId it reads from the
+// [telegram: chat …] context line the channel injects. tools/ is auto-discovered — no registration.
+export default defineTool({
+  description:
+    "Send a local file to a Telegram chat (a document, or a photo if it is an image). Pass the chatId from the [telegram: chat …] context line.",
+  input: z.object({
+    chatId: z.union([z.string(), z.number()]).describe("target chat id (from the [telegram: chat …] context line)"),
+    path: z.string().describe("absolute path of the local file to send"),
+    caption: z.string().optional(),
+    asPhoto: z.boolean().optional().describe("send as a photo (inline) instead of a document"),
+    messageThreadId: z.number().optional().describe("thread to reply into (from the context line), if any"),
+  }),
+  async execute({ chatId, path, caption, asPhoto, messageThreadId }) {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
+    const method = asPhoto ? "sendPhoto" : "sendDocument";
+    const form = new FormData();
+    form.set("chat_id", String(chatId));
+    if (messageThreadId !== undefined) form.set("message_thread_id", String(messageThreadId));
+    if (caption) form.set("caption", caption);
+    form.set(asPhoto ? "photo" : "document", new Blob([await readFile(path)]), basename(path));
+    const res = await fetch("https://api.telegram.org/bot" + token + "/" + method, { method: "POST", body: form });
+    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string };
+    if (!res.ok || !data.ok) throw new Error("telegram " + method + " failed: " + res.status + " " + (data.description ?? ""));
+    return "sent " + basename(path) + " to chat " + chatId;
+  },
+});
 `;
 
 export type ChannelKind = "github" | "telegram";
@@ -275,6 +314,8 @@ interface ChannelScaffold {
   env: ChannelEnv[];
   /** Channel-specific next-step lines, printed after the env lines and before the `dev` line. */
   steps: string[];
+  /** An optional companion tool dropped into `tools/` (e.g. an outbound action the agent calls). */
+  tool?: { name: string; template: string };
 }
 
 const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
@@ -298,7 +339,11 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot" },
       { name: "TELEGRAM_SECRET_TOKEN", hint: "any random string; verifies inbound updates", generate: true },
     ],
-    steps: ["edit channels/telegram.ts — map updates to intents in on()"],
+    steps: [
+      "edit channels/telegram.ts — map updates to intents in on()",
+      "the agent can send files back by calling the scaffolded tools/telegram-send.ts tool",
+    ],
+    tool: { name: "telegram-send", template: TELEGRAM_SEND_TOOL_TS },
   },
 };
 
@@ -356,6 +401,12 @@ export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<s
   }
   await mkdir(channelsDir, { recursive: true });
   await writeFile(file, CHANNEL_SCAFFOLDS[kind].template, { flag: "wx" });
+  // A companion tool (e.g. telegram's outbound send) goes in tools/; never clobber an authored one.
+  const tool = CHANNEL_SCAFFOLDS[kind].tool;
+  if (tool && !(await exists(join(dir, "tools", `${tool.name}.ts`)))) {
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await writeFile(join(dir, "tools", `${tool.name}.ts`), tool.template, { flag: "wx" });
+  }
   return file;
 }
 

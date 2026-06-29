@@ -13,6 +13,8 @@
  * kit: readBodyCapped / text), so it is exactly what a third-party `fastagent-channel-*` package would write.
  */
 import { timingSafeEqual } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import type { Agent, AgentEvent, ImageRef, Json } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
@@ -63,6 +65,11 @@ export interface TelegramMessage {
   location?: { latitude: number; longitude: number; [k: string]: unknown };
   contact?: { phone_number?: string; first_name: string; last_name?: string; [k: string]: unknown };
   poll?: { question: string; options?: { text: string }[]; [k: string]: unknown };
+  /** Files (downloaded to disk by the channel when listed in an intent's `fileIds`). */
+  document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number; [k: string]: unknown };
+  voice?: { file_id: string; [k: string]: unknown };
+  video?: { file_id: string; [k: string]: unknown };
+  audio?: { file_id: string; [k: string]: unknown };
   /** Present in Threaded Mode (topics in private chats); reply with the same id to stay in-thread. */
   message_thread_id?: number;
   /** The message this one replies to, if any — inject its text/media so the agent has the referent. */
@@ -99,6 +106,8 @@ export interface TelegramIntent {
   threadId?: number;
   /** Telegram file_ids to fetch and pass to the agent as images (e.g. the largest `message.photo` size). */
   imageFileIds?: string[];
+  /** Telegram file_ids (document/voice/video/…) to download to disk; the agent reads them with its tools. */
+  fileIds?: string[];
 }
 
 export interface TelegramChannelOptions {
@@ -180,9 +189,12 @@ async function sendMessageDraft(
   }
 }
 
-/** Download sanity cap (Telegram's own getFile limit); a larger file is rejected visibly. The engine
- *  resizes images to the model's needs, so this is a transport guard, not the model size limit. */
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+/** Download sanity cap (Telegram's own getFile limit); a larger file/image is rejected visibly. The
+ *  engine resizes images to the model's needs, so this is a transport guard, not the model size limit. */
+const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
+
+/** Where inbound files land (under the workspace's .fastagent machine-state dir; the agent reads them by path). */
+const FILES_SUBDIR = join(".fastagent", "telegram-files");
 
 function mimeFromPath(path: string): string {
   const ext = path.toLowerCase().split(".").pop();
@@ -198,12 +210,59 @@ async function fetchTelegramImage(api: string, botToken: string, fileId: string)
   }).then((r) => r.json())) as { ok?: boolean; result?: { file_path?: string; file_size?: number } };
   const path = meta.result?.file_path;
   if (!meta.ok || !path) throw new Error(`getFile failed for ${fileId}`);
-  if ((meta.result?.file_size ?? 0) > MAX_IMAGE_BYTES) throw new Error("image is too large (max 20 MB)");
+  if ((meta.result?.file_size ?? 0) > MAX_DOWNLOAD_BYTES) throw new Error("image is too large (max 20 MB)");
   const res = await fetch(`${api}/file/bot${botToken}/${path}`);
   if (!res.ok) throw new Error(`download failed: ${res.status}`);
   const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("image is too large (max 20 MB)");
+  if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("image is too large (max 20 MB)");
   return { mimeType: mimeFromPath(path), data: bytes.toString("base64") };
+}
+
+/** A downloaded inbound file: an absolute local path the agent's tools (read/bash) can open. */
+interface DownloadedFile {
+  path: string;
+  name: string;
+  size: number;
+}
+
+/** Download a Telegram file_id to <cwd>/.fastagent/telegram-files/<chat>/<name>. Throws on failure / oversize. */
+async function downloadTelegramFile(
+  api: string,
+  botToken: string,
+  fileId: string,
+  chatId: number | string,
+): Promise<DownloadedFile> {
+  const meta = (await fetch(`${api}/bot${botToken}/getFile`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ file_id: fileId }),
+  }).then((r) => r.json())) as { ok?: boolean; result?: { file_path?: string; file_size?: number } };
+  const remote = meta.result?.file_path;
+  if (!meta.ok || !remote) throw new Error(`getFile failed for ${fileId}`);
+  if ((meta.result?.file_size ?? 0) > MAX_DOWNLOAD_BYTES) throw new Error("file is too large (max 20 MB)");
+  const res = await fetch(`${api}/file/bot${botToken}/${remote}`);
+  if (!res.ok) throw new Error(`download failed: ${res.status}`);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("file is too large (max 20 MB)");
+  const name = basename(remote);
+  const dir = join(process.cwd(), FILES_SUBDIR, String(chatId));
+  await mkdir(dir, { recursive: true });
+  const dest = join(dir, name);
+  await writeFile(dest, bytes);
+  return { path: dest, name, size: bytes.byteLength };
+}
+
+/** Download all of an intent's files. Throws if any cannot be loaded — the caller surfaces it (no silent drop). */
+async function resolveFiles(
+  api: string,
+  botToken: string,
+  fileIds: string[] | undefined,
+  chatId: number | string,
+): Promise<DownloadedFile[] | undefined> {
+  if (!fileIds || fileIds.length === 0) return undefined;
+  const files: DownloadedFile[] = [];
+  for (const id of fileIds) files.push(await downloadTelegramFile(api, botToken, id, chatId));
+  return files;
 }
 
 /** Fetch all of an intent's images. Throws if any cannot be loaded — the caller surfaces it (no silent drop). */
@@ -219,26 +278,34 @@ async function resolveImages(
 }
 
 /**
- * agent.invoke, but resolve the intent's images first. A transport failure becomes a `failed` event so
- * it flows through the same two-audience path (user message + operator log) rather than being silently
- * dropped — the agent never runs on inputs the user sent but we failed to load.
+ * agent.invoke, but resolve the intent's attachments first: images (vision) inline, and files
+ * downloaded to disk with their absolute paths appended to the prompt so the agent can read them with
+ * its tools. A transport failure becomes a `failed` event — surfaced (user + log), never a silent drop;
+ * the agent never runs on inputs the user sent but we failed to load.
  */
-async function* invokeWithImages(
+async function* invokeWithAttachments(
   agent: Agent,
   session: string,
   text: string,
+  chatId: number | string,
+  imageFileIds: string[] | undefined,
   fileIds: string[] | undefined,
   api: string,
   botToken: string,
 ): AsyncIterable<AgentEvent> {
   let images: ImageRef[] | undefined;
+  let files: DownloadedFile[] | undefined;
   try {
-    images = await resolveImages(api, botToken, fileIds);
+    images = await resolveImages(api, botToken, imageFileIds);
+    files = await resolveFiles(api, botToken, fileIds, chatId);
   } catch (e) {
-    yield { type: "failed", details: `could not load image: ${String(e)}`, retryable: true };
+    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
     return;
   }
-  yield* agent.invoke({ session }, { text, images });
+  const manifest = files?.length
+    ? `\n\n[attached files — read them with your tools:\n${files.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
+    : "";
+  yield* agent.invoke({ session }, { text: text + manifest, images });
 }
 
 /** The customer-facing default: neutral, no leaked internals; differentiate only on whether to retry. */
@@ -388,7 +455,16 @@ export function telegramChannel(
       // Images are resolved lazily inside invokeWithImages (post-ACK): on() chose the file_ids, the
       // channel owns the transport (bot token + file API) that on()'s synchronous map cannot do.
       void streamReply(
-        invokeWithImages(agent, intent.session, intent.text, intent.imageFileIds, apiBaseUrl, botToken),
+        invokeWithAttachments(
+          agent,
+          intent.session,
+          intent.text,
+          intent.chatId,
+          intent.imageFileIds,
+          intent.fileIds,
+          apiBaseUrl,
+          botToken,
+        ),
         apiBaseUrl,
         botToken,
         target,
