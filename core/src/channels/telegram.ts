@@ -14,6 +14,7 @@
  * kit: readBodyCapped / text), so it is exactly what a third-party `fastagent-channel-*` package would write.
  */
 import { timingSafeEqual } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Agent, AgentEvent, ImageRef, Json } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
 import {
@@ -201,8 +202,6 @@ async function streamReply(
   const toolIndexById = new Map<string, number>();
   let thinking = "";
   let answer = "";
-  let lastDraftAt = 0;
-  let draftErrLogged = false;
 
   const mark = { running: "…", ok: "✓", error: "✗" } as const;
   const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
@@ -222,50 +221,85 @@ async function streamReply(
     // as a bare "…", so show an explicit placeholder instead (this is also what the keepalive re-pushes).
     return v === "" ? "💭 Thinking…" : v;
   };
-  const draft = async (force: boolean): Promise<void> => {
-    if (!force && Date.now() - lastDraftAt < DRAFT_THROTTLE_MS) return;
-    lastDraftAt = Date.now();
+  // ── Live-preview pump: a SINGLE serialized writer. ──────────────────────────────────────────
+  // Events mutate state (thinking / tools / answer) and mark the preview dirty; the pump sends the
+  // LATEST view() with at most ONE sendMessageDraft in flight, paced by a throttle between sends, plus a
+  // trailing send after the final change. One-in-flight is the whole point: concurrent draft sends (an
+  // event update racing the keepalive, or a slow send overtaken by the next) can reach Telegram out of
+  // order — an older frame landing over a newer one is the "shows 3-4 steps, blanks, re-fills" flicker.
+  // Serializing through one writer keeps frames strictly monotonic; the keepalive marks dirty through
+  // the same writer, so it cannot race.
+  let dirty = false;
+  let pumping = false;
+  let stopped = false;
+  let draftErrLogged = false;
+
+  const runPump = async (): Promise<void> => {
+    pumping = true;
     try {
-      await sendMessageDraft(api, botToken, target, draftId, view());
-    } catch (e) {
-      // The live preview is best-effort (the final sendMessage is authoritative), but a failing draft
-      // must be visible — log it once per turn so a draft that never renders is diagnosable, not silent.
-      if (!draftErrLogged) {
-        draftErrLogged = true;
-        console.error(`[telegram] live draft failed (preview may not render; final reply still sends): ${String(e)}`);
+      while (dirty && !stopped) {
+        dirty = false;
+        try {
+          await sendMessageDraft(api, botToken, target, draftId, view());
+        } catch (e) {
+          // Best-effort preview (the final sendMessage is authoritative), but a failing draft must be
+          // visible — log once per turn so a never-rendering draft is diagnosable, not silent.
+          if (!draftErrLogged) {
+            draftErrLogged = true;
+            console.error(
+              `[telegram] live draft failed (preview may not render; final reply still sends): ${String(e)}`,
+            );
+          }
+        }
+        if (dirty && !stopped) await sleep(DRAFT_THROTTLE_MS); // pace + coalesce a burst into one send
       }
+    } finally {
+      pumping = false;
     }
   };
+  // Mark the preview dirty and ensure the single writer is running (a send already in flight picks up
+  // the new state on its next loop). Synchronous — callers never await a network write.
+  const touch = (): void => {
+    dirty = true;
+    if (!pumping) void runPump();
+  };
 
-  await draft(true); // show the "💭 Thinking…" placeholder immediately (view() fills the empty state)
+  touch(); // show the "💭 Thinking…" placeholder immediately
 
-  // A draft is a ~30s ephemeral preview; a long tool / arg-generation step emits no events, so without
-  // a heartbeat the preview lapses and the chat looks dead. Re-push the current view to keep it alive.
-  const keepalive = setInterval(() => void draft(true), DRAFT_KEEPALIVE_MS);
+  // A draft is a ~30s ephemeral preview; a long event-less step would let it lapse, so re-mark dirty on
+  // a heartbeat to re-push the current view — through the same single writer, so no race.
+  const keepalive = setInterval(touch, DRAFT_KEEPALIVE_MS);
+  // Stop the writer (no draft frame after the authoritative final message); an in-flight send may land,
+  // but the pump starts no new one once stopped.
+  const finish = (): void => {
+    stopped = true;
+    clearInterval(keepalive);
+  };
+
   try {
     for await (const e of events) {
       if (e.type === "text") {
         answer += e.delta;
-        await draft(false);
+        touch();
       } else if (e.type === "thinking") {
         thinking += e.delta;
-        await draft(false);
+        touch();
       } else if (e.type === "tool_started") {
         const arg = summarizeArgs(e.args);
         toolIndexById.set(e.id, tools.length);
         tools.push({ label: arg ? `${e.name} ${arg}` : e.name, status: "running" });
-        await draft(true);
+        touch();
       } else if (e.type === "tool_ended") {
         const i = toolIndexById.get(e.id);
         const t = i === undefined ? undefined : tools[i];
         if (t) t.status = e.isError ? "error" : "ok";
-        await draft(true);
+        touch();
       } else if (e.type === "completed") {
-        clearInterval(keepalive);
+        finish();
         if (answer.trim() !== "") await sendMessage(api, botToken, target, answer);
         return;
       } else if (e.type === "failed") {
-        clearInterval(keepalive);
+        finish();
         // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
         // log (dev-facing — the full details, via the throw below + the handler's catch).
         const msg = formatError({ details: e.details, retryable: e.retryable });
@@ -275,7 +309,7 @@ async function streamReply(
     }
     throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
   } finally {
-    clearInterval(keepalive);
+    finish();
   }
 }
 

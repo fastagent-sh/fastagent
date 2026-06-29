@@ -224,6 +224,35 @@ describe("telegram channel", () => {
     expect(bodyOf(sent[0]).text).toBe("4 words"); // clean final, no thinking/tool noise
   });
 
+  it("serializes the live preview: never two draft sends in flight (the out-of-order flicker)", async () => {
+    vi.useFakeTimers();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith("/sendMessageDraft")) {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 30)); // a real send takes time — events arrive during it
+        inFlight--;
+      }
+      return new Response('{"ok":true}', { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        for (let k = 0; k < 8; k++) yield { type: "thinking", delta: `r${k} ` };
+        yield { type: "text", delta: "done" };
+        yield { type: "completed" };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+    await ch(tgRequest(MSG));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(maxInFlight).toBe(1); // single writer: concurrent draft sends are what reorder frames
+    expect(callsTo(fetchMock, "sendMessageDraft").length).toBeLessThan(9); // a burst coalesced, not 1/delta
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1); // the authoritative final still sends
+  });
+
   it("keeps the draft alive during a long event-less gap (heartbeat re-pushes it)", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
