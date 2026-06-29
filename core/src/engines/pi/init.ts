@@ -203,10 +203,21 @@ const channel: ChannelModule = (agent) => ({
     // goes. Auto-adapts: Threaded Mode supplies message_thread_id (own session + reply in-thread); a
     // linear chat has none and falls back to one session per chat.
     on: (update) => {
-      const m = update.message;
-      if (!m?.text) return [];
+      const m = update.message ?? update.edited_message ?? update.channel_post;
+      if (!m) return [];
+      const body = m.text ?? m.caption ?? "";
+      const imageFileIds = m.photo?.length ? [m.photo[m.photo.length - 1].file_id] : undefined; // largest size
+      if (!body && !imageFileIds) return []; // nothing to act on
       const session = m.message_thread_id ? \`\${m.chat.id}:\${m.message_thread_id}\` : \`\${m.chat.id}\`;
-      return [{ session, text: m.text, chatId: m.chat.id, threadId: m.message_thread_id }];
+      // A small context envelope so the agent knows where it is — edit freely, this is your glue.
+      const meta = [
+        \`chat \${m.chat.id} (\${m.chat.type})\`,
+        m.message_thread_id ? \`thread \${m.message_thread_id}\` : undefined,
+        m.from?.username ? \`from @\${m.from.username}\` : undefined,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return [{ session, text: \`[telegram: \${meta}]\\n\${body}\`, chatId: m.chat.id, threadId: m.message_thread_id, imageFileIds }];
     },
     // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
     // chat is customer-facing by default — for a public bot, drop this or return a neutral string;

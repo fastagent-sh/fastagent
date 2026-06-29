@@ -79,6 +79,8 @@ The adapter auto-adapts to **Threaded Mode** (topics in private chats, a @BotFat
 
 **Failures have two audiences.** The full `details` (the dev-facing diagnostic — raw provider/exception text) always go to the operator log. The chat message is **customer-facing**: by default a neutral message keyed on `retryable`, so an adopter building a public bot does not leak internals. A developer's own bot opts into transparency with `onError: (f) => \`⚠️ ${f.details}\`` (the scaffold sets this) so they — and their AI coding agent — can act on the real error.
 
+**Images.** Return `imageFileIds` from `on()` (e.g. the largest `message.photo` size) and the channel fetches them (`getFile` → download → base64) and passes them to the agent as `prompt.images` — `on()` (the policy: which files) stays synchronous, the channel (the transport: bot token + file API) does the async fetch. The model must support vision. `parseMode` (e.g. `"HTML"`) formats the final reply only — the streamed draft stays plain (mid-stream markup is incomplete), and a reply Telegram rejects as malformed retries once as plain text so it is never lost. Text-context envelopes, commands, and group-summon policy stay in your `on()` / `AGENTS.md`.
+
 ## Long-tail channels: external adapter packages
 
 fastagent does **not** publish a package per channel. Built-in/first-party adapters (the default invoke channel, `github`, `telegram`) are zero- or light-dependency. Anything with a heavy SDK (Slack, Discord, …) is a **separate adapter package** — first-party or community — that the user installs; its SDK never enters `@kid7st/fastagent`'s dependencies.
