@@ -441,6 +441,20 @@ export function telegramChannel(
     );
   }
   const decide = route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName }));
+  // Per-session serial queue: model B answers a shared chat[:thread] with ONE turn at a time, so a
+  // second update for the same session waits its turn (FIFO) instead of colliding on the engine lease
+  // and being dropped as "busy" — the wrong UX when several people talk in one group. Different sessions
+  // run concurrently (the engine's stateless multi-session invoke). In-process: a restart loses anything
+  // still queued (Telegram already got its 200). SPEC §8 leaves this concurrency policy to the channel.
+  const sessionChains = new Map<string, Promise<void>>();
+  const enqueueTurn = (session: string, task: () => Promise<void>): void => {
+    const prev = sessionChains.get(session) ?? Promise.resolve();
+    const next = prev.then(task, task); // run after this session's previous turn, in arrival order
+    sessionChains.set(session, next);
+    void next.finally(() => {
+      if (sessionChains.get(session) === next) sessionChains.delete(session); // drop the entry when drained
+    });
+  };
   let draftSeq = 0; // non-zero, per-turn draft ids (process-lived; the route handler is built once)
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -459,7 +473,8 @@ export function telegramChannel(
 
     // Decide whether/where to answer, then stream the reply. ACK 200 immediately (the turn may outlast
     // the webhook timeout); lifecycle goes to stderr — after the 200 there is no response body, so those
-    // lines are the operator's only signal. Concurrency safety = the engine's per-session lease.
+    // lines are the operator's only signal. Concurrency: a per-session serial queue (FIFO) here; the
+    // engine's per-session lease is the corruption floor beneath it.
     const m = pickMessage(update);
     const r = m ? decide(update) : null;
     if (m && r) {
@@ -481,26 +496,30 @@ export function telegramChannel(
       const imageFileIds = extractImages(m);
       const fileIds = extractFiles(m);
       if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
-        draftSeq = (draftSeq % 1_000_000_000) + 1;
-        const draftId = draftSeq;
         const turn = `${update.update_id}`;
         const where = `chat=${chatId}${target.threadId !== undefined ? ` thread=${target.threadId}` : ""}`;
-        console.error(`[telegram] turn start: turn=${turn} session=${session} ${where}`);
-        const startedAt = Date.now();
-        void streamReply(
-          invokeWithAttachments(agent, session, baseText, chatId, imageFileIds, fileIds, apiBaseUrl, botToken),
-          apiBaseUrl,
-          botToken,
-          target,
-          draftId,
-          formatError,
-        ).then(
-          () => console.error(`[telegram] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`),
-          (error) =>
+        enqueueTurn(session, async () => {
+          // Run at DEQUEUE time (serialized), so the draft id, lifecycle log, and engine turn all reflect
+          // the actual execution order rather than arrival.
+          draftSeq = (draftSeq % 1_000_000_000) + 1;
+          const startedAt = Date.now();
+          console.error(`[telegram] turn start: turn=${turn} session=${session} ${where}`);
+          try {
+            await streamReply(
+              invokeWithAttachments(agent, session, baseText, chatId, imageFileIds, fileIds, apiBaseUrl, botToken),
+              apiBaseUrl,
+              botToken,
+              target,
+              draftSeq,
+              formatError,
+            );
+            console.error(`[telegram] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`);
+          } catch (error) {
             console.error(
               `[telegram] turn failed: turn=${turn} session=${session} (${Date.now() - startedAt}ms): ${String(error)}`,
-            ),
-        );
+            );
+          }
+        });
       }
     }
     return new Response(null, { status: 200 });
