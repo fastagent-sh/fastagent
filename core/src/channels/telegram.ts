@@ -362,9 +362,10 @@ function attachmentSummary(m: TelegramMessage): string | undefined {
 }
 
 /**
- * The default base prompt: a context envelope (chat/thread/sender + reply) then the user's text/caption
- * and a compact rendering of structured payloads (location/contact/poll). The sender is named on every
- * message — in a shared multi-user session that is how the model tells participants apart. The reply
+ * The default base prompt: a context envelope (chat/thread/sender + a group note + reply) then the
+ * user's text/caption and a compact rendering of structured payloads (location/contact/poll). The
+ * sender is named on every message and a group chat is flagged — in a shared multi-user session that is
+ * how the model tells participants apart and knows it is not a 1:1. The reply
  * block carries the replied-to sender, message id, and text/caption or an attachment summary (and the
  * channel downloads a replied-to file/photo too). Exported so a custom `route` can reuse it, e.g.
  * `text: `${telegramEnvelope(m)}\n\n[extra]``. The channel still appends downloaded attachments.
@@ -378,6 +379,11 @@ export function telegramEnvelope(m: TelegramMessage): string {
   ]
     .filter(Boolean)
     .join(", ");
+  // In a shared group session the model sees turns from different people (each `from`-tagged); tell it
+  // so it addresses participants by name and does not assume one continuous interlocutor. A 1:1 DM is
+  // self-evident, so no note there.
+  const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
+  const scope = isGroup ? "\n[group chat — multiple people; each message is prefixed with its sender]" : "";
   const replyTo = r
     ? `\n[in reply to ${fromLabel(r.from) ?? `msg ${r.message_id}`} (msg ${r.message_id}): ${(r.text ?? r.caption ?? attachmentSummary(r) ?? "(empty)").slice(0, 280)}]`
     : "";
@@ -385,7 +391,7 @@ export function telegramEnvelope(m: TelegramMessage): string {
   if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);
   if (m.contact) parts.push(`[contact: ${m.contact.first_name} ${m.contact.phone_number ?? ""}]`);
   if (m.poll) parts.push(`[poll: ${m.poll.question} — ${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]`);
-  return `[telegram: ${meta}]${replyTo}\n${parts.filter(Boolean).join("\n")}`;
+  return `[telegram: ${meta}]${scope}${replyTo}\n${parts.filter(Boolean).join("\n")}`;
 }
 
 /**

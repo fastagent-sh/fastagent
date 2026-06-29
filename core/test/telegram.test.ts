@@ -76,6 +76,7 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
     expect(env).toMatch(/\[telegram: chat 42 \(private\), thread 9, from @alice\]/);
     expect(env).toMatch(/\[in reply to @bob \(msg 1\): the log\]/);
     expect(env).toMatch(/what is this$/);
+    expect(env).not.toMatch(/group chat/); // a 1:1 DM gets no group note
   });
 
   it("attributes a username-less sender by name + id (a shared session must still tell who is who)", () => {
@@ -86,6 +87,7 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
       from: { id: 99, first_name: "Carol" },
     });
     expect(env).toMatch(/from Carol \(id 99\)/);
+    expect(env).toMatch(/\[group chat — multiple people; each message is prefixed with its sender\]/);
   });
 
   it("summarizes a replied-to attachment when it has no text ('summarize this file')", () => {
