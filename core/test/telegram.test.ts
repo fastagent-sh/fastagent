@@ -196,6 +196,180 @@ describe("telegram channel", () => {
     expect(callsTo(fetchMock, "sendMessage")).toHaveLength(0); // no final message (a draft may have shown “Thinking…”)
   });
 
+  it("keeps the draft alive during a long event-less gap (heartbeat re-pushes it)", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      let release = (): void => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      const agent: Agent = {
+        async *invoke(): AsyncIterable<AgentEvent> {
+          yield { type: "tool_started", id: "t1", name: "write", args: {} };
+          await gate; // a long step that emits no events
+          yield { type: "completed" };
+        },
+      };
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: echoOn, apiBaseUrl: API });
+      await ch(tgRequest(MSG));
+      await vi.advanceTimersByTimeAsync(0); // let the turn park at `await gate`
+      const before = callsTo(fetchMock, "sendMessageDraft").length;
+      await vi.advanceTimersByTimeAsync(21_000); // past the 20s keepalive
+      expect(callsTo(fetchMock, "sendMessageDraft").length).toBeGreaterThan(before); // heartbeat fired
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes parseMode to the final message but keeps the streamed draft plain", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("**bold**");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      on: echoOn,
+      apiBaseUrl: API,
+      parseMode: "Markdown",
+    });
+    expect((await ch(tgRequest(MSG))).status).toBe(200);
+    await flush();
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0])).toMatchObject({ text: "**bold**", parse_mode: "Markdown" });
+    expect(bodyOf(callsTo(fetchMock, "sendMessageDraft")[0]).parse_mode).toBeUndefined(); // drafts stay plain
+  });
+
+  it("fetches Telegram photos (getFile → download) and passes them to the agent as images", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith("/getFile"))
+        return new Response(JSON.stringify({ ok: true, result: { file_path: "photos/x.jpg", file_size: 3 } }), {
+          status: 200,
+        });
+      if (String(url).includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      return new Response('{"ok":true}', { status: 200 }); // sendMessage / sendMessageDraft
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    let received: Prompt | undefined;
+    const agent: Agent = {
+      async *invoke(_scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+        received = prompt;
+        yield { type: "completed" };
+      },
+    };
+    const photoOn = (u: TelegramUpdate) => {
+      const m = u.message;
+      return m
+        ? [
+            {
+              session: `${m.chat.id}`,
+              text: m.caption ?? "",
+              chatId: m.chat.id,
+              imageFileIds: m.photo?.map((p) => p.file_id),
+            },
+          ]
+        : [];
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: photoOn, apiBaseUrl: API });
+    const photoMsg: TelegramUpdate = {
+      update_id: 9,
+      message: {
+        message_id: 3,
+        caption: "what is this",
+        photo: [{ file_id: "f1", file_unique_id: "u", width: 90, height: 90 }],
+        chat: { id: 42, type: "private" },
+      },
+    };
+    expect((await ch(tgRequest(photoMsg))).status).toBe(200);
+    await flush();
+    await flush();
+    await flush();
+    expect(received?.text).toBe("what is this");
+    expect(received?.images).toHaveLength(1);
+    expect(received?.images?.[0]).toMatchObject({
+      mimeType: "image/jpeg",
+      data: Buffer.from([1, 2, 3]).toString("base64"),
+    });
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("/file/botBOT/photos/x.jpg"))).toBe(true);
+  });
+
+  it("surfaces an image fetch failure to the user (not a silent skip) and does not run the agent", async () => {
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errors.push(String(m));
+    });
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).endsWith("/getFile")
+        ? new Response(JSON.stringify({ ok: false }), { status: 200 }) // getFile fails
+        : new Response('{"ok":true}', { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    let invoked = false;
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        invoked = true;
+        yield { type: "completed" };
+      },
+    };
+    const photoOn = (u: TelegramUpdate) => {
+      const m = u.message;
+      return m ? [{ session: `${m.chat.id}`, text: "", chatId: m.chat.id, imageFileIds: ["f1"] }] : [];
+    };
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      on: photoOn,
+      apiBaseUrl: API,
+      onError: (f) => `ERR: ${f.details}`,
+    });
+    const photoMsg: TelegramUpdate = {
+      update_id: 9,
+      message: {
+        message_id: 3,
+        photo: [{ file_id: "f1", file_unique_id: "u", width: 1, height: 1 }],
+        chat: { id: 42, type: "private" },
+      },
+    };
+    expect((await ch(tgRequest(photoMsg))).status).toBe(200);
+    await flush();
+    await flush();
+    await flush();
+    expect(invoked).toBe(false); // did not run the agent on input we failed to load
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toMatch(/could not load image/); // user told
+    expect(errors.some((e) => /turn failed/.test(e))).toBe(true); // operator log
+  });
+
+  it("retries a parse_mode reply as plain text when Telegram rejects the markup", async () => {
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (String(url).endsWith("/sendMessage")) {
+        const hasParse = JSON.parse(String(init.body)).parse_mode !== undefined;
+        return hasParse
+          ? new Response(JSON.stringify({ ok: false, description: "Bad Request: can't parse entities: bad" }), {
+              status: 400,
+            })
+          : new Response('{"ok":true}', { status: 200 });
+      }
+      return new Response('{"ok":true}', { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("<b>oops");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      on: echoOn,
+      apiBaseUrl: API,
+      parseMode: "HTML",
+    });
+    expect((await ch(tgRequest(MSG))).status).toBe(200);
+    await flush();
+    const sends = callsTo(fetchMock, "sendMessage");
+    expect(sends).toHaveLength(2); // first with parse_mode (rejected), then a plain-text retry
+    expect(bodyOf(sends[0]).parse_mode).toBe("HTML");
+    expect(bodyOf(sends[1]).parse_mode).toBeUndefined();
+  });
+
   it("a failing live draft is logged once (not swallowed) and the final reply still sends", async () => {
     const errors: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m) => {
@@ -211,7 +385,9 @@ describe("telegram channel", () => {
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: echoOn, apiBaseUrl: API });
     expect((await ch(tgRequest(MSG))).status).toBe(200);
     await flush();
-    expect(errors.filter((e) => /live draft failed/.test(e))).toHaveLength(1); // surfaced once, not per attempt
+    const draftErrs = errors.filter((e) => /live draft failed/.test(e));
+    expect(draftErrs).toHaveLength(1); // surfaced once, not per attempt
+    expect(draftErrs[0]).toMatch(/nope/); // includes the Telegram response body, not just the status
     expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toBe("final answer"); // final still sent
   });
 
