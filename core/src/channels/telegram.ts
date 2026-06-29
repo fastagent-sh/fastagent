@@ -13,7 +13,7 @@
  * kit: readBodyCapped / text), so it is exactly what a third-party `fastagent-channel-*` package would write.
  */
 import { timingSafeEqual } from "node:crypto";
-import type { Agent, AgentEvent, Json } from "../agent.ts";
+import type { Agent, AgentEvent, ImageRef, Json } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
 
@@ -22,6 +22,9 @@ const MAX_UPDATE_BYTES = 1 << 20;
 
 /** How often (ms) to push a streamed draft update; tool events flush immediately for snappy feedback. */
 const DRAFT_THROTTLE_MS = 800;
+
+/** Re-push the draft at least this often, under Telegram's ~30s draft expiry, so a long step keeps the preview alive. */
+const DRAFT_KEEPALIVE_MS = 20_000;
 
 /** Max length of a tool's arg preview in the live view. */
 const TOOL_ARG_MAX = 48;
@@ -52,6 +55,10 @@ function summarizeArgs(args: Json): string {
 export interface TelegramMessage {
   message_id: number;
   text?: string;
+  /** Caption on a media message (photo/document/…) — often the user's instruction for the attachment. */
+  caption?: string;
+  /** Photo sizes, smallest → largest. Pass the last one's `file_id` as an intent image for vision. */
+  photo?: { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }[];
   /** Present in Threaded Mode (topics in private chats); reply with the same id to stay in-thread. */
   message_thread_id?: number;
   chat: { id: number; type: string; [k: string]: unknown };
@@ -83,6 +90,8 @@ export interface TelegramIntent {
   chatId: number | string;
   /** Thread to reply into (Threaded Mode); omit for a linear chat. Usually `update.message.message_thread_id`. */
   threadId?: number;
+  /** Telegram file_ids to fetch and pass to the agent as images (e.g. the largest `message.photo` size). */
+  imageFileIds?: string[];
 }
 
 export interface TelegramChannelOptions {
@@ -125,12 +134,23 @@ async function sendMessage(
   body: string,
   parseMode?: TelegramChannelOptions["parseMode"],
 ): Promise<void> {
-  const res = await fetch(`${api}/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: t.chatId, message_thread_id: t.threadId, text: body, parse_mode: parseMode }),
-  });
-  if (!res.ok) throw new Error(`telegram sendMessage failed: ${res.status}`);
+  const post = (parse?: TelegramChannelOptions["parseMode"]): Promise<Response> =>
+    fetch(`${api}/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: t.chatId, message_thread_id: t.threadId, text: body, parse_mode: parse }),
+    });
+  let res = await post(parseMode);
+  if (res.ok) return;
+  let detail = await res.text().catch(() => "");
+  // A parse_mode reply with malformed markup is rejected ("can't parse entities …"); the model's content
+  // must not be lost to a formatting slip, so retry once as plain text.
+  if (parseMode && /can't parse|entit|unsupported.*tag|unclosed/i.test(detail)) {
+    res = await post(undefined);
+    if (res.ok) return;
+    detail = await res.text().catch(() => detail);
+  }
+  throw new Error(`telegram sendMessage failed: ${res.status} ${detail.slice(0, 300)}`.trim());
 }
 
 /** Push an ephemeral draft (animated preview). Same draft_id across a turn animates the updates. */
@@ -146,21 +166,85 @@ async function sendMessageDraft(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ chat_id: t.chatId, message_thread_id: t.threadId, draft_id: draftId, text: body }),
   });
-  if (!res.ok) throw new Error(`telegram sendMessageDraft failed: ${res.status}`);
+  if (!res.ok) {
+    throw new Error(
+      `telegram sendMessageDraft failed: ${res.status} ${(await res.text().catch(() => "")).slice(0, 300)}`.trim(),
+    );
+  }
+}
+
+/** Cap on a single fetched image (base64 inflates ~33%); a larger Telegram file is rejected, not silently dropped. */
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function mimeFromPath(path: string): string {
+  const ext = path.toLowerCase().split(".").pop();
+  return ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : ext === "gif" ? "image/gif" : "image/jpeg";
+}
+
+/** Resolve a Telegram file_id to an ImageRef (getFile → download → base64). Throws on failure / oversize. */
+async function fetchTelegramImage(api: string, botToken: string, fileId: string): Promise<ImageRef> {
+  const meta = (await fetch(`${api}/bot${botToken}/getFile`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ file_id: fileId }),
+  }).then((r) => r.json())) as { ok?: boolean; result?: { file_path?: string; file_size?: number } };
+  const path = meta.result?.file_path;
+  if (!meta.ok || !path) throw new Error(`getFile failed for ${fileId}`);
+  if ((meta.result?.file_size ?? 0) > MAX_IMAGE_BYTES) throw new Error("image is too large (max 5 MB)");
+  const res = await fetch(`${api}/file/bot${botToken}/${path}`);
+  if (!res.ok) throw new Error(`download failed: ${res.status}`);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error("image is too large (max 5 MB)");
+  return { mimeType: mimeFromPath(path), data: bytes.toString("base64") };
+}
+
+/** Fetch all of an intent's images. Throws if any cannot be loaded — the caller surfaces it (no silent drop). */
+async function resolveImages(
+  api: string,
+  botToken: string,
+  fileIds: string[] | undefined,
+): Promise<ImageRef[] | undefined> {
+  if (!fileIds || fileIds.length === 0) return undefined;
+  const images: ImageRef[] = [];
+  for (const id of fileIds) images.push(await fetchTelegramImage(api, botToken, id));
+  return images;
 }
 
 /**
- * Consume one turn's event stream into a Telegram chat, live. Tool calls + partial text stream into an
- * ephemeral draft; the final text is persisted with sendMessage (the draft is a 30s preview, so the
- * real message MUST be sent to keep it). Draft updates are best-effort: they are only a preview, and
- * the authoritative sendMessage surfaces any real failure (bad token, etc.) — a client that does not
- * support drafts simply degrades to "final message only".
+ * agent.invoke, but resolve the intent's images first. A transport failure becomes a `failed` event so
+ * it flows through the same two-audience path (user message + operator log) rather than being silently
+ * dropped — the agent never runs on inputs the user sent but we failed to load.
  */
+async function* invokeWithImages(
+  agent: Agent,
+  session: string,
+  text: string,
+  fileIds: string[] | undefined,
+  api: string,
+  botToken: string,
+): AsyncIterable<AgentEvent> {
+  let images: ImageRef[] | undefined;
+  try {
+    images = await resolveImages(api, botToken, fileIds);
+  } catch (e) {
+    yield { type: "failed", details: `could not load image: ${String(e)}`, retryable: true };
+    return;
+  }
+  yield* agent.invoke({ session }, { text, images });
+}
+
 /** The customer-facing default: neutral, no leaked internals; differentiate only on whether to retry. */
 function defaultErrorMessage(failed: TelegramFailure): string {
   return failed.retryable ? "⚠️ Temporary problem — please try again." : "⚠️ Sorry, something went wrong.";
 }
 
+/**
+ * Consume one turn's event stream into a Telegram chat, live. Tool calls + partial text stream into an
+ * ephemeral draft; the final text is persisted with sendMessage (the draft is a ~30s preview, so the
+ * real message MUST be sent to keep it, and a keepalive re-pushes it so a long step does not blank it).
+ * Draft updates are best-effort: they are only a preview, and the authoritative sendMessage surfaces
+ * any real failure (bad token, etc.) — a client that does not support drafts degrades to "final only".
+ */
 async function streamReply(
   events: AsyncIterable<AgentEvent>,
   api: string,
@@ -208,35 +292,44 @@ async function streamReply(
 
   await draft(true); // empty view → Telegram shows a "Thinking…" placeholder immediately
 
-  for await (const e of events) {
-    if (e.type === "text") {
-      answer += e.delta;
-      await draft(false);
-    } else if (e.type === "thinking") {
-      thinking += e.delta;
-      await draft(false);
-    } else if (e.type === "tool_started") {
-      const arg = summarizeArgs(e.args);
-      toolIndexById.set(e.id, tools.length);
-      tools.push({ label: arg ? `${e.name} ${arg}` : e.name, status: "running" });
-      await draft(true);
-    } else if (e.type === "tool_ended") {
-      const i = toolIndexById.get(e.id);
-      const t = i === undefined ? undefined : tools[i];
-      if (t) t.status = e.isError ? "error" : "ok";
-      await draft(true);
-    } else if (e.type === "completed") {
-      if (answer.trim() !== "") await sendMessage(api, botToken, target, answer, parseMode);
-      return;
-    } else if (e.type === "failed") {
-      // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
-      // log (dev-facing — the full details, via the throw below + the handler's catch).
-      const msg = formatError({ details: e.details, retryable: e.retryable });
-      if (msg && msg.trim() !== "") await sendMessage(api, botToken, target, msg, parseMode).catch(() => {});
-      throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
+  // A draft is a ~30s ephemeral preview; a long tool / arg-generation step emits no events, so without
+  // a heartbeat the preview lapses and the chat looks dead. Re-push the current view to keep it alive.
+  const keepalive = setInterval(() => void draft(true), DRAFT_KEEPALIVE_MS);
+  try {
+    for await (const e of events) {
+      if (e.type === "text") {
+        answer += e.delta;
+        await draft(false);
+      } else if (e.type === "thinking") {
+        thinking += e.delta;
+        await draft(false);
+      } else if (e.type === "tool_started") {
+        const arg = summarizeArgs(e.args);
+        toolIndexById.set(e.id, tools.length);
+        tools.push({ label: arg ? `${e.name} ${arg}` : e.name, status: "running" });
+        await draft(true);
+      } else if (e.type === "tool_ended") {
+        const i = toolIndexById.get(e.id);
+        const t = i === undefined ? undefined : tools[i];
+        if (t) t.status = e.isError ? "error" : "ok";
+        await draft(true);
+      } else if (e.type === "completed") {
+        clearInterval(keepalive);
+        if (answer.trim() !== "") await sendMessage(api, botToken, target, answer, parseMode);
+        return;
+      } else if (e.type === "failed") {
+        clearInterval(keepalive);
+        // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
+        // log (dev-facing — the full details, via the throw below + the handler's catch).
+        const msg = formatError({ details: e.details, retryable: e.retryable });
+        if (msg && msg.trim() !== "") await sendMessage(api, botToken, target, msg, parseMode).catch(() => {});
+        throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
+      }
     }
+    throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
+  } finally {
+    clearInterval(keepalive);
   }
-  throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
 }
 
 /** Build a Telegram bot channel for `agent`: a Fetch handler to mount at your webhook route (POST). */
@@ -284,8 +377,10 @@ export function telegramChannel(
       const where = `chat=${intent.chatId}${intent.threadId !== undefined ? ` thread=${intent.threadId}` : ""}`;
       console.error(`[telegram] turn start: turn=${turn} session=${intent.session} ${where}`);
       const startedAt = Date.now();
+      // Images are resolved lazily inside invokeWithImages (post-ACK): on() chose the file_ids, the
+      // channel owns the transport (bot token + file API) that on()'s synchronous map cannot do.
       void streamReply(
-        agent.invoke({ session: intent.session }, { text: intent.text }),
+        invokeWithImages(agent, intent.session, intent.text, intent.imageFileIds, apiBaseUrl, botToken),
         apiBaseUrl,
         botToken,
         target,
