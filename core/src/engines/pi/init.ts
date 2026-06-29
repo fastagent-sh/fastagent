@@ -207,9 +207,9 @@ const channel: ChannelModule = (agent) => ({
       if (!m) return [];
       const r = m.reply_to_message;
       const t = m.text ?? "";
-      // command + deep-link payload: "/start abc" → cmd "start", payload "abc"; "/help@bot" → "help"
+      // /start: let the agent greet (say so in AGENTS.md); a deep-link payload ("/start <token>")
+      // still reaches the agent as the message text. cmd is also a group-summon trigger (below).
       const cmd = t.startsWith("/") ? t.slice(1).split(" ")[0].split("@")[0] : undefined;
-      const payload = cmd && t.includes(" ") ? t.slice(t.indexOf(" ") + 1).trim() : undefined;
       // group summon: in groups, only act when addressed (command / reply-to-bot / @mention). Set
       // BOT_USERNAME to your bot's @username to enable mention-summon. Private chats always pass.
       const BOT_USERNAME = "";
@@ -238,7 +238,6 @@ const channel: ChannelModule = (agent) => ({
         \`chat \${m.chat.id} (\${m.chat.type})\`,
         m.message_thread_id ? \`thread \${m.message_thread_id}\` : undefined,
         m.from?.username ? \`from @\${m.from.username}\` : undefined,
-        cmd ? \`command /\${cmd}\${payload ? \` \${payload}\` : ""}\` : undefined,
       ]
         .filter(Boolean)
         .join(", ");
