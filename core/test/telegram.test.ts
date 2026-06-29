@@ -250,6 +250,79 @@ describe("telegram channel", () => {
     expect(bodyOf(sent[0]).text).toBe("4 words"); // clean final, no thinking/tool noise
   });
 
+  it("replies to the summoning message in a group (threads under the asker), but not in a DM", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("hi");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+
+    await ch(
+      tgRequest({ update_id: 1, message: { message_id: 77, text: "yo", chat: { id: -100, type: "supergroup" } } }),
+    );
+    await flush();
+    // Full payload: allow_sending_without_reply lets a since-deleted original still deliver.
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).reply_parameters).toMatchObject({
+      message_id: 77,
+      allow_sending_without_reply: true,
+    });
+
+    fetchMock.mockClear();
+    await ch(tgRequest(MSG)); // private chat (message_id 1)
+    await flush();
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).reply_parameters).toBeUndefined();
+  });
+
+  it("still quotes when a custom route returns the same chat explicitly (compares value, not field-presence)", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("hi");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      apiBaseUrl: API,
+      route: (u) => ({ chatId: u.message?.chat.id, session: "custom" }), // same chat, returned explicitly
+    });
+    await ch(
+      tgRequest({ update_id: 1, message: { message_id: 55, text: "yo", chat: { id: -100, type: "supergroup" } } }),
+    );
+    await flush();
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).reply_parameters).toMatchObject({ message_id: 55 });
+  });
+
+  it("on a split group reply, only the first chunk quotes the summoning message", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("x".repeat(9000)); // > 4096 → multiple chunks
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+    await ch(
+      tgRequest({ update_id: 1, message: { message_id: 88, text: "yo", chat: { id: -100, type: "supergroup" } } }),
+    );
+    await flush();
+    const sends = callsTo(fetchMock, "sendMessage");
+    expect(sends.length).toBeGreaterThanOrEqual(2);
+    expect(bodyOf(sends[0]).reply_parameters).toMatchObject({ message_id: 88, allow_sending_without_reply: true }); // first quotes
+    for (const s of sends.slice(1)) expect(bodyOf(s).reply_parameters).toBeUndefined(); // rest don't
+  });
+
+  it("does not quote when the route redirects the reply to another chat/thread", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("hi");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      apiBaseUrl: API,
+      route: () => ({ chatId: 999 }), // redirect to another chat
+    });
+    await ch(
+      tgRequest({ update_id: 1, message: { message_id: 77, text: "yo", chat: { id: -100, type: "supergroup" } } }),
+    );
+    await flush();
+    const sent = bodyOf(callsTo(fetchMock, "sendMessage")[0]);
+    expect(sent.chat_id).toBe(999);
+    expect(sent.reply_parameters).toBeUndefined(); // redirected → no quote (avoids a wrong-target reply)
+  });
+
   it("serializes the live preview: never two draft sends in flight (the out-of-order flicker)", async () => {
     vi.useFakeTimers();
     let inFlight = 0;
