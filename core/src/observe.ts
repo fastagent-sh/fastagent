@@ -5,6 +5,30 @@
  */
 import type { Agent, AgentEvent, Json, Prompt, Scope } from "./agent.ts";
 
+// ── DESIGN GAP (logging): this module's `dev`-only gating is a stopgap, not the design ──────────────
+//
+// The real, unaddressed problem is bigger than this one trace and bigger than the think/tool question:
+// fastagent has no logging LEVELS and no per-environment/per-scenario log CONFIG. Today every line —
+// lifecycle (`[fastagent] …`, `[telegram] turn …`), warnings (`[fastagent] warn: …`), and this turn
+// trace — is written straight to `console.error` at one implicit severity, with no level, no
+// env/scenario gating, no structured sink, and no redaction of end-user content. So a downstream log
+// collector cannot tell an operational warning from a debug trace from a real error, and the only knob
+// we have is the crude one used here: wire the trace into `dev` and omit it from `start`.
+//
+// That crude knob has two costs. (1) It is all-or-nothing and hardcoded: production gets NO step-level
+// visibility (only coarse turn start/done/failed), exactly when a misbehaving live bot most needs it,
+// and dev cannot quiet it. (2) The reason it must stay off in `start` is itself a logging-design
+// failure: this trace logs CONTENT — the user's prompt, tool args, tool results, the reply — so
+// enabling it in production would spray end-user data (and high volume) into operator logs.
+//
+// The right shape is leveled logging (debug/info/warn/error) configured by environment/scenario, not
+// by call site: dev → verbose, human-readable, content allowed; production → level-gated + structured
+// + end-user content redacted/sampled. Then this trace becomes a debug-level emitter that BOTH `dev`
+// and `start` route through their configured sink, instead of a switch soldered to the command path.
+// Until that layer exists, `logAgentLoop` stays dev-only on purpose — to keep user content out of
+// production logs — and this comment marks the debt so the next change does not mistake the stopgap
+// for the intent.
+
 const PREVIEW = 200;
 
 /** One line, whitespace-collapsed, truncated — a log stays scannable. */
