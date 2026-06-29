@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromWorkspace, loadAgentDefinition, scaffoldWorkspace } from "../src/index.ts";
-import { vendorSkill } from "../src/engines/pi/init.ts";
+import { vendorSkill } from "../src/engines/pi/vendor-skill.ts";
 
 const freshDir = () => mkdtemp(join(tmpdir(), "fa-init-"));
 async function exists(p: string): Promise<boolean> {
