@@ -20,6 +20,7 @@ describe("logAgentLoop", () => {
   it("traces prompt, tool call + result, reply, and completion — and passes events through unchanged", async () => {
     const lines: string[] = [];
     const events: AgentEvent[] = [
+      { type: "thinking", delta: "let me think" },
       { type: "tool_started", id: "t1", name: "read", args: { path: "AGENTS.md" } },
       { type: "tool_ended", id: "t1", isError: false, content: { ok: true } },
       { type: "text", delta: "Done." },
@@ -33,6 +34,7 @@ describe("logAgentLoop", () => {
     expect(lines.some((l) => /turn session=s1/.test(l) && /read it/.test(l))).toBe(true);
     expect(lines.some((l) => /tool → read/.test(l) && /AGENTS\.md/.test(l))).toBe(true);
     expect(lines.some((l) => /tool ✓ read/.test(l))).toBe(true);
+    expect(lines.some((l) => /thinking: let me think/.test(l))).toBe(true);
     expect(lines.some((l) => /reply: Done\./.test(l))).toBe(true);
     expect(lines.some((l) => /completed session=s1/.test(l))).toBe(true);
   });

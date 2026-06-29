@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AgentHarness, InMemorySessionRepo, type AgentTool } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { fauxAssistantMessage, fauxToolCall, Type, type FauxResponseStep } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxThinking, fauxToolCall, Type, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { inMemorySessionStore, inProcessLease, type AgentEvent } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
@@ -59,6 +59,25 @@ describe("invoke fan-in", () => {
     expect(text).toBe("hello world");
     expect(events.at(-1)).toEqual({ type: "completed" });
     expect(events.filter((e) => e.type === "completed" || e.type === "failed")).toHaveLength(1);
+  });
+
+  it("maps model reasoning to thinking events, kept separate from the answer text", async () => {
+    const { agent } = makeAgent([
+      fauxAssistantMessage([fauxThinking("let me think"), { type: "text", text: "the answer" }]),
+    ]);
+
+    const events = await drain(agent.invoke({ session: "sT" }, { text: "hi" }));
+    const thinking = events
+      .filter((e) => e.type === "thinking")
+      .map((e) => (e as any).delta)
+      .join("");
+    const text = events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as any).delta)
+      .join("");
+
+    expect(thinking).toContain("let me think");
+    expect(text).toBe("the answer"); // reasoning is not folded into the answer
   });
 
   it("preserves text → tool → completed order", async () => {

@@ -26,6 +26,9 @@ const DRAFT_THROTTLE_MS = 800;
 /** Max length of a tool's arg preview in the live view. */
 const TOOL_ARG_MAX = 48;
 
+/** How much of the (growing) reasoning to peek at in the live view — the most recent tail. */
+const THINKING_PREVIEW = 280;
+
 /** One-line, truncated: collapse whitespace so a multi-line command/arg stays on one line. */
 function clip(s: string): string {
   const one = s.replace(/\s+/g, " ").trim();
@@ -87,6 +90,8 @@ export interface TelegramChannelOptions {
   secretToken: string;
   /** Bot token — used to send the agent's reply via the Bot API. */
   botToken: string;
+  /** Telegram parse mode for bot replies. Omit for plain text. */
+  parseMode?: "Markdown" | "MarkdownV2" | "HTML";
   /** Map a verified update to the intents this agent acts on (empty array = ignore). */
   on: (update: TelegramUpdate) => TelegramIntent[];
   /**
@@ -113,11 +118,17 @@ function tokenMatches(header: string, secret: string): boolean {
 }
 
 /** Persist a final reply. `message_thread_id` is dropped from the JSON when undefined (linear chat). */
-async function sendMessage(api: string, botToken: string, t: Target, body: string): Promise<void> {
+async function sendMessage(
+  api: string,
+  botToken: string,
+  t: Target,
+  body: string,
+  parseMode?: TelegramChannelOptions["parseMode"],
+): Promise<void> {
   const res = await fetch(`${api}/bot${botToken}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: t.chatId, message_thread_id: t.threadId, text: body }),
+    body: JSON.stringify({ chat_id: t.chatId, message_thread_id: t.threadId, text: body, parse_mode: parseMode }),
   });
   if (!res.ok) throw new Error(`telegram sendMessage failed: ${res.status}`);
 }
@@ -157,17 +168,26 @@ async function streamReply(
   target: Target,
   draftId: number,
   formatError: (failed: TelegramFailure) => string | undefined,
+  parseMode?: TelegramChannelOptions["parseMode"],
 ): Promise<void> {
   const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
   const toolIndexById = new Map<string, number>();
+  let thinking = "";
   let answer = "";
   let lastDraftAt = 0;
   let draftErrLogged = false;
 
   const mark = { running: "…", ok: "✓", error: "✗" } as const;
   const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
+  // Reasoning is process, not the answer: shown (capped to its tail) in the live preview only, never
+  // in the persisted final message (which is `answer` alone).
+  const thinkingView = (): string => {
+    const t = thinking.replace(/\s+/g, " ").trim();
+    if (t === "") return "";
+    return `💭 ${t.length > THINKING_PREVIEW ? `…${t.slice(t.length - THINKING_PREVIEW + 1)}` : t}`;
+  };
   const view = (): string =>
-    [toolView(), answer]
+    [thinkingView(), toolView(), answer]
       .filter((s) => s.trim() !== "")
       .join("\n\n")
       .trim();
@@ -192,6 +212,9 @@ async function streamReply(
     if (e.type === "text") {
       answer += e.delta;
       await draft(false);
+    } else if (e.type === "thinking") {
+      thinking += e.delta;
+      await draft(false);
     } else if (e.type === "tool_started") {
       const arg = summarizeArgs(e.args);
       toolIndexById.set(e.id, tools.length);
@@ -203,13 +226,13 @@ async function streamReply(
       if (t) t.status = e.isError ? "error" : "ok";
       await draft(true);
     } else if (e.type === "completed") {
-      if (answer.trim() !== "") await sendMessage(api, botToken, target, answer);
+      if (answer.trim() !== "") await sendMessage(api, botToken, target, answer, parseMode);
       return;
     } else if (e.type === "failed") {
       // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
       // log (dev-facing — the full details, via the throw below + the handler's catch).
       const msg = formatError({ details: e.details, retryable: e.retryable });
-      if (msg && msg.trim() !== "") await sendMessage(api, botToken, target, msg).catch(() => {});
+      if (msg && msg.trim() !== "") await sendMessage(api, botToken, target, msg, parseMode).catch(() => {});
       throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
     }
   }
@@ -219,7 +242,7 @@ async function streamReply(
 /** Build a Telegram bot channel for `agent`: a Fetch handler to mount at your webhook route (POST). */
 export function telegramChannel(
   agent: Agent,
-  { secretToken, botToken, on, onError, apiBaseUrl = "https://api.telegram.org" }: TelegramChannelOptions,
+  { secretToken, botToken, parseMode, on, onError, apiBaseUrl = "https://api.telegram.org" }: TelegramChannelOptions,
 ): (req: Request) => Promise<Response> {
   // Both are mandatory: an unset secret_token would accept forged updates (the endpoint is public);
   // the bot token is required to send the reply. Fail at construction (startup), not silently.
@@ -268,6 +291,7 @@ export function telegramChannel(
         target,
         draftId,
         formatError,
+        parseMode,
       ).then(
         () =>
           console.error(`[telegram] turn done: turn=${turn} session=${intent.session} (${Date.now() - startedAt}ms)`),

@@ -58,6 +58,7 @@ Agents that do not support `images` ignore it.
 ```ts
 type AgentEvent =
   | { type: "text";         delta: string }
+  | { type: "thinking";     delta: string }                      // Model reasoning (process, not the answer)
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended";   id: string; isError: boolean; content: Json }
   | { type: "completed";    data?: Json }                        // Terminal: success
@@ -67,6 +68,7 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 ```
 
 - All textual output is emitted as `text` deltas; `completed` is only a terminal success signal and does not repeat the full text.
+- `thinking` deltas carry the model's reasoning when the engine and model expose it (optional — many models emit none). It is process, not output: a consumer MUST NOT fold `thinking` into the final answer (`collect` ignores it). Surface it for live/observability UIs only.
 - `completed.data` is present only when the engine produces structured data.
 - Every event MUST be JSON-serializable.
 

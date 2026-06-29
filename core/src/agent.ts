@@ -25,6 +25,8 @@ export interface Scope {
 
 export type AgentEvent =
   | { type: "text"; delta: string }
+  /** Model reasoning, streamed live. Process, NOT the answer: consumers MUST NOT fold it into the final text. */
+  | { type: "thinking"; delta: string }
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
   /** Terminal: success. `data` is attached only when the engine produces a structured result. */
