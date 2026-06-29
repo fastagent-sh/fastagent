@@ -198,19 +198,15 @@ const channel: ChannelModule = (agent) => ({
   "POST /telegram": telegramChannel(agent, {
     secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "", // missing → fails at startup (would accept forged updates)
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",       // used to send the agent's reply back to the chat
-    parseMode: "HTML",                                    // ask the model for Telegram HTML; channel falls back to Markdown/plain if its markup is off
-    // on is OPTIONAL: omitted, it defaults to standard routing — message/edited/channel_post +
-    // text/caption, photo→image, document/voice/video/audio→file (downloaded to disk), reply context,
-    // a metadata envelope, per-thread session, and group summon (private always; groups on a command
-    // a reply to the bot, or @mention). Pass your own on() to customize, e.g.:
-    //   on: (update) =>
-    //     update.message?.text
-    //       ? [{ session: \`\${update.message.chat.id}\`, text: update.message.text, chatId: update.message.chat.id }]
-    //       : [],
     // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
     // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
     // full details always go to the server log regardless.
     onError: (failed) => \`⚠️ \${failed.details}\`,
+    // The channel owns transport + format (HTML) + attachments (photo→vision, file→disk) + streaming.
+    // \`route\` (POLICY) is OPTIONAL — omitted, it uses defaultTelegramRoute: private chats always answer,
+    // groups only on a command / reply to the bot / @mention. Override to customise, reusing the export:
+    //   route: (u) => defaultTelegramRoute(u) && { session: \`user:\${u.message?.from?.id}\` },
+    //   route: (u) => defaultTelegramRoute(u) && { text: \`\${telegramEnvelope(u.message!)}\\n[extra]\` },
   }),
 });
 

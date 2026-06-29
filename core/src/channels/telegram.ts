@@ -97,18 +97,16 @@ export interface TelegramFailure {
   retryable: boolean;
 }
 
-/** What `on` returns per acted-on update: a session + the prompt + where (chat, optionally thread) to reply. */
-export interface TelegramIntent {
-  session: string;
-  text: string;
-  /** Chat the agent's reply is sent to (usually `update.message.chat.id`). */
-  chatId: number | string;
-  /** Thread to reply into (Threaded Mode); omit for a linear chat. Usually `update.message.message_thread_id`. */
+/** What `route` returns: act with these (every field optional — omitted ones default from the message), or null to ignore. */
+export interface TelegramRoute {
+  /** Conversation identity (default: `chat` or `chat:thread`). */
+  session?: string;
+  /** Reply target chat (default: the message's chat). */
+  chatId?: number | string;
+  /** Reply thread (default: the message's thread). */
   threadId?: number;
-  /** Telegram file_ids to fetch and pass to the agent as images (e.g. the largest `message.photo` size). */
-  imageFileIds?: string[];
-  /** Telegram file_ids (document/voice/video/…) to download to disk; the agent reads them with its tools. */
-  fileIds?: string[];
+  /** Base prompt (default: {@link telegramEnvelope}); the channel still appends attachments + the HTML hint. */
+  text?: string;
 }
 
 export interface TelegramChannelOptions {
@@ -116,16 +114,16 @@ export interface TelegramChannelOptions {
   secretToken: string;
   /** Bot token — used to send the agent's reply via the Bot API. */
   botToken: string;
-  /** Telegram parse mode for bot replies. Omit for plain text. */
-  parseMode?: "Markdown" | "MarkdownV2" | "HTML";
-  /** Map a verified update to the intents this agent acts on (empty array = ignore). Defaults to {@link defaultTelegramOn}. */
-  on?: (update: TelegramUpdate) => TelegramIntent[];
+  /** Policy: whether/where to answer an update (return null to ignore). Defaults to {@link defaultTelegramRoute}. */
+  route?: (update: TelegramUpdate) => TelegramRoute | null;
   /**
    * Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
    * log). Return a string to send it, or undefined/"" to stay silent. Default: a neutral message keyed
    * on `retryable`. A developer's own bot can surface the raw details, e.g. `(f) => `⚠️ ${f.details}``.
    */
   onError?: (failed: TelegramFailure) => string | undefined;
+  /** Bot @username for group @mention summon by the default route (else resolved via getMe). */
+  botUsername?: string;
   /** Bot API base, for tests. Defaults to the public Telegram endpoint. */
   apiBaseUrl?: string;
 }
@@ -169,7 +167,10 @@ async function callBotApi(
       body: JSON.stringify(params),
     });
     if (res.ok) return { ok: true };
-    const data = (await res.json().catch(() => ({}))) as { description?: string; parameters?: { retry_after?: number } };
+    const data = (await res.json().catch(() => ({}))) as {
+      description?: string;
+      parameters?: { retry_after?: number };
+    };
     const retryAfter = data.parameters?.retry_after;
     if (res.status === 429 && retryAfter !== undefined && attempt < 3) {
       await sleep((retryAfter + 1) * 1000);
@@ -195,37 +196,29 @@ function chunkText(text: string): string[] {
 }
 
 /**
- * Persist a final reply: split to Telegram's 4096-char limit, and for each chunk try the requested
- * parse_mode, then Markdown, then plain — a formatting slip (the model's HTML/markdown not matching
- * Telegram's parser) degrades gracefully instead of losing the message. `message_thread_id` is dropped
- * from the JSON when undefined (linear chat).
+ * Persist a final reply: split to Telegram's 4096-char limit, and send each chunk as HTML, falling back
+ * to plain text only if Telegram rejects the markup — so a model formatting slip degrades instead of
+ * losing the message. Format is the channel's job (Telegram's own parser); the developer never picks it.
+ * `message_thread_id` is dropped from the JSON when undefined (linear chat).
  */
-async function sendMessage(
-  api: string,
-  botToken: string,
-  t: Target,
-  body: string,
-  parseMode?: TelegramChannelOptions["parseMode"],
-): Promise<void> {
-  const modes: (TelegramChannelOptions["parseMode"] | undefined)[] =
-    parseMode === "HTML" ? ["HTML", "Markdown", undefined] : parseMode ? [parseMode, undefined] : [undefined];
+async function sendMessage(api: string, botToken: string, t: Target, body: string): Promise<void> {
   for (const chunk of chunkText(body)) {
-    let result: Awaited<ReturnType<typeof callBotApi>> = { ok: false, status: 0, description: "" };
-    for (const mode of modes) {
-      result = await callBotApi(api, botToken, "sendMessage", {
-        chat_id: t.chatId,
-        message_thread_id: t.threadId,
-        text: chunk,
-        parse_mode: mode,
-      });
-      if (result.ok || !PARSE_ERROR.test(result.description)) break; // re-format only on a parse error
-    }
+    const base = { chat_id: t.chatId, message_thread_id: t.threadId, text: chunk };
+    let result = await callBotApi(api, botToken, "sendMessage", { ...base, parse_mode: "HTML" });
+    if (!result.ok && PARSE_ERROR.test(result.description))
+      result = await callBotApi(api, botToken, "sendMessage", base);
     if (!result.ok) throw new Error(`telegram sendMessage failed: ${result.status} ${result.description}`.trim());
   }
 }
 
 /** Push an ephemeral draft (animated preview, capped at the text limit). Same draft_id animates updates. */
-async function sendMessageDraft(api: string, botToken: string, t: Target, draftId: number, body: string): Promise<void> {
+async function sendMessageDraft(
+  api: string,
+  botToken: string,
+  t: Target,
+  draftId: number,
+  body: string,
+): Promise<void> {
   const result = await callBotApi(api, botToken, "sendMessageDraft", {
     chat_id: t.chatId,
     message_thread_id: t.threadId,
@@ -329,7 +322,7 @@ async function resolveImages(
  * its tools. A transport failure becomes a `failed` event — surfaced (user + log), never a silent drop;
  * the agent never runs on inputs the user sent but we failed to load.
  */
-/** Appended to the prompt (not the system prompt) when parseMode is HTML: ask the model for Telegram HTML. */
+/** Appended to the prompt (not the system prompt): the channel owns Telegram-HTML formatting. */
 const HTML_INSTRUCTION =
   "\n\n(Format your reply in Telegram-supported HTML — <b> <i> <u> <s> <code> <pre> <a href> — not Markdown.)";
 
@@ -342,7 +335,6 @@ async function* invokeWithAttachments(
   fileIds: string[] | undefined,
   api: string,
   botToken: string,
-  parseMode?: TelegramChannelOptions["parseMode"],
 ): AsyncIterable<AgentEvent> {
   let images: ImageRef[] | undefined;
   let files: DownloadedFile[] | undefined;
@@ -356,8 +348,7 @@ async function* invokeWithAttachments(
   const manifest = files?.length
     ? `\n\n[attached files — read them with your tools:\n${files.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
     : "";
-  const format = parseMode === "HTML" ? HTML_INSTRUCTION : "";
-  yield* agent.invoke({ session }, { text: text + manifest + format, images });
+  yield* agent.invoke({ session }, { text: `${text}${manifest}${HTML_INSTRUCTION}`, images });
 }
 
 /** The customer-facing default: neutral, no leaked internals; differentiate only on whether to retry. */
@@ -379,7 +370,6 @@ async function streamReply(
   target: Target,
   draftId: number,
   formatError: (failed: TelegramFailure) => string | undefined,
-  parseMode?: TelegramChannelOptions["parseMode"],
 ): Promise<void> {
   const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
   const toolIndexById = new Map<string, number>();
@@ -442,14 +432,14 @@ async function streamReply(
         await draft(true);
       } else if (e.type === "completed") {
         clearInterval(keepalive);
-        if (answer.trim() !== "") await sendMessage(api, botToken, target, answer, parseMode);
+        if (answer.trim() !== "") await sendMessage(api, botToken, target, answer);
         return;
       } else if (e.type === "failed") {
         clearInterval(keepalive);
         // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
         // log (dev-facing — the full details, via the throw below + the handler's catch).
         const msg = formatError({ details: e.details, retryable: e.retryable });
-        if (msg && msg.trim() !== "") await sendMessage(api, botToken, target, msg, parseMode).catch(() => {});
+        if (msg && msg.trim() !== "") await sendMessage(api, botToken, target, msg).catch(() => {});
         throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
       }
     }
@@ -459,33 +449,32 @@ async function streamReply(
   }
 }
 
-/**
- * Default update→intents routing (used when `on` is omitted; exported so a custom `on` can build on it):
- * routes message/edited_message/channel_post/edited_channel_post; text/caption + structured payloads
- * (location/contact/poll) as text; photo→image, document/voice/video/audio→file; reply context; a
- * metadata envelope; per-thread session; and a group-summon gate — private chats always pass, groups
- * only on a command, a reply to the bot, or an @mention (when `botUsername` is supplied; telegramChannel
- * resolves it via getMe).
- */
-export function defaultTelegramOn(update: TelegramUpdate, options?: { botUsername?: string }): TelegramIntent[] {
-  const m = update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
-  if (!m) return [];
-  const r = m.reply_to_message;
-  const t = m.text ?? "";
-  const cmd = t.startsWith("/") ? t.slice(1).split(" ")[0]?.split("@")[0] : undefined;
-  const mentioned = options?.botUsername ? t.includes(`@${options.botUsername}`) : false;
-  if (!(m.chat.type === "private" || Boolean(cmd) || r?.from?.is_bot === true || mentioned)) return []; // group summon
-  const parts = [m.text ?? m.caption ?? ""];
-  if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);
-  if (m.contact) parts.push(`[contact: ${m.contact.first_name} ${m.contact.phone_number ?? ""}]`);
-  if (m.poll) parts.push(`[poll: ${m.poll.question} — ${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]`);
-  const body = parts.filter(Boolean).join("\n");
-  const imageFileIds = [m.photo?.at(-1)?.file_id, r?.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
-  const fileIds = [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter(
-    (id): id is string => Boolean(id),
+/** The actionable message in an update (a plain/edited message or channel post). */
+function pickMessage(update: TelegramUpdate): TelegramMessage | undefined {
+  return update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
+}
+
+/** file_ids to send the model as vision images: this message's largest photo + a replied-to photo. */
+function extractImages(m: TelegramMessage): string[] {
+  return [m.photo?.at(-1)?.file_id, m.reply_to_message?.photo?.at(-1)?.file_id].filter((id): id is string =>
+    Boolean(id),
   );
-  if (!body && imageFileIds.length === 0 && fileIds.length === 0) return [];
-  const session = m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`;
+}
+
+/** file_ids to download to disk for the agent's tools (document/voice/video/audio). */
+function extractFiles(m: TelegramMessage): string[] {
+  return [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter((id): id is string =>
+    Boolean(id),
+  );
+}
+
+/**
+ * The default base prompt: a context envelope (chat/thread/from + reply) then the user's text/caption
+ * and a compact rendering of structured payloads (location/contact/poll). Exported so a custom `route`
+ * can reuse it, e.g. `text: `${telegramEnvelope(m)}\n\n[extra]``. The channel still appends attachments.
+ */
+export function telegramEnvelope(m: TelegramMessage): string {
+  const r = m.reply_to_message;
   const meta = [
     `chat ${m.chat.id} (${m.chat.type})`,
     m.message_thread_id ? `thread ${m.message_thread_id}` : undefined,
@@ -496,22 +485,42 @@ export function defaultTelegramOn(update: TelegramUpdate, options?: { botUsernam
   const replyTo = r
     ? `\n[reply to ${r.from?.username ? `@${r.from.username}` : `msg ${r.message_id}`}: ${(r.text ?? r.caption ?? "(media)").slice(0, 200)}]`
     : "";
-  return [
-    {
-      session,
-      text: `[telegram: ${meta}]${replyTo}\n${body}`,
-      chatId: m.chat.id,
-      threadId: m.message_thread_id,
-      imageFileIds: imageFileIds.length ? imageFileIds : undefined,
-      fileIds: fileIds.length ? fileIds : undefined,
-    },
-  ];
+  const parts = [m.text ?? m.caption ?? ""];
+  if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);
+  if (m.contact) parts.push(`[contact: ${m.contact.first_name} ${m.contact.phone_number ?? ""}]`);
+  if (m.poll) parts.push(`[poll: ${m.poll.question} — ${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]`);
+  return `[telegram: ${meta}]${replyTo}\n${parts.filter(Boolean).join("\n")}`;
+}
+
+/**
+ * The default routing policy (used when `route` is omitted; exported so a custom route can reuse it):
+ * answer private chats always, groups only on a command, a reply to the bot, or an @mention (when
+ * `botUsername` is supplied — telegramChannel resolves it via getMe). Returns `{}` (act; the channel
+ * fills session/target/prompt from the message) or `null` (ignore).
+ */
+export function defaultTelegramRoute(update: TelegramUpdate, options?: { botUsername?: string }): TelegramRoute | null {
+  const m = pickMessage(update);
+  if (!m) return null;
+  const t = m.text ?? "";
+  const summoned =
+    m.chat.type === "private" ||
+    t.startsWith("/") ||
+    m.reply_to_message?.from?.is_bot === true ||
+    (options?.botUsername ? t.includes(`@${options.botUsername}`) : false);
+  return summoned ? {} : null;
 }
 
 /** Build a Telegram bot channel for `agent`: a Fetch handler to mount at your webhook route (POST). */
 export function telegramChannel(
   agent: Agent,
-  { secretToken, botToken, parseMode, on, onError, apiBaseUrl = "https://api.telegram.org" }: TelegramChannelOptions,
+  {
+    secretToken,
+    botToken,
+    route,
+    onError,
+    botUsername,
+    apiBaseUrl = "https://api.telegram.org",
+  }: TelegramChannelOptions,
 ): (req: Request) => Promise<Response> {
   // Both are mandatory: an unset secret_token would accept forged updates (the endpoint is public);
   // the bot token is required to send the reply. Fail at construction (startup), not silently.
@@ -524,18 +533,18 @@ export function telegramChannel(
     throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
   }
   const formatError = onError ?? defaultErrorMessage;
-  // Only the default routing needs the bot's @username (for group @mention summon); resolve it once via
-  // getMe when `on` is omitted. A custom `on` owns its own routing, so no getMe call is made for it.
-  let botUsername: string | undefined;
-  if (!on) {
+  // The default route summons on a group @mention, which needs the bot's own @username; resolve it once
+  // via getMe (only when using the default route and not supplied). A custom route owns its own summon.
+  let mentionName = botUsername;
+  if (!route && !botUsername) {
     void resolveBotUsername(apiBaseUrl, botToken).then(
       (u) => {
-        botUsername = u;
+        mentionName = u;
       },
       (e) => console.error(`[telegram] getMe failed; group @mention summon disabled: ${String(e)}`),
     );
   }
-  const route = on ?? ((update: TelegramUpdate) => defaultTelegramOn(update, { botUsername }));
+  const decide = route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName }));
   let draftSeq = 0; // non-zero, per-turn draft ids (process-lived; the route handler is built once)
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -552,47 +561,40 @@ export function telegramChannel(
       return text("invalid json\n", 400);
     }
 
-    // Run each intent and stream the reply, ACK 200 immediately (the turn may outlast the webhook
-    // timeout). The lifecycle is logged to stderr — after the 200 there is no response body, so these
+    // Decide whether/where to answer, then stream the reply. ACK 200 immediately (the turn may outlast
+    // the webhook timeout); lifecycle goes to stderr — after the 200 there is no response body, so those
     // lines are the operator's only signal. Concurrency safety = the engine's per-session lease.
-    const intents = route(update);
-    for (let i = 0; i < intents.length; i++) {
-      const intent = intents[i] as TelegramIntent;
-      const target: Target = { chatId: intent.chatId, threadId: intent.threadId };
-      draftSeq = (draftSeq % 1_000_000_000) + 1;
-      const draftId = draftSeq;
-      const turn = `${update.update_id}#${i}`;
-      const where = `chat=${intent.chatId}${intent.threadId !== undefined ? ` thread=${intent.threadId}` : ""}`;
-      console.error(`[telegram] turn start: turn=${turn} session=${intent.session} ${where}`);
-      const startedAt = Date.now();
-      // Images are resolved lazily inside invokeWithImages (post-ACK): on() chose the file_ids, the
-      // channel owns the transport (bot token + file API) that on()'s synchronous map cannot do.
-      void streamReply(
-        invokeWithAttachments(
-          agent,
-          intent.session,
-          intent.text,
-          intent.chatId,
-          intent.imageFileIds,
-          intent.fileIds,
+    const m = pickMessage(update);
+    const r = m ? decide(update) : null;
+    if (m && r) {
+      const session = r.session ?? (m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`);
+      const chatId = r.chatId ?? m.chat.id;
+      const target: Target = { chatId, threadId: r.threadId ?? m.message_thread_id };
+      const baseText = r.text ?? telegramEnvelope(m);
+      const imageFileIds = extractImages(m);
+      const fileIds = extractFiles(m);
+      if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
+        draftSeq = (draftSeq % 1_000_000_000) + 1;
+        const draftId = draftSeq;
+        const turn = `${update.update_id}`;
+        const where = `chat=${chatId}${target.threadId !== undefined ? ` thread=${target.threadId}` : ""}`;
+        console.error(`[telegram] turn start: turn=${turn} session=${session} ${where}`);
+        const startedAt = Date.now();
+        void streamReply(
+          invokeWithAttachments(agent, session, baseText, chatId, imageFileIds, fileIds, apiBaseUrl, botToken),
           apiBaseUrl,
           botToken,
-          parseMode,
-        ),
-        apiBaseUrl,
-        botToken,
-        target,
-        draftId,
-        formatError,
-        parseMode,
-      ).then(
-        () =>
-          console.error(`[telegram] turn done: turn=${turn} session=${intent.session} (${Date.now() - startedAt}ms)`),
-        (error) =>
-          console.error(
-            `[telegram] turn failed: turn=${turn} session=${intent.session} (${Date.now() - startedAt}ms): ${String(error)}`,
-          ),
-      );
+          target,
+          draftId,
+          formatError,
+        ).then(
+          () => console.error(`[telegram] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`),
+          (error) =>
+            console.error(
+              `[telegram] turn failed: turn=${turn} session=${session} (${Date.now() - startedAt}ms): ${String(error)}`,
+            ),
+        );
+      }
     }
     return new Response(null, { status: 200 });
   };

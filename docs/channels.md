@@ -63,15 +63,14 @@ const channel: ChannelModule = (agent) => ({
   "POST /telegram": telegramChannel(agent, {
     secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "", // the setWebhook secret_token
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",       // used to send the reply
-    parseMode: "HTML",                                    // ask the model for HTML; falls back to Markdown/plain
     onError: (failed) => `⚠️ ${failed.details}`,          // dev bot: surface raw errors; see below
-    // `on` is OPTIONAL — omitted, it uses `defaultTelegramOn` (standard routing + envelope, below).
+    // `route` is OPTIONAL — omitted, it uses `defaultTelegramRoute` and the channel composes everything.
   }),
 });
 export default channel;
 ```
 
-`on` (update → intents) defaults to the exported **`defaultTelegramOn`**: route message/edited/channel_post + text/caption, photo→image, document/voice/video/audio→file, reply context, a metadata envelope, per-`chat:thread` session, and group summon (private always; groups on a command, a reply to the bot, or an @mention — telegramChannel resolves the bot's username via getMe). Pass your own `on` to customize. The adapter auto-adapts to **Threaded Mode** (topics in private chats, a @BotFather toggle): an update carrying `message_thread_id` is answered in that thread with a per-`chat:thread` session; a linear chat has none and runs one session per chat. The turn is **streamed live** via `sendMessageDraft` — an ephemeral preview showing `Thinking…`, tool calls (`🔧 read AGENTS.md ✓`), and partial text — then the clean final text is persisted with `sendMessage`.
+**Responsibility split.** The *channel* owns all transport + format: picking the message, extracting `text`/`caption`, attachments (photo→vision image with resize, document/voice/video/audio→downloaded to disk), composing the prompt envelope, Telegram-HTML formatting (+ plain fallback), streaming, 4096-split, and 429 retries. The *developer* owns **policy** via `route` and behaviour via `AGENTS.md` + tools. `route(update) => { session?, chatId?, threadId?, text? } | null` decides whether/where to answer (return `null` to ignore; omitted fields default from the message). It defaults to the exported **`defaultTelegramRoute`** (private chats always answer; groups on a command, a reply to the bot, or an @mention — telegramChannel resolves the bot's username via getMe). Override granularly by reusing the defaults — `route: (u) => defaultTelegramRoute(u) && { session: "…" }`, or a custom prompt with `text: \`${telegramEnvelope(u.message!)}\n…\`` (the channel still appends attachments + the HTML hint). The adapter auto-adapts to **Threaded Mode** (topics in private chats, a @BotFather toggle): an update carrying `message_thread_id` is answered in that thread with a per-`chat:thread` session; a linear chat has none and runs one session per chat. The turn is **streamed live** via `sendMessageDraft` — an ephemeral preview showing `Thinking…`, tool calls (`🔧 read AGENTS.md ✓`), and partial text — then the clean final text is persisted with `sendMessage`.
 
 **Failures have two audiences.** The full `details` (the dev-facing diagnostic — raw provider/exception text) always go to the operator log. The chat message is **customer-facing**: by default a neutral message keyed on `retryable`, so an adopter building a public bot does not leak internals. A developer's own bot opts into transparency with `onError: (f) => \`⚠️ ${f.details}\`` (the scaffold sets this) so they — and their AI coding agent — can act on the real error.
 
