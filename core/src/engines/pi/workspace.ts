@@ -1,6 +1,6 @@
 /**
- * Open a definition directory into an agent — the single opener BOTH `fastagent dev` and
- * `fastagent start` drive (despite the file name, not dev-only).
+ * Open a definition directory into an agent — the single workspace opener BOTH `fastagent dev` and
+ * `fastagent start` drive.
  *
  * A thin command-posture composition over L2 `createPiAgentFromDefinition`: open the directory →
  * resolve model (flag > env > config) and tools (append-after-defaults) → pick session storage →

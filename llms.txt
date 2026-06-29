@@ -1,0 +1,43 @@
+# FastAgent
+
+> FastAgent is the serving layer for local agent folders. It takes a folder out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind a custom channel. Engine-, model-, and host-neutral; the reference implementation is built on the pi engine.
+
+Key facts:
+
+- Install: `npm i -g @kid7st/fastagent` (CLI) or `npm i @kid7st/fastagent` (library). Requires Node >= 22.19.
+- The folder is the agent: optional `AGENTS.md`, `skills/`, `tools/`, `channels/`, markdown context, and `fastagent.config.*`. No framework rewrite, no build step.
+- The contract is `invoke(scope, prompt) => AsyncIterable<AgentEvent>` (the Agent Handler SPEC).
+- Core CLI: `fastagent init | info | dev | chat | invoke | tool | start | add | login`.
+- Channels: HTTP/SSE (default), GitHub, Telegram, plus custom adapters.
+
+## Start here
+
+- [README](https://github.com/kid7st/fastagent/blob/main/README.md): project overview, install, quickstart, features.
+- [AI-guided setup prompt](https://github.com/kid7st/fastagent/blob/main/start.md): paste into a coding agent to scaffold or wire a workspace.
+- [Documentation index](https://github.com/kid7st/fastagent/blob/main/docs/README.md): the full doc map.
+
+## Guides
+
+- [Overview](https://github.com/kid7st/fastagent/blob/main/docs/overview.md): what FastAgent is and is not.
+- [Quickstart](https://github.com/kid7st/fastagent/blob/main/docs/quickstart.md): scaffold, run locally, add a tool, and start.
+- [Configuration](https://github.com/kid7st/fastagent/blob/main/docs/configuration.md): model, auth, ports, sessions, tools, and channels.
+- [CLI reference](https://github.com/kid7st/fastagent/blob/main/docs/cli.md): every command and flag.
+- [Embedding](https://github.com/kid7st/fastagent/blob/main/docs/embedding.md): use FastAgent as a library inside your own app.
+- [Channels](https://github.com/kid7st/fastagent/blob/main/docs/channels.md): add webhook/bot channels.
+- [GitHub channel](https://github.com/kid7st/fastagent/blob/main/docs/github.md): GitHub webhook events.
+- [Telegram channel](https://github.com/kid7st/fastagent/blob/main/docs/telegram.md): Telegram bot.
+- [Channel development](https://github.com/kid7st/fastagent/blob/main/docs/channel-development.md): build a custom channel adapter.
+- [Troubleshooting](https://github.com/kid7st/fastagent/blob/main/docs/troubleshooting.md): common setup/runtime issues.
+
+## Reference
+
+- [API reference](https://github.com/kid7st/fastagent/blob/main/docs/api-reference.md): public TypeScript exports.
+- [Agent Handler SPEC](https://github.com/kid7st/fastagent/blob/main/docs/SPEC.md): the v0.1 protocol contract.
+- [Design principles](https://github.com/kid7st/fastagent/blob/main/docs/principles.md): design choices, core primitives, and non-goals.
+
+## Optional
+
+- [Core design notes](https://github.com/kid7st/fastagent/blob/main/docs/design/core.md): pi reference implementation architecture.
+- [Contributing](https://github.com/kid7st/fastagent/blob/main/CONTRIBUTING.md): branch model, PR loop, and review tiers.
+- [Security policy](https://github.com/kid7st/fastagent/blob/main/SECURITY.md): how to report a vulnerability.
+- [Changelog](https://github.com/kid7st/fastagent/blob/main/CHANGELOG.md): notable changes.

@@ -24,6 +24,7 @@ interface Agent {
 }
 type AgentEvent =
   | { type: "text"; delta: string }
+  | { type: "thinking"; delta: string }
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
   | { type: "completed"; data?: Json }    // terminal: success
@@ -65,7 +66,7 @@ const agent = createPiAgent({
 
 Author tool schemas with the `z` re-exported from `@kid7st/fastagent` (as above), not a separately installed `zod` — `defineTool` converts the schema with its own zod, so a single shared copy avoids version-skew surprises. Every type on this surface (`AgentTool`, `Skill`, `Session`, `Model`, …) is re-exported too, so you never import from `@earendil-works/*` (the one exception is a provider's wire-protocol `api`, see §5).
 
-`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. (The folder path assembles `AGENTS.md` differently: it adds the pi engine base + skills + env for fidelity with local pi. See [core-design §2](core-design.md).)
+`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. (The folder path assembles `AGENTS.md` differently: it adds the pi engine base + skills + env for fidelity with local pi. See [core design §2](design/core.md).)
 
 ## 2. Consume the stream (three ways)
 
@@ -175,4 +176,4 @@ const agent = createPiAgent({ model: "acme/gpt-x", providers: [myGateway] });
 
 - [SPEC](SPEC.md) — the Agent Handler contract the whole thing rests on.
 - [quickstart](quickstart.md) — the CLI path (`init` / `dev` / `start`).
-- [core-design](core-design.md) — the assembly ladder (L0–L2), the four-segment prompt assembly, and the N × M × K layering.
+- [core design](design/core.md) — the assembly ladder (L0–L2), the four-segment prompt assembly, and the N × M × K layering.

@@ -1,0 +1,201 @@
+---
+title: CLI reference
+status: current
+---
+
+# CLI reference
+
+The `fastagent` CLI is the standalone workflow for creating, inspecting, serving, and operating an agent workspace.
+
+```bash
+fastagent <command> [args] [options]
+```
+
+Most commands take an optional workspace directory. When omitted, the current directory is used.
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `init [dir]` | Scaffold a runnable agent workspace. |
+| `info [dir]` | Inspect what a workspace assembles into without serving. |
+| `models [search]` | List model specs. |
+| `login [provider]` | Store provider credentials in `~/.fastagent/auth.json`. |
+| `dev [dir]` | Serve locally with watch/reload. |
+| `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
+| `invoke <message> [dir]` | Run one agent turn and exit. |
+| `tool <name> <json> [dir]` | Run one discovered tool directly. |
+| `add github|telegram [dir]` | Scaffold a first-party channel. |
+| `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
+| `start [dir]` | Serve without watch. |
+
+## `fastagent init`
+
+```bash
+fastagent init [dir] [--minimal] [--no-install]
+```
+
+Creates a workspace with `AGENTS.md`, `skills/`, config, `.env.example`, and `.gitignore`. By default it also creates a sample code tool, `package.json`, and runs `npm install`.
+
+Options:
+
+| Option | Meaning |
+|---|---|
+| `--minimal` | Prompt+skills only; no code tool, package.json, or install. |
+| `--no-install` | Write files but skip `npm install`. |
+
+## `fastagent info`
+
+```bash
+fastagent info [dir] [--json]
+```
+
+Prints the assembled surface without starting a server:
+
+- model source,
+- config path,
+- `AGENTS.md` presence,
+- skills and diagnostics,
+- non-default tools and collisions,
+- channel files,
+- session directory.
+
+`info` is read-only: it does not create sessions or modify `.fastagent/`.
+
+## `fastagent models`
+
+```bash
+fastagent models [search]
+```
+
+Lists available model specs in `provider/modelId` form. Pass a search string to filter.
+
+Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.*`.
+
+## `fastagent login`
+
+```bash
+fastagent login [provider]
+```
+
+Authenticates a model provider and stores credentials in `~/.fastagent/auth.json`. FastAgent uses its own credential file, separate from pi's CLI state.
+
+## `fastagent dev`
+
+```bash
+fastagent dev [dir] [--port N] [--model provider/modelId] [--no-watch] [--tunnel]
+```
+
+Assembles the workspace and serves it locally. With watch enabled, a supervisor restarts the worker on edits.
+
+Options:
+
+| Option | Meaning |
+|---|---|
+| `--port N` | Override `http.port` / default `8787`. |
+| `--model spec` | Override model selection. |
+| `--no-watch` | Serve once without the watch supervisor. |
+| `--tunnel` | Open a Cloudflare quick tunnel for webhook testing. |
+
+Model precedence:
+
+```txt
+--model > FASTAGENT_MODEL > fastagent.config.* model
+```
+
+## `fastagent chat`
+
+```bash
+fastagent chat [dir] [--model provider/modelId]
+```
+
+Opens the same assembled workspace in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
+
+## `fastagent invoke`
+
+```bash
+fastagent invoke <message> [dir] [--model provider/modelId]
+```
+
+Runs one turn through the same workspace assembly and exits:
+
+- answer text streams to stdout,
+- tool and diagnostic lines go to stderr,
+- a `failed` terminal event exits non-zero.
+
+Use this for smoke tests and scripts.
+
+## `fastagent tool`
+
+```bash
+fastagent tool <name> '<json-args>' [dir]
+```
+
+Runs one discovered or configured tool directly, without a model or server.
+
+Example:
+
+```bash
+fastagent tool word-count '{"text":"hello from fastagent"}'
+```
+
+## `fastagent add github|telegram`
+
+```bash
+fastagent add github [dir]
+fastagent add telegram [dir]
+```
+
+Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.env.example` when possible.
+
+See:
+
+- [GitHub channel](github.md)
+- [Telegram channel](telegram.md)
+
+## `fastagent add skill`
+
+```bash
+fastagent add skill <source> [dir] [--update]
+```
+
+Vendors an Agent Skills skill into `skills/<name>/`. Sources can be:
+
+- a GitHub-style ref,
+- a local path,
+- a bare name from local global skill directories.
+
+Use `--update` to overwrite an existing vendored skill. Review the result with `git diff` before deploying.
+
+## `fastagent start`
+
+```bash
+fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--tunnel]
+```
+
+Runs the workspace in production posture: no watch, same assembly as `dev`.
+
+Port precedence:
+
+```txt
+--port > PORT > fastagent.config.* http.port > 8787
+```
+
+Session directory precedence:
+
+```txt
+--sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions
+```
+
+For deployments, point sessions at durable storage:
+
+```bash
+FASTAGENT_SESSIONS_DIR=/data/sessions fastagent start
+```
+
+## Global options
+
+| Option | Meaning |
+|---|---|
+| `-h`, `--help` | Print CLI help. |
+| `-v`, `--version` | Print the package version. |

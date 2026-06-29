@@ -1,41 +1,40 @@
 ---
 title: GitHub channel
-type: doc
 status: current
 ---
 
 # GitHub channel
 
-Turn an agent into a GitHub webhook responder: a verified delivery routes to one or more agent turns,
-and the agent acts back through `gh` (agent-native — the channel holds no outbound credentials). The
-channel is the **N axis** (ingress); how it's served is the **K axis** (host).
+The GitHub channel turns a verified webhook delivery into one or more agent turns.
 
-## Add it
+It is an ingress adapter only: it verifies and routes GitHub events, then starts agent turns. If the agent should comment, label, review, or call GitHub APIs, give the agent tools or environment credentials to do that work.
 
-A channel is a file under `channels/` (discovered like `tools/`). Scaffold it:
+## Add the channel
 
-```
+From an agent workspace:
+
+```bash
 fastagent add github
 ```
 
-This writes `channels/github.ts` — the adapter import plus a starter `on()` to edit. A channel module
-default-exports `(agent) => Routes`; `fastagent start` / `fastagent dev` discover and serve it (no
-hand-written server, no config entry — a channel always needs app glue, so it is always a file).
+This creates `channels/github.ts` and appends the required env var to `.env.example` when possible.
 
 ```ts
-// channels/github.ts
 import { githubChannel } from "@kid7st/fastagent/github";
 import type { ChannelModule } from "@kid7st/fastagent";
 
 const channel: ChannelModule = (agent) => ({
   "POST /webhook": githubChannel(agent, {
     secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
-    // Each review is independent + idempotent (it reconciles against the PR's existing comments), so
-    // use a distinct per-delivery session — overlapping deliveries all run, none dropped.
     on: (event) => {
       if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
         const { repository, pull_request } = event.payload;
-        return [{ session: event.deliveryId, text: `Review #${pull_request.number} in ${repository.full_name}` }];
+        return [
+          {
+            session: event.deliveryId,
+            text: `Review PR #${pull_request.number} in ${repository.full_name}`,
+          },
+        ];
       }
       return [];
     },
@@ -45,35 +44,72 @@ const channel: ChannelModule = (agent) => ({
 export default channel;
 ```
 
-(`GET /health` is provided by the host — you do not declare it.) You write **only** the routing
-`on(event) => Intent[]`. Everything else is internal: HMAC
-verification, a body-size cap (413), `application/json` **and** `application/x-www-form-urlencoded`
-bodies (GitHub's webhook-UI default), and `ping`/unhandled deliveries → 2xx. Point the GitHub
-webhook's URL at `…/webhook` and set its secret to `GITHUB_WEBHOOK_SECRET`.
+`fastagent dev` and `fastagent start` discover `channels/*.ts` automatically. You do not add a config entry.
 
-### `GithubEvent` and `Intent`
+## Configure GitHub
 
-`on` receives a `GithubEvent` and returns `Intent[]`:
+1. Set a webhook secret locally:
 
-- `GithubEvent` = `{ event, action?, deliveryId, payload }`. `event` is the `X-GitHub-Event` header,
-  `deliveryId` the `X-GitHub-Delivery` header, `action` is `payload.action` (the usual discriminant).
-  `payload` is the full event, typed via `@octokit/webhooks-types` (the official source) — narrow it
-  for event-specific fields, e.g. `if ("pull_request" in event.payload)`.
-- `Intent` = `{ session, text }` — a session id and the prompt text for an agent turn. Return one per
-  delivery you act on (or several for fan-out), `[]` to ignore.
+   ```bash
+   GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 24)
+   ```
 
-## Execution model
+2. Put the same value in your workspace `.env`.
+3. In GitHub, create a repository webhook:
+   - Payload URL: `https://<host>/webhook`
+   - Content type: `application/json`
+   - Secret: the value of `GITHUB_WEBHOOK_SECRET`
+   - Events: choose the events your `on()` handler routes.
 
-The endpoint **ACKs 202** and runs each turn **fire-and-forget** on the long-running process. There
-are no concurrency modes: same-session concurrency is the engine's per-session **lease** (a second
-concurrent same-session turn fails fast), so give independent work **distinct sessions**. Distinct
-sessions run concurrently — if you route recurring same-subject events (e.g. `synchronize`), make the
-agent's action idempotent and race-safe (a check-then-act on shared state can double-fire).
+For local testing, run:
 
-Served on a long-running Node host (`fastagent start`). The turns run fire-and-forget on the process,
-so **serverless is unsupported** — the channel is Node-only until durable execution lands.
+```bash
+fastagent dev --tunnel
+```
 
-## Known gaps
+FastAgent starts a Cloudflare quick tunnel if `cloudflared` is installed and prints the webhook URL to paste into GitHub.
 
-A turn that fails after the 202, and any in-flight turn on shutdown/redeploy, is lost (server log
-only). The real fix is **durable execution** (persist the intent, retry across deploys), deferred.
+## Routing model
+
+`on(event) => Intent[]` is the only policy you write.
+
+```ts
+type GithubEvent = {
+  event: string;       // X-GitHub-Event
+  action?: string;     // payload.action when present
+  deliveryId: string;  // X-GitHub-Delivery
+  payload: Schema;     // @octokit/webhooks-types union
+};
+
+type Intent = {
+  session: string;
+  text: string;
+};
+```
+
+Return:
+
+- `[]` to ignore the delivery,
+- one intent for one turn,
+- multiple intents for fan-out.
+
+Choose session IDs deliberately. Independent work should use distinct sessions. Repeated events for the same subject can share a session, but concurrent same-session turns fail fast with `session busy` because the engine enforces one writer per session.
+
+## HTTP behavior
+
+The adapter handles:
+
+- HMAC verification (`x-hub-signature-256`),
+- a 25 MiB raw-body cap,
+- `application/json`,
+- GitHub's `application/x-www-form-urlencoded` webhook UI default,
+- `ping` deliveries,
+- ignored deliveries as successful acknowledgements.
+
+For accepted work, the channel returns `202` and runs turns after the ACK.
+
+## Limitations
+
+Post-ACK turns run in the current Node process. If the process exits, in-flight GitHub turns are lost and only the server log remains. Durable intent storage and retry are future host/adapter work.
+
+Do not use this channel in a serverless function that freezes or terminates immediately after returning the HTTP response.

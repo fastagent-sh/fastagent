@@ -1,46 +1,97 @@
 ---
 title: Channels
-type: doc
 status: current
 ---
 
 # Channels
 
-A **channel** is the agent's inbound surface — how a turn gets triggered (an HTTP call, a GitHub webhook, a Telegram message, …). Channels consume only the engine-neutral [Agent contract](SPEC.md), so the same channel works with any engine. This is the **N axis**.
+A **channel** is an agent's inbound surface: HTTP, GitHub webhooks, Telegram messages, Slack events, scheduled jobs, and so on.
 
-## The contract + discovery
+Channels consume only the engine-neutral [Agent contract](SPEC.md). The same channel can drive any conforming agent.
 
-A channel is a file in the workspace's `channels/` directory that default-exports a `ChannelModule`:
+## Mental model
 
-```ts
-type ChannelModule = (agent: Agent) => Routes;   // Routes = { "METHOD /path": (req: Request) => Response | Promise<Response> }
+```txt
+external event → channel adapter → agent.invoke(scope, prompt) → channel response/action
 ```
 
-`fastagent dev` / `start` discover every `channels/*.ts`, call each with the **same** assembled agent, and merge the returned route tables onto one HTTP server. A route-key clash is surfaced as a collision (first file wins). With no `channels/` dir, the default invoke channel is mounted at `POST /invoke`.
+A channel decides:
 
-## Multiple channels
+- how to verify and parse an external event,
+- whether the agent should run,
+- which `session` to use,
+- what prompt text/images/files to pass,
+- how to acknowledge or reply to the external system.
 
-Drop one file per channel; they coexist on one process, all driving the same agent:
+The agent remains the same assembled workspace.
 
-```
+## Workspace discovery
+
+A workspace declares channels with files under `channels/`:
+
+```txt
 channels/
-├── github.ts     → POST /webhook    (@kid7st/fastagent/github)
-├── telegram.ts   → POST /telegram   (@kid7st/fastagent/telegram)
-└── slack.ts      → POST /slack      (a third-party fastagent-channel-slack)
+├── github.ts     # POST /webhook
+├── telegram.ts   # POST /telegram
+└── slack.ts      # POST /slack
 ```
 
-`fastagent start` serves all three. Each file reads its own secrets (`GITHUB_WEBHOOK_SECRET`, `TELEGRAM_*`, `SLACK_*`) and wires its own adapter — independent, different packages, different deps.
-
-## Two layers: adapter + glue
-
-Every channel is an **adapter** (reusable verify + parse + ACK logic, possibly with an SDK) wired to your **`on()` glue** (which maps events to agent intents). You write only the glue. For the first-party channels, `fastagent add github` / `fastagent add telegram` scaffold the file below (with the env vars + setup steps printed as next steps).
-
-**GitHub** (`@kid7st/fastagent/github`) — fire-and-forget; the agent replies out-of-band (e.g. via `gh`). The channel holds only the inbound secret.
+Each file default-exports a `ChannelModule`:
 
 ```ts
-// channels/github.ts
+import type { ChannelModule } from "@kid7st/fastagent";
+
+const channel: ChannelModule = (agent) => ({
+  "POST /webhook": async (req) => {
+    // parse req, call agent, return a Response
+    return new Response(null, { status: 204 });
+  },
+});
+
+export default channel;
+```
+
+`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`, call each module with the same assembled agent, and merge the returned route tables onto one HTTP server.
+
+With no `channels/` directory, FastAgent mounts the default HTTP/SSE invoke channel at `POST /invoke`.
+
+## Routes
+
+Route keys are either:
+
+```txt
+/path              # any method
+METHOD /path       # method-specific
+```
+
+Examples:
+
+```ts
+{
+  "GET /healthz": () => new Response("ok\n"),
+  "POST /webhook": webhookHandler,
+}
+```
+
+A route overlap is surfaced as a collision. A bare `/webhook` conflicts with `POST /webhook`; `GET /webhook` and `POST /webhook` can coexist.
+
+FastAgent adds a default `GET /health` route unless a channel already covers it.
+
+## First-party channels
+
+FastAgent ships lightweight first-party adapters as subpath exports.
+
+| Channel | Package import | Docs | Add command |
+|---|---|---|---|
+| GitHub webhook | `@kid7st/fastagent/github` | [GitHub channel](github.md) | `fastagent add github` |
+| Telegram bot | `@kid7st/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram` |
+
+Example GitHub glue:
+
+```ts
 import { githubChannel } from "@kid7st/fastagent/github";
 import type { ChannelModule } from "@kid7st/fastagent";
+
 const channel: ChannelModule = (agent) => ({
   "POST /webhook": githubChannel(agent, {
     secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
@@ -50,85 +101,92 @@ const channel: ChannelModule = (agent) => ({
         : [],
   }),
 });
+
 export default channel;
 ```
 
-**Telegram** (`@kid7st/fastagent/telegram`) — request/reply: the channel holds the bot token and **streams the agent's reply back to the chat** itself.
+Example Telegram glue:
 
 ```ts
-// channels/telegram.ts
 import { telegramChannel } from "@kid7st/fastagent/telegram";
 import type { ChannelModule } from "@kid7st/fastagent";
+
 const channel: ChannelModule = (agent) => ({
   "POST /telegram": telegramChannel(agent, {
-    secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "", // the setWebhook secret_token
-    botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",       // used to send the reply
-    onError: (failed) => `⚠️ ${failed.details}`,          // dev bot: surface raw errors; see below
-    // `route` is OPTIONAL — omitted, it uses `defaultTelegramRoute` and the channel composes everything.
+    secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
+    botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
   }),
 });
+
 export default channel;
 ```
 
-**Responsibility split.** The *channel* owns all transport + format: picking the message, extracting `text`/`caption`, attachments (photo→vision image with resize, document/voice/video/audio→downloaded to disk), composing the prompt envelope, Telegram-HTML formatting (+ plain fallback), streaming, 4096-split, and 429 retries. The *developer* owns **policy** via `route` and behaviour via `AGENTS.md` + tools. `route(update) => { session?, chatId?, threadId?, text? } | null` decides whether/where to answer (return `null` to ignore; omitted fields default from the message). It defaults to the exported **`defaultTelegramRoute`** (private chats always answer; groups on a command, a reply to the bot, or an @mention — telegramChannel resolves the bot's username via getMe). Override granularly by reusing the defaults — `route: (u) => defaultTelegramRoute(u) && { session: "…" }`, or a custom prompt with `text: \`${telegramEnvelope(u.message!)}\n…\`` (the channel still appends attachments + the HTML hint). The adapter auto-adapts to **Threaded Mode** (topics in private chats, a @BotFather toggle): an update carrying `message_thread_id` is answered in that thread with a per-`chat:thread` session; a linear chat has none and runs one session per chat. The turn is **streamed live** via `sendMessageDraft` — an ephemeral preview showing `Thinking…`, tool calls (`🔧 read AGENTS.md ✓`), and partial text — then the clean final text is persisted with `sendMessage`.
+## Adapter + glue
 
-**Failures have two audiences.** The full `details` (the dev-facing diagnostic — raw provider/exception text) always go to the operator log. The chat message is **customer-facing**: by default a neutral message keyed on `retryable`, so an adopter building a public bot does not leak internals. A developer's own bot opts into transparency with `onError: (f) => \`⚠️ ${f.details}\`` (the scaffold sets this) so they — and their AI coding agent — can act on the real error.
+A channel usually has two layers:
 
-**Groups (shared session + context).** A group answers one shared `chat[:thread]` session: everyone talks to the same agent with one history, and concurrent summons are **serialized** (FIFO) rather than dropped as "busy". Each message is tagged with its sender so the model tells participants apart, and a group is flagged in the prompt. So the agent can answer "summarize the discussion" / "reply based on everyone's input", the channel keeps a small per-chat buffer of recent **un-summoned** messages (under a char budget, oldest dropped) and folds it into the next answered turn — which needs Telegram **group privacy mode OFF** (@BotFather → `/setprivacy` → Disable) to receive those messages at all; the channel warns at startup if it is on. The buffer is in-process (a restart loses anything not yet folded in; folded discussion lives in the durable session).
+| Layer | Reusable? | Example |
+|---|---|---|
+| Adapter | yes | verify a GitHub signature, parse a Telegram update, call an SDK |
+| Glue | workspace-specific | map one event to `{ session, text }`, choose routing policy |
 
-**Files.** Telegram media are just files. The channel downloads any document/voice/video/audio on a routed message to `<cwd>/.fastagent/telegram-files/<chat>/` and appends the local paths to the prompt — the agent then reads/processes them with its own tools (`read`/`bash`); we shuttle bytes, the agent decides. To send a file back, the agent calls the scaffolded `tools/telegram-send.ts` (`telegram_send_file`) with a `chatId` from the `[telegram: chat …]` context line. A load failure surfaces as a `failed` event, never a silent drop. Audio/video transcoding is out of scope — the agent finds its own tools if it needs the content. Downloaded files persist under `.fastagent/telegram-files/` (git-ignored machine state, not auto-cleaned — like sessions); a long-running production bot should mount/clean that dir.
+Keep transport mechanics in reusable adapters. Keep product/agent policy in the workspace's `channels/*.ts` file.
 
-**Images.** The channel extracts photos (the largest `message.photo` size, plus any on a replied-to message) and passes them to the agent as `prompt.images`, resized to the model's needs in the engine — so the model must support vision. Reply formatting is the channel's job, not a developer knob: the final text is sent as Telegram HTML and silently retries as plain text if Telegram rejects the markup, so a model formatting slip degrades instead of losing the message (the streamed draft stays plain — mid-stream markup is incomplete).
+## Local webhook development
 
-## Long-tail channels: external adapter packages
-
-fastagent does **not** publish a package per channel. Built-in/first-party adapters (the default invoke channel, `github`, `telegram`) are zero- or light-dependency. Anything with a heavy SDK (Slack, Discord, …) is a **separate adapter package** — first-party or community — that the user installs; its SDK never enters `@kid7st/fastagent`'s dependencies.
-
-```jsonc
-// fastagent-channel-slack/package.json
-{
-  "name": "fastagent-channel-slack",
-  "dependencies": { "@slack/web-api": "^7" },          // the heavy SDK lives here
-  "peerDependencies": { "@kid7st/fastagent": "^0.x" }  // for the Agent type + channel-authoring kit
-}
-```
-
-```ts
-// the user's workspace:  npm i fastagent-channel-slack
-// channels/slack.ts
-import { slackChannel } from "fastagent-channel-slack";
-import type { ChannelModule } from "@kid7st/fastagent";
-const channel: ChannelModule = (agent) => ({ "POST /slack": slackChannel(agent, { /* on() glue */ }) });
-export default channel;
-```
-
-`fastagent start` discovers `channels/slack.ts`; the Slack SDK is in the **workspace's** `node_modules`, not the main package. This is the same discovery/merge mechanism as multiple channels — long-tail and multi-channel are one mechanism.
-
-## Local development: a public URL
-
-Webhooks need a public HTTPS URL, but `fastagent dev` serves `localhost`. `--tunnel` bridges the gap:
+Webhooks need a public HTTPS URL, but `fastagent dev` serves `localhost`. Use:
 
 ```bash
 fastagent dev --tunnel
 ```
 
-It starts the server, opens a [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) (needs `cloudflared` installed — it prints an install hint if missing, and serves without a tunnel), prints the public URL, and **auto-registers the first-party webhooks**: it calls Telegram `setWebhook` (using the `.env` tokens) and prints the GitHub Payload URL to paste into repo settings. The tunnel is owned by the watch supervisor, so the URL **survives reloads** — edit and save without re-registering. `fastagent add telegram` scaffolds the `.env` vars (with a generated secret) and points you straight at `fastagent dev --tunnel`.
+When `cloudflared` is installed, FastAgent opens a Cloudflare quick tunnel, prints the public URL, and auto-registers first-party webhooks where possible:
 
-## Authoring an adapter
+- Telegram: calls `setWebhook` using `.env` values.
+- GitHub: prints the Payload URL to paste into repo settings.
 
-An adapter is a `(agent, options) => (req: Request) => Promise<Response>`. It needs only the public `@kid7st/fastagent` surface — the **channel-authoring kit** — so a third-party package depends on nothing else:
+The tunnel is owned by the dev watch supervisor, so the URL survives worker reloads.
 
-| Export | Use |
-|---|---|
-| `Agent` | the type of the agent the adapter drives |
-| `Routes`, `ChannelHandler` | type the returned route table |
-| `collect` | run a turn to its final `{ text, data }` (throws `AgentFailure` on failure) |
-| `readBodyCapped` | read a request body with a hard byte cap (DoS guard on a public endpoint) |
-| `text`, `textHeaders` | build plain `text/plain` responses (4xx / status replies) |
+## Third-party channels
 
-Concurrency safety across channels is the engine's per-session lease: concurrent turns on the same `session` fail fast with `failed{session busy}`. Post-ACK turns (fire-and-forget) are lost on shutdown until durable execution exists.
+Heavy or long-tail adapters should live outside `@kid7st/fastagent`:
+
+```jsonc
+{
+  "name": "fastagent-channel-slack",
+  "peerDependencies": { "@kid7st/fastagent": "^0.x" },
+  "dependencies": { "@slack/web-api": "^7" }
+}
+```
+
+The user's workspace installs the adapter and wires it with a channel file:
+
+```ts
+import { slackChannel } from "fastagent-channel-slack";
+import type { ChannelModule } from "@kid7st/fastagent";
+
+const channel: ChannelModule = (agent) => ({
+  "POST /slack": slackChannel(agent, {
+    signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
+    on: (event) => ({ session: event.user, text: event.text }),
+  }),
+});
+
+export default channel;
+```
+
+Read [Channel development](channel-development.md) for adapter design, packaging, and testing guidance.
+
+## Operational notes
+
+- Channels choose the `session` string. Same-session concurrent turns fail fast with a retryable `failed` event.
+- Post-ACK fire-and-forget work is lost if the process exits unless the channel or host persists intents.
+- Public endpoints should verify signatures/secrets and cap request bodies before parsing untrusted payloads.
+- User-facing error messages should avoid leaking provider or infrastructure details; log full diagnostics for operators.
 
 ## Where next
 
-- [github](github.md) — the GitHub webhook channel in depth (`fastagent add github`).
-- [embedding](embedding.md) — using channels (and the rest of the library) from your own app.
+- [GitHub channel](github.md)
+- [Telegram channel](telegram.md)
+- [Channel development](channel-development.md)
+- [Embedding](embedding.md)

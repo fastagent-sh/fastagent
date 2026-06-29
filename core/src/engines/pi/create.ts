@@ -6,8 +6,8 @@
  *   L1  createPiAgent(options)                       — assemble from typed parts (the canonical ctor).
  *   L0  createPiAgentFromHarness({ harnessFactory }) — in invoke.ts (its body is the turn mechanism).
  *
- * Above L2 sits the command opener createPiAgentFromWorkspace (dev.ts), which both `dev` and `start`
- * drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
+ * Above L2 sits the workspace opener createPiAgentFromWorkspace (workspace.ts), which both `dev` and
+ * `start` drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
  * they come from the definition; the openers own model/tools — from config resolution).
  */
 import { join } from "node:path";

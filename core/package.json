@@ -1,7 +1,7 @@
 {
   "name": "@kid7st/fastagent",
   "version": "0.7.1",
-  "description": "Flask/WSGI for agents: serve or embed an existing agent folder (AGENTS.md + skills/) as a production capability. Engine-, model-, and host-neutral.",
+  "description": "Vibe first. Then FastAgent: turn a local agent folder into a running service in your app, on GitHub, in Telegram, or behind any channel.",
   "keywords": [
     "agent",
     "ai-agent",
@@ -60,8 +60,8 @@
     "prepack": "npm run build",
     "test": "vitest --run",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src test examples",
-    "format": "biome check --write src test examples",
+    "lint": "biome check src test",
+    "format": "biome check --write src test",
     "postbuild": "node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\""
   },
   "dependencies": {

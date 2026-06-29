@@ -13,7 +13,7 @@
  */
 import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { loadRootIgnore } from "./definition.ts";
+import { loadRootIgnore } from "../definition.ts";
 import {
   CONFIG_MJS,
   ENV_EXAMPLE,
@@ -24,7 +24,7 @@ import {
   packageJson,
   toPackageName,
 } from "./scaffold-templates.ts";
-import { fastagentVersion } from "./version.ts";
+import { fastagentVersion } from "../version.ts";
 
 interface ScaffoldFile {
   rel: string;

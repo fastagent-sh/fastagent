@@ -5,7 +5,7 @@
  */
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { assertInsideWorkspace } from "./definition.ts";
+import { assertInsideWorkspace } from "../definition.ts";
 import { exists } from "./init.ts";
 import { CHANNEL_GITHUB_TS, CHANNEL_TELEGRAM_TS, TELEGRAM_SEND_TOOL_TS } from "./scaffold-templates.ts";
 
