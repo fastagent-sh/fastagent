@@ -232,7 +232,8 @@ async function sendMessageDraft(
  *  engine resizes images to the model's needs, so this is a transport guard, not the model size limit. */
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 
-/** Where inbound files land (under the workspace's .fastagent machine-state dir; the agent reads them by path). */
+/** Where inbound files land (the agent reads them by path). Machine state under .fastagent: persists,
+ *  git-ignored, not auto-cleaned (like sessions) — a long-running bot's operator manages the dir. */
 const FILES_SUBDIR = join(".fastagent", "telegram-files");
 
 function mimeFromPath(path: string): string {

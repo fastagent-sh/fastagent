@@ -1,11 +1,7 @@
 /**
- * Dev observability: wrap an Agent so each turn's loop is traced to a log sink — the prompt, every
- * tool call (name + args) with its result, the streamed reply, and the terminal event. Pass-through:
- * the event stream is forwarded untouched; this only tees a readable line per step, so a channel
- * downstream behaves exactly as without it. Engine-neutral (the Agent contract only).
- *
- * There is no separate "thinking"/reasoning event in the contract, so the trace shows the observable
- * loop: tool calls + the reply text. Enabled by `dev` (not `start`).
+ * Dev observability (dev, not start): wrap an Agent to trace each turn's loop to the log — prompt,
+ * reasoning, tool calls (name + args) with results, reply, terminal event. Pass-through: events are
+ * forwarded untouched; this only tees a readable line per step. Engine-neutral (the contract only).
  */
 import type { Agent, AgentEvent, Json, Prompt, Scope } from "./agent.ts";
 
