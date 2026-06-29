@@ -118,8 +118,8 @@ export interface TelegramChannelOptions {
   botToken: string;
   /** Telegram parse mode for bot replies. Omit for plain text. */
   parseMode?: "Markdown" | "MarkdownV2" | "HTML";
-  /** Map a verified update to the intents this agent acts on (empty array = ignore). */
-  on: (update: TelegramUpdate) => TelegramIntent[];
+  /** Map a verified update to the intents this agent acts on (empty array = ignore). Defaults to {@link defaultTelegramOn}. */
+  on?: (update: TelegramUpdate) => TelegramIntent[];
   /**
    * Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
    * log). Return a string to send it, or undefined/"" to stay silent. Default: a neutral message keyed
@@ -451,6 +451,53 @@ async function streamReply(
   }
 }
 
+/**
+ * Default update→intents routing (used when `on` is omitted; exported so a custom `on` can build on it):
+ * routes message/edited_message/channel_post/edited_channel_post; text/caption + structured payloads
+ * (location/contact/poll) as text; photo→image, document/voice/video/audio→file; reply context; a
+ * metadata envelope; per-thread session; and a group-summon gate — private chats always pass, groups
+ * only on a command or a reply to the bot (@mention needs your bot's username, so write your own `on`).
+ */
+export function defaultTelegramOn(update: TelegramUpdate): TelegramIntent[] {
+  const m = update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
+  if (!m) return [];
+  const r = m.reply_to_message;
+  const t = m.text ?? "";
+  const cmd = t.startsWith("/") ? t.slice(1).split(" ")[0]?.split("@")[0] : undefined;
+  if (!(m.chat.type === "private" || Boolean(cmd) || r?.from?.is_bot === true)) return []; // group summon
+  const parts = [m.text ?? m.caption ?? ""];
+  if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);
+  if (m.contact) parts.push(`[contact: ${m.contact.first_name} ${m.contact.phone_number ?? ""}]`);
+  if (m.poll) parts.push(`[poll: ${m.poll.question} — ${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]`);
+  const body = parts.filter(Boolean).join("\n");
+  const imageFileIds = [m.photo?.at(-1)?.file_id, r?.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
+  const fileIds = [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter(
+    (id): id is string => Boolean(id),
+  );
+  if (!body && imageFileIds.length === 0 && fileIds.length === 0) return [];
+  const session = m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`;
+  const meta = [
+    `chat ${m.chat.id} (${m.chat.type})`,
+    m.message_thread_id ? `thread ${m.message_thread_id}` : undefined,
+    m.from?.username ? `from @${m.from.username}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const replyTo = r
+    ? `\n[reply to ${r.from?.username ? `@${r.from.username}` : `msg ${r.message_id}`}: ${(r.text ?? r.caption ?? "(media)").slice(0, 200)}]`
+    : "";
+  return [
+    {
+      session,
+      text: `[telegram: ${meta}]${replyTo}\n${body}`,
+      chatId: m.chat.id,
+      threadId: m.message_thread_id,
+      imageFileIds: imageFileIds.length ? imageFileIds : undefined,
+      fileIds: fileIds.length ? fileIds : undefined,
+    },
+  ];
+}
+
 /** Build a Telegram bot channel for `agent`: a Fetch handler to mount at your webhook route (POST). */
 export function telegramChannel(
   agent: Agent,
@@ -467,6 +514,7 @@ export function telegramChannel(
     throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
   }
   const formatError = onError ?? defaultErrorMessage;
+  const route = on ?? defaultTelegramOn;
   let draftSeq = 0; // non-zero, per-turn draft ids (process-lived; the route handler is built once)
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -486,7 +534,7 @@ export function telegramChannel(
     // Run each intent and stream the reply, ACK 200 immediately (the turn may outlast the webhook
     // timeout). The lifecycle is logged to stderr — after the 200 there is no response body, so these
     // lines are the operator's only signal. Concurrency safety = the engine's per-session lease.
-    const intents = on(update);
+    const intents = route(update);
     for (let i = 0; i < intents.length; i++) {
       const intent = intents[i] as TelegramIntent;
       const target: Target = { chatId: intent.chatId, threadId: intent.threadId };

@@ -199,63 +199,14 @@ const channel: ChannelModule = (agent) => ({
     secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "", // missing → fails at startup (would accept forged updates)
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",       // used to send the agent's reply back to the chat
     parseMode: "HTML",                                    // ask the model for Telegram HTML; channel falls back to Markdown/plain if its markup is off
-    // Map a verified update to the intents the agent acts on (empty array = ignore). session per
-    // (chat, thread) gives each conversation its own multi-turn memory; chatId is where the reply
-    // goes. Auto-adapts: Threaded Mode supplies message_thread_id (own session + reply in-thread); a
-    // linear chat has none and falls back to one session per chat.
-    on: (update) => {
-      const m = update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
-      if (!m) return [];
-      const r = m.reply_to_message;
-      const t = m.text ?? "";
-      // /start: let the agent greet (say so in AGENTS.md); a deep-link payload ("/start <token>")
-      // still reaches the agent as the message text. cmd is also a group-summon trigger (below).
-      const cmd = t.startsWith("/") ? t.slice(1).split(" ")[0].split("@")[0] : undefined;
-      // group summon: in groups, only act when addressed (command / reply-to-bot / @mention). Set
-      // BOT_USERNAME to your bot's @username to enable mention-summon. Private chats always pass.
-      const BOT_USERNAME = "";
-      const summoned =
-        m.chat.type === "private" ||
-        Boolean(cmd) ||
-        r?.from?.is_bot === true ||
-        (BOT_USERNAME !== "" && t.includes(\`@\${BOT_USERNAME}\`));
-      if (!summoned) return [];
-      // body: text/caption + a compact rendering of structured payloads (kept as plain text)
-      const parts = [m.text ?? m.caption ?? ""];
-      if (m.location) parts.push(\`[location: \${m.location.latitude},\${m.location.longitude}]\`);
-      if (m.contact) parts.push(\`[contact: \${m.contact.first_name} \${m.contact.phone_number ?? ""}]\`);
-      if (m.poll) parts.push(\`[poll: \${m.poll.question} — \${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]\`);
-      const body = parts.filter(Boolean).join("\\n");
-      // images: largest photo of this message and/or the one it replies to (so "reply to a photo + ask" works)
-      const imageFileIds = [m.photo?.at(-1)?.file_id, r?.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
-      // files: documents/voice/video/audio → channel downloads them to disk; the agent reads them with its tools
-      const fileIds = [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter(
-        (id): id is string => Boolean(id),
-      );
-      if (!body && imageFileIds.length === 0 && fileIds.length === 0) return [];
-      const session = m.message_thread_id ? \`\${m.chat.id}:\${m.message_thread_id}\` : \`\${m.chat.id}\`;
-      // A small editable context envelope — edit freely, this is your glue.
-      const meta = [
-        \`chat \${m.chat.id} (\${m.chat.type})\`,
-        m.message_thread_id ? \`thread \${m.message_thread_id}\` : undefined,
-        m.from?.username ? \`from @\${m.from.username}\` : undefined,
-      ]
-        .filter(Boolean)
-        .join(", ");
-      const replyTo = r
-        ? \`\\n[reply to \${r.from?.username ? \`@\${r.from.username}\` : \`msg \${r.message_id}\`}: \${(r.text ?? r.caption ?? "(media)").slice(0, 200)}]\`
-        : "";
-      return [
-        {
-          session,
-          text: \`[telegram: \${meta}]\${replyTo}\\n\${body}\`,
-          chatId: m.chat.id,
-          threadId: m.message_thread_id,
-          imageFileIds: imageFileIds.length ? imageFileIds : undefined,
-          fileIds: fileIds.length ? fileIds : undefined,
-        },
-      ];
-    },
+    // on is OPTIONAL: omitted, it defaults to standard routing — message/edited/channel_post +
+    // text/caption, photo→image, document/voice/video/audio→file (downloaded to disk), reply context,
+    // a metadata envelope, per-thread session, and group summon (private always; groups on a command
+    // or a reply to the bot). Pass your own on() to customize, e.g.:
+    //   on: (update) =>
+    //     update.message?.text
+    //       ? [{ session: \`\${update.message.chat.id}\`, text: update.message.text, chatId: update.message.chat.id }]
+    //       : [],
     // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
     // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
     // full details always go to the server log regardless.

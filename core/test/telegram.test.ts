@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type TelegramUpdate, telegramChannel } from "../src/telegram.ts";
+import { defaultTelegramOn, type TelegramUpdate, telegramChannel } from "../src/telegram.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
 /** A faux Agent that records invocations and replies with `reply` text (contract-only). */
@@ -55,6 +55,41 @@ const bodyOf = (call: [string, RequestInit] | undefined) => {
 };
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("defaultTelegramOn (the built-in routing used when on is omitted)", () => {
+  it("routes a private text message into one intent with a metadata envelope", () => {
+    const intents = defaultTelegramOn({
+      update_id: 1,
+      message: { message_id: 2, text: "hi", chat: { id: 42, type: "private" }, from: { id: 7, username: "alice" } },
+    });
+    expect(intents).toHaveLength(1);
+    expect(intents[0]?.session).toBe("42");
+    expect(intents[0]?.chatId).toBe(42);
+    expect(intents[0]?.text).toMatch(/\[telegram: chat 42 \(private\).*from @alice\]/);
+    expect(intents[0]?.text).toMatch(/hi$/);
+  });
+
+  it("picks the largest photo as an image and keys the session per thread", () => {
+    const intents = defaultTelegramOn({
+      update_id: 1,
+      message: {
+        message_id: 2,
+        caption: "what is this",
+        message_thread_id: 9,
+        photo: [{ file_id: "small", file_unique_id: "a", width: 1, height: 1 }, { file_id: "big", file_unique_id: "b", width: 9, height: 9 }],
+        chat: { id: 42, type: "private" },
+      },
+    });
+    expect(intents[0]?.session).toBe("42:9");
+    expect(intents[0]?.imageFileIds).toEqual(["big"]);
+  });
+
+  it("stays silent in a group unless summoned (command / reply-to-bot)", () => {
+    const group = { id: -100, type: "supergroup" };
+    expect(defaultTelegramOn({ update_id: 1, message: { message_id: 2, text: "chatter", chat: group } })).toEqual([]);
+    expect(defaultTelegramOn({ update_id: 1, message: { message_id: 2, text: "/ask", chat: group } })).toHaveLength(1);
+  });
+});
 
 describe("telegram channel", () => {
   it("rejects non-POST with 405", async () => {
