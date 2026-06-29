@@ -323,6 +323,85 @@ describe("telegram channel", () => {
     expect(sent.reply_parameters).toBeUndefined(); // redirected → no quote (avoids a wrong-target reply)
   });
 
+  it("serializes same-session turns (FIFO) instead of dropping the second as 'busy'", async () => {
+    let started = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const order: number[] = [];
+    let release1 = (): void => {};
+    const gate1 = new Promise<void>((r) => {
+      release1 = r;
+    });
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        const id = ++started;
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (id === 1) await gate1; // hold the first turn open while the second arrives
+        inFlight--;
+        order.push(id);
+        yield { type: "text", delta: `r${id}` };
+        yield { type: "completed" };
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"ok":true}', { status: 200 })),
+    );
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+    const upd = (n: number) => ({
+      update_id: n,
+      message: { message_id: n, text: "yo", chat: { id: 7, type: "private" } },
+    });
+    const settle = async (): Promise<void> => {
+      for (let k = 0; k < 6; k++) await new Promise((r) => setImmediate(r));
+    };
+
+    await ch(tgRequest(upd(1))); // session "7"
+    await ch(tgRequest(upd(2))); // session "7" — queued behind #1, not run concurrently, not dropped
+    await settle();
+    expect(started).toBe(1); // only turn 1 has invoked; turn 2 waits its turn
+    expect(maxInFlight).toBe(1);
+
+    release1();
+    await settle();
+    expect(order).toEqual([1, 2]); // FIFO
+    expect(maxInFlight).toBe(1); // never two at once for the same session
+  });
+
+  it("runs different sessions concurrently (no cross-session blocking)", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await gate; // both turns park here at once iff they run concurrently
+        inFlight--;
+        yield { type: "completed" };
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"ok":true}', { status: 200 })),
+    );
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+    const settle = async (): Promise<void> => {
+      for (let k = 0; k < 6; k++) await new Promise((r) => setImmediate(r));
+    };
+
+    await ch(tgRequest({ update_id: 1, message: { message_id: 1, text: "a", chat: { id: 1, type: "private" } } }));
+    await ch(tgRequest({ update_id: 2, message: { message_id: 2, text: "b", chat: { id: 2, type: "private" } } }));
+    await settle();
+    expect(maxInFlight).toBe(2); // different sessions → both in flight at once
+    release();
+    await settle();
+  });
+
   it("serializes the live preview: never two draft sends in flight (the out-of-order flicker)", async () => {
     vi.useFakeTimers();
     let inFlight = 0;
