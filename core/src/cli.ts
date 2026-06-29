@@ -10,6 +10,7 @@ import { join, relative, resolve } from "node:path";
 import { autocomplete, isCancel, log, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
 import type { Agent } from "./agent.ts";
+import { logAgentLoop } from "./observe.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
@@ -518,7 +519,8 @@ async function serveOnce(): Promise<void> {
   console.error(`[fastagent] model:  ${a.modelSpec}`);
   await reportAuth(a.modelSpec);
   reportAgentsSkillsTools(a);
-  const routes = await routesFor(dir, a.agent).catch(failStartup);
+  // dev only: trace each turn's agent loop (tool calls + reply) to this log, for any channel.
+  const routes = await routesFor(dir, logAgentLoop(a.agent)).catch(failStartup);
   serve(routes, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.definition.dir, p));
 }
 
