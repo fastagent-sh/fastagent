@@ -465,7 +465,18 @@ export function telegramChannel(
     if (m && r) {
       const session = r.session ?? (m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`);
       const chatId = r.chatId ?? m.chat.id;
-      const target: Target = { chatId, threadId: r.threadId ?? m.message_thread_id };
+      // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no
+      // reply-quote. Only when the RESOLVED target is the message's own chat+thread: a route that
+      // redirects elsewhere must not carry a reply_parameters that resolves in the wrong place (fail, or
+      // quote a same-id message there). Compare VALUES, not whether the route touched the field — a route
+      // that explicitly returns the same chat/thread still quotes.
+      const threadId = r.threadId ?? m.message_thread_id;
+      const sameTarget = String(chatId) === String(m.chat.id) && threadId === m.message_thread_id;
+      const target: Target = {
+        chatId,
+        threadId,
+        replyTo: m.chat.type !== "private" && sameTarget ? m.message_id : undefined,
+      };
       const baseText = r.text ?? telegramEnvelope(m);
       const imageFileIds = extractImages(m);
       const fileIds = extractFiles(m);

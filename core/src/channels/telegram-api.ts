@@ -21,10 +21,12 @@ const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
  *  git-ignored, not auto-cleaned (like sessions) — a long-running bot's operator manages the dir. */
 const FILES_SUBDIR = join(".fastagent", "telegram-files");
 
-/** Where a reply goes: a chat, optionally a thread (Threaded Mode). */
+/** Where a reply goes: a chat, optionally a thread (Threaded Mode), optionally replying to a message. */
 export interface Target {
   chatId: number | string;
   threadId?: number;
+  /** Message to reply to (the summoning message). Set in groups so the answer threads under the asker. */
+  replyTo?: number;
 }
 
 /** A downloaded inbound file: an absolute local path the agent's tools (read/bash) can open. */
@@ -83,8 +85,16 @@ function chunkText(text: string): string[] {
  * `message_thread_id` is dropped from the JSON when undefined (linear chat).
  */
 export async function sendMessage(api: string, botToken: string, t: Target, body: string): Promise<void> {
+  let first = true;
   for (const chunk of chunkText(body)) {
-    const base = { chat_id: t.chatId, message_thread_id: t.threadId, text: chunk };
+    const base: Record<string, unknown> = { chat_id: t.chatId, message_thread_id: t.threadId, text: chunk };
+    // Reply to the summoning message on the FIRST chunk only — threads the answer under the asker in a
+    // group; allow_sending_without_reply so a since-deleted original still delivers. Continuation
+    // chunks post plainly right after (N reply-quotes would be noise).
+    if (first && t.replyTo !== undefined) {
+      base.reply_parameters = { message_id: t.replyTo, allow_sending_without_reply: true };
+    }
+    first = false;
     let result = await callBotApi(api, botToken, "sendMessage", { ...base, parse_mode: "HTML" });
     if (!result.ok && PARSE_ERROR.test(result.description))
       result = await callBotApi(api, botToken, "sendMessage", base);
