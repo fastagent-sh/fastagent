@@ -5,7 +5,6 @@
  */
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { autocomplete, isCancel, log, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
@@ -17,8 +16,7 @@ import { text } from "./channels/respond.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { runDevSupervisor } from "./dev-supervisor.ts";
 import { announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
-import { loadChannels } from "./engines/pi/channel.ts";
-import { isModuleFile } from "./engines/pi/loader.ts";
+import { discoverChannelFiles, loadChannels } from "./engines/pi/channel.ts";
 import { fastagentVersion } from "./engines/pi/version.ts";
 import {
   isValidPort,
@@ -27,10 +25,11 @@ import {
   resolveModelSpec,
   resolveSessionsDirOverride,
 } from "./engines/pi/config.ts";
+import { formatModelsCommand } from "./cli-models.ts";
 import { FASTAGENT_AUTH_PATH } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
-import { assertInsideWorkspace, loadAgentDefinition, loadRootIgnore } from "./engines/pi/definition.ts";
+import { loadAgentDefinition, loadRootIgnore } from "./engines/pi/definition.ts";
 import { runInvokeStream } from "./invoke-stream.ts";
 import { reportDefinitionWarnings, reportToolCollisions } from "./engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/dev.ts";
@@ -44,7 +43,7 @@ import {
   channelSetup,
   scaffoldChannel,
 } from "./engines/pi/add-channel.ts";
-import { scaffoldWorkspace } from "./engines/pi/init.ts";
+import { nextStepCd, scaffoldWorkspace } from "./engines/pi/init.ts";
 import { vendorSkill } from "./engines/pi/vendor-skill.ts";
 
 function usage(code: number): never {
@@ -141,11 +140,9 @@ else usage(1);
 
 /** `fastagent models [search]`: print every registered "provider/modelId"; `[search]` filters by substring. */
 function runModels(): void {
-  const search = positionals[1]?.toLowerCase();
-  const specs = listModels(createPiModels());
-  const shown = search ? specs.filter((spec) => spec.toLowerCase().includes(search)) : specs;
-  for (const spec of shown) console.log(spec);
-  if (search && shown.length === 0) console.error(`no model matches "${positionals[1]}"`);
+  const { lines, error } = formatModelsCommand(listModels(createPiModels()), positionals[1]);
+  for (const spec of lines) console.log(spec);
+  if (error) console.error(error);
 }
 
 /** `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model. */
@@ -210,23 +207,6 @@ async function runInvoke(): Promise<void> {
   // Always exit explicitly: the undici proxy agent's keep-alive sockets would otherwise hold the
   // event loop open after a successful one-shot turn.
   process.exit(exitCode);
-}
-
-/** List channel file basenames in <dir>/channels/ — the authoring view (no import, unlike loadChannels). */
-async function discoverChannelFiles(workspaceDir: string): Promise<string[]> {
-  // The same containment guard loadChannels uses, so info reports the surface dev/start would accept.
-  await assertInsideWorkspace(workspaceDir, "channels");
-  let names: string[];
-  try {
-    names = await readdir(join(workspaceDir, "channels"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  return names
-    .filter(isModuleFile)
-    .map((n) => n.replace(/\.(ts|js|mjs)$/, ""))
-    .sort();
 }
 
 /** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. Read-only. */
@@ -300,9 +280,8 @@ async function runInit(): Promise<void> {
   }
 
   console.error(`  next steps:`);
-  const rel = relative(process.cwd(), dir);
-  // A relative target that climbs out of cwd (../../../tmp/x) is noise — show the absolute path.
-  if (rel !== "") console.error(`    cd ${rel.startsWith("..") ? dir : rel}`);
+  const cdTarget = nextStepCd(process.cwd(), dir);
+  if (cdTarget) console.error(`    cd ${cdTarget}`);
   if (complete && (values["no-install"] || installFailed)) console.error(`    npm install`);
   console.error(`    fastagent dev   # serve locally and iterate`);
 }

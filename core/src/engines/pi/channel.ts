@@ -4,11 +4,12 @@
  * app's `on()` glue and returns the routes it mounts. There is no config-level channel list — a
  * channel always needs glue, so it is always a file.
  */
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { parseRouteKey, type Routes } from "../../host/node.ts";
 import { assertInsideWorkspace } from "./definition.ts";
-import { loadModuleDir } from "./loader.ts";
+import { isModuleFile, loadModuleDir } from "./loader.ts";
 
 /** A `channels/<name>.ts` default export: receives the assembled agent, returns the routes it mounts. */
 export type ChannelModule = (agent: Agent) => Routes;
@@ -17,6 +18,27 @@ export type ChannelModule = (agent: Agent) => Routes;
 export interface ChannelCollision {
   route: string;
   source: string;
+}
+
+/**
+ * Channel file basenames under `<dir>/channels/` — the authoring view (`fastagent info`), which lists
+ * WITHOUT importing, unlike {@link loadChannels}. It enforces the SAME containment guard so info reports
+ * exactly the surface dev/start would accept: a channels/ symlink escaping the workspace is rejected
+ * here too. This path is independent of loadChannels', so it must guard the boundary on its own.
+ */
+export async function discoverChannelFiles(dir: string): Promise<string[]> {
+  await assertInsideWorkspace(dir, "channels");
+  let names: string[];
+  try {
+    names = await readdir(join(dir, "channels"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  return names
+    .filter(isModuleFile)
+    .map((n) => n.replace(/\.(ts|js|mjs)$/, ""))
+    .sort();
 }
 
 /**
