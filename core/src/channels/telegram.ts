@@ -1,8 +1,9 @@
 /**
- * Telegram bot channel: verify the webhook secret token → route via `on(update)` → run the turn →
+ * Telegram bot channel: verify the webhook secret token → decide via `route(update)` → run the turn →
  * stream the agent's reply back to the chat, ACK 200. Reply model A: the channel holds the bot token
  * and posts the reply itself (chat UX), unlike the github channel's fire-and-forget. No SDK — inbound
- * is a JSON POST, outbound is a `fetch` to the Bot API. The developer writes only `on`.
+ * is a JSON POST, outbound is a `fetch` to the Bot API. The developer writes only `route` (policy); the
+ * channel owns transport + format + attachments.
  *
  * Live streaming: tool calls + partial text stream into an ephemeral draft (sendMessageDraft, a 30s
  * animated preview); the final text is persisted with sendMessage. Threaded Mode (topics in private
@@ -60,7 +61,7 @@ export interface TelegramMessage {
   text?: string;
   /** Caption on a media message (photo/document/…) — often the user's instruction for the attachment. */
   caption?: string;
-  /** Photo sizes, smallest → largest. Pass the last one's `file_id` as an intent image for vision. */
+  /** Photo sizes, smallest → largest. The channel sends the largest to the model as a vision image. */
   photo?: { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }[];
   /** Structured payloads worth rendering into the prompt as text (no new modality needed). */
   location?: { latitude: number; longitude: number; [k: string]: unknown };
@@ -292,7 +293,7 @@ async function downloadTelegramFile(
   return { path: dest, name, size: bytes.byteLength };
 }
 
-/** Download all of an intent's files. Throws if any cannot be loaded — the caller surfaces it (no silent drop). */
+/** Download the message's files. Throws if any cannot be loaded — the caller surfaces it (no silent drop). */
 async function resolveFiles(
   api: string,
   botToken: string,
@@ -305,7 +306,7 @@ async function resolveFiles(
   return files;
 }
 
-/** Fetch all of an intent's images. Throws if any cannot be loaded — the caller surfaces it (no silent drop). */
+/** Fetch the message's images. Throws if any cannot be loaded — the caller surfaces it (no silent drop). */
 async function resolveImages(
   api: string,
   botToken: string,
@@ -317,16 +318,16 @@ async function resolveImages(
   return images;
 }
 
-/**
- * agent.invoke, but resolve the intent's attachments first: images (vision) inline, and files
- * downloaded to disk with their absolute paths appended to the prompt so the agent can read them with
- * its tools. A transport failure becomes a `failed` event — surfaced (user + log), never a silent drop;
- * the agent never runs on inputs the user sent but we failed to load.
- */
 /** Appended to the prompt (not the system prompt): the channel owns Telegram-HTML formatting. */
 const HTML_INSTRUCTION =
   "\n\n(Format your reply in Telegram-supported HTML — <b> <i> <u> <s> <code> <pre> <a href> — not Markdown.)";
 
+/**
+ * agent.invoke, but resolve the message's attachments first: images (vision) inline, and files
+ * downloaded to disk with their absolute paths appended to the prompt so the agent can read them with
+ * its tools. A transport failure becomes a `failed` event — surfaced (user + log), never a silent drop;
+ * the agent never runs on inputs the user sent but we failed to load.
+ */
 async function* invokeWithAttachments(
   agent: Agent,
   session: string,
