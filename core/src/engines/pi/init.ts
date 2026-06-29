@@ -206,10 +206,12 @@ const channel: ChannelModule = (agent) => ({
       const m = update.message ?? update.edited_message ?? update.channel_post;
       if (!m) return [];
       const body = m.text ?? m.caption ?? "";
-      const imageFileIds = m.photo?.length ? [m.photo[m.photo.length - 1].file_id] : undefined; // largest size
-      if (!body && !imageFileIds) return []; // nothing to act on
+      const r = m.reply_to_message;
+      // images: largest photo of this message and/or the one it replies to (so "reply to a photo + ask" works)
+      const imageFileIds = [m.photo?.at(-1)?.file_id, r?.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
+      if (!body && imageFileIds.length === 0) return []; // nothing to act on
       const session = m.message_thread_id ? \`\${m.chat.id}:\${m.message_thread_id}\` : \`\${m.chat.id}\`;
-      // A small context envelope so the agent knows where it is — edit freely, this is your glue.
+      // A small editable context envelope: where we are + what this replies to. Edit freely, this is your glue.
       const meta = [
         \`chat \${m.chat.id} (\${m.chat.type})\`,
         m.message_thread_id ? \`thread \${m.message_thread_id}\` : undefined,
@@ -217,7 +219,18 @@ const channel: ChannelModule = (agent) => ({
       ]
         .filter(Boolean)
         .join(", ");
-      return [{ session, text: \`[telegram: \${meta}]\\n\${body}\`, chatId: m.chat.id, threadId: m.message_thread_id, imageFileIds }];
+      const replyTo = r
+        ? \`\\n[reply to \${r.from?.username ? \`@\${r.from.username}\` : \`msg \${r.message_id}\`}: \${(r.text ?? r.caption ?? "(media)").slice(0, 200)}]\`
+        : "";
+      return [
+        {
+          session,
+          text: \`[telegram: \${meta}]\${replyTo}\\n\${body}\`,
+          chatId: m.chat.id,
+          threadId: m.message_thread_id,
+          imageFileIds: imageFileIds.length ? imageFileIds : undefined,
+        },
+      ];
     },
     // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
     // chat is customer-facing by default — for a public bot, drop this or return a neutral string;

@@ -61,6 +61,8 @@ export interface TelegramMessage {
   photo?: { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }[];
   /** Present in Threaded Mode (topics in private chats); reply with the same id to stay in-thread. */
   message_thread_id?: number;
+  /** The message this one replies to, if any — inject its text/media so the agent has the referent. */
+  reply_to_message?: TelegramMessage;
   chat: { id: number; type: string; [k: string]: unknown };
   from?: { id: number; username?: string; [k: string]: unknown };
   [k: string]: unknown;
