@@ -404,6 +404,174 @@ describe("telegram channel", () => {
     await settle();
   });
 
+  const groupSettle = async (): Promise<void> => {
+    for (let k = 0; k < 6; k++) await new Promise((r) => setImmediate(r));
+  };
+  const onlyCommands = (u: TelegramUpdate) => (u.message?.text?.startsWith("/") ? {} : null);
+  const grp = { id: -100, type: "supergroup" as const };
+  const groupMsg = (n: number, user: string, t: string) => ({
+    update_id: n,
+    message: { message_id: n, text: t, chat: grp, from: { id: n, username: user } },
+  });
+
+  it("buffers un-summoned group messages and folds them into the next summoned turn, then clears", async () => {
+    const { agent, calls } = replyingAgent("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"ok":true}', { status: 200 })),
+    );
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
+
+    await ch(tgRequest(groupMsg(1, "alice", "the deploy failed"))); // un-summoned → buffered
+    await ch(tgRequest(groupMsg(2, "bob", "which service?"))); // un-summoned → buffered
+    await ch(tgRequest(groupMsg(3, "alice", "/bot summarize"))); // summoned → folds the buffer in
+    await groupSettle();
+    const p1 = calls[0]?.text ?? "";
+    expect(p1).toMatch(/recent group discussion/);
+    expect(p1).toMatch(/@alice: the deploy failed/);
+    expect(p1).toMatch(/@bob: which service\?/);
+
+    await ch(tgRequest(groupMsg(4, "bob", "/bot again"))); // summoned → buffer already cleared
+    await groupSettle();
+    expect(calls[1]?.text ?? "").not.toMatch(/recent group discussion/);
+  });
+
+  it("keeps the group buffer under the char budget (drops the oldest un-summoned messages)", async () => {
+    const { agent, calls } = replyingAgent("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"ok":true}', { status: 200 })),
+    );
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
+    for (let i = 0; i < 30; i++) await ch(tgRequest(groupMsg(i, "alice", `M${i}-${"x".repeat(290)}`))); // ~9000 chars
+    await ch(tgRequest(groupMsg(99, "alice", "/bot go")));
+    await groupSettle();
+    const p = calls[0]?.text ?? "";
+    expect(p).toMatch(/recent group discussion/);
+    expect(p).toMatch(/M29-/); // newest kept
+    expect(p).not.toMatch(/M0-/); // oldest dropped over budget
+  });
+
+  it("keeps the buffer when a pre-agent failure (attachment download) aborts the summoned turn", async () => {
+    const { agent, calls } = replyingAgent("ok");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/getFile"))
+          return new Response(JSON.stringify({ ok: true, result: { file_path: "photo.jpg" } }), { status: 200 });
+        if (String(url).includes("/file/bot")) return new Response("nope", { status: 500 }); // download fails
+        return new Response('{"ok":true}', { status: 200 });
+      }),
+    );
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
+
+    await ch(tgRequest(groupMsg(1, "alice", "the deploy failed"))); // un-summoned → buffered
+    // summoned, but carries a photo whose download fails → the turn fails BEFORE the agent runs
+    await ch(
+      tgRequest({
+        update_id: 2,
+        message: {
+          message_id: 2,
+          text: "/bot look",
+          chat: grp,
+          from: { id: 2, username: "bob" },
+          photo: [{ file_id: "p1", file_unique_id: "u", width: 1, height: 1 }],
+        },
+      }),
+    );
+    await groupSettle();
+    expect(calls).toHaveLength(0); // agent never ran — attachment failed before it
+
+    // retry with a plain command: the discussion was NOT lost; it is folded into this turn
+    await ch(tgRequest(groupMsg(3, "bob", "/bot summarize")));
+    await groupSettle();
+    expect(calls[0]?.text ?? "").toMatch(/@alice: the deploy failed/);
+  });
+
+  it("a message arriving during the attachment-download window survives the commit (folded into the next turn)", async () => {
+    const { agent, calls } = replyingAgent("ok");
+    let releaseDownload = (): void => {};
+    const downloadGate = new Promise<void>((r) => {
+      releaseDownload = r;
+    });
+    let markDownloadStarted = (): void => {};
+    const downloadStarted = new Promise<void>((r) => {
+      markDownloadStarted = r;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/getFile"))
+          return new Response(JSON.stringify({ ok: true, result: { file_path: "p.jpg", file_size: 3 } }), {
+            status: 200,
+          });
+        if (String(url).includes("/file/bot")) {
+          markDownloadStarted();
+          await downloadGate; // hold the download open
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        }
+        return new Response('{"ok":true}', { status: 200 });
+      }),
+    );
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
+
+    await ch(tgRequest(groupMsg(1, "alice", "the deploy failed"))); // un-summoned → buffered
+    await ch(
+      tgRequest({
+        update_id: 2,
+        message: {
+          message_id: 2,
+          text: "/bot look",
+          chat: grp,
+          from: { id: 2, username: "bob" },
+          photo: [{ file_id: "p1", file_unique_id: "u", width: 1, height: 1 }],
+        },
+      }),
+    ); // summoned + photo → enters the download window (peek already snapshotted [alice])
+    await downloadStarted;
+    await ch(tgRequest(groupMsg(3, "carol", "any update?"))); // arrives DURING the window
+    releaseDownload();
+    await groupSettle();
+
+    expect(calls[0]?.text ?? "").toMatch(/@alice: the deploy failed/);
+    expect(calls[0]?.text ?? "").not.toMatch(/@carol/); // carol was not in this turn's prompt
+
+    await ch(tgRequest(groupMsg(4, "bob", "/bot summarize"))); // next summon
+    await groupSettle();
+    expect(calls[1]?.text ?? "").toMatch(/@carol: any update\?/); // carol survived the commit
+  });
+
+  it("warns once at startup when group privacy mode is on (can_read_all_group_messages: false)", async () => {
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/getMe")
+          ? new Response(
+              JSON.stringify({ ok: true, result: { username: "bot", can_read_all_group_messages: false } }),
+              {
+                status: 200,
+              },
+            )
+          : new Response('{"ok":true}', { status: 200 }),
+      ),
+    );
+    const { agent } = replyingAgent();
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API }); // getMe fires once
+    await groupSettle();
+    const privacyWarnings = () => errs.filter((e) => /privacy mode is on/.test(e)).length;
+    expect(privacyWarnings()).toBe(1); // exactly once, at startup
+
+    // Driving group updates must NOT re-warn — it is a startup check, not a per-request one.
+    await ch(tgRequest(groupMsg(1, "alice", "hi")));
+    await ch(tgRequest(groupMsg(2, "bob", "there")));
+    await groupSettle();
+    expect(privacyWarnings()).toBe(1);
+  });
+
   it("serializes the live preview: never two draft sends in flight (the out-of-order flicker)", async () => {
     vi.useFakeTimers();
     let inFlight = 0;

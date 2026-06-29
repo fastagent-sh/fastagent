@@ -20,7 +20,7 @@ import { readBodyCapped } from "./body.ts";
 import {
   type DownloadedFile,
   type Target,
-  resolveBotUsername,
+  resolveBotInfo,
   resolveFiles,
   resolveImages,
   sendMessage,
@@ -30,6 +30,17 @@ import { text } from "./respond.ts";
 
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
+
+/** Char budget for the per-place group-context buffer — bounds the cost of folding it into a prompt;
+ *  when exceeded the OLDEST un-summoned messages are dropped (not a time window: a quiet group keeps its
+ *  sparse-but-relevant lines, a busy burst is capped). */
+const BUFFER_MAX_CHARS = 4000;
+
+/** One buffered un-summoned message: its sender label and one-line body (object identity is the commit key). */
+interface BufferEntry {
+  sender: string;
+  body: string;
+}
 
 /** How often (ms) to push a streamed draft update; tool events flush immediately for snappy feedback. */
 const DRAFT_THROTTLE_MS = 800;
@@ -151,7 +162,9 @@ const HTML_INSTRUCTION =
  * agent.invoke, but resolve the message's attachments first: images (vision) inline, and files
  * downloaded to disk with their absolute paths appended to the prompt so the agent can read them with
  * its tools. A transport failure becomes a `failed` event — surfaced (user + log), never a silent drop;
- * the agent never runs on inputs the user sent but we failed to load.
+ * the agent never runs on inputs the user sent but we failed to load. `onResolved` (if given) fires once
+ * the attachments are in hand and the turn is about to reach the agent — the commit point for any
+ * pending side effect (clearing the folded-in context buffer), so a pre-agent failure leaves it intact.
  */
 async function* invokeWithAttachments(
   agent: Agent,
@@ -162,6 +175,7 @@ async function* invokeWithAttachments(
   fileIds: string[] | undefined,
   api: string,
   botToken: string,
+  onResolved?: () => void,
 ): AsyncIterable<AgentEvent> {
   let images: ImageRef[] | undefined;
   let files: DownloadedFile[] | undefined;
@@ -172,6 +186,7 @@ async function* invokeWithAttachments(
     yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
     return;
   }
+  onResolved?.(); // attachments are in hand — about to reach the agent, safe to commit pending effects
   const manifest = files?.length
     ? `\n\n[attached files — read them with your tools:\n${files.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
     : "";
@@ -361,6 +376,11 @@ function attachmentSummary(m: TelegramMessage): string | undefined {
   return undefined;
 }
 
+/** A one-line, length-capped rendering of a message's content for the context buffer. */
+function messageText(m: TelegramMessage): string {
+  return (m.text ?? m.caption ?? attachmentSummary(m) ?? "").replace(/\s+/g, " ").trim().slice(0, 280);
+}
+
 /**
  * The default base prompt: a context envelope (chat/thread/sender + a group note + reply) then the
  * user's text/caption and a compact rendering of structured payloads (location/contact/poll). The
@@ -435,17 +455,22 @@ export function telegramChannel(
     throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
   }
   const formatError = onError ?? defaultErrorMessage;
-  // The default route summons on a group @mention, which needs the bot's own @username; resolve it once
-  // via getMe (only when using the default route and not supplied). A custom route owns its own summon.
+  // One getMe at startup: the bot's @username (for the default route's group @mention summon, only when
+  // not supplied) and the group-privacy flag — privacy mode off is required to receive the un-summoned
+  // group messages that feed the context buffer, so warn if it is on.
   let mentionName = botUsername;
-  if (!route && !botUsername) {
-    void resolveBotUsername(apiBaseUrl, botToken).then(
-      (u) => {
-        mentionName = u;
-      },
-      (e) => console.error(`[telegram] getMe failed; group @mention summon disabled: ${String(e)}`),
-    );
-  }
+  void resolveBotInfo(apiBaseUrl, botToken).then(
+    (info) => {
+      if (mentionName === undefined) mentionName = info.username;
+      if (info.canReadAllGroupMessages === false) {
+        console.error(
+          "[telegram] privacy mode is on: the bot only sees @mentions / replies / commands, so group " +
+            "context (un-summoned messages) won't be captured. Disable it via @BotFather → /setprivacy.",
+        );
+      }
+    },
+    (e) => console.error(`[telegram] getMe failed; @mention summon + privacy check skipped: ${String(e)}`),
+  );
   const decide = route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName }));
   // Per-session serial queue: model B answers a shared chat[:thread] with ONE turn at a time, so a
   // second update for the same session waits its turn (FIFO) instead of colliding on the engine lease
@@ -460,6 +485,38 @@ export function telegramChannel(
     void next.finally(() => {
       if (sessionChains.get(session) === next) sessionChains.delete(session); // drop the entry when drained
     });
+  };
+  // Group-context buffer: recent UN-summoned messages per Telegram "place" (chat[:thread]), kept under
+  // a char budget and folded into the next answered turn's prompt so a summoned agent has the discussion
+  // it didn't see turn-by-turn. Bucketed by place (not session): an un-summoned message has no route
+  // session, and the flush feeds whatever turn answers that place. In-process (a restart loses anything
+  // not yet flushed); needs group privacy OFF to receive the messages at all.
+  const buffers = new Map<string, BufferEntry[]>();
+  const bufferPush = (placeKey: string, sender: string, body: string): void => {
+    const buf = buffers.get(placeKey) ?? [];
+    buf.push({ sender, body });
+    let total = buf.reduce((n, e) => n + e.sender.length + e.body.length + 2, 0);
+    while (buf.length > 1 && total > BUFFER_MAX_CHARS) {
+      const dropped = buf.shift();
+      if (dropped) total -= dropped.sender.length + dropped.body.length + 2;
+    }
+    buffers.set(placeKey, buf);
+  };
+  // Peek renders the buffer WITHOUT clearing and snapshots exactly which entries it consumed; the commit
+  // (after the turn reaches the agent, which persists the prompt into the session) removes only those
+  // entries by identity. So a pre-agent failure leaves them intact, AND a message that arrives during
+  // the turn's attachment-download window (pushed to the same bucket, not in this prompt) survives for
+  // the next answered turn — a whole-bucket delete would lose it.
+  const bufferPeek = (placeKey: string): { text: string; consumed: BufferEntry[] } => {
+    const buf = buffers.get(placeKey) ?? [];
+    return { text: buf.map((e) => `${e.sender}: ${e.body}`).join("\n"), consumed: [...buf] };
+  };
+  const bufferCommit = (placeKey: string, consumed: BufferEntry[]): void => {
+    const buf = buffers.get(placeKey);
+    if (!buf) return;
+    const remaining = buf.filter((e) => !consumed.includes(e));
+    if (remaining.length === 0) buffers.delete(placeKey);
+    else buffers.set(placeKey, remaining);
   };
   let draftSeq = 0; // non-zero, per-turn draft ids (process-lived; the route handler is built once)
   return async (req) => {
@@ -482,9 +539,19 @@ export function telegramChannel(
     // lines are the operator's only signal. Concurrency: a per-session serial queue (FIFO) here; the
     // engine's per-session lease is the corruption floor beneath it.
     const m = pickMessage(update);
-    const r = m ? decide(update) : null;
-    if (m && r) {
-      const session = r.session ?? (m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`);
+    if (!m) return new Response(null, { status: 200 });
+    const placeKey = m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`;
+    const r = decide(update);
+    if (!r) {
+      // Not summoned: in a group, record the message so a later summon has the discussion (needs privacy
+      // off to be delivered here at all). Empty/service messages and non-group chats keep no buffer.
+      const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
+      const content = messageText(m);
+      if (isGroup && content) bufferPush(placeKey, fromLabel(m.from) ?? "someone", content);
+      return new Response(null, { status: 200 });
+    }
+    {
+      const session = r.session ?? placeKey;
       const chatId = r.chatId ?? m.chat.id;
       // Reply to the summoning message in groups (threads the answer under the asker); a 1:1 DM needs no
       // reply-quote. Only when the RESOLVED target is the message's own chat+thread: a route that
@@ -506,13 +573,18 @@ export function telegramChannel(
         const where = `chat=${chatId}${target.threadId !== undefined ? ` thread=${target.threadId}` : ""}`;
         enqueueTurn(session, async () => {
           // Run at DEQUEUE time (serialized), so the draft id, lifecycle log, and engine turn all reflect
-          // the actual execution order rather than arrival.
+          // the actual execution order rather than arrival. Fold the un-summoned discussion since the last
+          // answered turn into the prompt, then clear it — it now lives in this turn's durable session.
           draftSeq = (draftSeq % 1_000_000_000) + 1;
           const startedAt = Date.now();
           console.error(`[telegram] turn start: turn=${turn} session=${session} ${where}`);
+          const { text: recent, consumed } = bufferPeek(placeKey);
+          const prompt = recent ? `[recent group discussion:\n${recent}\n]\n\n${baseText}` : baseText;
           try {
             await streamReply(
-              invokeWithAttachments(agent, session, baseText, chatId, imageFileIds, fileIds, apiBaseUrl, botToken),
+              invokeWithAttachments(agent, session, prompt, chatId, imageFileIds, fileIds, apiBaseUrl, botToken, () =>
+                bufferCommit(placeKey, consumed),
+              ),
               apiBaseUrl,
               botToken,
               target,

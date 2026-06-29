@@ -119,12 +119,20 @@ export async function sendMessageDraft(
   if (!result.ok) throw new Error(`telegram sendMessageDraft failed: ${result.status} ${result.description}`.trim());
 }
 
-/** Resolve the bot's own @username (getMe) so default routing can recognise group @mentions. */
-export async function resolveBotUsername(api: string, botToken: string): Promise<string | undefined> {
+/** getMe: the bot's own @username (so default routing recognises group @mentions) and whether group
+ *  privacy mode is OFF (`can_read_all_group_messages`) — needed to receive the un-summoned group
+ *  messages that feed the context buffer. */
+export async function resolveBotInfo(
+  api: string,
+  botToken: string,
+): Promise<{ username?: string; canReadAllGroupMessages?: boolean }> {
   const res = await fetch(`${api}/bot${botToken}/getMe`);
-  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { username?: string } };
+  const data = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    result?: { username?: string; can_read_all_group_messages?: boolean };
+  };
   if (!res.ok || !data.ok) throw new Error(`getMe failed: ${res.status}`);
-  return data.result?.username;
+  return { username: data.result?.username, canReadAllGroupMessages: data.result?.can_read_all_group_messages };
 }
 
 function mimeFromPath(path: string): string {
