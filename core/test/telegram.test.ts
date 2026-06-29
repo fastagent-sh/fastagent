@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type TelegramUpdate, telegramChannel } from "../src/telegram.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
@@ -337,8 +340,51 @@ describe("telegram channel", () => {
     await flush();
     await flush();
     expect(invoked).toBe(false); // did not run the agent on input we failed to load
-    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toMatch(/could not load image/); // user told
+    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toMatch(/could not load attachment/); // user told
     expect(errors.some((e) => /turn failed/.test(e))).toBe(true); // operator log
+  });
+
+  it("downloads an inbound file to disk and appends its path to the prompt for the agent's tools", async () => {
+    const cwd0 = process.cwd();
+    const tmp = mkdtempSync(join(tmpdir(), "fa-tg-"));
+    process.chdir(tmp);
+    try {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (String(url).endsWith("/getFile"))
+          return new Response(JSON.stringify({ ok: true, result: { file_path: "documents/report.pdf", file_size: 5 } }), {
+            status: 200,
+          });
+        if (String(url).includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200 });
+        return new Response('{"ok":true}', { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      let received: Prompt | undefined;
+      const agent: Agent = {
+        async *invoke(_scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+          received = prompt;
+          yield { type: "completed" };
+        },
+      };
+      const fileOn = (u: TelegramUpdate) => {
+        const m = u.message;
+        return m ? [{ session: `${m.chat.id}`, text: "summarize this", chatId: m.chat.id, fileIds: ["d1"] }] : [];
+      };
+      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: fileOn, apiBaseUrl: API });
+      const docMsg: TelegramUpdate = {
+        update_id: 11,
+        message: { message_id: 4, document: { file_id: "d1", file_name: "report.pdf" }, chat: { id: 77, type: "private" } },
+      };
+      expect((await ch(tgRequest(docMsg))).status).toBe(200);
+      for (let i = 0; i < 100 && !received; i++) await new Promise((r) => setTimeout(r, 5)); // await the fs write
+      const dest = join(tmp, ".fastagent/telegram-files/77/report.pdf");
+      expect(existsSync(dest)).toBe(true); // downloaded to a local path
+      expect(received?.text).toContain("summarize this");
+      expect(received?.text).toMatch(/attached files/);
+      expect(received?.text).toContain(dest); // path handed to the agent for its tools
+    } finally {
+      process.chdir(cwd0);
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("retries a parse_mode reply as plain text when Telegram rejects the markup", async () => {
