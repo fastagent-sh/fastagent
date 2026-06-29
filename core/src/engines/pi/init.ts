@@ -198,6 +198,7 @@ const channel: ChannelModule = (agent) => ({
   "POST /telegram": telegramChannel(agent, {
     secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "", // missing → fails at startup (would accept forged updates)
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",       // used to send the agent's reply back to the chat
+    parseMode: "HTML",                                    // ask the model for Telegram HTML; channel falls back to Markdown/plain if its markup is off
     // Map a verified update to the intents the agent acts on (empty array = ignore). session per
     // (chat, thread) gives each conversation its own multi-turn memory; chatId is where the reply
     // goes. Auto-adapts: Threaded Mode supplies message_thread_id (own session + reply in-thread); a

@@ -5,4 +5,5 @@ export {
   type TelegramUpdate,
   type TelegramMessage,
   type TelegramIntent,
+  type TelegramFailure,
 } from "./channels/telegram.ts";

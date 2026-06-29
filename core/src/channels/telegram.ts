@@ -15,6 +15,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Agent, AgentEvent, ImageRef, Json } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
@@ -142,7 +143,55 @@ function tokenMatches(header: string, secret: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Persist a final reply. `message_thread_id` is dropped from the JSON when undefined (linear chat). */
+/** Telegram's hard text limit per message. */
+const TELEGRAM_MAX_TEXT = 4096;
+const PARSE_ERROR = /can't parse|entit|unsupported|unclosed|tag/i;
+
+/** One Bot API call, retrying on a 429 with the server's `retry_after` (a few attempts). */
+async function callBotApi(
+  api: string,
+  botToken: string,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<{ ok: true } | { ok: false; status: number; description: string }> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${api}/bot${botToken}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    if (res.ok) return { ok: true };
+    const data = (await res.json().catch(() => ({}))) as { description?: string; parameters?: { retry_after?: number } };
+    const retryAfter = data.parameters?.retry_after;
+    if (res.status === 429 && retryAfter !== undefined && attempt < 3) {
+      await sleep((retryAfter + 1) * 1000);
+      continue;
+    }
+    return { ok: false, status: res.status, description: data.description ?? "" };
+  }
+}
+
+/** Split text into ≤4096-char chunks (Telegram's limit), preferring newline boundaries. */
+function chunkText(text: string): string[] {
+  if (text.length <= TELEGRAM_MAX_TEXT) return [text];
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > TELEGRAM_MAX_TEXT) {
+    const nl = rest.lastIndexOf("\n", TELEGRAM_MAX_TEXT);
+    const cut = nl > 0 ? nl : TELEGRAM_MAX_TEXT;
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\n/, "");
+  }
+  if (rest !== "") chunks.push(rest);
+  return chunks;
+}
+
+/**
+ * Persist a final reply: split to Telegram's 4096-char limit, and for each chunk try the requested
+ * parse_mode, then Markdown, then plain — a formatting slip (the model's HTML/markdown not matching
+ * Telegram's parser) degrades gracefully instead of losing the message. `message_thread_id` is dropped
+ * from the JSON when undefined (linear chat).
+ */
 async function sendMessage(
   api: string,
   botToken: string,
@@ -150,43 +199,32 @@ async function sendMessage(
   body: string,
   parseMode?: TelegramChannelOptions["parseMode"],
 ): Promise<void> {
-  const post = (parse?: TelegramChannelOptions["parseMode"]): Promise<Response> =>
-    fetch(`${api}/bot${botToken}/sendMessage`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: t.chatId, message_thread_id: t.threadId, text: body, parse_mode: parse }),
-    });
-  let res = await post(parseMode);
-  if (res.ok) return;
-  let detail = await res.text().catch(() => "");
-  // A parse_mode reply with malformed markup is rejected ("can't parse entities …"); the model's content
-  // must not be lost to a formatting slip, so retry once as plain text.
-  if (parseMode && /can't parse|entit|unsupported.*tag|unclosed/i.test(detail)) {
-    res = await post(undefined);
-    if (res.ok) return;
-    detail = await res.text().catch(() => detail);
+  const modes: (TelegramChannelOptions["parseMode"] | undefined)[] =
+    parseMode === "HTML" ? ["HTML", "Markdown", undefined] : parseMode ? [parseMode, undefined] : [undefined];
+  for (const chunk of chunkText(body)) {
+    let result: Awaited<ReturnType<typeof callBotApi>> = { ok: false, status: 0, description: "" };
+    for (const mode of modes) {
+      result = await callBotApi(api, botToken, "sendMessage", {
+        chat_id: t.chatId,
+        message_thread_id: t.threadId,
+        text: chunk,
+        parse_mode: mode,
+      });
+      if (result.ok || !PARSE_ERROR.test(result.description)) break; // re-format only on a parse error
+    }
+    if (!result.ok) throw new Error(`telegram sendMessage failed: ${result.status} ${result.description}`.trim());
   }
-  throw new Error(`telegram sendMessage failed: ${res.status} ${detail.slice(0, 300)}`.trim());
 }
 
-/** Push an ephemeral draft (animated preview). Same draft_id across a turn animates the updates. */
-async function sendMessageDraft(
-  api: string,
-  botToken: string,
-  t: Target,
-  draftId: number,
-  body: string,
-): Promise<void> {
-  const res = await fetch(`${api}/bot${botToken}/sendMessageDraft`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: t.chatId, message_thread_id: t.threadId, draft_id: draftId, text: body }),
+/** Push an ephemeral draft (animated preview, capped at the text limit). Same draft_id animates updates. */
+async function sendMessageDraft(api: string, botToken: string, t: Target, draftId: number, body: string): Promise<void> {
+  const result = await callBotApi(api, botToken, "sendMessageDraft", {
+    chat_id: t.chatId,
+    message_thread_id: t.threadId,
+    draft_id: draftId,
+    text: body.slice(0, TELEGRAM_MAX_TEXT),
   });
-  if (!res.ok) {
-    throw new Error(
-      `telegram sendMessageDraft failed: ${res.status} ${(await res.text().catch(() => "")).slice(0, 300)}`.trim(),
-    );
-  }
+  if (!result.ok) throw new Error(`telegram sendMessageDraft failed: ${result.status} ${result.description}`.trim());
 }
 
 /** Download sanity cap (Telegram's own getFile limit); a larger file/image is rejected visibly. The
@@ -283,6 +321,10 @@ async function resolveImages(
  * its tools. A transport failure becomes a `failed` event — surfaced (user + log), never a silent drop;
  * the agent never runs on inputs the user sent but we failed to load.
  */
+/** Appended to the prompt (not the system prompt) when parseMode is HTML: ask the model for Telegram HTML. */
+const HTML_INSTRUCTION =
+  "\n\n(Format your reply in Telegram-supported HTML — <b> <i> <u> <s> <code> <pre> <a href> — not Markdown.)";
+
 async function* invokeWithAttachments(
   agent: Agent,
   session: string,
@@ -292,6 +334,7 @@ async function* invokeWithAttachments(
   fileIds: string[] | undefined,
   api: string,
   botToken: string,
+  parseMode?: TelegramChannelOptions["parseMode"],
 ): AsyncIterable<AgentEvent> {
   let images: ImageRef[] | undefined;
   let files: DownloadedFile[] | undefined;
@@ -305,7 +348,8 @@ async function* invokeWithAttachments(
   const manifest = files?.length
     ? `\n\n[attached files — read them with your tools:\n${files.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
     : "";
-  yield* agent.invoke({ session }, { text: text + manifest, images });
+  const format = parseMode === "HTML" ? HTML_INSTRUCTION : "";
+  yield* agent.invoke({ session }, { text: text + manifest + format, images });
 }
 
 /** The customer-facing default: neutral, no leaked internals; differentiate only on whether to retry. */
@@ -464,6 +508,7 @@ export function telegramChannel(
           intent.fileIds,
           apiBaseUrl,
           botToken,
+          parseMode,
         ),
         apiBaseUrl,
         botToken,

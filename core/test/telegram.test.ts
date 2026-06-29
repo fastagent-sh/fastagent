@@ -411,9 +411,22 @@ describe("telegram channel", () => {
     expect((await ch(tgRequest(MSG))).status).toBe(200);
     await flush();
     const sends = callsTo(fetchMock, "sendMessage");
-    expect(sends).toHaveLength(2); // first with parse_mode (rejected), then a plain-text retry
+    expect(sends).toHaveLength(3); // HTML rejected → Markdown rejected → plain
     expect(bodyOf(sends[0]).parse_mode).toBe("HTML");
-    expect(bodyOf(sends[1]).parse_mode).toBeUndefined();
+    expect(bodyOf(sends[1]).parse_mode).toBe("Markdown");
+    expect(bodyOf(sends[2]).parse_mode).toBeUndefined();
+  });
+
+  it("splits a reply longer than 4096 chars into multiple messages", async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("x".repeat(9000));
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", on: echoOn, apiBaseUrl: API });
+    expect((await ch(tgRequest(MSG))).status).toBe(200);
+    await flush();
+    const sends = callsTo(fetchMock, "sendMessage");
+    expect(sends.length).toBeGreaterThanOrEqual(3); // 9000 / 4096 → 3 chunks
+    for (const s of sends) expect((bodyOf(s).text as string).length).toBeLessThanOrEqual(4096);
   });
 
   it("a failing live draft is logged once (not swallowed) and the final reply still sends", async () => {
@@ -423,7 +436,7 @@ describe("telegram channel", () => {
     });
     const fetchMock = vi.fn(async (url: string) =>
       String(url).endsWith("/sendMessageDraft")
-        ? new Response("nope", { status: 400 })
+        ? new Response(JSON.stringify({ ok: false, description: "nope" }), { status: 400 })
         : new Response('{"ok":true}', { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
