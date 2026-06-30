@@ -9,7 +9,7 @@ import { cp, mkdir, rename, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
-import { type LoadedDefinition, loadAgentDefinition } from "../definition.ts";
+import { type LoadedDefinition, loadAgentDefinition } from "../engines/pi/definition.ts";
 
 /** Derive the destination skill name from a source ref: the last path segment, sans `#ref`. */
 function skillNameFromSource(source: string): string {

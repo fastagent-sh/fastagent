@@ -8,7 +8,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
 import { parseRouteKey, type Routes } from "../../host/node.ts";
-import { assertInsideWorkspace } from "./definition.ts";
+import { assertInsideWorkspace } from "../../workspace.ts";
 import { isModuleFile, loadModuleDir } from "./loader.ts";
 
 /** A `channels/<name>.ts` default export: receives the assembled agent, returns the routes it mounts. */

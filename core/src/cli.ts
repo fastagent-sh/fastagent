@@ -18,7 +18,7 @@ import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { runDevSupervisor } from "./dev-supervisor.ts";
 import { announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 import { discoverChannelFiles, loadChannels } from "./engines/pi/channel.ts";
-import { fastagentVersion } from "./engines/pi/version.ts";
+import { fastagentVersion } from "./version.ts";
 import {
   isValidPort,
   listModels,
@@ -30,7 +30,8 @@ import { formatModelsCommand } from "./cli-models.ts";
 import { FASTAGENT_AUTH_PATH } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
-import { loadAgentDefinition, loadRootIgnore } from "./engines/pi/definition.ts";
+import { loadAgentDefinition } from "./engines/pi/definition.ts";
+import { loadRootIgnore } from "./workspace.ts";
 import { runInvokeStream } from "./invoke-stream.ts";
 import { reportDefinitionWarnings, reportToolCollisions } from "./engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/workspace.ts";
@@ -43,9 +44,9 @@ import {
   channelExists,
   channelSetup,
   scaffoldChannel,
-} from "./engines/pi/scaffold/add-channel.ts";
-import { nextStepCd, scaffoldWorkspace } from "./engines/pi/scaffold/init.ts";
-import { vendorSkill } from "./engines/pi/scaffold/vendor-skill.ts";
+} from "./scaffold/add-channel.ts";
+import { nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
+import { vendorSkill } from "./scaffold/vendor-skill.ts";
 
 function usage(code: number): never {
   console.error(`usage:
