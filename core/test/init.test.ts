@@ -249,7 +249,12 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const src = await readFile(join(dir, "channels", "telegram.ts"), "utf8");
     expect(src).toContain('from "@kid7st/fastagent/telegram"'); // the adapter
     expect(src).toContain("POST /telegram");
-    expect(src).toContain("on:"); // the app glue stub
+    expect(src).toContain("telegramChannel(agent"); // the channel glue (route policy is optional)
+    expect(src).not.toContain("sendDocument"); // the channel file is the channel, NOT the send-tool (no misroute)
+    // the companion tool lands in tools/ by the bundle convention (so the agent can send files back)
+    const sendTool = await readFile(join(dir, "tools", "telegram-send.ts"), "utf8");
+    expect(sendTool).toContain('from "@kid7st/fastagent"');
+    expect(sendTool).toContain("sendDocument");
     // next steps carry this channel's env vars (with hints), not github's
     expect(out).toContain("TELEGRAM_BOT_TOKEN");
     expect(out).toContain("@BotFather");
@@ -265,6 +270,15 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     await cliInit(["add", "github"], dir);
     expect(await exists(join(dir, "channels", "github.ts"))).toBe(true);
     expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true);
+  });
+
+  it("never clobbers an author's companion tool when scaffolding the channel", async () => {
+    const dir = await readyWorkspace();
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await writeFile(join(dir, "tools", "telegram-send.ts"), "// mine\n"); // author already has this tool name
+    await cliInit(["add", "telegram"], dir);
+    expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true); // channel still scaffolded
+    expect(await readFile(join(dir, "tools", "telegram-send.ts"), "utf8")).toBe("// mine\n"); // tool untouched
   });
 
   it("refuses (writing nothing) when the workspace is not channel-ready, with an actionable message", async () => {
