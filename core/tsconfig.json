@@ -13,5 +13,8 @@
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test"],
+  // Scaffold payload: real template files copied verbatim into a new workspace. They import the
+  // published @kid7st/fastagent (not this source), so they are data here, not part of the build.
+  "exclude": ["src/engines/pi/scaffold/templates"]
 }

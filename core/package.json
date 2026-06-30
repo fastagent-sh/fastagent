@@ -62,7 +62,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src test",
     "format": "biome check --write src test",
-    "postbuild": "node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\""
+    "postbuild": "node -e \"const fs=require('node:fs'); fs.cpSync('src/engines/pi/scaffold/templates','dist/engines/pi/scaffold/templates',{recursive:true}); fs.chmodSync('dist/cli.js',0o755)\""
   },
   "dependencies": {
     "@clack/prompts": "^1.6.0",
