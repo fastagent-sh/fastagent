@@ -16,15 +16,15 @@ async function authPath(contents?: string): Promise<string> {
 
 describe("fastagentCredentialStore (read-write ~/.fastagent/auth.json; fail-visibly discipline)", () => {
   it("missing file → undefined, no warning (normal not-configured)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(await fastagentCredentialStore("/nonexistent/auth.json").read("anthropic")).toBeUndefined();
+    const warn = vi.fn();
+    expect(await fastagentCredentialStore("/nonexistent/auth.json", { warn }).read("anthropic")).toBeUndefined();
     expect(warn).not.toHaveBeenCalled();
   });
 
   it("corrupt JSON → undefined, but warns (diagnosable root cause)", async () => {
     const path = await authPath("{not valid json");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(await fastagentCredentialStore(path).read("anthropic")).toBeUndefined();
+    const warn = vi.fn();
+    expect(await fastagentCredentialStore(path, { warn }).read("anthropic")).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("corrupt auth file"));
   });
 

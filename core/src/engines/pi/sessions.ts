@@ -12,6 +12,7 @@
 import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
 import type { AgentMessage, Session } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { log } from "../../log.ts";
 
 /** What fastagent needs from a session backend: open-or-create by opaque id. */
 export interface PiSessionStore {
@@ -32,7 +33,7 @@ export interface PiSessionStore {
  * the next non-toolResult). tool-call ids are not unique across turns (a local model may restart ids
  * each response), so matching against the whole transcript could falsely settle a leaf call against an
  * earlier turn's identical id. Append-only logs can only repair a gap AT THE LEAF (last assistant
- * followed by nothing but its own results); an earlier gap is surfaced via console.warn rather than
+ * followed by nothing but its own results); an earlier gap is surfaced via log.warn rather than
  * "fixed" with an orphaned result that appending cannot place.
  *
  * The synthetic result splits its audiences: `content` (read by the model, may reach the end user)
@@ -70,7 +71,7 @@ async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
   });
 
   if (orphaned.length > 0) {
-    console.warn(
+    log.warn(
       `[fastagent] unmatched tool_use is not at the session leaf; leaving it unreconciled ` +
         `(an append-only log cannot repair a mid-history gap): toolCallIds=${orphaned.join(",")}`,
     );

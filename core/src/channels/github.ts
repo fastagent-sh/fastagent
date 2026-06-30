@@ -7,6 +7,7 @@ import { verify } from "@octokit/webhooks-methods";
 import type { Schema } from "@octokit/webhooks-types";
 import type { Agent } from "../agent.ts";
 import { collect } from "../collect.ts";
+import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
 
@@ -94,12 +95,12 @@ export function githubChannel(agent: Agent, { secret, on }: GithubChannelOptions
       // Per-turn correlation id (deliveryId is unique per webhook; the index disambiguates fan-out),
       // threaded through start/done/failed so a terminal line joins back to its start.
       const turn = `${event.deliveryId}#${i}`;
-      console.error(`[github] turn start: turn=${turn} session=${session} event=${label}`);
+      log.info(`[github] turn start: turn=${turn} session=${session} event=${label}`);
       const startedAt = Date.now();
       void collect(agent.invoke({ session }, { text })).then(
-        () => console.error(`[github] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`),
+        () => log.info(`[github] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`),
         (error) =>
-          console.error(
+          log.error(
             `[github] turn failed: turn=${turn} session=${session} (${Date.now() - startedAt}ms): ${String(error)}`,
           ),
       );

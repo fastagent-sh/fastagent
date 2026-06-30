@@ -6,6 +6,7 @@
  */
 import { spawn } from "node:child_process";
 import { watch as watchTree } from "chokidar";
+import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
@@ -56,13 +57,13 @@ export function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}
         process.exit(code ?? 1);
       } else {
         // A worker that HAD been serving stopped (broken edit or crash). Fixable; wait for the next save.
-        console.error(`[fastagent] dev stopped (worker exited: ${signal ?? code}) — save a change to retry`);
+        log.warn(`[fastagent] dev stopped (worker exited: ${signal ?? code}) — save a change to retry`);
       }
     });
   };
 
   const triggerReload = (): void => {
-    console.error(`[fastagent] change detected — restarting…`);
+    log.info(`[fastagent] change detected — restarting…`);
     if (worker) {
       reloadPending = true;
       worker.kill("SIGTERM"); // the exit handler respawns once the port is released
@@ -85,11 +86,9 @@ export function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}
     timer = setTimeout(triggerReload, 200);
   });
   watcher.on("error", (error) =>
-    console.error(
-      `[fastagent] warn: file watching error (${(error as Error).message}); some edits may need a manual restart`,
-    ),
+    log.warn(`[fastagent] file watching error (${(error as Error).message}); some edits may need a manual restart`),
   );
-  console.error(`[fastagent] watching for changes — edits restart the dev worker (--no-watch to disable)`);
+  log.info(`[fastagent] watching for changes — edits restart the dev worker (--no-watch to disable)`);
 
   const shutdown = (): never => {
     worker?.kill("SIGTERM");

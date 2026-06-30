@@ -201,7 +201,7 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
       timestamp: Date.now(),
     } as any);
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const reopened = await store.openOrCreate("mid-history"); // open -> reconcile
       const { messages } = await reopened.buildContext();
@@ -242,7 +242,7 @@ describe("crash-safety: reconcile interrupted tool calls on open", () => {
       timestamp: Date.now(),
     } as any);
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const reopened = await store.openOrCreate("mid-later-assistant"); // open -> reconcile
       const { messages } = await reopened.buildContext();

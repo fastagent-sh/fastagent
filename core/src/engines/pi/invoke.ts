@@ -15,6 +15,7 @@ import type { AgentHarnessEvent } from "@earendil-works/pi-agent-core";
 import { DEFAULT_COMPACTION_SETTINGS, calculateContextTokens, shouldCompact } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import type { Agent, AgentEvent, Json, Prompt, Scope } from "../../agent.ts";
+import { log } from "../../log.ts";
 import type { PiHarnessFactory } from "./harness.ts";
 
 // ── §1 Lease: single-writer concurrency floor ───────────────────────────────
@@ -238,7 +239,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
           try {
             await maybeCompact(harness, completed);
           } catch (error) {
-            console.warn(`[fastagent] auto-compaction failed during cleanup: ${String(error)}`);
+            log.warn(`[fastagent] auto-compaction failed during cleanup: ${String(error)}`);
           }
         }
         // Cleanup MUST NOT throw after the terminal was yielded — that would make an already-closed
@@ -247,12 +248,12 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         try {
           unsub();
         } catch (error) {
-          console.warn(`[fastagent] harness unsubscribe failed during cleanup: ${String(error)}`);
+          log.warn(`[fastagent] harness unsubscribe failed during cleanup: ${String(error)}`);
         }
         try {
           await harness.abort();
         } catch (error) {
-          console.warn(`[fastagent] harness abort failed during cleanup: ${String(error)}`);
+          log.warn(`[fastagent] harness abort failed during cleanup: ${String(error)}`);
         }
       }
     } finally {

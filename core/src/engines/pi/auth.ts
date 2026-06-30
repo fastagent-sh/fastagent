@@ -14,6 +14,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { log } from "../../log.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { FileAuthStorageBackend } from "@earendil-works/pi-coding-agent";
@@ -22,7 +23,7 @@ import { FileAuthStorageBackend } from "@earendil-works/pi-coding-agent";
 export const FASTAGENT_AUTH_PATH = join(homedir(), ".fastagent", "auth.json");
 
 export interface FastagentAuthOptions {
-  /** Sink for non-fatal auth anomalies (unreadable/corrupt file). Defaults to console.warn. */
+  /** Sink for non-fatal auth anomalies (unreadable/corrupt file). Defaults to the process logger (warn). */
   warn?: (message: string) => void;
 }
 
@@ -52,7 +53,7 @@ export function fastagentCredentialStore(
   authPath: string = FASTAGENT_AUTH_PATH,
   options: FastagentAuthOptions = {},
 ): CredentialStore {
-  const warn = options.warn ?? ((message: string) => console.warn(message));
+  const warn = options.warn ?? ((message: string) => log.warn(message));
   const backend = new FileAuthStorageBackend(authPath);
 
   return {

@@ -16,6 +16,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Agent, AgentEvent, ImageRef, Json } from "../agent.ts";
+import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import {
   type DownloadedFile,
@@ -261,9 +262,7 @@ async function streamReply(
           // visible — log once per turn so a never-rendering draft is diagnosable, not silent.
           if (!draftErrLogged) {
             draftErrLogged = true;
-            console.error(
-              `[telegram] live draft failed (preview may not render; final reply still sends): ${String(e)}`,
-            );
+            log.warn(`[telegram] live draft failed (preview may not render; final reply still sends): ${String(e)}`);
           }
         }
         if (dirty && !stopped) await sleep(DRAFT_THROTTLE_MS); // pace + coalesce a burst into one send
@@ -463,13 +462,13 @@ export function telegramChannel(
     (info) => {
       if (mentionName === undefined) mentionName = info.username;
       if (info.canReadAllGroupMessages === false) {
-        console.error(
+        log.warn(
           "[telegram] privacy mode is on: the bot only sees @mentions / replies / commands, so group " +
             "context (un-summoned messages) won't be captured. Disable it via @BotFather → /setprivacy.",
         );
       }
     },
-    (e) => console.error(`[telegram] getMe failed; @mention summon + privacy check skipped: ${String(e)}`),
+    (e) => log.warn(`[telegram] getMe failed; @mention summon + privacy check skipped: ${String(e)}`),
   );
   const decide = route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName }));
   // Per-session serial queue: model B answers a shared chat[:thread] with ONE turn at a time, so a
@@ -577,7 +576,7 @@ export function telegramChannel(
           // answered turn into the prompt, then clear it — it now lives in this turn's durable session.
           draftSeq = (draftSeq % 1_000_000_000) + 1;
           const startedAt = Date.now();
-          console.error(`[telegram] turn start: turn=${turn} session=${session} ${where}`);
+          log.info(`[telegram] turn start: turn=${turn} session=${session} ${where}`);
           const { text: recent, consumed } = bufferPeek(placeKey);
           const prompt = recent ? `[recent group discussion:\n${recent}\n]\n\n${baseText}` : baseText;
           try {
@@ -591,9 +590,9 @@ export function telegramChannel(
               draftSeq,
               formatError,
             );
-            console.error(`[telegram] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`);
+            log.info(`[telegram] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`);
           } catch (error) {
-            console.error(
+            log.error(
               `[telegram] turn failed: turn=${turn} session=${session} (${Date.now() - startedAt}ms): ${String(error)}`,
             );
           }

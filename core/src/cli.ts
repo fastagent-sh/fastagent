@@ -6,10 +6,11 @@
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { join, relative, resolve } from "node:path";
-import { autocomplete, isCancel, log, password, select, text as clackText } from "@clack/prompts";
+import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
 import type { Agent } from "./agent.ts";
 import { logAgentLoop } from "./observe.ts";
+import { log, setLogLevel } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
@@ -386,7 +387,7 @@ function terminalLoginIO(): LoginIO {
         : await clackText({ message, signal: opts?.signal });
       return isCancel(r) ? undefined : (r as string);
     },
-    note: (message) => log.info(message),
+    note: (message) => clackLog.info(message),
     openUrl: openBrowser,
   };
 }
@@ -420,12 +421,12 @@ function parsePort(value: string | undefined, source: string): number | undefine
 async function reportAuth(modelSpec: string): Promise<void> {
   const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
   const source = await probeAuthSource(createPiModels(), modelSpec);
-  console.error(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`}`);
+  log.info(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`}`);
   if (source === undefined) {
     // Lead with `fastagent login`: the default model (openai-codex) is OAuth-only, and the
     // provider-specific env var name is not exported, so keep the env path generic.
-    console.error(
-      `[fastagent] warn: no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
+    log.warn(
+      `[fastagent] no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
     );
   }
 }
@@ -434,9 +435,9 @@ type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;
 
 /** The agents/skills/tools/collisions report lines. */
 function reportAgentsSkillsTools(a: Assembled): void {
-  console.error(`[fastagent] agents: ${a.definition.instructions ? "AGENTS.md" : "(none)"}`);
-  console.error(`[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
-  if (a.toolNames.length > 0) console.error(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
+  log.info(`[fastagent] agents: ${a.definition.instructions ? "AGENTS.md" : "(none)"}`);
+  log.info(`[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
+  if (a.toolNames.length > 0) log.info(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
   reportToolCollisions(a.toolCollisions);
   reportDefinitionWarnings(a.definition.collisions, a.definition.diagnostics);
 }
@@ -447,6 +448,7 @@ function reportAgentsSkillsTools(a: Assembled): void {
  * is always the latest code, including modules a tool/config imports.
  */
 async function runDev(): Promise<void> {
+  setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   if (process.env.FASTAGENT_DEV_WORKER === "1" || values["no-watch"]) {
     await serveOnce();
     return;
@@ -493,17 +495,19 @@ async function serveOnce(): Promise<void> {
   installProxyFetch();
 
   const a = await createPiAgentFromWorkspace(dir, { model: values.model }).catch(failStartup);
-  console.error(`[fastagent] dir:    ${a.definition.dir}`);
-  console.error(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
-  console.error(`[fastagent] model:  ${a.modelSpec}`);
+  log.info(`[fastagent] dir:    ${a.definition.dir}`);
+  log.info(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
+  log.info(`[fastagent] model:  ${a.modelSpec}`);
   await reportAuth(a.modelSpec);
   reportAgentsSkillsTools(a);
-  // dev only: trace each turn's agent loop (tool calls + reply) to this log, for any channel.
+  // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
+  // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const routes = await routesFor(dir, logAgentLoop(a.agent)).catch(failStartup);
   serve(routes, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.definition.dir, p));
 }
 
 async function runStart(): Promise<void> {
+  setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
   const portFlag = parsePort(values.port, "--port");
   loadDotEnv(dir);
   installProxyFetch();
@@ -513,24 +517,25 @@ async function runStart(): Promise<void> {
   const { agent, definition, config, modelSpec, sessionsDir, toolNames, toolCollisions } =
     await createPiAgentFromWorkspace(dir, { model: values.model, sessionsDir: sessionsDirOverride }).catch(failStartup);
 
-  console.error(`[fastagent] start:  ${dir}`);
-  console.error(`[fastagent] model:  ${modelSpec}`);
+  log.info(`[fastagent] start:  ${dir}`);
+  log.info(`[fastagent] model:  ${modelSpec}`);
   await reportAuth(modelSpec);
-  console.error(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
-  console.error(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
-  if (toolNames.length > 0) console.error(`[fastagent] tools:  ${toolNames.join(", ")}`);
+  log.info(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
+  log.info(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
+  if (toolNames.length > 0) log.info(`[fastagent] tools:  ${toolNames.join(", ")}`);
   reportToolCollisions(toolCollisions);
-  console.error(`[fastagent] sessions: ${sessionsDir}`);
+  log.info(`[fastagent] sessions: ${sessionsDir}`);
   // Sessions default under the definition dir, which a redeploy may replace wholesale.
   if (sessionsDirOverride === undefined) {
-    console.error(
+    log.info(
       `[fastagent] note: sessions live under the definition dir; set FASTAGENT_SESSIONS_DIR to a ` +
         `persistent volume so a redeploy that replaces the dir does not wipe conversations.`,
     );
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
-  const routes = await routesFor(dir, agent).catch(failStartup);
+  // Same debug turn trace as dev; gated out here by the info level (see serveOnce).
+  const routes = await routesFor(dir, logAgentLoop(agent)).catch(failStartup);
   serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787, (p) =>
     maybeTunnel(dir, p),
   );
@@ -564,8 +569,8 @@ function serve(routes: Routes, port: number, onListening?: (boundPort: number) =
   serveNode(router(routes), { port }).listening.then(
     (boundPort) => {
       process.send?.({ type: "ready", port: boundPort }); // tell the dev supervisor we bound + on which port
-      console.error(`[fastagent] http channel on :${boundPort}`);
-      console.error(`[fastagent] routes: ${Object.keys(routes).join(", ") || "(none)"}`);
+      log.info(`[fastagent] http channel on :${boundPort}`);
+      log.info(`[fastagent] routes: ${Object.keys(routes).join(", ") || "(none)"}`);
       onListening?.(boundPort);
     },
     (error: NodeJS.ErrnoException) => {

@@ -11,6 +11,7 @@
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Agent } from "../agent.ts";
+import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { text, textHeaders } from "./respond.ts";
 
@@ -111,7 +112,7 @@ async function pump(
   } catch (error) {
     // Log server-side (some channels' only failure sink), but return a generic body — don't leak the
     // internal message to the client.
-    console.error(`[host] request handler failed: ${String(error)}`);
+    log.error(`[host] request handler failed: ${String(error)}`);
     if (!res.headersSent) res.writeHead(500, textHeaders);
     res.end("internal error\n");
     return;

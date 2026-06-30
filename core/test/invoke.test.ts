@@ -168,7 +168,7 @@ describe("invoke fan-in", () => {
     });
 
     // iteration must not throw, and the tail is still completed
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const events = await drain(agent.invoke({ session: "sg" }, { text: "hi" }));
       expect(events.at(-1)).toEqual({ type: "completed" });
@@ -441,7 +441,7 @@ describe("invoke: auto-compaction", () => {
     const compact = vi.fn(async () => {
       throw new Error("summary failed");
     });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     const agent = compactingAgent({ contextWindow: 1000, usage: usage(999_999), compact });
     const events = await drain(agent.invoke({ session: "s" }, { text: "hi" }));
     expect(events.at(-1)).toEqual({ type: "completed" }); // turn still completed
