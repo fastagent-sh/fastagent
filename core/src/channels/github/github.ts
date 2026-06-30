@@ -5,11 +5,11 @@
  */
 import { verify } from "@octokit/webhooks-methods";
 import type { Schema } from "@octokit/webhooks-types";
-import type { Agent } from "../agent.ts";
-import { collect } from "../collect.ts";
-import { log } from "../log.ts";
-import { readBodyCapped } from "./body.ts";
-import { text } from "./respond.ts";
+import type { Agent } from "../../agent.ts";
+import { collect } from "../../collect.ts";
+import { log } from "../../log.ts";
+import { readBodyCapped } from "../body.ts";
+import { text } from "../respond.ts";
 
 /** Raw body cap before verification — GitHub caps webhook payloads at 25 MB; reject larger early. */
 const MAX_WEBHOOK_BYTES = 25 << 20;

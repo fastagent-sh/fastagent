@@ -15,9 +15,9 @@
  */
 import { timingSafeEqual } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Agent, AgentEvent, ImageRef, Json } from "../agent.ts";
-import { log } from "../log.ts";
-import { readBodyCapped } from "./body.ts";
+import type { Agent, AgentEvent, ImageRef, Json } from "../../agent.ts";
+import { log } from "../../log.ts";
+import { readBodyCapped } from "../body.ts";
 import {
   type DownloadedFile,
   type Target,
@@ -27,7 +27,7 @@ import {
   sendMessage,
   sendMessageDraft,
 } from "./telegram-api.ts";
-import { text } from "./respond.ts";
+import { text } from "../respond.ts";
 
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
