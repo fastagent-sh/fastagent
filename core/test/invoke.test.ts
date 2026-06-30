@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentHarness, InMemorySessionRepo, type AgentTool } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, fauxThinking, fauxToolCall, Type, type FauxResponseStep } from "@earendil-works/pi-ai";
+import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
 import { inMemorySessionStore, inProcessLease, type AgentEvent } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
-import { piHarnessFactory } from "../src/engines/pi/harness.ts";
+import { type PiHarnessFactory, piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 
 /** An echo tool for the tool-call path. */
@@ -356,5 +357,95 @@ describe("inProcessLease (fail-fast single writer)", () => {
     // calling the stale release must not free r2's lease
     r();
     expect(lease.tryAcquire("s")).toBeNull(); // r2 still holds it
+  });
+});
+
+describe("invoke: auto-compaction", () => {
+  const usage = (input: number): Usage => ({
+    input,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+
+  /** An agent over a fake harness: prompt resolves a completed message with the given usage; getModel
+   *  reports the contextWindow; compact is a spy. (No real model — isolates the compaction decision.) */
+  function compactingAgent(opts: {
+    contextWindow: number;
+    usage: Usage;
+    compact: () => Promise<unknown>;
+    stopReason?: StopReason;
+  }) {
+    const message = {
+      role: "assistant",
+      content: [],
+      usage: opts.usage,
+      stopReason: opts.stopReason ?? "stop",
+    } as unknown as AssistantMessage;
+    const harness = {
+      subscribe: () => () => {},
+      prompt: async () => message,
+      getModel: () => ({ contextWindow: opts.contextWindow }),
+      compact: opts.compact,
+      abort: async () => ({}),
+    };
+    return createPiAgentFromHarness({ harnessFactory: (async () => harness) as unknown as PiHarnessFactory });
+  }
+
+  it("compacts after a completed turn when the context is over the threshold", async () => {
+    const compact = vi.fn(async () => ({}));
+    const agent = compactingAgent({ contextWindow: 1000, usage: usage(999_999), compact });
+    const events = await drain(agent.invoke({ session: "s" }, { text: "hi" }));
+    expect(events.at(-1)).toEqual({ type: "completed" });
+    expect(compact).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not compact when the context is under the threshold", async () => {
+    const compact = vi.fn(async () => ({}));
+    const agent = compactingAgent({ contextWindow: 999_999, usage: usage(10), compact });
+    await drain(agent.invoke({ session: "s" }, { text: "hi" }));
+    expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("does not compact when the turn fails (only a completed terminal triggers it)", async () => {
+    const compact = vi.fn(async () => ({}));
+    const agent = compactingAgent({ contextWindow: 1000, usage: usage(999_999), compact, stopReason: "error" });
+    const events = await drain(agent.invoke({ session: "s" }, { text: "hi" }));
+    expect(events.at(-1)?.type).toBe("failed"); // the turn failed
+    expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("holds the session lease through compaction (a concurrent same-session turn is busy until it finishes)", async () => {
+    let releaseCompact = (): void => {};
+    const compactGate = new Promise<void>((r) => {
+      releaseCompact = r;
+    });
+    const compact = vi.fn(async () => {
+      await compactGate; // hold the turn inside compaction
+    });
+    const agent = compactingAgent({ contextWindow: 1000, usage: usage(999_999), compact });
+    const turn1 = drain(agent.invoke({ session: "s" }, { text: "hi" }));
+    for (let k = 0; k < 8; k++) await new Promise((r) => setImmediate(r)); // let turn1 reach compaction
+    expect(compact).toHaveBeenCalledTimes(1); // turn1 is inside compaction — the lease is still held
+
+    const events2 = await drain(agent.invoke({ session: "s" }, { text: "again" }));
+    expect(events2.at(-1)).toMatchObject({ type: "failed", retryable: true }); // busy until compaction frees the lease
+
+    releaseCompact();
+    await turn1;
+  });
+
+  it("a compaction failure does not break the turn (it still completes)", async () => {
+    const compact = vi.fn(async () => {
+      throw new Error("summary failed");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = compactingAgent({ contextWindow: 1000, usage: usage(999_999), compact });
+    const events = await drain(agent.invoke({ session: "s" }, { text: "hi" }));
+    expect(events.at(-1)).toEqual({ type: "completed" }); // turn still completed
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/auto-compaction failed/));
   });
 });
