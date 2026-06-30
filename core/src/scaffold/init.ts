@@ -13,7 +13,7 @@
  */
 import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { loadRootIgnore } from "../definition.ts";
+import { loadRootIgnore } from "../workspace.ts";
 import {
   CONFIG_MJS,
   ENV_EXAMPLE,

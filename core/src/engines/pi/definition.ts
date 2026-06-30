@@ -10,35 +10,11 @@
  * loudly at startup), while non-fatal findings (bad skill files, name collisions) are returned as
  * data for the caller to surface.
  */
-import { readFile, realpath, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
-import ignore, { type Ignore } from "ignore";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-
-/**
- * Refuse a workspace subdir (`channels/`, …) that resolves OUTSIDE the workspace via a symlink: an
- * escaping subdir puts part of the agent outside its own directory (a deploy that copies the dir
- * would miss it, and a write through it lands outside). An in-workspace symlink is fine; a missing
- * subdir is fine. Both ends are realpath'd so a symlinked root (/tmp → /private/tmp) is not a false escape.
- */
-export async function assertInsideWorkspace(workspaceDir: string, name: string): Promise<void> {
-  const target = join(workspaceDir, name);
-  const real = await realpath(target).catch((e: NodeJS.ErrnoException) => {
-    if (e.code === "ENOENT" || e.code === "not_found") return undefined;
-    throw e;
-  });
-  if (real === undefined) return;
-  const root = await realpath(workspaceDir).catch(() => resolve(workspaceDir));
-  const rel = relative(root, real);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-    throw new Error(
-      `${target} resolves outside the workspace (${real}) — it must live inside the definition directory; ` +
-        `use a real directory or a symlink that stays within it`,
-    );
-  }
-}
 
 /** A same-name skill collision (the discarded side). Surfaced, never swallowed. */
 export interface SkillCollision {
@@ -110,29 +86,4 @@ export async function ensureStateDirSelfIgnored(stateDir: string): Promise<void>
   await writeFile(join(stateDir, ".gitignore"), "*\n", { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== "EEXIST") throw e;
   });
-}
-
-/**
- * Load the root's exclude rules into ONE flat matcher: `.gitignore` then `.fastagentignore` (fa last
- * → authoritative on conflicts). Deliberately FLAT — only the ROOT files, not nested or ancestor
- * .gitignore; for finer control put rules in the root `.fastagentignore`. The `ignore` library
- * handles git's per-file pattern syntax. An unreadable file fails visibly.
- *
- * Exported (module-internal) so commands can ask whether a path is ignored — e.g. whether `.env`
- * would ship before advising where to keep a secret.
- */
-export async function loadRootIgnore(dir: string): Promise<Ignore | undefined> {
-  let rules = "";
-  for (const name of [".gitignore", ".fastagentignore"]) {
-    try {
-      rules += `\n${await readFile(join(dir, name), "utf8")}`;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw new Error(`cannot read ${join(dir, name)}: ${(error as Error).message}`);
-      }
-    }
-  }
-  // ignorecase:false — the library defaults to case-INSENSITIVE, which would make a rule `README.md`
-  // also drop an authored `readme.md`. Match git on a case-sensitive filesystem, reproducibly.
-  return rules.trim() === "" ? undefined : ignore({ ignorecase: false }).add(rules);
 }
