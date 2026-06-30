@@ -5,8 +5,10 @@
  * is a JSON POST, outbound is a `fetch` to the Bot API. The developer writes only `route` (policy); the
  * channel owns transport + format + attachments.
  *
- * Live streaming: tool calls + partial text stream into an ephemeral draft (sendMessageDraft, a 30s
- * animated preview); the final text is persisted with sendMessage. Threaded Mode (topics in private
+ * Live streaming: a single "💭 Thinking…" message is sent once, then editMessageText'd in place with the
+ * latest tool calls + partial text (PLAIN — a partial answer may carry unbalanced HTML); on completion
+ * the same message is edited into the final answer as HTML. One message, works in groups and private
+ * (unlike sendMessageDraft, which is private/forum-topic only). Threaded Mode (topics in private
  * chats, a @BotFather toggle) is auto-adapted: an update carrying message_thread_id replies into that
  * thread; without one the chat is linear. Same code, both modes.
  *
@@ -14,7 +16,6 @@
  * kit: readBodyCapped / text), so it is exactly what a third-party `fastagent-channel-*` package would write.
  */
 import { timingSafeEqual } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 import type { Agent, AgentEvent, ImageRef, Json } from "../../agent.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
@@ -24,8 +25,10 @@ import {
   resolveBotInfo,
   resolveFiles,
   resolveImages,
+  chunkText,
+  deleteMessage,
+  editMessageText,
   sendMessage,
-  sendMessageDraft,
 } from "./telegram-api.ts";
 import { text } from "../respond.ts";
 
@@ -43,11 +46,9 @@ interface BufferEntry {
   body: string;
 }
 
-/** How often (ms) to push a streamed draft update; tool events flush immediately for snappy feedback. */
-const DRAFT_THROTTLE_MS = 800;
-
-/** Re-push the draft at least this often, under Telegram's ~30s draft expiry, so a long step keeps the preview alive. */
-const DRAFT_KEEPALIVE_MS = 20_000;
+/** How often (ms) to edit the live-preview message; tool events still flush on the next loop. Edits to
+ *  one message are rate-limited tighter than sends, so pace them ~1.5s (vs every token). */
+const EDIT_THROTTLE_MS = 1500;
 
 /** Max length of a tool's arg preview in the live view. */
 const TOOL_ARG_MAX = 48;
@@ -200,18 +201,55 @@ function defaultErrorMessage(failed: TelegramFailure): string {
 }
 
 /**
- * Consume one turn's event stream into a Telegram chat, live. Tool calls + partial text stream into an
- * ephemeral draft; the final text is persisted with sendMessage (the draft is a ~30s preview, so the
- * real message MUST be sent to keep it, and a keepalive re-pushes it so a long step does not blank it).
- * Draft updates are best-effort: they are only a preview, and the authoritative sendMessage surfaces
- * any real failure (bad token, etc.) — a client that does not support drafts degrades to "final only".
+ * The terminal-write POLICY: resolve the single preview message into `text`. streamReply owns the
+ * preview lifecycle, so this composition of transport primitives lives here, not in telegram-api. One
+ * message → edit the preview in place; if the edit fails (preview gone, or a persistent 429/5xx) fall
+ * back to deleting the placeholder and sending fresh, so no "Thinking…" is left pinned above the answer.
+ * Many messages → delete the preview and send the whole answer as consecutive fresh messages (editing
+ * would pin the first chunk where an active group has scrolled past). No preview → fresh send. EMPTY text
+ * = "say nothing" → just delete the preview.
+ */
+async function finalize(
+  api: string,
+  botToken: string,
+  target: Target,
+  messageId: number | undefined,
+  text: string,
+  opts: { html?: boolean } = {},
+): Promise<void> {
+  const html = opts.html ?? true;
+  if (text.trim() === "") {
+    if (messageId !== undefined) await deleteMessage(api, botToken, target, messageId);
+    return;
+  }
+  if (messageId !== undefined) {
+    if (chunkText(text).length === 1) {
+      try {
+        await editMessageText(api, botToken, target, messageId, text, { html });
+        return;
+      } catch {
+        // Edit failed — the preview may be gone, or still there (429 retries exhausted / 5xx). Fall through
+        // to delete + fresh send below so a still-present "Thinking…" is not left pinned above the answer.
+      }
+    }
+    // Many chunks, OR a failed single-chunk edit: remove the placeholder best-effort (a lingering one above
+    // the answer is worse than the extra call), then send the whole reply as fresh, consecutive messages.
+    await deleteMessage(api, botToken, target, messageId).catch(() => {});
+  }
+  await sendMessage(api, botToken, target, text, { html });
+}
+
+/**
+ * Consume one turn's event stream into a Telegram chat, live. A single preview message is sent once and
+ * editMessageText'd in place with the latest tool calls + partial text (PLAIN); on completion it is
+ * edited into the final answer (HTML). Preview edits are best-effort (logged once if they fail); the
+ * final write is authoritative and surfaces a real failure (bad token, etc.).
  */
 async function streamReply(
   events: AsyncIterable<AgentEvent>,
   api: string,
   botToken: string,
   target: Target,
-  draftId: number,
   formatError: (failed: TelegramFailure) => string | undefined,
 ): Promise<void> {
   const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
@@ -233,22 +271,46 @@ async function streamReply(
       .filter((s) => s.trim() !== "")
       .join("\n\n")
       .trim();
-    // Before the first reasoning/tool/text arrives the draft is empty — Telegram renders an empty draft
-    // as a bare "…", so show an explicit placeholder instead (this is also what the keepalive re-pushes).
+    // Before any reasoning/tool/text arrives, show an explicit placeholder rather than an empty edit.
     return v === "" ? "💭 Thinking…" : v;
   };
+
+  // The live preview is ONE real message: sent once (capturing its id + threading under the asker),
+  // then edited in place. messageId/lastSent are shared with the final write on completion.
+  let messageId: number | undefined;
+  let previewSent = false; // a placeholder send was attempted — guards against re-sending when no id came back
+  let finalized = false; // a terminal write (completed/failed) ran — the finally skips its orphan cleanup
+  let lastSent = "";
+  const flushPreview = async (): Promise<void> => {
+    const text = view();
+    if (text === lastSent) return; // skip an unchanged edit (Telegram rejects "message is not modified")
+    lastSent = text;
+    if (messageId !== undefined) {
+      await editMessageText(api, botToken, target, messageId, text); // plain — a partial answer may carry unbalanced HTML
+      return;
+    }
+    // No preview message yet. Send the placeholder ONCE; never re-send (that would spam a new message per
+    // frame). If Telegram returns ok WITHOUT a message_id (proxy / odd API base / unparseable body) we
+    // cannot edit — fail visibly and stop previewing (the final write still lands via finalize).
+    if (previewSent) return;
+    previewSent = true;
+    messageId = await sendMessage(api, botToken, target, text, { html: false });
+    if (messageId === undefined)
+      throw new Error("telegram sendMessage returned ok without a message_id — live preview disabled for this turn");
+  };
+
   // ── Live-preview pump: a SINGLE serialized writer. ──────────────────────────────────────────
-  // Events mutate state (thinking / tools / answer) and mark the preview dirty; the pump sends the
-  // LATEST view() with at most ONE sendMessageDraft in flight, paced by a throttle between sends, plus a
-  // trailing send after the final change. One-in-flight is the whole point: concurrent draft sends (an
-  // event update racing the keepalive, or a slow send overtaken by the next) can reach Telegram out of
-  // order — an older frame landing over a newer one is the "shows 3-4 steps, blanks, re-fills" flicker.
-  // Serializing through one writer keeps frames strictly monotonic; the keepalive marks dirty through
-  // the same writer, so it cannot race.
+  // Events mutate state (thinking / tools / answer) and mark the preview dirty; the pump edits the
+  // message to the LATEST view() with at most ONE edit in flight, paced by a throttle. One-in-flight is
+  // the whole point: concurrent edits can reach Telegram out of order — an older frame landing over a
+  // newer one is the "shows 3-4 steps, blanks, re-fills" flicker. Serializing keeps frames monotonic.
+  // (No keepalive: a real message does not expire, unlike the old 30s draft.)
   let dirty = false;
   let pumping = false;
   let stopped = false;
-  let draftErrLogged = false;
+  let previewErrLogged = false;
+  let pumpDone: Promise<void> | undefined;
+  let wakeThrottle: (() => void) | undefined; // set while the pump is mid-throttle; finish() cuts it short
 
   const runPump = async (): Promise<void> => {
     pumping = true;
@@ -256,38 +318,47 @@ async function streamReply(
       while (dirty && !stopped) {
         dirty = false;
         try {
-          await sendMessageDraft(api, botToken, target, draftId, view());
+          await flushPreview();
         } catch (e) {
-          // Best-effort preview (the final sendMessage is authoritative), but a failing draft must be
-          // visible — log once per turn so a never-rendering draft is diagnosable, not silent.
-          if (!draftErrLogged) {
-            draftErrLogged = true;
-            log.warn(`[telegram] live draft failed (preview may not render; final reply still sends): ${String(e)}`);
+          // Best-effort preview (the final write is authoritative), but a failing edit must be visible —
+          // log once per turn so a never-rendering preview is diagnosable, not silent.
+          if (!previewErrLogged) {
+            previewErrLogged = true;
+            log.warn(`[telegram] live preview failed (final reply still sends): ${String(e)}`);
           }
         }
-        if (dirty && !stopped) await sleep(DRAFT_THROTTLE_MS); // pace + coalesce a burst into one send
+        if (dirty && !stopped) {
+          // Pace + coalesce a burst into one edit. Interruptible: finish() cuts this short so the final
+          // write is not delayed by up to EDIT_THROTTLE_MS after the turn completes.
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, EDIT_THROTTLE_MS);
+            wakeThrottle = () => {
+              clearTimeout(t);
+              resolve();
+            };
+          });
+          wakeThrottle = undefined;
+        }
       }
     } finally {
       pumping = false;
     }
   };
-  // Mark the preview dirty and ensure the single writer is running (a send already in flight picks up
+  // Mark the preview dirty and ensure the single writer is running (an edit already in flight picks up
   // the new state on its next loop). Synchronous — callers never await a network write.
   const touch = (): void => {
     dirty = true;
-    if (!pumping) void runPump();
+    if (!pumping) pumpDone = runPump();
   };
 
-  touch(); // show the "💭 Thinking…" placeholder immediately
+  touch(); // send the "💭 Thinking…" placeholder immediately
 
-  // A draft is a ~30s ephemeral preview; a long event-less step would let it lapse, so re-mark dirty on
-  // a heartbeat to re-push the current view — through the same single writer, so no race.
-  const keepalive = setInterval(touch, DRAFT_KEEPALIVE_MS);
-  // Stop the writer (no draft frame after the authoritative final message); an in-flight send may land,
-  // but the pump starts no new one once stopped.
-  const finish = (): void => {
+  // Stop the pump and await any in-flight edit, so the final write below is strictly the LAST one to the
+  // preview message (no stale frame landing after the answer).
+  const finish = async (): Promise<void> => {
     stopped = true;
-    clearInterval(keepalive);
+    wakeThrottle?.(); // cut an in-flight throttle so the final write is not delayed up to EDIT_THROTTLE_MS
+    await pumpDone?.catch(() => {});
   };
 
   try {
@@ -309,21 +380,45 @@ async function streamReply(
         if (t) t.status = e.isError ? "error" : "ok";
         touch();
       } else if (e.type === "completed") {
-        finish();
-        if (answer.trim() !== "") await sendMessage(api, botToken, target, answer);
+        await finish();
+        // Edit the preview into the final answer (HTML, plain fallback); the persisted message is the
+        // answer alone — the process (thinking/tools) was preview-only. Mark finalized BEFORE delivering:
+        // the terminal was reached, so a delivery failure here is a plain failure, not an "abnormal exit"
+        // (which would wrongly fire the finally's neutral-notice fallback = double delivery + wrong text).
+        finalized = true;
+        await finalize(api, botToken, target, messageId, answer.trim() !== "" ? answer : "(no reply)");
         return;
       } else if (e.type === "failed") {
-        finish();
+        await finish();
         // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
-        // log (dev-facing — the full details, via the throw below + the handler's catch).
-        const msg = formatError({ details: e.details, retryable: e.retryable });
-        if (msg && msg.trim() !== "") await sendMessage(api, botToken, target, msg).catch(() => {});
+        // log (dev-facing — the full details, via the throw below + the handler's catch). Same terminal
+        // write as completed: edit → fresh-send if the preview is gone; an empty notice deletes the
+        // placeholder (suppress = no residue). HTML like the answer — symmetric, and finalize already
+        // falls back to plain if a custom onError returns markup Telegram rejects. Best-effort — we throw
+        // below regardless.
+        finalized = true;
+        {
+          const msg = formatError({ details: e.details, retryable: e.retryable }) ?? "";
+          await finalize(api, botToken, target, messageId, msg).catch(() => {});
+        }
         throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
       }
     }
     throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
   } finally {
-    finish();
+    await finish();
+    // Abnormal exit (stream ended without a terminal, the generator threw, or the consumer abandoned): no
+    // terminal write ran. Show the SAME neutral notice a `failed` event would — the preview may show real
+    // partial work, so don't delete it silently, and don't leave the user in silence. A suppressing
+    // onError still collapses to a delete (finalize on empty text).
+    if (!finalized) {
+      // retryable:false — an abnormal end (no terminal / a throw) is of UNKNOWN retryability, so use the
+      // neutral "something went wrong" default rather than promising "try again" that may not help.
+      const notice = formatError({ details: "the turn ended without completing", retryable: false }) ?? "";
+      // finalize handles messageId===undefined (no preview reached) with a fresh send — so the user is
+      // told even when the turn died before any message.
+      await finalize(api, botToken, target, messageId, notice).catch(() => {});
+    }
   }
 }
 
@@ -517,7 +612,7 @@ export function telegramChannel(
     if (remaining.length === 0) buffers.delete(placeKey);
     else buffers.set(placeKey, remaining);
   };
-  let draftSeq = 0; // non-zero, per-turn draft ids (process-lived; the route handler is built once)
+
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
     // Fail closed: a missing/wrong secret token is 401, never routed.
@@ -571,10 +666,9 @@ export function telegramChannel(
         const turn = `${update.update_id}`;
         const where = `chat=${chatId}${target.threadId !== undefined ? ` thread=${target.threadId}` : ""}`;
         enqueueTurn(session, async () => {
-          // Run at DEQUEUE time (serialized), so the draft id, lifecycle log, and engine turn all reflect
-          // the actual execution order rather than arrival. Fold the un-summoned discussion since the last
+          // Run at DEQUEUE time (serialized), so the lifecycle log and engine turn all reflect the actual
+          // execution order rather than arrival. Fold the un-summoned discussion since the last
           // answered turn into the prompt, then clear it — it now lives in this turn's durable session.
-          draftSeq = (draftSeq % 1_000_000_000) + 1;
           const startedAt = Date.now();
           log.info(`[telegram] turn start: turn=${turn} session=${session} ${where}`);
           const { text: recent, consumed } = bufferPeek(placeKey);
@@ -587,7 +681,6 @@ export function telegramChannel(
               apiBaseUrl,
               botToken,
               target,
-              draftSeq,
               formatError,
             );
             log.info(`[telegram] turn done: turn=${turn} session=${session} (${Date.now() - startedAt}ms)`);

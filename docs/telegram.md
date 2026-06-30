@@ -7,7 +7,7 @@ status: current
 
 The Telegram channel turns a Telegram Bot API webhook update into an agent turn and sends the agent's reply back to the chat.
 
-Unlike the GitHub channel, Telegram is request/reply: the channel holds the bot token, streams a live draft while the turn runs, and persists the final answer with `sendMessage`.
+Unlike the GitHub channel, Telegram is request/reply: the channel holds the bot token, streams a live preview message while the turn runs, and edits it into the final answer.
 
 ## Add the channel
 
@@ -146,14 +146,13 @@ Same-session concurrency is still controlled by the engine lease. If two updates
 
 ## Streaming behavior
 
-The channel streams progress into an ephemeral Telegram draft:
+The channel sends ONE preview message and edits it in place (`sendMessage` once → `editMessageText`), so it works in groups and private chats alike:
 
-- immediate "Thinking…" style draft,
-- tool-call previews,
-- partial answer text,
-- periodic keepalive while long steps run.
+- an immediate "💭 Thinking…" placeholder,
+- tool-call previews + partial answer text, edited in (plain text — a partial answer may carry unbalanced HTML),
+- on completion, the same message is edited into the final answer as HTML (falling back to plain if Telegram rejects the markup).
 
-The final answer is sent with `sendMessage`. The draft is only a live preview; the final message is authoritative.
+The preview is best-effort; the final write is authoritative. A short answer edits the preview in place (falling back to a fresh send if the message can no longer be edited). A long answer that overflows one message is sent as consecutive fresh messages — the preview placeholder is removed first, so the parts stay together instead of the first chunk being pinned where an active group has scrolled past. An empty answer leaves a `(no reply)` message rather than vanishing; a suppressed error notice deletes the placeholder, leaving no residue.
 
 ## Failures
 

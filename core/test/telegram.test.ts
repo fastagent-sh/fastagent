@@ -18,8 +18,18 @@ function replyingAgent(reply = "") {
   return { agent, calls };
 }
 
-/** Let fire-and-forget turns (started after the 200) run before asserting. */
-const flush = () => new Promise((r) => setImmediate(r));
+/** Let fire-and-forget turns (started after the 200) run before asserting. The streaming flow has
+ *  several hops, so rather than couple to a fixed tick count, settle until the Bot API mock goes quiet
+ *  (no new fetch for a full tick) — robust to adding/removing an await. (Real-timer tests only; the
+ *  fake-timer tests drive their own clock with advanceTimersByTimeAsync.) */
+const flush = async () => {
+  const f = globalThis.fetch as unknown as { mock?: { calls: unknown[] } };
+  let prev = -1;
+  for (let i = 0; i < 100 && (f.mock?.calls.length ?? 0) !== prev; i++) {
+    prev = f.mock?.calls.length ?? 0;
+    await new Promise((r) => setImmediate(r));
+  }
+};
 
 const SECRET = "tg-secret";
 const API = "http://tg.test";
@@ -41,6 +51,19 @@ const bodyOf = (call: [string, RequestInit] | undefined) => {
   if (!call) throw new Error("expected a matching fetch call");
   return JSON.parse(String(call[1].body));
 };
+
+/** Bot API fetch mock: sendMessage returns a message_id (so the channel edits its ONE preview message),
+ *  getMe returns a username, everything else is ok. */
+function okFetch() {
+  let id = 100;
+  return vi.fn(async (url: string) => {
+    const method = String(url).split("/").pop();
+    if (method === "getMe")
+      return new Response(JSON.stringify({ ok: true, result: { username: "mybot" } }), { status: 200 });
+    const result = method === "sendMessage" ? { message_id: id++ } : {};
+    return new Response(JSON.stringify({ ok: true, result }), { status: 200 });
+  });
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -159,7 +182,7 @@ describe("telegram channel", () => {
   });
 
   it("answers a routed update: composes the prompt (envelope) and sends the reply (model A)", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent, calls } = replyingAgent("hello back");
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
@@ -171,16 +194,18 @@ describe("telegram channel", () => {
     expect(calls[0]?.text).toMatch(/\[telegram: chat 42/); // channel composed the envelope
     expect(calls[0]?.text).toMatch(/\bhi\b/); // …around the user's text
     const sent = callsTo(fetchMock, "sendMessage");
-    expect(sent).toHaveLength(1);
-    expect(bodyOf(sent[0])).toMatchObject({ chat_id: 42, text: "hello back", parse_mode: "HTML" });
-    expect(callsTo(fetchMock, "sendMessageDraft").length).toBeGreaterThan(0); // streamed live
+    expect(sent).toHaveLength(1); // ONE preview message, edited in place (no per-step spam)
+    expect(bodyOf(sent[0])).toMatchObject({ chat_id: 42, text: "💭 Thinking…" }); // a plain placeholder
+    const edits = callsTo(fetchMock, "editMessageText");
+    expect(edits.length).toBeGreaterThan(0); // streamed live by editing the message
+    expect(bodyOf(edits.at(-1))).toMatchObject({ text: "hello back", parse_mode: "HTML" }); // final = the HTML answer
   });
 
   it("uses the default route + getMe when route is omitted (no crash, answers a private chat)", async () => {
     const fetchMock = vi.fn(async (url: string) =>
       String(url).endsWith("/getMe")
         ? new Response(JSON.stringify({ ok: true, result: { username: "mybot" } }), { status: 200 })
-        : new Response('{"ok":true}', { status: 200 }),
+        : new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
     const { agent } = replyingAgent("ok");
@@ -191,7 +216,7 @@ describe("telegram channel", () => {
   });
 
   it("auto-adapts to Threaded Mode: per-thread session + reply into the same thread", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent } = replyingAgent("yo");
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
@@ -204,12 +229,13 @@ describe("telegram channel", () => {
     expect(bodyOf(callsTo(fetchMock, "sendMessage")[0])).toMatchObject({
       chat_id: 42,
       message_thread_id: 99,
-      text: "yo",
+      text: "💭 Thinking…", // the placeholder threads into the topic; the answer follows by edit
     });
+    expect(bodyOf(callsTo(fetchMock, "editMessageText").at(-1)).text).toBe("yo");
   });
 
   it("a custom route can override just the session (reuse the default for the rest)", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent, calls } = replyingAgent("ok");
     const ch = telegramChannel(agent, {
@@ -228,32 +254,37 @@ describe("telegram channel", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("streams reasoning (💭) and tool activity into the draft; persists only the clean final text", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+  it("streams reasoning (💭) and tool activity into the preview; persists only the clean final text", async () => {
+    vi.useFakeTimers();
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const agent: Agent = {
       async *invoke(): AsyncIterable<AgentEvent> {
         yield { type: "thinking", delta: "weighing options" };
         yield { type: "tool_started", id: "t1", name: "word-count", args: { text: "the quick brown fox" } };
         yield { type: "tool_ended", id: "t1", isError: false, content: { words: 4 } };
+        await new Promise((r) => setTimeout(r, 2000)); // a gap: the pump renders the accumulated view here
         yield { type: "text", delta: "4 words" };
         yield { type: "completed" };
       },
     };
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
-    expect((await ch(tgRequest(MSG))).status).toBe(200);
-    await flush();
-    const drafts = callsTo(fetchMock, "sendMessageDraft").map((c) => bodyOf(c).text as string);
-    expect(drafts[0]).toBe("💭 Thinking…"); // initial draft is an explicit placeholder, never an empty "…"
-    expect(drafts.some((t) => /💭/.test(t) && /weighing options/.test(t))).toBe(true);
-    expect(drafts.some((t) => /word-count the quick brown fox/.test(t))).toBe(true);
-    const sent = callsTo(fetchMock, "sendMessage");
-    expect(sent).toHaveLength(1);
-    expect(bodyOf(sent[0]).text).toBe("4 words"); // clean final, no thinking/tool noise
+    const done = ch(tgRequest(MSG));
+    await vi.advanceTimersByTimeAsync(4000); // through the gap + the edit throttle
+    expect((await done).status).toBe(200);
+    const placeholder = bodyOf(callsTo(fetchMock, "sendMessage")[0]).text;
+    expect(placeholder).toBe("💭 Thinking…"); // the preview opens with an explicit placeholder, never an empty "…"
+    const edits = callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c).text as string);
+    // a mid-turn frame shows the reasoning + tool activity (process), edited into the one preview message
+    expect(
+      edits.some((t) => /💭/.test(t) && /weighing options/.test(t) && /word-count the quick brown fox/.test(t)),
+    ).toBe(true);
+    expect(edits.at(-1)).toBe("4 words"); // …but the final message is the answer alone, no thinking/tool noise
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1); // one preview message, not per-step spam
   });
 
   it("replies to the summoning message in a group (threads under the asker), but not in a DM", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent } = replyingAgent("hi");
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
@@ -275,7 +306,7 @@ describe("telegram channel", () => {
   });
 
   it("still quotes when a custom route returns the same chat explicitly (compares value, not field-presence)", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent } = replyingAgent("hi");
     const ch = telegramChannel(agent, {
@@ -292,7 +323,7 @@ describe("telegram channel", () => {
   });
 
   it("on a split group reply, only the first chunk quotes the summoning message", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent } = replyingAgent("x".repeat(9000)); // > 4096 → multiple chunks
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
@@ -300,14 +331,19 @@ describe("telegram channel", () => {
       tgRequest({ update_id: 1, message: { message_id: 88, text: "yo", chat: { id: -100, type: "supergroup" } } }),
     );
     await flush();
-    const sends = callsTo(fetchMock, "sendMessage");
-    expect(sends.length).toBeGreaterThanOrEqual(2);
-    expect(bodyOf(sends[0]).reply_parameters).toMatchObject({ message_id: 88, allow_sending_without_reply: true }); // first quotes
-    for (const s of sends.slice(1)) expect(bodyOf(s).reply_parameters).toBeUndefined(); // rest don't
+    // Long reply: placeholder deleted, answer sent as consecutive fresh messages — only the FIRST answer
+    // message quotes the asker (N reply-quotes would be noise).
+    const answerSends = callsTo(fetchMock, "sendMessage").filter((c) => bodyOf(c).text !== "💭 Thinking…");
+    expect(answerSends.length).toBeGreaterThanOrEqual(2);
+    expect(bodyOf(answerSends[0]).reply_parameters).toMatchObject({
+      message_id: 88,
+      allow_sending_without_reply: true,
+    });
+    for (const s of answerSends.slice(1)) expect(bodyOf(s).reply_parameters).toBeUndefined();
   });
 
   it("does not quote when the route redirects the reply to another chat/thread", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent } = replyingAgent("hi");
     const ch = telegramChannel(agent, {
@@ -348,7 +384,7 @@ describe("telegram channel", () => {
     };
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response('{"ok":true}', { status: 200 })),
+      vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 })),
     );
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
     const upd = (n: number) => ({
@@ -389,7 +425,7 @@ describe("telegram channel", () => {
     };
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response('{"ok":true}', { status: 200 })),
+      vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 })),
     );
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
     const settle = async (): Promise<void> => {
@@ -418,7 +454,7 @@ describe("telegram channel", () => {
     const { agent, calls } = replyingAgent("ok");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response('{"ok":true}', { status: 200 })),
+      vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 })),
     );
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
 
@@ -440,7 +476,7 @@ describe("telegram channel", () => {
     const { agent, calls } = replyingAgent("ok");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response('{"ok":true}', { status: 200 })),
+      vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 })),
     );
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
     for (let i = 0; i < 30; i++) await ch(tgRequest(groupMsg(i, "alice", `M${i}-${"x".repeat(290)}`))); // ~9000 chars
@@ -460,7 +496,7 @@ describe("telegram channel", () => {
         if (String(url).includes("/getFile"))
           return new Response(JSON.stringify({ ok: true, result: { file_path: "photo.jpg" } }), { status: 200 });
         if (String(url).includes("/file/bot")) return new Response("nope", { status: 500 }); // download fails
-        return new Response('{"ok":true}', { status: 200 });
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
       }),
     );
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
@@ -510,7 +546,7 @@ describe("telegram channel", () => {
           await downloadGate; // hold the download open
           return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
         }
-        return new Response('{"ok":true}', { status: 200 });
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
       }),
     );
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
@@ -556,7 +592,7 @@ describe("telegram channel", () => {
                 status: 200,
               },
             )
-          : new Response('{"ok":true}', { status: 200 }),
+          : new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }),
       ),
     );
     const { agent } = replyingAgent();
@@ -572,18 +608,19 @@ describe("telegram channel", () => {
     expect(privacyWarnings()).toBe(1);
   });
 
-  it("serializes the live preview: never two draft sends in flight (the out-of-order flicker)", async () => {
+  it("serializes the live preview: never two writes in flight (the out-of-order flicker)", async () => {
     vi.useFakeTimers();
     let inFlight = 0;
     let maxInFlight = 0;
     const fetchMock = vi.fn(async (url: string) => {
-      if (String(url).endsWith("/sendMessageDraft")) {
+      const method = String(url).split("/").pop();
+      if (method === "sendMessage" || method === "editMessageText") {
         inFlight++;
         maxInFlight = Math.max(maxInFlight, inFlight);
-        await new Promise((r) => setTimeout(r, 30)); // a real send takes time — events arrive during it
+        await new Promise((r) => setTimeout(r, 30)); // a real write takes time — events arrive during it
         inFlight--;
       }
-      return new Response('{"ok":true}', { status: 200 });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
     const agent: Agent = {
@@ -596,68 +633,45 @@ describe("telegram channel", () => {
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
     await ch(tgRequest(MSG));
     await vi.advanceTimersByTimeAsync(5000);
-    expect(maxInFlight).toBe(1); // single writer: concurrent draft sends are what reorder frames
-    expect(callsTo(fetchMock, "sendMessageDraft").length).toBeLessThan(9); // a burst coalesced, not 1/delta
-    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1); // the authoritative final still sends
+    expect(maxInFlight).toBe(1); // single writer: concurrent edits are what reorder frames
+    expect(callsTo(fetchMock, "editMessageText").length).toBeLessThan(9); // a burst coalesced, not 1/delta
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1); // one preview message (the placeholder)
   });
 
-  it("keeps the draft alive during a long event-less gap (heartbeat re-pushes it)", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    let release = (): void => {};
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
-    const agent: Agent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        yield { type: "tool_started", id: "t1", name: "write", args: {} };
-        await gate;
-        yield { type: "completed" };
-      },
-    };
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
-    await ch(tgRequest(MSG));
-    await vi.advanceTimersByTimeAsync(0);
-    const before = callsTo(fetchMock, "sendMessageDraft").length;
-    await vi.advanceTimersByTimeAsync(21_000);
-    expect(callsTo(fetchMock, "sendMessageDraft").length).toBeGreaterThan(before);
-    release();
-    await vi.advanceTimersByTimeAsync(0);
-  });
-
-  it("sends HTML, falling back to plain text when Telegram rejects the markup", async () => {
+  it("edits the final answer as HTML, falling back to plain text when Telegram rejects the markup", async () => {
     const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
-      if (String(url).endsWith("/sendMessage")) {
+      if (String(url).endsWith("/editMessageText")) {
         return JSON.parse(String(init.body)).parse_mode === "HTML"
           ? new Response(JSON.stringify({ ok: false, description: "Bad Request: can't parse entities: bad" }), {
               status: 400,
             })
-          : new Response('{"ok":true}', { status: 200 });
+          : new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
       }
-      return new Response('{"ok":true}', { status: 200 });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
     const { agent } = replyingAgent("<b>oops");
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
     expect((await ch(tgRequest(MSG))).status).toBe(200);
     await flush();
-    const sends = callsTo(fetchMock, "sendMessage");
-    expect(sends).toHaveLength(2); // HTML rejected → plain retry
-    expect(bodyOf(sends[0]).parse_mode).toBe("HTML");
-    expect(bodyOf(sends[1]).parse_mode).toBeUndefined();
+    const finalEdits = callsTo(fetchMock, "editMessageText").filter((c) => bodyOf(c).text === "<b>oops");
+    expect(finalEdits.some((c) => bodyOf(c).parse_mode === "HTML")).toBe(true); // tried HTML
+    expect(finalEdits.some((c) => bodyOf(c).parse_mode === undefined)).toBe(true); // …fell back to plain
   });
 
   it("splits a reply longer than 4096 chars into multiple messages", async () => {
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent } = replyingAgent("x".repeat(9000));
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
     expect((await ch(tgRequest(MSG))).status).toBe(200);
     await flush();
-    const sends = callsTo(fetchMock, "sendMessage");
-    expect(sends.length).toBeGreaterThanOrEqual(3);
-    for (const s of sends) expect((bodyOf(s).text as string).length).toBeLessThanOrEqual(4096);
+    // A long reply gives up in-place editing: the preview placeholder is DELETED and the whole answer is
+    // sent as consecutive fresh messages (so it stays together in an active group), each ≤4096.
+    expect(callsTo(fetchMock, "deleteMessage")).toHaveLength(1);
+    const answerSends = callsTo(fetchMock, "sendMessage").filter((c) => bodyOf(c).text !== "💭 Thinking…");
+    expect(answerSends.length).toBeGreaterThanOrEqual(3); // 9000 chars → ≥3 chunks
+    for (const s of answerSends) expect((bodyOf(s).text as string).length).toBeLessThanOrEqual(4096);
   });
 
   it("auto-extracts a photo from the message and passes it to the agent as a (vision) image", async () => {
@@ -667,7 +681,7 @@ describe("telegram channel", () => {
           status: 200,
         });
       if (String(url).includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
-      return new Response('{"ok":true}', { status: 200 });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
     const { agent, calls } = replyingAgent("ok");
@@ -704,7 +718,7 @@ describe("telegram channel", () => {
             { status: 200 },
           );
         if (String(url).includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200 });
-        return new Response('{"ok":true}', { status: 200 });
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
       });
       vi.stubGlobal("fetch", fetchMock);
       const { agent, calls } = replyingAgent("ok");
@@ -738,7 +752,7 @@ describe("telegram channel", () => {
     const fetchMock = vi.fn(async (url: string) =>
       String(url).endsWith("/getFile")
         ? new Response(JSON.stringify({ ok: false }), { status: 200 })
-        : new Response('{"ok":true}', { status: 200 }),
+        : new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
     let invoked = false;
@@ -768,29 +782,71 @@ describe("telegram channel", () => {
     await flush();
     await flush();
     expect(invoked).toBe(false);
-    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toMatch(/could not load attachment/);
+    const writes = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map(
+      (c) => bodyOf(c).text as string,
+    );
+    expect(writes.some((t) => /could not load attachment/.test(t))).toBe(true);
     expect(errors.some((e) => /turn failed/.test(e))).toBe(true);
   });
 
-  it("a failing live draft is logged once (not swallowed) and the final reply still sends", async () => {
+  it("a failing live preview edit is logged once (not swallowed) and the final reply still lands", async () => {
+    vi.useFakeTimers();
     const errors: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m) => {
       errors.push(String(m));
     });
     const fetchMock = vi.fn(async (url: string) =>
-      String(url).endsWith("/sendMessageDraft")
+      String(url).endsWith("/editMessageText")
         ? new Response(JSON.stringify({ ok: false, description: "nope" }), { status: 400 })
-        : new Response('{"ok":true}', { status: 200 }),
+        : new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { agent } = replyingAgent("final answer");
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "text", delta: "final answer" };
+        await new Promise((r) => setTimeout(r, 2000)); // a gap so the pump attempts (and fails) a preview edit
+        yield { type: "completed" };
+      },
+    };
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
-    expect((await ch(tgRequest(MSG))).status).toBe(200);
-    await flush();
-    const draftErrs = errors.filter((e) => /live draft failed/.test(e));
-    expect(draftErrs).toHaveLength(1);
-    expect(draftErrs[0]).toMatch(/nope/);
-    expect(bodyOf(callsTo(fetchMock, "sendMessage")[0]).text).toBe("final answer");
+    const done = ch(tgRequest(MSG));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect((await done).status).toBe(200);
+    const previewErrs = errors.filter((e) => /live preview failed/.test(e));
+    expect(previewErrs).toHaveLength(1); // logged ONCE, not per failed edit
+    expect(previewErrs[0]).toMatch(/nope/);
+    // the edit keeps failing, so the final answer lands via a fresh send instead
+    expect(callsTo(fetchMock, "sendMessage").map((c) => bodyOf(c).text)).toContain("final answer");
+  });
+
+  it("does not spam new messages when Telegram returns ok WITHOUT a message_id (preview disabled, not per-frame)", async () => {
+    vi.useFakeTimers();
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errors.push(String(m));
+    });
+    // ok but no result.message_id (proxy / odd API base / unparseable body) — the channel cannot edit
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).endsWith("/getMe")
+        ? new Response(JSON.stringify({ ok: true, result: { username: "mybot" } }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "thinking", delta: "a" };
+        await new Promise((r) => setTimeout(r, 2000)); // a gap so the pump would retry preview writes
+        yield { type: "text", delta: "done" };
+        yield { type: "completed" };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+    const done = ch(tgRequest(MSG));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect((await done).status).toBe(200);
+    expect(errors.filter((e) => /live preview failed/.test(e))).toHaveLength(1); // surfaced once, not silent
+    // placeholder sent once + the final fresh send — NOT one send per changed view
+    expect(callsTo(fetchMock, "sendMessage").length).toBeLessThanOrEqual(2);
   });
 
   it("a failed event tells the user (neutral by default) and logs the turn as failed", async () => {
@@ -798,7 +854,7 @@ describe("telegram channel", () => {
     const spy = vi.spyOn(console, "error").mockImplementation((m) => {
       errors.push(String(m));
     });
-    const fetchMock = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const agent: Agent = {
       async *invoke(): AsyncIterable<AgentEvent> {
@@ -809,9 +865,114 @@ describe("telegram channel", () => {
     expect((await ch(tgRequest(MSG))).status).toBe(200);
     await flush();
     expect(errors.some((e) => /turn failed/.test(e) && /boom/.test(e))).toBe(true); // dev log
-    const userText = bodyOf(callsTo(fetchMock, "sendMessage")[0]).text as string;
+    // the failed event is reported by editing the preview message (or a fresh send if none yet)
+    const errWrite = callsTo(fetchMock, "editMessageText").at(-1) ?? callsTo(fetchMock, "sendMessage").at(-1);
+    const userText = bodyOf(errWrite).text as string;
     expect(userText).not.toMatch(/boom/); // customer-facing: neutral, no leaked details
     expect(userText).toMatch(/something went wrong/i);
     spy.mockRestore();
+  });
+
+  it("a failed event still notifies the user when the preview can no longer be edited (fresh-send fallback)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // editMessageText always fails (preview deleted); sendMessage works
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).endsWith("/editMessageText")
+        ? new Response(JSON.stringify({ ok: false, description: "Bad Request: message to edit not found" }), {
+            status: 400,
+          })
+        : new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "failed", details: "boom", retryable: false };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+    await ch(tgRequest(MSG));
+    await flush();
+    // the neutral error lands via a fresh send (the edit failed), not silently lost — same fallback as completed
+    const sends = callsTo(fetchMock, "sendMessage").map((c) => bodyOf(c).text as string);
+    expect(sends.some((t) => /something went wrong/i.test(t))).toBe(true);
+  });
+
+  it("a failed turn with a suppressing formatError deletes the placeholder (no dead 'Thinking…')", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "failed", details: "boom", retryable: false };
+      },
+    };
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      route: act,
+      apiBaseUrl: API,
+      onError: () => "", // developer suppresses the user-facing notice
+    });
+    await ch(tgRequest(MSG));
+    await flush();
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1); // just the placeholder
+    expect(callsTo(fetchMock, "deleteMessage")).toHaveLength(1); // …which is then removed, not left as dead "Thinking…"
+  });
+
+  it("deletes the placeholder before a fresh send when a single-chunk edit fails but the preview still exists", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // editMessageText fails with a NON-"gone" error (5xx) — the placeholder is still there, so a bare fresh
+    // send would leave a "💭 Thinking…" residue above the answer
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).endsWith("/editMessageText")
+        ? new Response(JSON.stringify({ ok: false, description: "Bad Gateway" }), { status: 502 })
+        : new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("the answer");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+    await ch(tgRequest(MSG));
+    await flush();
+    expect(callsTo(fetchMock, "deleteMessage")).toHaveLength(1); // placeholder removed — no residue
+    expect(callsTo(fetchMock, "sendMessage").map((c) => bodyOf(c).text)).toContain("the answer"); // answer lands fresh
+  });
+
+  it("shows (no reply) when a completed turn produced no text", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "tool_started", id: "t1", name: "noop", args: {} };
+        yield { type: "tool_ended", id: "t1", isError: false, content: {} };
+        yield { type: "completed" }; // completed, but no text was ever produced
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+    await ch(tgRequest(MSG));
+    await flush();
+    // the preview is edited to an explicit "(no reply)" (a persisted message can't vanish like the old draft)
+    expect(callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c).text)).toContain("(no reply)");
+  });
+
+  it("shows a neutral notice when the stream ends without a terminal event (not silence, not a dead 'Thinking…')", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    // an agent that ends WITHOUT completed/failed (a SPEC violation) — the user must still be told, and the
+    // preview (which may show real partial work) must not silently vanish
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "thinking", delta: "…" };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
+    await ch(tgRequest(MSG));
+    await flush();
+    // the preview is edited into the neutral failure notice (unknown retryability → "something went wrong"),
+    // not deleted, not left stuck
+    const edits = callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c).text as string);
+    expect(edits.some((t) => /something went wrong/i.test(t))).toBe(true);
+    expect(callsTo(fetchMock, "deleteMessage")).toHaveLength(0);
   });
 });

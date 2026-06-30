@@ -44,14 +44,17 @@ async function callBotApi(
   botToken: string,
   method: string,
   params: Record<string, unknown>,
-): Promise<{ ok: true } | { ok: false; status: number; description: string }> {
+): Promise<{ ok: true; result?: { message_id?: number } } | { ok: false; status: number; description: string }> {
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(`${api}/bot${botToken}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(params),
     });
-    if (res.ok) return { ok: true };
+    if (res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { result?: { message_id?: number } };
+      return { ok: true, result: data.result };
+    }
     const data = (await res.json().catch(() => ({}))) as {
       description?: string;
       parameters?: { retry_after?: number };
@@ -66,7 +69,7 @@ async function callBotApi(
 }
 
 /** Split text into ≤4096-char chunks (Telegram's limit), preferring newline boundaries. */
-function chunkText(text: string): string[] {
+export function chunkText(text: string): string[] {
   if (text.length <= TELEGRAM_MAX_TEXT) return [text];
   const chunks: string[] = [];
   let rest = text;
@@ -81,12 +84,20 @@ function chunkText(text: string): string[] {
 }
 
 /**
- * Persist a final reply: split to Telegram's 4096-char limit, and send each chunk as HTML, falling back
- * to plain text only if Telegram rejects the markup — so a model formatting slip degrades instead of
- * losing the message. Format is the channel's job (Telegram's own parser); the developer never picks it.
- * `message_thread_id` is dropped from the JSON when undefined (linear chat).
+ * Send a message: split to Telegram's 4096-char limit, each chunk as HTML by default (`html:false` for
+ * a plain live-preview), falling back to plain only if Telegram rejects the markup — so a model
+ * formatting slip degrades instead of losing the message. Returns the FIRST chunk's message_id (so the
+ * caller can edit it as a live preview). `message_thread_id` is dropped from the JSON when undefined.
  */
-export async function sendMessage(api: string, botToken: string, t: Target, body: string): Promise<void> {
+export async function sendMessage(
+  api: string,
+  botToken: string,
+  t: Target,
+  body: string,
+  opts: { html?: boolean } = {},
+): Promise<number | undefined> {
+  const html = opts.html ?? true;
+  let firstId: number | undefined;
   let first = true;
   for (const chunk of chunkText(body)) {
     const base: Record<string, unknown> = { chat_id: t.chatId, message_thread_id: t.threadId, text: chunk };
@@ -96,31 +107,53 @@ export async function sendMessage(api: string, botToken: string, t: Target, body
     if (first && t.replyTo !== undefined) {
       base.reply_parameters = { message_id: t.replyTo, allow_sending_without_reply: true };
     }
-    first = false;
-    let result = await callBotApi(api, botToken, "sendMessage", { ...base, parse_mode: "HTML" });
-    if (!result.ok && PARSE_ERROR.test(result.description))
+    let result = html
+      ? await callBotApi(api, botToken, "sendMessage", { ...base, parse_mode: "HTML" })
+      : await callBotApi(api, botToken, "sendMessage", base);
+    if (html && !result.ok && PARSE_ERROR.test(result.description))
       result = await callBotApi(api, botToken, "sendMessage", base);
     if (!result.ok) throw new Error(`telegram sendMessage failed: ${result.status} ${result.description}`.trim());
+    if (first) firstId = result.result?.message_id;
+    first = false;
   }
+  return firstId;
 }
 
-/** Push an ephemeral draft (animated preview, capped at the text limit). Same draft_id animates updates. */
-export async function sendMessageDraft(
+/**
+ * Edit a message in place — the live-preview mechanism (one message, repeatedly updated). Plain by
+ * default (a partial preview may contain unbalanced HTML); `html:true` for the final answer, falling
+ * back to plain if Telegram rejects the markup. "message is not modified" is NOT an error: the pump may
+ * re-render an unchanged view. The message is identified by (chat_id, message_id) — no thread needed.
+ */
+export async function editMessageText(
   api: string,
   botToken: string,
   t: Target,
-  draftId: number,
+  messageId: number,
   body: string,
+  opts: { html?: boolean } = {},
 ): Promise<void> {
-  const result = await callBotApi(api, botToken, "sendMessageDraft", {
+  const base: Record<string, unknown> = {
     chat_id: t.chatId,
-    message_thread_id: t.threadId,
-    draft_id: draftId,
+    message_id: messageId,
     text: body.slice(0, TELEGRAM_MAX_TEXT),
-  });
-  if (!result.ok) throw new Error(`telegram sendMessageDraft failed: ${result.status} ${result.description}`.trim());
+  };
+  let result = opts.html
+    ? await callBotApi(api, botToken, "editMessageText", { ...base, parse_mode: "HTML" })
+    : await callBotApi(api, botToken, "editMessageText", base);
+  if (opts.html && !result.ok && PARSE_ERROR.test(result.description))
+    result = await callBotApi(api, botToken, "editMessageText", base);
+  if (!result.ok && /message is not modified/i.test(result.description)) return;
+  if (!result.ok) throw new Error(`telegram editMessageText failed: ${result.status} ${result.description}`.trim());
 }
 
+/** Delete a message — the wire primitive for removing a preview placeholder (the finalize POLICY lives
+ *  in telegram.ts). Throws on failure, like the other primitives; a caller that wants best-effort cleanup
+ *  catches explicitly rather than the primitive swallowing it. */
+export async function deleteMessage(api: string, botToken: string, t: Target, messageId: number): Promise<void> {
+  const result = await callBotApi(api, botToken, "deleteMessage", { chat_id: t.chatId, message_id: messageId });
+  if (!result.ok) throw new Error(`telegram deleteMessage failed: ${result.status} ${result.description}`.trim());
+}
 /** getMe: the bot's own @username (so default routing recognises group @mentions) and whether group
  *  privacy mode is OFF (`can_read_all_group_messages`) — needed to receive the un-summoned group
  *  messages that feed the context buffer. */
