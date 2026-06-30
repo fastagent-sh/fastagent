@@ -8,4 +8,4 @@ export {
   type TelegramMessage,
   type TelegramRoute,
   type TelegramFailure,
-} from "./channels/telegram.ts";
+} from "./channels/telegram/telegram.ts";

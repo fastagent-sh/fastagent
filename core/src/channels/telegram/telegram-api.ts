@@ -7,7 +7,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { ImageRef } from "../agent.ts";
+import type { ImageRef } from "../../agent.ts";
 
 /** Telegram's hard text limit per message. */
 const TELEGRAM_MAX_TEXT = 4096;
