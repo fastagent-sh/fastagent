@@ -1,13 +1,14 @@
 /**
  * `fastagent add <channel>`: drop a `channels/<kind>.ts` adapter-glue file (+ any companion tool, +
  * `.env.example` vars) into an existing workspace. `add` checks and guides; it never bootstraps a
- * workspace (that is `init`'s job). The template content lives in scaffold-templates.ts.
+ * workspace (that is `init`'s job). Each channel's template files live in its own bundle at
+ * src/channels/<kind>/scaffold/, read here at scaffold time.
  */
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { assertInsideWorkspace } from "../workspace.ts";
+import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
-import { CHANNEL_GITHUB_TS, CHANNEL_TELEGRAM_TS, TELEGRAM_SEND_TOOL_TS } from "./scaffold-templates.ts";
 
 export type ChannelKind = "github" | "telegram";
 
@@ -19,17 +20,13 @@ export interface ChannelEnv {
 }
 
 interface ChannelScaffold {
-  template: string;
   env: ChannelEnv[];
   /** Channel-specific next-step lines, printed after the env lines and before the `dev` line. */
   steps: string[];
-  /** An optional companion tool dropped into `tools/` (e.g. an outbound action the agent calls). */
-  tool?: { name: string; template: string };
 }
 
 const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   github: {
-    template: CHANNEL_GITHUB_TS,
     env: [
       {
         name: "GITHUB_WEBHOOK_SECRET",
@@ -43,7 +40,6 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     ],
   },
   telegram: {
-    template: CHANNEL_TELEGRAM_TS,
     env: [
       { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot" },
       { name: "TELEGRAM_SECRET_TOKEN", hint: "any random string; verifies inbound updates", generate: true },
@@ -52,7 +48,6 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       "edit channels/telegram.ts — customise routing with route() (optional; the defaults already work)",
       "the agent can send files back by calling the scaffolded tools/telegram-send.ts tool",
     ],
-    tool: { name: "telegram-send", template: TELEGRAM_SEND_TOOL_TS },
   },
 };
 
@@ -109,12 +104,19 @@ export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<s
     throw new Error(`${file} already exists — edit it, or remove it to re-scaffold`);
   }
   await mkdir(channelsDir, { recursive: true });
-  await writeFile(file, CHANNEL_SCAFFOLDS[kind].template, { flag: "wx" });
-  // A companion tool (e.g. telegram's outbound send) goes in tools/; never clobber an authored one.
-  const tool = CHANNEL_SCAFFOLDS[kind].tool;
-  if (tool && !(await exists(join(dir, "tools", `${tool.name}.ts`)))) {
-    await mkdir(join(dir, "tools"), { recursive: true });
-    await writeFile(join(dir, "tools", `${tool.name}.ts`), tool.template, { flag: "wx" });
+  // `channel.ts` is THE adapter (→ channels/<kind>.ts); any other .ts in the bundle is a companion tool
+  // (→ tools/<name>, never clobbering an authored one).
+  for (const name of channelBundleFiles(kind)) {
+    const content = channelTemplate(kind, name);
+    if (name === "channel.ts") {
+      await writeFile(file, content, { flag: "wx" });
+      continue;
+    }
+    const toolFile = join(dir, "tools", name);
+    if (!(await exists(toolFile))) {
+      await mkdir(join(dir, "tools"), { recursive: true });
+      await writeFile(toolFile, content, { flag: "wx" });
+    }
   }
   return file;
 }

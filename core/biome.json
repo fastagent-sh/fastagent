@@ -1,7 +1,12 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.0/schema.json",
   "files": {
-    "includes": ["src/**/*.ts", "test/**/*.ts"]
+    "includes": [
+      "src/**/*.ts",
+      "test/**/*.ts",
+      "!src/scaffold/templates/**",
+      "!src/channels/*/scaffold/**"
+    ]
   },
   "formatter": {
     "enabled": true,

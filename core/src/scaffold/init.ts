@@ -8,22 +8,13 @@
  * preflights non-directory scaffold parents, and rolls back a partial write. It does not defend
  * against every pathological target state (TOCTOU, FIFOs, disk-full): recover by delete-and-retry.
  *
- * Sibling scaffold modules: add-channel.ts (`add <channel>`), vendor-skill.ts (`add skill`); the file
- * content they and this module write lives in scaffold-templates.ts.
+ * Sibling scaffold modules: add-channel.ts (`add <channel>`), vendor-skill.ts (`add skill`). The files
+ * this module writes are real templates under templates/, read through templates.ts.
  */
 import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { loadRootIgnore } from "../workspace.ts";
-import {
-  CONFIG_MJS,
-  ENV_EXAMPLE,
-  GITIGNORE,
-  SKILL_MD,
-  TOOL_TS,
-  agentsMd,
-  packageJson,
-  toPackageName,
-} from "./scaffold-templates.ts";
+import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
 
 interface ScaffoldFile {
@@ -78,15 +69,15 @@ export async function exists(p: string): Promise<boolean> {
 export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
   const minimal = options.minimal ?? false;
   const files: ScaffoldFile[] = [
-    { rel: "AGENTS.md", content: agentsMd(minimal) },
-    { rel: join("skills", "house-style", "SKILL.md"), content: SKILL_MD },
-    { rel: "fastagent.config.mjs", content: CONFIG_MJS },
-    { rel: ".gitignore", content: GITIGNORE },
-    { rel: ".env.example", content: ENV_EXAMPLE },
+    { rel: "AGENTS.md", content: baseTemplate("AGENTS.md") },
+    { rel: join("skills", "house-style", "SKILL.md"), content: baseTemplate("skills/house-style/SKILL.md") },
+    { rel: "fastagent.config.mjs", content: baseTemplate("fastagent.config.mjs") },
+    { rel: ".gitignore", content: baseTemplate("gitignore") },
+    { rel: ".env.example", content: baseTemplate("env.example") },
   ];
   if (!minimal) {
     files.push(
-      { rel: join("tools", "word-count.ts"), content: TOOL_TS },
+      { rel: join("tools", "word-count.ts"), content: baseTemplate("tools/word-count.ts") },
       { rel: "package.json", content: packageJson(toPackageName(dir), await fastagentVersion()) },
     );
   }
