@@ -17,6 +17,7 @@ While the project is pre-1.0, minor versions may include breaking changes.
   (`github`, `telegram`, `channel-development`), and maintainer notes under `docs/design/`.
 
 ### Changed
+- Telegram: a long reply (>4096 chars) is split as valid HTML — a tag that spans a boundary is closed at the chunk's end and reopened (attributes and all) at the next chunk's start, so a long `<pre>` code block stays formatted instead of degrading to plain text. The split also never cuts through a tag token.
 - Narrative reframed to "Vibe first. Then FastAgent." — take a local agent folder out of
   the terminal and serve it in an app, on GitHub, in Telegram, or behind a custom channel.
 - **Auth is now project-level by default.** The credentials file defaults to

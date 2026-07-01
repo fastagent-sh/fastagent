@@ -22,10 +22,10 @@ import { readBodyCapped } from "../body.ts";
 import {
   type DownloadedFile,
   type Target,
+  TELEGRAM_MAX_TEXT,
   resolveBotInfo,
   resolveFiles,
   resolveImages,
-  chunkText,
   deleteMessage,
   editMessageText,
   sendMessage,
@@ -223,7 +223,9 @@ async function finalize(
     return;
   }
   if (messageId !== undefined) {
-    if (chunkText(text).length === 1) {
+    // "Fits in one message" is a plain length check against Telegram's limit — not chunkText, whose html
+    // mode exists for SPLIT chunks and is irrelevant to an un-split text.
+    if (text.length <= TELEGRAM_MAX_TEXT) {
       try {
         await editMessageText(api, botToken, target, messageId, text, { html });
         return;
@@ -232,7 +234,7 @@ async function finalize(
         // to delete + fresh send below so a still-present "Thinking…" is not left pinned above the answer.
       }
     }
-    // Many chunks, OR a failed single-chunk edit: remove the placeholder best-effort (a lingering one above
+    // Too long for one message, OR a failed single-message edit: remove the placeholder best-effort (a lingering one above
     // the answer is worse than the extra call), then send the whole reply as fresh, consecutive messages.
     await deleteMessage(api, botToken, target, messageId).catch(() => {});
   }
