@@ -75,4 +75,67 @@ describe("cli papercuts", () => {
     expect(info.channels).toEqual(["github"]);
     await expect(stat(join(dir, ".fastagent"))).rejects.toThrow(); // read-only: never creates sessions dir
   });
+
+  it("login self-ignores .fastagent on an adapted dir before it writes the credential file", async () => {
+    // login is the command that CREATES the secret, so its self-ignore must fire independently of the
+    // opener. A bogus provider fails the auth flow AFTER the self-ignore, so the .gitignore is the
+    // proof the leak guard ran. Adapted dir = no root .gitignore (the feature's core use case).
+    const cwd = await mkdtemp(join(tmpdir(), "fa-login-cli-"));
+    const env = { ...process.env };
+    delete env.FASTAGENT_AUTH_PATH; // ensure the in-tree default (not a dev's global override)
+    const { code } = await run(["login", "no-such-provider"], cwd, env);
+    expect(code).not.toBe(0); // unknown provider fails the flow
+    const { readFile } = await import("node:fs/promises");
+    expect(await readFile(join(cwd, ".fastagent", ".gitignore"), "utf8")).toBe("*\n");
+  });
+
+  it("login from $HOME does NOT self-ignore the HOME-global ~/.fastagent (a dotfiles repo may track it)", async () => {
+    // self-ignore protects agent PROJECT trees, not the user's home. Run from $HOME (cwd == home) so
+    // the credential default IS the global file; the bogus provider fails after the self-ignore
+    // decision, so an absent .gitignore proves the global dir was left alone.
+    // NOT realpath'd on purpose: macOS hands the child a /var→/private/var symlinked $HOME, so this
+    // also exercises that the home check canonicalizes (a raw string compare would leak a .gitignore here).
+    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    delete env.FASTAGENT_AUTH_PATH;
+    const { code } = await run(["login", "no-such-provider"], home, env);
+    expect(code).not.toBe(0);
+    await expect(stat(join(home, ".fastagent", ".gitignore"))).rejects.toThrow(); // home left untouched
+  });
+
+  it("login reads .env from the current directory (a FASTAGENT_AUTH_PATH set there takes effect)", async () => {
+    // Regression: login used to load .env from ./<provider> (the positional is the provider, not a dir).
+    // Put FASTAGENT_AUTH_PATH in cwd/.env pointing OUTSIDE the tree — if .env is honored, auth resolves
+    // there and the in-tree .fastagent is never self-ignored; if the bug returns (.env ignored), auth
+    // falls back to the in-tree default and .fastagent/.gitignore appears. So its ABSENCE is the proof.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-login-env-"));
+    const external = join(await mkdtemp(join(tmpdir(), "fa-ext-")), "auth.json");
+    await writeFile(join(cwd, ".env"), `FASTAGENT_AUTH_PATH=${external}\n`);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.FASTAGENT_AUTH_PATH; // must come only from .env
+    const { code } = await run(["login", "no-such-provider"], cwd, env);
+    expect(code).not.toBe(0);
+    await expect(stat(join(cwd, ".fastagent", ".gitignore"))).rejects.toThrow(); // external path won → no in-tree self-ignore
+  });
+
+  it("invoke points an upgraded user at their global credential when the project file is empty", async () => {
+    // The breaking change's safety net: project auth defaults empty, but a pre-upgrade global login
+    // still has the credential — the startup report must say so (set FASTAGENT_AUTH_PATH) instead of a
+    // bare turn failure. HOME override makes GLOBAL_AUTH_PATH resolve into the temp home.
+    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
+    await mkdir(join(home, ".fastagent"), { recursive: true });
+    await writeFile(
+      join(home, ".fastagent", "auth.json"),
+      JSON.stringify({ anthropic: { type: "api_key", key: "sk-test" } }),
+    );
+    const proj = await mkdtemp(join(tmpdir(), "fa-proj-"));
+    await writeFile(join(proj, "fastagent.config.mjs"), `export default { model: "anthropic/claude-sonnet-4-5" };`);
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+    delete env.ANTHROPIC_API_KEY; // else the project probe finds env creds and the hint never fires
+    delete env.FASTAGENT_AUTH_PATH;
+    delete env.FASTAGENT_MODEL;
+    const { stderr } = await run(["invoke", "hi", proj], undefined, env);
+    expect(stderr).toMatch(/global .*has them/i); // the migration hint fired
+    expect(stderr).toMatch(/FASTAGENT_AUTH_PATH=/); // with the actionable env-var fix
+  });
 });

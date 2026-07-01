@@ -3,8 +3,13 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { createPiAgentFromWorkspace, createPiModels, listModels, resolveModel } from "../src/index.ts";
-import { loadConfig, resolveModelSpec, resolveSessionsDirOverride } from "../src/engines/pi/config.ts";
+import { createPiAgentFromWorkspace, createPiModels, listModels, probeAuthSource, resolveModel } from "../src/index.ts";
+import {
+  loadConfig,
+  resolveAuthPathOverride,
+  resolveModelSpec,
+  resolveSessionsDirOverride,
+} from "../src/engines/pi/config.ts";
 import { resolveTools } from "../src/engines/pi/create.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -18,6 +23,40 @@ describe("config: resolveSessionsDirOverride (start's sessions precedence)", () 
     expect(resolveSessionsDirOverride(undefined, env)).toBe(resolve("envdir")); // env when no flag
     expect(resolveSessionsDirOverride(undefined, {} as NodeJS.ProcessEnv)).toBeUndefined(); // neither → opener default
     expect(resolveSessionsDirOverride("/mnt/vol", {} as NodeJS.ProcessEnv)).toBe("/mnt/vol"); // absolute kept as-is
+  });
+});
+
+describe("models: createPiModels honors authPath (the project-level credential seam)", () => {
+  it("reads a stored credential from the GIVEN file, not the global default or env", async () => {
+    // The foundation of both the feature and the migration hint: point createPiModels at a path and it
+    // must read THAT file. "stored credential" (not the "ANTHROPIC_API_KEY" env label) proves the file
+    // at authPath won — so an empty project file genuinely reads as not-configured (what the hint keys on).
+    const path = join(await mkdtemp(join(tmpdir(), "fa-auth-")), "auth.json");
+    await writeFile(path, JSON.stringify({ anthropic: { type: "api_key", key: "sk-test" } }));
+    expect(await probeAuthSource(createPiModels({ authPath: path }), "anthropic/claude-sonnet-4-5")).toBe(
+      "stored credential",
+    );
+  });
+});
+
+describe("config: resolveAuthPathOverride (auth-file precedence)", () => {
+  it("precedence --auth-path > FASTAGENT_AUTH_PATH > none; a given value resolves to absolute", () => {
+    const env = { FASTAGENT_AUTH_PATH: "envauth.json" } as NodeJS.ProcessEnv;
+    expect(resolveAuthPathOverride("flagauth.json", env)).toBe(resolve("flagauth.json")); // flag beats env
+    expect(resolveAuthPathOverride(undefined, env)).toBe(resolve("envauth.json")); // env when no flag
+    expect(resolveAuthPathOverride(undefined, {} as NodeJS.ProcessEnv)).toBeUndefined(); // neither → opener default
+    expect(resolveAuthPathOverride("/abs/auth.json", {} as NodeJS.ProcessEnv)).toBe("/abs/auth.json"); // absolute kept
+  });
+
+  it("expands a leading ~ to the home dir (a .env value never gets the shell's expansion)", async () => {
+    const { homedir } = await import("node:os");
+    const env = { FASTAGENT_AUTH_PATH: "~/.fastagent/auth.json" } as NodeJS.ProcessEnv;
+    // the footgun this guards: a bare resolve("~/x") makes a literal `<cwd>/~` dir and the secret lands there
+    expect(resolveAuthPathOverride(undefined, env)).toBe(join(homedir(), ".fastagent", "auth.json"));
+    expect(resolveAuthPathOverride("~", {} as NodeJS.ProcessEnv)).toBe(homedir());
+    expect(resolveSessionsDirOverride(undefined, { FASTAGENT_SESSIONS_DIR: "~/s" } as NodeJS.ProcessEnv)).toBe(
+      join(homedir(), "s"),
+    ); // symmetric: sessions had the same latent bug
   });
 });
 
@@ -176,6 +215,31 @@ describe("L3: createPiAgentFromWorkspace (config-driven assembly boundary on the
     expect(overridden.sessionsDir).toBe(ext);
     const defaulted = await createPiAgentFromWorkspace(dir);
     expect(defaulted.sessionsDir).toBe(join(dir, ".fastagent", "sessions"));
+  });
+
+  it("authPath defaults to the project-level <dir>/.fastagent/auth.json; the override wins", async () => {
+    // The feature: each project carries its own credential (own OAuth refresh lifecycle), not a shared
+    // global file. Lock that the opener defaults project-level and an explicit path (e.g. the shared
+    // global one) overrides — the same precedence shape as sessionsDir.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    const defaulted = await createPiAgentFromWorkspace(dir);
+    expect(defaulted.authPath).toBe(join(dir, ".fastagent", "auth.json"));
+    const shared = join(tmpdir(), "shared-auth.json");
+    const overridden = await createPiAgentFromWorkspace(dir, { authPath: shared });
+    expect(overridden.authPath).toBe(shared);
+  });
+
+  it("self-ignores .fastagent when auth defaults in-tree even though sessionsDir is on a volume", async () => {
+    // The leak this guards: `start --sessions-dir /vol` overrides sessions but leaves the credential
+    // file at the default <dir>/.fastagent/auth.json. The self-ignore must still fire so an adapted
+    // (no root .gitignore) agent dir never ships OAuth/API-key state.
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };`);
+    const vol = await mkdtemp(join(tmpdir(), "fa-sessions-"));
+    await createPiAgentFromWorkspace(dir, { sessionsDir: vol });
+    const { readFile } = await import("node:fs/promises");
+    expect(await readFile(join(dir, ".fastagent", ".gitignore"), "utf8")).toBe("*\n");
   });
 
   it("missing every model source throws a clear startup error (fail visibly)", async () => {

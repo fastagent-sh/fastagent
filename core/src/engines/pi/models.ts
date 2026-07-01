@@ -9,16 +9,19 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
-  /** Override the credentials file path (default `~/.fastagent/auth.json`). */
+  /** Credentials file path. Defaults to the global `~/.fastagent/auth.json`; the folder opener passes
+   *  the project-level `<dir>/.fastagent/auth.json`. */
   authPath?: string;
   /** Extra providers registered on top of the built-ins (same id overrides a built-in). */
   providers?: Provider[];
 }
 
 /**
- * A `Models` with every built-in pi provider, wired to fastagent's auth: stored credentials from
- * `~/.fastagent/auth.json` (via {@link fastagentCredentialStore}), then ambient env vars. A stored
- * credential owns the provider; env is consulted only when nothing is stored (resolution order is upstream-owned).
+ * A `Models` with every built-in pi provider, wired to fastagent's auth: stored credentials from the
+ * {@link CreatePiModelsOptions.authPath} file (via {@link fastagentCredentialStore}; the global
+ * `~/.fastagent/auth.json` unless the opener passes a project-level path), then ambient env vars. A
+ * stored credential owns the provider; env is consulted only when nothing is stored (resolution order
+ * is upstream-owned).
  */
 export function createPiModels(options: CreatePiModelsOptions = {}): Models {
   const models = builtinModels({
@@ -31,8 +34,9 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
 
 /**
  * Which source currently satisfies auth for `spec` — a startup diagnostic. Returns the upstream
- * `AuthResult.source` label (e.g. "OAuth", "ANTHROPIC_API_KEY") or undefined when unconfigured.
- * Reporting-only; never throws.
+ * `AuthResult.source` label: `"OAuth"` for a stored OAuth credential (e.g. a logged-in openai-codex),
+ * `"stored credential"` for a stored API key, an env-var name like `"ANTHROPIC_API_KEY"` for env, or
+ * undefined when unconfigured. Reporting-only; never throws.
  */
 export async function probeAuthSource(models: Models, spec: string): Promise<string | undefined> {
   const slash = spec.indexOf("/");

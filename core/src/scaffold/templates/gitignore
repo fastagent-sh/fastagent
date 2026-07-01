@@ -4,5 +4,5 @@
 # dependencies (reinstalled at deploy)
 node_modules/
 
-# fastagent machine state (dev/start sessions)
+# fastagent machine state (dev/start sessions + project-level auth.json credentials)
 .fastagent/

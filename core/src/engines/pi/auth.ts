@@ -1,10 +1,21 @@
 /**
- * Auth for the pi engine: a read-WRITE {@link CredentialStore} over fastagent's OWN credentials file
- * (`~/.fastagent/auth.json`), consumed by the `Models` collection (models.ts).
+ * Auth for the pi engine: a read-WRITE {@link CredentialStore} over a fastagent credentials file,
+ * consumed by the `Models` collection (models.ts). The path is project-level by default
+ * (`<dir>/.fastagent/auth.json`, resolved by the opener); {@link GLOBAL_AUTH_PATH} is the global
+ * location used as the override target / login default, not an implicit per-provider fallback.
  *
- * fastagent owns this file, SEPARATE from the pi CLI's `~/.pi/agent/auth.json`: two stores cannot
- * share one OAuth refresh lifecycle (a rotated refresh token consumed by one would break the other),
- * and the engine binding must not write the user's global pi state.
+ * Project-level default + NO implicit project↔global fallback, for two reasons: (1) isolation — each
+ * agent can use a different account/subscription; (2) fail-visibly — a missing credential surfaces at
+ * startup instead of being masked by a machine-global one that won't exist on a fresh deploy box. A
+ * *fallback* specifically is refused because the only safe shape (read global, write the rotated token
+ * back to the project file) would diverge: OAuth refresh tokens are single-use, so consuming global's
+ * token and persisting the new one elsewhere leaves global stale for every other consumer.
+ *
+ * Sharing is still SAFE the right way: point everything at ONE file (`FASTAGENT_AUTH_PATH` → the
+ * global path). One file means one refresh lifecycle under `FileAuthStorageBackend`'s cross-process
+ * lock (refresh re-reads the latest token under the lock) — the documented same-machine pattern.
+ * fastagent's store stays SEPARATE from the pi CLI's `~/.pi/agent/auth.json` for the same single-
+ * lifecycle reason: two uncoordinated files over one grant would each rotate and break the other.
  *
  * Persistence + locking reuse pi's `FileAuthStorageBackend` (a cross-process file lock) on the WRITE
  * path only. `read` is pi-ai's per-request hot path, so it stays UNLOCKED; the backend's in-place
@@ -19,8 +30,15 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { FileAuthStorageBackend } from "@earendil-works/pi-coding-agent";
 
-/** fastagent's own credentials file (written by `fastagent login`; distinct from pi's `~/.pi`). */
-export const FASTAGENT_AUTH_PATH = join(homedir(), ".fastagent", "auth.json");
+/**
+ * The GLOBAL fastagent credentials file (distinct from pi's `~/.pi`). The project-level default is
+ * `<dir>/.fastagent/auth.json` (computed by the opener and by `fastagent login`); this is only the
+ * `loginFlow()` PROGRAMMATIC fallback (when a caller omits `authPath`) and the path to point
+ * `--auth-path`/`FASTAGENT_AUTH_PATH` at to deliberately share ONE credential file across projects
+ * (safe — one file, one lock-serialized refresh lifecycle). The `fastagent login` CLI is project-
+ * level by default, never this.
+ */
+export const GLOBAL_AUTH_PATH = join(homedir(), ".fastagent", "auth.json");
 
 export interface FastagentAuthOptions {
   /** Sink for non-fatal auth anomalies (unreadable/corrupt file). Defaults to the process logger (warn). */
@@ -48,9 +66,10 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
   }
 }
 
-/** A read-write `CredentialStore` backed by `~/.fastagent/auth.json`. */
+/** A read-write `CredentialStore` backed by the given credentials file (default {@link GLOBAL_AUTH_PATH};
+ *  the folder opener passes the project-level `<dir>/.fastagent/auth.json`). */
 export function fastagentCredentialStore(
-  authPath: string = FASTAGENT_AUTH_PATH,
+  authPath: string = GLOBAL_AUTH_PATH,
   options: FastagentAuthOptions = {},
 ): CredentialStore {
   const warn = options.warn ?? ((message: string) => log.warn(message));

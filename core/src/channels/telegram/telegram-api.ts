@@ -17,8 +17,10 @@ const PARSE_ERROR = /can't parse|entit|unsupported|unclosed|tag/i;
  *  engine resizes images to the model's needs, so this is a transport guard, not the model size limit. */
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 
-/** Where inbound files land (the agent reads them by path). Machine state under .fastagent: persists,
- *  git-ignored, not auto-cleaned (like sessions) — a long-running bot's operator manages the dir. */
+/** Where inbound files land (the agent reads them by path). Machine state under `.fastagent`: persists,
+ *  not auto-cleaned (like sessions) — a long-running bot's operator manages the dir. Git-ignored via
+ *  `<dir>/.fastagent/.gitignore="*"`, which dev/start write when self-ignoring the state dir (the
+ *  default; NOT registered with that guard, so an all-external sessions+auth config leaves it tracked). */
 const FILES_SUBDIR = join(".fastagent", "telegram-files");
 
 /** Where a reply goes: a chat, optionally a thread (Threaded Mode), optionally replying to a message. */

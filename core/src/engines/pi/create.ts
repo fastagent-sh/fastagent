@@ -17,7 +17,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
-import { type FastagentConfig, resolveModel } from "./config.ts";
+import { type FastagentConfig, defaultProjectAuthPath, resolveModel } from "./config.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
@@ -131,6 +131,7 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
 function buildPiAgent(opts: {
   model: string;
   providers?: Provider[];
+  authPath?: string;
   systemPrompt?: string | (() => string);
   tools?: AgentTool[];
   skills?: Skill[];
@@ -138,7 +139,7 @@ function buildPiAgent(opts: {
   env?: ExecutionEnv;
   lease?: Lease;
 }): Agent {
-  const models = createPiModels({ providers: opts.providers });
+  const models = createPiModels({ providers: opts.providers, authPath: opts.authPath });
   return createPiAgentFromHarness({
     lease: opts.lease,
     harnessFactory: piHarnessFactory({
@@ -187,9 +188,15 @@ export interface CreatePiAgentOptions {
   /**
    * Extra providers registered on top of the built-ins — your own gateway / self-hosted endpoint /
    * test fake — selected by the `model` spec's provider id. Built-ins cover the rest; static keys
-   * still come from `~/.fastagent/auth.json` (fastagent login) or env, not from here.
+   * still come from the {@link authPath} credentials file (fastagent login) or env, not from here.
    */
   providers?: Provider[];
+  /**
+   * Credentials file for stored OAuth/API-key auth. Defaults to `~/.fastagent/auth.json`; the
+   * folder opener passes the project-level `<dir>/.fastagent/auth.json` instead. Env vars are still
+   * consulted when a provider is absent from the file (resolution order is upstream-owned).
+   */
+  authPath?: string;
   /** Session persistence. Defaults to in-memory; inject jsonlSessionStore for restart-surviving continuity. */
   sessions?: PiSessionStore;
   /** Tool execution environment. Defaults to local NodeExecutionEnv (cwd); production injects a sandbox. */
@@ -203,6 +210,7 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
   return buildPiAgent({
     model: options.model,
     providers: options.providers,
+    authPath: options.authPath,
     systemPrompt: instructionsPrompt(options.instructions, options.skills),
     tools: options.tools,
     skills: options.skills,
@@ -225,6 +233,12 @@ export interface CreatePiAgentFromDefinitionOptions {
   tools?: AgentTool[];
   /** Extra providers registered on top of the built-ins (your own gateway / self-hosted endpoint). */
   providers?: Provider[];
+  /**
+   * Credentials file (see {@link CreatePiAgentOptions.authPath}). Being dir-aware, this rung defaults
+   * to the PROJECT-level `<dir>/.fastagent/auth.json` (matching `fastagent dev`/`start` on the same
+   * dir) — unlike the dir-less {@link createPiAgent}/{@link createPiModels}, which default global.
+   */
+  authPath?: string;
   sessions?: PiSessionStore;
   env?: ExecutionEnv;
   lease?: Lease;
@@ -245,6 +259,9 @@ export async function createPiAgentFromDefinition(
   const agent = buildPiAgent({
     model: options.model,
     providers: options.providers,
+    // Dir-aware default: the same project-level file the opener uses for this dir (the opener passes
+    // an explicit authPath, so this only affects direct L2 callers).
+    authPath: options.authPath ?? defaultProjectAuthPath(dir),
     // Factory, not a string: re-assembled per invoke so `date` is the date of the turn, not of agent
     // creation (a long-running deployment would otherwise serve the boot date forever).
     systemPrompt: () =>

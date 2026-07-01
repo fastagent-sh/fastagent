@@ -7,6 +7,7 @@
  * still leave a runnable zero-config agent (model via --model / FASTAGENT_MODEL).
  */
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -136,14 +137,63 @@ export function resolveModelSpec(
 }
 
 /**
+ * Resolve a user-supplied path override (a CLI flag or an env var) to an absolute path, expanding a
+ * leading `~`/`~/` to the home dir FIRST. Path-valued config from `.env` (or any non-shell source)
+ * never gets the shell's `~` expansion, so a bare `resolve("~/x")` would silently create a literal `~`
+ * directory — a fail-silently footgun for a secret/state path. Expanding here makes `~` mean home
+ * everywhere these knobs are read.
+ */
+function resolveOverridePath(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const expanded = raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
+  return resolve(expanded);
+}
+
+/**
  * `start`'s sessions-dir override: `--sessions-dir` flag > `FASTAGENT_SESSIONS_DIR` env > undefined
- * (the opener then falls back to `<dir>/.fastagent/sessions`). Resolved to absolute so the store and
- * the startup report agree regardless of cwd.
+ * (the opener then falls back to {@link defaultProjectSessionsDir}). Resolved to absolute so the store
+ * and the startup report agree regardless of cwd.
  */
 export function resolveSessionsDirOverride(
   flag: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const raw = flag ?? env.FASTAGENT_SESSIONS_DIR;
-  return raw ? resolve(raw) : undefined;
+  return resolveOverridePath(flag ?? env.FASTAGENT_SESSIONS_DIR);
+}
+
+/**
+ * The auth-file override: `--auth-path` flag > `FASTAGENT_AUTH_PATH` env > undefined (the opener then
+ * falls back to `<dir>/.fastagent/auth.json`, the project-level default). Resolved to absolute so the
+ * store and the startup report agree regardless of cwd. No implicit project↔global fallback (isolation
+ * + fail-visibly; see auth.ts); to share one account across projects, point this at the global
+ * `~/.fastagent/auth.json` — sharing ONE file is safe under the store's cross-process refresh lock.
+ */
+export function resolveAuthPathOverride(
+  flag: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return resolveOverridePath(flag ?? env.FASTAGENT_AUTH_PATH);
+}
+
+/**
+ * The project state-dir root, `<dir>/.fastagent` (machine state: sessions + auth.json, self-ignored).
+ * THE single definition of that path segment — the auth/sessions defaults below and the leak guard
+ * (`ensureInTreeStateSelfIgnored`) all derive from it, so the `.fastagent` literal lives in one place
+ * and the self-ignore invariant cannot drift out of sync with where state actually lands.
+ */
+export function projectStateDir(dir: string): string {
+  return join(dir, ".fastagent");
+}
+
+/**
+ * The project-level default credentials file, `<dir>/.fastagent/auth.json` — used whenever no override
+ * applies. Single source so every call site (the opener, `info`, `login`) agrees.
+ */
+export function defaultProjectAuthPath(dir: string): string {
+  return join(projectStateDir(dir), "auth.json");
+}
+
+/** The project-level default sessions dir, `<dir>/.fastagent/sessions` (the opener's fallback). */
+export function defaultProjectSessionsDir(dir: string): string {
+  return join(projectStateDir(dir), "sessions");
 }

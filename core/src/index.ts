@@ -95,8 +95,11 @@ export {
 // Session is pi's session object that PiSessionStore.openOrCreate returns (custom stores produce it).
 export type { Session } from "@earendil-works/pi-agent-core";
 // Auth + the Models collection. createPiModels builds the default collection (built-in providers;
-// ~/.fastagent/auth.json → env vars); fastagentCredentialStore is the read-write store fastagent owns.
-export { FASTAGENT_AUTH_PATH, type FastagentAuthOptions, fastagentCredentialStore } from "./engines/pi/auth.ts";
+// the global auth file → env vars — pass `authPath` for a project-level file); fastagentCredentialStore
+// is the read-write store fastagent owns. GLOBAL_AUTH_PATH is the global location (createPiModels'
+// default and loginFlow's programmatic fallback when authPath is omitted, plus the explicit ONE-file
+// cross-project share target) — NOT the `fastagent login` default, which is project-level.
+export { GLOBAL_AUTH_PATH, type FastagentAuthOptions, fastagentCredentialStore } from "./engines/pi/auth.ts";
 export { type CreatePiModelsOptions, createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 export type { Models } from "@earendil-works/pi-ai";
 // Provider injection (Tier 2: your own gateway / self-hosted endpoint), passed via the `providers`

@@ -17,8 +17,24 @@ import {
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
 import { assembleSystemPrompt } from "../src/engines/pi/create.ts";
+import { isUnderStateDir } from "../src/engines/pi/definition.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
+
+describe("definition: isUnderStateDir (the leak-guard predicate — path location, not option presence)", () => {
+  const state = join("/work", ".fastagent");
+  it("is true for the dir itself and any path inside it (defaulted OR an explicit path aimed in-tree)", () => {
+    expect(isUnderStateDir(state, state)).toBe(true); // same dir
+    expect(isUnderStateDir(join(state, "auth.json"), state)).toBe(true); // default auth
+    expect(isUnderStateDir(join(state, "sessions"), state)).toBe(true); // default sessions
+    expect(isUnderStateDir(join(state, "nested", "x"), state)).toBe(true); // explicit --auth-path back in-tree
+  });
+  it("is false for external paths (a mounted volume) and sibling dirs sharing a prefix", () => {
+    expect(isUnderStateDir("/mnt/vol", state)).toBe(false); // operator's volume
+    expect(isUnderStateDir(join("/work", ".fastagent-old"), state)).toBe(false); // prefix sibling, not inside
+    expect(isUnderStateDir(join("/work", "sessions"), state)).toBe(false); // outside .fastagent
+  });
+});
 
 describe("definition: loadAgentDefinition", () => {
   it("loads instructions from AGENTS.md and skills from SKILL.md frontmatter", async () => {

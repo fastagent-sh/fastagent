@@ -14,8 +14,13 @@
  *
  * Cross-workspace session switches are rejected: `.env` is process-global, so one chat TUI is one
  * workspace.
+ *
+ * AUTH: chat is the one command that does NOT use fastagent's credential file. It drives pi's own
+ * session services (`createAgentSessionServices`, auth from pi's `~/.pi` via `getAgentDir()`), so you
+ * log in through pi's TUI, not `fastagent login`. `--auth-path`/`FASTAGENT_AUTH_PATH` therefore do not
+ * apply here, and `createPiModels()` below is used only to RESOLVE the model descriptor (never for auth).
  */
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
@@ -32,7 +37,7 @@ import {
 import { loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
 import { createPiModels } from "./models.ts";
-import { loadAgentDefinition } from "./definition.ts";
+import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { loadTools, mergeDiscoveredTools } from "./tool.ts";
 import { reportDefinitionWarnings, reportToolCollisions } from "./report.ts";
 
@@ -60,7 +65,8 @@ export async function buildChatRuntime(
         `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
       );
     }
-    // Resolution only; chat's auth/login rides pi's native TUI machinery (see header).
+    // Resolution only — the Models' auth is unused here; chat's auth is pi's own (~/.pi via the session
+    // services), so authPath is intentionally not threaded in. See the AUTH note in the header.
     const model = resolveModel(createPiModels(), modelSpec);
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(cwd, { env });
@@ -98,12 +104,12 @@ export async function buildChatRuntime(
   // AGENTS.md/skills, stale config/tools). Keep chat a coherent startup snapshot: restart to load
   // edits. And keep it workspace-scoped — `.env` is process-global, so a switch to another cwd would
   // leak env or require mutating global env at runtime.
-  const rootCwd = canonicalCwd(dir);
+  const rootCwd = canonicalPath(dir);
   let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {
     // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would
     // otherwise mismatch a non-realpath rootCwd.
-    const activeCwd = canonicalCwd(cwd);
+    const activeCwd = canonicalPath(cwd);
     if (activeCwd !== rootCwd) {
       throw workspaceScopeError(activeCwd);
     }
@@ -172,16 +178,6 @@ function workspaceScopeError(targetCwd: string): Error {
   );
 }
 
-/** Resolve to a canonical (symlink-free) path so comparisons match pi's process.cwd() realpath. */
-function canonicalCwd(p: string): string {
-  const resolved = resolve(p);
-  try {
-    return realpathSync(resolved);
-  } catch {
-    return resolved; // a path that doesn't exist (e.g. a foreign workspace cwd) stays as resolved
-  }
-}
-
 function readSessionHeaderCwd(sessionPath: string): string | undefined {
   const resolvedPath = resolve(sessionPath);
   if (!existsSync(resolvedPath)) return undefined;
@@ -189,7 +185,7 @@ function readSessionHeaderCwd(sessionPath: string): string | undefined {
     if (!line.trim()) continue;
     try {
       const entry = JSON.parse(line) as { type?: unknown; cwd?: unknown };
-      if (entry.type === "session") return typeof entry.cwd === "string" ? canonicalCwd(entry.cwd) : undefined;
+      if (entry.type === "session") return typeof entry.cwd === "string" ? canonicalPath(entry.cwd) : undefined;
     } catch {
       // Ignore malformed lines the same way pi's session loader does; no header cwd → caller pins root.
     }
@@ -205,7 +201,7 @@ function readSessionHeaderCwd(sessionPath: string): string | undefined {
  */
 function enforceWorkspaceScopedSessionSwitches(runtime: AgentSessionRuntime, rootCwd: string): void {
   const rejectForeignTarget = (sessionPath: string, cwdOverride: string | undefined): void => {
-    const target = cwdOverride !== undefined ? canonicalCwd(cwdOverride) : readSessionHeaderCwd(sessionPath);
+    const target = cwdOverride !== undefined ? canonicalPath(cwdOverride) : readSessionHeaderCwd(sessionPath);
     if (target !== undefined && target !== rootCwd) throw workspaceScopeError(target);
   };
 

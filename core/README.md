@@ -41,7 +41,7 @@ Common commands:
 | `fastagent tool <name> <json> [dir]` | Run one discovered tool without a model |
 | `fastagent add github|telegram [dir]` | Scaffold a first-party channel |
 | `fastagent add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/` |
-| `fastagent login [provider]` | Store provider credentials in `~/.fastagent/auth.json` |
+| `fastagent login [provider]` | Store provider credentials in the project-level `<cwd>/.fastagent/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`) |
 | `fastagent start [dir]` | Serve without watch; use `--sessions-dir` or `FASTAGENT_SESSIONS_DIR` for durable sessions |
 
 ## Library API

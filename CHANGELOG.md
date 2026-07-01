@@ -19,6 +19,31 @@ While the project is pre-1.0, minor versions may include breaking changes.
 ### Changed
 - Narrative reframed to "Vibe first. Then FastAgent." — take a local agent folder out of
   the terminal and serve it in an app, on GitHub, in Telegram, or behind a custom channel.
+- **Auth is now project-level by default.** The credentials file defaults to
+  `<dir>/.fastagent/auth.json` (was the global `~/.fastagent/auth.json`); `fastagent login`,
+  `dev`, `start`, `invoke`, and `info` all resolve it as `--auth-path` > `FASTAGENT_AUTH_PATH` >
+  project default, with no implicit project↔global fallback (isolation + fail-visibly). (`fastagent
+  chat` is exempt — it authenticates through pi's own TUI / `~/.pi`, not fastagent's credential file.)
+  **Migration:**
+  existing global logins are not used automatically — `dev`/`start`/`invoke` now print a hint when the
+  global file has the credential; set `FASTAGENT_AUTH_PATH=~/.fastagent/auth.json` to keep using it
+  (sharing one file is safe), or `fastagent login` in the project for a project-level credential.
+- **Breaking (API):** the exported `FASTAGENT_AUTH_PATH` constant is renamed `GLOBAL_AUTH_PATH`
+  (it is the global location, no longer the default). No deprecation alias — the constant's meaning
+  changed from *the default path* to *the global location* (the value you point the
+  `FASTAGENT_AUTH_PATH` env var at), so reusing that name for it would mislead. `createPiAgent`,
+  `createPiAgentFromDefinition`, and `createPiModels` gain an `authPath` option; the dir-aware
+  `createPiAgentFromDefinition` defaults it to the project-level `<dir>/.fastagent/auth.json` (the
+  dir-less `createPiAgent`/`createPiModels` still default to the global file).
+
+### Fixed
+- `fastagent login <provider>` now loads `.env` from the current directory. It previously
+  resolved `.env` against `./<provider>` (the positional is the provider, not a dir), so a proxy
+  (e.g. `HTTPS_PROXY`) set in the workspace `.env` was ignored during the OAuth token exchange.
+- A leading `~` in path overrides is now expanded to the home dir. Both `--auth-path` /
+  `FASTAGENT_AUTH_PATH` and `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` previously took `~/x` from a
+  non-shell source (e.g. `.env`) literally, creating a `<cwd>/~` directory instead of resolving to
+  home.
 
 ### Removed
 - `core/examples/` (better examples will be added later).

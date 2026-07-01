@@ -9,7 +9,7 @@ FastAgent keeps behavior and deployment choices separate:
 
 - agent behavior lives in `AGENTS.md`, `skills/`, and `tools/`,
 - deployment choices live in `fastagent.config.*`, CLI flags, and environment variables,
-- secrets live in `.env`, provider env vars, or `~/.fastagent/auth.json`.
+- secrets live in `.env`, provider env vars, or the project-level `<dir>/.fastagent/auth.json`.
 
 ## Config file
 
@@ -76,7 +76,7 @@ FastAgent resolves model credentials through the model provider layer. Common op
 
 | Source | Use case |
 |---|---|
-| `fastagent login` | Stores OAuth/API-key credentials in `~/.fastagent/auth.json`. |
+| `fastagent login` | Stores OAuth/API-key credentials in the project-level `<cwd>/.fastagent/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded; run from `$HOME` for the global file). |
 | Provider env vars | Good for servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
 | Workspace `.env` | Local development secrets loaded by CLI commands. Keep it gitignored. |
 
@@ -121,6 +121,8 @@ Precedence:
 ```txt
 --sessions-dir > FASTAGENT_SESSIONS_DIR > <workspace>/.fastagent/sessions
 ```
+
+A leading `~` in `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` is expanded to your home dir (same as the auth path).
 
 ## Tools
 

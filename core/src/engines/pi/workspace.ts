@@ -9,11 +9,17 @@
  * watch and can point sessions at a mounted volume.
  */
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import type { Agent } from "../../agent.ts";
-import { type FastagentConfig, type LoadedConfig, loadConfig, resolveModelSpec } from "./config.ts";
+import {
+  type FastagentConfig,
+  type LoadedConfig,
+  defaultProjectAuthPath,
+  defaultProjectSessionsDir,
+  loadConfig,
+  resolveModelSpec,
+} from "./config.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
-import { type LoadedDefinition, ensureStateDirSelfIgnored } from "./definition.ts";
+import { type LoadedDefinition, ensureInTreeStateSelfIgnored } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
 
@@ -26,6 +32,12 @@ export interface CreatePiAgentFromWorkspaceOptions {
    * survives redeploys.
    */
   sessionsDir?: string;
+  /**
+   * Credentials file override. Default `<dir>/.fastagent/auth.json` (project-level, gitignored under
+   * the same `*`-ignored `.fastagent`). Override via --auth-path / FASTAGENT_AUTH_PATH; point it at
+   * `~/.fastagent/auth.json` to share one credential across projects.
+   */
+  authPath?: string;
 }
 
 /**
@@ -45,6 +57,8 @@ export async function createPiAgentFromWorkspace(
   modelSpec: string;
   /** Absolute session store directory in use (for the startup report). */
   sessionsDir: string;
+  /** Absolute credentials file in use (for the startup report). */
+  authPath: string;
   /** Non-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
   toolCollisions: ToolCollision[];
@@ -57,16 +71,20 @@ export async function createPiAgentFromWorkspace(
     );
   }
   const { tools, toolNames, toolCollisions } = await resolveWorkspaceTools(config, dir);
-  const sessionsDir = options.sessionsDir ?? join(dir, ".fastagent", "sessions");
+  const sessionsDir = options.sessionsDir ?? defaultProjectSessionsDir(dir);
   await mkdir(sessionsDir, { recursive: true });
-  // Self-ignore only the default in-tree state dir. An explicit sessionsDir is the operator's path
-  // (e.g. a mounted volume) — never write our `.gitignore` into it.
-  if (!options.sessionsDir) await ensureStateDirSelfIgnored(join(dir, ".fastagent"));
+  // The credentials file: project-level by default (its `.fastagent` dir is self-ignored below); only
+  // READ here, so no mkdir (a missing file reads as not-configured — `fastagent login` creates it).
+  const authPath = options.authPath ?? defaultProjectAuthPath(dir);
+  // Self-ignore the in-tree `.fastagent` iff sessions OR auth actually lands under it (decided by path
+  // location, not which option was passed; the single owner also skips the HOME-global dir).
+  await ensureInTreeStateSelfIgnored(dir, sessionsDir, authPath);
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
     model: modelSpec,
     tools,
+    authPath,
     // Skills are definition-only (the agent is its folder), so dev mirrors deployment exactly.
     sessions: jsonlSessionStore({ dir: sessionsDir, cwd: dir }),
   });
-  return { agent, definition, config, configPath, modelSpec, sessionsDir, toolNames, toolCollisions };
+  return { agent, definition, config, configPath, modelSpec, sessionsDir, authPath, toolNames, toolCollisions };
 }

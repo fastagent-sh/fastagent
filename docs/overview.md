@@ -113,7 +113,7 @@ Implemented today:
 - GitHub and Telegram channel adapters.
 - `dev`, `chat`, `invoke`, `tool`, `info`, and `start` workflows.
 - jsonl session persistence with restart continuity.
-- CLI login backed by `~/.fastagent/auth.json`.
+- CLI login backed by a project-level `<dir>/.fastagent/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`).
 
 Not implemented yet:
 

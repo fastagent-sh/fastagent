@@ -20,17 +20,20 @@ import { announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 import { discoverChannelFiles, loadChannels } from "./engines/pi/channel.ts";
 import { fastagentVersion } from "./version.ts";
 import {
+  defaultProjectAuthPath,
+  defaultProjectSessionsDir,
   isValidPort,
   listModels,
   loadConfig,
+  resolveAuthPathOverride,
   resolveModelSpec,
   resolveSessionsDirOverride,
 } from "./engines/pi/config.ts";
 import { formatModelsCommand } from "./cli-models.ts";
-import { FASTAGENT_AUTH_PATH } from "./engines/pi/auth.ts";
+import { GLOBAL_AUTH_PATH } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
-import { loadAgentDefinition } from "./engines/pi/definition.ts";
+import { ensureInTreeStateSelfIgnored, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { loadRootIgnore } from "./workspace.ts";
 import { runInvokeStream } from "./invoke-stream.ts";
 import { reportDefinitionWarnings, reportToolCollisions } from "./engines/pi/report.ts";
@@ -52,14 +55,14 @@ function usage(code: number): never {
   console.error(`usage:
   fastagent init   [dir] [--minimal] [--no-install]
   fastagent models [search]
-  fastagent info   [dir] [--json]
+  fastagent info   [dir] [--json] [--auth-path file]
   fastagent tool   <name> '<json-args>' [dir]
-  fastagent invoke <message> [dir] [--model provider/modelId]
-  fastagent dev    [dir] [--port N] [--model provider/modelId] [--no-watch] [--tunnel]
+  fastagent invoke <message> [dir] [--model provider/modelId] [--auth-path file]
+  fastagent dev    [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
-  fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--tunnel]
+  fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
   fastagent add   github | telegram | skill <source> [dir]
-  fastagent login [provider]
+  fastagent login [provider] [--auth-path file]
   fastagent --version
 
   dev    assemble the agent in dir (default .) and serve a local HTTP channel.
@@ -92,14 +95,17 @@ function usage(code: number): never {
          port precedence:  --port > PORT env > fastagent.config.ts http.port > 8787
          sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions
                    (point FASTAGENT_SESSIONS_DIR at a volume so a redeploy never wipes conversations)
+         auth:     --auth-path > FASTAGENT_AUTH_PATH > <dir>/.fastagent/auth.json (project-level;
+                   point it at ~/.fastagent/auth.json to share one credential across projects)
          --tunnel  same as dev: a public HTTPS URL + auto-registered webhooks, for hosting a bot from
                    your own box without deploying (the quick-tunnel URL is ephemeral, not for production)
   add    github | telegram: scaffold channels/<kind>.ts (third-party adapter glue, an on() to edit).
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
-  login  authenticate a model provider into ~/.fastagent/auth.json: pick a method (subscription/OAuth
-         or API key), then a provider that offers it (configured status shown). [provider] takes the
-         method from what that provider supports, asked only when it offers both.`);
+  login  authenticate a model provider into the project-level <cwd>/.fastagent/auth.json (override with
+         --auth-path / FASTAGENT_AUTH_PATH; run from $HOME for the global ~/.fastagent/auth.json): pick
+         a method (subscription/OAuth or API key), then a provider that offers it (configured status
+         shown). [provider] takes the method from what that provider supports, asked only when both.`);
   process.exit(code);
 }
 
@@ -109,6 +115,7 @@ const { positionals, values } = parseArgs({
     port: { type: "string" },
     model: { type: "string" },
     "sessions-dir": { type: "string" },
+    "auth-path": { type: "string" },
     minimal: { type: "boolean" },
     "no-install": { type: "boolean" },
     "no-watch": { type: "boolean" },
@@ -196,8 +203,14 @@ async function runInvoke(): Promise<void> {
   const invokeDir = resolve(positionals[2] ?? ".");
   loadDotEnv(invokeDir);
   installProxyFetch();
-  const { agent, modelSpec } = await createPiAgentFromWorkspace(invokeDir, { model: values.model }).catch(failStartup);
+  const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(invokeDir, {
+    model: values.model,
+    authPath: resolveAuthPathOverride(values["auth-path"]),
+  }).catch(failStartup);
   console.error(`[fastagent] invoke: ${invokeDir} (${modelSpec})`);
+  // Same auth report as dev/start (incl. the global-credential migration hint) — otherwise an upgraded
+  // user's first `invoke` hits a bare turn failure with no pointer to their existing global credential.
+  await reportAuth(modelSpec, authPath);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
   // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).
   const exitCode = await runInvokeStream(
@@ -219,8 +232,10 @@ async function runInfo(): Promise<void> {
   const definition = await loadAgentDefinition(dir).catch(failStartup);
   const { toolNames, toolCollisions } = await resolveWorkspaceTools(config, dir).catch(failStartup);
   const channels = await discoverChannelFiles(dir).catch(failStartup);
-  // The default sessions path WITHOUT creating it (info is read-only; dev/start mkdir it, info must not).
-  const sessionsDir = resolveSessionsDirOverride(values["sessions-dir"]) ?? join(dir, ".fastagent", "sessions");
+  // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login
+  // create them, info must not).
+  const sessionsDir = resolveSessionsDirOverride(values["sessions-dir"]) ?? defaultProjectSessionsDir(dir);
+  const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultProjectAuthPath(dir);
 
   if (values.json) {
     console.log(
@@ -234,6 +249,7 @@ async function runInfo(): Promise<void> {
           tools: toolNames,
           channels,
           sessionsDir,
+          authPath,
           diagnostics: definition.diagnostics,
           skillCollisions: definition.collisions,
           toolCollisions,
@@ -252,6 +268,7 @@ async function runInfo(): Promise<void> {
   console.log(`tools:    ${toolNames.join(", ") || "(none)"}`);
   console.log(`channels: ${channels.join(", ") || "(none)"}`);
   console.log(`sessions: ${sessionsDir}`);
+  console.log(`auth:     ${authPath}`);
   reportToolCollisions(toolCollisions);
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 }
@@ -359,13 +376,29 @@ async function runAddSkill(): Promise<void> {
   console.error(`  next: mention "${name}" in AGENTS.md so the model knows when to use it; then \`fastagent dev\``);
 }
 
-/** `fastagent login [provider]`: authenticate a model provider into `~/.fastagent/auth.json`. */
+/**
+ * `fastagent login [provider]`: authenticate a model provider into the project-level auth file
+ * (`<cwd>/.fastagent/auth.json`) by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`. The positional is
+ * the PROVIDER (not a dir), so the project is cwd — `cd` into your agent before logging in (running it
+ * from $HOME writes the global `~/.fastagent/auth.json`).
+ *
+ * Creates and self-ignores `<cwd>/.fastagent/` (the credential's gitignored home) BEFORE the auth flow,
+ * so the secret can never land untracked — a flow that then fails (bad provider, abort) leaves that
+ * empty state dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
+ */
 async function runLogin(): Promise<void> {
-  loadDotEnv(dir); // a proxy (HTTPS_PROXY) may be configured in the workspace .env
+  const loginDir = process.cwd();
+  loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
+  const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultProjectAuthPath(loginDir);
+  // login is the command that CREATES the credential file, so the leak guard binds HERE too (not only
+  // in the opener): on an adapted project dir, a `login` before the first dev/start would otherwise
+  // leave the secret untracked-but-committable. Same single owner — it self-ignores only an in-tree
+  // project `.fastagent`, never the HOME-global one (login from $HOME).
+  await ensureInTreeStateSelfIgnored(loginDir, authPath);
   const io = terminalLoginIO();
-  const result = await loginFlow(io, { provider: positionals[1] }).catch(failStartup);
-  console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${FASTAGENT_AUTH_PATH}`);
+  const result = await loginFlow(io, { provider: positionals[1], authPath }).catch(failStartup);
+  console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
 }
 
@@ -419,17 +452,30 @@ function parsePort(value: string | undefined, source: string): number | undefine
 }
 
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. Non-blocking. */
-async function reportAuth(modelSpec: string): Promise<void> {
+async function reportAuth(modelSpec: string, authPath: string): Promise<void> {
   const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
-  const source = await probeAuthSource(createPiModels(), modelSpec);
-  log.info(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`}`);
-  if (source === undefined) {
-    // Lead with `fastagent login`: the default model (openai-codex) is OAuth-only, and the
-    // provider-specific env var name is not exported, so keep the env path generic.
-    log.warn(
-      `[fastagent] no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
-    );
+  const source = await probeAuthSource(createPiModels({ authPath }), modelSpec);
+  log.info(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`} — ${authPath}`);
+  if (source !== undefined) return;
+  // Migration aid: a pre-0.x user logged in under the OLD global default; the new project-level
+  // default reads empty and would silently "lose" their credential. If the global file still has it,
+  // point them at it (sharing one file is safe) rather than only telling them to log in again.
+  if (authPath !== GLOBAL_AUTH_PATH) {
+    const global = await probeAuthSource(createPiModels({ authPath: GLOBAL_AUTH_PATH }), modelSpec);
+    if (global !== undefined) {
+      log.warn(
+        `[fastagent] no project credentials for "${provider}", but the global ${GLOBAL_AUTH_PATH} has them — ` +
+          `set FASTAGENT_AUTH_PATH=${GLOBAL_AUTH_PATH} to use them here, or run \`fastagent login\` for a project-level credential`,
+      );
+      return;
+    }
   }
+  // Lead with `fastagent login`: the default model (openai-codex) is OAuth-only, and the provider-
+  // specific env var name is not exported, so keep the env path generic. login writes to this same
+  // project-level path, so a follow-up `fastagent login` here fixes it in place.
+  log.warn(
+    `[fastagent] no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
+  );
 }
 
 type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;
@@ -495,11 +541,14 @@ async function serveOnce(): Promise<void> {
   loadDotEnv(dir);
   installProxyFetch();
 
-  const a = await createPiAgentFromWorkspace(dir, { model: values.model }).catch(failStartup);
+  const a = await createPiAgentFromWorkspace(dir, {
+    model: values.model,
+    authPath: resolveAuthPathOverride(values["auth-path"]),
+  }).catch(failStartup);
   log.info(`[fastagent] dir:    ${a.definition.dir}`);
   log.info(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
   log.info(`[fastagent] model:  ${a.modelSpec}`);
-  await reportAuth(a.modelSpec);
+  await reportAuth(a.modelSpec, a.authPath);
   reportAgentsSkillsTools(a);
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
@@ -515,12 +564,16 @@ async function runStart(): Promise<void> {
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(values["sessions-dir"]);
-  const { agent, definition, config, modelSpec, sessionsDir, toolNames, toolCollisions } =
-    await createPiAgentFromWorkspace(dir, { model: values.model, sessionsDir: sessionsDirOverride }).catch(failStartup);
+  const { agent, definition, config, modelSpec, sessionsDir, authPath, toolNames, toolCollisions } =
+    await createPiAgentFromWorkspace(dir, {
+      model: values.model,
+      sessionsDir: sessionsDirOverride,
+      authPath: resolveAuthPathOverride(values["auth-path"]),
+    }).catch(failStartup);
 
   log.info(`[fastagent] start:  ${dir}`);
   log.info(`[fastagent] model:  ${modelSpec}`);
-  await reportAuth(modelSpec);
+  await reportAuth(modelSpec, authPath);
   log.info(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
   log.info(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (toolNames.length > 0) log.info(`[fastagent] tools:  ${toolNames.join(", ")}`);

@@ -10,11 +10,14 @@
  * loudly at startup), while non-fatal findings (bad skill files, name collisions) are returned as
  * data for the caller to surface.
  */
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { projectStateDir } from "./config.ts";
 
 /** A same-name skill collision (the discarded side). Surfaced, never swallowed. */
 export interface SkillCollision {
@@ -79,11 +82,74 @@ export async function loadAgentDefinition(
 }
 
 /**
- * Self-ignore a `.fastagent` state dir: write `<stateDir>/.gitignore` = "*" (idempotent — an
- * existing one is kept), so a workspace that runs dev/start never shows machine state as untracked.
+ * Whether `targetPath` lives inside `stateDir` (the in-tree `<dir>/.fastagent`). This — not "was an
+ * option passed" — is the test that drives self-ignore: ANY state/secret landing under `.fastagent`
+ * (a defaulted path, or an explicit `--sessions-dir`/`--auth-path` pointed back in-tree) must be
+ * ignored; a path on an external volume must not (and we never write our `.gitignore` outside the
+ * tree anyway). Same path → true; the stateDir is always ours to write into.
  */
-export async function ensureStateDirSelfIgnored(stateDir: string): Promise<void> {
+export function isUnderStateDir(targetPath: string, stateDir: string): boolean {
+  const rel = relative(stateDir, targetPath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Self-ignore a `.fastagent` state dir: create it if missing, then write `<stateDir>/.gitignore` = "*"
+ * (idempotent — an existing one is kept), so a workspace that runs dev/start never shows machine state
+ * as untracked. Creates the dir because a caller may self-ignore it before anything else populates it
+ * (e.g. `login` writing auth.json, or the default sessions store pointing elsewhere on a volume).
+ *
+ * Module-PRIVATE on purpose: the only entry to the leak guard is {@link ensureInTreeStateSelfIgnored}
+ * (home exclusion + containment). Keeping this unexported makes that single-owner claim hold at the
+ * type level — a sibling command can't bypass those checks by writing a `.gitignore` directly.
+ */
+async function ensureStateDirSelfIgnored(stateDir: string): Promise<void> {
+  await mkdir(stateDir, { recursive: true });
   await writeFile(join(stateDir, ".gitignore"), "*\n", { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== "EEXIST") throw e;
   });
+}
+
+/**
+ * The single owner of the self-ignore MECHANISM: if any of `paths` lands inside `<dir>/.fastagent`,
+ * write that dir's `.gitignore="*"` (which then covers EVERYTHING under `.fastagent` — sessions,
+ * auth.json, a channel's downloads). The orchestration (derive stateDir → test → ensure, with the home
+ * exclusion below) lives here, and `ensureStateDirSelfIgnored` is private, so a caller cannot write a
+ * `.gitignore` bypassing these checks.
+ *
+ * It is NOT auto-discovery: it fires only for the `paths` it is GIVEN. Every command/channel that puts
+ * state in-tree must register its path here (the opener: sessions + auth; `login`: auth). A path it is
+ * never told about is covered only incidentally — e.g. `<cwd>/.fastagent/telegram-files` relies on the
+ * opener having self-ignored `.fastagent` for sessions/auth, so an all-external sessions+auth config
+ * would leave it untracked-but-committable (a channel that wants a guarantee must register its dir).
+ *
+ * Excludes the user's HOME-global `~/.fastagent` (e.g. `login`/`dev` run from `$HOME`): self-ignore is
+ * for protecting state inside an agent PROJECT tree, not for writing a `.gitignore` into the user's
+ * home, which a dotfiles repo may track. The global credential file there was never self-ignored.
+ */
+export async function ensureInTreeStateSelfIgnored(dir: string, ...paths: string[]): Promise<void> {
+  // Compare CANONICAL paths for the home check: `dir` arrives realpath-resolved (it is `process.cwd()`
+  // or `resolve(".")`) but `homedir()` returns the raw `$HOME`, so a symlinked home would slip past raw
+  // equality and we'd write a `.gitignore` into the real `~/.fastagent` — the very thing the doc forbids
+  // (chat.ts canonicalizes for the same reason).
+  if (canonicalPath(dir) === canonicalPath(homedir())) return;
+  // Containment uses the RAW stateDir. For the DEFAULTED paths (the common case + the whole point of the
+  // guard) auth/sessions derive from this same `dir`, so raw equality is correct by construction.
+  // NOT covered: an explicit `--auth-path`/`--sessions-dir` given in a different symlink form than `dir`
+  // (e.g. a realpath into a symlinked workspace) — canonicalizing wouldn't reliably fix it either, since
+  // a not-yet-created `.fastagent`/auth.json can't be realpath'd. An operator supplying an explicit path
+  // owns where it lands.
+  const stateDir = projectStateDir(dir);
+  if (paths.some((p) => isUnderStateDir(p, stateDir))) await ensureStateDirSelfIgnored(stateDir);
+}
+
+/** Resolve to a canonical (symlink-free) absolute path so comparisons match `process.cwd()`'s realpath.
+ *  A non-existent path can't be realpath'd, so it stays as the plain absolute resolve. */
+export function canonicalPath(p: string): string {
+  const resolved = resolve(p);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
 }

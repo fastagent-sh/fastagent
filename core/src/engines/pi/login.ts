@@ -1,5 +1,6 @@
 /**
- * `fastagent login`: authenticate a MODEL PROVIDER into `~/.fastagent/auth.json` via the same
+ * `fastagent login`: authenticate a MODEL PROVIDER into the resolved auth file (project-level
+ * `<dir>/.fastagent/auth.json` by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`) via the same
  * {@link fastagentCredentialStore} the runtime uses (one writer, one lock/corruption semantics).
  *
  * Flow (pi-ai's unified `ProviderAuth` API): pick a method (OAuth or API key), then a provider that
@@ -16,7 +17,7 @@ import type {
   Provider,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { FASTAGENT_AUTH_PATH, fastagentCredentialStore } from "./auth.ts";
+import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "./auth.ts";
 
 /** One picker option: a stable `value`, a human `label`, and an optional `hint` (e.g. configured status). */
 export interface IoOption {
@@ -149,7 +150,7 @@ export async function loginFlow(
     signal?: AbortSignal;
   } = {},
 ): Promise<LoginResult> {
-  const store = options.store ?? fastagentCredentialStore(options.authPath ?? FASTAGENT_AUTH_PATH);
+  const store = options.store ?? fastagentCredentialStore(options.authPath ?? GLOBAL_AUTH_PATH);
   const providers = options.providers ?? builtinProviders();
 
   let method: LoginMethod;

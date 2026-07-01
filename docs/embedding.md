@@ -12,7 +12,7 @@ Use FastAgent as a **library** — the agent is one capability inside a product 
 
 - **Node ≥ 22.19.** Ships compiled JS + types; no build step for FastAgent itself.
 - **Install as a dependency:** `npm i @kid7st/fastagent`.
-- **Model credentials** — `fastagent login` (OAuth, writes `~/.fastagent/auth.json`) or a provider API key in the environment (e.g. `OPENAI_API_KEY`). Auth is invisible to your code; see [Auth](#auth) below.
+- **Model credentials** — `fastagent login` (OAuth, writes the project-level `<cwd>/.fastagent/auth.json`) or a provider API key in the environment (e.g. `OPENAI_API_KEY`). Auth is invisible to your code; see [Auth](#auth) below.
 
 ## The one mental model
 
@@ -134,9 +134,9 @@ createPiAgent({
 
 ## 4. Auth
 
-Auth never appears in your agent code. It resolves, in order, from **`~/.fastagent/auth.json`** (written by `fastagent login` — OAuth or API key) then **ambient env vars** (e.g. `ANTHROPIC_API_KEY`). A server deploy that only sets an env key Just Works; a dev machine uses `fastagent login`.
+Auth never appears in your agent code. It resolves, in order, from a **credentials file** then **ambient env vars** (e.g. `ANTHROPIC_API_KEY`). The dir-aware rungs default it to the **project-level** `<dir>/.fastagent/auth.json`: the folder opener (`createPiAgentFromWorkspace`, i.e. `dev`/`start`) and `createPiAgentFromDefinition(dir)`. The dir-less `createPiAgent` / `createPiModels` default to the global `~/.fastagent/auth.json`; all of them accept an explicit `authPath`. A server deploy that only sets an env key Just Works; a dev machine uses `fastagent login` (which writes the project-level file by default). There is no implicit fallback between the project and global files — each owns its own OAuth refresh lifecycle.
 
-To check what's in effect: `probeAuthSource(createPiModels(), "openai-codex/gpt-5.5")` returns the resolved source label (`"OAuth"`, `"ANTHROPIC_API_KEY"`, or `undefined`).
+To check what's in effect: `probeAuthSource(createPiModels({ authPath }), "openai-codex/gpt-5.5")` returns the resolved source label — `"OAuth"` for a stored OAuth credential (what a logged-in `openai-codex` user sees), `"stored credential"` for a stored API key, an env-var name like `"ANTHROPIC_API_KEY"`, or `undefined`.
 
 Static keys belong in the login file or the environment, not in code — there is no `apiKey` constructor option by design. The only model-source injection point is `providers` (next), for when the endpoint itself is yours.
 
