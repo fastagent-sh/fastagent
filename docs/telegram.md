@@ -178,7 +178,7 @@ Downloaded files persist until the operator cleans them up. Treat `.fastagent/te
 
 ## Limits
 
-- Telegram messages are split to the 4096-character limit.
+- Telegram messages are split to the 4096-character limit as valid HTML: a tag spanning a boundary is closed at the chunk end and reopened (with its attributes) at the next chunk start, and the split never cuts through a tag token — so a long `<pre>` code block stays formatted instead of degrading to a plain-text fallback.
 - HTML parse failures fall back to plain text so a model formatting mistake does not lose the reply.
 - Bot API 429 responses are retried with Telegram's `retry_after` hint.
 - Audio/video transcription is not built in; the agent must use its own tools if it needs media content.

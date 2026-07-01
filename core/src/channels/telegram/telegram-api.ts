@@ -10,7 +10,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { ImageRef } from "../../agent.ts";
 
 /** Telegram's hard text limit per message. */
-const TELEGRAM_MAX_TEXT = 4096;
+export const TELEGRAM_MAX_TEXT = 4096;
 const PARSE_ERROR = /can't parse|entit|unsupported|unclosed|tag/i;
 
 /** Download sanity cap (Telegram's own getFile limit); a larger file/image is rejected visibly. The
@@ -68,25 +68,102 @@ async function callBotApi(
   }
 }
 
-/** Split text into ≤4096-char chunks (Telegram's limit), preferring newline boundaries. */
-export function chunkText(text: string): string[] {
+/** Tags left open at the end of `html`, innermost last, each as its full opening string (attributes and
+ *  all) so a reopen reproduces `<a href=…>` / `<code class=…>` exactly. A close pops the nearest matching
+ *  open. Telegram's HTML is a shallow flat subset, so this simple stack is enough. */
+function unclosedTags(html: string): { name: string; open: string }[] {
+  const stack: { name: string; open: string }[] = [];
+  for (const m of html.matchAll(/<(\/?)([a-z][a-z0-9-]*)(?:\s[^>]*)?>/gi)) {
+    const name = m[2]?.toLowerCase();
+    if (name === undefined) continue;
+    if (m[1] === "/") {
+      const i = stack.map((t) => t.name).lastIndexOf(name);
+      if (i !== -1) stack.splice(i, 1);
+    } else {
+      stack.push({ name, open: m[0] });
+    }
+  }
+  return stack;
+}
+
+/** Reserve for the `</…>` closers appended at a chunk boundary — Telegram nesting is shallow, so this
+ *  covers the worst realistic stack. A pathological deeper nest would push the chunk past 4096 and fail
+ *  visibly on send (Telegram's "message is too long", not a silent truncation); real agent output does
+ *  not reach it. */
+const TAG_CLOSE_BUDGET = 64;
+
+/**
+ * Split text into ≤4096-char chunks (Telegram's limit), preferring a newline boundary. When `html`, it is
+ * tag-aware: a tag that would SPAN a boundary is CLOSED at the chunk's end and REOPENED (attributes and
+ * all) at the next chunk's start, so every chunk is self-contained valid HTML — a long `<pre>` code block
+ * stays formatted instead of the first chunk degrading to plain text. It also never cuts THROUGH a tag
+ * token (backs the cut up before a `<` it would land inside). For plain text a `<` is literal content, so
+ * both behaviours are skipped.
+ */
+export function chunkText(text: string, opts: { html?: boolean } = {}): string[] {
   if (text.length <= TELEGRAM_MAX_TEXT) return [text];
   const chunks: string[] = [];
+  let open: { name: string; open: string }[] = []; // tags carried across the current boundary (html only)
   let rest = text;
-  while (rest.length > TELEGRAM_MAX_TEXT) {
-    const nl = rest.lastIndexOf("\n", TELEGRAM_MAX_TEXT);
-    const cut = nl > 0 ? nl : TELEGRAM_MAX_TEXT;
-    chunks.push(rest.slice(0, cut));
-    rest = rest.slice(cut).replace(/^\n/, "");
+  while (rest.length > 0) {
+    const prefix = open.map((t) => t.open).join(""); // reopen carried tags at the chunk head
+    if (prefix.length + rest.length <= TELEGRAM_MAX_TEXT) {
+      chunks.push(prefix + rest); // the tail closes the carried tags itself
+      break;
+    }
+    // Room for content, reserving the reopen prefix + (html) the closers appended below. ≥1 guarantees
+    // progress even in a pathological deep nest.
+    const room = Math.max(1, TELEGRAM_MAX_TEXT - prefix.length - (opts.html ? TAG_CLOSE_BUDGET : 0));
+    let cut = rest.lastIndexOf("\n", room);
+    if (cut <= 0) cut = room; // no newline in range → hard cut at the limit
+    if (opts.html) {
+      // Don't cut through a tag token: if the last `<` before the cut has no `>` after it, back up to it
+      // (lt > 0 keeps at least one content char, so the loop still progresses).
+      const lt = rest.lastIndexOf("<", cut - 1);
+      if (lt > 0 && lt > rest.lastIndexOf(">", cut - 1)) cut = lt;
+      // Likewise don't split an entity token (`&amp;`): entities are short, so a `&` within ~12 chars of
+      // the cut with no `;` yet means the cut is inside one — back up to that `&`. Only when the `&` is
+      // CONTENT, not inside a tag token (a raw `&` in an attribute is legal and common — any href with
+      // query params); backing up to one of those would cut through the tag this very rule's sibling
+      // protects.
+      const amp = rest.lastIndexOf("&", cut - 1);
+      if (
+        amp > 0 &&
+        cut - amp < 12 &&
+        amp > rest.lastIndexOf(";", cut - 1) &&
+        rest.lastIndexOf("<", amp) <= rest.lastIndexOf(">", amp)
+      )
+        cut = amp;
+    }
+    let chunk = rest.slice(0, cut);
+    let advance = cut;
+    if (opts.html) {
+      // A boundary newline is CONTENT in html (it may sit inside a <pre>) — keep it at this chunk's end
+      // (before the closers) rather than dropping it, so rejoined <pre> code is lossless.
+      if (rest[cut] === "\n") {
+        chunk += "\n";
+        advance = cut + 1;
+      }
+      open = unclosedTags(prefix + chunk);
+      chunk += open
+        .map((t) => `</${t.name}>`)
+        .reverse()
+        .join("");
+    }
+    chunks.push(prefix + chunk);
+    // Plain text: drop the boundary newline (the message split itself separates the parts). Html: keep
+    // everything (the newline was already folded into the chunk above).
+    rest = opts.html ? rest.slice(advance) : rest.slice(cut).replace(/^\n/, "");
   }
-  if (rest !== "") chunks.push(rest);
   return chunks;
 }
 
 /**
- * Send a message: split to Telegram's 4096-char limit, each chunk as HTML by default (`html:false` for
- * a plain live-preview), falling back to plain only if Telegram rejects the markup — so a model
- * formatting slip degrades instead of losing the message. Returns the FIRST chunk's message_id (so the
+ * Send a message: split to Telegram's 4096-char limit, each chunk as HTML by default (`html:false` for a
+ * plain live-preview). If Telegram rejects the markup on the FIRST chunk (a model formatting slip), the
+ * whole body is re-chunked and resent as PLAIN — re-chunked, not the same bytes, so the tag-balancer's
+ * injected boundary tags don't leak as literal text. (A later chunk failing after the first parsed
+ * cleanly is rare; it falls back per-chunk, best-effort.) Returns the FIRST chunk's message_id (so the
  * caller can edit it as a live preview). `message_thread_id` is dropped from the JSON when undefined.
  */
 export async function sendMessage(
@@ -96,10 +173,13 @@ export async function sendMessage(
   body: string,
   opts: { html?: boolean } = {},
 ): Promise<number | undefined> {
-  const html = opts.html ?? true;
+  let mode = opts.html ?? true;
+  let chunks = chunkText(body, { html: mode });
   let firstId: number | undefined;
   let first = true;
-  for (const chunk of chunkText(body)) {
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (chunk === undefined) continue;
     const base: Record<string, unknown> = { chat_id: t.chatId, message_thread_id: t.threadId, text: chunk };
     // Reply to the summoning message on the FIRST chunk only — threads the answer under the asker in a
     // group; allow_sending_without_reply so a since-deleted original still delivers. Continuation
@@ -107,11 +187,20 @@ export async function sendMessage(
     if (first && t.replyTo !== undefined) {
       base.reply_parameters = { message_id: t.replyTo, allow_sending_without_reply: true };
     }
-    let result = html
+    let result = mode
       ? await callBotApi(api, botToken, "sendMessage", { ...base, parse_mode: "HTML" })
       : await callBotApi(api, botToken, "sendMessage", base);
-    if (html && !result.ok && PARSE_ERROR.test(result.description))
+    if (mode && !result.ok && PARSE_ERROR.test(result.description)) {
+      if (first) {
+        // Nothing sent yet — re-chunk the whole body as plain (no injected boundary tags leak) and restart.
+        mode = false;
+        chunks = chunkText(body, { html: false });
+        i = -1;
+        continue;
+      }
+      // A later chunk failed after the first parsed cleanly (rare) — best-effort plain resend of this chunk.
       result = await callBotApi(api, botToken, "sendMessage", base);
+    }
     if (!result.ok) throw new Error(`telegram sendMessage failed: ${result.status} ${result.description}`.trim());
     if (first) firstId = result.result?.message_id;
     first = false;
