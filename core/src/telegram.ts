@@ -6,6 +6,7 @@ export {
   type TelegramChannelOptions,
   type TelegramUpdate,
   type TelegramMessage,
+  type MessageEntity,
   type TelegramRoute,
   type TelegramFailure,
 } from "./channels/telegram/telegram.ts";

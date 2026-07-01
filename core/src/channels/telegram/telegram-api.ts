@@ -68,14 +68,24 @@ async function callBotApi(
   }
 }
 
-/** Split text into ≤4096-char chunks (Telegram's limit), preferring newline boundaries. */
+/**
+ * Split text into ≤4096-char chunks (Telegram's limit), preferring newline boundaries and never cutting
+ * through an HTML tag: if the chosen boundary lands after an unclosed `<` (a `<` with no `>` yet), back
+ * it up to that `<` so a `<b>`/`<a …>` is not split mid-token (which Telegram would reject, forcing the
+ * whole chunk to plain-text fallback). This does NOT balance tags that SPAN a boundary (open in one
+ * chunk, close in the next) — that rarer case still relies on the caller's per-chunk plain fallback.
+ * Exported for unit tests; not part of the public channel surface.
+ */
 export function chunkText(text: string): string[] {
   if (text.length <= TELEGRAM_MAX_TEXT) return [text];
   const chunks: string[] = [];
   let rest = text;
   while (rest.length > TELEGRAM_MAX_TEXT) {
     const nl = rest.lastIndexOf("\n", TELEGRAM_MAX_TEXT);
-    const cut = nl > 0 ? nl : TELEGRAM_MAX_TEXT;
+    let cut = nl > 0 ? nl : TELEGRAM_MAX_TEXT;
+    // Inside a tag? A `<` after the last `>` before the cut means the cut splits a tag — break before it.
+    const lt = rest.lastIndexOf("<", cut - 1);
+    if (lt > 0 && lt > rest.lastIndexOf(">", cut - 1)) cut = lt;
     chunks.push(rest.slice(0, cut));
     rest = rest.slice(cut).replace(/^\n/, "");
   }
@@ -154,20 +164,25 @@ export async function deleteMessage(api: string, botToken: string, t: Target, me
   const result = await callBotApi(api, botToken, "deleteMessage", { chat_id: t.chatId, message_id: messageId });
   if (!result.ok) throw new Error(`telegram deleteMessage failed: ${result.status} ${result.description}`.trim());
 }
-/** getMe: the bot's own @username (so default routing recognises group @mentions) and whether group
- *  privacy mode is OFF (`can_read_all_group_messages`) — needed to receive the un-summoned group
- *  messages that feed the context buffer. */
+/** getMe: the bot's own `id` (so default routing recognises a reply to THIS bot, not any bot) and
+ *  `@username` (for group @mention summon), plus whether group privacy mode is OFF
+ *  (`can_read_all_group_messages`) — needed to receive the un-summoned group messages that feed the
+ *  context buffer. */
 export async function resolveBotInfo(
   api: string,
   botToken: string,
-): Promise<{ username?: string; canReadAllGroupMessages?: boolean }> {
+): Promise<{ id?: number; username?: string; canReadAllGroupMessages?: boolean }> {
   const res = await fetch(`${api}/bot${botToken}/getMe`);
   const data = (await res.json().catch(() => ({}))) as {
     ok?: boolean;
-    result?: { username?: string; can_read_all_group_messages?: boolean };
+    result?: { id?: number; username?: string; can_read_all_group_messages?: boolean };
   };
   if (!res.ok || !data.ok) throw new Error(`getMe failed: ${res.status}`);
-  return { username: data.result?.username, canReadAllGroupMessages: data.result?.can_read_all_group_messages };
+  return {
+    id: data.result?.id,
+    username: data.result?.username,
+    canReadAllGroupMessages: data.result?.can_read_all_group_messages,
+  };
 }
 
 function mimeFromPath(path: string): string {

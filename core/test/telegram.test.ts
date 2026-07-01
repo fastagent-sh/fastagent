@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultTelegramRoute, type TelegramUpdate, telegramChannel, telegramEnvelope } from "../src/telegram.ts";
+import { chunkText } from "../src/channels/telegram/telegram-api.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
 /** A faux Agent that records each invocation's prompt and replies with `reply`. */
@@ -71,15 +72,145 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("chunkText (HTML-aware split)", () => {
+  it("returns one chunk under the limit and prefers newline boundaries over it", () => {
+    expect(chunkText("short")).toEqual(["short"]);
+    const long = `${"a".repeat(4000)}\n${"b".repeat(200)}`; // > 4096, a newline before the limit
+    const chunks = chunkText(long);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toBe("a".repeat(4000)); // cut at the newline, not mid-line
+    expect(chunks[1]).toBe("b".repeat(200));
+  });
+
+  it("never ends a chunk inside an HTML tag (backs the cut up to the '<')", () => {
+    // A tag straddles the 4096 boundary: filler fills 0..4093, `<b>` opens at 4094 with no newline, so a
+    // naive cut at 4096 would land inside `<b>`. The split must back up to the '<' so no chunk is broken.
+    const body = `${"a".repeat(4094)}<b>bold</b> and a good deal more text to force a second chunk here.`;
+    const chunks = chunkText(body);
+    expect(chunks[0]).toBe("a".repeat(4094)); // stops before the tag, not mid-`<b>`
+    expect(chunks[0]).not.toContain("<"); // no dangling tag open
+    expect(chunks[1]).toMatch(/^<b>bold<\/b>/); // the tag stays intact in the next chunk
+  });
+
+  it("does NOT back up for a CLOSED tag before the cut (only an unclosed one)", () => {
+    // a complete `<b>x</b>` sits well before the boundary; the cut lands in plain text after it and must
+    // stay there — a naive `if (lt > 0)` (dropping the `>` comparison) would wrongly rewind to that `<`.
+    const body = `${"a".repeat(2000)}<b>x</b>${"c".repeat(2090)}dd${"e".repeat(200)}`; // closed tag ~2000, cut ~4096
+    const chunks = chunkText(body);
+    expect(chunks[0]).toContain("<b>x</b>"); // the closed tag stays in the first chunk (cut not rewound to it)
+    expect((chunks[0] ?? "").length).toBeGreaterThan(4000); // cut near the limit, not pulled back ~2000 chars
+  });
+});
+
 describe("defaultTelegramRoute + telegramEnvelope", () => {
-  it("answers a private message; stays silent in a group unless summoned", () => {
+  it("answers a private message; a group summons only on an @mention entity or reply-to-bot", () => {
     expect(defaultTelegramRoute(MSG)).toEqual({}); // private → act
     const group = { id: -100, type: "supergroup" };
-    expect(defaultTelegramRoute({ update_id: 1, message: { message_id: 2, text: "chatter", chat: group } })).toBeNull();
-    expect(defaultTelegramRoute({ update_id: 1, message: { message_id: 2, text: "/ask", chat: group } })).toEqual({});
-    const mention: TelegramUpdate = { update_id: 1, message: { message_id: 2, text: "hey @mybot", chat: group } };
-    expect(defaultTelegramRoute(mention)).toBeNull(); // no username → no @mention summon
-    expect(defaultTelegramRoute(mention, { botUsername: "mybot" })).toEqual({});
+    const g = (text: string, extra: Record<string, unknown> = {}): TelegramUpdate => ({
+      update_id: 1,
+      message: { message_id: 2, text, chat: group, ...extra },
+    });
+    expect(defaultTelegramRoute(g("chatter"))).toBeNull();
+    // #3: a bare slash command no longer summons in a group (ambiguous; often meant for another bot)
+    expect(defaultTelegramRoute(g("/ask"))).toBeNull();
+    // #4: a loose SUBSTRING is not a summon — only a Telegram `mention` entity is
+    expect(defaultTelegramRoute(g("hey @mybot"), { botUsername: "mybot" })).toBeNull();
+    const mention = g("hey @mybot", { entities: [{ type: "mention", offset: 4, length: 6 }] });
+    expect(defaultTelegramRoute(mention)).toBeNull(); // no username configured → no summon
+    expect(defaultTelegramRoute(mention, { botUsername: "mybot" })).toEqual({}); // entity @mybot → act
+    // a `mention` for a look-alike username must NOT match (exact entity text, not prefix)
+    const other = g("@mybotanic hi", { entities: [{ type: "mention", offset: 0, length: 9 }] });
+    expect(defaultTelegramRoute(other, { botUsername: "mybot" })).toBeNull();
+    // #4: `/cmd@mybot` (a bot_command entity targeting THIS bot) summons; `/cmd@othbot` does not
+    const cmd = g("/summarize@mybot", { entities: [{ type: "bot_command", offset: 0, length: 16 }] });
+    expect(defaultTelegramRoute(cmd, { botUsername: "mybot" })).toEqual({});
+    const otherCmd = g("/summarize@othbot", { entities: [{ type: "bot_command", offset: 0, length: 17 }] });
+    expect(defaultTelegramRoute(otherCmd, { botUsername: "mybot" })).toBeNull();
+    // #4: a media message whose CAPTION @mentions the bot summons too (caption_entities, not just text)
+    const cap: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 2,
+        caption: "look @mybot",
+        caption_entities: [{ type: "mention", offset: 5, length: 6 }],
+        photo: [{ file_id: "f", file_unique_id: "u", width: 1, height: 1 }],
+        chat: group,
+      },
+    };
+    expect(defaultTelegramRoute(cap, { botUsername: "mybot" })).toEqual({});
+    // reply arm: with a known botId, only a reply to THIS bot summons; without one, any bot (fallback)
+    const reply = g("thanks", { reply_to_message: { message_id: 1, chat: group, from: { id: 5, is_bot: true } } });
+    expect(defaultTelegramRoute(reply)).toEqual({}); // no botId → is_bot fallback summons
+    expect(defaultTelegramRoute(reply, { botId: 5 })).toEqual({}); // reply to THIS bot
+    expect(defaultTelegramRoute(reply, { botId: 99 })).toBeNull(); // reply to ANOTHER bot → not us
+  });
+
+  it("strips the summon @mention from the prompt text (the model shouldn't see the routing @bot)", () => {
+    const env = telegramEnvelope(
+      {
+        message_id: 2,
+        text: "hey @mybot summarize this",
+        entities: [{ type: "mention", offset: 4, length: 6 }],
+        chat: { id: -100, type: "supergroup" },
+        from: { id: 7, username: "alice" },
+      },
+      { botUsername: "mybot" },
+    );
+    expect(env).toMatch(/hey summarize this$/); // @mybot removed, surrounding space collapsed
+    expect(env).not.toMatch(/@mybot/);
+    // mention at the END: the leading space is consumed too, so no trailing gap is left
+    const tail = telegramEnvelope(
+      {
+        message_id: 5,
+        text: "summarize this @mybot",
+        entities: [{ type: "mention", offset: 15, length: 6 }],
+        chat: { id: -100, type: "supergroup" },
+      },
+      { botUsername: "mybot" },
+    );
+    expect(tail).toMatch(/summarize this$/);
+    expect(tail).not.toMatch(/@mybot|this $/);
+    // TWO mentions: cuts must apply right-to-left (else the first removal shifts the second's offset)
+    // and each consumes one space — no double-space, no leftover handle
+    const multi = telegramEnvelope(
+      {
+        message_id: 6,
+        text: "@mybot ping @mybot pong",
+        entities: [
+          { type: "mention", offset: 0, length: 6 },
+          { type: "mention", offset: 12, length: 6 },
+        ],
+        chat: { id: -100, type: "supergroup" },
+      },
+      { botUsername: "mybot" },
+    );
+    expect(multi).toMatch(/ping pong$/);
+    expect(multi).not.toMatch(/@mybot| {2}/);
+    // a `/cmd@bot` keeps the bare command, drops the @bot target
+    const cmd = telegramEnvelope(
+      {
+        message_id: 3,
+        text: "/summarize@mybot",
+        entities: [{ type: "bot_command", offset: 0, length: 16 }],
+        chat: { id: -100, type: "supergroup" },
+      },
+      { botUsername: "mybot" },
+    );
+    expect(cmd).toMatch(/\/summarize$/);
+    expect(cmd).not.toMatch(/@mybot/);
+    // caption strip: a photo captioned "@mybot ..." has the summon removed from the caption body
+    const capEnv = telegramEnvelope(
+      {
+        message_id: 4,
+        caption: "@mybot describe",
+        caption_entities: [{ type: "mention", offset: 0, length: 6 }],
+        photo: [{ file_id: "f", file_unique_id: "u", width: 1, height: 1 }],
+        chat: { id: -100, type: "supergroup" },
+      },
+      { botUsername: "mybot" },
+    );
+    expect(capEnv).toMatch(/describe$/);
+    expect(capEnv).not.toMatch(/@mybot/);
   });
 
   it("composes a context envelope: chat/thread/sender + reply (with msg id) + the user's text", () => {
@@ -211,6 +342,35 @@ describe("telegram channel", () => {
     const { agent } = replyingAgent("ok");
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API }); // no route → default
     expect((await ch(tgRequest(MSG))).status).toBe(200);
+    await flush();
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1);
+  });
+
+  it("threads the bot's own id from getMe into the default route (reply to THIS bot vs another)", async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).endsWith("/getMe")
+        ? new Response(JSON.stringify({ ok: true, result: { id: 42, username: "mybot" } }), { status: 200 })
+        : // sendMessage must return a message_id so the live-preview edit flow doesn't fresh-send a fallback
+          new Response(JSON.stringify({ ok: true, result: { message_id: 100 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("ok");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API }); // default route
+    await flush(); // let getMe resolve so botId is known before routing
+    const group = { id: -100, type: "supergroup" };
+    const replyToBot = (botId: number): TelegramUpdate => ({
+      update_id: 1,
+      message: {
+        message_id: 2,
+        text: "thanks",
+        chat: group,
+        reply_to_message: { message_id: 1, chat: group, from: { id: botId, is_bot: true } },
+      },
+    });
+    await ch(tgRequest(replyToBot(42))); // reply to THIS bot (id 42) → answered
+    await flush();
+    expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1);
+    await ch(tgRequest(replyToBot(7))); // reply to ANOTHER bot → ignored, no new reply
     await flush();
     expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1);
   });

@@ -19,6 +19,15 @@ While the project is pre-1.0, minor versions may include breaking changes.
 ### Changed
 - Narrative reframed to "Vibe first. Then FastAgent." — take a local agent folder out of
   the terminal and serve it in an app, on GitHub, in Telegram, or behind a custom channel.
+- **Telegram group summoning is now precise (default route).** A group message summons the bot only
+  on a Telegram **entity** mention (`@botname` or `/cmd@botname`, in text or a media caption) or a
+  reply to **the** bot (matched by the bot's own id, not any bot in the group) — a **bare `/cmd` no
+  longer summons in groups** (it is ambiguous, often meant for
+  another bot), and a loose `@botname` substring no longer matches. Private chats are unchanged
+  (always answer). The bot's own `@botname` handle is now stripped from the prompt (text or caption)
+  before the model sees it. **Migration:** groups that relied on bare slash commands must use `@botname` / `/cmd@botname`, a
+  reply, or a custom `route`. New: the `MessageEntity` type is exported from
+  `@kid7st/fastagent/telegram` (the message entities a custom route can inspect).
 - **Auth is now project-level by default.** The credentials file defaults to
   `<dir>/.fastagent/auth.json` (was the global `~/.fastagent/auth.json`); `fastagent login`,
   `dev`, `start`, `invoke`, and `info` all resolve it as `--auth-path` > `FASTAGENT_AUTH_PATH` >
@@ -37,6 +46,9 @@ While the project is pre-1.0, minor versions may include breaking changes.
   dir-less `createPiAgent`/`createPiModels` still default to the global file).
 
 ### Fixed
+- Telegram: long replies (>4096 chars) are split without cutting through an HTML tag — the split
+  point backs up to before a `<` it would otherwise land inside, so a chunk no longer degrades to
+  plain text just because a tag straddled the boundary.
 - `fastagent login <provider>` now loads `.env` from the current directory. It previously
   resolved `.env` against `./<provider>` (the positional is the provider, not a dir), so a proxy
   (e.g. `HTTPS_PROXY`) set in the workspace `.env` was ignored during the OAuth token exchange.

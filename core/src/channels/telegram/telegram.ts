@@ -75,12 +75,25 @@ function summarizeArgs(args: Json): string {
   return values.length > 0 ? clip(JSON.stringify(args)) : "";
 }
 
+/** A Telegram message entity (subset): `mention` (`@username`), `bot_command` (`/cmd` or `/cmd@bot`),
+ *  a link, etc. `offset`/`length` are UTF-16 code units into the text — matching JS string slicing. */
+export interface MessageEntity {
+  type: string;
+  offset: number;
+  length: number;
+  [k: string]: unknown;
+}
+
 /** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */
 export interface TelegramMessage {
   message_id: number;
   text?: string;
+  /** Entities over `text` (mentions, commands, links…) — used to detect a bot @mention precisely. */
+  entities?: MessageEntity[];
   /** Caption on a media message (photo/document/…) — often the user's instruction for the attachment. */
   caption?: string;
+  /** Entities over `caption` (same shape as {@link entities}). */
+  caption_entities?: MessageEntity[];
   /** Photo sizes, smallest → largest. The channel sends the largest to the model as a vision image. */
   photo?: { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }[];
   /** Structured payloads worth rendering into the prompt as text (no new modality needed). */
@@ -475,16 +488,77 @@ function messageText(m: TelegramMessage): string {
   return (m.text ?? m.caption ?? attachmentSummary(m) ?? "").replace(/\s+/g, " ").trim().slice(0, 280);
 }
 
+/** The message's text (else caption) with its matching entities — one accessor so mention detection
+ *  and stripping read the same source. `text` is undefined only when neither is present. */
+function textWithEntities(m: TelegramMessage): { text?: string; entities: MessageEntity[] } {
+  if (m.text !== undefined) return { text: m.text, entities: m.entities ?? [] };
+  if (m.caption !== undefined) return { text: m.caption, entities: m.caption_entities ?? [] };
+  return { entities: [] };
+}
+
+/**
+ * If entity `e` references our bot (`@botUsername` mention, or a `/cmd@botUsername` command targeting
+ * it), the character range `[start, end)` of the `@botUsername` handle token — else null. The ONE place
+ * that defines "what counts as the bot's own handle": {@link mentionsBotHandle} asks "does any exist"
+ * and {@link stripBotHandle} removes each, so a new case (e.g. `text_mention`) changes both at once. Entity
+ * offsets are exact (UTF-16, matching JS slicing), so `@botUsername_typo` can't false-match.
+ */
+function botHandleRange(text: string, e: MessageEntity, at: string): [number, number] | null {
+  const s = text.slice(e.offset, e.offset + e.length).toLowerCase();
+  if (e.type === "mention" && s === at) return [e.offset, e.offset + e.length];
+  if (e.type === "bot_command" && s.endsWith(at)) return [e.offset + e.length - at.length, e.offset + e.length];
+  return null;
+}
+
+/**
+ * Whether the message references `botUsername` via a Telegram ENTITY (not a loose substring): a
+ * `mention` entity that IS `@botUsername`, OR a `bot_command` entity targeting it (`/cmd@botUsername`).
+ * The entity-mention arm of the group summon decision — internal; a custom `route` reuses the whole
+ * decision via {@link defaultTelegramRoute}, not this sub-predicate. Case-insensitive.
+ */
+function mentionsBotHandle(m: TelegramMessage, botUsername: string): boolean {
+  const { text = "", entities } = textWithEntities(m);
+  const at = `@${botUsername}`.toLowerCase();
+  return entities.some((e) => botHandleRange(text, e, at) !== null);
+}
+
+/**
+ * Remove the bot's OWN handle from the text before it reaches the agent — the model should never see
+ * `@botUsername` (whether or not it routed the message): `@botUsername` mention tokens, and the
+ * `@botUsername` suffix of a `/cmd@botUsername` command (the bare `/cmd` stays). Uses entity offsets so
+ * ONLY the exact handle is cut (right-to-left, keeping earlier offsets valid), consuming one adjacent
+ * space per cut so no double-space / edge gap is left — the rest of the body (its indentation, alignment,
+ * and any pre-existing leading/trailing whitespace) is untouched. No handle → unchanged. Deliberately
+ * does NOT trim the whole body: a trim would fire only on this strip path (when `botUsername` is known),
+ * so an identical message would read differently before vs after getMe resolves.
+ */
+function stripBotHandle(text: string, entities: MessageEntity[], botUsername: string): string {
+  const at = `@${botUsername}`.toLowerCase();
+  const cuts = entities.map((e) => botHandleRange(text, e, at)).filter((r): r is [number, number] => r !== null);
+  let out = text;
+  for (let [start, end] of cuts.sort((a, b) => b[0] - a[0])) {
+    if (out[end] === " ")
+      end++; // consume the trailing space, else the leading one — never both
+    else if (out[start - 1] === " ") start--;
+    out = out.slice(0, start) + out.slice(end);
+  }
+  return out;
+}
+
 /**
  * The default base prompt: a context envelope (chat/thread/sender + a group note + reply) then the
  * user's text/caption and a compact rendering of structured payloads (location/contact/poll). The
  * sender is named on every message and a group chat is flagged — in a shared multi-user session that is
  * how the model tells participants apart and knows it is not a 1:1. The reply
  * block carries the replied-to sender, message id, and text/caption or an attachment summary (and the
- * channel downloads a replied-to file/photo too). Exported so a custom `route` can reuse it, e.g.
- * `text: `${telegramEnvelope(m)}\n\n[extra]``. The channel still appends downloaded attachments.
+ * channel downloads a replied-to file/photo too). With `botUsername`, the bot's OWN `@botUsername`
+ * mention (and the `@botUsername` suffix of a `/cmd@botUsername`) is stripped from the user's
+ * text/caption — the model should not see its own handle — whether or not that mention is what routed
+ * the message. Exported so
+ * a custom `route` can reuse it, e.g. `text: `${telegramEnvelope(m)}\n\n[extra]``. The channel still
+ * appends downloaded attachments.
  */
-export function telegramEnvelope(m: TelegramMessage): string {
+export function telegramEnvelope(m: TelegramMessage, options?: { botUsername?: string }): string {
   const r = m.reply_to_message;
   const meta = [
     `chat ${m.chat.id} (${m.chat.type})`,
@@ -501,7 +575,9 @@ export function telegramEnvelope(m: TelegramMessage): string {
   const replyTo = r
     ? `\n[in reply to ${fromLabel(r.from) ?? `msg ${r.message_id}`} (msg ${r.message_id}): ${(r.text ?? r.caption ?? attachmentSummary(r) ?? "(empty)").slice(0, 280)}]`
     : "";
-  const parts = [m.text ?? m.caption ?? attachmentSummary(m) ?? ""];
+  const { text: raw, entities } = textWithEntities(m);
+  const body = raw !== undefined && options?.botUsername ? stripBotHandle(raw, entities, options.botUsername) : raw;
+  const parts = [body ?? attachmentSummary(m) ?? ""];
   if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);
   if (m.contact) parts.push(`[contact: ${m.contact.first_name} ${m.contact.phone_number ?? ""}]`);
   if (m.poll) parts.push(`[poll: ${m.poll.question} — ${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]`);
@@ -510,19 +586,28 @@ export function telegramEnvelope(m: TelegramMessage): string {
 
 /**
  * The default routing policy (used when `route` is omitted; exported so a custom route can reuse it):
- * answer private chats always, groups only on a command, a reply to the bot, or an @mention (when
- * `botUsername` is supplied — telegramChannel resolves it via getMe). Returns `{}` (act; the channel
- * fills session/target/prompt from the message) or `null` (ignore).
+ * answer private chats always, groups ONLY on a reply to THIS bot or an explicit @mention (via a
+ * Telegram entity in the text OR a media caption, when `botUsername` is supplied — telegramChannel
+ * resolves it via getMe). A bare slash command no longer summons in groups: `/cmd` there is ambiguous
+ * (often meant for another bot), and `/cmd@botUsername` is already caught as an entity mention. Private
+ * chats always answer, so their commands still work.
+ *
+ * The reply arm is exact when `botId` is known (a reply to THIS bot, not any bot in the group); before
+ * getMe resolves (or without an id) it falls back to "any bot". Returns `{}` (act; the channel fills
+ * session/target/prompt) or `null` (ignore).
  */
-export function defaultTelegramRoute(update: TelegramUpdate, options?: { botUsername?: string }): TelegramRoute | null {
+export function defaultTelegramRoute(
+  update: TelegramUpdate,
+  options?: { botUsername?: string; botId?: number },
+): TelegramRoute | null {
   const m = pickMessage(update);
   if (!m) return null;
-  const t = m.text ?? "";
+  const repliedTo = m.reply_to_message?.from;
+  const repliesToThisBot = options?.botId !== undefined ? repliedTo?.id === options.botId : repliedTo?.is_bot === true;
   const summoned =
     m.chat.type === "private" ||
-    t.startsWith("/") ||
-    m.reply_to_message?.from?.is_bot === true ||
-    (options?.botUsername ? t.includes(`@${options.botUsername}`) : false);
+    repliesToThisBot ||
+    (options?.botUsername ? mentionsBotHandle(m, options.botUsername) : false);
   return summoned ? {} : null;
 }
 
@@ -553,9 +638,11 @@ export function telegramChannel(
   // not supplied) and the group-privacy flag — privacy mode off is required to receive the un-summoned
   // group messages that feed the context buffer, so warn if it is on.
   let mentionName = botUsername;
+  let botId: number | undefined;
   void resolveBotInfo(apiBaseUrl, botToken).then(
     (info) => {
       if (mentionName === undefined) mentionName = info.username;
+      botId = info.id;
       if (info.canReadAllGroupMessages === false) {
         log.warn(
           "[telegram] privacy mode is on: the bot only sees @mentions / replies / commands, so group " +
@@ -563,9 +650,14 @@ export function telegramChannel(
         );
       }
     },
-    (e) => log.warn(`[telegram] getMe failed; @mention summon + privacy check skipped: ${String(e)}`),
+    (e) =>
+      log.warn(
+        `[telegram] getMe failed; group @mention + /cmd@bot summon and the privacy check are disabled ` +
+          `(set botUsername to keep group summoning; replies to a bot still work): ${String(e)}`,
+      ),
   );
-  const decide = route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName }));
+  const decide =
+    route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
   // Per-session serial queue: model B answers a shared chat[:thread] with ONE turn at a time, so a
   // second update for the same session waits its turn (FIFO) instead of colliding on the engine lease
   // and being dropped as "busy" — the wrong UX when several people talk in one group. Different sessions
@@ -659,7 +751,7 @@ export function telegramChannel(
         threadId,
         replyTo: m.chat.type !== "private" && sameTarget ? m.message_id : undefined,
       };
-      const baseText = r.text ?? telegramEnvelope(m);
+      const baseText = r.text ?? telegramEnvelope(m, { botUsername: mentionName });
       const imageFileIds = extractImages(m);
       const fileIds = extractFiles(m);
       if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {

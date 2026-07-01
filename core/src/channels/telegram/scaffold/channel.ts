@@ -18,7 +18,8 @@ const channel: ChannelModule = (agent) => ({
     onError: (failed) => `⚠️ ${failed.details}`,
     // The channel owns transport + format (HTML) + attachments (photo→vision, file→disk) + streaming.
     // `route` (POLICY) is OPTIONAL — omitted, it uses defaultTelegramRoute: private chats always answer,
-    // groups only on a command / reply to the bot / @mention. Override to customise, reusing the export:
+    // groups only on an @botname / /cmd@botname entity mention or a reply to the bot. Override to
+    // customise, reusing the export:
     //   route: (u) => defaultTelegramRoute(u) && { session: `user:${u.message?.from?.id}` },
     //   route: (u) => defaultTelegramRoute(u) && { text: `${telegramEnvelope(u.message!)}\n[extra]` },
   }),

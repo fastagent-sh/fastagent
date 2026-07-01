@@ -148,7 +148,7 @@ Check:
 
 - `TELEGRAM_BOT_TOKEN` is set,
 - the bot is allowed to message the chat,
-- group messages match the route policy (private chat, slash command, reply to bot, or `@botname` mention by default),
+- group messages match the route policy (by default: private chat, reply to the bot, or an `@botname` / `/cmd@botname` entity mention — a bare `/cmd` no longer summons in groups),
 - model credentials are configured,
 - the operator log for a `failed` event or Bot API error.
 

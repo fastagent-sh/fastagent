@@ -76,11 +76,17 @@ Both `secretToken` and `botToken` are required. Construction fails if either is 
 By default, `telegramChannel` uses `defaultTelegramRoute`:
 
 - private chats always answer,
-- groups answer on a slash command,
-- groups answer when the message replies to a bot,
-- groups answer on `@botname` mention when the bot username is known.
+- groups answer when the message replies to the bot,
+- groups answer on an `@botname` mention or a `/cmd@botname` command targeting the bot (a Telegram
+  **entity**, in the text or a media caption, when the bot username is known) — a bare `/cmd` no
+  longer summons in a group (it is ambiguous, often meant for another bot; private chats keep it).
 
-Override `route` to decide whether and where to answer. A custom route owns its own group-summon policy; if you rely on `@botname` mentions, pass a known `botUsername` to `defaultTelegramRoute`.
+The summon `@botname` (and the `@botname` suffix of `/cmd@botname`) is stripped from the prompt before
+the model sees it — it only routed the message. Override `route` to decide whether and where to answer.
+A custom route owns its own group-summon policy; if you rely on `@botname` mentions, pass a known
+`botUsername` to `defaultTelegramRoute`. Note: only the built-in path resolves the bot's own id via
+getMe, so a custom route that reuses `defaultTelegramRoute` without a `botId` matches a reply to
+**any** bot in the group, not just this one — pass `botId` too if you need that precision.
 
 ## Group chats
 
@@ -108,7 +114,7 @@ telegramChannel(agent, {
     return {
       ...base,
       session: `telegram:${message.chat.id}`,
-      text: `${telegramEnvelope(message)}\n\nAnswer briefly.`,
+      text: `${telegramEnvelope(message, { botUsername })}\n\nAnswer briefly.`,
     };
   },
 });
@@ -129,7 +135,7 @@ Return `null` to ignore the update. Omitted fields default from the message.
 
 ## Prompt envelope
 
-The exported `telegramEnvelope(message)` builds a text envelope with chat/thread/from metadata, reply context, text/caption, and structured payloads such as location, contact, and poll. You can reuse it when customizing `route`.
+The exported `telegramEnvelope(message)` builds a text envelope with chat/thread/from metadata, reply context, text/caption, and structured payloads such as location, contact, and poll. You can reuse it when customizing `route`. Pass `{ botUsername }` (as the example above does) to strip the bot's own `@handle` from the user's text/caption before the model sees it.
 
 The channel appends a formatting instruction so replies use Telegram-supported HTML rather than Markdown.
 
