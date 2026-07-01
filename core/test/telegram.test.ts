@@ -72,14 +72,47 @@ afterEach(() => {
 });
 
 describe("defaultTelegramRoute + telegramEnvelope", () => {
-  it("answers a private message; stays silent in a group unless summoned", () => {
+  it("answers a private message; a group only on a boundary-@mention or reply-to-bot, not a slash command", () => {
     expect(defaultTelegramRoute(MSG)).toEqual({}); // private → act
     const group = { id: -100, type: "supergroup" };
-    expect(defaultTelegramRoute({ update_id: 1, message: { message_id: 2, text: "chatter", chat: group } })).toBeNull();
-    expect(defaultTelegramRoute({ update_id: 1, message: { message_id: 2, text: "/ask", chat: group } })).toEqual({});
-    const mention: TelegramUpdate = { update_id: 1, message: { message_id: 2, text: "hey @mybot", chat: group } };
+    const g = (text: string) => ({ update_id: 1, message: { message_id: 2, text, chat: group } });
+    expect(defaultTelegramRoute(g("chatter"))).toBeNull();
+    // a group slash command no longer summons — bare OR directed at the bot (only @mention / reply do)
+    expect(defaultTelegramRoute(g("/ask"))).toBeNull();
+    expect(defaultTelegramRoute(g("/ask@mybot"), { botUsername: "mybot" })).toBeNull();
+    const mention = g("hey @mybot");
     expect(defaultTelegramRoute(mention)).toBeNull(); // no username → no @mention summon
     expect(defaultTelegramRoute(mention, { botUsername: "mybot" })).toEqual({});
+    expect(defaultTelegramRoute(mention, { botUsername: "@mybot" })).toEqual({}); // a leading @ in the option is tolerated
+    expect(defaultTelegramRoute(g("yo @MyBot"), { botUsername: "mybot" })).toEqual({}); // case-insensitive
+    // boundary-anchored at BOTH ends: a suffix (@mybottington) and a prefix (glued after a word char)
+    expect(defaultTelegramRoute(g("@mybottington rocks"), { botUsername: "mybot" })).toBeNull(); // suffix boundary (?!\w)
+    expect(defaultTelegramRoute(g("mail x@mybot"), { botUsername: "mybot" })).toBeNull(); // prefix boundary, lookbehind (?<!\w)
+    // a reply to a bot summons (no @mention needed)
+    const replyToBot = {
+      update_id: 1,
+      message: {
+        message_id: 2,
+        text: "thanks",
+        chat: group,
+        reply_to_message: { message_id: 1, chat: group, from: { id: 9, is_bot: true } },
+      },
+    };
+    expect(defaultTelegramRoute(replyToBot)).toEqual({});
+  });
+
+  it("summons on a media caption @mention too, not just text", () => {
+    const group = { id: -100, type: "supergroup" };
+    const photo = {
+      message_id: 7,
+      caption: "@mybot look",
+      photo: [{ file_id: "f", file_unique_id: "u", width: 1, height: 1 }],
+      chat: group,
+    };
+    expect(defaultTelegramRoute({ update_id: 1, message: photo }, { botUsername: "mybot" })).toEqual({});
+    // a caption with no mention stays silent in a group
+    const plain = { ...photo, caption: "nice sunset" };
+    expect(defaultTelegramRoute({ update_id: 1, message: plain }, { botUsername: "mybot" })).toBeNull();
   });
 
   it("composes a context envelope: chat/thread/sender + reply (with msg id) + the user's text", () => {

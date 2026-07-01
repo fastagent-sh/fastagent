@@ -76,11 +76,10 @@ Both `secretToken` and `botToken` are required. Construction fails if either is 
 By default, `telegramChannel` uses `defaultTelegramRoute`:
 
 - private chats always answer,
-- groups answer on a slash command,
 - groups answer when the message replies to a bot,
-- groups answer on `@botname` mention when the bot username is known.
+- groups answer on a boundary-anchored `@botname` mention when the bot username is known (case-insensitive; `@fast` does not match `@fastagent`).
 
-Override `route` to decide whether and where to answer. A custom route owns its own group-summon policy; if you rely on `@botname` mentions, pass a known `botUsername` to `defaultTelegramRoute`.
+A slash command does **not** summon in a group (bare or directed like `/cmd@botname`) — it was noise; a bot that wants commands adds a custom `route`. Override `route` to decide whether and where to answer; a custom route owns its own group-summon policy, and if you rely on `@botname` mentions, pass a known `botUsername` to `defaultTelegramRoute`.
 
 ## Group chats
 

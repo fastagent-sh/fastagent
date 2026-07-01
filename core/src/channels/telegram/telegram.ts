@@ -508,21 +508,37 @@ export function telegramEnvelope(m: TelegramMessage): string {
   return `[telegram: ${meta}]${scope}${replyTo}\n${parts.filter(Boolean).join("\n")}`;
 }
 
+/** Normalize a configured bot username: drop a leading `@`, trim (regexes match case-insensitively).
+ *  Undefined when unknown. Telegram usernames are [A-Za-z0-9_], so the result needs no regex escaping. */
+function botName(botUsername: string | undefined): string | undefined {
+  const s = botUsername?.replace(/^@/, "").trim();
+  return s || undefined;
+}
+
+/**
+ * Whether `text` @mentions the bot: a boundary-anchored @name anywhere (case-insensitive). Boundary-
+ * anchored so `@fast` does not match `@fastagent` (a substring `includes` would), and a glued `/cmd@bot`
+ * — a command, not a mention — does not count (its `@` follows a word char).
+ */
+function mentionsBot(text: string, botUsername: string | undefined): boolean {
+  const name = botName(botUsername);
+  return name ? new RegExp(`(?<!\\w)@${name}(?!\\w)`, "i").test(text) : false;
+}
+
 /**
  * The default routing policy (used when `route` is omitted; exported so a custom route can reuse it):
- * answer private chats always, groups only on a command, a reply to the bot, or an @mention (when
- * `botUsername` is supplied — telegramChannel resolves it via getMe). Returns `{}` (act; the channel
- * fills session/target/prompt from the message) or `null` (ignore).
+ * answer private chats always; a group only on a reply to the bot or a boundary-anchored @mention of it (when
+ * `botUsername` is supplied — telegramChannel resolves it via getMe). A bare or directed slash command
+ * does NOT summon in a group (that was noisy; a bot author who wants commands adds a custom route).
+ * Returns `{}` (act; the channel fills session/target/prompt from the message) or `null` (ignore).
  */
 export function defaultTelegramRoute(update: TelegramUpdate, options?: { botUsername?: string }): TelegramRoute | null {
   const m = pickMessage(update);
   if (!m) return null;
-  const t = m.text ?? "";
   const summoned =
     m.chat.type === "private" ||
-    t.startsWith("/") ||
     m.reply_to_message?.from?.is_bot === true ||
-    (options?.botUsername ? t.includes(`@${options.botUsername}`) : false);
+    mentionsBot(m.text ?? m.caption ?? "", options?.botUsername);
   return summoned ? {} : null;
 }
 
