@@ -41,12 +41,6 @@ const RETRIES = 3;
  *  engine resizes images to the model's needs, so this is a transport guard, not the model size limit. */
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 
-/** Where inbound files land (the agent reads them by path). Machine state under `.fastagent`: persists,
- *  not auto-cleaned (like sessions) — a long-running bot's operator manages the dir. Git-ignored via
- *  `<dir>/.fastagent/.gitignore="*"`, which dev/start write when self-ignoring the state dir (the
- *  default; NOT registered with that guard, so an all-external sessions+auth config leaves it tracked). */
-const FILES_SUBDIR = join(".fastagent", "telegram-files");
-
 /** Where a reply goes: a chat, optionally a thread (Threaded Mode), optionally replying to a message. */
 export interface Target {
   chatId: number | string;
@@ -380,16 +374,17 @@ async function fetchTelegramImage(api: string, botToken: string, fileId: string)
   return { mimeType: mimeFromPath(remotePath), data: bytes.toString("base64") };
 }
 
-/** Download a Telegram file_id to <cwd>/.fastagent/telegram-files/<chat>/<name>. Throws on failure / oversize. */
+/** Download a Telegram file_id to <filesDir>/<chat>/<name>. Throws on failure / oversize. */
 async function downloadTelegramFile(
   api: string,
   botToken: string,
   fileId: string,
   chatId: number | string,
+  filesDir: string,
 ): Promise<DownloadedFile> {
   const { bytes, remotePath } = await getFileBytes(api, botToken, fileId);
   const name = basename(remotePath);
-  const dir = join(process.cwd(), FILES_SUBDIR, String(chatId));
+  const dir = join(filesDir, String(chatId));
   await mkdir(dir, { recursive: true });
   const dest = join(dir, name);
   await writeFile(dest, bytes);
@@ -408,15 +403,17 @@ export async function resolveImages(
   return images;
 }
 
-/** Download the message's files. Throws if any cannot be loaded — the caller surfaces it (no silent drop). */
+/** Download the message's files into `filesDir` (the channel passes its state home's `files/`).
+ *  Throws if any cannot be loaded — the caller surfaces it (no silent drop). */
 export async function resolveFiles(
   api: string,
   botToken: string,
   fileIds: string[] | undefined,
   chatId: number | string,
+  filesDir: string,
 ): Promise<DownloadedFile[] | undefined> {
   if (!fileIds || fileIds.length === 0) return undefined;
   const files: DownloadedFile[] = [];
-  for (const id of fileIds) files.push(await downloadTelegramFile(api, botToken, id, chatId));
+  for (const id of fileIds) files.push(await downloadTelegramFile(api, botToken, id, chatId, filesDir));
   return files;
 }

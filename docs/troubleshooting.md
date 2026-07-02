@@ -161,7 +161,7 @@ Telegram photos become `prompt.images`. The selected model must support vision. 
 Telegram documents/audio/video are downloaded under:
 
 ```txt
-<cwd>/.fastagent/telegram-files/<chat>/
+<cwd>/.fastagent/channels/telegram/files/<chat>/
 ```
 
 The path is appended to the prompt. Make sure the agent has filesystem tools enabled and the file still exists. Long-running bots should mount or clean this directory deliberately.
