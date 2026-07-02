@@ -88,6 +88,7 @@ A slash command does **not** summon in a group (bare or directed like `/cmd@botn
 A group answers one shared `chat[:thread]` session: everyone talks to the same agent with one history. To keep that shared session coherent:
 
 - **Serialized turns.** Concurrent summons in the same session run one at a time (FIFO) instead of failing fast as `session busy` — the right UX when several people talk in one group. Different sessions still run in parallel.
+- **Queue feedback.** A summon that lands while the session is busy gets an immediate "⏳ Queued" notice (reply-quoted to the asker, so a group sees whose ask is waiting); when its turn starts, the live preview edits that same message in place — the notice morphs into the answer, no orphan messages. Not group-specific: any busy session answers this way, including a private chat with two quick asks.
 - **Sender attribution.** Each message is prefixed with its sender, and a group is flagged in the prompt, so the model can tell participants apart and answer "summarize the discussion".
 - **Context buffer.** The channel keeps a small per-chat buffer of recent **un-summoned** messages (bounded by a character budget; the oldest are dropped) and folds it into the next answered turn. The buffer is durable: persisted before each webhook ACK and reloaded on start, so a restart keeps the discussion; folded discussion lives in the durable session.
 

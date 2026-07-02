@@ -487,6 +487,130 @@ describe("durable channel state (single-process restarts)", () => {
   });
 });
 
+describe("queue feedback (⏳ while a session is busy)", () => {
+  const recordingFetch = () => {
+    const sends: { text: string; id: number; replyTo?: number }[] = [];
+    const edits: { message_id: number; text: string }[] = [];
+    let nextId = 100;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as {
+            text?: string;
+            message_id?: number;
+            reply_parameters?: { message_id?: number };
+          })
+        : {};
+      if (String(url).endsWith("/sendMessage")) {
+        const id = nextId++;
+        sends.push({ text: body.text ?? "", id, replyTo: body.reply_parameters?.message_id });
+        return new Response(JSON.stringify({ ok: true, result: { message_id: id } }), { status: 200 });
+      }
+      if (String(url).endsWith("/editMessageText") && body.message_id !== undefined)
+        edits.push({ message_id: body.message_id, text: body.text ?? "" });
+      return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { sends, edits };
+  };
+  const msg = (id: number, text: string) => ({
+    update_id: id,
+    message: { message_id: id, text, chat: { id: 5, type: "private" } },
+  });
+
+  it("a second ask in a busy session gets an immediate ⏳ notice, which its turn then takes over", async () => {
+    const { sends, edits } = recordingFetch();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let call = 0;
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        if (++call === 1) {
+          await gate;
+          yield { type: "completed" };
+          return;
+        }
+        yield { type: "text", delta: "answer two" };
+        yield { type: "completed" };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}) });
+    await ch(tgRequest(msg(1, "first")));
+    await flush(); // turn 1 is mid-flight, parked on the gate
+    await ch(tgRequest(msg(2, "second")));
+    await flush();
+    const notice = sends.find((s) => s.text.includes("⏳"));
+    expect(notice).toBeDefined(); // the asker heard back WHILE turn 1 was still running
+    release();
+    await flush();
+    // turn 2's live preview + final answer took over the SAME message — the notice morphs, no orphan ⏳
+    expect(edits.some((e) => e.message_id === notice?.id && e.text.includes("answer two"))).toBe(true);
+    // and turn 2 never sent a second placeholder of its own
+    expect(sends.filter((s) => s.text.includes("💭")).length).toBeLessThanOrEqual(1); // only turn 1's
+  });
+
+  it("in a group, the ⏳ notice reply-quotes the QUEUED asker — whose ask is waiting is visible", async () => {
+    const { sends } = recordingFetch();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let call = 0;
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        if (++call === 1) {
+          await gate;
+        }
+        yield { type: "completed" };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}) });
+    const g = (id: number, text: string, from: string) => ({
+      update_id: id,
+      message: { message_id: id, text, chat: { id: -100, type: "supergroup" }, from: { id, username: from } },
+    });
+    await ch(tgRequest(g(11, "first ask", "alice")));
+    await flush();
+    await ch(tgRequest(g(22, "second ask", "bob")));
+    await flush();
+    const notice = sends.find((s) => s.text.includes("⏳"));
+    expect(notice?.replyTo).toBe(22); // quoted to BOB's message — not alice's, not unquoted
+    release();
+  });
+
+  it("a restart-replayed turn REUSES its persisted ⏳ notice — no new notice, the preview edits it", async () => {
+    const { sends, edits } = recordingFetch();
+    const state = freshStateDir();
+    const rec = {
+      id: "9",
+      state: "queued",
+      session: "5",
+      placeKey: "5",
+      baseText: "hi again",
+      chatId: 5,
+      imageFileIds: [],
+      fileIds: [],
+      previewId: 100, // the notice the pre-crash process sent
+    };
+    writeFileSync(join(state, "queue.json"), JSON.stringify({ pending: [rec], tombstones: [] }));
+    const { agent } = replyingAgent("recovered");
+    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
+    await flush();
+    expect(sends.length).toBe(0); // no new notice AND no new placeholder — message 100 is taken over
+    expect(edits.some((e) => e.message_id === 100 && e.text.includes("recovered"))).toBe(true);
+  });
+
+  it("an idle session gets no ⏳ notice", async () => {
+    const { sends } = recordingFetch();
+    const { agent } = replyingAgent("hi");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}) });
+    await ch(tgRequest(msg(1, "hello")));
+    await flush();
+    expect(sends.some((s) => s.text.includes("⏳"))).toBe(false);
+  });
+});
+
 describe("defaultTelegramRoute + telegramEnvelope", () => {
   it("answers a private message; a group only on a mention ENTITY naming the bot or reply-to-bot, not a slash command", () => {
     expect(defaultTelegramRoute(MSG)).toEqual({}); // private → act
