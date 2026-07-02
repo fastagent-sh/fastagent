@@ -9,6 +9,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { callBotApi } from "./channels/telegram/telegram-api.ts";
 import { log } from "./log.ts";
 
 export interface Tunnel {
@@ -199,21 +200,21 @@ async function registerTelegram(baseUrl: string): Promise<void> {
   );
 }
 
-/** One setWebhook attempt. Resolves { ok } or { ok: false, error } (HTTP status + description, or a thrown message). */
+/** One setWebhook attempt via the channel's hardened transport (timeout, body-ok validation, 429
+ *  retry, self-describing failures) — one implementation, not a parallel copy. A thrown timeout
+ *  stringifies to `telegram setWebhook: TimeoutError…`, which matches the caller's transient regex. */
 async function trySetWebhook(
   botToken: string,
   url: string,
   secret: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    const res = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url, secret_token: secret }),
+    const result = await callBotApi("https://api.telegram.org", botToken, "setWebhook", {
+      url,
+      secret_token: secret,
     });
-    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string };
-    if (res.ok && data.ok) return { ok: true };
-    return { ok: false, error: `${res.status}${data.description ? `: ${data.description}` : ""}` };
+    if (result.ok) return { ok: true };
+    return { ok: false, error: `${result.status}: ${result.description}` };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

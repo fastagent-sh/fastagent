@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultTelegramRoute, type TelegramUpdate, telegramChannel, telegramEnvelope } from "../src/telegram.ts";
-import { chunkText, sendMessage } from "../src/channels/telegram/telegram-api.ts";
+import { chunkText, resolveImages, sendMessage } from "../src/channels/telegram/telegram-api.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
 /** A faux Agent that records each invocation's prompt and replies with `reply`. */
@@ -176,6 +176,154 @@ describe("sendMessage HTML fallback", () => {
     const plain = sent.filter((s) => s.parse_mode === undefined).map((s) => s.text);
     expect(plain.length).toBeGreaterThan(0);
     expect(plain.join("")).toBe(long);
+  });
+
+  it("sendMessage carries a 30s timeout signal (a wedged connection can't hang the turn)", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchMock = vi.fn(
+      async (_url: string, _init: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await sendMessage(API, "BOT", { chatId: 42 }, "hi");
+    // Pin the MECHANISM, not just "some signal": the signal fetch received is the one AbortSignal.timeout
+    // produced for the API timeout — a never-firing plain signal would pass an instanceof check.
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(timeoutSpy.mock.results[0]?.value);
+  });
+
+  it("the file download carries the 120s timeout (same mechanism pin as sendMessage)", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (String(url).endsWith("/getFile"))
+        return new Response(JSON.stringify({ ok: true, result: { file_path: "photos/x.jpg", file_size: 3 } }), {
+          status: 200,
+        });
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const images = await resolveImages(API, "BOT", ["f1"]);
+    expect(images?.length).toBe(1);
+    expect(timeoutSpy).toHaveBeenCalledWith(120_000);
+    const download = fetchMock.mock.calls.find((c) => String(c[0]).includes("/file/"));
+    const produced = timeoutSpy.mock.results[timeoutSpy.mock.calls.findIndex((c) => c[0] === 120_000)];
+    expect(download?.[1]?.signal).toBe(produced?.value);
+  });
+
+  it("names a failing file download", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith("/getFile"))
+        return new Response(JSON.stringify({ ok: true, result: { file_path: "photos/x.jpg" } }), { status: 200 });
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(resolveImages(API, "BOT", ["f1"])).rejects.toThrow(/telegram file download: .*TimeoutError/);
+  });
+
+  it("names the failing call when the transport throws (timeout/network)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }),
+    );
+    await expect(sendMessage(API, "BOT", { chatId: 42 }, "hi")).rejects.toThrow(/telegram sendMessage: .*TimeoutError/);
+  });
+
+  it("a 200 with a non-JSON body (a proxy's error page) is a named failure, not a fake success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html>gateway error</html>", { status: 200 })),
+    );
+    await expect(sendMessage(API, "BOT", { chatId: 42 }, "hi")).rejects.toThrow(
+      /telegram sendMessage failed: 200 Bot API response was not the expected JSON/,
+    );
+  });
+
+  it("gives up after exhausting 429 retries — bounded, and the error says it retried", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: false, description: "Too Many Requests", parameters: { retry_after: 0 } }), {
+          status: 429,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const p = sendMessage(API, "BOT", { chatId: 42 }, "hi");
+    const rejection = expect(p).rejects.toThrow(/Too Many Requests \(gave up after 3 retries\)/);
+    await vi.advanceTimersByTimeAsync(3500); // three (0+1)s waits, then the 4th attempt fails for good
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledTimes(4); // the `attempt < 3` bound — not an infinite hammer
+  });
+
+  it("a mid-body timeout throws named — never a silent fake success (the old .json().catch swallow)", async () => {
+    // 200 arrives, but reading the body times out. The old `.json().catch(() => ({}))` turned this into
+    // `ok:true, result:undefined`; it must instead surface as a named transport failure.
+    const res = {
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      },
+    } as unknown as Response;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => res),
+    );
+    await expect(sendMessage(API, "BOT", { chatId: 42 }, "hi")).rejects.toThrow(/telegram sendMessage: .*TimeoutError/);
+  });
+
+  it("retries a 429 after the server's retry_after, then succeeds", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls++;
+      if (calls === 1)
+        return new Response(JSON.stringify({ ok: false, parameters: { retry_after: 2 } }), { status: 429 });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 7 } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const p = sendMessage(API, "BOT", { chatId: 42 }, "hi");
+    await vi.advanceTimersByTimeAsync(1000); // before (retry_after 2 + 1) s elapses…
+    expect(calls).toBe(1); // …it is actually WAITING, not hammering an immediate retry
+    await vi.advanceTimersByTimeAsync(2100); // past the wait
+    expect(await p).toBe(7);
+    expect(calls).toBe(2);
+  });
+
+  it("retries a 429 WITHOUT retry_after with a short backoff, then succeeds", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls++;
+      if (calls === 1) return new Response(JSON.stringify({ ok: false }), { status: 429 }); // no parameters
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 7 } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const p = sendMessage(API, "BOT", { chatId: 42 }, "hi");
+    await vi.advanceTimersByTimeAsync(1000); // before the (attempt 0 → 1 + 1) s backoff elapses…
+    expect(calls).toBe(1); // …it waits here too
+    await vi.advanceTimersByTimeAsync(1100); // past the backoff
+    expect(await p).toBe(7);
+    expect(calls).toBe(2);
+  });
+
+  it("fails fast on a flood ban whose retry_after exceeds the wait cap (no silent hour-long park)", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ ok: false, description: "Too Many Requests", parameters: { retry_after: 3600 } }),
+          {
+            status: 429,
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const t0 = Date.now();
+    // The error self-describes the transport's own decision (not just the server's text).
+    await expect(sendMessage(API, "BOT", { chatId: 42 }, "hi")).rejects.toThrow(/exceeds the \d+s flood-wait cap/);
+    expect(Date.now() - t0).toBeLessThan(1000); // failed visibly, did not honour the hour-long wait
+    expect(fetchMock).toHaveBeenCalledTimes(1); // and did not burn retries on it either
   });
 
   it("resends only the failing LATER chunk as plain, same bytes (boundary tags leak — the named trade-off)", async () => {

@@ -23,9 +23,34 @@ export default defineTool({
     if (messageThreadId !== undefined) form.set("message_thread_id", String(messageThreadId));
     if (caption) form.set("caption", caption);
     form.set(asPhoto ? "photo" : "document", new Blob([await readFile(path)]), basename(path));
-    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, { method: "POST", body: form });
-    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string };
-    if (!res.ok || !data.ok) throw new Error(`telegram ${method} failed: ${res.status} ${data.description ?? ""}`);
+    let res: Response;
+    let raw: string;
+    try {
+      // Upload timeout: a wedged connection would otherwise hang this tool call — and the whole turn.
+      // Deliberately NO 429 retry here (unlike the channel transport): a tool error goes back to the
+      // agent, which can decide to retry — fail-fast beats a tool call that silently sleeps.
+      res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(120_000),
+      });
+      raw = await res.text();
+    } catch (e) {
+      // Name the call — a bare TimeoutError says nothing in the agent's tool-error output.
+      throw new Error(`telegram ${method}: ${String(e)}`, { cause: e });
+    }
+    let data: { ok?: boolean; description?: string };
+    try {
+      data = JSON.parse(raw) as { ok?: boolean; description?: string };
+    } catch {
+      data = {};
+    }
+    if (!res.ok || !data.ok) {
+      // Self-describing even for a proxy's 200 + error page (no description to quote).
+      throw new Error(
+        `telegram ${method} failed: ${res.status} ${data.description ?? "Bot API response was not the expected JSON"}`,
+      );
+    }
     return `sent ${basename(path)} to chat ${chatId}`;
   },
 });

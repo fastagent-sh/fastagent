@@ -1,17 +1,49 @@
 /**
  * Telegram Bot API transport: the wire calls the channel orchestrates (telegram.ts). No agent, no
- * rendering — just `fetch` to the Bot API, with the protocol's hard edges handled here (429 backoff,
- * the 4096-char split, the HTML→plain parse fallback, the getFile→download dance). Split from the
+ * rendering — just `fetch` to the Bot API, with the protocol's hard edges handled here (timeouts, 429
+ * backoff, the 4096-char split, the HTML→plain parse fallback, the getFile→download dance). Split from the
  * channel so policy/streaming stays separate from the wire protocol.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import type { ImageRef } from "../../agent.ts";
+
+/** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers. */
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Parse a Bot API response body; a non-JSON body (a proxy's error page) is treated as empty — the
+ *  caller then fails on the missing `ok` field rather than trusting an intermediary's HTTP 200. Only the
+ *  PARSE is forgiven here: a network/timeout error while READING the body happens at the `res.text()`
+ *  call sites, inside their context-adding try/catch. */
+function parseBotJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+/** The self-description when a body carries no usable Bot API answer — either not JSON at all (an
+ *  intermediary's error page) or JSON without the expected fields. Phrased to be true for both; callers
+ *  that can tell a more specific truth (e.g. "no file_path") say that instead. */
+const MALFORMED_BODY = "Bot API response was not the expected JSON";
 
 /** Telegram's hard text limit per message. */
 export const TELEGRAM_MAX_TEXT = 4096;
 const PARSE_ERROR = /can't parse|entit|unsupported|unclosed|tag/i;
+
+/** Per-attempt timeout for a JSON Bot API call — without one a wedged connection hangs the turn (and the
+ *  session's serial queue behind it) forever. Generous: these are small JSON round-trips. */
+const API_TIMEOUT_MS = 30_000;
+
+/** Timeout for downloading file bytes (up to the 20 MB cap) — sized for a slow link, not a JSON call. */
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+
+/** Longest flood wait (seconds) we honour PER ATTEMPT before failing visibly instead. Telegram's
+ *  `retry_after` can reach minutes–hours on a flood ban; sleeping that long would silently hold the turn
+ *  and every queued turn behind it — a fast, diagnosable failure is better. The aggregate is bounded by
+ *  the retry count: at most 3 waits, so ~3× this cap worst-case. */
+const FLOOD_WAIT_MAX_S = 30;
 
 /** Download sanity cap (Telegram's own getFile limit); a larger file/image is rejected visibly. The
  *  engine resizes images to the model's needs, so this is a transport guard, not the model size limit. */
@@ -38,33 +70,69 @@ export interface DownloadedFile {
   size: number;
 }
 
-/** One Bot API call, retrying on a 429 with the server's `retry_after` (a few attempts). */
-async function callBotApi(
+/** One Bot API call, retrying on a 429 (a few attempts): waits the server's `retry_after` when given
+ *  (exported for the tunnel's setWebhook registration — one hardened call, not parallel copies)
+ *  (a missing one gets a short linear backoff), but only up to {@link FLOOD_WAIT_MAX_S} — beyond that
+ *  the flood ban fails visibly rather than silently parking the turn. No retry on other statuses or on
+ *  network errors/timeouts: the request may have been processed, and a retried sendMessage would
+ *  double-deliver; those fail visibly (a thrown fetch error, or `ok:false`) for the caller to surface. */
+export async function callBotApi(
   api: string,
   botToken: string,
   method: string,
   params: Record<string, unknown>,
 ): Promise<{ ok: true; result?: { message_id?: number } } | { ok: false; status: number; description: string }> {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${api}/bot${botToken}/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(params),
-    });
-    if (res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { result?: { message_id?: number } };
-      return { ok: true, result: data.result };
+    let res: Response;
+    let raw: string;
+    try {
+      res = await fetch(`${api}/bot${botToken}/${method}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      });
+      raw = await res.text(); // the body read is under the same timeout — keep it in the guarded region
+    } catch (e) {
+      // Name the call: a bare `TimeoutError` in the operator log names no method — the whole point of
+      // the timeout is a diagnosable failure.
+      throw new Error(`telegram ${method}: ${String(e)}`, { cause: e });
     }
-    const data = (await res.json().catch(() => ({}))) as {
+    const data = parseBotJson(raw) as {
+      ok?: boolean;
+      result?: { message_id?: number };
       description?: string;
       parameters?: { retry_after?: number };
     };
-    const retryAfter = data.parameters?.retry_after;
-    if (res.status === 429 && retryAfter !== undefined && attempt < 3) {
-      await sleep((retryAfter + 1) * 1000);
-      continue;
+    // Success requires the BODY's own `ok:true` (every Bot API response carries it), not just HTTP 200:
+    // a proxy's 200 + HTML error page must be a named failure, not a fake success with no message_id.
+    if (res.ok && data.ok === true) return { ok: true, result: data.result };
+    if (res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        description: data.description ?? MALFORMED_BODY,
+      };
     }
-    return { ok: false, status: res.status, description: data.description ?? "" };
+    if (res.status === 429 && attempt < 3) {
+      const floodWait = data.parameters?.retry_after ?? attempt + 1;
+      if (floodWait <= FLOOD_WAIT_MAX_S) {
+        await wait((floodWait + 1) * 1000);
+        continue;
+      }
+      // A longer flood ban fails visibly — and says WHY the transport refused to wait, rather than
+      // relying on the server's description to mention the retry_after.
+      return {
+        ok: false,
+        status: res.status,
+        description:
+          `${data.description ?? ""} (retry_after ${floodWait}s exceeds the ${FLOOD_WAIT_MAX_S}s flood-wait cap)`.trim(),
+      };
+    }
+    // Same self-describing rule for the other transport decision: a 429 that survived every retry says
+    // so, distinguishable in the log from one that was never retried.
+    const exhausted = res.status === 429 ? ` (gave up after ${attempt} retries)` : "";
+    return { ok: false, status: res.status, description: `${data.description ?? MALFORMED_BODY}${exhausted}`.trim() };
   }
 }
 
@@ -250,12 +318,22 @@ export async function resolveBotInfo(
   api: string,
   botToken: string,
 ): Promise<{ username?: string; canReadAllGroupMessages?: boolean }> {
-  const res = await fetch(`${api}/bot${botToken}/getMe`);
-  const data = (await res.json().catch(() => ({}))) as {
+  let res: Response;
+  let raw: string;
+  try {
+    res = await fetch(`${api}/bot${botToken}/getMe`, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
+    raw = await res.text();
+  } catch (e) {
+    throw new Error(`telegram getMe: ${String(e)}`, { cause: e });
+  }
+  const data = parseBotJson(raw) as {
     ok?: boolean;
+    description?: string;
     result?: { username?: string; can_read_all_group_messages?: boolean };
   };
-  if (!res.ok || !data.ok) throw new Error(`getMe failed: ${res.status}`);
+  if (!res.ok || !data.ok) {
+    throw new Error(`telegram getMe failed: ${res.status} ${data.description ?? MALFORMED_BODY}`);
+  }
   return { username: data.result?.username, canReadAllGroupMessages: data.result?.can_read_all_group_messages };
 }
 
@@ -271,17 +349,45 @@ async function getFileBytes(
   botToken: string,
   fileId: string,
 ): Promise<{ bytes: Buffer; remotePath: string }> {
-  const meta = (await fetch(`${api}/bot${botToken}/getFile`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ file_id: fileId }),
-  }).then((r) => r.json())) as { ok?: boolean; result?: { file_path?: string; file_size?: number } };
+  let meta: { ok?: boolean; description?: string; result?: { file_path?: string; file_size?: number } };
+  let metaStatus: number;
+  try {
+    const res = await fetch(`${api}/bot${botToken}/getFile`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file_id: fileId }),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+    metaStatus = res.status;
+    meta = parseBotJson(await res.text()) as typeof meta;
+  } catch (e) {
+    throw new Error(`telegram getFile: ${String(e)}`, { cause: e });
+  }
   const remotePath = meta.result?.file_path;
-  if (!meta.ok || !remotePath) throw new Error(`getFile failed for ${fileId}`);
+  if (!meta.ok || !remotePath) {
+    // A valid `ok:true` body missing file_path gets the specific truth, not the generic one.
+    const why = meta.ok ? "no file_path in response" : (meta.description ?? MALFORMED_BODY);
+    throw new Error(`telegram getFile failed for ${fileId}: ${metaStatus} ${why}`);
+  }
   if ((meta.result?.file_size ?? 0) > MAX_DOWNLOAD_BYTES) throw new Error("file is too large (max 20 MB)");
-  const res = await fetch(`${api}/file/bot${botToken}/${remotePath}`);
-  if (!res.ok) throw new Error(`download failed: ${res.status}`);
-  const bytes = Buffer.from(await res.arrayBuffer());
+  let res: Response;
+  let buf: ArrayBuffer | undefined;
+  let errBody: string | undefined;
+  try {
+    res = await fetch(`${api}/file/bot${botToken}/${remotePath}`, {
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
+    // The error body self-describes too (an expired file_path's "Not Found") — read it in the guarded region.
+    buf = res.ok ? await res.arrayBuffer() : undefined;
+    errBody = res.ok ? undefined : await res.text();
+  } catch (e) {
+    throw new Error(`telegram file download: ${String(e)}`, { cause: e });
+  }
+  if (!res.ok || buf === undefined) {
+    const why = (parseBotJson(errBody ?? "") as { description?: string }).description ?? MALFORMED_BODY;
+    throw new Error(`telegram file download failed: ${res.status} ${why}`);
+  }
+  const bytes = Buffer.from(buf);
   if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("file is too large (max 20 MB)");
   return { bytes, remotePath };
 }

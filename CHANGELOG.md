@@ -17,6 +17,7 @@ While the project is pre-1.0, minor versions may include breaking changes.
   (`github`, `telegram`, `channel-development`), and maintainer notes under `docs/design/`.
 
 ### Changed
+- Telegram transport hardening: every Bot API call, file download, and the `--tunnel` webhook registration now carry a timeout (30s API / 120s download) so a wedged connection cannot hang a turn, its session queue, or dev startup; a 429 without `retry_after` gets a short backoff (the scaffold send-tool is the one exception — it stays fail-fast so the agent sees the error and decides); a flood ban demanding a wait beyond 30s fails visibly instead of silently parking the turn. Failures self-describe (`telegram <method>: …`, "gave up after N retries", the flood-wait cap), a success requires the body's own `ok:true` — a proxy's 200 + error page can no longer read as a sent message.
 - Telegram: a long reply (>4096 chars) is split as valid HTML — a tag that spans a boundary is closed at the chunk's end and reopened (attributes and all) at the next chunk's start, so a long `<pre>` code block stays formatted instead of degrading to plain text. The split also never cuts through a tag token.
 - Narrative reframed to "Vibe first. Then FastAgent." — take a local agent folder out of
   the terminal and serve it in an app, on GitHub, in Telegram, or behind a custom channel.
