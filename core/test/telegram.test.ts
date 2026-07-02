@@ -396,17 +396,41 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
     // raw text containing @mybot WITHOUT a mention entity does not summon — Telegram emits no mention
     // entity for a name inside a code block or a URL, so pasted code/links cannot false-summon
     expect(defaultTelegramRoute(g("see @mybot in that snippet"), { botUsername: "mybot" })).toBeNull();
-    // a reply to a bot summons (no @mention needed)
-    const replyToBot = {
+    // a reply to THIS bot summons (no @mention needed); a reply to ANOTHER bot must not
+    const reply = (username?: string) => ({
       update_id: 1,
       message: {
         message_id: 2,
         text: "thanks",
         chat: group,
-        reply_to_message: { message_id: 1, chat: group, from: { id: 9, is_bot: true } },
+        reply_to_message: { message_id: 1, chat: group, from: { id: 9, is_bot: true, username } },
+      },
+    });
+    expect(defaultTelegramRoute(reply("MyBot"), { botUsername: "mybot" })).toEqual({}); // ours (case-insensitive)
+    expect(defaultTelegramRoute(reply("otherbot"), { botUsername: "mybot" })).toBeNull(); // another bot — stay silent
+    // the numeric id is the authoritative identity tier: it wins over username in BOTH directions
+    expect(defaultTelegramRoute(reply("otherbot"), { botId: 9 })).toEqual({}); // id matches → ours
+    expect(defaultTelegramRoute(reply("MyBot"), { botId: 42, botUsername: "mybot" })).toBeNull(); // id ≠ → silent
+    // neither id nor username known (a bare route call) → fail CLOSED: "is this a reply to me?" cannot
+    // be yes when the caller supplied no identity — otherwise every multi-bot group mis-summons
+    expect(defaultTelegramRoute(reply("otherbot"))).toBeNull();
+    // a reply to a HUMAN never summons
+    const replyToHuman = reply(undefined);
+    replyToHuman.message.reply_to_message.from.is_bot = false;
+    expect(defaultTelegramRoute(replyToHuman, { botUsername: "mybot" })).toBeNull();
+  });
+
+  it("an edited message never summons — in groups or private (no duplicate answer per typo fix)", () => {
+    const edited = {
+      update_id: 1,
+      edited_message: {
+        message_id: 2,
+        text: "hey @mybot now",
+        entities: [{ type: "mention", offset: 4, length: 6 }],
+        chat: { id: 5, type: "private" },
       },
     };
-    expect(defaultTelegramRoute(replyToBot)).toEqual({});
+    expect(defaultTelegramRoute(edited, { botUsername: "mybot" })).toBeNull();
   });
 
   it("summons on a media caption @mention too, not just text", () => {
@@ -499,6 +523,61 @@ describe("telegram channel", () => {
     expect((await ch(tgRequest(MSG, { secret: "wrong" }))).status).toBe(401);
     expect((await ch(new Request("http://app/telegram", { method: "POST", body: "{}" }))).status).toBe(401);
     expect(routed).toBe(false);
+  });
+
+  it("reply-to-bot targeting is precise from the token's bot id — before getMe ever resolves", async () => {
+    const { agent, calls } = replyingAgent("hi");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 })),
+    );
+    // Default route; the token "99:ZZ" carries bot id 99. getMe (mocked) never yields a username.
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "99:ZZ" });
+    const g = (fromId: number) => ({
+      update_id: 1,
+      message: {
+        message_id: 2,
+        text: "thanks",
+        chat: { id: -100, type: "supergroup" },
+        reply_to_message: {
+          message_id: 1,
+          chat: { id: -100, type: "supergroup" },
+          from: { id: fromId, is_bot: true, username: "otherbot" },
+        },
+      },
+    });
+    expect((await ch(tgRequest(g(7)))).status).toBe(200); // a reply to ANOTHER bot (id 7)
+    await flush();
+    expect(calls.length).toBe(0); // …does not summon — no fail-open window while getMe is unresolved
+    await ch(tgRequest(g(99))); // a reply to THIS bot (id 99)
+    await flush();
+    expect(calls.length).toBe(1);
+  });
+
+  it("ACKs a non-actionable update without consulting route (dropped BEFORE the route boundary)", async () => {
+    const { agent, calls } = replyingAgent("should not run");
+    let routed = false;
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "B",
+      route: () => {
+        routed = true;
+        return {}; // an always-act route — if the handler consulted it, the agent WOULD run
+      },
+    });
+    const m = { message_id: 2, text: "fixed typo", chat: { id: 5, type: "private" } };
+    // Every kind the contract excludes — edits and callback queries (even with an embedded message).
+    const updates = [
+      { update_id: 9, edited_message: m },
+      { update_id: 10, edited_channel_post: m },
+      { update_id: 11, callback_query: { id: "cq", data: "x", message: m } },
+    ];
+    for (const update of updates) {
+      expect((await ch(tgRequest(update))).status).toBe(200);
+    }
+    await flush();
+    expect(routed).toBe(false); // the contract: route never sees these kinds
+    expect(calls.length).toBe(0); // and the agent never ran
   });
 
   it("rejects an oversized body with 413 before parsing", async () => {

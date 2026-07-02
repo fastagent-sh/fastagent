@@ -112,9 +112,7 @@ export interface TelegramMessage {
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
-  edited_message?: TelegramMessage;
   channel_post?: TelegramMessage;
-  edited_channel_post?: TelegramMessage;
   [k: string]: unknown;
 }
 
@@ -431,9 +429,12 @@ async function streamReply(
   }
 }
 
-/** The actionable message in an update (a plain/edited message or channel post). */
+/** The actionable message in an update (a fresh message or channel post). Edits (`edited_message` /
+ *  `edited_channel_post`) are deliberately NOT actionable: answering them re-answers every typo fix (a
+ *  duplicate reply per edit), so an edited message changes nothing — the standard bot behavior. The
+ *  trade-off: editing a mention INTO an old message does not summon either; send a new message. */
 function pickMessage(update: TelegramUpdate): TelegramMessage | undefined {
-  return update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
+  return update.message ?? update.channel_post;
 }
 
 /** file_ids to send the model as vision images: this message's largest photo + a replied-to photo. */
@@ -542,18 +543,35 @@ function mentionsBot(m: TelegramMessage, botUsername: string | undefined): boole
   );
 }
 
+/** Whether the message replies to THIS bot — not just any bot: in a multi-bot group, replying to
+ *  another bot must not summon ours. Identity is the bot's numeric id (stable; a username is a mutable
+ *  handle) — telegramChannel parses it synchronously from the token, so there is no resolution race.
+ *  Without an id, fall back to username; with NEITHER, fail closed (false): answering "is this a reply
+ *  to me?" with "I don't know who I am, so yes" would mis-summon in every multi-bot group — a caller
+ *  reusing the route bare must supply an identity to get reply summon. */
+function repliesToBot(m: TelegramMessage, options?: { botUsername?: string; botId?: number }): boolean {
+  const r = m.reply_to_message?.from;
+  if (r?.is_bot !== true) return false;
+  if (options?.botId !== undefined) return r.id === options.botId;
+  const name = botName(options?.botUsername);
+  return name !== undefined && r.username?.toLowerCase() === name;
+}
+
 /**
  * The default routing policy (used when `route` is omitted; exported so a custom route can reuse it):
- * answer private chats always; a group only on a reply to the bot or a `mention` entity naming it (when
- * `botUsername` is supplied — telegramChannel resolves it via getMe). A bare or directed slash command
- * does NOT summon in a group (that was noisy; a bot author who wants commands adds a custom route).
- * Returns `{}` (act; the channel fills session/target/prompt from the message) or `null` (ignore).
+ * answer private chats always; a group only on a reply to THIS bot (by `botId`) or a `mention` entity
+ * naming it (when `botUsername` is supplied — telegramChannel parses the id from the token and resolves
+ * the username via getMe). A bare or directed slash command does NOT summon in a group (that was noisy;
+ * a bot author who wants commands adds a custom route). Returns `{}` (act; the channel fills
+ * session/target/prompt from the message) or `null` (ignore).
  */
-export function defaultTelegramRoute(update: TelegramUpdate, options?: { botUsername?: string }): TelegramRoute | null {
+export function defaultTelegramRoute(
+  update: TelegramUpdate,
+  options?: { botUsername?: string; botId?: number },
+): TelegramRoute | null {
   const m = pickMessage(update);
   if (!m) return null;
-  const summoned =
-    m.chat.type === "private" || m.reply_to_message?.from?.is_bot === true || mentionsBot(m, options?.botUsername);
+  const summoned = m.chat.type === "private" || repliesToBot(m, options) || mentionsBot(m, options?.botUsername);
   return summoned ? {} : null;
 }
 
@@ -596,7 +614,17 @@ export function telegramChannel(
     },
     (e) => log.warn(`[telegram] getMe failed; @mention summon + privacy check skipped: ${String(e)}`),
   );
-  const decide = route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName }));
+  // A bot token is "<bot_id>:<secret>" — the bot's own id is knowable synchronously, so reply-to-bot
+  // targeting is precise from the first update (no getMe race; getMe only resolves the @username).
+  // Every real token parses; one that doesn't (a mock/test token) degrades visibly: reply summon stays
+  // off (fail-closed in repliesToBot) until getMe supplies the username tier.
+  const tokenId = Number(botToken.split(":")[0]);
+  const botId = Number.isSafeInteger(tokenId) && tokenId > 0 ? tokenId : undefined;
+  if (botId === undefined) {
+    log.warn("[telegram] bot token has no parseable bot id — reply-to-bot summon disabled until getMe resolves");
+  }
+  const decide =
+    route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
   // Per-session serial queue: model B answers a shared chat[:thread] with ONE turn at a time, so a
   // second update for the same session waits its turn (FIFO) instead of colliding on the engine lease
   // and being dropped as "busy" — the wrong UX when several people talk in one group. Different sessions

@@ -73,13 +73,15 @@ Both `secretToken` and `botToken` are required. Construction fails if either is 
 
 ## Routing policy
 
+The channel routes only **fresh** `message` / `channel_post` updates. Everything else — edited messages (each typo fix would re-answer), edited channel posts, callback queries — is ACKed and dropped **before** `route` runs, so a custom route never sees them.
+
 By default, `telegramChannel` uses `defaultTelegramRoute`:
 
 - private chats always answer,
-- groups answer when the message replies to a bot,
+- groups answer when the message replies to THIS bot — matched by the bot id parsed from the token, so a reply to another bot in a multi-bot group stays silent, precisely from the first update (no getMe race),
 - groups answer on an `@botname` mention when the bot username is known — detected from Telegram's own `mention` entities, not a text scan, so `@fast` never matches `@fastagent`, and an `@botname` inside a code block or a URL does not summon (it is not a mention entity).
 
-A slash command does **not** summon in a group (bare or directed like `/cmd@botname`) — it was noise; a bot that wants commands adds a custom `route`. Override `route` to decide whether and where to answer; a custom route owns its own group-summon policy, and if you rely on `@botname` mentions, pass a known `botUsername` to `defaultTelegramRoute`.
+A slash command does **not** summon in a group (bare or directed like `/cmd@botname`) — it was noise; a bot that wants commands adds a custom `route`. Override `route` to decide whether and where to answer; a custom route owns its own group-summon policy. When reusing `defaultTelegramRoute`, pass your bot's identity (`botUsername` and/or `botId`) — group summon needs it, and a bare call answers only private chats (fail-closed: "is this a reply to me?" cannot be yes without knowing who "me" is).
 
 ## Group chats
 
