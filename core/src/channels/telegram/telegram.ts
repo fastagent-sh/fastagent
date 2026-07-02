@@ -23,10 +23,9 @@ import {
   type DownloadedFile,
   type Target,
   TELEGRAM_MAX_TEXT,
-  resolveBotInfo,
+  callApi,
   resolveFiles,
   resolveImages,
-  deleteMessage,
   editMessageText,
   sendMessage,
 } from "./telegram-api.ts";
@@ -219,7 +218,8 @@ async function finalize(
 ): Promise<void> {
   const html = opts.html ?? true;
   if (text.trim() === "") {
-    if (messageId !== undefined) await deleteMessage(api, botToken, target, messageId);
+    if (messageId !== undefined)
+      await callApi(api, botToken, "deleteMessage", { chat_id: target.chatId, message_id: messageId });
     return;
   }
   if (messageId !== undefined) {
@@ -236,7 +236,7 @@ async function finalize(
     }
     // Too long for one message, OR a failed single-message edit: remove the placeholder best-effort (a lingering one above
     // the answer is worse than the extra call), then send the whole reply as fresh, consecutive messages.
-    await deleteMessage(api, botToken, target, messageId).catch(() => {});
+    await callApi(api, botToken, "deleteMessage", { chat_id: target.chatId, message_id: messageId }).catch(() => {});
   }
   await sendMessage(api, botToken, target, text, { html });
 }
@@ -571,10 +571,10 @@ export function telegramChannel(
   // not supplied) and the group-privacy flag — privacy mode off is required to receive the un-summoned
   // group messages that feed the context buffer, so warn if it is on.
   let mentionName = botUsername;
-  void resolveBotInfo(apiBaseUrl, botToken).then(
-    (info) => {
-      if (mentionName === undefined) mentionName = info.username;
-      if (info.canReadAllGroupMessages === false) {
+  void callApi(apiBaseUrl, botToken, "getMe", {}).then(
+    (me) => {
+      if (mentionName === undefined) mentionName = me.username;
+      if (me.can_read_all_group_messages === false) {
         log.warn(
           "[telegram] privacy mode is on: the bot only sees @mentions / replies / commands, so group " +
             "context (un-summoned messages) won't be captured. Disable it via @BotFather → /setprivacy.",

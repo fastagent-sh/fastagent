@@ -1,17 +1,41 @@
 /**
- * Telegram Bot API transport: the wire calls the channel orchestrates (telegram.ts). No agent, no
- * rendering — just `fetch` to the Bot API, with the protocol's hard edges handled here (429 backoff,
- * the 4096-char split, the HTML→plain parse fallback, the getFile→download dance). Split from the
- * channel so policy/streaming stays separate from the wire protocol.
+ * Telegram Bot API transport. ONE pipeline (`callApi`) carries every JSON call — per-method code does
+ * not exist, so a transport rule can never be missing from one call site. The transport invariants
+ * live here and nowhere else:
+ *
+ *  1. Every call has a per-attempt timeout (API_TIMEOUT_MS; file bytes DOWNLOAD_TIMEOUT_MS) — a wedged
+ *     connection cannot hang a turn, its session queue, or webhook registration.
+ *  2. Only a 429 is retried (bounded attempts, honouring `retry_after` up to FLOOD_WAIT_MAX_S per
+ *     wait); a longer flood ban or exhausted retries fail visibly. No other failure class is retried:
+ *     the request may have been processed, and a retried sendMessage would double-deliver.
+ *  3. Success requires the body's own `ok:true` — an intermediary's HTTP 200 is not a sent message.
+ *  4. Every failure is a {@link TelegramApiError} naming the method: self-description is a property of
+ *     the error type, not per-call-site string assembly.
+ *
+ * On top of the pipeline sits the channel's POLICY: the 4096-char HTML-aware split, the HTML→plain
+ * parse fallback, and the getFile→download dance. (telegram.ts orchestrates; no agent, no rendering.)
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import type { ImageRef } from "../../agent.ts";
 
 /** Telegram's hard text limit per message. */
 export const TELEGRAM_MAX_TEXT = 4096;
 const PARSE_ERROR = /can't parse|entit|unsupported|unclosed|tag/i;
+
+/** Per-attempt timeout for a JSON Bot API call — small JSON round-trips, so 30s is generous. */
+const API_TIMEOUT_MS = 30_000;
+
+/** Timeout for downloading file bytes (up to the 20 MB cap) — sized for a slow link, not a JSON call. */
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+
+/** Longest flood wait (seconds) honoured PER ATTEMPT before failing visibly instead. Telegram's
+ *  `retry_after` can reach minutes–hours on a flood ban; sleeping that long would silently park the
+ *  turn and every queued turn behind it. Aggregate is bounded by RETRIES: ~3× this cap worst-case. */
+const FLOOD_WAIT_MAX_S = 30;
+
+/** How many 429s one call absorbs before giving up. */
+const RETRIES = 3;
 
 /** Download sanity cap (Telegram's own getFile limit); a larger file/image is rejected visibly. The
  *  engine resizes images to the model's needs, so this is a transport guard, not the model size limit. */
@@ -38,33 +62,93 @@ export interface DownloadedFile {
   size: number;
 }
 
-/** One Bot API call, retrying on a 429 with the server's `retry_after` (a few attempts). */
-async function callBotApi(
+/** The methods this channel speaks and their result shapes — a hand-written slice of the Bot API
+ *  schema. Adding a method = adding a row here, not writing a function. (If this table ever needs to
+ *  grow past roughly ten rows, or entity-based formatting, adopt gramIO instead of growing it.) */
+interface Api {
+  sendMessage: { message_id?: number };
+  editMessageText: unknown;
+  deleteMessage: unknown;
+  getMe: { username?: string; can_read_all_group_messages?: boolean };
+  getFile: { file_path?: string; file_size?: number };
+  setWebhook: unknown;
+}
+
+/** A named Bot API failure. `status` 0 = the transport itself failed (network error / timeout) before
+ *  any HTTP status existed; otherwise the HTTP status with Telegram's own description (or a note that
+ *  the body carried no usable answer). */
+export class TelegramApiError extends Error {
+  readonly method: string;
+  readonly status: number;
+  readonly description: string;
+  // No constructor parameter properties: the CLI runs source under Node's strip-only TS mode, which
+  // rejects them (ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX).
+  constructor(method: string, status: number, description: string, options?: { cause?: unknown }) {
+    super(
+      status === 0
+        ? `telegram ${method}: ${description}`
+        : `telegram ${method} failed: ${status} ${description}`.trim(),
+      options,
+    );
+    this.name = "TelegramApiError";
+    this.method = method;
+    this.status = status;
+    this.description = description;
+  }
+}
+
+/** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers. */
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The pipeline: one Bot API call, carrying every transport invariant (see the module header). Returns
+ * the method's `result` payload; throws {@link TelegramApiError} on any failure.
+ */
+export async function callApi<M extends keyof Api>(
   api: string,
   botToken: string,
-  method: string,
+  method: M,
   params: Record<string, unknown>,
-): Promise<{ ok: true; result?: { message_id?: number } } | { ok: false; status: number; description: string }> {
+): Promise<Api[M]> {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${api}/bot${botToken}/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(params),
-    });
-    if (res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { result?: { message_id?: number } };
-      return { ok: true, result: data.result };
+    let res: Response;
+    let raw: string;
+    try {
+      res = await fetch(`${api}/bot${botToken}/${method}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      });
+      raw = await res.text(); // the body read shares the timeout — a mid-body stall is a transport failure too
+    } catch (e) {
+      throw new TelegramApiError(method, 0, String(e), { cause: e });
     }
-    const data = (await res.json().catch(() => ({}))) as {
-      description?: string;
-      parameters?: { retry_after?: number };
-    };
-    const retryAfter = data.parameters?.retry_after;
-    if (res.status === 429 && retryAfter !== undefined && attempt < 3) {
-      await sleep((retryAfter + 1) * 1000);
-      continue;
+    let data: { ok?: boolean; result?: unknown; description?: string; parameters?: { retry_after?: number } };
+    try {
+      data = JSON.parse(raw) as typeof data;
+    } catch {
+      data = {}; // only the parse is forgiven — the ok-gate below turns it into a named failure
     }
-    return { ok: false, status: res.status, description: data.description ?? "" };
+    if (res.ok && data.ok === true) return data.result as Api[M];
+    if (res.status === 429 && attempt < RETRIES) {
+      const floodWait = data.parameters?.retry_after ?? attempt + 1; // no retry_after → short linear backoff
+      if (floodWait <= FLOOD_WAIT_MAX_S) {
+        await wait((floodWait + 1) * 1000);
+        continue;
+      }
+      throw new TelegramApiError(
+        method,
+        429,
+        `${data.description ?? ""} (retry_after ${floodWait}s exceeds the ${FLOOD_WAIT_MAX_S}s flood-wait cap)`.trim(),
+      );
+    }
+    const exhausted = res.status === 429 ? ` (gave up after ${attempt} retries)` : "";
+    throw new TelegramApiError(
+      method,
+      res.status,
+      `${data.description ?? "Bot API response was not the expected JSON"}${exhausted}`.trim(),
+    );
   }
 }
 
@@ -187,10 +271,11 @@ export async function sendMessage(
     if (first && t.replyTo !== undefined) {
       base.reply_parameters = { message_id: t.replyTo, allow_sending_without_reply: true };
     }
-    let result = mode
-      ? await callBotApi(api, botToken, "sendMessage", { ...base, parse_mode: "HTML" })
-      : await callBotApi(api, botToken, "sendMessage", base);
-    if (mode && !result.ok && PARSE_ERROR.test(result.description)) {
+    let result: Api["sendMessage"];
+    try {
+      result = await callApi(api, botToken, "sendMessage", mode ? { ...base, parse_mode: "HTML" } : base);
+    } catch (e) {
+      if (!(mode && e instanceof TelegramApiError && PARSE_ERROR.test(e.description))) throw e;
       if (first) {
         // Nothing sent yet — re-chunk the whole body as plain (no injected boundary tags leak) and restart.
         mode = false;
@@ -199,10 +284,9 @@ export async function sendMessage(
         continue;
       }
       // A later chunk failed after the first parsed cleanly (rare) — best-effort plain resend of this chunk.
-      result = await callBotApi(api, botToken, "sendMessage", base);
+      result = await callApi(api, botToken, "sendMessage", base);
     }
-    if (!result.ok) throw new Error(`telegram sendMessage failed: ${result.status} ${result.description}`.trim());
-    if (first) firstId = result.result?.message_id;
+    if (first) firstId = result.message_id;
     first = false;
   }
   return firstId;
@@ -227,36 +311,19 @@ export async function editMessageText(
     message_id: messageId,
     text: body.slice(0, TELEGRAM_MAX_TEXT),
   };
-  let result = opts.html
-    ? await callBotApi(api, botToken, "editMessageText", { ...base, parse_mode: "HTML" })
-    : await callBotApi(api, botToken, "editMessageText", base);
-  if (opts.html && !result.ok && PARSE_ERROR.test(result.description))
-    result = await callBotApi(api, botToken, "editMessageText", base);
-  if (!result.ok && /message is not modified/i.test(result.description)) return;
-  if (!result.ok) throw new Error(`telegram editMessageText failed: ${result.status} ${result.description}`.trim());
-}
-
-/** Delete a message — the wire primitive for removing a preview placeholder (the finalize POLICY lives
- *  in telegram.ts). Throws on failure, like the other primitives; a caller that wants best-effort cleanup
- *  catches explicitly rather than the primitive swallowing it. */
-export async function deleteMessage(api: string, botToken: string, t: Target, messageId: number): Promise<void> {
-  const result = await callBotApi(api, botToken, "deleteMessage", { chat_id: t.chatId, message_id: messageId });
-  if (!result.ok) throw new Error(`telegram deleteMessage failed: ${result.status} ${result.description}`.trim());
-}
-/** getMe: the bot's own @username (so default routing recognises group @mentions) and whether group
- *  privacy mode is OFF (`can_read_all_group_messages`) — needed to receive the un-summoned group
- *  messages that feed the context buffer. */
-export async function resolveBotInfo(
-  api: string,
-  botToken: string,
-): Promise<{ username?: string; canReadAllGroupMessages?: boolean }> {
-  const res = await fetch(`${api}/bot${botToken}/getMe`);
-  const data = (await res.json().catch(() => ({}))) as {
-    ok?: boolean;
-    result?: { username?: string; can_read_all_group_messages?: boolean };
-  };
-  if (!res.ok || !data.ok) throw new Error(`getMe failed: ${res.status}`);
-  return { username: data.result?.username, canReadAllGroupMessages: data.result?.can_read_all_group_messages };
+  const notModified = (e: unknown): boolean =>
+    e instanceof TelegramApiError && /message is not modified/i.test(e.description);
+  try {
+    await callApi(api, botToken, "editMessageText", opts.html ? { ...base, parse_mode: "HTML" } : base);
+  } catch (e) {
+    if (notModified(e)) return;
+    if (!(opts.html && e instanceof TelegramApiError && PARSE_ERROR.test(e.description))) throw e;
+    try {
+      await callApi(api, botToken, "editMessageText", base); // plain fallback for rejected markup
+    } catch (e2) {
+      if (!notModified(e2)) throw e2;
+    }
+  }
 }
 
 function mimeFromPath(path: string): string {
@@ -271,17 +338,38 @@ async function getFileBytes(
   botToken: string,
   fileId: string,
 ): Promise<{ bytes: Buffer; remotePath: string }> {
-  const meta = (await fetch(`${api}/bot${botToken}/getFile`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ file_id: fileId }),
-  }).then((r) => r.json())) as { ok?: boolean; result?: { file_path?: string; file_size?: number } };
-  const remotePath = meta.result?.file_path;
-  if (!meta.ok || !remotePath) throw new Error(`getFile failed for ${fileId}`);
-  if ((meta.result?.file_size ?? 0) > MAX_DOWNLOAD_BYTES) throw new Error("file is too large (max 20 MB)");
-  const res = await fetch(`${api}/file/bot${botToken}/${remotePath}`);
-  if (!res.ok) throw new Error(`download failed: ${res.status}`);
-  const bytes = Buffer.from(await res.arrayBuffer());
+  const meta = await callApi(api, botToken, "getFile", { file_id: fileId });
+  const remotePath = meta.file_path;
+  if (!remotePath) throw new Error(`telegram getFile: no file_path in response for ${fileId}`);
+  if ((meta.file_size ?? 0) > MAX_DOWNLOAD_BYTES) throw new Error("file is too large (max 20 MB)");
+  // The byte download is the one non-JSON call (a GET of the file endpoint), so it cannot ride the
+  // pipeline — same timeout + naming discipline, applied here once.
+  let res: Response;
+  let buf: ArrayBuffer | undefined;
+  let errBody: string | undefined;
+  try {
+    res = await fetch(`${api}/file/bot${botToken}/${remotePath}`, {
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
+    buf = res.ok ? await res.arrayBuffer() : undefined;
+    errBody = res.ok ? undefined : await res.text(); // the error body self-describes (expired path etc.)
+  } catch (e) {
+    throw new TelegramApiError("file download", 0, String(e), { cause: e });
+  }
+  if (!res.ok || buf === undefined) {
+    let description: string | undefined;
+    try {
+      description = (JSON.parse(errBody ?? "") as { description?: string }).description;
+    } catch {
+      /* non-JSON error body — fall through to the generic description */
+    }
+    throw new TelegramApiError(
+      "file download",
+      res.status,
+      description ?? "Bot API response was not the expected JSON",
+    );
+  }
+  const bytes = Buffer.from(buf);
   if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("file is too large (max 20 MB)");
   return { bytes, remotePath };
 }
