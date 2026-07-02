@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultTelegramRoute, type TelegramUpdate, telegramChannel, telegramEnvelope } from "../src/telegram.ts";
+import {
+  defaultTelegramRoute,
+  type TelegramUpdate,
+  telegramChannel as buildTelegramChannel,
+  telegramEnvelope,
+} from "../src/telegram.ts";
 import { callApi, chunkText, resolveImages, sendMessage } from "../src/channels/telegram/telegram-api.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
@@ -70,7 +75,21 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  for (const d of stateDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
+
+/** A fresh throwaway state dir (cleaned up in afterEach). */
+const stateDirs: string[] = [];
+const freshStateDir = (): string => {
+  const d = mkdtempSync(join(tmpdir(), "tg-state-"));
+  stateDirs.push(d);
+  return d;
+};
+
+/** telegramChannel with an isolated default stateDir, so tests never write the repo's `.fastagent`.
+ *  Persistence tests pass an explicit shared `stateDir` to simulate a restart. */
+const telegramChannel: typeof buildTelegramChannel = (agent, opts) =>
+  buildTelegramChannel(agent, { stateDir: freshStateDir(), ...opts });
 
 describe("chunkText (HTML-aware split)", () => {
   it("returns one chunk under the limit, and prefers a newline boundary over it", () => {
@@ -354,6 +373,117 @@ describe("file download (the one non-JSON call)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     await expect(resolveImages(API, "BOT", ["f1"])).rejects.toThrow(/telegram file download: .*TimeoutError/);
+  });
+});
+
+describe("durable channel state (single-process restarts)", () => {
+  const okFetch = () =>
+    vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }));
+  const group = (id: number, text: string) => ({
+    update_id: id,
+    message: {
+      message_id: id,
+      text,
+      chat: { id: -100, type: "supergroup" },
+      from: { id: 7, username: "alice" },
+    },
+  });
+  // Summon on "@go …" — an explicit route keeps these tests independent of bot-identity resolution.
+  const route = (u: TelegramUpdate) =>
+    (u.message as { text?: string } | undefined)?.text?.startsWith("@go") ? {} : null;
+
+  it("the group buffer is persisted BEFORE the ACK and survives a restart", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const state = freshStateDir();
+    const a1 = replyingAgent("first");
+    const ch1 = telegramChannel(a1.agent, { secretToken: SECRET, botToken: "1:A", route, stateDir: state });
+    expect((await ch1(tgRequest(group(1, "the deploy is broken")))).status).toBe(200);
+    // durable by the time the 200 exists — an ACKed update is never redelivered
+    const onDisk = JSON.parse(readFileSync(join(state, "buffers.json"), "utf8")) as Record<string, unknown[]>;
+    expect(onDisk["-100"]?.length).toBe(1);
+    expect(readFileSync(join(state, ".gitignore"), "utf8")).toBe("*\n"); // the state home self-ignores
+    // "restart": a NEW channel instance over the same state dir
+    const a2 = replyingAgent("second");
+    const ch2 = telegramChannel(a2.agent, { secretToken: SECRET, botToken: "1:A", route, stateDir: state });
+    await ch2(tgRequest(group(2, "@go what broke?")));
+    await flush();
+    expect(String(a2.calls[0]?.text)).toContain("the deploy is broken"); // folded from the RELOADED buffer
+  });
+
+  it("queue WAL: a queued turn replays after a restart; a started one is dropped (no duplicate answer)", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const state = freshStateDir();
+    // Turn A reaches the agent and hangs mid-stream (the crash scenario); turn B stays queued behind it.
+    const hanging: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "thinking", delta: "…" }; // one event, then hang — the turn is mid-flight forever
+        await new Promise(() => {});
+      },
+    };
+    const always = () => ({});
+    const ch1 = telegramChannel(hanging, { secretToken: SECRET, botToken: "1:A", route: always, stateDir: state });
+    await ch1(tgRequest(group(1, "first — will hang")));
+    await ch1(tgRequest(group(2, "second — queued")));
+    await flush(); // let turn 1 reach the agent
+    const wal = JSON.parse(readFileSync(join(state, "queue.json"), "utf8")) as { pending: { state: string }[] };
+    expect(wal.pending.map((r) => r.state)).toEqual(["started", "queued"]);
+    // "restart": recovery runs at construction — replay the queued turn, drop the started one loudly
+    const a2 = replyingAgent("recovered");
+    const ch2 = telegramChannel(a2.agent, { secretToken: SECRET, botToken: "1:A", route: always, stateDir: state });
+    await flush();
+    expect(a2.calls.length).toBe(1); // ONLY the never-started turn replayed — no duplicate for the started one
+    expect(String(a2.calls[0]?.text)).toContain("second — queued");
+    const after = JSON.parse(readFileSync(join(state, "queue.json"), "utf8")) as {
+      pending: unknown[];
+      tombstones: string[];
+    };
+    expect(after.pending).toEqual([]); // replayed turn completed; the dropped one is no longer pending
+    expect(after.tombstones).toEqual(["1", "2"]); // EVERY recovered id is tombstoned — dropped AND replayed…
+    // …so a Telegram REDELIVERY of either (crash before the 200 went out) is ACKed and skipped: the
+    // dropped turn may already have answered pre-crash, the replayed one answered via the replay
+    expect((await ch2(tgRequest(group(1, "first — will hang")))).status).toBe(200);
+    expect((await ch2(tgRequest(group(2, "second — queued")))).status).toBe(200);
+    await flush();
+    expect(a2.calls.length).toBe(1); // still exactly one turn — no duplicates
+  });
+
+  it("a FAILED turn keeps the folded discussion — the next summon re-folds it (commit on completed only)", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const state = freshStateDir();
+    let fail = true;
+    const calls: Prompt[] = [];
+    const agent: Agent = {
+      async *invoke(_s: Scope, p: Prompt): AsyncIterable<AgentEvent> {
+        calls.push(p);
+        if (fail) {
+          yield { type: "failed", details: "boom", retryable: true };
+          return;
+        }
+        yield { type: "completed" };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route, stateDir: state });
+    await ch(tgRequest(group(1, "important context"))); // un-summoned → buffered
+    await ch(tgRequest(group(2, "@go answer"))); // summoned → the turn FAILS
+    await flush();
+    expect(String(calls[0]?.text)).toContain("important context"); // folded into the failed turn…
+    fail = false;
+    await ch(tgRequest(group(3, "@go retry")));
+    await flush();
+    expect(String(calls[1]?.text)).toContain("important context"); // …and STILL there for the retry
+  });
+
+  it("a corrupt or wrong-shaped state file degrades to empty — the channel still boots and answers", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const state = freshStateDir();
+    // buffers: syntactically valid JSON of the WRONG SHAPE; queue: not JSON at all — both must degrade
+    writeFileSync(join(state, "buffers.json"), JSON.stringify(["not", "a", "record"]));
+    writeFileSync(join(state, "queue.json"), "not json");
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
+    await ch(tgRequest(group(1, "hello")));
+    await flush();
+    expect(calls.length).toBe(1); // works, with empty state (the warn is in the operator log)
   });
 });
 
@@ -1127,42 +1257,41 @@ describe("telegram channel", () => {
     });
   });
 
-  it("downloads an inbound document to disk and appends its path to the prompt", async () => {
-    const cwd0 = process.cwd();
-    const tmp = mkdtempSync(join(tmpdir(), "fa-tg-"));
-    process.chdir(tmp);
-    try {
-      const fetchMock = vi.fn(async (url: string) => {
-        if (String(url).endsWith("/getFile"))
-          return new Response(
-            JSON.stringify({ ok: true, result: { file_path: "documents/report.pdf", file_size: 5 } }),
-            { status: 200 },
-          );
-        if (String(url).includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200 });
-        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
-      });
-      vi.stubGlobal("fetch", fetchMock);
-      const { agent, calls } = replyingAgent("ok");
-      const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", route: act, apiBaseUrl: API });
-      const doc: TelegramUpdate = {
-        update_id: 11,
-        message: {
-          message_id: 4,
-          caption: "summarize",
-          document: { file_id: "d1", file_name: "report.pdf" },
-          chat: { id: 77, type: "private" },
-        },
-      };
-      expect((await ch(tgRequest(doc))).status).toBe(200);
-      for (let i = 0; i < 100 && calls.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
-      const dest = join(tmp, ".fastagent/telegram-files/77/report.pdf");
-      expect(existsSync(dest)).toBe(true);
-      expect(calls[0]?.text).toMatch(/attached files/);
-      expect(calls[0]?.text).toContain(dest);
-    } finally {
-      process.chdir(cwd0);
-      rmSync(tmp, { recursive: true, force: true });
-    }
+  it("downloads an inbound document into the state dir's files/ and appends its path to the prompt", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith("/getFile"))
+        return new Response(JSON.stringify({ ok: true, result: { file_path: "documents/report.pdf", file_size: 5 } }), {
+          status: 200,
+        });
+      if (String(url).includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const state = freshStateDir();
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      route: act,
+      apiBaseUrl: API,
+      stateDir: state,
+    });
+    const doc: TelegramUpdate = {
+      update_id: 11,
+      message: {
+        message_id: 4,
+        caption: "summarize",
+        document: { file_id: "d1", file_name: "report.pdf" },
+        chat: { id: 77, type: "private" },
+      },
+    };
+    expect((await ch(tgRequest(doc))).status).toBe(200);
+    for (let i = 0; i < 100 && calls.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
+    // files live UNDER the state dir — one home for all channel state, so `stateDir` moves everything
+    const dest = join(state, "files/77/report.pdf");
+    expect(existsSync(dest)).toBe(true);
+    expect(calls[0]?.text).toMatch(/attached files/);
+    expect(calls[0]?.text).toContain(dest);
   });
 
   it("surfaces an attachment fetch failure to the user (not a silent skip) and does not run the agent", async () => {

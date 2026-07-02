@@ -117,11 +117,10 @@ async function ensureStateDirSelfIgnored(stateDir: string): Promise<void> {
  * exclusion below) lives here, and `ensureStateDirSelfIgnored` is private, so a caller cannot write a
  * `.gitignore` bypassing these checks.
  *
- * It is NOT auto-discovery: it fires only for the `paths` it is GIVEN. Every command/channel that puts
- * state in-tree must register its path here (the opener: sessions + auth; `login`: auth). A path it is
- * never told about is covered only incidentally — e.g. `<cwd>/.fastagent/telegram-files` relies on the
- * opener having self-ignored `.fastagent` for sessions/auth, so an all-external sessions+auth config
- * would leave it untracked-but-committable (a channel that wants a guarantee must register its dir).
+ * It is NOT auto-discovery: it fires only for the `paths` it is GIVEN. Every command that puts state
+ * in-tree must register its path here (the opener: sessions + auth; `login`: auth). A CHANNEL cannot
+ * reach this guard across the layer boundary, so a channel that wants a guarantee owns it — e.g. the
+ * telegram channel writes a nested `.gitignore` inside its own state home (`ensureStateHome`).
  *
  * Excludes the user's HOME-global `~/.fastagent` (e.g. `login`/`dev` run from `$HOME`): self-ignore is
  * for protecting state inside an agent PROJECT tree, not for writing a `.gitignore` into the user's

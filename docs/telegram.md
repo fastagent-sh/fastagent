@@ -89,7 +89,7 @@ A group answers one shared `chat[:thread]` session: everyone talks to the same a
 
 - **Serialized turns.** Concurrent summons in the same session run one at a time (FIFO) instead of failing fast as `session busy` — the right UX when several people talk in one group. Different sessions still run in parallel.
 - **Sender attribution.** Each message is prefixed with its sender, and a group is flagged in the prompt, so the model can tell participants apart and answer "summarize the discussion".
-- **Context buffer.** The channel keeps a small per-chat buffer of recent **un-summoned** messages (bounded by a character budget; the oldest are dropped) and folds it into the next answered turn. The buffer is in-process — a restart loses anything not yet folded in; folded discussion lives in the durable session.
+- **Context buffer.** The channel keeps a small per-chat buffer of recent **un-summoned** messages (bounded by a character budget; the oldest are dropped) and folds it into the next answered turn. The buffer is durable: persisted before each webhook ACK and reloaded on start, so a restart keeps the discussion; folded discussion lives in the durable session.
 
 The buffer needs Telegram **group privacy mode off** (@BotFather → `/setprivacy` → Disable) to receive un-summoned messages at all. The channel resolves the bot's privacy flag once at startup and warns when it is on.
 
@@ -169,10 +169,20 @@ For development bots, surfacing `failed.details` is useful. For public bots, pre
 Telegram media are handled by the channel before the agent turn runs.
 
 - Photos are downloaded, converted to `prompt.images`, and resized by the engine before reaching the model. The selected model must support vision.
-- Documents, voice, video, and audio are downloaded to `<cwd>/.fastagent/telegram-files/<chat>/`. Their local paths are appended to the prompt so the agent can read them with tools.
+- Documents, voice, video, and audio are downloaded to `<cwd>/.fastagent/channels/telegram/files/<chat>/`. Their local paths are appended to the prompt so the agent can read them with tools.
 - Download failures become `failed` events, never silent drops.
 
-Downloaded files persist until the operator cleans them up. Treat `.fastagent/telegram-files/` like session state: git-ignored machine state that may need a volume or cleanup policy for long-running bots.
+Downloaded files persist until the operator cleans them up. Treat `.fastagent/channels/telegram/` like session state: git-ignored machine state that may need a volume or cleanup policy for long-running bots.
+
+## State & restarts
+
+The channel persists its state under `<cwd>/.fastagent/channels/telegram/` (the channel-state convention: engine state at the `.fastagent` top level, channel state under `channels/<kind>/`; override with the `stateDir` option):
+
+- `buffers.json` — the group-context buffer, written before each webhook ACK (an ACKed update is never redelivered, so ACK-then-persist would be a silent-loss window).
+- `queue.json` — the pending-turn WAL. On restart, turns that never reached the agent replay in arrival order; a turn that was mid-flight when the process died is **dropped with an error log** — it may already have answered, and a duplicate reply is worse than a visible loss (ask again). Every recovered update id (replayed or dropped) is tombstoned, so if Telegram redelivers the update (a crash before the 200 went out), the redelivery is ACKed and skipped rather than answered twice.
+- `files/<chat>/` — downloaded inbound files.
+
+The state home self-ignores (a nested `.gitignore`), so buffered chat content is never committable. A corrupt state file logs a warning and starts empty — the bot boots, the loss is visible. Single-process semantics: two processes must not share a state dir. While the process is **down**, nothing is lost at all — Telegram retries undelivered webhooks with backoff until the endpoint returns.
 
 ## Sending files back
 
