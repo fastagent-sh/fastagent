@@ -106,14 +106,15 @@ export interface TelegramMessage {
   [k: string]: unknown;
 }
 
-/** A Telegram update (the common subset). Narrow for what you route on, e.g. `update.message?.text`. */
+/** A Telegram update (the common subset the channel ACTS on — an update kind not listed here is ACKed
+ *  and dropped before `route` sees it, so listing it would be a false promise; `[k]` keeps the raw
+ *  payload reachable). Narrow for what you route on, e.g. `update.message?.text`. */
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   edited_message?: TelegramMessage;
   channel_post?: TelegramMessage;
   edited_channel_post?: TelegramMessage;
-  callback_query?: { id: string; data?: string; message?: TelegramMessage; [k: string]: unknown };
   [k: string]: unknown;
 }
 
