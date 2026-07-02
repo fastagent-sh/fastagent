@@ -78,8 +78,14 @@ function summarizeArgs(args: Json): string {
 export interface TelegramMessage {
   message_id: number;
   text?: string;
+  /** Entities Telegram's server parsed out of `text` (mentions, commands, URLs, code…). Offsets are
+   *  UTF-16 code units — exactly JS string indexing, so `text.slice(offset, offset + length)` is the
+   *  entity's text verbatim. */
+  entities?: { type: string; offset: number; length: number; [k: string]: unknown }[];
   /** Caption on a media message (photo/document/…) — often the user's instruction for the attachment. */
   caption?: string;
+  /** Entities of `caption`, same shape as {@link TelegramMessage.entities}. */
+  caption_entities?: { type: string; offset: number; length: number; [k: string]: unknown }[];
   /** Photo sizes, smallest → largest. The channel sends the largest to the model as a vision image. */
   photo?: { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }[];
   /** Structured payloads worth rendering into the prompt as text (no new modality needed). */
@@ -510,26 +516,34 @@ export function telegramEnvelope(m: TelegramMessage): string {
   return `[telegram: ${meta}]${scope}${replyTo}\n${parts.filter(Boolean).join("\n")}`;
 }
 
-/** Normalize a configured bot username: drop a leading `@`, trim (regexes match case-insensitively).
- *  Undefined when unknown. Telegram usernames are [A-Za-z0-9_], so the result needs no regex escaping. */
+/** Normalize a configured bot username: drop a leading `@`, trim, lowercase (usernames are case-
+ *  insensitive). Undefined when unknown. */
 function botName(botUsername: string | undefined): string | undefined {
-  const s = botUsername?.replace(/^@/, "").trim();
+  const s = botUsername?.replace(/^@/, "").trim().toLowerCase();
   return s || undefined;
 }
 
 /**
- * Whether `text` @mentions the bot: a boundary-anchored @name anywhere (case-insensitive). Boundary-
- * anchored so `@fast` does not match `@fastagent` (a substring `includes` would), and a glued `/cmd@bot`
- * — a command, not a mention — does not count (its `@` follows a word char).
+ * Whether the message @mentions the bot — read from the `mention` ENTITIES Telegram's server already
+ * parsed, not a regex over the raw text. The entity type excludes by construction what a text scan
+ * false-matches: `@bot` inside a code block or a URL is not a `mention` entity, a glued `/cmd@bot` is a
+ * `bot_command` — and slicing the exact offset/length range makes `@fast` vs `@fastagent` confusion
+ * impossible. (Offsets are UTF-16 code units = native JS string indexing.) No text fallback: mention
+ * entities are produced server-side, so their absence means there is no mention.
  */
-function mentionsBot(text: string, botUsername: string | undefined): boolean {
+function mentionsBot(m: TelegramMessage, botUsername: string | undefined): boolean {
   const name = botName(botUsername);
-  return name ? new RegExp(`(?<!\\w)@${name}(?!\\w)`, "i").test(text) : false;
+  if (!name) return false;
+  const text = m.text ?? m.caption ?? "";
+  const entities = (m.text !== undefined ? m.entities : m.caption_entities) ?? [];
+  return entities.some(
+    (e) => e.type === "mention" && text.slice(e.offset, e.offset + e.length).toLowerCase() === `@${name}`,
+  );
 }
 
 /**
  * The default routing policy (used when `route` is omitted; exported so a custom route can reuse it):
- * answer private chats always; a group only on a reply to the bot or a boundary-anchored @mention of it (when
+ * answer private chats always; a group only on a reply to the bot or a `mention` entity naming it (when
  * `botUsername` is supplied — telegramChannel resolves it via getMe). A bare or directed slash command
  * does NOT summon in a group (that was noisy; a bot author who wants commands adds a custom route).
  * Returns `{}` (act; the channel fills session/target/prompt from the message) or `null` (ignore).
@@ -538,9 +552,7 @@ export function defaultTelegramRoute(update: TelegramUpdate, options?: { botUser
   const m = pickMessage(update);
   if (!m) return null;
   const summoned =
-    m.chat.type === "private" ||
-    m.reply_to_message?.from?.is_bot === true ||
-    mentionsBot(m.text ?? m.caption ?? "", options?.botUsername);
+    m.chat.type === "private" || m.reply_to_message?.from?.is_bot === true || mentionsBot(m, options?.botUsername);
   return summoned ? {} : null;
 }
 

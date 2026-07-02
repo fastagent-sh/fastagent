@@ -358,22 +358,44 @@ describe("file download (the one non-JSON call)", () => {
 });
 
 describe("defaultTelegramRoute + telegramEnvelope", () => {
-  it("answers a private message; a group only on a boundary-@mention or reply-to-bot, not a slash command", () => {
+  it("answers a private message; a group only on a mention ENTITY naming the bot or reply-to-bot, not a slash command", () => {
     expect(defaultTelegramRoute(MSG)).toEqual({}); // private → act
     const group = { id: -100, type: "supergroup" };
     const g = (text: string) => ({ update_id: 1, message: { message_id: 2, text, chat: group } });
+    // A message whose text carries a server-parsed `mention` entity — the shape Telegram actually sends.
+    const gm = (text: string, mention: string) => ({
+      update_id: 1,
+      message: {
+        message_id: 2,
+        text,
+        entities: [{ type: "mention", offset: text.indexOf(mention), length: mention.length }],
+        chat: group,
+      },
+    });
     expect(defaultTelegramRoute(g("chatter"))).toBeNull();
-    // a group slash command no longer summons — bare OR directed at the bot (only @mention / reply do)
+    // a group slash command does not summon — bare, or directed (its entity is bot_command, not mention)
     expect(defaultTelegramRoute(g("/ask"))).toBeNull();
-    expect(defaultTelegramRoute(g("/ask@mybot"), { botUsername: "mybot" })).toBeNull();
-    const mention = g("hey @mybot");
+    const directed = {
+      update_id: 1,
+      message: {
+        message_id: 2,
+        text: "/ask@mybot",
+        entities: [{ type: "bot_command", offset: 0, length: 10 }],
+        chat: group,
+      },
+    };
+    expect(defaultTelegramRoute(directed, { botUsername: "mybot" })).toBeNull();
+    const mention = gm("hey @mybot", "@mybot");
     expect(defaultTelegramRoute(mention)).toBeNull(); // no username → no @mention summon
     expect(defaultTelegramRoute(mention, { botUsername: "mybot" })).toEqual({});
     expect(defaultTelegramRoute(mention, { botUsername: "@mybot" })).toEqual({}); // a leading @ in the option is tolerated
-    expect(defaultTelegramRoute(g("yo @MyBot"), { botUsername: "mybot" })).toEqual({}); // case-insensitive
-    // boundary-anchored at BOTH ends: a suffix (@mybottington) and a prefix (glued after a word char)
-    expect(defaultTelegramRoute(g("@mybottington rocks"), { botUsername: "mybot" })).toBeNull(); // suffix boundary (?!\w)
-    expect(defaultTelegramRoute(g("mail x@mybot"), { botUsername: "mybot" })).toBeNull(); // prefix boundary, lookbehind (?<!\w)
+    expect(defaultTelegramRoute(gm("yo @MyBot", "@MyBot"), { botUsername: "mybot" })).toEqual({}); // case-insensitive
+    // the entity's exact range is compared — a mention of a DIFFERENT user whose name merely starts
+    // with ours does not summon (the substring/boundary confusion class, gone by construction)
+    expect(defaultTelegramRoute(gm("@mybottington rocks", "@mybottington"), { botUsername: "mybot" })).toBeNull();
+    // raw text containing @mybot WITHOUT a mention entity does not summon — Telegram emits no mention
+    // entity for a name inside a code block or a URL, so pasted code/links cannot false-summon
+    expect(defaultTelegramRoute(g("see @mybot in that snippet"), { botUsername: "mybot" })).toBeNull();
     // a reply to a bot summons (no @mention needed)
     const replyToBot = {
       update_id: 1,
@@ -392,12 +414,13 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
     const photo = {
       message_id: 7,
       caption: "@mybot look",
+      caption_entities: [{ type: "mention", offset: 0, length: 6 }],
       photo: [{ file_id: "f", file_unique_id: "u", width: 1, height: 1 }],
       chat: group,
     };
     expect(defaultTelegramRoute({ update_id: 1, message: photo }, { botUsername: "mybot" })).toEqual({});
     // a caption with no mention stays silent in a group
-    const plain = { ...photo, caption: "nice sunset" };
+    const plain = { ...photo, caption: "nice sunset", caption_entities: undefined };
     expect(defaultTelegramRoute({ update_id: 1, message: plain }, { botUsername: "mybot" })).toBeNull();
   });
 

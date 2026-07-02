@@ -77,7 +77,7 @@ By default, `telegramChannel` uses `defaultTelegramRoute`:
 
 - private chats always answer,
 - groups answer when the message replies to a bot,
-- groups answer on a boundary-anchored `@botname` mention when the bot username is known (case-insensitive; `@fast` does not match `@fastagent`).
+- groups answer on an `@botname` mention when the bot username is known — detected from Telegram's own `mention` entities, not a text scan, so `@fast` never matches `@fastagent`, and an `@botname` inside a code block or a URL does not summon (it is not a mention entity).
 
 A slash command does **not** summon in a group (bare or directed like `/cmd@botname`) — it was noise; a bot that wants commands adds a custom `route`. Override `route` to decide whether and where to answer; a custom route owns its own group-summon policy, and if you rely on `@botname` mentions, pass a known `botUsername` to `defaultTelegramRoute`.
 
