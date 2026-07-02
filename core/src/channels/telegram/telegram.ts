@@ -41,10 +41,48 @@ const MAX_UPDATE_BYTES = 1 << 20;
  *  sparse-but-relevant lines, a busy burst is capped). */
 const BUFFER_MAX_CHARS = 4000;
 
-/** One buffered un-summoned message: its sender label and one-line body (object identity is the commit key). */
+/** One buffered un-summoned message (object identity is the commit key). Besides the sender label and
+ *  one-line body, it carries what a LATER summon needs to resolve references into the discussion:
+ *  message ids ("reply to the one Alex answered"), and attachment file_ids so "summarize the file from
+ *  earlier" can actually open it — an un-summoned attachment otherwise surfaces only as its caption or
+ *  a `[document: …]` label, never the bytes. */
 interface BufferEntry {
   sender: string;
   body: string;
+  /** The message's id — rendered into the fold so the model can correlate replies. */
+  messageId?: number;
+  /** The message_id this one replied to, when it was a reply. */
+  replyTo?: number;
+  /** file_ids of document/voice/video/audio attachments (downloadable on a later summon). */
+  fileIds?: string[];
+  /** file_ids of photos (usable as vision inputs on a later summon). */
+  imageIds?: string[];
+}
+
+/** A buffered attachment reference: its file_id plus WHO posted it in WHICH message, so the manifest
+ *  can attribute it ("the file Bob sent") the way the fold attributes text. */
+interface BufferedRef {
+  id: string;
+  from: string;
+  msg?: number;
+}
+
+/** How many buffered files and images (each, most recent first) a summon pulls in with the folded
+ *  discussion — bounds the latency/token cost of "summarize the file from earlier" against a chatty
+ *  group posting many attachments between summons. Skipped ones are counted into the prompt note, so
+ *  the model never sees an attachment reference it silently cannot open. */
+const BUFFER_ATTACH_MAX = 3;
+
+/** One fold line. ALSO the eviction cost basis: the budget must price what the fold actually renders
+ *  (sender + body + the msg/reply meta), or the fold would systematically overrun BUFFER_MAX_CHARS. */
+function bufferLine(e: BufferEntry): string {
+  const meta = [
+    e.messageId !== undefined ? `msg ${e.messageId}` : undefined,
+    e.replyTo !== undefined ? `reply to msg ${e.replyTo}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return `${e.sender}${meta ? ` (${meta})` : ""}: ${e.body}`;
 }
 
 /** One accepted-but-unfinished turn, as persisted in the queue WAL: everything needed to run it again
@@ -196,7 +234,9 @@ const HTML_INSTRUCTION =
  * agent.invoke, but resolve the message's attachments first: images (vision) inline, and files
  * downloaded to disk with their absolute paths appended to the prompt so the agent can read them with
  * its tools. A transport failure becomes a `failed` event — surfaced (user + log), never a silent drop;
- * the agent never runs on inputs the user sent but we failed to load. `onCompleted` (if given) fires on
+ * the agent never runs on inputs the user sent but we failed to load. `buffered` attachments (posted in
+ * the un-summoned discussion) are BACKGROUND context, so their failures degrade instead — a warn + a
+ * prompt note — rather than failing the ask they merely accompany. `onCompleted` (if given) fires on
  * the turn's `completed` event — the commit point for clearing the folded-in context buffer: only then
  * does the folded discussion provably live in the durable session, so a failure or crash at ANY earlier
  * point leaves the buffer intact for the next summon (a re-folded block beats lost context).
@@ -211,6 +251,7 @@ async function* invokeWithAttachments(
   api: string,
   botToken: string,
   filesDir: string,
+  buffered: { files: BufferedRef[]; images: BufferedRef[]; skipped: number },
   onCompleted?: () => void,
 ): AsyncIterable<AgentEvent> {
   let images: ImageRef[] | undefined;
@@ -222,10 +263,63 @@ async function* invokeWithAttachments(
     yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
     return;
   }
-  const manifest = files?.length
-    ? `\n\n[attached files — read them with your tools:\n${files.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
+  // Background context — degrade PER ATTACHMENT, don't fail the ask: one expired earlier file must
+  // neither block the answer nor drag down its still-valid siblings. The note counts EVERY missing one
+  // (load failures + cap-skipped), so the model never holds an attachment reference it silently cannot
+  // open.
+  // Parallel (allSettled keeps input order and per-attachment isolation — the whole point of not
+  // batching them into one resolve call): serially, up to 2×BUFFER_ATTACH_MAX two-hop downloads would
+  // stack on the critical path before the agent even starts.
+  const bufferedImages: ImageRef[] = [];
+  const bufferedFiles: { file: DownloadedFile; ref: BufferedRef }[] = [];
+  let lost = 0;
+  const imageResults = await Promise.allSettled(buffered.images.map((ref) => resolveImages(api, botToken, [ref.id])));
+  for (const r of imageResults) {
+    if (r.status === "fulfilled") bufferedImages.push(...(r.value ?? []));
+    else {
+      lost++;
+      log.warn(`[telegram] could not load an earlier (buffered) photo: ${String(r.reason)}`);
+    }
+  }
+  const fileResults = await Promise.allSettled(
+    buffered.files.map(async (ref) => ({
+      ref,
+      files: (await resolveFiles(api, botToken, [ref.id], chatId, filesDir)) ?? [],
+    })),
+  );
+  for (const r of fileResults) {
+    if (r.status === "fulfilled") {
+      for (const file of r.value.files) bufferedFiles.push({ file, ref: r.value.ref });
+    } else {
+      lost++;
+      log.warn(`[telegram] could not load an earlier (buffered) attachment: ${String(r.reason)}`);
+    }
+  }
+  const missing = lost + buffered.skipped;
+  const bufferedNote =
+    missing > 0
+      ? `\n[note: ${missing} attachment(s) from the earlier discussion are not loaded (expired, or older than the most recent few)]`
+      : "";
+  // PRIMARY first, background after — consistent with "primary wins": what the user pointed at this
+  // turn leads. Buffered file entries are attributed like the fold's text lines ("the file Bob sent"
+  // resolves); buffered PHOTOS cannot be (ImageRef carries no label), so their attribution stops at
+  // the fold's attachment markers (bufferPush appends `[photo]` even to captioned lines) — a
+  // documented limit.
+  const allFiles = [
+    ...(files ?? []),
+    ...bufferedFiles.map(({ file, ref }) => ({
+      ...file,
+      name: `${file.name} (from ${ref.from}${ref.msg !== undefined ? `, msg ${ref.msg}` : ""}, earlier discussion)`,
+    })),
+  ];
+  const manifest = allFiles.length
+    ? `\n\n[attached files — read them with your tools:\n${allFiles.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
     : "";
-  for await (const e of agent.invoke({ session }, { text: `${text}${manifest}${HTML_INSTRUCTION}`, images })) {
+  const allImages = [...(images ?? []), ...bufferedImages];
+  for await (const e of agent.invoke(
+    { session },
+    { text: `${text}${bufferedNote}${manifest}${HTML_INSTRUCTION}`, images: allImages.length ? allImages : undefined },
+  )) {
     if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
     yield e;
   }
@@ -474,25 +568,27 @@ function pickMessage(update: TelegramUpdate): TelegramMessage | undefined {
 
 /** file_ids to send the model as vision images: this message's largest photo + a replied-to photo. */
 function extractImages(m: TelegramMessage): string[] {
-  return [m.photo?.at(-1)?.file_id, m.reply_to_message?.photo?.at(-1)?.file_id].filter((id): id is string =>
-    Boolean(id),
-  );
+  return [...ownImages(m), ...(m.reply_to_message ? ownImages(m.reply_to_message) : [])];
+}
+
+/** The message's OWN photo (largest size), without the replied-to message's — the buffer path uses
+ *  this: each message is its own entry there, so counting the replied-to attachment again would
+ *  duplicate it and squeeze the attachment cap (the reply relation is expressed by `replyTo` instead). */
+function ownImages(m: TelegramMessage): string[] {
+  return [m.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
 }
 
 /** file_ids to download to disk for the agent's tools: this message's files + a replied-to message's
  *  (so "summarize this file" works when the user replies to a document with the mention). */
 function extractFiles(m: TelegramMessage): string[] {
-  const r = m.reply_to_message;
-  return [
-    m.document?.file_id,
-    m.voice?.file_id,
-    m.video?.file_id,
-    m.audio?.file_id,
-    r?.document?.file_id,
-    r?.voice?.file_id,
-    r?.video?.file_id,
-    r?.audio?.file_id,
-  ].filter((id): id is string => Boolean(id));
+  return [...ownFiles(m), ...(m.reply_to_message ? ownFiles(m.reply_to_message) : [])];
+}
+
+/** The message's OWN files, without the replied-to message's (see {@link ownImages} for why). */
+function ownFiles(m: TelegramMessage): string[] {
+  return [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter((id): id is string =>
+    Boolean(id),
+  );
 }
 
 /** A stable sender label for attribution. In a shared (multi-user) session the model must tell who is
@@ -690,8 +786,19 @@ export function telegramChannel(
   const queuePath = join(stateHome, "queue.json");
   // State files are an IO boundary: valid JSON of the WRONG SHAPE (hand-edited, version drift) must
   // degrade exactly like a corrupt file — warn + empty — not flow into the channel as trusted data.
-  const isBufferEntry = (e: unknown): e is BufferEntry =>
-    typeof (e as BufferEntry)?.sender === "string" && typeof (e as BufferEntry)?.body === "string";
+  const isBufferEntry = (e: unknown): e is BufferEntry => {
+    const t = e as BufferEntry;
+    const strings = (v: unknown): boolean =>
+      v === undefined || (Array.isArray(v) && v.every((x) => typeof x === "string"));
+    return (
+      typeof t?.sender === "string" &&
+      typeof t.body === "string" &&
+      (t.messageId === undefined || typeof t.messageId === "number") &&
+      (t.replyTo === undefined || typeof t.replyTo === "number") &&
+      strings(t.fileIds) &&
+      strings(t.imageIds)
+    );
+  };
   const loadBuffers = (): Map<string, BufferEntry[]> => {
     const raw = loadStateFile(buffersPath);
     if (raw === undefined) return new Map();
@@ -708,16 +815,16 @@ export function telegramChannel(
   };
   const buffers = loadBuffers();
   const persistBuffers = (): void => saveStateFile(buffersPath, Object.fromEntries(buffers));
-  const bufferPush = (placeKey: string, sender: string, body: string): void => {
+  const bufferPush = (placeKey: string, entry: BufferEntry): void => {
     // Stage on a copy and roll back if the pre-ACK persist throws: the throw becomes a 500 and Telegram
     // REDELIVERS — with the entry already in memory, the redelivery would append it a second time.
     const prev = buffers.get(placeKey);
     const buf = prev ? [...prev] : [];
-    buf.push({ sender, body });
-    let total = buf.reduce((n, e) => n + e.sender.length + e.body.length + 2, 0);
+    buf.push(entry);
+    let total = buf.reduce((n, e) => n + bufferLine(e).length + 1, 0);
     while (buf.length > 1 && total > BUFFER_MAX_CHARS) {
       const dropped = buf.shift();
-      if (dropped) total -= dropped.sender.length + dropped.body.length + 2;
+      if (dropped) total -= bufferLine(dropped).length + 1;
     }
     buffers.set(placeKey, buf);
     try {
@@ -733,10 +840,17 @@ export function telegramChannel(
   // only those entries by identity. So a failure or crash anywhere earlier leaves them intact for the
   // next summon, AND a message that arrives while the turn runs (pushed to the same bucket, not in this
   // prompt) survives for the next answered turn — a whole-bucket delete would lose it.
+  // Message ids in the fold let the model resolve references ("the one Bob replied to") — rendered
+  // only when known (bufferLine), so a plain line stays plain.
   const bufferPeek = (placeKey: string): { text: string; consumed: BufferEntry[] } => {
     const buf = buffers.get(placeKey) ?? [];
-    return { text: buf.map((e) => `${e.sender}: ${e.body}`).join("\n"), consumed: [...buf] };
+    return { text: buf.map(bufferLine).join("\n"), consumed: [...buf] };
   };
+  // Commit consumes entries WHOLE — including ones whose attachments failed to load or were cap-
+  // skipped: their text is durably in the session (keeping them would re-fold duplicate text), and the
+  // prompt note told the model/user what is missing; re-post an attachment to use it. The alternative
+  // (retrying unloaded attachments on later summons) buys a rare recovery at the cost of duplicated
+  // context every time — rejected.
   const bufferCommit = (placeKey: string, consumed: BufferEntry[]): void => {
     const buf = buffers.get(placeKey);
     if (!buf) return;
@@ -835,6 +949,37 @@ export function telegramChannel(
       log.info(`[telegram] turn start: turn=${rec.id} session=${rec.session} ${where}`);
       const { text: recent, consumed } = bufferPeek(rec.placeKey);
       const prompt = recent ? `[recent group discussion:\n${recent}\n]\n\n${rec.baseText}` : rec.baseText;
+      // Attachments posted in the un-summoned discussion, so "summarize the file from earlier" can open
+      // them — most recent BUFFER_ATTACH_MAX of each kind (bounds cost against an attachment-heavy gap).
+      // Minus the summoning message's OWN ids: replying to a still-buffered attachment puts its file_id
+      // in both sets, and without this filter the same file would download twice and appear in the
+      // manifest twice (primary wins — it is what the user pointed at this turn).
+      const primaryFiles = new Set(rec.fileIds);
+      const primaryImages = new Set(rec.imageFileIds);
+      // Attribution rides along (sender + msg id) so the manifest can answer "the file BOB sent" — the
+      // fold's msg-id annotations resolve text references, this resolves the attachment side.
+      const refs = (pick: (e: BufferEntry) => string[] | undefined, primary: Set<string>): BufferedRef[] => {
+        const seen = new Set<string>();
+        const out: BufferedRef[] = [];
+        for (const e of consumed) {
+          for (const id of pick(e) ?? []) {
+            if (primary.has(id) || seen.has(id)) continue;
+            seen.add(id);
+            out.push({ id, from: e.sender, msg: e.messageId });
+          }
+        }
+        return out;
+      };
+      const bufFiles = refs((e) => e.fileIds, primaryFiles);
+      const bufImages = refs((e) => e.imageIds, primaryImages);
+      const buffered = {
+        files: bufFiles.slice(-BUFFER_ATTACH_MAX),
+        images: bufImages.slice(-BUFFER_ATTACH_MAX),
+        // Cap-skipped ones count into the prompt note. The note is the ONLY guarantee: a fold line may
+        // show a [document: …] label, but a captioned attachment renders as its caption text alone —
+        // without the note, the model holds references it silently cannot open and may pretend it read them.
+        skipped: Math.max(0, bufFiles.length - BUFFER_ATTACH_MAX) + Math.max(0, bufImages.length - BUFFER_ATTACH_MAX),
+      };
       try {
         await streamReply(
           invokeWithAttachments(
@@ -847,6 +992,7 @@ export function telegramChannel(
             apiBaseUrl,
             botToken,
             join(stateHome, "files"),
+            buffered,
             () => bufferCommit(rec.placeKey, consumed),
           ),
           apiBaseUrl,
@@ -957,7 +1103,25 @@ export function telegramChannel(
       // off to be delivered here at all). Empty/service messages and non-group chats keep no buffer.
       const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
       const content = messageText(m);
-      if (isGroup && content) bufferPush(placeKey, fromLabel(m.from) ?? "someone", content);
+      if (isGroup && content) {
+        // OWN attachments only: each message is its own buffer entry, so a reply's referenced
+        // attachment is already (or will be) the other entry's — recounting it here would duplicate
+        // downloads and squeeze the BUFFER_ATTACH_MAX cap.
+        const fileIds = ownFiles(m);
+        const imageIds = ownImages(m);
+        // A captioned attachment renders as its caption — append the attachment marker so the fold
+        // ALWAYS labels attachments (that label + sender is all the attribution a photo gets).
+        const summary = attachmentSummary(m);
+        const body = summary && content !== summary ? `${content} ${summary}` : content;
+        bufferPush(placeKey, {
+          sender: fromLabel(m.from) ?? "someone",
+          body,
+          messageId: m.message_id,
+          replyTo: m.reply_to_message?.message_id,
+          fileIds: fileIds.length ? fileIds : undefined,
+          imageIds: imageIds.length ? imageIds : undefined,
+        });
+      }
       return new Response(null, { status: 200 });
     }
     {

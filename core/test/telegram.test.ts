@@ -487,6 +487,213 @@ describe("durable channel state (single-process restarts)", () => {
   });
 });
 
+describe("buffered attachments (files/photos from un-summoned discussion)", () => {
+  const route = (u: TelegramUpdate) =>
+    (u.message as { text?: string } | undefined)?.text?.startsWith("@go") ? {} : null;
+  const attachFetch = () => {
+    const gotFiles: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body && typeof init.body === "string" ? (JSON.parse(init.body) as { file_id?: string }) : {};
+        if (String(url).endsWith("/getFile")) {
+          gotFiles.push(body.file_id ?? "");
+          return new Response(
+            JSON.stringify({ ok: true, result: { file_path: `docs/${body.file_id}.pdf`, file_size: 3 } }),
+            { status: 200 },
+          );
+        }
+        if (String(url).includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+      }),
+    );
+    return gotFiles;
+  };
+  const group = { id: -100, type: "supergroup" };
+  const doc = (id: number, name: string) => ({
+    update_id: id,
+    message: {
+      message_id: id,
+      caption: "here",
+      document: { file_id: name, file_name: `${name}.pdf` },
+      chat: group,
+      from: { id: 7, username: "alice" },
+    },
+  });
+  const summon = (id: number, text: string) => ({
+    update_id: id,
+    message: { message_id: id, text, chat: group, from: { id: 8, username: "bob" } },
+  });
+  // File resolution interleaves fs work between fetches, which can outlast flush()'s quiet window.
+  const until = async (cond: () => boolean): Promise<void> => {
+    for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
+  };
+
+  it("a file posted WITHOUT summoning is downloadable by the next summon", async () => {
+    const got = attachFetch();
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route });
+    await ch(tgRequest(doc(1, "report"))); // un-summoned → only buffered, nothing downloaded
+    expect(got).toEqual([]);
+    await ch(tgRequest(summon(2, "@go summarize the file from earlier")));
+    await until(() => calls.length > 0);
+    expect(got).toEqual(["report"]); // downloaded at summon time
+    const text = String(calls[0]?.text);
+    expect(text).toMatch(/report\.pdf \(from @alice, msg 1, earlier discussion\)/); // attributed: "the file ALICE sent" resolves
+    expect(text).toMatch(/attached files/);
+  });
+
+  it("a photo posted without summoning becomes a vision input on the next summon", async () => {
+    attachFetch();
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route });
+    const photo = {
+      update_id: 1,
+      message: {
+        message_id: 1,
+        caption: "look at this",
+        photo: [{ file_id: "p1", file_unique_id: "u", width: 1, height: 1 }],
+        chat: group,
+        from: { id: 7, username: "alice" },
+      },
+    };
+    await ch(tgRequest(photo));
+    await ch(tgRequest(summon(2, "@go what was in that picture?")));
+    await flush();
+    expect(calls[0]?.images?.length).toBe(1); // the earlier photo rides along as vision input
+  });
+
+  it("caps buffered files at the most recent few", async () => {
+    const got = attachFetch();
+    const agentRef = replyingAgent("ok");
+    const { agent } = agentRef;
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route });
+    for (let i = 1; i <= 5; i++) await ch(tgRequest(doc(i, `f${i}`)));
+    await ch(tgRequest(summon(9, "@go the files?")));
+    await until(() => got.length >= 3);
+    await flush(); // settle — if the cap were broken, the extra downloads would land here
+    expect(got).toEqual(["f3", "f4", "f5"]); // most recent three — not all five
+    const { calls } = agentRef;
+    await until(() => calls.length > 0);
+    expect(String(calls[0]?.text)).toContain("2 attachment(s) from the earlier discussion are not loaded"); // cap-skipped ones are VISIBLE
+  });
+
+  it("a failed buffered download degrades PER FILE — the stale one is noted, its siblings still load", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body && typeof init.body === "string" ? (JSON.parse(init.body) as { file_id?: string }) : {};
+        if (String(url).endsWith("/getFile")) {
+          if (body.file_id === "expired")
+            return new Response(JSON.stringify({ ok: false, description: "wrong file_id" }), { status: 400 });
+          return new Response(
+            JSON.stringify({ ok: true, result: { file_path: `docs/${body.file_id}.pdf`, file_size: 3 } }),
+            { status: 200 },
+          );
+        }
+        if (String(url).includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+      }),
+    );
+    const { agent, calls } = replyingAgent("still answered");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route });
+    await ch(tgRequest(doc(1, "expired")));
+    await ch(tgRequest(doc(2, "valid")));
+    await ch(tgRequest(summon(3, "@go what were those files?")));
+    await until(() => calls.length > 0);
+    expect(calls.length).toBe(1); // the agent RAN — a background-context failure does not fail the ask
+    const text = String(calls[0]?.text);
+    expect(text).toContain("1 attachment(s) from the earlier discussion are not loaded"); // the stale one, counted
+    expect(text).toMatch(/valid\.pdf \(from @alice, msg 2, earlier discussion\)/); // …and it did NOT drag its sibling down
+  });
+
+  it("a failed buffered PHOTO also degrades — counted in the note, its sibling still lands as vision", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body && typeof init.body === "string" ? (JSON.parse(init.body) as { file_id?: string }) : {};
+        if (String(url).endsWith("/getFile")) {
+          if (body.file_id === "deadpic")
+            return new Response(JSON.stringify({ ok: false, description: "wrong file_id" }), { status: 400 });
+          return new Response(
+            JSON.stringify({ ok: true, result: { file_path: `pics/${body.file_id}.jpg`, file_size: 3 } }),
+            { status: 200 },
+          );
+        }
+        if (String(url).includes("/file/bot")) return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+      }),
+    );
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route });
+    const pic = (id: number, fid: string) => ({
+      update_id: id,
+      message: {
+        message_id: id,
+        caption: "pic",
+        photo: [{ file_id: fid, file_unique_id: fid, width: 1, height: 1 }],
+        chat: group,
+        from: { id: 7, username: "alice" },
+      },
+    });
+    await ch(tgRequest(pic(1, "deadpic")));
+    await ch(tgRequest(pic(2, "livepic")));
+    await ch(tgRequest(summon(3, "@go the pictures?")));
+    await until(() => calls.length > 0);
+    expect(calls.length).toBe(1); // the ask still ran
+    expect(calls[0]?.images?.length).toBe(1); // the sibling photo landed
+    expect(String(calls[0]?.text)).toContain("1 attachment(s) from the earlier discussion are not loaded");
+  });
+
+  it("a summon REPLYING to a still-buffered attachment downloads it once — not once per set", async () => {
+    const got = attachFetch();
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route });
+    await ch(tgRequest(doc(1, "report"))); // un-summoned → buffered (fileIds carries "report")
+    // …then the user REPLIES to that very message to ask about it → primary extraction ALSO sees it
+    const replySummon = {
+      update_id: 2,
+      message: {
+        message_id: 2,
+        text: "@go summarize this",
+        chat: group,
+        from: { id: 8, username: "bob" },
+        reply_to_message: {
+          message_id: 1,
+          document: { file_id: "report", file_name: "report.pdf" },
+          chat: group,
+        },
+      },
+    };
+    await ch(tgRequest(replySummon));
+    await until(() => calls.length > 0);
+    expect(got).toEqual(["report"]); // downloaded exactly ONCE
+    const text = String(calls[0]?.text);
+    expect(text.match(/- report\.pdf/g)?.length).toBe(1); // one manifest ENTRY — not primary + buffered twins
+    expect(text).not.toContain("(from earlier discussion)"); // primary wins: it is what the user pointed at
+  });
+
+  it("the fold annotates message ids and replies, so references resolve", async () => {
+    attachFetch();
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route });
+    const reply = {
+      update_id: 3,
+      message: {
+        message_id: 3,
+        text: "agreed",
+        chat: group,
+        from: { id: 9, username: "carol" },
+        reply_to_message: { message_id: 1, chat: group },
+      },
+    };
+    await ch(tgRequest(reply));
+    await ch(tgRequest(summon(4, "@go who agreed with what?")));
+    await flush();
+    expect(String(calls[0]?.text)).toMatch(/@carol \(msg 3, reply to msg 1\): agreed/);
+  });
+});
+
 describe("queue feedback (⏳ while a session is busy)", () => {
   const recordingFetch = () => {
     const sends: { text: string; id: number; replyTo?: number }[] = [];
@@ -1139,8 +1346,8 @@ describe("telegram channel", () => {
     await groupSettle();
     const p1 = calls[0]?.text ?? "";
     expect(p1).toMatch(/recent group discussion/);
-    expect(p1).toMatch(/@alice: the deploy failed/);
-    expect(p1).toMatch(/@bob: which service\?/);
+    expect(p1).toMatch(/@alice \(msg \d+\): the deploy failed/);
+    expect(p1).toMatch(/@bob \(msg \d+\): which service\?/);
 
     await ch(tgRequest(groupMsg(4, "bob", "/bot again"))); // summoned → buffer already cleared
     await groupSettle();
@@ -1196,7 +1403,7 @@ describe("telegram channel", () => {
     // retry with a plain command: the discussion was NOT lost; it is folded into this turn
     await ch(tgRequest(groupMsg(3, "bob", "/bot summarize")));
     await groupSettle();
-    expect(calls[0]?.text ?? "").toMatch(/@alice: the deploy failed/);
+    expect(calls[0]?.text ?? "").toMatch(/@alice \(msg \d+\): the deploy failed/);
   });
 
   it("a message arriving during the attachment-download window survives the commit (folded into the next turn)", async () => {
@@ -1244,12 +1451,12 @@ describe("telegram channel", () => {
     releaseDownload();
     await groupSettle();
 
-    expect(calls[0]?.text ?? "").toMatch(/@alice: the deploy failed/);
+    expect(calls[0]?.text ?? "").toMatch(/@alice \(msg \d+\): the deploy failed/);
     expect(calls[0]?.text ?? "").not.toMatch(/@carol/); // carol was not in this turn's prompt
 
     await ch(tgRequest(groupMsg(4, "bob", "/bot summarize"))); // next summon
     await groupSettle();
-    expect(calls[1]?.text ?? "").toMatch(/@carol: any update\?/); // carol survived the commit
+    expect(calls[1]?.text ?? "").toMatch(/@carol \(msg \d+\): any update\?/); // carol survived the commit
   });
 
   it("warns once at startup when group privacy mode is on (can_read_all_group_messages: false)", async () => {
