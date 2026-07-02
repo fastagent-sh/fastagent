@@ -52,6 +52,9 @@ interface BufferEntry {
 interface PendingTurn {
   /** The update_id — the turn's identity in logs and on disk. */
   id: string;
+  /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over (and a
+   *  replay after a restart reuses it instead of orphaning it). */
+  previewId?: number;
   /** `queued` → never reached the agent, safe to replay; `started` → may have already sent output,
    *  replaying risks a duplicate answer, so recovery drops it loudly instead. */
   state: "queued" | "started";
@@ -287,6 +290,7 @@ async function streamReply(
   botToken: string,
   target: Target,
   formatError: (failed: TelegramFailure) => string | undefined,
+  previewId?: number,
 ): Promise<void> {
   const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
   const toolIndexById = new Map<string, number>();
@@ -313,8 +317,10 @@ async function streamReply(
 
   // The live preview is ONE real message: sent once (capturing its id + threading under the asker),
   // then edited in place. messageId/lastSent are shared with the final write on completion.
-  let messageId: number | undefined;
-  let previewSent = false; // a placeholder send was attempted — guards against re-sending when no id came back
+  // `previewId`: an already-sent message to take over as the preview (the "⏳ queued" notice) — the
+  // pump edits it in place, so the queue notice morphs into the live view instead of leaving an orphan.
+  let messageId: number | undefined = previewId;
+  let previewSent = messageId !== undefined; // a placeholder send was attempted — guards against re-sending when no id came back
   let finalized = false; // a terminal write (completed/failed) ran — the finally skips its orphan cleanup
   let lastSent = "";
   const flushPreview = async (): Promise<void> => {
@@ -786,14 +792,43 @@ export function telegramChannel(
   // throw becomes a 500 and Telegram redelivers), while recovery replays MANY records already on disk
   // and persists ONCE after the loop — a per-record persist there could fail mid-loop and leave the
   // already-replayed prefix still `queued` in the WAL, to be replayed AGAIN on the next boot.
+  // In-memory: the in-flight "⏳ queued" notice per turn, awaited at dequeue so the turn reliably takes
+  // the notice message over (rec.previewId) instead of racing it and orphaning a late-arriving notice.
+  const notices = new Map<string, Promise<void>>();
   const runTurn = (rec: PendingTurn): void => {
     pending.set(rec.id, rec);
     const target: Target = { chatId: rec.chatId, threadId: rec.threadId, replyTo: rec.replyTo };
+    // Queue feedback: when this session already has a turn running/queued, a silent wait reads as "the
+    // bot ignored me" once the current turn runs long — tell the asker NOW (reply-quoted, so it is
+    // clear whose ask is queued). Best-effort and post-ACK: a failed notice is a log line, never a
+    // failed update. The turn's live preview then edits this same message in place.
+    if (rec.previewId === undefined && sessionChains.has(rec.session)) {
+      notices.set(
+        rec.id,
+        sendMessage(apiBaseUrl, botToken, target, "⏳ Queued — I’ll start once the current task finishes.", {
+          html: false,
+        }).then(
+          (id) => {
+            if (id !== undefined) {
+              rec.previewId = id;
+              persistQueuePostAck(); // a replay after a restart reuses the notice instead of orphaning it
+            }
+          },
+          (e) => log.warn(`[telegram] queue notice failed (the turn still runs): ${String(e)}`),
+        ),
+      );
+    }
     const where = `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`;
     enqueueTurn(rec.session, async () => {
       // Run at DEQUEUE time (serialized), so the lifecycle log and engine turn all reflect the actual
       // execution order rather than arrival. Fold the un-summoned discussion since the last answered
       // turn into the prompt; it is cleared only when the turn COMPLETES (then it lives in the session).
+      // Settle the queue notice (if any) so rec.previewId is final. NOT free: a slow (not failed)
+      // notice delays this turn's start by up to the API timeout — accepted, because racing it would
+      // orphan the ⏳ message and double-post a placeholder; in the common path the notice resolved
+      // while the previous turn was still running, so this await is instant.
+      await notices.get(rec.id);
+      notices.delete(rec.id);
       rec.state = "started";
       persistQueuePostAck();
       const startedAt = Date.now();
@@ -818,6 +853,7 @@ export function telegramChannel(
           botToken,
           target,
           formatError,
+          rec.previewId,
         );
         log.info(`[telegram] turn done: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms)`);
       } catch (error) {
@@ -841,6 +877,7 @@ export function telegramChannel(
       (typeof t.chatId === "number" || typeof t.chatId === "string") &&
       (t.threadId === undefined || typeof t.threadId === "number") &&
       (t.replyTo === undefined || typeof t.replyTo === "number") &&
+      (t.previewId === undefined || typeof t.previewId === "number") &&
       Array.isArray(t.imageFileIds) &&
       t.imageFileIds.every((x) => typeof x === "string") &&
       Array.isArray(t.fileIds) &&
