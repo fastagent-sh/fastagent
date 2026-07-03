@@ -24,24 +24,47 @@ core/
 ├── src/
 │   ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
 │   ├── collect.ts               # buffered consumption helper
-│   ├── channels/http.ts         # HTTP/SSE channel (consumes only the Agent contract)
-│   ├── cli.ts                   # `fastagent dev` entry point (process side effects live here)
 │   ├── index.ts                 # the public API surface (see README "API stability")
+│   ├── cli.ts                   # command entry points (process side effects live here)
+│   ├── invoke-stream.ts, cli-models.ts # command rendering layers (`invoke` stream → exit code, `models` output)
+│   ├── telegram.ts, github.ts   # subpath-export shims (@kid7st/fastagent/telegram etc. — the supported surface)
+│   ├── log.ts                   # leveled logging singleton (dev=debug, start=info)
+│   ├── observe.ts               # turn-trace logging around an Agent
+│   ├── tunnel.ts                # `--tunnel`: cloudflared + per-channel webhook dispatch
+│   ├── dev-supervisor.ts        # `dev` watch/restart worker
+│   ├── proxy.ts                 # HTTPS_PROXY wiring
+│   ├── workspace.ts, version.ts # neutral helpers (in-workspace guard, ignore files, version)
+│   ├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
+│   ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
+│   ├── channels/
+│   │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
+│   │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
+│   │   ├── github/              # github channel (+ scaffold/ bundle)
+│   │   └── telegram/            # telegram channel — see docs/design/core.md §9.2
+│   │       ├── telegram.ts      # Telegram domain: ingress, summon policy, envelope, composition
+│   │       ├── turn-store.ts    # durable per-session serial turns (WAL, recovery, dedup)
+│   │       ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
+│   │       ├── preview.ts       # live-preview pump + terminal-write policy
+│   │       ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
+│   │       ├── state.ts         # atomic state files under .fastagent/channels/telegram/
+│   │       ├── register-webhook.ts # --tunnel setWebhook registration
+│   │       └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
 │   └── engines/pi/              # the pi reference implementation
 │       ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
 │       ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
 │       ├── workspace.ts         # shared opener: workspace → agent for dev/start/invoke
 │       ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
-│       ├── scaffold/            # `init`, `add <channel>`, `add skill`, and scaffold templates
 │       ├── tool.ts              # defineTool (Zod) + tools/ filesystem discovery
 │       ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
 │       ├── harness.ts           # pi harness wiring (factory)
 │       ├── definition.ts        # AGENTS.md + skills loading and bundling
 │       ├── config.ts            # fastagent.config.ts loading + model/precedence
-│       ├── auth.ts              # pi OAuth / env auth resolution
+│       ├── auth.ts, login.ts    # credential store/resolution (project-level auth.json default) + `login` flow
+│       ├── models.ts, loader.ts # Models collection wiring; ESM module loading for tools/channels/config
+│       ├── report.ts            # startup report (auth/model/skills/tools surface)
 │       └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
 ├── test/                        # vitest; faux models by default
-docs/                            # SPEC, guides, and maintainer design notes
+docs/                            # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```
 
 ## DevX Principle Stack

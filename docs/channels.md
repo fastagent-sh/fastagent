@@ -9,6 +9,8 @@ A **channel** is an agent's inbound surface: HTTP, GitHub webhooks, Telegram mes
 
 Channels consume only the engine-neutral [Agent contract](SPEC.md). The same channel can drive any conforming agent.
 
+> This page is the USER's view — what channels exist and how to wire them. Building a new channel adapter is a different audience: see [Channel development](channel-development.md).
+
 ## Mental model
 
 ```txt

@@ -2,7 +2,7 @@
 title: fastagent — Core design
 type: design-doc
 status: current
-updated: 2026-06-29
+updated: 2026-07-03
 ---
 
 # fastagent core design
@@ -162,7 +162,9 @@ If a second invocation arrives for the same session while one is already running
 
 Core does not queue. Dedupe, retry, user-visible “busy” messages, and steering are channel-level decisions because only the channel understands the trigger semantics.
 
-## 9. HTTP channel
+## 9. Channels
+
+### 9.1 HTTP channel
 
 `createInvokeHandler(agent)` implements the minimal dev HTTP channel:
 
@@ -172,6 +174,40 @@ Core does not queue. Dedupe, retry, user-visible “busy” messages, and steeri
 - client disconnect calls `iterator.return()` to trigger invoke cleanup.
 
 The HTTP channel consumes only the neutral `Agent` contract.
+
+### 9.2 Telegram channel architecture
+
+The telegram channel is the reference for a **stateful chat channel**: it bridges a streaming,
+unbounded, fallible agent turn onto discrete messages, multi-user group chats, and at-least-once
+webhook delivery. Its folder (`src/channels/telegram/`) is the future package boundary; each
+subsystem owns its invariants in its own module:
+
+| Module | Owns |
+|---|---|
+| `telegram.ts` | the Telegram DOMAIN: ingress (secret token, body cap), summon policy, envelope/prompt assembly, composition |
+| `turn-store.ts` | durable per-session serial execution: two-state WAL (`queued` replays after a crash, `started` drops loudly — a duplicate answer is worse than a visible loss), tombstoned ids so a Telegram redelivery is ACKed and skipped, pre-ACK durable-or-nothing accept. Channel-neutral by design (`label` names the consumer) |
+| `context-buffer.ts` | un-summoned group discussion: persisted before each webhook ACK (an ACKed update is never redelivered), folded into the next answered turn, cleared only on that turn's `completed` (only then is it provably in the durable session); carries message ids / reply relations / attachment file_ids so later references ("the file Bob sent") resolve |
+| `preview.ts` | the live preview: ONE real message (`sendMessage` → `editMessageText` in place; `sendMessageDraft` is private-only, useless in groups), a single-writer pump (one edit in flight — out-of-order frames are the flicker), and the terminal-write matrix (completed/failed/abnormal × edit/delete+send/suppress) |
+| `telegram-api.ts` | ONE transport pipeline (`callApi`) for every Bot API method — per-method wire code does not exist, so the invariants (per-attempt timeout, bounded 429/flood-wait, success gated on the body's own `ok:true`, self-describing typed errors) hold by construction. Plus the HTML-aware split: a tag-stack balancer that closes/reopens tags (attributes kept) across the 4096 boundary |
+| `state.ts` | atomic state files (tmp+rename) under the channel-state home |
+
+Durable decisions this architecture encodes:
+
+- **Channel-state convention:** engine state lives at the `.fastagent` top level (auth, sessions);
+  channel state lives under `.fastagent/channels/<kind>/` (buffers, WAL, downloaded files),
+  mirroring `src/channels/<kind>/`. The home self-ignores (nested `.gitignore`) — it can carry chat
+  content. Single-process semantics; while the process is DOWN, Telegram itself retries undelivered
+  webhooks, so the WAL only covers the ACKed-but-unfinished window.
+- **Summon = consume the platform's structure, not re-parse it:** @mentions from Telegram's
+  `mention` entities (never a regex over text — code blocks/URLs can't false-summon); reply-to-bot
+  by the bot id parsed synchronously from the token (`<bot_id>:<secret>`, no getMe race); edits
+  never summon. Fail closed without an identity.
+- **Formatting model:** the agent emits Telegram-HTML strings sent with `parse_mode` (the natural
+  fit for LLM output); the entity model is NOT used. **gramIO tripwire** (documented on the `Api`
+  table): if the channel ever needs ~10+ methods or entity-based formatting, adopt gramIO instead
+  of growing the hand-rolled surface — `callApi<M>` is shape-compatible with `bot.api.*`, so the
+  policy layer survives that swap. The transport rewrite itself applied gramIO's architecture
+  lesson (one generic call function, policy as its wrapper, typed errors) without the dependency.
 
 ## 10. Running and deployment (design)
 

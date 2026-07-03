@@ -91,7 +91,7 @@ Force-pushing to `main` is forbidden. Long-lived PRs (> ~3 days) should be rebas
 
 Dependabot opens weekly PRs for npm and GitHub Actions. The pi packages (`@earendil-works/pi-*`) share one monorepo and move together — update them as a group. Re-run `npm run typecheck && npm test` before merging any dependency bump.
 
-The `undici` version is load-bearing for proxy/streaming behavior under Node 26; see the dispatcher comment in `core/src/cli.ts` before changing it.
+The `undici` version is load-bearing for proxy/streaming behavior under Node 26; see the `installProxyFetch` docstring in `core/src/proxy.ts` before changing it.
 
 ## Issues
 
