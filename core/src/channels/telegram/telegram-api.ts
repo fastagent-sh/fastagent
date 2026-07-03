@@ -70,8 +70,11 @@ interface Api {
 
 /** A named Bot API failure. `status` 0 = the transport itself failed (network error / timeout) before
  *  any HTTP status existed; otherwise the HTTP status with Telegram's own description (or a note that
- *  the body carried no usable answer). */
-export class TelegramApiError extends Error {
+ *  the body carried no usable answer). Module-private: no EXTERNAL caller matches on the type; it
+ *  stays a typed class (not a plain Error) because this module's own retry logic — sendMessage's
+ *  parse-mode fallback, editMessageText's "not modified" swallow — does `instanceof` + reads
+ *  `.description`. */
+class TelegramApiError extends Error {
   readonly method: string;
   readonly status: number;
   readonly description: string;

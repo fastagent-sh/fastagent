@@ -150,6 +150,8 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
       );
     }
   } catch (error) {
+    // Best-effort rollback of a partial scaffold: a file that won't delete is left behind (the original
+    // error below is the one worth surfacing — a cleanup failure must not mask it).
     for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
     throw error;
   }
