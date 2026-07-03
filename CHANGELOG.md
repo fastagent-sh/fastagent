@@ -14,6 +14,12 @@ While the project is pre-1.0, minor versions may include breaking changes.
   flaky network, a cloudflared ERROR line mentioning `https://api.trycloudflare.com/tunnel` parsed
   as the tunnel URL and the Telegram webhook got registered against Cloudflare's API host — the bot
   silently received nothing while every log line said success.
+- **Transient provider request failures no longer kill the turn** for providers whose pi-ai
+  adapters implement client-side retries (OpenAI-family / Anthropic / Azure / Codex — request-phase
+  network errors / 429 / 5xx with backoff; all previously defaulted to 0 retries). The google /
+  vertex / bedrock / mistral adapters ignore `maxRetries`, so transients there still fail the
+  turn. Mid-stream drops also still fail the turn — partial output was already streamed and
+  cannot be retracted.
 
 ## [0.8.0] - 2026-07-03
 
