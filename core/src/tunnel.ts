@@ -9,7 +9,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { callApi } from "./channels/telegram/telegram-api.ts";
+import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { log } from "./log.ts";
 
 export interface Tunnel {
@@ -142,7 +142,7 @@ export async function announceWebhooks(dir: string, baseUrl: string): Promise<vo
   if (!(await waitForTunnel(baseUrl))) {
     log.warn(`[fastagent] tunnel did not respond in time; webhook registration may fail (URL: ${baseUrl})`);
   }
-  if (channels.includes("telegram")) await registerTelegram(baseUrl);
+  if (channels.includes("telegram")) await registerTelegramWebhook(baseUrl);
   if (channels.includes("github")) {
     log.info(
       `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
@@ -163,43 +163,4 @@ async function waitForTunnel(baseUrl: string, timeoutMs = 60000): Promise<boolea
     await sleep(3000);
   }
   return false;
-}
-
-async function registerTelegram(baseUrl: string): Promise<void> {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  const secret = process.env.TELEGRAM_SECRET_TOKEN;
-  const webhookUrl = `${baseUrl}/telegram`;
-  if (!botToken || !secret) {
-    log.info(
-      `[fastagent] telegram: set TELEGRAM_BOT_TOKEN + TELEGRAM_SECRET_TOKEN in .env, then re-run to auto-register. Webhook URL: ${webhookUrl}`,
-    );
-    return;
-  }
-  // Backstop after waitForTunnel: Telegram's resolver may lag our health poll by a moment. The call
-  // itself rides the channel's hardened pipeline (timeout, ok-validation, named failures) — a thrown
-  // timeout stringifies with "timeout" in it, so the transient regex below catches it.
-  const ATTEMPTS = 3;
-  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    if (attempt > 0) await sleep(5000);
-    try {
-      await callApi("https://api.telegram.org", botToken, "setWebhook", { url: webhookUrl, secret_token: secret });
-      log.info(`[fastagent] telegram: webhook registered → ${webhookUrl}`);
-      return;
-    } catch (e) {
-      // Only network-transient errors are worth retrying. A fresh tunnel's "bad webhook: Failed to
-      // resolve host" is caught by `resolve host`; a permanent "Bad webhook: HTTPS url must be provided"
-      // is a config error, not transient, so `bad webhook` is deliberately NOT a trigger.
-      const error = String(e);
-      const transient = /resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout/i.test(error);
-      if (!transient) {
-        log.error(`[fastagent] telegram: setWebhook failed (${error}). Register manually with url=${webhookUrl}`);
-        return;
-      }
-      if (attempt < ATTEMPTS - 1)
-        log.warn(`[fastagent] telegram: tunnel not resolvable yet, retrying… (${attempt + 1}/${ATTEMPTS - 1})`);
-    }
-  }
-  log.warn(
-    `[fastagent] telegram: webhook still failing after retries (the tunnel may need another moment). Register manually with url=${webhookUrl}`,
-  );
 }
