@@ -66,19 +66,19 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.6.0",
-    "@earendil-works/pi-agent-core": "^0.80.2",
+    "@earendil-works/pi-agent-core": "^0.80.3",
     "@earendil-works/pi-ai": "^0.80.2",
-    "@earendil-works/pi-coding-agent": "^0.80.2",
+    "@earendil-works/pi-coding-agent": "^0.80.3",
     "@octokit/webhooks-methods": "^6.0.0",
     "@octokit/webhooks-types": "^7.6.1",
     "chokidar": "^5.0.0",
     "giget": "^3.3.0",
     "ignore": "^7.0.5",
-    "undici": "^8.5.0",
+    "undici": "^8.6.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.0",
+    "@biomejs/biome": "^2.5.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }
