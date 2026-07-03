@@ -5,98 +5,43 @@
  * is a JSON POST, outbound is a `fetch` to the Bot API. The developer writes only `route` (policy); the
  * channel owns transport + format + attachments.
  *
- * Live streaming: a single "💭 Thinking…" message is sent once, then editMessageText'd in place with the
- * latest tool calls + partial text (PLAIN — a partial answer may carry unbalanced HTML); on completion
- * the same message is edited into the final answer as HTML. One message, works in groups and private
- * (unlike sendMessageDraft, which is private/forum-topic only). Threaded Mode (topics in private
- * chats, a @BotFather toggle) is auto-adapted: an update carrying message_thread_id replies into that
- * thread; without one the chat is linear. Same code, both modes.
+ * This file is the Telegram DOMAIN: ingress + summon policy + prompt assembly. The subsystems it
+ * composes each own their invariants in their own module:
+ *   - turn-store.ts     durable per-session serial execution, crash recovery, redelivery dedup
+ *   - context-buffer.ts un-summoned group discussion, folded into the next answered turn
+ *   - preview.ts        the live-preview pump ("💭 Thinking…" → edits → final answer) + terminal writes
+ *   - telegram-api.ts   the single Bot API pipeline (timeouts, 429, ok-gating, HTML-aware split)
+ *   - state.ts          atomic state files under the channel-state home
+ *
+ * Threaded Mode (topics in private chats, a @BotFather toggle) is auto-adapted: an update carrying
+ * message_thread_id replies into that thread; without one the chat is linear. Same code, both modes.
  *
  * Authored against the public `@kid7st/fastagent` surface only (the contract + the channel-authoring
  * kit: readBodyCapped / text), so it is exactly what a third-party `fastagent-channel-*` package would write.
  */
 import { timingSafeEqual } from "node:crypto";
 import { join, resolve } from "node:path";
-import type { Agent, AgentEvent, ImageRef, Json } from "../../agent.ts";
+import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
-import {
-  type DownloadedFile,
-  type Target,
-  TELEGRAM_MAX_TEXT,
-  callApi,
-  resolveFiles,
-  resolveImages,
-  editMessageText,
-  sendMessage,
-} from "./telegram-api.ts";
 import { text } from "../respond.ts";
-import { ensureStateHome, loadStateFile, saveStateFile } from "./state.ts";
+import { type BufferedRef, collectAttachments, createContextBuffer } from "./context-buffer.ts";
+import { type TelegramFailure, defaultErrorMessage, streamReply } from "./preview.ts";
+import { ensureStateHome } from "./state.ts";
+import { type DownloadedFile, type Target, callApi, resolveFiles, resolveImages, sendMessage } from "./telegram-api.ts";
+import { type TurnRecord, createTurnStore } from "./turn-store.ts";
+
+export type { TelegramFailure };
 
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
 
-/** Char budget for the per-place group-context buffer — bounds the cost of folding it into a prompt;
- *  when exceeded the OLDEST un-summoned messages are dropped (not a time window: a quiet group keeps its
- *  sparse-but-relevant lines, a busy burst is capped). */
-const BUFFER_MAX_CHARS = 4000;
-
-/** One buffered un-summoned message (object identity is the commit key). Besides the sender label and
- *  one-line body, it carries what a LATER summon needs to resolve references into the discussion:
- *  message ids ("reply to the one Alex answered"), and attachment file_ids so "summarize the file from
- *  earlier" can actually open it — an un-summoned attachment otherwise surfaces only as its caption or
- *  a `[document: …]` label, never the bytes. */
-interface BufferEntry {
-  sender: string;
-  body: string;
-  /** The message's id — rendered into the fold so the model can correlate replies. */
-  messageId?: number;
-  /** The message_id this one replied to, when it was a reply. */
-  replyTo?: number;
-  /** file_ids of document/voice/video/audio attachments (downloadable on a later summon). */
-  fileIds?: string[];
-  /** file_ids of photos (usable as vision inputs on a later summon). */
-  imageIds?: string[];
-}
-
-/** A buffered attachment reference: its file_id plus WHO posted it in WHICH message, so the manifest
- *  can attribute it ("the file Bob sent") the way the fold attributes text. */
-interface BufferedRef {
-  id: string;
-  from: string;
-  msg?: number;
-}
-
-/** How many buffered files and images (each, most recent first) a summon pulls in with the folded
- *  discussion — bounds the latency/token cost of "summarize the file from earlier" against a chatty
- *  group posting many attachments between summons. Skipped ones are counted into the prompt note, so
- *  the model never sees an attachment reference it silently cannot open. */
-const BUFFER_ATTACH_MAX = 3;
-
-/** One fold line. ALSO the eviction cost basis: the budget must price what the fold actually renders
- *  (sender + body + the msg/reply meta), or the fold would systematically overrun BUFFER_MAX_CHARS. */
-function bufferLine(e: BufferEntry): string {
-  const meta = [
-    e.messageId !== undefined ? `msg ${e.messageId}` : undefined,
-    e.replyTo !== undefined ? `reply to msg ${e.replyTo}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(", ");
-  return `${e.sender}${meta ? ` (${meta})` : ""}: ${e.body}`;
-}
-
-/** One accepted-but-unfinished turn, as persisted in the queue WAL: everything needed to run it again
- *  after a restart (Telegram never redelivers an ACKed update, so this record IS the turn). */
-interface PendingTurn {
-  /** The update_id — the turn's identity in logs and on disk. */
-  id: string;
+/** One accepted-but-unfinished turn, as persisted in the turn store's WAL: everything needed to run it
+ *  again after a restart (Telegram never redelivers an ACKed update, so this record IS the turn). */
+interface PendingTurn extends TurnRecord {
   /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over (and a
    *  replay after a restart reuses it instead of orphaning it). */
   previewId?: number;
-  /** `queued` → never reached the agent, safe to replay; `started` → may have already sent output,
-   *  replaying risks a duplicate answer, so recovery drops it loudly instead. */
-  state: "queued" | "started";
-  session: string;
   placeKey: string;
   baseText: string;
   chatId: number | string;
@@ -106,33 +51,24 @@ interface PendingTurn {
   fileIds: string[];
 }
 
-/** How often (ms) to edit the live-preview message; tool events still flush on the next loop. Edits to
- *  one message are rate-limited tighter than sends, so pace them ~1.5s (vs every token). */
-const EDIT_THROTTLE_MS = 1500;
-
-/** Max length of a tool's arg preview in the live view. */
-const TOOL_ARG_MAX = 48;
-
-/** How much of the (growing) reasoning to peek at in the live view — the most recent tail. */
-const THINKING_PREVIEW = 280;
-
-/** One-line, truncated: collapse whitespace so a multi-line command/arg stays on one line. */
-function clip(s: string): string {
-  const one = s.replace(/\s+/g, " ").trim();
-  return one.length > TOOL_ARG_MAX ? `${one.slice(0, TOOL_ARG_MAX - 1)}…` : one;
-}
-
-/**
- * A compact, human-readable preview of a tool call's args so the live view reads `🔧 read AGENTS.md`
- * rather than just `🔧 read`. Generic (the channel knows no tool schemas): show the salient value — the
- * first primitive field, conventionally the subject (path / command / query / url) — else compact JSON.
- */
-function summarizeArgs(args: Json): string {
-  if (args === null || typeof args !== "object" || Array.isArray(args)) return clip(String(args));
-  const values = Object.values(args);
-  const primary = values.find((v) => typeof v === "string" || typeof v === "number");
-  if (primary !== undefined) return clip(String(primary));
-  return values.length > 0 ? clip(JSON.stringify(args)) : "";
+/** Shape validation at the turn store's IO boundary (the record shape is this channel's, not the store's). */
+function isPendingTurn(r: unknown): r is PendingTurn {
+  const t = r as PendingTurn;
+  return (
+    typeof t?.id === "string" &&
+    (t.state === "queued" || t.state === "started") &&
+    typeof t.session === "string" &&
+    typeof t.placeKey === "string" &&
+    typeof t.baseText === "string" &&
+    (typeof t.chatId === "number" || typeof t.chatId === "string") &&
+    (t.threadId === undefined || typeof t.threadId === "number") &&
+    (t.replyTo === undefined || typeof t.replyTo === "number") &&
+    (t.previewId === undefined || typeof t.previewId === "number") &&
+    Array.isArray(t.imageFileIds) &&
+    t.imageFileIds.every((x) => typeof x === "string") &&
+    Array.isArray(t.fileIds) &&
+    t.fileIds.every((x) => typeof x === "string")
+  );
 }
 
 /** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */
@@ -175,12 +111,6 @@ export interface TelegramUpdate {
   message?: TelegramMessage;
   channel_post?: TelegramMessage;
   [k: string]: unknown;
-}
-
-/** A terminal failure, as the channel hands it to `onError`. */
-export interface TelegramFailure {
-  details: string;
-  retryable: boolean;
 }
 
 /** What `route` returns: act with these (every field optional — omitted ones default from the message), or null to ignore. */
@@ -303,7 +233,7 @@ async function* invokeWithAttachments(
   // PRIMARY first, background after — consistent with "primary wins": what the user pointed at this
   // turn leads. Buffered file entries are attributed like the fold's text lines ("the file Bob sent"
   // resolves); buffered PHOTOS cannot be (ImageRef carries no label), so their attribution stops at
-  // the fold's attachment markers (bufferPush appends `[photo]` even to captioned lines) — a
+  // the fold's attachment markers (the buffer appends `[photo]` even to captioned lines) — a
   // documented limit.
   const allFiles = [
     ...(files ?? []),
@@ -322,239 +252,6 @@ async function* invokeWithAttachments(
   )) {
     if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
     yield e;
-  }
-}
-
-/** The customer-facing default: neutral, no leaked internals; differentiate only on whether to retry. */
-function defaultErrorMessage(failed: TelegramFailure): string {
-  return failed.retryable ? "⚠️ Temporary problem — please try again." : "⚠️ Sorry, something went wrong.";
-}
-
-/**
- * The terminal-write POLICY: resolve the single preview message into `text`. streamReply owns the
- * preview lifecycle, so this composition of transport primitives lives here, not in telegram-api. One
- * message → edit the preview in place; if the edit fails (preview gone, or a persistent 429/5xx) fall
- * back to deleting the placeholder and sending fresh, so no "Thinking…" is left pinned above the answer.
- * Many messages → delete the preview and send the whole answer as consecutive fresh messages (editing
- * would pin the first chunk where an active group has scrolled past). No preview → fresh send. EMPTY text
- * = "say nothing" → just delete the preview.
- */
-async function finalize(
-  api: string,
-  botToken: string,
-  target: Target,
-  messageId: number | undefined,
-  text: string,
-  opts: { html?: boolean } = {},
-): Promise<void> {
-  const html = opts.html ?? true;
-  if (text.trim() === "") {
-    if (messageId !== undefined)
-      await callApi(api, botToken, "deleteMessage", { chat_id: target.chatId, message_id: messageId });
-    return;
-  }
-  if (messageId !== undefined) {
-    // "Fits in one message" is a plain length check against Telegram's limit — not chunkText, whose html
-    // mode exists for SPLIT chunks and is irrelevant to an un-split text.
-    if (text.length <= TELEGRAM_MAX_TEXT) {
-      try {
-        await editMessageText(api, botToken, target, messageId, text, { html });
-        return;
-      } catch {
-        // Edit failed — the preview may be gone, or still there (429 retries exhausted / 5xx). Fall through
-        // to delete + fresh send below so a still-present "Thinking…" is not left pinned above the answer.
-      }
-    }
-    // Too long for one message, OR a failed single-message edit: remove the placeholder best-effort (a lingering one above
-    // the answer is worse than the extra call), then send the whole reply as fresh, consecutive messages.
-    await callApi(api, botToken, "deleteMessage", { chat_id: target.chatId, message_id: messageId }).catch(() => {});
-  }
-  await sendMessage(api, botToken, target, text, { html });
-}
-
-/**
- * Consume one turn's event stream into a Telegram chat, live. A single preview message is sent once and
- * editMessageText'd in place with the latest tool calls + partial text (PLAIN); on completion it is
- * edited into the final answer (HTML). Preview edits are best-effort (logged once if they fail); the
- * final write is authoritative and surfaces a real failure (bad token, etc.).
- */
-async function streamReply(
-  events: AsyncIterable<AgentEvent>,
-  api: string,
-  botToken: string,
-  target: Target,
-  formatError: (failed: TelegramFailure) => string | undefined,
-  previewId?: number,
-): Promise<void> {
-  const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
-  const toolIndexById = new Map<string, number>();
-  let thinking = "";
-  let answer = "";
-
-  const mark = { running: "…", ok: "✓", error: "✗" } as const;
-  const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
-  // Reasoning is process, not the answer: shown (capped to its tail) in the live preview only, never
-  // in the persisted final message (which is `answer` alone).
-  const thinkingView = (): string => {
-    const t = thinking.replace(/\s+/g, " ").trim();
-    if (t === "") return "";
-    return `💭 ${t.length > THINKING_PREVIEW ? `…${t.slice(t.length - THINKING_PREVIEW + 1)}` : t}`;
-  };
-  const view = (): string => {
-    const v = [thinkingView(), toolView(), answer]
-      .filter((s) => s.trim() !== "")
-      .join("\n\n")
-      .trim();
-    // Before any reasoning/tool/text arrives, show an explicit placeholder rather than an empty edit.
-    return v === "" ? "💭 Thinking…" : v;
-  };
-
-  // The live preview is ONE real message: sent once (capturing its id + threading under the asker),
-  // then edited in place. messageId/lastSent are shared with the final write on completion.
-  // `previewId`: an already-sent message to take over as the preview (the "⏳ queued" notice) — the
-  // pump edits it in place, so the queue notice morphs into the live view instead of leaving an orphan.
-  let messageId: number | undefined = previewId;
-  let previewSent = messageId !== undefined; // a placeholder send was attempted — guards against re-sending when no id came back
-  let finalized = false; // a terminal write (completed/failed) ran — the finally skips its orphan cleanup
-  let lastSent = "";
-  const flushPreview = async (): Promise<void> => {
-    const text = view();
-    if (text === lastSent) return; // skip an unchanged edit (Telegram rejects "message is not modified")
-    lastSent = text;
-    if (messageId !== undefined) {
-      await editMessageText(api, botToken, target, messageId, text); // plain — a partial answer may carry unbalanced HTML
-      return;
-    }
-    // No preview message yet. Send the placeholder ONCE; never re-send (that would spam a new message per
-    // frame). If Telegram returns ok WITHOUT a message_id (proxy / odd API base / unparseable body) we
-    // cannot edit — fail visibly and stop previewing (the final write still lands via finalize).
-    if (previewSent) return;
-    previewSent = true;
-    messageId = await sendMessage(api, botToken, target, text, { html: false });
-    if (messageId === undefined)
-      throw new Error("telegram sendMessage returned ok without a message_id — live preview disabled for this turn");
-  };
-
-  // ── Live-preview pump: a SINGLE serialized writer. ──────────────────────────────────────────
-  // Events mutate state (thinking / tools / answer) and mark the preview dirty; the pump edits the
-  // message to the LATEST view() with at most ONE edit in flight, paced by a throttle. One-in-flight is
-  // the whole point: concurrent edits can reach Telegram out of order — an older frame landing over a
-  // newer one is the "shows 3-4 steps, blanks, re-fills" flicker. Serializing keeps frames monotonic.
-  // (No keepalive: a real message does not expire, unlike the old 30s draft.)
-  let dirty = false;
-  let pumping = false;
-  let stopped = false;
-  let previewErrLogged = false;
-  let pumpDone: Promise<void> | undefined;
-  let wakeThrottle: (() => void) | undefined; // set while the pump is mid-throttle; finish() cuts it short
-
-  const runPump = async (): Promise<void> => {
-    pumping = true;
-    try {
-      while (dirty && !stopped) {
-        dirty = false;
-        try {
-          await flushPreview();
-        } catch (e) {
-          // Best-effort preview (the final write is authoritative), but a failing edit must be visible —
-          // log once per turn so a never-rendering preview is diagnosable, not silent.
-          if (!previewErrLogged) {
-            previewErrLogged = true;
-            log.warn(`[telegram] live preview failed (final reply still sends): ${String(e)}`);
-          }
-        }
-        if (dirty && !stopped) {
-          // Pace + coalesce a burst into one edit. Interruptible: finish() cuts this short so the final
-          // write is not delayed by up to EDIT_THROTTLE_MS after the turn completes.
-          await new Promise<void>((resolve) => {
-            const t = setTimeout(resolve, EDIT_THROTTLE_MS);
-            wakeThrottle = () => {
-              clearTimeout(t);
-              resolve();
-            };
-          });
-          wakeThrottle = undefined;
-        }
-      }
-    } finally {
-      pumping = false;
-    }
-  };
-  // Mark the preview dirty and ensure the single writer is running (an edit already in flight picks up
-  // the new state on its next loop). Synchronous — callers never await a network write.
-  const touch = (): void => {
-    dirty = true;
-    if (!pumping) pumpDone = runPump();
-  };
-
-  touch(); // send the "💭 Thinking…" placeholder immediately
-
-  // Stop the pump and await any in-flight edit, so the final write below is strictly the LAST one to the
-  // preview message (no stale frame landing after the answer).
-  const finish = async (): Promise<void> => {
-    stopped = true;
-    wakeThrottle?.(); // cut an in-flight throttle so the final write is not delayed up to EDIT_THROTTLE_MS
-    await pumpDone?.catch(() => {});
-  };
-
-  try {
-    for await (const e of events) {
-      if (e.type === "text") {
-        answer += e.delta;
-        touch();
-      } else if (e.type === "thinking") {
-        thinking += e.delta;
-        touch();
-      } else if (e.type === "tool_started") {
-        const arg = summarizeArgs(e.args);
-        toolIndexById.set(e.id, tools.length);
-        tools.push({ label: arg ? `${e.name} ${arg}` : e.name, status: "running" });
-        touch();
-      } else if (e.type === "tool_ended") {
-        const i = toolIndexById.get(e.id);
-        const t = i === undefined ? undefined : tools[i];
-        if (t) t.status = e.isError ? "error" : "ok";
-        touch();
-      } else if (e.type === "completed") {
-        await finish();
-        // Edit the preview into the final answer (HTML, plain fallback); the persisted message is the
-        // answer alone — the process (thinking/tools) was preview-only. Mark finalized BEFORE delivering:
-        // the terminal was reached, so a delivery failure here is a plain failure, not an "abnormal exit"
-        // (which would wrongly fire the finally's neutral-notice fallback = double delivery + wrong text).
-        finalized = true;
-        await finalize(api, botToken, target, messageId, answer.trim() !== "" ? answer : "(no reply)");
-        return;
-      } else if (e.type === "failed") {
-        await finish();
-        // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
-        // log (dev-facing — the full details, via the throw below + the handler's catch). Same terminal
-        // write as completed: edit → fresh-send if the preview is gone; an empty notice deletes the
-        // placeholder (suppress = no residue). HTML like the answer — symmetric, and finalize already
-        // falls back to plain if a custom onError returns markup Telegram rejects. Best-effort — we throw
-        // below regardless.
-        finalized = true;
-        {
-          const msg = formatError({ details: e.details, retryable: e.retryable }) ?? "";
-          await finalize(api, botToken, target, messageId, msg).catch(() => {});
-        }
-        throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
-      }
-    }
-    throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
-  } finally {
-    await finish();
-    // Abnormal exit (stream ended without a terminal, the generator threw, or the consumer abandoned): no
-    // terminal write ran. Show the SAME neutral notice a `failed` event would — the preview may show real
-    // partial work, so don't delete it silently, and don't leave the user in silence. A suppressing
-    // onError still collapses to a delete (finalize on empty text).
-    if (!finalized) {
-      // retryable:false — an abnormal end (no terminal / a throw) is of UNKNOWN retryability, so use the
-      // neutral "something went wrong" default rather than promising "try again" that may not help.
-      const notice = formatError({ details: "the turn ended without completing", retryable: false }) ?? "";
-      // finalize handles messageId===undefined (no preview reached) with a fresh send — so the user is
-      // told even when the turn died before any message.
-      await finalize(api, botToken, target, messageId, notice).catch(() => {});
-    }
   }
 }
 
@@ -757,229 +454,63 @@ export function telegramChannel(
   }
   const decide =
     route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
-  // Per-session serial queue: model B answers a shared chat[:thread] with ONE turn at a time, so a
-  // second update for the same session waits its turn (FIFO) instead of colliding on the engine lease
-  // and being dropped as "busy" — the wrong UX when several people talk in one group. Different sessions
-  // run concurrently (the engine's stateless multi-session invoke). The chain itself is in-memory; the
-  // pending-turn WAL below is what survives a restart. SPEC §8 leaves this concurrency policy to the
-  // channel.
-  const sessionChains = new Map<string, Promise<void>>();
-  const enqueueTurn = (session: string, task: () => Promise<void>): void => {
-    const prev = sessionChains.get(session) ?? Promise.resolve();
-    const next = prev.then(task, task); // run after this session's previous turn, in arrival order
-    sessionChains.set(session, next);
-    void next.finally(() => {
-      if (sessionChains.get(session) === next) sessionChains.delete(session); // drop the entry when drained
-    });
-  };
-  // Group-context buffer: recent UN-summoned messages per Telegram "place" (chat[:thread]), kept under
-  // a char budget and folded into the next answered turn's prompt so a summoned agent has the discussion
-  // it didn't see turn-by-turn. Bucketed by place (not session): an un-summoned message has no route
-  // session, and the flush feeds whatever turn answers that place. DURABLE: persisted (synchronously,
-  // before the webhook 200 — Telegram never redelivers an ACKed update) and reloaded on start, so a
-  // restart keeps the discussion. Needs group privacy OFF to receive the messages at all.
+
   // Normalize once: a relative stateDir resolves against the process cwd HERE, so every derived path
   // (incl. the attachment paths handed to the agent) honours DownloadedFile's absolute-path contract.
   const stateHome = resolve(stateDir);
   ensureStateHome(stateHome); // create + self-ignore — buffers/WAL/files may carry chat content
-  const buffersPath = join(stateHome, "buffers.json");
-  const queuePath = join(stateHome, "queue.json");
-  // State files are an IO boundary: valid JSON of the WRONG SHAPE (hand-edited, version drift) must
-  // degrade exactly like a corrupt file — warn + empty — not flow into the channel as trusted data.
-  const isBufferEntry = (e: unknown): e is BufferEntry => {
-    const t = e as BufferEntry;
-    const strings = (v: unknown): boolean =>
-      v === undefined || (Array.isArray(v) && v.every((x) => typeof x === "string"));
-    return (
-      typeof t?.sender === "string" &&
-      typeof t.body === "string" &&
-      (t.messageId === undefined || typeof t.messageId === "number") &&
-      (t.replyTo === undefined || typeof t.replyTo === "number") &&
-      strings(t.fileIds) &&
-      strings(t.imageIds)
-    );
-  };
-  const loadBuffers = (): Map<string, BufferEntry[]> => {
-    const raw = loadStateFile(buffersPath);
-    if (raw === undefined) return new Map();
-    if (
-      typeof raw === "object" &&
-      raw !== null &&
-      !Array.isArray(raw) &&
-      Object.values(raw).every((v) => Array.isArray(v) && v.every(isBufferEntry))
-    ) {
-      return new Map(Object.entries(raw as Record<string, BufferEntry[]>));
-    }
-    log.warn(`[telegram] unexpected shape in ${buffersPath} — starting with an empty buffer`);
-    return new Map();
-  };
-  const buffers = loadBuffers();
-  const persistBuffers = (): void => saveStateFile(buffersPath, Object.fromEntries(buffers));
-  const bufferPush = (placeKey: string, entry: BufferEntry): void => {
-    // Stage on a copy and roll back if the pre-ACK persist throws: the throw becomes a 500 and Telegram
-    // REDELIVERS — with the entry already in memory, the redelivery would append it a second time.
-    const prev = buffers.get(placeKey);
-    const buf = prev ? [...prev] : [];
-    buf.push(entry);
-    let total = buf.reduce((n, e) => n + bufferLine(e).length + 1, 0);
-    while (buf.length > 1 && total > BUFFER_MAX_CHARS) {
-      const dropped = buf.shift();
-      if (dropped) total -= bufferLine(dropped).length + 1;
-    }
-    buffers.set(placeKey, buf);
-    try {
-      persistBuffers();
-    } catch (e) {
-      if (prev) buffers.set(placeKey, prev);
-      else buffers.delete(placeKey);
-      throw e;
-    }
-  };
-  // Peek renders the buffer WITHOUT clearing and snapshots exactly which entries it consumed; the commit
-  // (on the turn's COMPLETED event — only then is the folded discussion durably in the session) removes
-  // only those entries by identity. So a failure or crash anywhere earlier leaves them intact for the
-  // next summon, AND a message that arrives while the turn runs (pushed to the same bucket, not in this
-  // prompt) survives for the next answered turn — a whole-bucket delete would lose it.
-  // Message ids in the fold let the model resolve references ("the one Bob replied to") — rendered
-  // only when known (bufferLine), so a plain line stays plain.
-  const bufferPeek = (placeKey: string): { text: string; consumed: BufferEntry[] } => {
-    const buf = buffers.get(placeKey) ?? [];
-    return { text: buf.map(bufferLine).join("\n"), consumed: [...buf] };
-  };
-  // Commit consumes entries WHOLE — including ones whose attachments failed to load or were cap-
-  // skipped: their text is durably in the session (keeping them would re-fold duplicate text), and the
-  // prompt note told the model/user what is missing; re-post an attachment to use it. The alternative
-  // (retrying unloaded attachments on later summons) buys a rare recovery at the cost of duplicated
-  // context every time — rejected.
-  const bufferCommit = (placeKey: string, consumed: BufferEntry[]): void => {
-    const buf = buffers.get(placeKey);
-    if (!buf) return;
-    const remaining = buf.filter((e) => !consumed.includes(e));
-    if (remaining.length === 0) buffers.delete(placeKey);
-    else buffers.set(placeKey, remaining);
-    // Post-ACK write: a disk error here must not abort the turn's delivery — log it; whatever the last
-    // successful write left on disk still holds the committed entries, so a restart merely re-folds
-    // already-answered discussion. (bufferPush's write, by contrast, is PRE-ACK and deliberately
-    // throws: the 500 makes Telegram redeliver once the disk recovers.)
-    try {
-      persistBuffers();
-    } catch (e) {
-      log.error(`[telegram] buffer write failed post-ACK (a restart may re-fold answered discussion): ${String(e)}`);
-    }
-  };
+  const buffer = createContextBuffer(join(stateHome, "buffers.json"));
 
-  // Pending-turn queue WAL: an accepted turn is persisted from ACK to completion, so a crash between
-  // the two is not a silent loss. Recovery: `queued` records never reached the agent — replay them in
-  // arrival order; a `started` record may have already sent output, so it is dropped LOUDLY (replaying
-  // would risk a duplicate answer — a visible loss beats a confusing double reply).
-  const pending = new Map<string, PendingTurn>();
-  // Tombstones for every update_id the WAL RECOVERY took over — dropped (started) AND replayed (queued)
-  // alike: if the previous process died BEFORE its webhook 200 went out, Telegram redelivers the same
-  // update, and without a tombstone the redelivery would run the turn a second time (the dropped one may
-  // already have answered; the replayed one answers via the replay). Persisted alongside the queue so
-  // they survive a further restart. Bounded by turn count, not time: Telegram's redelivery retries span
-  // minutes–hours of backoff, far fewer than 50 turns in any deployment this channel targets — an
-  // evicted id being redelivered is an extreme edge where a rare duplicate beats unbounded growth.
-  const tombstones = new Set<string>();
-  const TOMBSTONES_MAX = 50;
-  const tombstone = (id: string): void => {
-    tombstones.add(id);
-    for (const old of tombstones) {
-      if (tombstones.size <= TOMBSTONES_MAX) break;
-      tombstones.delete(old);
-    }
-  };
-  const persistQueue = (): void =>
-    saveStateFile(queuePath, { pending: [...pending.values()], tombstones: [...tombstones] });
-  // For WAL writes AFTER the webhook 200: a disk error there has no request to fail into, and an
-  // uncaught throw inside a queued task would surface as an unhandled rejection — log instead. The
-  // stale-but-atomic WAL stays diagnosable: at worst a completed turn is still `started` on disk, and
-  // the next restart drops + tombstones it (no redelivery is coming — its 200 was long delivered).
-  const persistQueuePostAck = (): void => {
-    try {
-      persistQueue();
-    } catch (e) {
-      log.error(`[telegram] WAL write failed post-ACK (state stale until the next write): ${String(e)}`);
-    }
-  };
-  // Enqueue only — durability is the CALLER's line: the webhook path persists per turn (pre-ACK, a
-  // throw becomes a 500 and Telegram redelivers), while recovery replays MANY records already on disk
-  // and persists ONCE after the loop — a per-record persist there could fail mid-loop and leave the
-  // already-replayed prefix still `queued` in the WAL, to be replayed AGAIN on the next boot.
   // In-memory: the in-flight "⏳ queued" notice per turn, awaited at dequeue so the turn reliably takes
   // the notice message over (rec.previewId) instead of racing it and orphaning a late-arriving notice.
   const notices = new Map<string, Promise<void>>();
-  const runTurn = (rec: PendingTurn): void => {
-    pending.set(rec.id, rec);
-    const target: Target = { chatId: rec.chatId, threadId: rec.threadId, replyTo: rec.replyTo };
+  const store = createTurnStore<PendingTurn>({
+    path: join(stateHome, "queue.json"),
+    label: "[telegram]",
+    isRecord: isPendingTurn,
     // Queue feedback: when this session already has a turn running/queued, a silent wait reads as "the
     // bot ignored me" once the current turn runs long — tell the asker NOW (reply-quoted, so it is
     // clear whose ask is queued). Best-effort and post-ACK: a failed notice is a log line, never a
     // failed update. The turn's live preview then edits this same message in place.
-    if (rec.previewId === undefined && sessionChains.has(rec.session)) {
+    onQueuedBehind: (rec, s) => {
+      if (rec.previewId !== undefined) return; // a replayed record that already has its notice
+      const target: Target = { chatId: rec.chatId, threadId: rec.threadId, replyTo: rec.replyTo };
       notices.set(
         rec.id,
         sendMessage(apiBaseUrl, botToken, target, "⏳ Queued — I’ll start once the current task finishes.", {
           html: false,
         }).then(
           (id) => {
-            if (id !== undefined) {
-              rec.previewId = id;
-              persistQueuePostAck(); // a replay after a restart reuses the notice instead of orphaning it
-            }
+            // Through the store, which owns the record — a replay after a restart reuses the notice
+            // instead of orphaning it.
+            if (id !== undefined) s.update(rec.id, { previewId: id });
           },
           (e) => log.warn(`[telegram] queue notice failed (the turn still runs): ${String(e)}`),
         ),
       );
-    }
-    const where = `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`;
-    enqueueTurn(rec.session, async () => {
-      // Run at DEQUEUE time (serialized), so the lifecycle log and engine turn all reflect the actual
-      // execution order rather than arrival. Fold the un-summoned discussion since the last answered
-      // turn into the prompt; it is cleared only when the turn COMPLETES (then it lives in the session).
+    },
+    run: async (rec, s) => {
+      // Runs at DEQUEUE time (serialized), so the lifecycle log and engine turn reflect the actual
+      // execution order rather than arrival.
       // Settle the queue notice (if any) so rec.previewId is final. NOT free: a slow (not failed)
       // notice delays this turn's start by up to the API timeout — accepted, because racing it would
       // orphan the ⏳ message and double-post a placeholder; in the common path the notice resolved
       // while the previous turn was still running, so this await is instant.
       await notices.get(rec.id);
       notices.delete(rec.id);
-      rec.state = "started";
-      persistQueuePostAck();
+      s.started(rec.id); // output becomes possible from here — a crash past this point must not replay
       const startedAt = Date.now();
+      const where = `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`;
       log.info(`[telegram] turn start: turn=${rec.id} session=${rec.session} ${where}`);
-      const { text: recent, consumed } = bufferPeek(rec.placeKey);
+      // Fold the un-summoned discussion since the last answered turn into the prompt; it is cleared
+      // only when the turn COMPLETES (then it lives in the session).
+      const { text: recent, consumed } = buffer.peek(rec.placeKey);
       const prompt = recent ? `[recent group discussion:\n${recent}\n]\n\n${rec.baseText}` : rec.baseText;
-      // Attachments posted in the un-summoned discussion, so "summarize the file from earlier" can open
-      // them — most recent BUFFER_ATTACH_MAX of each kind (bounds cost against an attachment-heavy gap).
-      // Minus the summoning message's OWN ids: replying to a still-buffered attachment puts its file_id
-      // in both sets, and without this filter the same file would download twice and appear in the
-      // manifest twice (primary wins — it is what the user pointed at this turn).
-      const primaryFiles = new Set(rec.fileIds);
-      const primaryImages = new Set(rec.imageFileIds);
-      // Attribution rides along (sender + msg id) so the manifest can answer "the file BOB sent" — the
-      // fold's msg-id annotations resolve text references, this resolves the attachment side.
-      const refs = (pick: (e: BufferEntry) => string[] | undefined, primary: Set<string>): BufferedRef[] => {
-        const seen = new Set<string>();
-        const out: BufferedRef[] = [];
-        for (const e of consumed) {
-          for (const id of pick(e) ?? []) {
-            if (primary.has(id) || seen.has(id)) continue;
-            seen.add(id);
-            out.push({ id, from: e.sender, msg: e.messageId });
-          }
-        }
-        return out;
-      };
-      const bufFiles = refs((e) => e.fileIds, primaryFiles);
-      const bufImages = refs((e) => e.imageIds, primaryImages);
-      const buffered = {
-        files: bufFiles.slice(-BUFFER_ATTACH_MAX),
-        images: bufImages.slice(-BUFFER_ATTACH_MAX),
-        // Cap-skipped ones count into the prompt note. The note is the ONLY guarantee: a fold line may
-        // show a [document: …] label, but a captioned attachment renders as its caption text alone —
-        // without the note, the model holds references it silently cannot open and may pretend it read them.
-        skipped: Math.max(0, bufFiles.length - BUFFER_ATTACH_MAX) + Math.max(0, bufImages.length - BUFFER_ATTACH_MAX),
-      };
+      const buffered = collectAttachments(consumed, {
+        files: new Set(rec.fileIds),
+        images: new Set(rec.imageFileIds),
+      });
+      const target: Target = { chatId: rec.chatId, threadId: rec.threadId, replyTo: rec.replyTo };
       try {
         await streamReply(
           invokeWithAttachments(
@@ -993,7 +524,7 @@ export function telegramChannel(
             botToken,
             join(stateHome, "files"),
             buffered,
-            () => bufferCommit(rec.placeKey, consumed),
+            () => buffer.commit(rec.placeKey, consumed),
           ),
           apiBaseUrl,
           botToken,
@@ -1006,67 +537,9 @@ export function telegramChannel(
         log.error(
           `[telegram] turn failed: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms): ${String(error)}`,
         );
-      } finally {
-        pending.delete(rec.id);
-        persistQueuePostAck();
       }
-    });
-  };
-  const isPendingTurn = (r: unknown): r is PendingTurn => {
-    const t = r as PendingTurn;
-    return (
-      typeof t?.id === "string" &&
-      (t.state === "queued" || t.state === "started") &&
-      typeof t.session === "string" &&
-      typeof t.placeKey === "string" &&
-      typeof t.baseText === "string" &&
-      (typeof t.chatId === "number" || typeof t.chatId === "string") &&
-      (t.threadId === undefined || typeof t.threadId === "number") &&
-      (t.replyTo === undefined || typeof t.replyTo === "number") &&
-      (t.previewId === undefined || typeof t.previewId === "number") &&
-      Array.isArray(t.imageFileIds) &&
-      t.imageFileIds.every((x) => typeof x === "string") &&
-      Array.isArray(t.fileIds) &&
-      t.fileIds.every((x) => typeof x === "string")
-    );
-  };
-  const loadQueue = (): { pending: PendingTurn[]; tombstones: string[] } => {
-    const raw = loadStateFile(queuePath);
-    if (raw !== undefined) {
-      const q = raw as { pending?: unknown; tombstones?: unknown };
-      if (
-        typeof raw === "object" &&
-        raw !== null &&
-        Array.isArray(q.pending) &&
-        q.pending.every(isPendingTurn) &&
-        Array.isArray(q.tombstones) &&
-        q.tombstones.every((d) => typeof d === "string")
-      ) {
-        return q as { pending: PendingTurn[]; tombstones: string[] };
-      }
-      log.warn(`[telegram] unexpected shape in ${queuePath} — starting with an empty queue`);
-    }
-    return { pending: [], tombstones: [] };
-  };
-  // Recover the WAL a previous process left behind (constructor-time, before any new update arrives).
-  // EVERY recovered id is tombstoned first: if the crash predated the webhook 200, Telegram redelivers
-  // the update — and whether this recovery replays the turn or drops it, running the redelivery too
-  // would answer twice.
-  const recovered = loadQueue();
-  for (const id of recovered.tombstones) tombstones.add(id);
-  for (const rec of recovered.pending) {
-    tombstone(rec.id);
-    if (rec.state === "started") {
-      log.error(
-        `[telegram] dropping turn ${rec.id} (session=${rec.session}): it was mid-flight when the previous ` +
-          "process died and may have already answered — replaying would risk a duplicate reply. Ask again.",
-      );
-      continue;
-    }
-    log.info(`[telegram] recovering queued turn ${rec.id} (session=${rec.session}) from a previous process`);
-    runTurn(rec);
-  }
-  persistQueue(); // rewrite the WAL now: recovered records must not survive as pending
+    },
+  });
 
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -1083,16 +556,15 @@ export function telegramChannel(
       return text("invalid json\n", 400);
     }
 
-    // Decide whether/where to answer, then stream the reply. ACK 200 immediately (the turn may outlast
-    // the webhook timeout); lifecycle goes to stderr — after the 200 there is no response body, so those
-    // lines are the operator's only signal. Concurrency: a per-session serial queue (FIFO) here; the
-    // engine's per-session lease is the corruption floor beneath it.
+    // Decide whether/where to answer, then run the turn. ACK 200 immediately (the turn may outlast the
+    // webhook timeout); lifecycle goes to stderr — after the 200 there is no response body, so those
+    // lines are the operator's only signal.
     const m = pickMessage(update);
     if (!m) return new Response(null, { status: 200 });
-    // A redelivery of an update whose turn the WAL recovery already took over (replayed or dropped):
-    // ACK and skip — Telegram redelivers exactly when the 200 never made it out, which is the crash
-    // window recovery covers; running it again would answer twice.
-    if (tombstones.has(`${update.update_id}`)) {
+    // A redelivery of an update whose turn the store's recovery already took over (replayed or
+    // dropped): ACK and skip — Telegram redelivers exactly when the 200 never made it out, which is
+    // the crash window recovery covers; running it again would answer twice.
+    if (store.suppressed(`${update.update_id}`)) {
       log.info(`[telegram] suppressing redelivered update ${update.update_id} — recovery already handled it`);
       return new Response(null, { status: 200 });
     }
@@ -1106,16 +578,16 @@ export function telegramChannel(
       if (isGroup && content) {
         // OWN attachments only: each message is its own buffer entry, so a reply's referenced
         // attachment is already (or will be) the other entry's — recounting it here would duplicate
-        // downloads and squeeze the BUFFER_ATTACH_MAX cap.
+        // downloads and squeeze the attachment cap.
         const fileIds = ownFiles(m);
         const imageIds = ownImages(m);
         // A captioned attachment renders as its caption — append the attachment marker so the fold
         // ALWAYS labels attachments (that label + sender is all the attribution a photo gets).
         const summary = attachmentSummary(m);
-        const body = summary && content !== summary ? `${content} ${summary}` : content;
-        bufferPush(placeKey, {
+        const bodyLine = summary && content !== summary ? `${content} ${summary}` : content;
+        buffer.push(placeKey, {
           sender: fromLabel(m.from) ?? "someone",
-          body,
+          body: bodyLine,
           messageId: m.message_id,
           replyTo: m.reply_to_message?.message_id,
           fileIds: fileIds.length ? fileIds : undefined,
@@ -1138,9 +610,10 @@ export function telegramChannel(
       const imageFileIds = extractImages(m);
       const fileIds = extractFiles(m);
       if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
-        // Everything the turn needs, as a plain record — persisted in the WAL (before this handler's
-        // 200) so an accepted turn survives a crash; file_ids stay resolvable for a replay.
-        const rec: PendingTurn = {
+        // Everything the turn needs, as a plain record — the store persists it before this handler's
+        // 200 (durable-or-nothing), so an accepted turn survives a crash; file_ids stay resolvable for
+        // a replay.
+        store.accept({
           id: `${update.update_id}`,
           state: "queued",
           session,
@@ -1151,18 +624,7 @@ export function telegramChannel(
           replyTo: m.chat.type !== "private" && sameTarget ? m.message_id : undefined,
           imageFileIds,
           fileIds,
-        };
-        // Persist BEFORE scheduling, with rollback: if the pre-ACK write throws (→ 500 → redelivery),
-        // nothing may be enqueued yet — a scheduled task would run regardless, and the redelivery would
-        // then run the same turn a second time.
-        pending.set(rec.id, rec);
-        try {
-          persistQueue();
-        } catch (e) {
-          pending.delete(rec.id);
-          throw e;
-        }
-        runTurn(rec);
+        });
       }
     }
     return new Response(null, { status: 200 });
