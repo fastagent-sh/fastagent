@@ -8,6 +8,13 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--tunnel` no longer mistakes cloudflared's API endpoint for the assigned tunnel URL.** Under a
+  flaky network, a cloudflared ERROR line mentioning `https://api.trycloudflare.com/tunnel` parsed
+  as the tunnel URL and the Telegram webhook got registered against Cloudflare's API host — the bot
+  silently received nothing while every log line said success.
+
 ## [0.8.0] - 2026-07-03
 
 ### Breaking
