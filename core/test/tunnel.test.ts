@@ -105,6 +105,22 @@ describe("tunnel: parseTunnelUrl", () => {
     );
     expect(parseTunnelUrl("starting tunnel, registering connection…")).toBeUndefined();
   });
+
+  it("never mistakes cloudflared's API endpoint in an ERROR line for the assigned tunnel URL", () => {
+    // Seen live (0.8.0 release verification): a flaky proxy made cloudflared print its request
+    // endpoint in an error, and the webhook got registered against Cloudflare's API host.
+    expect(
+      parseTunnelUrl(
+        '2026 ERR failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": context deadline exceeded',
+      ),
+    ).toBeUndefined();
+    // …and an error line followed by the real assigned URL still resolves to the real one.
+    expect(
+      parseTunnelUrl(
+        'ERR Post "https://api.trycloudflare.com/tunnel": timeout\nINF |  https://adams-columbus-organizing-portion.trycloudflare.com  |',
+      ),
+    ).toBe("https://adams-columbus-organizing-portion.trycloudflare.com");
+  });
 });
 
 describe("tunnel: announceWebhooks", () => {
