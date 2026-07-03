@@ -8,43 +8,79 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-03
+
+### Breaking
+
+- **Auth is project-level by default.** The credentials file defaults to
+  `<dir>/.fastagent/auth.json` (was the global `~/.fastagent/auth.json`); `fastagent login`,
+  `dev`, `start`, `invoke`, and `info` all resolve it as `--auth-path` > `FASTAGENT_AUTH_PATH` >
+  project default, with no implicit project↔global fallback (isolation + fail-visibly). (`fastagent
+  chat` is exempt — it authenticates through pi's own TUI / `~/.pi`, not fastagent's credential file.)
+  **Migration:** existing global logins are not used automatically — `dev`/`start`/`invoke` print a
+  hint when the global file has the credential; set `FASTAGENT_AUTH_PATH=~/.fastagent/auth.json` to
+  keep using it (sharing one file is safe), or `fastagent login` in the project for a project-level
+  credential.
+- The exported `FASTAGENT_AUTH_PATH` constant is renamed `GLOBAL_AUTH_PATH` (it is the global
+  location, no longer the default). No deprecation alias — the constant's meaning changed from *the
+  default path* to *the global location* (the value you point the `FASTAGENT_AUTH_PATH` env var at),
+  so reusing that name would mislead. `createPiAgent`, `createPiAgentFromDefinition`, and
+  `createPiModels` gain an `authPath` option; the dir-aware `createPiAgentFromDefinition` defaults it
+  to the project-level `<dir>/.fastagent/auth.json` (the dir-less `createPiAgent`/`createPiModels`
+  still default to the global file).
+
 ### Added
+
+- **Telegram channel** (`@kid7st/fastagent/telegram` + `fastagent add telegram`): serve an agent as
+  a Telegram bot — webhook ingress (secret-token verified, fail-closed), photos as vision inputs,
+  documents/voice/video downloaded for the agent's tools, replies/threads/topics auto-adapted, and a
+  customizable `onError`/`route` policy surface. Highlights:
+  - **Live streaming preview:** one real message ("💭 Thinking…") edited in place with reasoning
+    tail + tool calls + partial answer, morphing into the final HTML answer — works in groups and
+    private chats alike; a single-writer pump keeps frames monotonic (no flicker).
+  - **Group-native behavior:** a shared per-chat session with sender attribution; concurrent
+    summons run serially (FIFO) with an immediate "⏳ Queued" notice reply-quoted to the asker;
+    un-summoned discussion is buffered (bounded) and folded into the next answered turn — including
+    attachments, so "summarize the file from earlier" actually opens it, attributed to its sender.
+  - **Precise summoning:** group summon only on a `mention` entity naming the bot (never a text
+    scan — code blocks/URLs can't false-summon) or a reply to THIS bot (matched by the bot id
+    parsed from the token; a multi-bot group never mis-triggers); edited messages and slash
+    commands do not summon.
+  - **Durable across restarts** (single-process): the context buffer persists before each webhook
+    ACK, and accepted turns live in a WAL — never-started turns replay in arrival order, a
+    mid-flight one is dropped loudly and its redelivery suppressed (a duplicate reply is worse than
+    a visible loss). State lives under `.fastagent/channels/telegram/` (self-git-ignored; the
+    `stateDir` option moves everything as one unit).
+  - **Hardened transport:** one Bot API pipeline — per-attempt timeouts (30s API / 120s
+    downloads), bounded 429/flood-wait retry, success gated on the body's own `ok:true`,
+    self-describing failures; long replies (>4096 chars) split as valid HTML via a tag balancer
+    (a `<pre>` code block spanning the boundary stays formatted).
+- `--tunnel` for `dev`/`start`: expose the local server on a public HTTPS URL via a Cloudflare
+  quick tunnel and auto-register webhook channels (telegram setWebhook; github prints the URL),
+  with `HTTPS_PROXY` support end to end.
+- Engine auto-compaction: after a completed turn crosses the context-window threshold, the session
+  is compacted before the next turn — long-running chats no longer hit the window.
+- Leveled logging (`FASTAGENT_LOG_LEVEL`, or posture defaults: `dev`=debug, `start`=info); turn
+  traces log at debug in both postures, keeping end-user content out of production logs.
+- Channel-authoring kit exports: `readBodyCapped`, `text`, `textHeaders`; new public types
+  (`AgentTool`, `Skill`, `SkillDiagnostic`, `Session`, `Model`, `Provider`/`createProvider`).
 - `SECURITY.md`, `CHANGELOG.md`, and `llms.txt` for open-source readiness.
 - README status badges (CI, npm version, license, Node version).
 - `start.md`: an AI-guided setup prompt for coding agents.
 - Restructured public docs: `docs/README.md` index, `overview`, `cli`, `configuration`,
   `api-reference`, `troubleshooting`, `principles`, dedicated channel guides
-  (`github`, `telegram`, `channel-development`), and maintainer notes under `docs/design/`.
+  (`github`, `telegram`, `channel-development`), and maintainer notes under `docs/design/`
+  (`core.md` §9.2 documents the telegram channel architecture).
 
 ### Changed
-- Telegram: attachments posted in a group WITHOUT summoning the bot are now usable by a later summon — the folded discussion carries their file_ids, and the answering turn downloads the most recent few files, attributed to their sender and message ("the file Bob sent" resolves), and includes recent photos as vision inputs (without per-photo attribution); a stale or cap-skipped earlier attachment is counted in a visible note instead of silently missing or failing the ask. The folded discussion is also annotated with message ids and reply relations, so references like "the one Alex replied to" resolve.
-- Telegram: a summon that lands while the session is busy now gets an immediate "⏳ Queued" notice (reply-quoted to the asker) instead of silence until the current turn finishes; the turn's live preview takes the notice message over in place, and a restart-replayed turn reuses it too.
-- Telegram channel state is now durable across restarts (single-process deployments): the group-context buffer persists before each webhook ACK, and accepted turns live in a pending-turn WAL — on restart, never-started turns replay in arrival order while a mid-flight one is dropped with an error log (a duplicate reply is worse than a visible loss). State lives under `.fastagent/channels/telegram/` (the new channel-state convention; inbound files moved there too, from `.fastagent/telegram-files/` — old dirs are orphaned, delete freely), written atomically, with corrupt files degrading visibly to empty. New `stateDir` option overrides the location.
-- Telegram group summon precision: a reply summons only when it replies to THIS bot — matched by the bot's numeric id, parsed synchronously from the token (`<bot_id>:<secret>`), so a reply to another bot in a multi-bot group never triggers ours and there is no getMe race window; with no identity at all the check fails closed (a bare `defaultTelegramRoute` call needs `botId`/`botUsername` for reply summon). Edited messages no longer summon at all (each typo fix used to produce a duplicate answer); `TelegramUpdate` drops `edited_message`/`edited_channel_post` accordingly (they are ACKed before `route` sees them).
-- Telegram: `TelegramUpdate` no longer declares `callback_query` — the channel ACKs and drops non-message updates before `route` sees them, so the field advertised an interaction that could never be delivered (the raw payload stays reachable via the index signature). Re-add it together with real button support, not before.
-- Telegram: group @mention summon now reads Telegram's own `mention` entities instead of scanning the text with a regex — an `@botname` pasted inside a code block or a URL no longer summons (not a mention entity), a mention of a different user whose name starts with the bot's cannot match (exact entity range), and `/cmd@bot` stays a command. No text fallback: mention entities are produced server-side.
-- Telegram transport rewritten around a single pipeline (`callApi`): per-method wire code no longer exists, so the transport invariants — a per-attempt timeout on every call (30s API / 120s file bytes), bounded 429 retry honouring `retry_after` up to a 30s flood-wait cap, success gated on the body's own `ok:true` (a proxy's 200 + error page is a named failure, not a sent message), and self-describing `TelegramApiError`s — hold for every call by construction, including `--tunnel` webhook registration. The scaffold send-tool carries a documented standalone copy (fail-fast, no 429 retry: the agent sees the error and decides).
-- Telegram: a long reply (>4096 chars) is split as valid HTML — a tag that spans a boundary is closed at the chunk's end and reopened (attributes and all) at the next chunk's start, so a long `<pre>` code block stays formatted instead of degrading to plain text. The split also never cuts through a tag token.
+
 - Narrative reframed to "Vibe first. Then FastAgent." — take a local agent folder out of
   the terminal and serve it in an app, on GitHub, in Telegram, or behind a custom channel.
-- **Auth is now project-level by default.** The credentials file defaults to
-  `<dir>/.fastagent/auth.json` (was the global `~/.fastagent/auth.json`); `fastagent login`,
-  `dev`, `start`, `invoke`, and `info` all resolve it as `--auth-path` > `FASTAGENT_AUTH_PATH` >
-  project default, with no implicit project↔global fallback (isolation + fail-visibly). (`fastagent
-  chat` is exempt — it authenticates through pi's own TUI / `~/.pi`, not fastagent's credential file.)
-  **Migration:**
-  existing global logins are not used automatically — `dev`/`start`/`invoke` now print a hint when the
-  global file has the credential; set `FASTAGENT_AUTH_PATH=~/.fastagent/auth.json` to keep using it
-  (sharing one file is safe), or `fastagent login` in the project for a project-level credential.
-- **Breaking (API):** the exported `FASTAGENT_AUTH_PATH` constant is renamed `GLOBAL_AUTH_PATH`
-  (it is the global location, no longer the default). No deprecation alias — the constant's meaning
-  changed from *the default path* to *the global location* (the value you point the
-  `FASTAGENT_AUTH_PATH` env var at), so reusing that name for it would mislead. `createPiAgent`,
-  `createPiAgentFromDefinition`, and `createPiModels` gain an `authPath` option; the dir-aware
-  `createPiAgentFromDefinition` defaults it to the project-level `<dir>/.fastagent/auth.json` (the
-  dir-less `createPiAgent`/`createPiModels` still default to the global file).
+- Scaffold templates are real files (copied to dist), channel bundles live beside their channel,
+  and `fastagent add <channel>` drops files by convention without touching your `AGENTS.md`.
 
 ### Fixed
+
 - `fastagent login <provider>` now loads `.env` from the current directory. It previously
   resolved `.env` against `./<provider>` (the positional is the provider, not a dir), so a proxy
   (e.g. `HTTPS_PROXY`) set in the workspace `.env` was ignored during the OAuth token exchange.
@@ -54,6 +90,7 @@ While the project is pre-1.0, minor versions may include breaking changes.
   home.
 
 ### Removed
+
 - `core/examples/` (better examples will be added later).
 
 ## [0.7.1]
@@ -61,5 +98,6 @@ While the project is pre-1.0, minor versions may include breaking changes.
 Last release before the open-source documentation pass. Earlier history is in the
 [commit log](https://github.com/kid7st/fastagent/commits/main).
 
-[Unreleased]: https://github.com/kid7st/fastagent/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/kid7st/fastagent/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/kid7st/fastagent/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/kid7st/fastagent/releases/tag/v0.7.1
