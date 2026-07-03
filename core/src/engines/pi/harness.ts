@@ -35,6 +35,19 @@ export interface PiHarnessFactoryOptions {
   skills?: Skill[];
 }
 
+/**
+ * Provider request retries. The OpenAI-family / Anthropic / Azure / Codex pi-ai adapters
+ * implement client-side retries (429/5xx/request-phase network failures with backoff, honoring
+ * Retry-After; a Codex websocket that fails before the stream starts falls back to SSE) but all
+ * default maxRetries to 0 (even SDK-backed ones override the SDK default), so a single transient
+ * `fetch failed` would otherwise kill the whole turn; 2 matches the OpenAI/Anthropic SDK default.
+ * The google / vertex / bedrock / mistral adapters ignore this option (a pi-ai upstream gap) —
+ * transients there still fail the turn. Mid-stream drops are deliberately NOT retried anywhere on
+ * this path — partial output was already streamed and the SPEC event stream cannot retract it,
+ * so a mid-stream failure surfaces as a `failed` event.
+ */
+const PROVIDER_MAX_RETRIES = 2;
+
 /** Open-or-create the session per invoke: existing → open (history via buildContext); missing → create. */
 export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFactory {
   return async (sessionId) => {
@@ -48,6 +61,7 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       tools: options.tools,
       systemPrompt: typeof systemPrompt === "function" ? systemPrompt() : systemPrompt,
       resources: options.skills ? { skills: options.skills } : undefined,
+      streamOptions: { maxRetries: PROVIDER_MAX_RETRIES },
     });
   };
 }
