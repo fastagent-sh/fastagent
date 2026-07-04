@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -17,6 +17,7 @@ import {
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
 import { assembleSystemPrompt } from "../src/engines/pi/create.ts";
+import { log } from "../src/log.ts";
 import { isUnderStateDir } from "../src/engines/pi/definition.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
@@ -273,5 +274,102 @@ describe("create: toolset (real pi tools, fidelity)", () => {
     const r = await read.execute("t1", { path: "AGENTS.md" });
     const text = (r.content[0] as any).text as string;
     expect(text).toContain("Haiku Bot");
+  });
+});
+
+describe("create L2: the folder is LIVE (definition re-read per invoke)", () => {
+  it("an AGENTS.md/skill edit between two invokes reaches the next turn's prompt and skill resources — no restart", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-live-"));
+    await writeFile(join(dir, "AGENTS.md"), "You are DRAFT-PERSONA.\n");
+    const seen: (string | undefined)[] = [];
+    const { faux } = makeFaux();
+    faux.setResponses([
+      (ctx) => {
+        seen.push(ctx.systemPrompt);
+        return fauxAssistantMessage("one");
+      },
+      (ctx) => {
+        seen.push(ctx.systemPrompt);
+        return fauxAssistantMessage("two");
+      },
+    ]);
+    const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
+
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    // The edit an agent might make to its own workspace mid-conversation: new persona + a new skill.
+    await writeFile(join(dir, "AGENTS.md"), "You are FINAL-PERSONA.\n");
+    await mkdir(join(dir, "skills", "late-skill"), { recursive: true });
+    await writeFile(
+      join(dir, "skills", "late-skill", "SKILL.md"),
+      "---\nname: late-skill\ndescription: added after boot\n---\nBody.\n",
+    );
+    await collect(agent.invoke({ session: "s" }, { text: "again" }));
+
+    expect(seen[0]).toContain("DRAFT-PERSONA");
+    expect(seen[0]).not.toContain("late-skill");
+    expect(seen[1]).toContain("FINAL-PERSONA");
+    expect(seen[1]).not.toContain("DRAFT-PERSONA");
+    expect(seen[1]).toContain("late-skill"); // the listing comes from the SAME re-read as the prompt
+  });
+
+  it("a bad skill written at runtime is surfaced as a warning on the affected turn, never silently dropped", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-live-bad-"));
+    await writeFile(join(dir, "AGENTS.md"), "You are a bot.\n");
+    const { faux } = makeFaux();
+    faux.setResponses([() => fauxAssistantMessage("one"), () => fauxAssistantMessage("two")]);
+    const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+
+    // The agent (or author) writes a skill with broken frontmatter mid-conversation. The loader
+    // returns this as a diagnostic (data, not a throw) — the live path must re-report it.
+    await mkdir(join(dir, "skills", "broken"), { recursive: true });
+    await writeFile(join(dir, "skills", "broken", "SKILL.md"), "no frontmatter at all\n");
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const { text } = await collect(agent.invoke({ session: "s" }, { text: "again" }));
+      expect(text).toBe("two"); // non-fatal: the turn still completes
+      const brokenWarns = () => warn.mock.calls.filter((c) => String(c[0]).includes("broken")).length;
+      expect(brokenWarns()).toBeGreaterThan(0);
+
+      // …but an UNCHANGED finding set does not re-warn on the next turn (no per-turn log spam).
+      faux.appendResponses([() => fauxAssistantMessage("three")]);
+      await collect(agent.invoke({ session: "s" }, { text: "once more" }));
+      expect(brokenWarns()).toBe(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a throw-class broken edit fails THAT turn as a failed event — the agent survives and the next good turn recovers", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-live-throw-"));
+    await writeFile(join(dir, "AGENTS.md"), "You are a bot.\n");
+    class FlakyEnv extends NodeExecutionEnv {
+      deny = false;
+      override async readTextFile(path: string) {
+        if (this.deny && path.endsWith("AGENTS.md")) {
+          return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
+        }
+        return super.readTextFile(path);
+      }
+    }
+    const env = new FlakyEnv({ cwd: dir });
+    const { faux } = makeFaux();
+    faux.setResponses([() => fauxAssistantMessage("one"), () => fauxAssistantMessage("recovered")]);
+    const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1", env });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+
+    env.deny = true; // the live re-read now throws (unreadable AGENTS.md)
+    const events: string[] = [];
+    let details = "";
+    for await (const e of agent.invoke({ session: "s" }, { text: "again" })) {
+      events.push(e.type);
+      if (e.type === "failed") details = e.details;
+    }
+    expect(events).toEqual(["failed"]); // SPEC MUST 2: a failed event, not a thrown iteration error
+    expect(details).toMatch(/AGENTS\.md/);
+
+    env.deny = false; // the next good edit heals it — same agent, no restart
+    const { text } = await collect(agent.invoke({ session: "s" }, { text: "back" }));
+    expect(text).toBe("recovered");
   });
 });

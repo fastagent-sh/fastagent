@@ -30,7 +30,7 @@ src/
 ├── log.ts                   # leveled logging singleton (dev=debug, start=info)
 ├── observe.ts               # turn-trace logging around an Agent
 ├── tunnel.ts                # `--tunnel`: cloudflared + per-channel webhook dispatch
-├── dev-supervisor.ts        # `dev` watch/restart worker
+├── dev-supervisor.ts        # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
 ├── proxy.ts                 # HTTPS_PROXY wiring
 ├── workspace.ts, version.ts # neutral helpers (in-workspace guard, ignore files, version)
 ├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)

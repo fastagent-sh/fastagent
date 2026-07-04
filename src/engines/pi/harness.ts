@@ -29,10 +29,23 @@ export interface PiHarnessFactoryOptions {
   models: Models;
   model: AnyModel;
   tools?: AgentTool[];
-  /** Final assembled prompt, or a factory re-evaluated per invoke so time-sensitive segments stay current. */
+  /**
+   * Final assembled prompt, or a SYNC factory re-evaluated per invoke (how L1 serves dynamic
+   * `instructions` + the skills listing). Distinct from {@link live}, which is the folder rung's
+   * ASYNC re-read of prompt AND skills as one pair — both are exercised, by different rungs.
+   */
   systemPrompt?: string | (() => string);
   /** Skills visible to the model / explicitly invokable (injected as harness resources). */
   skills?: Skill[];
+  /**
+   * Per-invoke source for the prompt+skills PAIR, re-evaluated on every harness build. When set it
+   * supersedes {@link systemPrompt}/{@link skills} — one call yields both, so the skills listing
+   * inside the prompt and the mounted skill resources can never come from two different reads. The
+   * folder rung (L2) uses it to re-read the definition, so AGENTS.md/skills edits — the author's or
+   * the agent's own — take effect on the next turn without a process restart. A rejection surfaces
+   * as that invoke's `failed` event (the factory throw path), never a crash.
+   */
+  live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
 }
 
 /**
@@ -52,15 +65,18 @@ const PROVIDER_MAX_RETRIES = 2;
 export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFactory {
   return async (sessionId) => {
     const session = await options.sessions.openOrCreate(sessionId);
+    const fresh = options.live ? await options.live() : undefined;
     const { systemPrompt } = options;
+    const prompt = fresh ? fresh.systemPrompt : typeof systemPrompt === "function" ? systemPrompt() : systemPrompt;
+    const skills = fresh ? fresh.skills : options.skills;
     return new AgentHarness({
       env: options.env,
       session,
       models: options.models,
       model: options.model,
       tools: options.tools,
-      systemPrompt: typeof systemPrompt === "function" ? systemPrompt() : systemPrompt,
-      resources: options.skills ? { skills: options.skills } : undefined,
+      systemPrompt: prompt,
+      resources: skills ? { skills } : undefined,
       streamOptions: { maxRetries: PROVIDER_MAX_RETRIES },
     });
   };

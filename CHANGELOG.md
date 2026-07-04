@@ -8,6 +8,19 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The folder is live: AGENTS.md and `skills/` are re-read on every invoke** (folder-rung agents:
+  `createPiAgentFromDefinition`, `dev`, `start`). Edits — the author's or the agent's own — take
+  effect on the next turn with no process restart; a broken edit fails that turn visibly instead of
+  the process. `createPiAgent` (typed parts) is unchanged, and `fastagent chat` keeps its startup
+  snapshot — restart it to pick up edits.
+- **`dev` watch scope narrowed to code inputs** (`tools/`, `channels/`, `fastagent.config.*`,
+  `package.json`, `.env`) — the only changes that require a new process (ESM module cache). Files
+  the agent writes into its own workspace no longer kill its in-flight turn with a restart;
+  definition edits no longer restart at all (they are live, above). Helper code imported from
+  outside `tools/`/`channels/` is out of watch scope — keep it under `tools/`, or restart manually.
+
 ## [0.8.1] - 2026-07-04
 
 ### Fixed
