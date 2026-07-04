@@ -13,7 +13,7 @@ Key facts:
 ## Start here
 
 - [README](https://github.com/kid7st/fastagent/blob/main/README.md): project overview, install, quickstart, features.
-- [AI-guided setup prompt](https://github.com/kid7st/fastagent/blob/main/start.md): paste into a coding agent to scaffold or wire a workspace.
+- [AI-guided setup prompt](https://github.com/kid7st/fastagent/blob/main/docs/ai-start.md): paste into a coding agent to scaffold or wire a workspace.
 - [Documentation index](https://github.com/kid7st/fastagent/blob/main/docs/README.md): the full doc map.
 
 ## Guides

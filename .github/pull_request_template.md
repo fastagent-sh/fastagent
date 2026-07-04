@@ -4,8 +4,8 @@
 
 ## Validation
 
-- [ ] `npm run typecheck` in `core/`
-- [ ] `npm test` in `core/`
+- [ ] `npm run typecheck`
+- [ ] `npm test`
 - [ ] Added or updated the smallest relevant tests
 
 ## Checklist

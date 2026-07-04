@@ -14,7 +14,7 @@ FastAgent is the serving layer for local agent folders. It takes a folder out of
 3. Use [Configuration](configuration.md) when choosing models, auth, ports, sessions, tools, and channels.
 4. Pick the integration path you need: [Embedding](embedding.md) or [Channels](channels.md).
 
-Using a coding agent? Give it the repository's [`start.md`](../start.md) for an AI-guided setup path.
+Using a coding agent? Give it the repository's [`ai-start.md`](ai-start.md) for an AI-guided setup path.
 
 ## Guides
 

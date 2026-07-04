@@ -17,7 +17,6 @@ Anything that can be verified locally **must** be verified locally before openin
 The full local loop is fast:
 
 ```bash
-cd core
 npm install
 npm run lint           # biome check (format + lint, read-only); `npm run format` to fix
 npm run typecheck      # tsc --noEmit (covers src and test)
@@ -31,7 +30,7 @@ Tests use faux models by default, so they validate serving mechanics without net
 ```text
 1. git checkout -b feature/<thing>
 2. ... change code, iterate locally ...
-3. cd core && npm run lint && npm run typecheck && npm test
+3. npm run lint && npm run typecheck && npm test
 4. git push -u origin feature/<thing>
 5. gh pr create --base main           # fill in the PR template
 6. CI green → merge (see "Merge strategy")
@@ -49,14 +48,14 @@ git fetch --prune origin
 
 ## Validation before merge
 
-A PR is mergeable only when, in `core/`:
+A PR is mergeable only when:
 
 - `npm run lint` is clean (Biome format + lint; run `npm run format` to auto-fix),
 - `npm run typecheck` is clean (TypeScript with `noUnusedLocals`/`noUnusedParameters`),
 - `npm test` passes,
 - CI (`Core checks`, Node 22.19 / 24 / 26) is green.
 
-Add or update the smallest relevant tests that prove the change. Reusable SPEC conformance lives in `core/test/spec-conformance.ts`; one-off product-scenario scripts should be run and then deleted, not committed.
+Add or update the smallest relevant tests that prove the change. Reusable SPEC conformance lives in `test/spec-conformance.ts`; one-off product-scenario scripts should be run and then deleted, not committed.
 
 ## Merge strategy
 
@@ -76,7 +75,7 @@ This is a small team; review is risk-based, not mandatory on everything.
 |---|---|
 | Docs, comments, typos | Self-merge after CI |
 | Semantically-equivalent refactor, added tests | Self-merge after CI |
-| `docs/SPEC.md` (the locked contract), the `Agent` interface, public API surface in `core/src/index.ts` | Wait for review |
+| `docs/SPEC.md` (the locked contract), the `Agent` interface, public API surface in `src/index.ts` | Wait for review |
 | Anything that deletes a public export or changes error/terminal semantics | Wait for review |
 
 Force-pushing to `main` is forbidden. Long-lived PRs (> ~3 days) should be rebased on `main`.
@@ -91,7 +90,7 @@ Force-pushing to `main` is forbidden. Long-lived PRs (> ~3 days) should be rebas
 
 Dependabot opens weekly PRs for npm and GitHub Actions. The pi packages (`@earendil-works/pi-*`) share one monorepo and move together — update them as a group. Re-run `npm run typecheck && npm test` before merging any dependency bump.
 
-The `undici` version is load-bearing for proxy/streaming behavior under Node 26; see the `installProxyFetch` docstring in `core/src/proxy.ts` before changing it.
+The `undici` version is load-bearing for proxy/streaming behavior under Node 26; see the `installProxyFetch` docstring in `src/proxy.ts` before changing it.
 
 ## Issues
 

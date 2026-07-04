@@ -7,7 +7,7 @@ updated: 2026-07-03
 
 # fastagent core design
 
-This document describes the current pi-based reference implementation of the [Agent Handler SPEC](../SPEC.md). The code source of truth is `core/`.
+This document describes the current pi-based reference implementation of the [Agent Handler SPEC](../SPEC.md). The code source of truth is `src/`.
 
 Technical analogy: FastAgent plays the WSGI-like layer for agent serving — a small internal handler contract plus a reference implementation and deployment tooling around existing agent definitions.
 

@@ -25,27 +25,24 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-          cache-dependency-path: core/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
-        working-directory: core
 
       - name: Lint
         run: npm run lint
-        working-directory: core
 
       - name: Typecheck
         run: npm run typecheck
-        working-directory: core
 
       - name: Test
         run: npm test
-        working-directory: core
 
   # Stable-named aggregate gate: this is the branch-protection required check.
   # Keeping a fixed name (independent of the matrix) means adding/removing Node
-  # versions never requires editing branch protection.
+  # versions never requires editing branch protection. ("Core" = the essential
+  # aggregate gate, not the removed core/ directory.)
   core-checks:
     name: Core checks
     needs: test

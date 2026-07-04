@@ -15,56 +15,55 @@ The stable design center is the Agent Handler contract (`docs/SPEC.md`). The ref
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
 | `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review tiers). |
 
-Code truth is `core/`.
+Code truth is `src/`.
 
 ## Repo map
 
 ```
-core/
-├── src/
-│   ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
-│   ├── collect.ts               # buffered consumption helper
-│   ├── index.ts                 # the public API surface (see README "API stability")
-│   ├── cli.ts                   # command entry points (process side effects live here)
-│   ├── invoke-stream.ts, cli-models.ts # command rendering layers (`invoke` stream → exit code, `models` output)
-│   ├── telegram.ts, github.ts   # subpath-export shims (@kid7st/fastagent/telegram etc. — the supported surface)
-│   ├── log.ts                   # leveled logging singleton (dev=debug, start=info)
-│   ├── observe.ts               # turn-trace logging around an Agent
-│   ├── tunnel.ts                # `--tunnel`: cloudflared + per-channel webhook dispatch
-│   ├── dev-supervisor.ts        # `dev` watch/restart worker
-│   ├── proxy.ts                 # HTTPS_PROXY wiring
-│   ├── workspace.ts, version.ts # neutral helpers (in-workspace guard, ignore files, version)
-│   ├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
-│   ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
-│   ├── channels/
-│   │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
-│   │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
-│   │   ├── github/              # github channel (+ scaffold/ bundle)
-│   │   └── telegram/            # telegram channel — see docs/design/core.md §9.2
-│   │       ├── telegram.ts      # Telegram domain: ingress, summon policy, envelope, composition
-│   │       ├── turn-store.ts    # durable per-session serial turns (WAL, recovery, dedup)
-│   │       ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
-│   │       ├── preview.ts       # live-preview pump + terminal-write policy
-│   │       ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
-│   │       ├── state.ts         # atomic state files under .fastagent/channels/telegram/
-│   │       ├── register-webhook.ts # --tunnel setWebhook registration
-│   │       └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
-│   └── engines/pi/              # the pi reference implementation
-│       ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
-│       ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
-│       ├── workspace.ts         # shared opener: workspace → agent for dev/start/invoke
-│       ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
-│       ├── tool.ts              # defineTool (Zod) + tools/ filesystem discovery
-│       ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
-│       ├── harness.ts           # pi harness wiring (factory)
-│       ├── definition.ts        # AGENTS.md + skills loading and bundling
-│       ├── config.ts            # fastagent.config.ts loading + model/precedence
-│       ├── auth.ts, login.ts    # credential store/resolution (project-level auth.json default) + `login` flow
-│       ├── models.ts, loader.ts # Models collection wiring; ESM module loading for tools/channels/config
-│       ├── report.ts            # startup report (auth/model/skills/tools surface)
-│       └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
-├── test/                        # vitest; faux models by default
-docs/                            # SPEC, guides, and maintainer design notes (design/core.md = architecture)
+src/
+├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
+├── collect.ts               # buffered consumption helper
+├── index.ts                 # the public API surface (see README "Public API surface & stability")
+├── cli.ts                   # command entry points (process side effects live here)
+├── invoke-stream.ts, cli-models.ts # command rendering layers (`invoke` stream → exit code, `models` output)
+├── telegram.ts, github.ts   # subpath-export shims (@kid7st/fastagent/telegram etc. — the supported surface)
+├── log.ts                   # leveled logging singleton (dev=debug, start=info)
+├── observe.ts               # turn-trace logging around an Agent
+├── tunnel.ts                # `--tunnel`: cloudflared + per-channel webhook dispatch
+├── dev-supervisor.ts        # `dev` watch/restart worker
+├── proxy.ts                 # HTTPS_PROXY wiring
+├── workspace.ts, version.ts # neutral helpers (in-workspace guard, ignore files, version)
+├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
+├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
+├── channels/
+│   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
+│   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
+│   ├── github/              # github channel (+ scaffold/ bundle)
+│   └── telegram/            # telegram channel — see docs/design/core.md §9.2
+│       ├── telegram.ts      # Telegram domain: ingress, summon policy, envelope, composition
+│       ├── turn-store.ts    # durable per-session serial turns (WAL, recovery, dedup)
+│       ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
+│       ├── preview.ts       # live-preview pump + terminal-write policy
+│       ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
+│       ├── state.ts         # atomic state files under .fastagent/channels/telegram/
+│       ├── register-webhook.ts # --tunnel setWebhook registration
+│       └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
+└── engines/pi/              # the pi reference implementation
+    ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
+    ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
+    ├── workspace.ts         # shared opener: workspace → agent for dev/start/invoke
+    ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
+    ├── tool.ts              # defineTool (Zod) + tools/ filesystem discovery
+    ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
+    ├── harness.ts           # pi harness wiring (factory)
+    ├── definition.ts        # AGENTS.md + skills loading and bundling
+    ├── config.ts            # fastagent.config.ts loading + model/precedence
+    ├── auth.ts, login.ts    # credential store/resolution (project-level auth.json default) + `login` flow
+    ├── models.ts, loader.ts # Models collection wiring; ESM module loading for tools/channels/config
+    ├── report.ts            # startup report (auth/model/skills/tools surface)
+    └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
+test/                        # vitest; faux models by default + reusable SPEC conformance
+docs/                        # SPEC, guides, and maintainer design notes (design/core.md = architecture)
 ```
 
 ## DevX Principle Stack
@@ -79,10 +78,10 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 
 ## Working rules specific to this repo
 
-- **The contract is engine-neutral.** `core/src/agent.ts` must not import any engine (`@earendil-works/pi-*` only under `core/src/engines/`).
+- **The contract is engine-neutral.** `src/agent.ts` must not import any engine (`@earendil-works/pi-*` only under `src/engines/`).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. On the invoke path, failures become `failed` events (SPEC MUST 2), never thrown iteration errors.
 - **Stateless invoke.** Each invoke builds a fresh harness and discards it; durable state lives behind `PiSessionStore`. Do not introduce in-process session state.
-- **Public surface is scoped on purpose.** `core/src/index.ts` exports only the supported surface. pi-coupled internals (L0 `createPiAgentFromHarness`, `piHarnessFactory`, assembly helpers) are intentionally not exported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Public surface is scoped on purpose.** `src/index.ts` exports only the supported surface. pi-coupled internals (L0 `createPiAgentFromHarness`, `piHarnessFactory`, assembly helpers) are intentionally not exported — import them from their modules for tests/custom wiring, do not re-export them.
 - **The artifact is the truth.** Deployment behavior must come from the bundled definition, not the builder machine's global state.
 
 ## GitHub workflow (summary)
@@ -91,7 +90,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
 
 1. **Local-first.** Verify locally before opening a PR; do not push to discover bugs in CI.
    ```bash
-   cd core && npm run typecheck && npm test
+   npm run typecheck && npm test
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
 3. **Rebase merge by default** (preserve curated commits); squash only to clean up a WIP branch. Merge commits are disabled. `main` enforces linear history; force-push is forbidden.
@@ -101,7 +100,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
    git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin
    ```
 6. **Releases publish via npm Trusted Publishing (OIDC), never a local `npm publish`.** Flow: bump
-   `core/package.json` + finalize CHANGELOG in a `chore/release-x.y.z` PR → merge → tag `vX.Y.Z` →
+   `package.json` + finalize CHANGELOG in a `chore/release-x.y.z` PR → merge → tag `vX.Y.Z` →
    create the GitHub Release — `.github/workflows/publish.yml` re-verifies (typecheck + test) and
    publishes to npm from CI. There is no NPM_TOKEN anywhere; a local `npm publish` fails with 401 by
    design.

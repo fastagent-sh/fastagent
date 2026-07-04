@@ -65,7 +65,7 @@ A channel adapter should depend only on the public `@kid7st/fastagent` surface:
 | `readBodyCapped` | read a request body with a byte cap |
 | `text`, `textHeaders` | build plain status/error responses |
 
-Do not import from `core/src/engines/*` or `@earendil-works/*` in a channel package. Channels consume the neutral Agent contract.
+Do not import from `src/engines/*` or `@earendil-works/*` in a channel package. Channels consume the neutral Agent contract.
 
 ## Minimal adapter
 

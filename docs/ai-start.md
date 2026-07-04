@@ -58,8 +58,8 @@ Before finishing:
 
 References:
 
-- [Quickstart](docs/quickstart.md)
-- [Configuration](docs/configuration.md)
-- [Embedding](docs/embedding.md)
-- [Channels](docs/channels.md)
-- [Troubleshooting](docs/troubleshooting.md)
+- [Quickstart](quickstart.md)
+- [Configuration](configuration.md)
+- [Embedding](embedding.md)
+- [Channels](channels.md)
+- [Troubleshooting](troubleshooting.md)

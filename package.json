@@ -17,8 +17,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kid7st/fastagent.git",
-    "directory": "core"
+    "url": "git+https://github.com/kid7st/fastagent.git"
   },
   "type": "module",
   "sideEffects": false,

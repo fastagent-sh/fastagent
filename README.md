@@ -28,7 +28,7 @@ FastAgent is the missing bridge from local agent folder to real service.
 | **Always-on channels**<br>Connect the same agent to GitHub PR review, Telegram support, or any custom channel adapter. | **Fast local loop**<br>Use `fastagent info`, `dev`, `chat`, `tool`, and `invoke` to inspect and test before serving. |
 | **Typed tools and reusable skills**<br>Add TypeScript tools and Agent Skills without rewriting the agent loop. | **Neutral handler contract**<br>Engine-, model-, and host-neutral at the Agent Handler layer. The current reference implementation is built on pi. |
 
-Using a coding agent? Give it [`start.md`](start.md) for an AI-guided setup path.
+Using a coding agent? Give it [`docs/ai-start.md`](docs/ai-start.md) for an AI-guided setup path.
 
 ## Design philosophy
 
@@ -125,12 +125,33 @@ const agent = createPiAgent({
 | [docs/SPEC.md](docs/SPEC.md) | Agent Handler protocol v0.1 |
 | [docs/design/core.md](docs/design/core.md) | Maintainer architecture notes |
 
+## Public API surface & stability
+
+The root export intentionally contains the supported surface only.
+
+| Area | Examples | Stability |
+|---|---|---|
+| Contract | `Agent`, `AgentEvent`, `collect` | Stable within SPEC v0.1 |
+| Channels/host | `createInvokeHandler`, `nodeListener`, `serveNode`, `router`, `Routes` | Reference implementation, pre-1.0 |
+| pi assembly | `createPiAgentFromWorkspace`, `createPiAgentFromDefinition`, `createPiAgent` | Usable now, may tighten before 1.0 |
+| Tool/channel authoring | `defineTool`, `z`, `loadTools`, `loadChannels`, `ChannelModule` | Usable now, may tighten before 1.0 |
+| Injection ports | `PiSessionStore`, `inMemorySessionStore`, `jsonlSessionStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
+| Not exported | L0 harness adapter, pi harness factory, prompt/config internals | Internal modules; no compatibility promise |
+
+Subpath exports: `@kid7st/fastagent/github` (GitHub webhook channel), `@kid7st/fastagent/telegram`
+(Telegram bot channel).
+
 ## Repository layout
 
 ```txt
-core/    npm package: CLI, library API, reference implementation, tests
+src/     the npm package: CLI, library API, reference implementation
+test/    vitest suite (faux models by default) + reusable SPEC conformance
 docs/    user docs, SPEC, and maintainer design notes
 ```
+
+Single package, likely long-term; subpath exports (not sibling packages) are the module boundary.
+A `packages/` workspace split is deliberately deferred until a second published artifact with
+independent dependencies/versioning actually exists.
 
 ## Status
 

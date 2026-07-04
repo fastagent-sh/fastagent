@@ -12,7 +12,7 @@ This directory contains maintainer-facing design material. It is intentionally k
 | Source | Status |
 |---|---|
 | [Agent Handler SPEC](../SPEC.md) | Normative protocol contract. Changes require explicit review. |
-| Code in `core/src` | Implementation source of truth. |
+| Code in `src/` | Implementation source of truth. |
 | User docs in `docs/` | Product behavior and supported usage. |
 | Documents in `docs/design/` | Explanatory architecture notes. They clarify why the code is shaped the way it is, but they are not a public compatibility promise. |
 

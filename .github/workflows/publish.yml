@@ -6,7 +6,7 @@ name: Publish
 # Re-add `npm publish --provenance` once the repo is public. Requires a trusted publisher
 # configured on npmjs (org/user kid7st, repo fastagent, workflow publish.yml) and npm >= 11.5.1 (Node 26
 # ships 11.12.1). The release tag is the manual gate; the job re-verifies (typecheck + test) before
-# publishing so a non-green tag never ships. Version comes from core/package.json — bump it before
+# publishing so a non-green tag never ships. Version comes from package.json — bump it before
 # tagging (npm rejects re-publishing an existing version).
 on:
   release:
@@ -20,9 +20,6 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: core
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -34,7 +31,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           scope: '@kid7st'
           cache: npm
-          cache-dependency-path: core/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
