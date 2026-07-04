@@ -8,6 +8,8 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-07-04
+
 ### Changed
 
 - **The folder is live: AGENTS.md and `skills/` are re-read on every invoke** (folder-rung agents:
@@ -126,7 +128,8 @@ While the project is pre-1.0, minor versions may include breaking changes.
 Last release before the open-source documentation pass. Earlier history is in the
 [commit log](https://github.com/kid7st/fastagent/commits/main).
 
-[Unreleased]: https://github.com/kid7st/fastagent/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/kid7st/fastagent/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/kid7st/fastagent/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/kid7st/fastagent/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/kid7st/fastagent/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/kid7st/fastagent/releases/tag/v0.7.1
