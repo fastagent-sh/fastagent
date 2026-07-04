@@ -28,9 +28,9 @@ describe("config: resolveSessionsDirOverride (start's sessions precedence)", () 
 
 describe("models: createPiModels honors authPath (the project-level credential seam)", () => {
   it("reads a stored credential from the GIVEN file, not the global default or env", async () => {
-    // The foundation of both the feature and the migration hint: point createPiModels at a path and it
-    // must read THAT file. "stored credential" (not the "ANTHROPIC_API_KEY" env label) proves the file
-    // at authPath won — so an empty project file genuinely reads as not-configured (what the hint keys on).
+    // Point createPiModels at a path and it must read THAT file. "stored credential" (not the
+    // "ANTHROPIC_API_KEY" env label) proves the file at authPath won — so an empty project file
+    // genuinely reads as not-configured, which is what the startup auth report keys on.
     const path = join(await mkdtemp(join(tmpdir(), "fa-auth-")), "auth.json");
     await writeFile(path, JSON.stringify({ anthropic: { type: "api_key", key: "sk-test" } }));
     expect(await probeAuthSource(createPiModels({ authPath: path }), "anthropic/claude-sonnet-4-5")).toBe(

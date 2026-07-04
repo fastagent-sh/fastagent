@@ -117,25 +117,4 @@ describe("cli papercuts", () => {
     expect(code).not.toBe(0);
     await expect(stat(join(cwd, ".fastagent", ".gitignore"))).rejects.toThrow(); // external path won → no in-tree self-ignore
   });
-
-  it("invoke points an upgraded user at their global credential when the project file is empty", async () => {
-    // The breaking change's safety net: project auth defaults empty, but a pre-upgrade global login
-    // still has the credential — the startup report must say so (set FASTAGENT_AUTH_PATH) instead of a
-    // bare turn failure. HOME override makes GLOBAL_AUTH_PATH resolve into the temp home.
-    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
-    await mkdir(join(home, ".fastagent"), { recursive: true });
-    await writeFile(
-      join(home, ".fastagent", "auth.json"),
-      JSON.stringify({ anthropic: { type: "api_key", key: "sk-test" } }),
-    );
-    const proj = await mkdtemp(join(tmpdir(), "fa-proj-"));
-    await writeFile(join(proj, "fastagent.config.mjs"), `export default { model: "anthropic/claude-sonnet-4-5" };`);
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
-    delete env.ANTHROPIC_API_KEY; // else the project probe finds env creds and the hint never fires
-    delete env.FASTAGENT_AUTH_PATH;
-    delete env.FASTAGENT_MODEL;
-    const { stderr } = await run(["invoke", "hi", proj], undefined, env);
-    expect(stderr).toMatch(/global .*has them/i); // the migration hint fired
-    expect(stderr).toMatch(/FASTAGENT_AUTH_PATH=/); // with the actionable env-var fix
-  });
 });

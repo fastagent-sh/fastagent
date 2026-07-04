@@ -30,7 +30,6 @@ import {
   resolveSessionsDirOverride,
 } from "./engines/pi/config.ts";
 import { formatModelsCommand } from "./cli-models.ts";
-import { GLOBAL_AUTH_PATH } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 import { ensureInTreeStateSelfIgnored, loadAgentDefinition } from "./engines/pi/definition.ts";
@@ -211,8 +210,6 @@ async function runInvoke(): Promise<void> {
     authPath: resolveAuthPathOverride(values["auth-path"]),
   }).catch(failStartup);
   console.error(`[fastagent] invoke: ${invokeDir} (${modelSpec})`);
-  // Same auth report as dev/start (incl. the global-credential migration hint) — otherwise an upgraded
-  // user's first `invoke` hits a bare turn failure with no pointer to their existing global credential.
   await reportAuth(modelSpec, authPath);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
   // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).
@@ -460,19 +457,6 @@ async function reportAuth(modelSpec: string, authPath: string): Promise<void> {
   const source = await probeAuthSource(createPiModels({ authPath }), modelSpec);
   log.info(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`} — ${authPath}`);
   if (source !== undefined) return;
-  // Migration aid: a pre-0.x user logged in under the OLD global default; the new project-level
-  // default reads empty and would silently "lose" their credential. If the global file still has it,
-  // point them at it (sharing one file is safe) rather than only telling them to log in again.
-  if (authPath !== GLOBAL_AUTH_PATH) {
-    const global = await probeAuthSource(createPiModels({ authPath: GLOBAL_AUTH_PATH }), modelSpec);
-    if (global !== undefined) {
-      log.warn(
-        `[fastagent] no project credentials for "${provider}", but the global ${GLOBAL_AUTH_PATH} has them — ` +
-          `set FASTAGENT_AUTH_PATH=${GLOBAL_AUTH_PATH} to use them here, or run \`fastagent login\` for a project-level credential`,
-      );
-      return;
-    }
-  }
   // Lead with `fastagent login`: the default model (openai-codex) is OAuth-only, and the provider-
   // specific env var name is not exported, so keep the env path generic. login writes to this same
   // project-level path, so a follow-up `fastagent login` here fixes it in place.
