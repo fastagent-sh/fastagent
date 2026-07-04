@@ -289,9 +289,16 @@ function attachmentSummary(m: TelegramMessage): string | undefined {
   return undefined;
 }
 
+/** A message's readable body: its text, else its caption, else a one-line attachment summary; undefined
+ *  for an empty/service message. The single source for "what did this message say" — envelope, reply-
+ *  quote, and the context-buffer line all read through it so their fallbacks cannot drift apart. */
+function bodyOf(m: TelegramMessage): string | undefined {
+  return m.text ?? m.caption ?? attachmentSummary(m);
+}
+
 /** A one-line, length-capped rendering of a message's content for the context buffer. */
 function messageText(m: TelegramMessage): string {
-  return (m.text ?? m.caption ?? attachmentSummary(m) ?? "").replace(/\s+/g, " ").trim().slice(0, 280);
+  return (bodyOf(m) ?? "").replace(/\s+/g, " ").trim().slice(0, 280);
 }
 
 /**
@@ -318,9 +325,9 @@ export function telegramEnvelope(m: TelegramMessage): string {
   const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
   const scope = isGroup ? "\n[group chat — multiple people; each message is prefixed with its sender]" : "";
   const replyTo = r
-    ? `\n[in reply to ${fromLabel(r.from) ?? `msg ${r.message_id}`} (msg ${r.message_id}): ${(r.text ?? r.caption ?? attachmentSummary(r) ?? "(empty)").slice(0, 280)}]`
+    ? `\n[in reply to ${fromLabel(r.from) ?? `msg ${r.message_id}`} (msg ${r.message_id}): ${(bodyOf(r) ?? "(empty)").slice(0, 280)}]`
     : "";
-  const parts = [m.text ?? m.caption ?? attachmentSummary(m) ?? ""];
+  const parts = [bodyOf(m) ?? ""];
   if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);
   if (m.contact) parts.push(`[contact: ${m.contact.first_name} ${m.contact.phone_number ?? ""}]`);
   if (m.poll) parts.push(`[poll: ${m.poll.question} — ${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]`);
