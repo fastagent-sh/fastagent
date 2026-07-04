@@ -8,6 +8,21 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The telegram per-session turn queue is now in-memory** (was a file-backed WAL). One turn at a
+  time per session (FIFO) is unchanged — it always was; only the restart-durability layer is
+  removed. Rationale: the queue is the group-UX serializer atop the engine lease, and Telegram
+  already redelivers *never-ACKed* updates on its own; the one window a WAL added was an
+  *ACKed-but-unfinished* turn lost to a crash, which a single-process bot accepts (the asker
+  re-asks) — recovering it is durable-execution work for a K-axis backend (an external queue with
+  distributed-locking recovery), not a hand-rolled per-process log in the channel. This makes turn
+  durability consistent with `start`'s existing no-graceful-drain on SIGTERM. The un-summoned group
+  context buffer stays durable (its case is stronger — those messages are never redelivered).
+  **Upgrading:** a `queue.json` left by a prior version is no longer read — a turn that was queued
+  (not yet started) at the upgrade moment is dropped rather than replayed (re-ask); the now-inert
+  file lives under the gitignored `.fastagent/channels/telegram/` and can be deleted.
+
 ## [0.8.2] - 2026-07-04
 
 ### Changed

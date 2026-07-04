@@ -7,7 +7,7 @@
  *
  * This file is the Telegram DOMAIN: ingress + summon policy + prompt assembly. The subsystems it
  * composes each own their invariants in their own module:
- *   - turn-store.ts     durable per-session serial execution, crash recovery, redelivery dedup
+ *   - turn-queue.ts     in-memory per-session serial execution (FIFO; one turn at a time per session)
  *   - context-buffer.ts un-summoned group discussion, folded into the next answered turn
  *   - preview.ts        the live-preview pump ("💭 Thinking…" → edits → final answer) + terminal writes
  *   - telegram-api.ts   the single Bot API pipeline (timeouts, 429, ok-gating, HTML-aware split)
@@ -29,18 +29,19 @@ import { type BufferedRef, collectAttachments, createContextBuffer } from "./con
 import { type TelegramFailure, defaultErrorMessage, streamReply } from "./preview.ts";
 import { ensureStateHome } from "./state.ts";
 import { type DownloadedFile, type Target, callApi, resolveFiles, resolveImages, sendMessage } from "./telegram-api.ts";
-import { type TurnRecord, createTurnStore } from "./turn-store.ts";
+import { createTurnQueue } from "./turn-queue.ts";
 
 export type { TelegramFailure };
 
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
 
-/** One accepted-but-unfinished turn, as persisted in the turn store's WAL: everything needed to run it
- *  again after a restart (Telegram never redelivers an ACKed update, so this record IS the turn). */
-interface PendingTurn extends TurnRecord {
-  /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over (and a
-   *  replay after a restart reuses it instead of orphaning it). */
+/** One accepted turn: everything the runner needs to execute it. The queue is in-memory, so this is a
+ *  live object, not a persisted record — a restart drops it (Telegram already ACKed the update). */
+interface PendingTurn {
+  id: string;
+  session: string;
+  /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over. */
   previewId?: number;
   placeKey: string;
   baseText: string;
@@ -49,26 +50,6 @@ interface PendingTurn extends TurnRecord {
   replyTo?: number;
   imageFileIds: string[];
   fileIds: string[];
-}
-
-/** Shape validation at the turn store's IO boundary (the record shape is this channel's, not the store's). */
-function isPendingTurn(r: unknown): r is PendingTurn {
-  const t = r as PendingTurn;
-  return (
-    typeof t?.id === "string" &&
-    (t.state === "queued" || t.state === "started") &&
-    typeof t.session === "string" &&
-    typeof t.placeKey === "string" &&
-    typeof t.baseText === "string" &&
-    (typeof t.chatId === "number" || typeof t.chatId === "string") &&
-    (t.threadId === undefined || typeof t.threadId === "number") &&
-    (t.replyTo === undefined || typeof t.replyTo === "number") &&
-    (t.previewId === undefined || typeof t.previewId === "number") &&
-    Array.isArray(t.imageFileIds) &&
-    t.imageFileIds.every((x) => typeof x === "string") &&
-    Array.isArray(t.fileIds) &&
-    t.fileIds.every((x) => typeof x === "string")
-  );
 }
 
 /** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */
@@ -458,38 +439,35 @@ export function telegramChannel(
   // Normalize once: a relative stateDir resolves against the process cwd HERE, so every derived path
   // (incl. the attachment paths handed to the agent) honours DownloadedFile's absolute-path contract.
   const stateHome = resolve(stateDir);
-  ensureStateHome(stateHome); // create + self-ignore — buffers/WAL/files may carry chat content
+  ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
   const buffer = createContextBuffer(join(stateHome, "buffers.json"));
 
   // In-memory: the in-flight "⏳ queued" notice per turn, awaited at dequeue so the turn reliably takes
   // the notice message over (rec.previewId) instead of racing it and orphaning a late-arriving notice.
   const notices = new Map<string, Promise<void>>();
-  const store = createTurnStore<PendingTurn>({
-    path: join(stateHome, "queue.json"),
+  const queue = createTurnQueue<PendingTurn>({
     label: "[telegram]",
-    isRecord: isPendingTurn,
     // Queue feedback: when this session already has a turn running/queued, a silent wait reads as "the
     // bot ignored me" once the current turn runs long — tell the asker NOW (reply-quoted, so it is
     // clear whose ask is queued). Best-effort and post-ACK: a failed notice is a log line, never a
     // failed update. The turn's live preview then edits this same message in place.
-    onQueuedBehind: (rec, s) => {
-      if (rec.previewId !== undefined) return; // a replayed record that already has its notice
+    onQueuedBehind: (rec) => {
       const target: Target = { chatId: rec.chatId, threadId: rec.threadId, replyTo: rec.replyTo };
       notices.set(
         rec.id,
         sendMessage(apiBaseUrl, botToken, target, "⏳ Queued — I’ll start once the current task finishes.", {
           html: false,
         }).then(
+          // The runner holds this same `rec` object, so mutating it here (gated by the notices await at
+          // dequeue below) is what hands the turn its preview message id.
           (id) => {
-            // Through the store, which owns the record — a replay after a restart reuses the notice
-            // instead of orphaning it.
-            if (id !== undefined) s.update(rec.id, { previewId: id });
+            if (id !== undefined) rec.previewId = id;
           },
           (e) => log.warn(`[telegram] queue notice failed (the turn still runs): ${String(e)}`),
         ),
       );
     },
-    run: async (rec, s) => {
+    run: async (rec) => {
       // Runs at DEQUEUE time (serialized), so the lifecycle log and engine turn reflect the actual
       // execution order rather than arrival.
       // Settle the queue notice (if any) so rec.previewId is final. NOT free: a slow (not failed)
@@ -498,7 +476,6 @@ export function telegramChannel(
       // while the previous turn was still running, so this await is instant.
       await notices.get(rec.id);
       notices.delete(rec.id);
-      s.started(rec.id); // output becomes possible from here — a crash past this point must not replay
       const startedAt = Date.now();
       const where = `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`;
       log.info(`[telegram] turn start: turn=${rec.id} session=${rec.session} ${where}`);
@@ -561,13 +538,6 @@ export function telegramChannel(
     // lines are the operator's only signal.
     const m = pickMessage(update);
     if (!m) return new Response(null, { status: 200 });
-    // A redelivery of an update whose turn the store's recovery already took over (replayed or
-    // dropped): ACK and skip — Telegram redelivers exactly when the 200 never made it out, which is
-    // the crash window recovery covers; running it again would answer twice.
-    if (store.suppressed(`${update.update_id}`)) {
-      log.info(`[telegram] suppressing redelivered update ${update.update_id} — recovery already handled it`);
-      return new Response(null, { status: 200 });
-    }
     const placeKey = m.message_thread_id ? `${m.chat.id}:${m.message_thread_id}` : `${m.chat.id}`;
     const r = decide(update);
     if (!r) {
@@ -610,12 +580,9 @@ export function telegramChannel(
       const imageFileIds = extractImages(m);
       const fileIds = extractFiles(m);
       if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
-        // Everything the turn needs, as a plain record — the store persists it before this handler's
-        // 200 (durable-or-nothing), so an accepted turn survives a crash; file_ids stay resolvable for
-        // a replay.
-        store.accept({
+        // Everything the turn needs, as a plain record; the queue runs it serially per session.
+        queue.accept({
           id: `${update.update_id}`,
-          state: "queued",
           session,
           placeKey,
           baseText,

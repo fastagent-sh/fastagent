@@ -376,7 +376,7 @@ describe("file download (the one non-JSON call)", () => {
   });
 });
 
-describe("durable channel state (single-process restarts)", () => {
+describe("durable group buffer (single-process restarts)", () => {
   const okFetch = () =>
     vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 }));
   const group = (id: number, text: string) => ({
@@ -410,43 +410,6 @@ describe("durable channel state (single-process restarts)", () => {
     expect(String(a2.calls[0]?.text)).toContain("the deploy is broken"); // folded from the RELOADED buffer
   });
 
-  it("queue WAL: a queued turn replays after a restart; a started one is dropped (no duplicate answer)", async () => {
-    vi.stubGlobal("fetch", okFetch());
-    const state = freshStateDir();
-    // Turn A reaches the agent and hangs mid-stream (the crash scenario); turn B stays queued behind it.
-    const hanging: Agent = {
-      async *invoke(): AsyncIterable<AgentEvent> {
-        yield { type: "thinking", delta: "…" }; // one event, then hang — the turn is mid-flight forever
-        await new Promise(() => {});
-      },
-    };
-    const always = () => ({});
-    const ch1 = telegramChannel(hanging, { secretToken: SECRET, botToken: "1:A", route: always, stateDir: state });
-    await ch1(tgRequest(group(1, "first — will hang")));
-    await ch1(tgRequest(group(2, "second — queued")));
-    await flush(); // let turn 1 reach the agent
-    const wal = JSON.parse(readFileSync(join(state, "queue.json"), "utf8")) as { pending: { state: string }[] };
-    expect(wal.pending.map((r) => r.state)).toEqual(["started", "queued"]);
-    // "restart": recovery runs at construction — replay the queued turn, drop the started one loudly
-    const a2 = replyingAgent("recovered");
-    const ch2 = telegramChannel(a2.agent, { secretToken: SECRET, botToken: "1:A", route: always, stateDir: state });
-    await flush();
-    expect(a2.calls.length).toBe(1); // ONLY the never-started turn replayed — no duplicate for the started one
-    expect(String(a2.calls[0]?.text)).toContain("second — queued");
-    const after = JSON.parse(readFileSync(join(state, "queue.json"), "utf8")) as {
-      pending: unknown[];
-      tombstones: string[];
-    };
-    expect(after.pending).toEqual([]); // replayed turn completed; the dropped one is no longer pending
-    expect(after.tombstones).toEqual(["1", "2"]); // EVERY recovered id is tombstoned — dropped AND replayed…
-    // …so a Telegram REDELIVERY of either (crash before the 200 went out) is ACKed and skipped: the
-    // dropped turn may already have answered pre-crash, the replayed one answered via the replay
-    expect((await ch2(tgRequest(group(1, "first — will hang")))).status).toBe(200);
-    expect((await ch2(tgRequest(group(2, "second — queued")))).status).toBe(200);
-    await flush();
-    expect(a2.calls.length).toBe(1); // still exactly one turn — no duplicates
-  });
-
   it("a FAILED turn keeps the folded discussion — the next summon re-folds it (commit on completed only)", async () => {
     vi.stubGlobal("fetch", okFetch());
     const state = freshStateDir();
@@ -476,9 +439,8 @@ describe("durable channel state (single-process restarts)", () => {
   it("a corrupt or wrong-shaped state file degrades to empty — the channel still boots and answers", async () => {
     vi.stubGlobal("fetch", okFetch());
     const state = freshStateDir();
-    // buffers: syntactically valid JSON of the WRONG SHAPE; queue: not JSON at all — both must degrade
+    // buffers.json: syntactically valid JSON of the WRONG SHAPE — must degrade to empty, not boot-fail
     writeFileSync(join(state, "buffers.json"), JSON.stringify(["not", "a", "record"]));
-    writeFileSync(join(state, "queue.json"), "not json");
     const { agent, calls } = replyingAgent("ok");
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
     await ch(tgRequest(group(1, "hello")));
@@ -784,28 +746,6 @@ describe("queue feedback (⏳ while a session is busy)", () => {
     const notice = sends.find((s) => s.text.includes("⏳"));
     expect(notice?.replyTo).toBe(22); // quoted to BOB's message — not alice's, not unquoted
     release();
-  });
-
-  it("a restart-replayed turn REUSES its persisted ⏳ notice — no new notice, the preview edits it", async () => {
-    const { sends, edits } = recordingFetch();
-    const state = freshStateDir();
-    const rec = {
-      id: "9",
-      state: "queued",
-      session: "5",
-      placeKey: "5",
-      baseText: "hi again",
-      chatId: 5,
-      imageFileIds: [],
-      fileIds: [],
-      previewId: 100, // the notice the pre-crash process sent
-    };
-    writeFileSync(join(state, "queue.json"), JSON.stringify({ pending: [rec], tombstones: [] }));
-    const { agent } = replyingAgent("recovered");
-    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
-    await flush();
-    expect(sends.length).toBe(0); // no new notice AND no new placeholder — message 100 is taken over
-    expect(edits.some((e) => e.message_id === 100 && e.text.includes("recovered"))).toBe(true);
   });
 
   it("an idle session gets no ⏳ notice", async () => {

@@ -14,8 +14,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { log } from "../../log.ts";
 
-/** Create the state home and self-ignore it (`.gitignore="*"`): its contents (buffers, the WAL,
- *  downloaded files) can carry chat content and must never be committable. Owned by the channel — the
+/** Create the state home and self-ignore it (`.gitignore="*"`): its contents (buffers, downloaded
+ *  files) can carry chat content and must never be committable. Owned by the channel — the
  *  engine's `.fastagent`-level self-ignore fires only for the paths IT is told about (sessions/auth),
  *  and a channel cannot reach that guard across the layer boundary. `wx`: never clobber an operator's
  *  own file. */

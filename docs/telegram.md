@@ -180,10 +180,11 @@ Downloaded files persist until the operator cleans them up. Treat `.fastagent/ch
 The channel persists its state under `<cwd>/.fastagent/channels/telegram/` (the channel-state convention: engine state at the `.fastagent` top level, channel state under `channels/<kind>/`; override with the `stateDir` option):
 
 - `buffers.json` — the group-context buffer, written before each webhook ACK (an ACKed update is never redelivered, so ACK-then-persist would be a silent-loss window).
-- `queue.json` — the pending-turn WAL. On restart, turns that never reached the agent replay in arrival order; a turn that was mid-flight when the process died is **dropped with an error log** — it may already have answered, and a duplicate reply is worse than a visible loss (ask again). Every recovered update id (replayed or dropped) is tombstoned, so if Telegram redelivers the update (a crash before the 200 went out), the redelivery is ACKed and skipped rather than answered twice.
 - `files/<chat>/` — downloaded inbound files.
 
-The state home self-ignores (a nested `.gitignore`), so buffered chat content is never committable. A corrupt state file logs a warning and starts empty — the bot boots, the loss is visible. Single-process semantics: two processes must not share a state dir. While the process is **down**, nothing is lost at all — Telegram retries undelivered webhooks with backoff until the endpoint returns.
+The per-session turn queue is **in-memory** (one turn at a time per session; a second summon waits instead of colliding on the engine lease). It is not persisted: a restart drops anything still queued. This is a deliberate partial guarantee — while the process is **down**, Telegram retries undelivered (never-ACKed) webhooks, so those are covered for free; but a turn that was already ACKed (200 returned) and then lost to a crash is Telegram's *no-redelivery* case, so the asker re-asks. Recovering that window is durable-execution work for a K-axis backend (an external queue with distributed-locking recovery), not a per-process write-ahead log in the channel — consistent with `start` losing in-flight turns on SIGTERM.
+
+The state home self-ignores (a nested `.gitignore`), so buffered chat content is never committable. A corrupt `buffers.json` logs a warning and starts empty — the bot boots, the loss is visible. Single-process semantics: two processes must not share a state dir.
 
 ## Sending files back
 

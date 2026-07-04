@@ -185,7 +185,7 @@ subsystem owns its invariants in its own module:
 | Module | Owns |
 |---|---|
 | `telegram.ts` | the Telegram DOMAIN: ingress (secret token, body cap), summon policy, envelope/prompt assembly, composition |
-| `turn-store.ts` | durable per-session serial execution: two-state WAL (`queued` replays after a crash, `started` drops loudly — a duplicate answer is worse than a visible loss), tombstoned ids so a Telegram redelivery is ACKed and skipped, pre-ACK durable-or-nothing accept. Channel-neutral by design (`label` names the consumer) |
+| `turn-queue.ts` | in-memory per-session serial execution: one turn at a time per session (FIFO chains), different sessions concurrent — the group-UX queue atop the engine lease (a second summon waits instead of colliding as "busy"). Channel-neutral by design (`label` names the consumer). A restart drops anything still queued; durable execution (recovering an ACKed-but-unfinished turn across a crash) belongs at the K-axis backend, not a per-process WAL (see below) |
 | `context-buffer.ts` | un-summoned group discussion: persisted before each webhook ACK (an ACKed update is never redelivered), folded into the next answered turn, cleared only on that turn's `completed` (only then is it provably in the durable session); carries message ids / reply relations / attachment file_ids so later references ("the file Bob sent") resolve |
 | `preview.ts` | the live preview: ONE real message (`sendMessage` → `editMessageText` in place; `sendMessageDraft` is private-only, useless in groups), a single-writer pump (one edit in flight — out-of-order frames are the flicker), and the terminal-write matrix (completed/failed/abnormal × edit/delete+send/suppress) |
 | `telegram-api.ts` | ONE transport pipeline (`callApi`) for every Bot API method — per-method wire code does not exist, so the invariants (per-attempt timeout, bounded 429/flood-wait, success gated on the body's own `ok:true`, self-describing typed errors) hold by construction. Plus the HTML-aware split: a tag-stack balancer that closes/reopens tags (attributes kept) across the 4096 boundary |
@@ -194,10 +194,17 @@ subsystem owns its invariants in its own module:
 Durable decisions this architecture encodes:
 
 - **Channel-state convention:** engine state lives at the `.fastagent` top level (auth, sessions);
-  channel state lives under `.fastagent/channels/<kind>/` (buffers, WAL, downloaded files),
+  channel state lives under `.fastagent/channels/<kind>/` (buffers, downloaded files),
   mirroring `src/channels/<kind>/`. The home self-ignores (nested `.gitignore`) — it can carry chat
-  content. Single-process semantics; while the process is DOWN, Telegram itself retries undelivered
-  webhooks, so the WAL only covers the ACKed-but-unfinished window.
+  content. Single-process semantics.
+- **Turn durability is deliberately partial.** The turn queue is in-memory: while the process is
+  DOWN, Telegram retries undelivered (never-ACKed) webhooks, so those are covered for free; but an
+  ACKed-but-unfinished turn (200 already returned) is Telegram's *no-redelivery* case, so a crash
+  there loses it — the asker re-asks. A single-process bot accepts this. Recovering that window would
+  take a durable queue with distributed-locking recovery, which is the K-axis backend's job (§11),
+  not a hand-rolled per-process WAL in the channel; this keeps `runStart`'s no-graceful-drain and the
+  queue consistent (both accept in-flight loss). The un-summoned context buffer is a *separate*
+  durability decision (below) with a stronger case: those messages are never redelivered as a summon.
 - **Summon = consume the platform's structure, not re-parse it:** @mentions from Telegram's
   `mention` entities (never a regex over text — code blocks/URLs can't false-summon); reply-to-bot
   by the bot id parsed synchronously from the token (`<bot_id>:<secret>`, no getMe race); edits
