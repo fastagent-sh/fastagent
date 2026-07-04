@@ -65,7 +65,10 @@ function usage(code: number): never {
   fastagent login [provider] [--auth-path file]
   fastagent --version
 
-  dev    assemble the agent in dir (default .) and serve a local HTTP channel.
+  dev    assemble the agent in dir (default .) and serve a local HTTP channel. AGENTS.md/skills
+         are re-read every turn (edits go live next turn); edits to code inputs — tools/,
+         channels/, fastagent.config.*, package.json, .env — restart the worker (--no-watch to
+         disable). Files the agent writes as work product never trigger a restart.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --tunnel  expose it on a public HTTPS URL via a Cloudflare quick tunnel (needs cloudflared)
                    and auto-register the webhook channels (telegram setWebhook; github prints the URL)

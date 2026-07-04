@@ -21,6 +21,7 @@ import { type FastagentConfig, defaultProjectAuthPath, resolveModel } from "./co
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
+import { reportDefinitionWarnings } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
@@ -135,6 +136,8 @@ function buildPiAgent(opts: {
   systemPrompt?: string | (() => string);
   tools?: AgentTool[];
   skills?: Skill[];
+  /** Per-invoke prompt+skills source (see {@link PiHarnessFactoryOptions.live}); supersedes the two above. */
+  live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
   sessions?: PiSessionStore;
   env?: ExecutionEnv;
   lease?: Lease;
@@ -150,6 +153,7 @@ function buildPiAgent(opts: {
       systemPrompt: opts.systemPrompt,
       tools: opts.tools,
       skills: opts.skills,
+      live: opts.live,
     }),
   });
 }
@@ -244,6 +248,13 @@ export interface CreatePiAgentFromDefinitionOptions {
   lease?: Lease;
 }
 
+/** Stable identity of a definition's non-fatal findings, for change-detection in `live` (dedup only). */
+function findingsSignature(def: LoadedDefinition): string {
+  const collisions = def.collisions.map((c) => `c:${c.name}:${c.winnerPath}:${c.loserPath}`);
+  const diagnostics = def.diagnostics.map((d) => `d:${d.code}:${d.path}`);
+  return [...collisions, ...diagnostics].sort().join("\n");
+}
+
 /**
  * L2: "point at a folder → agent": load + assemble (base + AGENTS.md + skills + env) + L1 in one
  * call. Returns the definition so callers can surface diagnostics/collisions.
@@ -253,7 +264,13 @@ export async function createPiAgentFromDefinition(
   options: CreatePiAgentFromDefinitionOptions,
 ): Promise<{ agent: Agent; definition: LoadedDefinition }> {
   const env = options.env ?? new NodeExecutionEnv({ cwd: dir });
+  // Boot-time load: fail-visibly at startup on a broken folder, and give callers the snapshot to
+  // report (skills/diagnostics/collisions). Serving does NOT close over it — see `live` below.
   const definition = await loadAgentDefinition(dir, { env });
+  // Findings the caller already reported at boot; `live` re-reports only when the set CHANGES — a
+  // runtime-written bad skill surfaces the moment it appears, while a static finding does not spam
+  // every turn's log. A log-dedup memo, not session state (stateless invoke holds).
+  let reportedFindings = findingsSignature(definition);
   const tools = options.tools ?? piDefaultTools(env.cwd);
   const base = options.base ?? piBasePrompt({ tools });
   const agent = buildPiAgent({
@@ -262,19 +279,36 @@ export async function createPiAgentFromDefinition(
     // Dir-aware default: the same project-level file the opener uses for this dir (the opener passes
     // an explicit authPath, so this only affects direct L2 callers).
     authPath: options.authPath ?? defaultProjectAuthPath(dir),
-    // Factory, not a string: re-assembled per invoke so `date` is the date of the turn, not of agent
-    // creation (a long-running deployment would otherwise serve the boot date forever).
-    systemPrompt: () =>
-      assembleSystemPrompt({
-        base,
-        instructions: definition.instructions,
-        instructionsPath: definition.instructions !== undefined ? join(definition.dir, "AGENTS.md") : undefined,
-        skills: definition.skills,
-        date: new Date().toISOString().slice(0, 10),
-        cwd: env.cwd,
-      }),
+    // The folder is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills
+    // edits (the author's, or the agent's own self-modification) take effect on the next turn with
+    // no process restart — restarts are reserved for code (tools/channels/config, module cache).
+    // One read yields prompt AND skills (they can never diverge), `date` is the turn's date, and the
+    // fs cost is a few reads against a model call. Broken edits stay visible: a throw-class problem
+    // (unreadable AGENTS.md) fails that turn's invoke, and the loader's NON-fatal findings (bad
+    // SKILL.md frontmatter, name collisions — returned as data, not thrown) are warned the moment
+    // the finding set changes (boot findings are the baseline) — a runtime-written bad skill must
+    // not silently vanish from the agent, and a static one must not spam every turn's log. The
+    // next good edit heals both.
+    live: async () => {
+      const def = await loadAgentDefinition(dir, { env });
+      const sig = findingsSignature(def);
+      if (sig !== reportedFindings) {
+        reportedFindings = sig;
+        reportDefinitionWarnings(def.collisions, def.diagnostics);
+      }
+      return {
+        systemPrompt: assembleSystemPrompt({
+          base,
+          instructions: def.instructions,
+          instructionsPath: def.instructions !== undefined ? join(def.dir, "AGENTS.md") : undefined,
+          skills: def.skills,
+          date: new Date().toISOString().slice(0, 10),
+          cwd: env.cwd,
+        }),
+        skills: def.skills,
+      };
+    },
     tools,
-    skills: definition.skills,
     sessions: options.sessions,
     env,
     lease: options.lease,

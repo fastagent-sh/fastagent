@@ -81,9 +81,19 @@ For `start`, hosted environments can set `PORT`.
 
 ## Dev does not pick up changes
 
-`fastagent dev` restarts its worker on workspace edits. It ignores machine-state and dependency directories such as `.fastagent/`, `node_modules/`, and `.git/`.
+`fastagent dev` separates two change classes:
 
-If the worker stopped after a broken edit, save another change after fixing the error. The supervisor should retry.
+- **AGENTS.md and `skills/`** are re-read on every turn — edits go live on the next turn with no
+  restart (and no watcher involvement).
+- **Code inputs** (`tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.env`) restart the
+  dev worker — a new process is the only way to drop the ESM module cache.
+
+Nothing else is watched: files the agent itself writes into the workspace (its work product) never
+trigger a restart. Helper code imported from outside `tools/`/`channels/` is out of watch scope —
+keep it under `tools/`, or restart manually. (`fastagent chat` is a startup snapshot — restart it
+to pick up any edit.)
+
+If the worker stopped after a broken code edit, save another change after fixing the error. The supervisor should retry.
 
 Use `--no-watch` to serve once without the supervisor.
 

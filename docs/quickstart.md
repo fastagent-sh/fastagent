@@ -67,7 +67,7 @@ FASTAGENT_MODEL=provider/model-id fastagent dev
 fastagent dev
 ```
 
-`dev` assembles the workspace, serves it on `:8787`, and restarts the worker when files change. The default channel is `POST /invoke`.
+`dev` assembles the workspace and serves it on `:8787`. AGENTS.md/`skills/` edits go live on the next turn; code edits (`tools/`, `channels/`, config) restart the worker. The default channel is `POST /invoke`.
 
 Send one turn:
 

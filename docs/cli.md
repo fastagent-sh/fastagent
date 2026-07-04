@@ -88,7 +88,9 @@ Authenticates a model provider and stores credentials in the **project-level** `
 fastagent dev [dir] [--port N] [--model provider/modelId] [--no-watch] [--tunnel]
 ```
 
-Assembles the workspace and serves it locally. With watch enabled, a supervisor restarts the worker on edits.
+Assembles the workspace and serves it locally. AGENTS.md/`skills/` are re-read every turn (edits go
+live next turn, no restart); a supervisor restarts the worker on edits to the code inputs —
+`tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.env`.
 
 Options:
 
