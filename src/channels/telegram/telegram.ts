@@ -141,46 +141,44 @@ function tokenMatches(header: string, secret: string): boolean {
 const HTML_INSTRUCTION =
   "\n\n(Format your reply in Telegram-supported HTML — <b> <i> <u> <s> <code> <pre> <a href> — not Markdown.)";
 
+/** Everything the transport needs to fetch a turn's attachments. */
+interface TurnTransport {
+  api: string;
+  botToken: string;
+  chatId: number | string;
+  filesDir: string;
+}
+
+/** A turn's attachment inputs: the summoning message's own file_ids (primary) and the ones folded in
+ *  from the un-summoned discussion (buffered). */
+interface TurnAttachments {
+  primary: { imageFileIds?: string[]; fileIds?: string[] };
+  buffered: { files: BufferedRef[]; images: BufferedRef[]; skipped: number };
+}
+
+/** A turn's attachments, resolved to what agent.invoke consumes: vision images inline, plus a prompt
+ *  suffix (the file manifest + a missing-attachment note) appended after the prompt, before the HTML hint. */
+interface ResolvedAttachments {
+  images: ImageRef[] | undefined;
+  promptSuffix: string;
+}
+
 /**
- * agent.invoke, but resolve the message's attachments first: images (vision) inline, and files
- * downloaded to disk with their absolute paths appended to the prompt so the agent can read them with
- * its tools. A transport failure becomes a `failed` event — surfaced (user + log), never a silent drop;
- * the agent never runs on inputs the user sent but we failed to load. `buffered` attachments (posted in
- * the un-summoned discussion) are BACKGROUND context, so their failures degrade instead — a warn + a
- * prompt note — rather than failing the ask they merely accompany. `onCompleted` (if given) fires on
- * the turn's `completed` event — the commit point for clearing the folded-in context buffer: only then
- * does the folded discussion provably live in the durable session, so a failure or crash at ANY earlier
- * point leaves the buffer intact for the next summon (a re-folded block beats lost context).
+ * Resolve a turn's attachments: images (vision) inline, files downloaded to disk with their absolute
+ * paths listed in a manifest the agent reads with its tools. Two tiers, different failure policies.
+ * PRIMARY (this turn's own message) THROWS on any load failure — the caller turns it into a `failed`
+ * event, so the agent never runs on inputs the user sent but we failed to load. BACKGROUND (`buffered`,
+ * from the un-summoned discussion) degrades PER ATTACHMENT — a warn + a prompt note — rather than
+ * failing the ask it merely accompanies: one expired earlier file must neither block the answer nor drag
+ * down its still-valid siblings. Parallel (allSettled keeps input order + per-attachment isolation); the
+ * note counts EVERY missing one (load failures + cap-skipped) so the model never holds a reference it
+ * silently cannot open.
  */
-async function* invokeWithAttachments(
-  agent: Agent,
-  session: string,
-  text: string,
-  chatId: number | string,
-  imageFileIds: string[] | undefined,
-  fileIds: string[] | undefined,
-  api: string,
-  botToken: string,
-  filesDir: string,
-  buffered: { files: BufferedRef[]; images: BufferedRef[]; skipped: number },
-  onCompleted?: () => void,
-): AsyncIterable<AgentEvent> {
-  let images: ImageRef[] | undefined;
-  let files: DownloadedFile[] | undefined;
-  try {
-    images = await resolveImages(api, botToken, imageFileIds);
-    files = await resolveFiles(api, botToken, fileIds, chatId, filesDir);
-  } catch (e) {
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
-    return;
-  }
-  // Background context — degrade PER ATTACHMENT, don't fail the ask: one expired earlier file must
-  // neither block the answer nor drag down its still-valid siblings. The note counts EVERY missing one
-  // (load failures + cap-skipped), so the model never holds an attachment reference it silently cannot
-  // open.
-  // Parallel (allSettled keeps input order and per-attachment isolation — the whole point of not
-  // batching them into one resolve call): serially, up to 2×BUFFER_ATTACH_MAX two-hop downloads would
-  // stack on the critical path before the agent even starts.
+async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachments): Promise<ResolvedAttachments> {
+  const { api, botToken, chatId, filesDir } = t;
+  const { primary, buffered } = attachments;
+  const images = await resolveImages(api, botToken, primary.imageFileIds);
+  const files = await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir);
   const bufferedImages: ImageRef[] = [];
   const bufferedFiles: { file: DownloadedFile; ref: BufferedRef }[] = [];
   let lost = 0;
@@ -227,9 +225,34 @@ async function* invokeWithAttachments(
     ? `\n\n[attached files — read them with your tools:\n${allFiles.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
     : "";
   const allImages = [...(images ?? []), ...bufferedImages];
+  return { images: allImages.length ? allImages : undefined, promptSuffix: `${bufferedNote}${manifest}` };
+}
+
+/**
+ * Run one turn: resolve its attachments, then stream agent.invoke. A primary-attachment failure surfaces
+ * as a `failed` event (never a silent drop). `onCompleted` (if given) fires on the turn's `completed`
+ * event — the commit point for clearing the folded-in context buffer: only then does the folded
+ * discussion provably live in the durable session, so a failure or crash at ANY earlier point leaves the
+ * buffer intact for the next summon (a re-folded block beats lost context).
+ */
+async function* invokeTurn(
+  agent: Agent,
+  session: string,
+  text: string,
+  transport: TurnTransport,
+  attachments: TurnAttachments,
+  onCompleted?: () => void,
+): AsyncIterable<AgentEvent> {
+  let resolved: ResolvedAttachments;
+  try {
+    resolved = await resolveTurnAttachments(transport, attachments);
+  } catch (e) {
+    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
+    return;
+  }
   for await (const e of agent.invoke(
     { session },
-    { text: `${text}${bufferedNote}${manifest}${HTML_INSTRUCTION}`, images: allImages.length ? allImages : undefined },
+    { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images },
   )) {
     if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
     yield e;
@@ -497,17 +520,12 @@ export function telegramChannel(
       const target: Target = { chatId: rec.chatId, threadId: rec.threadId, replyTo: rec.replyTo };
       try {
         await streamReply(
-          invokeWithAttachments(
+          invokeTurn(
             agent,
             rec.session,
             prompt,
-            rec.chatId,
-            rec.imageFileIds,
-            rec.fileIds,
-            apiBaseUrl,
-            botToken,
-            join(stateHome, "files"),
-            buffered,
+            { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: join(stateHome, "files") },
+            { primary: { imageFileIds: rec.imageFileIds, fileIds: rec.fileIds }, buffered },
             () => buffer.commit(rec.placeKey, consumed),
           ),
           apiBaseUrl,
