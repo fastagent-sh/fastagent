@@ -8,6 +8,8 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-07-05
+
 ### Changed
 
 - **The telegram per-session turn queue is now in-memory** (was a file-backed WAL). One turn at a
@@ -22,6 +24,13 @@ While the project is pre-1.0, minor versions may include breaking changes.
   **Upgrading:** a `queue.json` left by a prior version is no longer read — a turn that was queued
   (not yet started) at the upgrade moment is dropped rather than replayed (re-ask); the now-inert
   file lives under the gitignored `.fastagent/channels/telegram/` and can be deleted.
+
+### Removed
+
+- **The pre-0.x global-credential migration hint** in the startup auth report. It probed
+  `GLOBAL_AUTH_PATH` when the project auth file was empty and pointed a pre-0.x upgrader at it — a
+  backward-compat aid with no place in a pre-release. The report now falls back to the generic
+  `fastagent login` hint, consistent with the no-implicit-fallback design.
 
 ## [0.8.2] - 2026-07-04
 
@@ -143,7 +152,8 @@ While the project is pre-1.0, minor versions may include breaking changes.
 Last release before the open-source documentation pass. Earlier history is in the
 [commit log](https://github.com/kid7st/fastagent/commits/main).
 
-[Unreleased]: https://github.com/kid7st/fastagent/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/kid7st/fastagent/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/kid7st/fastagent/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/kid7st/fastagent/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/kid7st/fastagent/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/kid7st/fastagent/compare/v0.7.1...v0.8.0
