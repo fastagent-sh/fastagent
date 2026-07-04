@@ -100,6 +100,11 @@ Full version: `CONTRIBUTING.md`. The essentials:
    ```bash
    git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin
    ```
+6. **Releases publish via npm Trusted Publishing (OIDC), never a local `npm publish`.** Flow: bump
+   `core/package.json` + finalize CHANGELOG in a `chore/release-x.y.z` PR → merge → tag `vX.Y.Z` →
+   create the GitHub Release — `.github/workflows/publish.yml` re-verifies (typecheck + test) and
+   publishes to npm from CI. There is no NPM_TOKEN anywhere; a local `npm publish` fails with 401 by
+   design.
 
 ## Communication
 
