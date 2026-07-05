@@ -26,20 +26,20 @@ fastagent init my-agent
 cd my-agent
 ```
 
-The default scaffold is complete: instructions, one skill, one code tool, config, package metadata, and `.env.example`.
+The default scaffold is a **self-iterating agent** — the folder is the agent, and it can edit its own definition (AGENTS.md and skills are re-read every turn). A fresh workspace is minimal:
 
 ```txt
 my-agent/
-├── AGENTS.md
-├── skills/house-style/SKILL.md
-├── tools/word-count.ts
+├── AGENTS.md                          # the persona — how to improve yourself
+├── skills/writing-great-skills/       # the example skill: how to author skills well
+├── tools/fetch-url.ts                 # an example code tool
 ├── fastagent.config.mjs
 ├── package.json
 ├── .env.example
 └── .gitignore
 ```
 
-For a markdown-only workspace with no code tools or dependencies:
+`AGENTS.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills), MIT) is the guide it consults to write them. Add more skills with `fastagent add skill <owner/repo/path>`. For a workspace with no code tool or dependencies (AGENTS.md + the skill + config only):
 
 ```bash
 fastagent init my-agent --minimal
@@ -74,15 +74,15 @@ Send one turn:
 ```bash
 curl -N -X POST localhost:8787/invoke \
   -H 'content-type: application/json' \
-  -d '{"session":"s1","text":"How many words are in: the quick brown fox jumps"}'
+  -d '{"session":"s1","text":"Summarize https://example.com in two bullets"}'
 ```
 
 The response is Server-Sent Events. Events include `text`, optional `thinking`, tool events, and exactly one terminal `completed` or `failed`.
 
 ```txt
-data: {"type":"tool_started","id":"tool-1","name":"word-count","args":{"text":"the quick brown fox jumps"}}
+data: {"type":"tool_started","id":"tool-1","name":"fetch-url","args":{"url":"https://example.com"}}
 
-data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"details":{"words":5,"characters":25}}}
+data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"details":{"url":"https://example.com/","text":"Example Domain …"}}}
 
 data: {"type":"completed"}
 ```
@@ -106,7 +106,7 @@ fastagent invoke "Summarize AGENTS.md in one sentence"
 Run one tool without a model:
 
 ```bash
-fastagent tool word-count '{"text":"hello from fastagent"}'
+fastagent tool fetch-url '{"url":"https://example.com"}'
 ```
 
 ## 5. Add a tool

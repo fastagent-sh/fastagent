@@ -8,6 +8,20 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **`init` now scaffolds a minimal self-iterating agent.** A fresh workspace is `AGENTS.md` (a
+  short persona built around self-improvement — the folder is the agent, re-read every turn, so it
+  can edit its own definition and skills), the `writing-great-skills` example skill (vendored
+  verbatim from [mattpocock/skills](https://github.com/mattpocock/skills), MIT, `LICENSE`
+  included — the guide to authoring skills), and a `fetch-url` example code tool. Everything is
+  written offline. `--minimal` keeps AGENTS.md + the skill + config (dropping the tool and
+  `package.json`); `--no-install` scaffolds everything but skips `npm install`. Replaces the
+  earlier example templates (a `house-style` skill, a `word-count` tool).
+- **`vendorSkill` (and `add skill`) now guards the `skills/` path**: a symlink escaping the
+  workspace or a plain file named `skills` fails with one clear error instead of writing outside
+  the workspace or emitting per-write noise.
+
 ## [0.9.0] - 2026-07-05
 
 ### Changed

@@ -1,8 +1,9 @@
 /**
- * Init: scaffold a runnable fastagent workspace. Default = a COMPLETE agent (AGENTS.md, a house-style
- * skill, tools/word-count.ts, fastagent.config.mjs, package.json, .gitignore); `--minimal` is the
- * markdown-only unit (no package.json/tool/install). AGENTS.md is a clean persona because it IS the
- * system prompt; tools/ is auto-discovered; .gitignore lists `.env`.
+ * Init: scaffold a runnable fastagent workspace, offline. Default = a COMPLETE agent (AGENTS.md +
+ * the writing-great-skills skill + a fetch-url code tool + fastagent.config.mjs + package.json +
+ * .gitignore); `--minimal` drops the code tool and package.json (AGENTS.md + skill + config only).
+ * AGENTS.md IS the system prompt; skills/ and tools/ are the agent's self-editable capabilities
+ * (folder is the agent, re-read each turn); .gitignore lists `.env`.
  *
  * Scope: init is best-effort atomic for ORDINARY inputs — it never overwrites an existing workspace,
  * preflights non-directory scaffold parents, and rolls back a partial write. It does not defend
@@ -61,23 +62,31 @@ export async function exists(p: string): Promise<boolean> {
 }
 
 /**
- * Scaffold a runnable workspace into {@link dir} (created if missing). Default is a complete
- * agent (instructions + skill + a code tool + package.json); `--minimal` is markdown-only.
- * Refuses to overwrite an existing agent identity (AGENTS.md or any fastagent.config.*); other
- * pre-existing files (.gitignore, package.json, the example skill) are kept, not overwritten.
+ * Scaffold a runnable workspace into {@link dir} (created if missing). Default is a complete agent
+ * (instructions + the writing-great-skills skill + a code tool + package.json); `--minimal` drops
+ * the code tool and package.json. Refuses to overwrite an existing agent identity (AGENTS.md or any
+ * fastagent.config.*); other pre-existing files (.gitignore, package.json) are kept, not overwritten.
  */
 export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
   const minimal = options.minimal ?? false;
+  const skill = (name: string) => ({
+    rel: join("skills", "writing-great-skills", name),
+    content: baseTemplate(`skills/writing-great-skills/${name}`),
+  });
   const files: ScaffoldFile[] = [
     { rel: "AGENTS.md", content: baseTemplate("AGENTS.md") },
-    { rel: join("skills", "house-style", "SKILL.md"), content: baseTemplate("skills/house-style/SKILL.md") },
+    // The example skill: how to author skills well — the core of self-iteration. Markdown, so it
+    // ships in --minimal too. Vendored verbatim from mattpocock/skills (MIT); LICENSE sits beside it.
+    skill("SKILL.md"),
+    skill("GLOSSARY.md"),
+    skill("LICENSE"),
     { rel: "fastagent.config.mjs", content: baseTemplate("fastagent.config.mjs") },
     { rel: ".gitignore", content: baseTemplate("gitignore") },
     { rel: ".env.example", content: baseTemplate("env.example") },
   ];
   if (!minimal) {
     files.push(
-      { rel: join("tools", "word-count.ts"), content: baseTemplate("tools/word-count.ts") },
+      { rel: join("tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") },
       { rel: "package.json", content: packageJson(toPackageName(dir), await fastagentVersion()) },
     );
   }
