@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
 import type { Agent } from "./agent.ts";
@@ -50,8 +50,9 @@ import {
   channelSetup,
   scaffoldChannel,
 } from "./scaffold/add-channel.ts";
-import { nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
+import { exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
+import { parseFlyAppName, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
 
 function usage(code: number): never {
   console.error(`usage:
@@ -110,6 +111,9 @@ function usage(code: number): never {
          to edit (github maps events in on(); telegram routes in the optional route()).
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
+  deploy fly [dir]: generate fly.toml/Dockerfile/.dockerignore (autostop=suspend, state→volume) from
+         the definition and print an ordered flyctl runbook + the post-deploy webhook step. Does not
+         run flyctl — a coding agent (or you) executes the runbook. --force overwrites existing artifacts.
   login  authenticate a model provider into the project-level <state root>/auth.json — default
          <cwd>/.fastagent/auth.json (root: FASTAGENT_STATE_DIR; file: --auth-path / FASTAGENT_AUTH_PATH;
          run from $HOME for the global ~/.fastagent/auth.json): pick
@@ -130,6 +134,7 @@ const { positionals, values } = parseArgs({
     "no-watch": { type: "boolean" },
     tunnel: { type: "boolean" },
     update: { type: "boolean" },
+    force: { type: "boolean" },
     json: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean", short: "v" },
@@ -153,6 +158,7 @@ else if (command === "dev") await runDev();
 else if (command === "chat") await runChat();
 else if (command === "start") await runStart();
 else if (command === "add") await runAdd();
+else if (command === "deploy") await runDeploy();
 else if (command === "login") await runLogin();
 else usage(1);
 
@@ -393,6 +399,118 @@ async function runAddSkill(): Promise<void> {
     );
   }
   console.error(`  next: mention "${name}" in AGENTS.md so the model knows when to use it; then \`fastagent dev\``);
+}
+
+/**
+ * `fastagent deploy <host> [dir]`: generate host artifacts from the resolved definition and print an
+ * ordered flyctl runbook. Host-scoped (`fly` for now — the extension seam). It does NOT run flyctl:
+ * fastagent owns the two ends it uniquely knows (definition-aware artifacts; the post-deploy webhook
+ * step), and hands the middle to a coding agent (or human) as a precise, values-resolved runbook.
+ * Read-only on the definition; the only writes are the generated artifacts (never clobbered without
+ * --force).
+ */
+async function runDeploy(): Promise<void> {
+  const host = positionals[1];
+  const target = resolve(positionals[2] ?? ".");
+  if (host !== "fly") {
+    console.error(`usage: fastagent deploy fly [dir]   # supported hosts: fly`);
+    process.exit(1);
+  }
+  loadDotEnv(target); // a custom provider/tool may read a key at config load
+  const { config } = await loadConfig(target).catch(failStartup);
+  const modelSpec = resolveModelSpec(values.model, config);
+  // Known channel kinds only — a custom channel's secrets/webhook are unknown to us; warn and let the
+  // author wire them. probeAuthSource is best-effort (default providers): an env key becomes a secret,
+  // a local OAuth/stored login surfaces as guidance, an unknown provider degrades to a generic note.
+  const discovered = await discoverChannelFiles(target).catch(failStartup);
+  const channels = discovered.filter((c): c is ChannelKind => (CHANNEL_KINDS as string[]).includes(c));
+  for (const c of discovered) {
+    if (!channels.includes(c as ChannelKind)) {
+      console.error(`[fastagent] note: channel "${c}" is custom — set its secrets and webhook yourself`);
+    }
+  }
+  // Probe auth from the SAME project-level file the opener/login use (default `<state root>/auth.json`,
+  // or --auth-path / FASTAGENT_AUTH_PATH) — not the global default, which would miss a `fastagent login`
+  // credential and falsely report "none configured".
+  const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultAuthPath(resolveStateRoot(target));
+  const modelAuth = modelSpec ? await probeAuthSource(createPiModels({ authPath }), modelSpec) : undefined;
+  // The replay floor that makes scale-to-zero safe is Telegram-only (its L1 turn store). GitHub turns
+  // are fire-and-forget (no replay), so the generated fly.toml keeps one machine running for them —
+  // a note, not a warn, since the plan already did the safe thing (definition-aware autostop).
+  if (channels.includes("github")) {
+    console.error(
+      `[fastagent] note: github turns have no replay — the generated fly.toml uses min_machines_running=1 ` +
+        `(no scale-to-zero) so autostop can't drop an in-flight review. Set it to 0 to accept that trade.`,
+    );
+  }
+  const hasPackageJson = await exists(join(target, "package.json"));
+  const hasLockfile = await exists(join(target, "package-lock.json"));
+  // The generated Dockerfile is npm-based (npm ci/install + npx). A pnpm/yarn workspace has no
+  // package-lock.json, so make that npm-only assumption EXPLICIT rather than silently routing them to
+  // `npm install` and telling them to commit an npm lockfile (which would ignore their real one).
+  const hasOtherLock = (await exists(join(target, "pnpm-lock.yaml"))) || (await exists(join(target, "yarn.lock")));
+  // Two consistent modes. KEEP (no --force): an existing fly.toml is authoritative — not rewritten,
+  // and the runbook reads its `app=` (Fly app names are globally unique, so the basename guess may be
+  // taken and the user renamed it). --force: the template is authoritative — the WHOLE fly.toml resets
+  // (app→basename, region→iad, vm→defaults), so we do NOT round-trip `app` and warn that hand edits go.
+  const flyTomlPath = join(target, "fly.toml");
+  const flyTomlExists = await exists(flyTomlPath);
+  const keptApp = flyTomlExists && !values.force ? parseFlyAppName(await readFile(flyTomlPath, "utf8")) : undefined;
+  const appName = keptApp ?? toFlyAppName(basename(target));
+  if (keptApp) console.error(`[fastagent] app: ${keptApp} (from fly.toml)`);
+  if (flyTomlExists && values.force) {
+    console.error(`[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`);
+  }
+  // A code workspace with no package-lock.json builds via `npm install` (caret ranges resolve at build
+  // time) — not a reproducible redeploy. A pnpm/yarn user gets an accurate message (their lockfile is
+  // ignored by the npm Dockerfile), not the misleading "commit an npm lockfile".
+  if (hasPackageJson && !hasLockfile) {
+    console.error(
+      hasOtherLock
+        ? `[fastagent] warn: the generated Dockerfile is npm-based — your pnpm/yarn lockfile is NOT used (build runs ` +
+            `\`npm install\`, not reproducible). Edit the Dockerfile for your package manager, or vendor a package-lock.json.`
+        : `[fastagent] warn: no package-lock.json — the image build resolves deps at build time (not reproducible). ` +
+            `Run \`npm install\` and commit the lockfile for pinned redeploys.`,
+    );
+  }
+  // The code-path Dockerfile runs `npx fastagent`: that resolves the workspace's OWN dependency, so a
+  // package.json missing it would make the CONTAINER fetch an unpinned build at runtime (offline-fragile,
+  // the failure moved from build to prod). Warn at plan time, like `add`'s dep check (which throws).
+  if (hasPackageJson) {
+    let hasDep = false;
+    try {
+      const pkg = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
+      hasDep = "@kid7st/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies };
+    } catch {
+      /* malformed package.json — the build would surface it; skip this check */
+    }
+    if (!hasDep) {
+      console.error(
+        `[fastagent] warn: package.json does not list @kid7st/fastagent — the image's \`npx fastagent\` would ` +
+          `fetch it at runtime (offline-fragile, unpinned). Add it to dependencies and re-run \`npm install\`.`,
+      );
+    }
+  }
+  const plan = planFlyDeploy({
+    appName,
+    port: config.http?.port ?? 8787,
+    modelAuth,
+    channels,
+    hasPackageJson,
+    hasLockfile,
+    version: await fastagentVersion(),
+  });
+
+  for (const a of plan.artifacts) {
+    const abs = join(target, a.path);
+    if (!values.force && (await exists(abs))) {
+      console.error(`[fastagent] kept ${a.path} (exists — pass --force to overwrite)`);
+      continue;
+    }
+    await writeFile(abs, a.content);
+    console.error(`[fastagent] wrote ${a.path}`);
+  }
+  console.log(plan.runbook.join("\n"));
 }
 
 /**

@@ -317,7 +317,7 @@ Resolution order is upstream-owned: a stored credential owns the provider; env i
 
 OAuth refresh tokens are single-use, so refresh is serialized (the file lock) and the new credentials written back — the persistence above. **Single machine/container** is covered by that file lock. **Multi-instance** deployments need a shared credential store with row-locked refresh; that uses the same `CredentialStore` seam and is deferred with the K-axis backends.
 
-### 10.5 Container recipe (v1, documented not generated)
+### 10.5 Container recipe & `fastagent deploy fly`
 
 The container is the v1 "machine-state independence" boundary, and with no build step it is trivial:
 
@@ -327,12 +327,16 @@ RUN  npm ci                          # code-tool deps (skip for pure markdown/sk
 CMD  ["fastagent", "start", "/app"]  # cwd = /app
 ```
 
-State goes to a mounted volume (`FASTAGENT_STATE_DIR=/data`) so a redeploy never wipes sessions, rotating OAuth credentials, or channel state (the Telegram turn/context files replay depends on); static secrets are injected as env; `PORT` is honored. Excluding dev cruft from the image is `.dockerignore`'s job until the future `deploy` command owns packaging. The recipe is documented here rather than generated or shipped as a Dockerfile.
+State goes to a mounted volume (`FASTAGENT_STATE_DIR=/data`) so a redeploy never wipes sessions, rotating OAuth credentials, or channel state (the Telegram turn/context files replay depends on); static secrets are injected as env; `PORT` is honored.
+
+**`fastagent deploy fly`** generates this per host, tuned to the definition: `fly.toml` (`auto_stop_machines="suspend"` + `min_machines_running=0` + a `/data` volume mounted as `FASTAGENT_STATE_DIR`), `Dockerfile`, `.dockerignore`, then prints an ordered flyctl runbook — `fly apps/volumes/secrets/deploy` with the exact secret list computed from the model auth + discovered channels, plus the post-deploy webhook step only fastagent knows. **It does not run flyctl** (host-scoped `deploy <host>`, `fly` for now): fastagent is cloud-neutral, so it owns the two ends it uniquely knows (definition-aware artifacts; webhook registration) and hands the middle to the operator — a coding agent executes the runbook. The verb names the goal it drives you to; the command's output leads with what it generated vs what remains, never claiming "deployed". `--force` overwrites artifacts (else kept). Contrast a platform-owner (Vercel eve → `eve deploy` runs, deploying to its own house); a cloud-neutral tool produces host artifacts and hands off (Flue's `build --target`).
+
+**autostop = suspend** is a wake-latency optimization, not the correctness mechanism. When it applies, it freezes the in-flight event loop and resumes in ~hundreds of ms on the next webhook; but Fly uses suspend only "if possible" and **may fall back to `stop`** (a snapshot isn't durable, and a volume-mounted machine can be stopped rather than suspended) — a cold start of a few seconds. Either way the **correctness floor is replay — but only for Telegram**: a turn interrupted mid-run (by a discarded suspend snapshot OR a `stop`) is re-run on the next start from the Telegram L1 turn store (at-least-once), and state survives on the /data volume regardless. So suspend buys faster wakes; it is never what makes an interrupted turn safe. **GitHub turns are fire-and-forget with no replay** — an in-flight review dropped by scale-to-zero is lost (GitHub already got its 202), so `deploy fly` generates `min_machines_running=1` when a github channel is present (definition-aware: keep one machine up; the extra capacity still suspends) and prints a note. Edit it to `0` to accept the trade. Short turns (the Q&A sweet spot) complete well within Fly Proxy's periodic idle check, so mid-turn interruption is the rare case either way.
 
 ## 11. Current open work
 
-- `fastagent dev` / `fastagent start` per §10 are implemented (single-machine tier, the directory is the agent); the documented container recipe (§10.5) is not yet shipped as a generated Dockerfile.
-- `fastagent deploy`: packaging (exclude dev cruft, pin a model, push to a target runtime) returns here as an internal step, not a user-facing build. Future milestone.
+- `fastagent dev` / `fastagent start` per §10 are implemented (single-machine tier, the directory is the agent). `fastagent deploy fly` (§10.5) generates the Fly artifacts + runbook; it does not yet run flyctl (`--run` orchestration is deferred — flyctl's interactive `launch` is the fiddly part, not a neutrality constraint). Other hosts extend the `deploy <host>` seam.
+- Multi-instance (multiple Fly machines sharing state) needs a K-axis backend — the single-machine + single-volume tier is the documented scope; `deploy fly` warns to keep one machine.
 - Multi-instance credential broker for OAuth refresh (§10.4); single-machine/container credential refresh is covered by the file-backed store.
 - Target adapters with external sessions and distributed locking (the async `Lease` port).
 - Production observability sink for cleanup anomalies (§3) without violating SPEC terminal discipline.

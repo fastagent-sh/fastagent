@@ -10,6 +10,16 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ### Added
 
+- **`fastagent deploy fly` — host-scoped deploy artifact + runbook generation.** Computes `fly.toml`
+  (`auto_stop_machines="suspend"` + `min_machines_running=0`, or `1` when a github channel is present —
+  github turns have no replay — + a `/data` volume mounted as `FASTAGENT_STATE_DIR`), `Dockerfile`, and
+  `.dockerignore` from the resolved definition, then prints
+  an ordered flyctl runbook — `fly apps/volumes/secrets/deploy` with the exact secret list (model auth
+  + discovered channels) and the post-deploy webhook step. It does **not** run flyctl: cloud-neutral by
+  design, fastagent owns the two ends it uniquely knows (definition-aware artifacts; webhook
+  registration) and hands the middle to a coding agent (or you) to execute. `--force` overwrites
+  existing artifacts (else kept). Single-machine tier (one volume, one machine); the runbook says so.
+
 - **Acknowledgements + npm metadata.** README now credits the open-source stack it builds on — pi
   (`@earendil-works/pi-*`, the reference engine) and the MIT libraries it depends on — with a
   "built with pi" badge. `package.json` gains `homepage`, `bugs`, and `author`. All runtime

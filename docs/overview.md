@@ -111,13 +111,13 @@ Implemented today:
 - Folder assembly from `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.*`.
 - HTTP/SSE invoke channel.
 - GitHub and Telegram channel adapters.
-- `dev`, `chat`, `invoke`, `tool`, `info`, and `start` workflows.
+- `dev`, `chat`, `invoke`, `tool`, `info`, `start`, and `deploy fly` workflows.
 - jsonl session persistence with restart continuity.
 - CLI login backed by a project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`; override: `--auth-path` / `FASTAGENT_AUTH_PATH`, root: `FASTAGENT_STATE_DIR`).
 
 Not implemented yet:
 
-- Hosted deployment (`fastagent deploy`).
+- Running the deploy for you: `fastagent deploy fly` generates the Fly artifacts + a flyctl runbook, but does not execute flyctl (`--run` orchestration is deferred).
 - Durable post-ACK execution for webhook turns.
 - Multi-instance session/lease/auth backends out of the box.
 - Non-pi engine bindings.
