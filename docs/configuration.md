@@ -149,6 +149,14 @@ channels/telegram.ts
 
 See [Channels](channels.md).
 
+## Logging
+
+Log verbosity is an environment knob, not a config key. `FASTAGENT_LOG_LEVEL` (`debug` | `info` | `warn` | `error`) overrides the per-posture default: `dev` defaults to `debug`, `start` to `info`. Per-turn traces log at `debug`, so `start` keeps end-user content out of production logs unless you opt into `debug`.
+
+```bash
+FASTAGENT_LOG_LEVEL=debug fastagent start
+```
+
 ## What is deliberately not config
 
 The following are library API injection points rather than config keys:

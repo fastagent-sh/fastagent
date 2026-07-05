@@ -160,6 +160,7 @@ FastAgent is pre-1.0. The stable design center is the Agent Handler contract in 
 ## Project
 
 - [Contributing](CONTRIBUTING.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 

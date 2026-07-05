@@ -4,6 +4,7 @@
 
 ## Validation
 
+- [ ] `npm run lint`
 - [ ] `npm run typecheck`
 - [ ] `npm test`
 - [ ] Added or updated the smallest relevant tests

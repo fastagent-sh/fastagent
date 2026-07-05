@@ -30,7 +30,7 @@ In scope:
 
 - the `@kid7st/fastagent` package (CLI, library API, reference implementation),
 - the first-party channel adapters (`/github`, `/telegram`),
-- credential handling in `~/.fastagent/auth.json` and the OAuth/env auth resolution path.
+- credential handling in the project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`; global `~/.fastagent/auth.json` is opt-in) and the OAuth/env auth resolution path.
 
 Out of scope:
 
@@ -42,7 +42,7 @@ Out of scope:
 
 FastAgent treats credentials and environment as deployment config, never as part of the agent definition:
 
-- keep `.env`, provider keys, and `~/.fastagent/auth.json` out of version control,
+- keep `.env`, provider keys, and the credentials file (`<dir>/.fastagent/auth.json` by default, or `~/.fastagent/auth.json`) out of version control,
 - the scaffolded `.gitignore` excludes `.env`; `fastagent init` warns when a pre-existing `.gitignore` does not,
 - webhook channels require a verification secret (`GITHUB_WEBHOOK_SECRET`, `TELEGRAM_SECRET_TOKEN`) and fail at startup when it is missing, rather than accepting forged deliveries.
 

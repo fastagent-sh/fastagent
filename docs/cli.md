@@ -47,7 +47,7 @@ Options:
 ## `fastagent info`
 
 ```bash
-fastagent info [dir] [--json]
+fastagent info [dir] [--json] [--auth-path file]
 ```
 
 Prints the assembled surface without starting a server:
@@ -75,7 +75,7 @@ Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.*`.
 ## `fastagent login`
 
 ```bash
-fastagent login [provider]
+fastagent login [provider] [--auth-path file]
 ```
 
 Authenticates a model provider and stores credentials in the **project-level** `<state root>/auth.json` — by default `<cwd>/.fastagent/auth.json` (root override: `FASTAGENT_STATE_DIR`; file override: `--auth-path` / `FASTAGENT_AUTH_PATH`; run it from `$HOME` to write the global `~/.fastagent/auth.json`). There is no implicit fallback between the project and global files — the default is project-level for **isolation** (different agents can use different accounts) and **fail-visibly** (a missing credential surfaces instead of being masked by a machine-global one absent on a fresh box). So `cd` into your agent before logging in. FastAgent uses its own credential file, separate from pi's CLI state.
@@ -85,7 +85,7 @@ Authenticates a model provider and stores credentials in the **project-level** `
 ## `fastagent dev`
 
 ```bash
-fastagent dev [dir] [--port N] [--model provider/modelId] [--no-watch] [--tunnel]
+fastagent dev [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
 ```
 
 Assembles the workspace and serves it locally. AGENTS.md/`skills/` are re-read every turn (edits go
@@ -118,7 +118,7 @@ Opens the same assembled workspace in pi's interactive TUI. This is useful for t
 ## `fastagent invoke`
 
 ```bash
-fastagent invoke <message> [dir] [--model provider/modelId]
+fastagent invoke <message> [dir] [--model provider/modelId] [--auth-path file]
 ```
 
 Runs one turn through the same workspace assembly and exits:
@@ -174,7 +174,7 @@ Use `--update` to overwrite an existing vendored skill. Review the result with `
 ## `fastagent start`
 
 ```bash
-fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--tunnel]
+fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
 ```
 
 Runs the workspace in production posture: no watch, same assembly as `dev`.

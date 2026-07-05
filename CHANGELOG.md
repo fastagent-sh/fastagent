@@ -178,7 +178,7 @@ While the project is pre-1.0, minor versions may include breaking changes.
   (`AgentTool`, `Skill`, `SkillDiagnostic`, `Session`, `Model`, `Provider`/`createProvider`).
 - `SECURITY.md`, `CHANGELOG.md`, and `llms.txt` for open-source readiness.
 - README status badges (CI, npm version, license, Node version).
-- `start.md`: an AI-guided setup prompt for coding agents.
+- `ai-start.md`: an AI-guided setup prompt for coding agents.
 - Restructured public docs: `docs/README.md` index, `overview`, `cli`, `configuration`,
   `api-reference`, `troubleshooting`, `principles`, dedicated channel guides
   (`github`, `telegram`, `channel-development`), and maintainer notes under `docs/design/`

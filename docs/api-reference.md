@@ -142,14 +142,16 @@ Load `AGENTS.md` and `skills/` from a folder, assemble the pi prompt, and return
 ```ts
 function createPiAgentFromWorkspace(
   dir: string,
-  options?: { model?: string; sessionsDir?: string },
+  options?: { model?: string; sessionsDir?: string; authPath?: string },
 ): Promise<{
   agent: Agent;
   definition: LoadedDefinition;
   config: FastagentConfig;
   configPath?: string;
   modelSpec: string;
+  stateRoot: string;
   sessionsDir: string;
+  authPath: string;
   toolNames: string[];
   toolCollisions: ToolCollision[];
 }>;
