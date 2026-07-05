@@ -76,10 +76,10 @@ function usage(code: number): never {
          crude REPL) — to try it locally before serving. Same model/tool/skill resolution
          as dev; pi handles login, sessions, and /resume natively.
   init   scaffold a runnable agent in dir (default .) and run npm install. Default is a
-         complete agent: AGENTS.md, a skill, tools/word-count.ts (a code tool), config,
-         package.json, .gitignore. Refuses to overwrite an existing workspace.
-         --minimal      markdown-only (no package.json/tool/install) — a prompt+skills agent
-         --no-install   scaffold but skip npm install
+         self-iterating agent: AGENTS.md, a writing-great-skills example skill, a fetch-url
+         code tool, config, package.json, .gitignore. Refuses to overwrite an existing workspace.
+         --minimal      AGENTS.md + the example skill + config only (no code tool / package.json)
+         --no-install   scaffold everything but skip npm install
   models list the available "provider/modelId" specs ([search] filters by substring; use one with
          --model or in the config).
   info   print what dir (default .) ASSEMBLES into — model, AGENTS.md, skills, tools (+ collisions),
@@ -310,6 +310,7 @@ async function runInit(): Promise<void> {
   if (cdTarget) console.error(`    cd ${cdTarget}`);
   if (complete && (values["no-install"] || installFailed)) console.error(`    npm install`);
   console.error(`    fastagent dev   # serve locally and iterate`);
+  console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
 }
 
 /** `fastagent add <channel> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */

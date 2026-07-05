@@ -5,16 +5,30 @@
  * Fetch → staging → validate with the runtime loader → atomic replace, so a bad fetch never destroys
  * an existing skill.
  */
-import { cp, mkdir, rename, rm } from "node:fs/promises";
+import { cp, mkdir, rename, rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { type LoadedDefinition, loadAgentDefinition } from "../engines/pi/definition.ts";
+import { assertInsideWorkspace } from "../workspace.ts";
 
 /** Derive the destination skill name from a source ref: the last path segment, sans `#ref`. */
 function skillNameFromSource(source: string): string {
   const noRef = source.split("#")[0] ?? source;
   return basename(noRef.replace(/\/+$/, ""));
+}
+
+/**
+ * The skills/ path must be safe to write through: never follow a symlink that escapes the workspace
+ * (mkdir would), and reject a plain file with one clear message.
+ */
+async function assertSkillsDirUsable(workspaceDir: string): Promise<void> {
+  await assertInsideWorkspace(workspaceDir, "skills");
+  const skillsDir = join(workspaceDir, "skills");
+  const st = await stat(skillsDir).catch(() => undefined);
+  if (st && !st.isDirectory()) {
+    throw new Error(`${skillsDir} exists and is not a directory — remove it (skills must be a directory)`);
+  }
 }
 
 /** A local source is an explicit path (./x, ../x, /abs); anything else is a giget ref or a bare name. */
@@ -67,6 +81,7 @@ export async function vendorSkill(
     throw new Error(`cannot derive a skill name from "${source}" — point at a skill directory (…/skills/<name>)`);
   }
   const skillsDir = join(workspaceDir, "skills");
+  await assertSkillsDirUsable(workspaceDir);
   const dest = join(skillsDir, name);
   // Refuse to clobber unless --update; the check is side-effect-free, and a git-tracked overwrite is
   // safe (review with `git diff`, undo with `git checkout`).

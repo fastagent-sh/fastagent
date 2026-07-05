@@ -35,15 +35,17 @@ describe("init: scaffoldWorkspace", () => {
     expect(nextStepCd("/a/b", "/tmp/x")).toBe("/tmp/x"); // outside → absolute, not ../../tmp/x noise
   });
 
-  it("default scaffolds a COMPLETE agent (instructions + skill + a code tool + package.json)", async () => {
+  it("default scaffolds a COMPLETE agent (instructions + the example skill + a code tool + package.json)", async () => {
     const dir = await freshDir();
     const { complete, created, warnings } = await scaffoldWorkspace(dir);
     expect(complete).toBe(true);
     expect(created).toEqual(
       expect.arrayContaining([
         "AGENTS.md",
-        join("skills", "house-style", "SKILL.md"),
-        join("tools", "word-count.ts"),
+        join("skills", "writing-great-skills", "SKILL.md"),
+        join("skills", "writing-great-skills", "GLOSSARY.md"),
+        join("skills", "writing-great-skills", "LICENSE"),
+        join("tools", "fetch-url.ts"),
         "fastagent.config.mjs",
         "package.json",
         ".gitignore",
@@ -74,29 +76,36 @@ describe("init: scaffoldWorkspace", () => {
     ).version;
     expect(pkg.dependencies["@kid7st/fastagent"]).toBe(`^${realVersion}`);
     expect(pkg.dependencies.zod).toBeDefined();
-    expect(await readFile(join(dir, "tools", "word-count.ts"), "utf8")).toContain('from "@kid7st/fastagent"');
+    expect(await readFile(join(dir, "tools", "fetch-url.ts"), "utf8")).toContain('from "@kid7st/fastagent"');
 
-    // AGENTS.md + skill load as a definition offline (loadAgentDefinition does not touch tools/).
+    // AGENTS.md + the bundled skill load as a definition offline (loadAgentDefinition does not touch
+    // tools/). The skill is a real markdown skill, mounted by the runtime loader.
     const def = await loadAgentDefinition(dir);
-    expect(def.skills.map((s) => s.name)).toEqual(["house-style"]);
+    expect(def.instructions).toBeDefined();
+    expect(def.skills.map((s) => s.name)).toEqual(["writing-great-skills"]);
     expect(def.collisions).toEqual([]);
   });
 
-  it("--minimal scaffolds the markdown-only unit (no package.json/tool) and assembles fully offline", async () => {
+  it("--minimal keeps AGENTS.md + the example skill + config (no package.json/tool) and assembles fully offline", async () => {
     const dir = await freshDir();
     const { complete, created } = await scaffoldWorkspace(dir, { minimal: true });
     expect(complete).toBe(false);
     expect(created.sort()).toEqual(
       [
         "AGENTS.md",
+        join("skills", "writing-great-skills", "SKILL.md"),
+        join("skills", "writing-great-skills", "GLOSSARY.md"),
+        join("skills", "writing-great-skills", "LICENSE"),
         ".gitignore",
         ".env.example",
         "fastagent.config.mjs",
-        join("skills", "house-style", "SKILL.md"),
       ].sort(),
     );
     expect(await exists(join(dir, "package.json"))).toBe(false);
     expect(await exists(join(dir, "tools"))).toBe(false);
+    // the bundled skill still mounts in the minimal unit
+    const def = await loadAgentDefinition(dir);
+    expect(def.skills.map((s) => s.name)).toEqual(["writing-great-skills"]);
 
     // No tool to import → dev assembles with zero edits and zero network.
     const { agent, modelSpec } = await createPiAgentFromWorkspace(dir);
@@ -112,19 +121,26 @@ describe("init: scaffoldWorkspace", () => {
     expect(intoNonEmpty).toBe(false);
   });
 
-  it("preflights blocking parent paths: a file named `skills` fails BEFORE writing AGENTS.md (retryable)", async () => {
+  it("preflights blocking parent paths: a file named `tools` or `skills` fails BEFORE writing AGENTS.md (retryable)", async () => {
     const dir = await freshDir();
-    await writeFile(join(dir, "skills"), "i am a file, not a dir\n"); // blocks skills/house-style/
-    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"skills" exists and is not a directory/);
+    await writeFile(join(dir, "tools"), "i am a file, not a dir\n"); // blocks tools/
+    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"tools" exists and is not a directory/);
     // no half-scaffold: AGENTS.md was never written, so a retry is not blocked by the guard
     expect(await exists(join(dir, "AGENTS.md"))).toBe(false);
+
+    // `skills` blocks too — the scaffold writes the example skill there, in default AND --minimal.
+    const dir2 = await freshDir();
+    await writeFile(join(dir2, "skills"), "i am a file, not a dir\n");
+    await expect(scaffoldWorkspace(dir2)).rejects.toThrow(/"skills" exists and is not a directory/);
+    expect(await exists(join(dir2, "AGENTS.md"))).toBe(false);
+    await expect(scaffoldWorkspace(dir2, { minimal: true })).rejects.toThrow(/"skills" exists and is not a directory/);
   });
 
   it("rejects a symlinked scaffold parent (does not follow it and write outside the workspace)", async () => {
     const external = await freshDir(); // a dir OUTSIDE the workspace
     const dir = await freshDir();
-    await symlink(external, join(dir, "skills")); // `skills` is a symlink → must be rejected, not followed
-    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"skills" exists and is not a directory/);
+    await symlink(external, join(dir, "tools")); // `tools` is a symlink → must be rejected, not followed
+    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"tools" exists and is not a directory/);
     expect(await exists(join(dir, "AGENTS.md"))).toBe(false); // nothing written in the workspace
     expect(await readdir(external)).toEqual([]); // and nothing escaped into the symlink target
   });
@@ -434,6 +450,23 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(updated.overwritten).toBe(true);
     expect(updated.description).toContain("v2");
     expect(await readFile(join(ws, "skills", "greeter", "SKILL.md"), "utf8")).toContain("Two.");
+  });
+
+  it("rejects a skills/ symlink that escapes the workspace (mkdir would follow it and write outside)", async () => {
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    const external = await freshDir();
+    await symlink(external, join(ws, "skills")); // skills → outside the workspace
+    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
+    await mkdir(join(srcRoot, "greeter"));
+    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: Hi.\n---\nHi.\n");
+    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/outside the workspace/);
+    expect(await readdir(external)).toEqual([]); // nothing escaped into the symlink target
+  });
+
+  it("fails once with a clear message when `skills` is a plain file (not per-write EEXIST noise)", async () => {
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await writeFile(join(ws, "skills"), "i am a file\n");
+    await expect(vendorSkill(ws, "greeter")).rejects.toThrow(/exists and is not a directory/);
   });
 
   it("--update failure leaves the existing skill intact (validate-before-replace, not destructive-first)", async () => {

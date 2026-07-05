@@ -35,14 +35,14 @@ Most commands take an optional workspace directory. When omitted, the current di
 fastagent init [dir] [--minimal] [--no-install]
 ```
 
-Creates a workspace with `AGENTS.md`, `skills/`, config, `.env.example`, and `.gitignore`. By default it also creates a sample code tool, `package.json`, and runs `npm install`.
+Creates a self-iterating agent — the folder is the agent, and it can edit its own definition (AGENTS.md and skills are re-read every turn). A fresh workspace has `AGENTS.md` (the persona: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills), MIT — the guide to authoring skills), a `fetch-url` example code tool, config, `.env.example`, and `.gitignore`. Everything is written offline; by default it also writes `package.json` and runs `npm install`.
 
 Options:
 
 | Option | Meaning |
 |---|---|
-| `--minimal` | Prompt+skills only; no code tool, package.json, or install. |
-| `--no-install` | Write files but skip `npm install`. |
+| `--minimal` | AGENTS.md + the example skill + config only — no code tool, package.json, or install. |
+| `--no-install` | Scaffold everything but skip `npm install`. |
 
 ## `fastagent info`
 
@@ -140,7 +140,7 @@ Runs one discovered or configured tool directly, without a model or server.
 Example:
 
 ```bash
-fastagent tool word-count '{"text":"hello from fastagent"}'
+fastagent tool fetch-url '{"url":"https://example.com"}'
 ```
 
 ## `fastagent add github|telegram`
