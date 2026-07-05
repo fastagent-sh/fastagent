@@ -57,10 +57,10 @@ describe("init: scaffoldWorkspace", () => {
     expect(warnings).toEqual([]);
 
     // .env.example documents env knobs without misleading: all-commented (sets nothing), and it
-    // states the default model uses OAuth (`fastagent login`), never implying an API key is required.
+    // frames auth as a choice (`fastagent login` OR a provider API key), never implying a key is required.
     const envExample = await readFile(join(dir, ".env.example"), "utf8");
     expect(envExample).toMatch(/fastagent login/);
-    expect(envExample).toMatch(/OAuth, not an API key/);
+    expect(envExample).toMatch(/set a provider API key/);
     for (const line of envExample.split("\n")) {
       if (line.trim() !== "") expect(line.startsWith("#")).toBe(true); // every non-blank line is a comment
     }
@@ -109,8 +109,9 @@ describe("init: scaffoldWorkspace", () => {
     const def = await loadAgentDefinition(dir);
     expect(def.skills.map((s) => s.name)).toEqual(["writing-great-skills"]);
 
-    // No tool to import → dev assembles with zero edits and zero network.
-    const { agent, modelSpec } = await createPiAgentFromWorkspace(dir);
+    // No tool to import → dev assembles with zero edits and zero network. The scaffold presets no
+    // model (first-run pick writes it back), so assembly is exercised with an explicit spec.
+    const { agent, modelSpec } = await createPiAgentFromWorkspace(dir, { model: "openai-codex/gpt-5.5" });
     expect(typeof agent.invoke).toBe("function");
     expect(modelSpec).toBe("openai-codex/gpt-5.5");
   });

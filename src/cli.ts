@@ -5,6 +5,7 @@
  */
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
@@ -29,10 +30,11 @@ import {
   resolveAuthPathOverride,
   resolveModelSpec,
   resolveSessionsDirOverride,
+  rewriteConfigModel,
 } from "./engines/pi/config.ts";
 import { formatModelsCommand } from "./cli-models.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
-import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
+import { configuredModelSpecs, createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 import { ensureStateRootSelfIgnored, isUnderDir, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { loadRootIgnore } from "./workspace.ts";
 import { runInvokeStream } from "./invoke-stream.ts";
@@ -210,6 +212,7 @@ async function runInvoke(): Promise<void> {
   const invokeDir = resolve(positionals[2] ?? ".");
   loadDotEnv(invokeDir);
   installProxyFetch();
+  await resolveFirstRunModel(invokeDir);
   const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(invokeDir, {
     model: values.model,
     authPath: resolveAuthPathOverride(values["auth-path"]),
@@ -484,6 +487,71 @@ async function reportAuth(modelSpec: string, authPath: string): Promise<void> {
   );
 }
 
+/** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
+function isInteractive(): boolean {
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+/**
+ * First-run model resolution for the serving commands. When no model is set (flag/env/config), and
+ * we're on a TTY, pick one from the providers the user is logged into and persist the choice. A no-op
+ * when a model is already set; on a non-TTY (CI/deploy) or with nothing configured it stays silent and
+ * lets the opener raise its clear "missing model" error. The pick is exported to FASTAGENT_MODEL so a
+ * spawned `dev` worker inherits it, and best-effort written back to the config so the next run is quiet.
+ */
+async function resolveFirstRunModel(workspaceDir: string): Promise<void> {
+  const { config, path: configPath } = await loadConfig(workspaceDir).catch(failStartup);
+  if (resolveModelSpec(values.model, config)) return; // already set (flag > FASTAGENT_MODEL > config)
+  if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
+
+  const authPath = resolveAuthPathOverride(values["auth-path"]);
+  let specs: string[];
+  try {
+    specs = await configuredModelSpecs(createPiModels({ authPath }));
+  } catch (error) {
+    // Enumerating providers/auth threw — a system fault (a corrupt auth store, a throwing provider),
+    // NOT "not logged in". Surface it instead of masking it as the login hint; the opener then still
+    // raises the clear missing-model error.
+    log.warn(`[fastagent] could not list configured models: ${(error as Error).message}`);
+    return;
+  }
+  if (specs.length === 0) {
+    log.warn(
+      `[fastagent] no model set and no authenticated provider — run \`fastagent login\`, then \`fastagent dev\``,
+    );
+    return;
+  }
+  const r = await (specs.length > 7 ? autocomplete : select)({
+    message: "Choose a model for this agent",
+    options: specs.map((s) => ({ value: s, label: s })),
+  });
+  if (isCancel(r)) return; // cancelled: let the opener report the missing model
+  const chosen = r as string;
+  process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
+  await persistModelChoice(workspaceDir, configPath, chosen);
+}
+
+/**
+ * Best-effort persist the picked model so the next run does not prompt. Only rewrites the commented
+ * `model:` placeholder the scaffold writes (or an existing `model:` line); anything else (zero-config,
+ * a hand-shaped config) is left untouched with a printed hint. Never throws — persistence is a convenience.
+ */
+async function persistModelChoice(workspaceDir: string, configPath: string | undefined, spec: string): Promise<void> {
+  const hint = (): void =>
+    console.error(
+      `[fastagent] using ${spec} for this run; set \`model: ${JSON.stringify(spec)}\` in your config to persist`,
+    );
+  if (!configPath) return hint();
+  try {
+    const replaced = rewriteConfigModel(await readFile(configPath, "utf8"), spec);
+    if (!replaced) return hint();
+    await writeFile(configPath, replaced);
+    console.error(`[fastagent] saved model ${JSON.stringify(spec)} to ${relative(workspaceDir, configPath)}`);
+  } catch {
+    hint();
+  }
+}
+
 type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;
 
 /** The agents/skills/tools/collisions report lines. */
@@ -502,7 +570,17 @@ function reportAgentsSkillsTools(a: Assembled): void {
  */
 async function runDev(): Promise<void> {
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
-  if (process.env.FASTAGENT_DEV_WORKER === "1" || values["no-watch"]) {
+  const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
+  // Pick a model interactively once, in the parent (both watch and --no-watch have a TTY); a spawned
+  // watch worker inherits the choice via FASTAGENT_MODEL, so it must not prompt again. Load .env and
+  // the proxy FIRST (as invoke/start do): the picker reads FASTAGENT_MODEL and provider keys from
+  // .env, and getAuth's OAuth refresh must go through HTTPS_PROXY. The worker re-loads both in serveOnce.
+  if (!isWorker) {
+    loadDotEnv(dir);
+    installProxyFetch();
+    await resolveFirstRunModel(dir);
+  }
+  if (isWorker || values["no-watch"]) {
     await serveOnce();
     return;
   }
@@ -567,6 +645,7 @@ async function runStart(): Promise<void> {
   const portFlag = parsePort(values.port, "--port");
   loadDotEnv(dir);
   installProxyFetch();
+  await resolveFirstRunModel(dir);
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(values["sessions-dir"]);

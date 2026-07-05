@@ -288,3 +288,23 @@ describe("config: resolveModelSpec (precedence flag > env > config)", () => {
     expect(resolveModelSpec(undefined, {}, {} as NodeJS.ProcessEnv)).toBeUndefined();
   });
 });
+
+describe("rewriteConfigModel (first-run picker write-back)", async () => {
+  const { rewriteConfigModel } = await import("../src/engines/pi/config.ts");
+
+  it("uncomments the scaffold's commented model placeholder", () => {
+    const src = 'export default {\n  // model: "openai-codex/gpt-5.5",\n  http: { port: 8787 },\n};\n';
+    expect(rewriteConfigModel(src, "anthropic/claude-x")).toBe(
+      'export default {\n  model: "anthropic/claude-x",\n  http: { port: 8787 },\n};\n',
+    );
+  });
+
+  it("replaces an existing active model line", () => {
+    const src = 'export default {\n  model: "old/one",\n};\n';
+    expect(rewriteConfigModel(src, "new/two")).toBe('export default {\n  model: "new/two",\n};\n');
+  });
+
+  it("returns null when there is no model line to touch (hand-shaped / zero-config)", () => {
+    expect(rewriteConfigModel("export default { http: { port: 8787 } };\n", "x/y")).toBeNull();
+  });
+});
