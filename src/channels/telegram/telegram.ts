@@ -5,9 +5,12 @@
  * is a JSON POST, outbound is a `fetch` to the Bot API. The developer writes only `route` (policy); the
  * channel owns transport + format + attachments.
  *
- * This file is the Telegram DOMAIN: ingress + summon policy + prompt assembly. The subsystems it
- * composes each own their invariants in their own module:
+ * This file is the Telegram WIRING: ingress (secret/body cap/JSON) + the per-turn lifecycle + composition.
+ * Every other concern lives in its own module, each owning its invariants:
+ *   - parse.ts          pure message parsing: field extraction, prompt envelope, summon/route policy
+ *   - invoke-turn.ts    run one turn: assemble inputs (resolve attachments) + stream `agent.invoke`
  *   - turn-queue.ts     in-memory per-session serial execution (FIFO; one turn at a time per session)
+ *   - turn-store.ts     durable turn intent (L1): pre-ACK persist, replay a crash-surviving turn
  *   - context-buffer.ts un-summoned group discussion, folded into the next answered turn
  *   - preview.ts        the live-preview pump ("💭 Thinking…" → edits → final answer) + terminal writes
  *   - telegram-api.ts   the single Bot API pipeline (timeouts, 429, ok-gating, HTML-aware split)
@@ -21,24 +24,36 @@
  */
 import { timingSafeEqual } from "node:crypto";
 import { join, resolve } from "node:path";
-import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import type { Agent } from "../../agent.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
-import { type BufferedRef, collectAttachments, createContextBuffer } from "./context-buffer.ts";
+import { invokeTurn } from "./invoke-turn.ts";
+import { collectAttachments, createContextBuffer } from "./context-buffer.ts";
+import {
+  type TelegramMessage,
+  type TelegramRoute,
+  type TelegramUpdate,
+  attachmentSummary,
+  defaultTelegramRoute,
+  extractFiles,
+  extractImages,
+  fromLabel,
+  messageText,
+  ownFiles,
+  ownImages,
+  pickMessage,
+  telegramEnvelope,
+} from "./parse.ts";
 import { type TelegramFailure, defaultErrorMessage, streamReply } from "./preview.ts";
 import { ensureStateHome } from "./state.ts";
-import {
-  type DownloadedFile,
-  type Target,
-  callApi,
-  editMessageText,
-  resolveFiles,
-  resolveImages,
-  sendMessage,
-} from "./telegram-api.ts";
+import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 import { createTurnQueue } from "./turn-queue.ts";
 import { type StoredTurn, createTurnStore } from "./turn-store.ts";
+
+// Re-export the public surface authored elsewhere, so `@kid7st/fastagent/telegram` keeps one entry point.
+export { defaultTelegramRoute, telegramEnvelope };
+export type { TelegramFailure, TelegramMessage, TelegramRoute, TelegramUpdate };
 
 /** Execution ceiling: a turn that has STARTED running this many times without finishing is dropped
  *  rather than run again (a poison turn must not loop forever under a restart policy). Counted per turn
@@ -51,8 +66,6 @@ import { type StoredTurn, createTurnStore } from "./turn-store.ts";
  *  — raise this constant if such turns are expected. */
 const MAX_TURN_ATTEMPTS = 3;
 
-export type { TelegramFailure };
-
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
 
@@ -64,60 +77,6 @@ interface PendingTurn extends Omit<StoredTurn, "attempts"> {
   /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over. Live
    *  only; never persisted (a replayed turn sends a fresh preview). */
   previewId?: number;
-}
-
-/** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */
-export interface TelegramMessage {
-  message_id: number;
-  text?: string;
-  /** Entities Telegram's server parsed out of `text` (mentions, commands, URLs, code…). Offsets are
-   *  UTF-16 code units — exactly JS string indexing, so `text.slice(offset, offset + length)` is the
-   *  entity's text verbatim. */
-  entities?: { type: string; offset: number; length: number; [k: string]: unknown }[];
-  /** Caption on a media message (photo/document/…) — often the user's instruction for the attachment. */
-  caption?: string;
-  /** Entities of `caption`, same shape as {@link TelegramMessage.entities}. */
-  caption_entities?: { type: string; offset: number; length: number; [k: string]: unknown }[];
-  /** Photo sizes, smallest → largest. The channel sends the largest to the model as a vision image. */
-  photo?: { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }[];
-  /** Structured payloads worth rendering into the prompt as text (no new modality needed). */
-  location?: { latitude: number; longitude: number; [k: string]: unknown };
-  contact?: { phone_number?: string; first_name: string; last_name?: string; [k: string]: unknown };
-  poll?: { question: string; options?: { text: string }[]; [k: string]: unknown };
-  /** Files — the channel downloads document/voice/video/audio on a routed message to disk. */
-  document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number; [k: string]: unknown };
-  voice?: { file_id: string; [k: string]: unknown };
-  video?: { file_id: string; [k: string]: unknown };
-  audio?: { file_id: string; [k: string]: unknown };
-  /** Present in Threaded Mode (topics in private chats); reply with the same id to stay in-thread. */
-  message_thread_id?: number;
-  /** The message this one replies to, if any — inject its text/media so the agent has the referent. */
-  reply_to_message?: TelegramMessage;
-  chat: { id: number; type: string; [k: string]: unknown };
-  from?: { id: number; username?: string; is_bot?: boolean; first_name?: string; [k: string]: unknown };
-  [k: string]: unknown;
-}
-
-/** A Telegram update (the common subset the channel ACTS on — an update kind not listed here is ACKed
- *  and dropped before `route` sees it, so listing it would be a false promise; `[k]` keeps the raw
- *  payload reachable). Narrow for what you route on, e.g. `update.message?.text`. */
-export interface TelegramUpdate {
-  update_id: number;
-  message?: TelegramMessage;
-  channel_post?: TelegramMessage;
-  [k: string]: unknown;
-}
-
-/** What `route` returns: act with these (every field optional — omitted ones default from the message), or null to ignore. */
-export interface TelegramRoute {
-  /** Conversation identity (default: `chat` or `chat:thread`). */
-  session?: string;
-  /** Reply target chat (default: the message's chat). */
-  chatId?: number | string;
-  /** Reply thread (default: the message's thread). */
-  threadId?: number;
-  /** Base prompt (default: {@link telegramEnvelope}); the channel still appends attachments + the HTML hint. */
-  text?: string;
 }
 
 export interface TelegramChannelOptions {
@@ -149,284 +108,6 @@ function tokenMatches(header: string, secret: string): boolean {
   const a = Buffer.from(header);
   const b = Buffer.from(secret);
   return a.length === b.length && timingSafeEqual(a, b);
-}
-
-/** Appended to the prompt (not the system prompt): the channel owns Telegram-HTML formatting. */
-const HTML_INSTRUCTION =
-  "\n\n(Format your reply in Telegram-supported HTML — <b> <i> <u> <s> <code> <pre> <a href> — not Markdown.)";
-
-/** Everything the transport needs to fetch a turn's attachments. */
-interface TurnTransport {
-  api: string;
-  botToken: string;
-  chatId: number | string;
-  filesDir: string;
-}
-
-/** A turn's attachment inputs: the summoning message's own file_ids (primary) and the ones folded in
- *  from the un-summoned discussion (buffered). */
-interface TurnAttachments {
-  primary: { imageFileIds?: string[]; fileIds?: string[] };
-  buffered: { files: BufferedRef[]; images: BufferedRef[]; skipped: number };
-}
-
-/** A turn's attachments, resolved to what agent.invoke consumes: vision images inline, plus a prompt
- *  suffix (the file manifest + a missing-attachment note) appended after the prompt, before the HTML hint. */
-interface ResolvedAttachments {
-  images: ImageRef[] | undefined;
-  promptSuffix: string;
-}
-
-/**
- * Resolve a turn's attachments: images (vision) inline, files downloaded to disk with their absolute
- * paths listed in a manifest the agent reads with its tools. Two tiers, different failure policies.
- * PRIMARY (this turn's own message) THROWS on any load failure — the caller turns it into a `failed`
- * event, so the agent never runs on inputs the user sent but we failed to load. BACKGROUND (`buffered`,
- * from the un-summoned discussion) degrades PER ATTACHMENT — a warn + a prompt note — rather than
- * failing the ask it merely accompanies: one expired earlier file must neither block the answer nor drag
- * down its still-valid siblings. Parallel (allSettled keeps input order + per-attachment isolation); the
- * note counts EVERY missing one (load failures + cap-skipped) so the model never holds a reference it
- * silently cannot open.
- */
-async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachments): Promise<ResolvedAttachments> {
-  const { api, botToken, chatId, filesDir } = t;
-  const { primary, buffered } = attachments;
-  const images = await resolveImages(api, botToken, primary.imageFileIds);
-  const files = await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir);
-  const bufferedImages: ImageRef[] = [];
-  const bufferedFiles: { file: DownloadedFile; ref: BufferedRef }[] = [];
-  let lost = 0;
-  const imageResults = await Promise.allSettled(buffered.images.map((ref) => resolveImages(api, botToken, [ref.id])));
-  for (const r of imageResults) {
-    if (r.status === "fulfilled") bufferedImages.push(...(r.value ?? []));
-    else {
-      lost++;
-      log.warn(`[telegram] could not load an earlier (buffered) photo: ${String(r.reason)}`);
-    }
-  }
-  const fileResults = await Promise.allSettled(
-    buffered.files.map(async (ref) => ({
-      ref,
-      files: (await resolveFiles(api, botToken, [ref.id], chatId, filesDir)) ?? [],
-    })),
-  );
-  for (const r of fileResults) {
-    if (r.status === "fulfilled") {
-      for (const file of r.value.files) bufferedFiles.push({ file, ref: r.value.ref });
-    } else {
-      lost++;
-      log.warn(`[telegram] could not load an earlier (buffered) attachment: ${String(r.reason)}`);
-    }
-  }
-  const missing = lost + buffered.skipped;
-  const bufferedNote =
-    missing > 0
-      ? `\n[note: ${missing} attachment(s) from the earlier discussion are not loaded (expired, or older than the most recent few)]`
-      : "";
-  // PRIMARY first, background after — consistent with "primary wins": what the user pointed at this
-  // turn leads. Buffered file entries are attributed like the fold's text lines ("the file Bob sent"
-  // resolves); buffered PHOTOS cannot be (ImageRef carries no label), so their attribution stops at
-  // the fold's attachment markers (the buffer appends `[photo]` even to captioned lines) — a
-  // documented limit.
-  const allFiles = [
-    ...(files ?? []),
-    ...bufferedFiles.map(({ file, ref }) => ({
-      ...file,
-      name: `${file.name} (from ${ref.from}${ref.msg !== undefined ? `, msg ${ref.msg}` : ""}, earlier discussion)`,
-    })),
-  ];
-  const manifest = allFiles.length
-    ? `\n\n[attached files — read them with your tools:\n${allFiles.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
-    : "";
-  const allImages = [...(images ?? []), ...bufferedImages];
-  return { images: allImages.length ? allImages : undefined, promptSuffix: `${bufferedNote}${manifest}` };
-}
-
-/**
- * Run one turn: resolve its attachments, then stream agent.invoke. A primary-attachment failure surfaces
- * as a `failed` event (never a silent drop). `onCompleted` (if given) fires on the turn's `completed`
- * event — the durable-commit point: only then does the folded discussion provably live in the session,
- * so a failure or crash at ANY earlier point leaves the buffer intact for the next summon (a re-folded
- * block beats lost context). The caller uses it to remove the turn intent AND commit the context buffer,
- * in that order (see the call site) so a crash between the two clears cannot replay a context-stripped turn.
- */
-async function* invokeTurn(
-  agent: Agent,
-  session: string,
-  text: string,
-  transport: TurnTransport,
-  attachments: TurnAttachments,
-  onCompleted?: () => void,
-): AsyncIterable<AgentEvent> {
-  let resolved: ResolvedAttachments;
-  try {
-    resolved = await resolveTurnAttachments(transport, attachments);
-  } catch (e) {
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
-    return;
-  }
-  for await (const e of agent.invoke(
-    { session },
-    { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images },
-  )) {
-    if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
-    yield e;
-  }
-}
-
-/** The actionable message in an update (a fresh message or channel post). Edits (`edited_message` /
- *  `edited_channel_post`) are deliberately NOT actionable: answering them re-answers every typo fix (a
- *  duplicate reply per edit), so an edited message changes nothing — the standard bot behavior. The
- *  trade-off: editing a mention INTO an old message does not summon either; send a new message. */
-function pickMessage(update: TelegramUpdate): TelegramMessage | undefined {
-  return update.message ?? update.channel_post;
-}
-
-/** file_ids to send the model as vision images: this message's largest photo + a replied-to photo. */
-function extractImages(m: TelegramMessage): string[] {
-  return [...ownImages(m), ...(m.reply_to_message ? ownImages(m.reply_to_message) : [])];
-}
-
-/** The message's OWN photo (largest size), without the replied-to message's — the buffer path uses
- *  this: each message is its own entry there, so counting the replied-to attachment again would
- *  duplicate it and squeeze the attachment cap (the reply relation is expressed by `replyTo` instead). */
-function ownImages(m: TelegramMessage): string[] {
-  return [m.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
-}
-
-/** file_ids to download to disk for the agent's tools: this message's files + a replied-to message's
- *  (so "summarize this file" works when the user replies to a document with the mention). */
-function extractFiles(m: TelegramMessage): string[] {
-  return [...ownFiles(m), ...(m.reply_to_message ? ownFiles(m.reply_to_message) : [])];
-}
-
-/** The message's OWN files, without the replied-to message's (see {@link ownImages} for why). */
-function ownFiles(m: TelegramMessage): string[] {
-  return [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter((id): id is string =>
-    Boolean(id),
-  );
-}
-
-/** A stable sender label for attribution. In a shared (multi-user) session the model must tell who is
- *  who across turns; a username-less user still gets a name + id rather than vanishing. */
-function fromLabel(from: TelegramMessage["from"]): string | undefined {
-  if (!from) return undefined;
-  return from.username ? `@${from.username}` : `${from.first_name ?? "user"} (id ${from.id})`;
-}
-
-/** A one-line description of a message's attachment, so the envelope names what was sent even before
- *  the agent opens it (and so a media-only message isn't blank). */
-function attachmentSummary(m: TelegramMessage): string | undefined {
-  if (m.photo?.length) return "[photo]";
-  if (m.document) {
-    return `[document: ${m.document.file_name ?? "file"}${m.document.mime_type ? ` (${m.document.mime_type})` : ""}]`;
-  }
-  if (m.voice) return "[voice message]";
-  if (m.video) return "[video]";
-  if (m.audio) return "[audio]";
-  return undefined;
-}
-
-/** A message's readable body: its text, else its caption, else a one-line attachment summary; undefined
- *  for an empty/service message. The single source for "what did this message say" — envelope, reply-
- *  quote, and the context-buffer line all read through it so their fallbacks cannot drift apart. */
-function bodyOf(m: TelegramMessage): string | undefined {
-  return m.text ?? m.caption ?? attachmentSummary(m);
-}
-
-/** A one-line, length-capped rendering of a message's content for the context buffer. */
-function messageText(m: TelegramMessage): string {
-  return (bodyOf(m) ?? "").replace(/\s+/g, " ").trim().slice(0, 280);
-}
-
-/**
- * The default base prompt: a context envelope (chat/thread/sender + a group note + reply) then the
- * user's text/caption and a compact rendering of structured payloads (location/contact/poll). The
- * sender is named on every message and a group chat is flagged — in a shared multi-user session that is
- * how the model tells participants apart and knows it is not a 1:1. The reply
- * block carries the replied-to sender, message id, and text/caption or an attachment summary (and the
- * channel downloads a replied-to file/photo too). Exported so a custom `route` can reuse it, e.g.
- * `text: `${telegramEnvelope(m)}\n\n[extra]``. The channel still appends downloaded attachments.
- */
-export function telegramEnvelope(m: TelegramMessage): string {
-  const r = m.reply_to_message;
-  const meta = [
-    `chat ${m.chat.id} (${m.chat.type})`,
-    m.message_thread_id ? `thread ${m.message_thread_id}` : undefined,
-    fromLabel(m.from) ? `from ${fromLabel(m.from)}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(", ");
-  // In a shared group session the model sees turns from different people (each `from`-tagged); tell it
-  // so it addresses participants by name and does not assume one continuous interlocutor. A 1:1 DM is
-  // self-evident, so no note there.
-  const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
-  const scope = isGroup ? "\n[group chat — multiple people; each message is prefixed with its sender]" : "";
-  const replyTo = r
-    ? `\n[in reply to ${fromLabel(r.from) ?? `msg ${r.message_id}`} (msg ${r.message_id}): ${(bodyOf(r) ?? "(empty)").slice(0, 280)}]`
-    : "";
-  const parts = [bodyOf(m) ?? ""];
-  if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);
-  if (m.contact) parts.push(`[contact: ${m.contact.first_name} ${m.contact.phone_number ?? ""}]`);
-  if (m.poll) parts.push(`[poll: ${m.poll.question} — ${(m.poll.options ?? []).map((o) => o.text).join(" / ")}]`);
-  return `[telegram: ${meta}]${scope}${replyTo}\n${parts.filter(Boolean).join("\n")}`;
-}
-
-/** Normalize a configured bot username: drop a leading `@`, trim, lowercase (usernames are case-
- *  insensitive). Undefined when unknown. */
-function botName(botUsername: string | undefined): string | undefined {
-  const s = botUsername?.replace(/^@/, "").trim().toLowerCase();
-  return s || undefined;
-}
-
-/**
- * Whether the message @mentions the bot — read from the `mention` ENTITIES Telegram's server already
- * parsed, not a regex over the raw text. The entity type excludes by construction what a text scan
- * false-matches: `@bot` inside a code block or a URL is not a `mention` entity, a glued `/cmd@bot` is a
- * `bot_command` — and slicing the exact offset/length range makes `@fast` vs `@fastagent` confusion
- * impossible. (Offsets are UTF-16 code units = native JS string indexing.) No text fallback: mention
- * entities are produced server-side, so their absence means there is no mention.
- */
-function mentionsBot(m: TelegramMessage, botUsername: string | undefined): boolean {
-  const name = botName(botUsername);
-  if (!name) return false;
-  const text = m.text ?? m.caption ?? "";
-  const entities = (m.text !== undefined ? m.entities : m.caption_entities) ?? [];
-  return entities.some(
-    (e) => e.type === "mention" && text.slice(e.offset, e.offset + e.length).toLowerCase() === `@${name}`,
-  );
-}
-
-/** Whether the message replies to THIS bot — not just any bot: in a multi-bot group, replying to
- *  another bot must not summon ours. Identity is the bot's numeric id (stable; a username is a mutable
- *  handle) — telegramChannel parses it synchronously from the token, so there is no resolution race.
- *  Without an id, fall back to username; with NEITHER, fail closed (false): answering "is this a reply
- *  to me?" with "I don't know who I am, so yes" would mis-summon in every multi-bot group — a caller
- *  reusing the route bare must supply an identity to get reply summon. */
-function repliesToBot(m: TelegramMessage, options?: { botUsername?: string; botId?: number }): boolean {
-  const r = m.reply_to_message?.from;
-  if (r?.is_bot !== true) return false;
-  if (options?.botId !== undefined) return r.id === options.botId;
-  const name = botName(options?.botUsername);
-  return name !== undefined && r.username?.toLowerCase() === name;
-}
-
-/**
- * The default routing policy (used when `route` is omitted; exported so a custom route can reuse it):
- * answer private chats always; a group only on a reply to THIS bot (by `botId`) or a `mention` entity
- * naming it (when `botUsername` is supplied — telegramChannel parses the id from the token and resolves
- * the username via getMe). A bare or directed slash command does NOT summon in a group (that was noisy;
- * a bot author who wants commands adds a custom route). Returns `{}` (act; the channel fills
- * session/target/prompt from the message) or `null` (ignore).
- */
-export function defaultTelegramRoute(
-  update: TelegramUpdate,
-  options?: { botUsername?: string; botId?: number },
-): TelegramRoute | null {
-  const m = pickMessage(update);
-  if (!m) return null;
-  const summoned = m.chat.type === "private" || repliesToBot(m, options) || mentionsBot(m, options?.botUsername);
-  return summoned ? {} : null;
 }
 
 /** Build a Telegram bot channel for `agent`: a Fetch handler to mount at your webhook route (POST). */

@@ -40,7 +40,9 @@ src/
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
 │   ├── github/              # github channel (+ scaffold/ bundle)
 │   └── telegram/            # telegram channel — see docs/design/core.md §9.2
-│       ├── telegram.ts      # Telegram domain: ingress, summon policy, envelope, composition
+│       ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)
+│       ├── parse.ts         # pure protocol parsing: field extraction, prompt envelope, summon/route policy (no state/IO)
+│       ├── invoke-turn.ts   # run one turn: assemble inputs (resolve attachments: download/vision) + stream agent.invoke
 │       ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; durability layered by turn-store.ts)
 │       ├── turn-store.ts    # durable turn intent (L1): persist pre-ACK, replay a crash-surviving turn on next start
 │       ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
