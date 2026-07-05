@@ -8,6 +8,16 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **First-run model picker.** A scaffolded workspace no longer hard-codes a model. When no model is
+  set (flag/`FASTAGENT_MODEL`/config) and a serving command (`dev` / `start` / `invoke`) runs in a
+  terminal, FastAgent lists the models of the providers you are logged into (`Models.getAuth` — stored
+  login or env key) and writes your pick back to the config so the next run is silent. Non-interactive
+  runs (CI, a container) skip the prompt and fail with the clear `missing model` error, unchanged. This
+  removes the old default (`openai-codex/gpt-5.5`) that gated first-run on one specific paid
+  subscription — onboarding now adapts to whatever provider you actually authenticated.
+
 ### Removed
 
 - **Tightened the public API surface** (pre-1.0 cleanup, `src/index.ts`): dropped exports that

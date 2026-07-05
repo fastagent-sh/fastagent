@@ -127,6 +127,22 @@ export function listModels(models: Models): string[] {
   return specs.sort();
 }
 
+/**
+ * Rewrite the `model` in a config file's SOURCE TEXT to `spec`, for the first-run picker's write-back.
+ * Handles the scaffold's commented placeholder (`// model: "…"`) and an existing `model:` line; returns
+ * null when neither is present (zero-config or a hand-shaped config) so the caller falls back to a
+ * printed hint instead of guessing where to insert. Text-level (not AST) on purpose — it only ever
+ * touches a line it recognizes, never reformats the author's file.
+ */
+export function rewriteConfigModel(src: string, spec: string): string | null {
+  const line = `  model: ${JSON.stringify(spec)},`;
+  const commented = /^[ \t]*\/\/[ \t]*model:.*$/m;
+  const active = /^[ \t]*model:[ \t]*["'].*$/m;
+  if (commented.test(src)) return src.replace(commented, line);
+  if (active.test(src)) return src.replace(active, line);
+  return null;
+}
+
 /** Model selection precedence: CLI flag > FASTAGENT_MODEL env > config default. */
 export function resolveModelSpec(
   flag: string | undefined,

@@ -53,7 +53,10 @@ fastagent info
 
 `info` is read-only. It prints the model, loaded `AGENTS.md`, skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
-If no model is set, choose one of:
+A fresh workspace presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
+terminal, FastAgent lists the models of the providers you are logged into (run `fastagent login`
+first) and writes your pick back to `fastagent.config.mjs`. To set it non-interactively (or in
+CI/deploy, where there is no prompt):
 
 ```bash
 fastagent dev --model provider/model-id
