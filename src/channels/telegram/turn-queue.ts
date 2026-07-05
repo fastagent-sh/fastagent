@@ -1,14 +1,14 @@
 /**
  * Per-session serial turn execution: one turn at a time per session (FIFO chains), different
- * sessions concurrent. IN-MEMORY — a restart drops anything still queued; Telegram already ACKed the
- * update so it won't redeliver, and the asker re-asks. The engine lease is the corruption floor
- * beneath this; this adds the group-UX queue (a second summon waits its turn instead of colliding on
- * the lease and being dropped as "busy").
+ * sessions concurrent. IN-MEMORY — the runtime queue holds no durability of its own. The engine lease
+ * is the corruption floor beneath this; this adds the group-UX queue (a second summon waits its turn
+ * instead of colliding on the lease and being dropped as "busy").
  *
  * Channel-neutral (records are opaque beyond a `session` key); it lives in the telegram folder
- * because that is its only consumer today. Durable execution (recovering an ACKed-but-unfinished turn
- * across a crash) belongs at the K-axis backend — an external queue with distributed locking (SPEC
- * §11), not a hand-rolled per-process WAL — so a single-process bot accepts that loss here.
+ * because that is its only consumer today. Durability is layered ON TOP by the caller: turn-store.ts
+ * persists an accepted turn's intent pre-ACK and replays a crash-surviving one on the next start (L1,
+ * process-crash recovery, at-least-once). Exactly-once / deterministic step-replay (L2) is the K-axis
+ * backend — an external queue with distributed locking (SPEC §11) — not this in-memory queue.
  */
 import { log } from "../../log.ts";
 

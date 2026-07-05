@@ -580,8 +580,10 @@ async function runStart(): Promise<void> {
   serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787, (p) =>
     maybeTunnel(dir, p),
   );
-  // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits, losing in-flight turns
-  // (durable execution is the real fix, deferred).
+  // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
+  // in-flight turn is LOST depends on the channel: the Telegram channel persists turn intent pre-ACK
+  // and replays it next start (turn-store.ts, L1 durable execution, at-least-once); HTTP and other
+  // channels have no such layer, so their in-flight turns are still lost (the asker re-invokes).
 }
 
 /**

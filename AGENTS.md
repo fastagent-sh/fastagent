@@ -41,7 +41,8 @@ src/
 │   ├── github/              # github channel (+ scaffold/ bundle)
 │   └── telegram/            # telegram channel — see docs/design/core.md §9.2
 │       ├── telegram.ts      # Telegram domain: ingress, summon policy, envelope, composition
-│       ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; a restart drops the queue)
+│       ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; durability layered by turn-store.ts)
+│       ├── turn-store.ts    # durable turn intent (L1): persist pre-ACK, replay a crash-surviving turn on next start
 │       ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
 │       ├── preview.ts       # live-preview pump + terminal-write policy
 │       ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split

@@ -28,28 +28,42 @@ import { text } from "../respond.ts";
 import { type BufferedRef, collectAttachments, createContextBuffer } from "./context-buffer.ts";
 import { type TelegramFailure, defaultErrorMessage, streamReply } from "./preview.ts";
 import { ensureStateHome } from "./state.ts";
-import { type DownloadedFile, type Target, callApi, resolveFiles, resolveImages, sendMessage } from "./telegram-api.ts";
+import {
+  type DownloadedFile,
+  type Target,
+  callApi,
+  editMessageText,
+  resolveFiles,
+  resolveImages,
+  sendMessage,
+} from "./telegram-api.ts";
 import { createTurnQueue } from "./turn-queue.ts";
+import { type StoredTurn, createTurnStore } from "./turn-store.ts";
+
+/** Execution ceiling: a turn that has STARTED running this many times without finishing is dropped
+ *  rather than run again (a poison turn must not loop forever under a restart policy). Counted per turn
+ *  at dequeue, so a never-run turn queued behind a poison one keeps its full budget.
+ *
+ *  Known limitation: `startAttempt` cannot tell a self-inflicted process crash from an external SIGTERM
+ *  (no graceful drain), so a legitimately LONG turn interrupted by this many successive deploys is
+ *  dropped ("please ask again") as if it were poison. Accepted: catching SIGTERM to spare it would
+ *  reintroduce the drain the design refuses, and a turn outliving this many deploy cycles is an outlier
+ *  — raise this constant if such turns are expected. */
+const MAX_TURN_ATTEMPTS = 3;
 
 export type { TelegramFailure };
 
 /** Update body cap — Telegram updates are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_UPDATE_BYTES = 1 << 20;
 
-/** One accepted turn: everything the runner needs to execute it. The queue is in-memory, so this is a
- *  live object, not a persisted record — a restart drops it (Telegram already ACKed the update). */
-interface PendingTurn {
-  id: string;
-  session: string;
-  /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over. */
+/** One accepted turn: everything the runner needs to execute it. The executable intent is the persisted
+ *  {@link StoredTurn} (so a new field the runner needs is durable by construction); PendingTurn adds only
+ *  live-object fields that are NOT persisted — a restart's queue notice is gone, so `previewId` is
+ *  reconstructed fresh on replay. */
+interface PendingTurn extends Omit<StoredTurn, "attempts"> {
+  /** The "⏳ queued" notice's message_id, when one was sent — the turn's preview takes it over. Live
+   *  only; never persisted (a replayed turn sends a fresh preview). */
   previewId?: number;
-  placeKey: string;
-  baseText: string;
-  chatId: number | string;
-  threadId?: number;
-  replyTo?: number;
-  imageFileIds: string[];
-  fileIds: string[];
 }
 
 /** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */
@@ -231,9 +245,10 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
 /**
  * Run one turn: resolve its attachments, then stream agent.invoke. A primary-attachment failure surfaces
  * as a `failed` event (never a silent drop). `onCompleted` (if given) fires on the turn's `completed`
- * event — the commit point for clearing the folded-in context buffer: only then does the folded
- * discussion provably live in the durable session, so a failure or crash at ANY earlier point leaves the
- * buffer intact for the next summon (a re-folded block beats lost context).
+ * event — the durable-commit point: only then does the folded discussion provably live in the session,
+ * so a failure or crash at ANY earlier point leaves the buffer intact for the next summon (a re-folded
+ * block beats lost context). The caller uses it to remove the turn intent AND commit the context buffer,
+ * in that order (see the call site) so a crash between the two clears cannot replay a context-stripped turn.
  */
 async function* invokeTurn(
   agent: Agent,
@@ -471,6 +486,13 @@ export function telegramChannel(
   const stateHome = resolve(stateDir);
   ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
   const buffer = createContextBuffer(join(stateHome, "buffers.json"));
+  // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash
+  // leaves it for replay on the next start. See turn-store.ts for the at-least-once semantics.
+  const store = createTurnStore(join(stateHome, "turns.json"));
+  const toStored = (r: PendingTurn): StoredTurn => {
+    const { previewId: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
+    return { ...intent, attempts: 0 };
+  };
 
   // In-memory: the in-flight "⏳ queued" notice per turn, awaited at dequeue so the turn reliably takes
   // the notice message over (rec.previewId) instead of racing it and orphaning a late-arriving notice.
@@ -503,9 +525,33 @@ export function telegramChannel(
       // Settle the queue notice (if any) so rec.previewId is final. NOT free: a slow (not failed)
       // notice delays this turn's start by up to the API timeout — accepted, because racing it would
       // orphan the ⏳ message and double-post a placeholder; in the common path the notice resolved
-      // while the previous turn was still running, so this await is instant.
+      // while the previous turn was still running, so this await is instant. BEFORE the ceiling check
+      // so a dropped turn's notice is settled/cleared too (rec.previewId lets notifyDropped take it over).
       await notices.get(rec.id);
       notices.delete(rec.id);
+      // Count this execution against the durable record (poison-turn ceiling) before running it again.
+      const decision = store.startAttempt(rec.id, MAX_TURN_ATTEMPTS);
+      if (decision === "exceeded") {
+        // Started MAX_TURN_ATTEMPTS times without finishing — tell the asker (reusing its ⏳ notice if
+        // any), drop it.
+        notifyDropped(rec);
+        return;
+      }
+      if (decision === "defer") {
+        // Couldn't record the attempt (disk failure): skip this cycle. A restart replays it, so no notify
+        // (telling the asker to re-ask would double-answer once the deferred turn runs). Two accepted
+        // edges of this rare disk-failure corner: (1) the session chain proceeds to the next queued turn,
+        // so a deferred turn can replay AFTER its successors — a per-session FIFO reorder; (2) its ⏳ notice
+        // (if it was queued behind another turn) now falsely reads "Queued", so delete it best-effort — the
+        // eventual replay sends a fresh preview, and leaving it would orphan a stale message above that.
+        if (rec.previewId !== undefined) {
+          void callApi(apiBaseUrl, botToken, "deleteMessage", {
+            chat_id: rec.chatId,
+            message_id: rec.previewId,
+          }).catch(() => {});
+        }
+        return;
+      }
       const startedAt = Date.now();
       const where = `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`;
       log.info(`[telegram] turn start: turn=${rec.id} session=${rec.session} ${where}`);
@@ -526,7 +572,14 @@ export function telegramChannel(
             prompt,
             { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: join(stateHome, "files") },
             { primary: { imageFileIds: rec.imageFileIds, fileIds: rec.fileIds }, buffered },
-            () => buffer.commit(rec.placeKey, consumed),
+            () => {
+              // On completed, ORDER the two durable clears so a crash between them can't replay a
+              // context-stripped turn: drop the intent FIRST (a crash after this won't replay it), THEN
+              // commit the context buffer (a crash before this just re-folds the same context into the
+              // next summon — harmless and additive). The reverse order would leave intent+no-context.
+              store.remove(rec.id);
+              buffer.commit(rec.placeKey, consumed);
+            },
           ),
           apiBaseUrl,
           botToken,
@@ -539,9 +592,44 @@ export function telegramChannel(
         log.error(
           `[telegram] turn failed: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms): ${String(error)}`,
         );
+      } finally {
+        // Fallback removal for the caught-error paths (a `failed` event or a transport throw): those
+        // never reach the completed hook above, which is where a completed turn removes its intent in
+        // order. Idempotent — a second remove after the completed hook is a no-op. Only an INTERRUPTED run
+        // (this finally never runs — a crash or a SIGTERM deploy, no graceful drain) leaves the record for
+        // replay; a transport throw is dropped, not retried (safe retry needs an L2 delivery key).
+        store.remove(rec.id);
       }
     },
   });
+
+  // Accept a turn: persist its intent before the ACK (durable), then enqueue it. Recovery re-enqueues a
+  // crash-surviving turn WITHOUT re-persisting (it is already on disk with a bumped attempt count).
+  const submit = (rec: PendingTurn, persist: boolean): void => {
+    if (persist) store.add(toStored(rec)); // pre-ACK: a failed write throws → webhook 500 → redeliver
+    queue.accept(rec);
+  };
+
+  // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not
+  // just an operator log line. Take over the ⏳ "Queued" notice in place if the turn had one (else send
+  // fresh) — leaving it pinned at "Queued" while sending a separate failure would double-post. Best-
+  // effort, like the queue notices.
+  const notifyDropped = (r: PendingTurn): void => {
+    const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
+    const target: Target = { chatId: r.chatId, threadId: r.threadId, replyTo: r.replyTo };
+    const sent =
+      r.previewId !== undefined
+        ? editMessageText(apiBaseUrl, botToken, target, r.previewId, body, { html: false })
+        : sendMessage(apiBaseUrl, botToken, target, body, { html: false }).then(() => {});
+    void sent.catch((e) => log.warn(`[telegram] could not notify a dropped turn (session=${r.session}): ${String(e)}`));
+  };
+
+  // Re-enqueue turns a prior crash left mid-flight (ACKed but unfinished). Synchronous at construction:
+  // the queue runs them on the next tick, once this factory returns and the event loop turns. The
+  // execution ceiling is enforced per turn at dequeue (run), not here — a never-run turn keeps its budget.
+  const recovered = store.recover();
+  if (recovered.length > 0) log.info(`[telegram] recovering ${recovered.length} unfinished turn(s) from a prior run`);
+  for (const { attempts: _a, ...intent } of recovered) submit({ ...intent, previewId: undefined }, false);
 
   return async (req) => {
     if (req.method !== "POST") return text("POST only\n", 405);
@@ -605,18 +693,21 @@ export function telegramChannel(
       const imageFileIds = extractImages(m);
       const fileIds = extractFiles(m);
       if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
-        // Everything the turn needs, as a plain record; the queue runs it serially per session.
-        queue.accept({
-          id: `${update.update_id}`,
-          session,
-          placeKey,
-          baseText,
-          chatId,
-          threadId,
-          replyTo: m.chat.type !== "private" && sameTarget ? m.message_id : undefined,
-          imageFileIds,
-          fileIds,
-        });
+        // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
+        submit(
+          {
+            id: `${update.update_id}`,
+            session,
+            placeKey,
+            baseText,
+            chatId,
+            threadId,
+            replyTo: m.chat.type !== "private" && sameTarget ? m.message_id : undefined,
+            imageFileIds,
+            fileIds,
+          },
+          true,
+        );
       }
     }
     return new Response(null, { status: 200 });

@@ -185,11 +185,12 @@ subsystem owns its invariants in its own module:
 | Module | Owns |
 |---|---|
 | `telegram.ts` | the Telegram DOMAIN: ingress (secret token, body cap), summon policy, envelope/prompt assembly, composition |
-| `turn-queue.ts` | in-memory per-session serial execution: one turn at a time per session (FIFO chains), different sessions concurrent — the group-UX queue atop the engine lease (a second summon waits instead of colliding as "busy"). Channel-neutral by design (`label` names the consumer). A restart drops anything still queued; durable execution (recovering an ACKed-but-unfinished turn across a crash) belongs at the K-axis backend, not a per-process WAL (see below) |
+| `turn-queue.ts` | in-memory per-session serial execution: one turn at a time per session (FIFO chains), different sessions concurrent — the group-UX queue atop the engine lease (a second summon waits instead of colliding as "busy"). Channel-neutral by design (`label` names the consumer). Holds no durability itself; `turn-store.ts` layers it on (see below) |
+| `turn-store.ts` | durable turn intent (L1): persists an accepted turn pre-ACK, removes it when the turn ends (the runner's `finally`), and replays a crash-surviving one on the next start. Recovers the ACKed-but-unfinished window the queue drops; at-least-once, with a replay ceiling for poison turns. Exactly-once / step-replay (L2) is still the K-axis backend |
 | `context-buffer.ts` | un-summoned group discussion: persisted before each webhook ACK (an ACKed update is never redelivered), folded into the next answered turn, cleared only on that turn's `completed` (only then is it provably in the durable session); carries message ids / reply relations / attachment file_ids so later references ("the file Bob sent") resolve |
 | `preview.ts` | the live preview: ONE real message (`sendMessage` → `editMessageText` in place; `sendMessageDraft` is private-only, useless in groups), a single-writer pump (one edit in flight — out-of-order frames are the flicker), and the terminal-write matrix (completed/failed/abnormal × edit/delete+send/suppress) |
 | `telegram-api.ts` | ONE transport pipeline (`callApi`) for every Bot API method — per-method wire code does not exist, so the invariants (per-attempt timeout, bounded 429/flood-wait, success gated on the body's own `ok:true`, self-describing typed errors) hold by construction. Plus the HTML-aware split: a tag-stack balancer that closes/reopens tags (attributes kept) across the 4096 boundary |
-| `state.ts` | atomic state files (tmp+rename) under the channel-state home |
+| `state.ts` | atomic state files (tmp+rename) under the channel-state home; crash-safe, power-loss best-effort (no fsync) |
 
 Durable decisions this architecture encodes:
 
@@ -197,14 +198,24 @@ Durable decisions this architecture encodes:
   channel state lives under `.fastagent/channels/<kind>/` (buffers, downloaded files),
   mirroring `src/channels/<kind>/`. The home self-ignores (nested `.gitignore`) — it can carry chat
   content. Single-process semantics.
-- **Turn durability is deliberately partial.** The turn queue is in-memory: while the process is
-  DOWN, Telegram retries undelivered (never-ACKed) webhooks, so those are covered for free; but an
-  ACKed-but-unfinished turn (200 already returned) is Telegram's *no-redelivery* case, so a crash
-  there loses it — the asker re-asks. A single-process bot accepts this. Recovering that window would
-  take a durable queue with distributed-locking recovery, which is the K-axis backend's job (§11),
-  not a hand-rolled per-process WAL in the channel; this keeps `runStart`'s no-graceful-drain and the
-  queue consistent (both accept in-flight loss). The un-summoned context buffer is a *separate*
-  durability decision (below) with a stronger case: those messages are never redelivered as a summon.
+- **Turn durability is layered: L1 in the channel (`turn-store.ts`), L2 at the K-axis backend.**
+  While the process is DOWN, Telegram retries undelivered (never-ACKed) webhooks, so those are covered
+  for free. The remaining window is the ACKed-but-unfinished turn (200 already returned) — Telegram's
+  *no-redelivery* case. L1 recovers it: `turn-store.ts` persists an accepted turn's intent pre-ACK
+  (like the context buffer) and, on the next start, replays anything an interrupted run left mid-flight.
+  "Interrupted" is not just a rare crash: `runStart` has no graceful drain, so a SIGTERM — every rolling
+  deploy — exits mid-turn too. This is a per-process WAL by another name, and a deliberate reversal of
+  the earlier "accept the loss" stance — the atomic-rename primitive (`state.ts`) already in the channel
+  makes it cheap enough to be worth the ACKed-but-unfinished window that a single re-ask otherwise
+  costs. It is **at-least-once, not exactly-once**: replay re-runs the whole turn (re-running
+  side-effecting tools — so the idempotency bar is judged against DEPLOY frequency, not rare crashes —
+  and possibly orphaning a preview), and the pre-ACK window can overlap Telegram redelivery (same
+  update_id, no dedup) — a turn may run twice. An execution ceiling drops a poison turn on its own
+  N+1th run (counted per turn at dequeue, so a never-run turn queued behind it keeps its full budget);
+  the dropped turn's asker is notified. **Exactly-once delivery (a persisted delivery key) and
+  deterministic step-replay are L2 — the K-axis backend's job (§11)**, needing the engine's resume
+  hook, not just a store. The un-summoned context buffer is a *separate* durability decision (below): those messages
+  are never redelivered as a summon.
 - **Summon = consume the platform's structure, not re-parse it:** @mentions from Telegram's
   `mention` entities (never a regex over text — code blocks/URLs can't false-summon); reply-to-bot
   by the bot id parsed synchronously from the token (`<bot_id>:<secret>`, no getMe race); edits

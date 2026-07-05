@@ -8,6 +8,19 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Durable turn intent for the Telegram channel (L1 crash/deploy recovery).** An accepted turn's
+  intent is now persisted before the webhook ACK (`turns.json`) and removed when the turn ends; a turn
+  interrupted mid-run — by a crash *or* a SIGTERM deploy (`start` has no graceful drain) — is replayed
+  on the next start, recovering the ACKed-but-unfinished window Telegram won't redeliver. This is
+  **at-least-once**: replay re-runs the whole turn, so side-effecting tools re-run (safe for a Q&A bot;
+  the bar for adding side-effecting ones), and a turn repeatedly interrupted mid-run is dropped after a
+  few attempts with a notice to the asker. Exactly-once delivery and deterministic step-replay remain
+  L2 (a K-axis backend). This is a deliberate reversal of 0.8.3's "accept the loss" stance — a
+  per-process *intent* log made cheap by the channel's existing atomic-rename state primitive, distinct
+  from the queue-level WAL 0.8.3 removed.
+
 ## [0.8.3] - 2026-07-05
 
 ### Changed

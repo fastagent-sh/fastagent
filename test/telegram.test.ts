@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -153,13 +153,199 @@ describe("durable group buffer (single-process restarts)", () => {
   it("a corrupt or wrong-shaped state file degrades to empty — the channel still boots and answers", async () => {
     vi.stubGlobal("fetch", okFetch());
     const state = freshStateDir();
-    // buffers.json: syntactically valid JSON of the WRONG SHAPE — must degrade to empty, not boot-fail
+    // buffers.json AND turns.json: syntactically valid JSON of the WRONG SHAPE — each must degrade to
+    // empty (its IO-boundary shape guard), not boot-fail.
     writeFileSync(join(state, "buffers.json"), JSON.stringify(["not", "a", "record"]));
+    writeFileSync(join(state, "turns.json"), JSON.stringify(["not", "a", "record"]));
     const { agent, calls } = replyingAgent("ok");
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
     await ch(tgRequest(group(1, "hello")));
     await flush();
-    expect(calls.length).toBe(1); // works, with empty state (the warn is in the operator log)
+    expect(calls.length).toBe(1); // works, with empty state (the warns are in the operator log)
+  });
+});
+
+describe("durable turn intent (crash recovery)", () => {
+  it("persists a turn's intent BEFORE the ACK and removes it when the turn completes", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const state = freshStateDir();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        await gate; // hang so the intent is observably on disk while the turn is in flight
+        yield { type: "completed" };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
+    expect((await ch(tgRequest(MSG))).status).toBe(200);
+    const during = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(during)).toHaveLength(1); // durable by the time the 200 exists
+    release();
+    await flush();
+    const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(after)).toHaveLength(0); // completed → removed; only a hard crash would leave it
+  });
+
+  it("a FAILED turn also removes its intent — a failed event is not replayed on the next start", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const state = freshStateDir();
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        yield { type: "failed", details: "boom", retryable: true };
+      },
+    };
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
+    await ch(tgRequest(MSG));
+    await flush();
+    const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(after)).toHaveLength(0);
+  });
+
+  it("replays a crash-surviving turn on the next start, then removes it", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const state = freshStateDir();
+    // Simulate a crash: a record persisted pre-ACK but never removed (the runner's finally never ran).
+    writeFileSync(
+      join(state, "turns.json"),
+      JSON.stringify({
+        "9": {
+          id: "9",
+          session: "42",
+          placeKey: "42",
+          baseText: "recover me",
+          chatId: 42,
+          imageFileIds: [],
+          fileIds: [],
+          attempts: 0,
+        },
+      }),
+    );
+    const { agent, calls } = replyingAgent("done");
+    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state }); // construction replays
+    await flush();
+    expect(String(calls[0]?.text)).toContain("recover me"); // ran with no new update
+    const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(after)).toHaveLength(0); // removed on completion
+  });
+
+  it("drops a recovered turn over the execution ceiling — notifies the asker instead of running it", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const state = freshStateDir();
+    // A record that has already started (and crashed the process) MAX_TURN_ATTEMPTS times.
+    writeFileSync(
+      join(state, "turns.json"),
+      JSON.stringify({
+        "9": {
+          id: "9",
+          session: "42",
+          placeKey: "42",
+          baseText: "poison",
+          chatId: 42,
+          imageFileIds: [],
+          fileIds: [],
+          attempts: 3,
+        },
+      }),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { agent, calls } = replyingAgent("should not run");
+    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
+    await flush();
+    expect(calls).toHaveLength(0); // ceiling hit at dequeue — the turn never runs
+    const notices = callsTo(fetchMock, "sendMessage").map((c) => bodyOf(c));
+    expect(notices.some((b) => String(b.text).includes("complete an earlier request"))).toBe(true);
+    const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(after)).toHaveLength(0); // and the poison record is dropped
+  });
+
+  it("a pre-ACK state-write failure does NOT ACK (rejects → host 500 → Telegram redelivers), persists nothing", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const state = freshStateDir();
+    const { agent } = replyingAgent("hi");
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
+    mkdirSync(join(state, "turns.json.tmp")); // make saveStateFile's tmp write fail (EISDIR) on the pre-ACK persist
+    // add() throws → submit throws → the handler rejects (never returns the 200 ACK). The Node host maps a
+    // rejected handler to 500, so Telegram redelivers the never-ACKed update rather than silently losing it.
+    await expect(ch(tgRequest(MSG))).rejects.toThrow();
+    expect(existsSync(join(state, "turns.json"))).toBe(false); // rolled back — no phantom intent on disk
+  });
+
+  it("DEFERS a recovered turn when its attempt bump can't persist — not run, not notified, retained on disk", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const state = freshStateDir();
+    writeFileSync(
+      join(state, "turns.json"),
+      JSON.stringify({
+        "9": {
+          id: "9",
+          session: "42",
+          placeKey: "42",
+          baseText: "later",
+          chatId: 42,
+          imageFileIds: [],
+          fileIds: [],
+          attempts: 0,
+        },
+      }),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { agent, calls } = replyingAgent("done");
+    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state }); // recover() re-enqueues it
+    mkdirSync(join(state, "turns.json.tmp")); // make the dequeue-time bump write fail (EISDIR), before the turn runs
+    await flush();
+    expect(calls).toHaveLength(0); // deferred — never ran
+    const notices = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map((c) =>
+      bodyOf(c),
+    );
+    expect(notices.some((b) => String(b.text).includes("complete an earlier request"))).toBe(false); // no notify
+    const onDisk = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(onDisk)).toEqual(["9"]); // retained intact for the next start
+  });
+
+  it("a poison turn queued behind a sibling takes over its ⏳ notice (no orphan, no double-post)", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const state = freshStateDir();
+    // Same session: update 8 completes, update 9 is over the ceiling. Written out of order (9 first) so
+    // recovery's numeric-id sort — not on-disk order — decides FIFO: 8 runs, 9 is "queued behind" it and
+    // gets a ⏳ notice; when 9 is dropped it must edit that notice, not orphan it + double-post.
+    writeFileSync(
+      join(state, "turns.json"),
+      JSON.stringify({
+        "9": {
+          id: "9",
+          session: "s",
+          placeKey: "s",
+          baseText: "poison",
+          chatId: 42,
+          imageFileIds: [],
+          fileIds: [],
+          attempts: 3,
+        },
+        "8": {
+          id: "8",
+          session: "s",
+          placeKey: "s",
+          baseText: "run me",
+          chatId: 42,
+          imageFileIds: [],
+          fileIds: [],
+          attempts: 0,
+        },
+      }),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { agent, calls } = replyingAgent("done");
+    telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", stateDir: state });
+    await flush();
+    expect(calls).toHaveLength(1); // only update 8 ran; 9 was dropped before running
+    const edits = callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c));
+    expect(edits.some((b) => String(b.text).includes("complete an earlier request"))).toBe(true); // took over ⏳
+    const after = JSON.parse(readFileSync(join(state, "turns.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(after)).toHaveLength(0); // 8 completed, 9 dropped
   });
 });
 
