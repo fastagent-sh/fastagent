@@ -8,6 +8,8 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-05
+
 ### Changed
 
 - **BREAKING: the channel contract is now `ChannelModule = (ctx: ChannelContext) => Routes`** with
@@ -194,7 +196,8 @@ While the project is pre-1.0, minor versions may include breaking changes.
 Last release before the open-source documentation pass. Earlier history is in the
 [commit log](https://github.com/kid7st/fastagent/commits/main).
 
-[Unreleased]: https://github.com/kid7st/fastagent/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/kid7st/fastagent/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/kid7st/fastagent/compare/v0.8.3...v0.9.0
 [0.8.3]: https://github.com/kid7st/fastagent/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/kid7st/fastagent/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/kid7st/fastagent/compare/v0.8.0...v0.8.1
