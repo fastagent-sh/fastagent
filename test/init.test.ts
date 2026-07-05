@@ -249,7 +249,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const src = await readFile(join(dir, "channels", "telegram.ts"), "utf8");
     expect(src).toContain('from "@kid7st/fastagent/telegram"'); // the adapter
     expect(src).toContain("POST /telegram");
-    expect(src).toContain("telegramChannel(agent"); // the channel glue (route policy is optional)
+    expect(src).toContain("telegramChannel({"); // policy-only glue (agent/stateDir arrive via ctx)
     expect(src).not.toContain("sendDocument"); // the channel file is the channel, NOT the send-tool (no misroute)
     // the companion tool lands in tools/ by the bundle convention (so the agent can send files back)
     const sendTool = await readFile(join(dir, "tools", "telegram-send.ts"), "utf8");

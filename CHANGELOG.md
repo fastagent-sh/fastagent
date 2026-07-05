@@ -8,7 +8,36 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: the channel contract is now `ChannelModule = (ctx: ChannelContext) => Routes`** with
+  `ctx = { agent, stateRoot }`, and the bundled adapters are policy-only factories:
+  `telegramChannel(opts)` / `githubChannel(opts)` take options (no `agent` argument) and RETURN a
+  `ChannelModule` that mounts their route (`POST /telegram`, `POST /webhook`). A scaffolded channel
+  file is now one policy expression — `export default telegramChannel({…})` — and `agent`/`stateRoot`
+  flow from the framework to the adapter without transiting user glue. This also fixes a real anchor
+  bug: telegram state was rooted at `process.cwd()/.fastagent` while engine state used
+  `<dir>/.fastagent`, so `fastagent start <dir>` from elsewhere split the state home. The
+  `TelegramChannelOptions.stateDir` option is removed: the channel home is always derived from the
+  state root, so glue can never silently bypass the operator's one state knob.
+  **Upgrading:** rewrite `channels/*.ts` to the new one-expression shape (or re-run
+  `fastagent add <kind>`); if you ran `fastagent start <dir>` with a cwd other than `<dir>` (or used
+  the removed `stateDir` option), move the old telegram state —
+  `<old cwd>/.fastagent/channels/telegram/` → `<state root>/channels/telegram/` — before starting,
+  or pending turn intents and group-context buffers are silently abandoned.
+
 ### Added
+
+- **`FASTAGENT_STATE_DIR` — one knob for the whole machine-state home.** `.fastagent/` is now formally
+  the agent's single-lifecycle state root (sessions, `auth.json`, `channels/<kind>/`); the opener
+  resolves `FASTAGENT_STATE_DIR` > `<dir>/.fastagent` once and everything derives from it, so a
+  container mounts ONE volume to keep all durable state (including the Telegram turn intents and
+  context buffers that crash/deploy replay depends on — previously impossible to relocate). The finer
+  `--sessions-dir`/`FASTAGENT_SESSIONS_DIR` and `--auth-path`/`FASTAGENT_AUTH_PATH` knobs still
+  override their specific path on top (as operator knobs, a relative value resolves against cwd). The
+  self-ignore leak guard is now root-based: a custom in-tree root (a `FASTAGENT_STATE_DIR` inside the
+  agent dir) gets its own `.gitignore="*"`, closing a gap where credentials under a non-`.fastagent`
+  in-tree root could show as committable.
 
 - **Durable turn intent for the Telegram channel (L1 crash/deploy recovery).** An accepted turn's
   intent is now persisted before the webhook ACK (`turns.json`) and removed when the turn ends; a turn

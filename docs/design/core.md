@@ -196,10 +196,21 @@ subsystem owns its invariants in its own module:
 
 Durable decisions this architecture encodes:
 
-- **Channel-state convention:** engine state lives at the `.fastagent` top level (auth, sessions);
-  channel state lives under `.fastagent/channels/<kind>/` (buffers, downloaded files),
-  mirroring `src/channels/<kind>/`. The home self-ignores (nested `.gitignore`) — it can carry chat
-  content. Single-process semantics.
+- **The state root is defined, resolved once, and handed down.** `.fastagent/` is the agent's machine-
+  state home: ONE lifecycle (precious, single-process, must survive redeploy) — nothing cache-like or
+  runtime-like lives there, so no XDG-style taxonomy inside it. The opener resolves the root
+  (`FASTAGENT_STATE_DIR` > `<dir>/.fastagent`, absolute) and hands it to code via `ChannelContext`
+  (env/flags are the operator input plane; ctx is the in-process handoff — the systemd
+  `StateDirectory=` → `$STATE_DIRECTORY` shape). Engine state lives at the root (auth, sessions);
+  channel state under `<root>/channels/<kind>/` (buffers, downloaded files), mirroring
+  `src/channels/<kind>/` — anchored on the resolved root, never `process.cwd()`. The in-tree home
+  self-ignores (nested `.gitignore`) — it can carry chat content. Single-process semantics; the
+  file-backed root is the "local backend", and multi-instance state is the K-axis remote backend, not
+  a smarter file layout.
+- **Adapters are policy-only factories.** `telegramChannel(opts)` / `githubChannel(opts)` return a
+  `ChannelModule` (`(ctx: { agent, stateRoot }) => Routes`), so the scaffolded channel file is one
+  policy expression and the framework pipes `agent`/`stateRoot` to the adapter without transiting user
+  glue. Custom glue destructures ctx.
 - **Turn durability is layered: L1 in the channel (`turn-store.ts`), L2 at the K-axis backend.**
   While the process is DOWN, Telegram retries undelivered (never-ACKed) webhooks, so those are covered
   for free. The remaining window is the ACKed-but-unfinished turn (200 already returned) — Telegram's
@@ -282,12 +293,12 @@ One opener (§4), two postures — both reuse **L2** (`createPiAgentFromDefiniti
 | watch | restart the worker on edits | none (stable process) |
 | model/http | `fastagent.config.mjs` (flag > env > config) | same — read directly, frozen by git, **no manifest** |
 | skills | definition-only | definition-only (same) |
-| sessions | `<dir>/.fastagent/sessions` | same default; `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` override to a volume |
+| sessions | `<state root>/sessions` | same default; `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` override to a volume |
 | posture | authoring (verbose) | production (stable, no watch) |
 
 `start` depends on zero builder-machine state: it reads the directory + `fastagent.config.mjs`, resolves model/sessions, calls L2 — no manifest, no frozen copy.
 
-**Sessions** default under the definition's own `.fastagent/sessions` (restart-surviving local continuity, faithful to local pi). A container may replace the definition directory wholesale on redeploy, so point `FASTAGENT_SESSIONS_DIR` at a mounted volume to keep conversations — `start` reminds the operator when running on the default. Precedence `--sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions`.
+**State** defaults under the definition's own `.fastagent/` (restart-surviving local continuity, faithful to local pi). A container may replace the definition directory wholesale on redeploy, so point `FASTAGENT_STATE_DIR` at a mounted volume to keep the whole machine-state home (sessions, auth, channel state) — `start` reminds the operator when running on the default. Sessions precedence: `--sessions-dir > FASTAGENT_SESSIONS_DIR > <state root>/sessions`; auth: `--auth-path > FASTAGENT_AUTH_PATH > <state root>/auth.json`.
 
 **Startup report (minimal observable surface):** run dir, model, **auth source** (pi's resolved label + provider, e.g. `OAuth (anthropic)` or `ANTHROPIC_API_KEY (anthropic)`), `AGENTS.md` presence, the **loaded skills** (enumerable), the session dir, and the bound port. It does **not** enumerate authored context files: they are ambient (§10.1a), so the only meaningful, bounded list is skills.
 
@@ -316,7 +327,7 @@ RUN  npm ci                          # code-tool deps (skip for pure markdown/sk
 CMD  ["fastagent", "start", "/app"]  # cwd = /app
 ```
 
-Sessions go to a mounted volume (`FASTAGENT_SESSIONS_DIR=/data/sessions`) so a redeploy never wipes them; secrets and (optionally) OAuth credentials are injected as env/mounted files; `PORT` is honored. Excluding dev cruft from the image is `.dockerignore`'s job until the future `deploy` command owns packaging. The recipe is documented here rather than generated or shipped as a Dockerfile.
+State goes to a mounted volume (`FASTAGENT_STATE_DIR=/data`) so a redeploy never wipes sessions, rotating OAuth credentials, or channel state (the Telegram turn/context files replay depends on); static secrets are injected as env; `PORT` is honored. Excluding dev cruft from the image is `.dockerignore`'s job until the future `deploy` command owns packaging. The recipe is documented here rather than generated or shipped as a Dockerfile.
 
 ## 11. Current open work
 

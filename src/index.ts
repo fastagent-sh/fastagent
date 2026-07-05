@@ -17,7 +17,14 @@ export { readBodyCapped } from "./channels/body.ts";
 export { text, textHeaders } from "./channels/respond.ts";
 
 // Node host (K-side). serveNode binds a route table on node:http; router composes a Routes table.
-export { type ChannelHandler, type Routes, router, serveNode } from "./host/node.ts";
+export {
+  type ChannelContext,
+  type ChannelHandler,
+  type ChannelModule,
+  type Routes,
+  router,
+  serveNode,
+} from "./host/node.ts";
 
 // pi reference implementation — the reusable assembly ladder (L1/L2; L0 is internal to invoke.ts).
 export {
@@ -45,8 +52,8 @@ export {
 export { z } from "zod";
 export type { AgentTool } from "@earendil-works/pi-agent-core";
 
-// Channel discovery: a channels/<name>.ts default-exports a ChannelModule ((agent) => Routes).
-export { loadChannels, type ChannelModule, type ChannelCollision } from "./engines/pi/channel.ts";
+// Channel discovery: a channels/<name>.ts default-exports a ChannelModule ((ctx) => Routes).
+export { loadChannels, type ChannelCollision } from "./engines/pi/channel.ts";
 
 // The command opener `dev` and `start` both drive: point at a definition directory → agent.
 export {

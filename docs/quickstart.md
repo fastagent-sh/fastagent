@@ -87,7 +87,7 @@ data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"details":{"
 data: {"type":"completed"}
 ```
 
-Reuse the same `session` value to continue a conversation. Local sessions persist under `.fastagent/sessions`, so a dev restart keeps conversation history.
+Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `.fastagent/sessions`), so a dev restart keeps conversation history.
 
 ## 4. Try authoring loops
 

@@ -43,9 +43,10 @@ Each file default-exports a `ChannelModule`:
 ```ts
 import type { ChannelModule } from "@kid7st/fastagent";
 
-const channel: ChannelModule = (agent) => ({
+const channel: ChannelModule = ({ agent, stateRoot }) => ({
   "POST /webhook": async (req) => {
-    // parse req, call agent, return a Response
+    // parse req, call agent, return a Response; durable channel state goes under
+    // `${stateRoot}/channels/<kind>` (never process.cwd())
     return new Response(null, { status: 204 });
   },
 });
@@ -53,7 +54,7 @@ const channel: ChannelModule = (agent) => ({
 export default channel;
 ```
 
-`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`, call each module with the same assembled agent, and merge the returned route tables onto one HTTP server.
+`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`, call each module with the same mount context (the assembled agent + the resolved state root), and merge the returned route tables onto one HTTP server.
 
 With no `channels/` directory, FastAgent mounts the default HTTP/SSE invoke channel at `POST /invoke`.
 
@@ -92,36 +93,31 @@ Example GitHub glue:
 
 ```ts
 import { githubChannel } from "@kid7st/fastagent/github";
-import type { ChannelModule } from "@kid7st/fastagent";
 
-const channel: ChannelModule = (agent) => ({
-  "POST /webhook": githubChannel(agent, {
-    secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
-    on: (event) =>
-      event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload
-        ? [{ session: event.deliveryId, text: `Review PR #${event.payload.pull_request.number}` }]
-        : [],
-  }),
+export default githubChannel({
+  secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
+  on: (event) =>
+    event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload
+      ? [{ session: event.deliveryId, text: `Review PR #${event.payload.pull_request.number}` }]
+      : [],
 });
-
-export default channel;
 ```
 
 Example Telegram glue:
 
 ```ts
 import { telegramChannel } from "@kid7st/fastagent/telegram";
-import type { ChannelModule } from "@kid7st/fastagent";
 
-const channel: ChannelModule = (agent) => ({
-  "POST /telegram": telegramChannel(agent, {
-    secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
-    botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
-  }),
+export default telegramChannel({
+  secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
+  botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
 });
-
-export default channel;
 ```
+
+An adapter call returns a `ChannelModule`: the glue holds only policy (secrets from env, `on`/`route`),
+while `agent` and the state root flow from the framework to the adapter without transiting your code.
+The adapter owns its default route (`POST /webhook`, `POST /telegram`); wrap it in your own
+`ChannelModule` to remap.
 
 ## Adapter + glue
 
@@ -165,16 +161,11 @@ The user's workspace installs the adapter and wires it with a channel file:
 
 ```ts
 import { slackChannel } from "fastagent-channel-slack";
-import type { ChannelModule } from "@kid7st/fastagent";
 
-const channel: ChannelModule = (agent) => ({
-  "POST /slack": slackChannel(agent, {
-    signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-    on: (event) => ({ session: event.user, text: event.text }),
-  }),
+export default slackChannel({
+  signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
+  on: (event) => ({ session: event.user, text: event.text }),
 });
-
-export default channel;
 ```
 
 Read [Channel development](channel-development.md) for adapter design, packaging, and testing guidance.

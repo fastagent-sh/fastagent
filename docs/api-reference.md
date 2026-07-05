@@ -182,11 +182,18 @@ export default defineTool({
 ## Channel authoring
 
 ```ts
-type ChannelModule = (agent: Agent) => Routes;
-function loadChannels(dir: string, agent: Agent): Promise<{ routes: Routes; collisions: ChannelCollision[] }>;
+interface ChannelContext {
+  agent: Agent;
+  stateRoot: string; // resolved state root (FASTAGENT_STATE_DIR > <dir>/.fastagent), absolute
+}
+type ChannelModule = (ctx: ChannelContext) => Routes;
+function loadChannels(dir: string, ctx: ChannelContext): Promise<{ routes: Routes; collisions: ChannelCollision[] }>;
 ```
 
-A workspace channel default-exports a `ChannelModule` from `channels/<name>.ts`.
+A workspace channel default-exports a `ChannelModule` from `channels/<name>.ts`. Bundled adapters
+(`telegramChannel(opts)`, `githubChannel(opts)`) take policy options and return a `ChannelModule`, so
+the channel file is one expression; a channel persisting durable state derives its home from
+`ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`.
 
 Channel adapters can also use:
 

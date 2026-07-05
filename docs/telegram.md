@@ -55,18 +55,13 @@ A minimal channel module looks like this:
 
 ```ts
 import { telegramChannel } from "@kid7st/fastagent/telegram";
-import type { ChannelModule } from "@kid7st/fastagent";
 
-const channel: ChannelModule = (agent) => ({
-  "POST /telegram": telegramChannel(agent, {
-    secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
-    botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
-    // Optional. The scaffold uses this for development transparency.
-    onError: (failed) => `⚠️ ${failed.details}`,
-  }),
+export default telegramChannel({
+  secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
+  botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
+  // Optional. The scaffold uses this for development transparency.
+  onError: (failed) => `⚠️ ${failed.details}`,
 });
-
-export default channel;
 ```
 
 Both `secretToken` and `botToken` are required. Construction fails if either is empty, so a public endpoint never silently accepts forged updates or fails later without a bot token.
@@ -99,7 +94,7 @@ import { defaultTelegramRoute, telegramChannel, telegramEnvelope } from "@kid7st
 
 const botUsername = "my_bot";
 
-telegramChannel(agent, {
+telegramChannel({
   secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
   botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
   route(update) {
@@ -170,14 +165,14 @@ For development bots, surfacing `failed.details` is useful. For public bots, pre
 Telegram media are handled by the channel before the agent turn runs.
 
 - Photos are downloaded, converted to `prompt.images`, and resized by the engine before reaching the model. The selected model must support vision.
-- Documents, voice, video, and audio are downloaded to `<cwd>/.fastagent/channels/telegram/files/<chat>/`. Their local paths are appended to the prompt so the agent can read them with tools.
+- Documents, voice, video, and audio are downloaded to `<state root>/channels/telegram/files/<chat>/`. Their local paths are appended to the prompt so the agent can read them with tools.
 - Download failures become `failed` events, never silent drops.
 
-Downloaded files persist until the operator cleans them up. Treat `.fastagent/channels/telegram/` like session state: git-ignored machine state that may need a volume or cleanup policy for long-running bots.
+Downloaded files persist until the operator cleans them up. Treat `<state root>/channels/telegram/` like session state: git-ignored machine state that may need a volume or cleanup policy for long-running bots.
 
 ## State & restarts
 
-The channel persists its state under `<cwd>/.fastagent/channels/telegram/` (the channel-state convention: engine state at the `.fastagent` top level, channel state under `channels/<kind>/`; override with the `stateDir` option):
+The channel persists its state under `<state root>/channels/telegram/` (the state root resolves as `FASTAGENT_STATE_DIR` > `<dir>/.fastagent`; the channel-state convention puts engine state at the root, channel state under `channels/<kind>/`):
 
 - `buffers.json` — the group-context buffer, written before each webhook ACK (an ACKed update is never redelivered, so ACK-then-persist would be a silent-loss window).
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start.

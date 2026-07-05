@@ -5,10 +5,13 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { createPiAgentFromWorkspace, createPiModels, listModels, probeAuthSource, resolveModel } from "../src/index.ts";
 import {
+  defaultAuthPath,
+  defaultSessionsDir,
   loadConfig,
   resolveAuthPathOverride,
   resolveModelSpec,
   resolveSessionsDirOverride,
+  resolveStateRoot,
 } from "../src/engines/pi/config.ts";
 import { resolveTools } from "../src/engines/pi/create.ts";
 
@@ -23,6 +26,27 @@ describe("config: resolveSessionsDirOverride (start's sessions precedence)", () 
     expect(resolveSessionsDirOverride(undefined, env)).toBe(resolve("envdir")); // env when no flag
     expect(resolveSessionsDirOverride(undefined, {} as NodeJS.ProcessEnv)).toBeUndefined(); // neither → opener default
     expect(resolveSessionsDirOverride("/mnt/vol", {} as NodeJS.ProcessEnv)).toBe("/mnt/vol"); // absolute kept as-is
+  });
+});
+
+describe("config: resolveStateRoot (the ONE machine-state root)", () => {
+  it("env overrides; default is the absolute in-tree .fastagent; ~ expands", async () => {
+    const env = { FASTAGENT_STATE_DIR: "/data" } as NodeJS.ProcessEnv;
+    expect(resolveStateRoot("/app", env)).toBe("/data"); // env wins
+    expect(resolveStateRoot("relative/dir", {} as NodeJS.ProcessEnv)).toBe(resolve("relative/dir", ".fastagent")); // absolute default
+    const { homedir } = await import("node:os");
+    expect(resolveStateRoot("/app", { FASTAGENT_STATE_DIR: "~/state" } as NodeJS.ProcessEnv)).toBe(
+      join(homedir(), "state"),
+    );
+    // A RELATIVE override is an operator knob — anchored on cwd (its sibling knobs' convention), NOT on
+    // `dir`; only the default is dir-anchored. So it ignores `dir` and resolves against process.cwd().
+    expect(resolveStateRoot("/app", { FASTAGENT_STATE_DIR: "state" } as NodeJS.ProcessEnv)).toBe(resolve("state"));
+  });
+
+  it("sessions and auth defaults derive from the resolved root (one volume covers everything)", () => {
+    const root = resolveStateRoot("/app", { FASTAGENT_STATE_DIR: "/data" } as NodeJS.ProcessEnv);
+    expect(defaultSessionsDir(root)).toBe("/data/sessions");
+    expect(defaultAuthPath(root)).toBe("/data/auth.json");
   });
 });
 

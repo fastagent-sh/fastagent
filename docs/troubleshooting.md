@@ -102,7 +102,7 @@ Use `--no-watch` to serve once without the supervisor.
 By default, sessions live under the workspace:
 
 ```txt
-<workspace>/.fastagent/sessions
+<state root>/sessions   # default <workspace>/.fastagent/sessions; root override: FASTAGENT_STATE_DIR
 ```
 
 A redeploy that replaces the workspace can wipe them. Point sessions at durable storage:
@@ -171,7 +171,7 @@ Telegram photos become `prompt.images`. The selected model must support vision. 
 Telegram documents/audio/video are downloaded under:
 
 ```txt
-<cwd>/.fastagent/channels/telegram/files/<chat>/
+<state root>/channels/telegram/files/<chat>/
 ```
 
 The path is appended to the prompt. Make sure the agent has filesystem tools enabled and the file still exists. Long-running bots should mount or clean this directory deliberately.

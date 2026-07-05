@@ -9,7 +9,7 @@ FastAgent keeps behavior and deployment choices separate:
 
 - agent behavior lives in `AGENTS.md`, `skills/`, and `tools/`,
 - deployment choices live in `fastagent.config.*`, CLI flags, and environment variables,
-- secrets live in `.env`, provider env vars, or the project-level `<dir>/.fastagent/auth.json`.
+- secrets live in `.env`, provider env vars, or the project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`).
 
 ## Config file
 
@@ -76,7 +76,7 @@ FastAgent resolves model credentials through the model provider layer. Common op
 
 | Source | Use case |
 |---|---|
-| `fastagent login` | Stores OAuth/API-key credentials in the project-level `<cwd>/.fastagent/auth.json` (override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded; run from `$HOME` for the global file). |
+| `fastagent login` | Stores OAuth/API-key credentials in the project-level `<state root>/auth.json` (default `<cwd>/.fastagent/auth.json`; override: `--auth-path` / `FASTAGENT_AUTH_PATH`, a leading `~` is expanded; run from `$HOME` for the global file). |
 | Provider env vars | Good for servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
 | Workspace `.env` | Local development secrets loaded by CLI commands. Keep it gitignored. |
 
@@ -102,27 +102,26 @@ Use `PORT` in hosted environments that inject a port.
 
 ## Sessions
 
-By default, `dev` and `start` persist sessions under:
+`<workspace>/.fastagent/` is the agent's **machine-state home**: sessions, credentials (`auth.json`),
+and channel state (`channels/<kind>/`) all live under one root with one lifecycle — precious,
+single-process, must survive a redeploy. It is gitignored and never part of the definition.
 
-```txt
-<workspace>/.fastagent/sessions
-```
-
-For deployments, use durable storage:
+For deployments, move the WHOLE root to durable storage with one knob:
 
 ```bash
-FASTAGENT_SESSIONS_DIR=/data/sessions fastagent start
-# or
-fastagent start --sessions-dir /data/sessions
+FASTAGENT_STATE_DIR=/data fastagent start
 ```
 
-Precedence:
+Everything derives from it (`/data/sessions`, `/data/auth.json`, `/data/channels/telegram`, …), so a
+container mounts one volume. The finer knobs still override their specific path on top:
 
 ```txt
---sessions-dir > FASTAGENT_SESSIONS_DIR > <workspace>/.fastagent/sessions
+state root: FASTAGENT_STATE_DIR                          > <workspace>/.fastagent
+sessions:   --sessions-dir > FASTAGENT_SESSIONS_DIR      > <state root>/sessions
+auth:       --auth-path    > FASTAGENT_AUTH_PATH         > <state root>/auth.json
 ```
 
-A leading `~` in `--sessions-dir` / `FASTAGENT_SESSIONS_DIR` is expanded to your home dir (same as the auth path).
+A leading `~` in any of these is expanded to your home dir.
 
 ## Tools
 

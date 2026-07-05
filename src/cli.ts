@@ -20,8 +20,9 @@ import { announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 import { discoverChannelFiles, loadChannels } from "./engines/pi/channel.ts";
 import { fastagentVersion } from "./version.ts";
 import {
-  defaultProjectAuthPath,
-  defaultProjectSessionsDir,
+  defaultAuthPath,
+  defaultSessionsDir,
+  resolveStateRoot,
   isValidPort,
   listModels,
   loadConfig,
@@ -32,7 +33,7 @@ import {
 import { formatModelsCommand } from "./cli-models.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { createPiModels, probeAuthSource } from "./engines/pi/models.ts";
-import { ensureInTreeStateSelfIgnored, loadAgentDefinition } from "./engines/pi/definition.ts";
+import { ensureStateRootSelfIgnored, isUnderDir, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { loadRootIgnore } from "./workspace.ts";
 import { runInvokeStream } from "./invoke-stream.ts";
 import { reportDefinitionWarnings, reportToolCollisions } from "./engines/pi/report.ts";
@@ -95,17 +96,20 @@ function usage(code: number): never {
          definition directly; model/http come from fastagent.config.ts (frozen by git).
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          port precedence:  --port > PORT env > fastagent.config.ts http.port > 8787
-         sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <dir>/.fastagent/sessions
-                   (point FASTAGENT_SESSIONS_DIR at a volume so a redeploy never wipes conversations)
-         auth:     --auth-path > FASTAGENT_AUTH_PATH > <dir>/.fastagent/auth.json (project-level;
+         state:    FASTAGENT_STATE_DIR > <dir>/.fastagent — the ONE machine-state root (auth,
+                   sessions, channel state all derive from it); point it at a mounted volume so a
+                   redeploy that replaces the directory never wipes state
+         sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <state>/sessions
+         auth:     --auth-path > FASTAGENT_AUTH_PATH > <state>/auth.json (project-level;
                    point it at ~/.fastagent/auth.json to share one credential across projects)
          --tunnel  same as dev: a public HTTPS URL + auto-registered webhooks, for hosting a bot from
                    your own box without deploying (the quick-tunnel URL is ephemeral, not for production)
   add    github | telegram: scaffold channels/<kind>.ts (third-party adapter glue, an on() to edit).
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
-  login  authenticate a model provider into the project-level <cwd>/.fastagent/auth.json (override with
-         --auth-path / FASTAGENT_AUTH_PATH; run from $HOME for the global ~/.fastagent/auth.json): pick
+  login  authenticate a model provider into the project-level <state root>/auth.json — default
+         <cwd>/.fastagent/auth.json (root: FASTAGENT_STATE_DIR; file: --auth-path / FASTAGENT_AUTH_PATH;
+         run from $HOME for the global ~/.fastagent/auth.json): pick
          a method (subscription/OAuth or API key), then a provider that offers it (configured status
          shown). [provider] takes the method from what that provider supports, asked only when both.`);
   process.exit(code);
@@ -234,8 +238,9 @@ async function runInfo(): Promise<void> {
   const channels = await discoverChannelFiles(dir).catch(failStartup);
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login
   // create them, info must not).
-  const sessionsDir = resolveSessionsDirOverride(values["sessions-dir"]) ?? defaultProjectSessionsDir(dir);
-  const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultProjectAuthPath(dir);
+  const stateRoot = resolveStateRoot(dir);
+  const sessionsDir = resolveSessionsDirOverride(values["sessions-dir"]) ?? defaultSessionsDir(stateRoot);
+  const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultAuthPath(stateRoot);
 
   if (values.json) {
     console.log(
@@ -248,6 +253,7 @@ async function runInfo(): Promise<void> {
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
           tools: toolNames,
           channels,
+          stateRoot,
           sessionsDir,
           authPath,
           diagnostics: definition.diagnostics,
@@ -267,6 +273,7 @@ async function runInfo(): Promise<void> {
   console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
   console.log(`tools:    ${toolNames.join(", ") || "(none)"}`);
   console.log(`channels: ${channels.join(", ") || "(none)"}`);
+  console.log(`state:    ${stateRoot}`);
   console.log(`sessions: ${sessionsDir}`);
   console.log(`auth:     ${authPath}`);
   reportToolCollisions(toolCollisions);
@@ -390,12 +397,15 @@ async function runLogin(): Promise<void> {
   const loginDir = process.cwd();
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
-  const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultProjectAuthPath(loginDir);
+  const stateRoot = resolveStateRoot(loginDir);
+  const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultAuthPath(stateRoot);
   // login is the command that CREATES the credential file, so the leak guard binds HERE too (not only
   // in the opener): on an adapted project dir, a `login` before the first dev/start would otherwise
-  // leave the secret untracked-but-committable. Same single owner — it self-ignores only an in-tree
-  // project `.fastagent`, never the HOME-global one (login from $HOME).
-  await ensureInTreeStateSelfIgnored(loginDir, authPath);
+  // leave the secret untracked-but-committable. Unlike the opener (which populates the WHOLE root, so
+  // it always self-ignores an in-tree root), login writes ONLY auth.json — so guard iff the credential
+  // actually lands under the in-tree root. An external `--auth-path`/`FASTAGENT_AUTH_PATH` writes
+  // nothing in-tree (don't create an empty `.fastagent`); the guard also skips the HOME-global root.
+  if (isUnderDir(authPath, stateRoot)) await ensureStateRootSelfIgnored(loginDir, stateRoot);
   const io = terminalLoginIO();
   const result = await loginFlow(io, { provider: positionals[1], authPath }).catch(failStartup);
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
@@ -539,7 +549,7 @@ async function serveOnce(): Promise<void> {
   reportAgentsSkillsTools(a);
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
-  const routes = await routesFor(dir, logAgentLoop(a.agent)).catch(failStartup);
+  const routes = await routesFor(dir, logAgentLoop(a.agent), a.stateRoot).catch(failStartup);
   serve(routes, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.definition.dir, p));
 }
 
@@ -551,7 +561,7 @@ async function runStart(): Promise<void> {
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(values["sessions-dir"]);
-  const { agent, definition, config, modelSpec, sessionsDir, authPath, toolNames, toolCollisions } =
+  const { agent, definition, config, modelSpec, stateRoot, sessionsDir, authPath, toolNames, toolCollisions } =
     await createPiAgentFromWorkspace(dir, {
       model: values.model,
       sessionsDir: sessionsDirOverride,
@@ -565,18 +575,23 @@ async function runStart(): Promise<void> {
   log.info(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (toolNames.length > 0) log.info(`[fastagent] tools:  ${toolNames.join(", ")}`);
   reportToolCollisions(toolCollisions);
+  log.info(`[fastagent] state:  ${stateRoot}`);
   log.info(`[fastagent] sessions: ${sessionsDir}`);
-  // Sessions default under the definition dir, which a redeploy may replace wholesale.
-  if (sessionsDirOverride === undefined) {
+  // State defaults under the definition dir, which a redeploy may replace wholesale. Gate on where the
+  // root ACTUALLY resolved (in-tree?), not on the raw env var: an empty `FASTAGENT_STATE_DIR=""` reads
+  // as unset (resolveStateRoot) and still lands in-tree, so a raw `=== undefined` check would wrongly
+  // silence the warning. A sessions/auth override to a volume does not help — channel state (the
+  // telegram turn/context files replay depends on) is still in-tree.
+  if (isUnderDir(stateRoot, dir)) {
     log.info(
-      `[fastagent] note: sessions live under the definition dir; set FASTAGENT_SESSIONS_DIR to a ` +
-        `persistent volume so a redeploy that replaces the dir does not wipe conversations.`,
+      `[fastagent] note: state (auth, sessions, channel state) lives under the definition dir; point ` +
+        `FASTAGENT_STATE_DIR at a persistent volume so a redeploy that replaces the dir does not wipe it.`,
     );
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
   // Same debug turn trace as dev; gated out here by the info level (see serveOnce).
-  const routes = await routesFor(dir, logAgentLoop(agent)).catch(failStartup);
+  const routes = await routesFor(dir, logAgentLoop(agent), stateRoot).catch(failStartup);
   serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787, (p) =>
     maybeTunnel(dir, p),
   );
@@ -590,8 +605,8 @@ async function runStart(): Promise<void> {
  * The routes this deployment serves: a default `GET /health` plus the workspace's discovered
  * `channels/` — or the default invoke channel at POST /invoke when none are declared.
  */
-async function routesFor(workspaceDir: string, agent: Agent): Promise<Routes> {
-  const { routes, collisions } = await loadChannels(workspaceDir, agent);
+async function routesFor(workspaceDir: string, agent: Agent, stateRoot: string): Promise<Routes> {
+  const { routes, collisions } = await loadChannels(workspaceDir, { agent, stateRoot });
   for (const c of collisions) {
     console.error(
       `[fastagent] warn: channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`,

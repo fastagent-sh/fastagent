@@ -17,7 +17,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
-import { type FastagentConfig, defaultProjectAuthPath, resolveModel } from "./config.ts";
+import { type FastagentConfig, defaultAuthPath, resolveModel, resolveStateRoot } from "./config.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
@@ -276,9 +276,9 @@ export async function createPiAgentFromDefinition(
   const agent = buildPiAgent({
     model: options.model,
     providers: options.providers,
-    // Dir-aware default: the same project-level file the opener uses for this dir (the opener passes
-    // an explicit authPath, so this only affects direct L2 callers).
-    authPath: options.authPath ?? defaultProjectAuthPath(dir),
+    // Dir-aware default: the same state-root-derived file the opener uses for this dir (the opener
+    // passes an explicit authPath, so this only affects direct L2 callers).
+    authPath: options.authPath ?? defaultAuthPath(resolveStateRoot(dir)),
     // The folder is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills
     // edits (the author's, or the agent's own self-modification) take effect on the next turn with
     // no process restart — restarts are reserved for code (tools/channels/config, module cache).

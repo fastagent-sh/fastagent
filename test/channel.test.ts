@@ -6,13 +6,14 @@ import type { Agent } from "../src/index.ts";
 import { loadChannels } from "../src/index.ts";
 import { discoverChannelFiles } from "../src/engines/pi/channel.ts";
 
-const fakeAgent = {} as Agent; // loadChannels only forwards it to the factory; these factories ignore it
+// loadChannels only forwards the ctx to the factory; these factories ignore it.
+const fakeCtx = { agent: {} as Agent, stateRoot: "/unused-in-tests" };
 const freshDir = () => mkdtemp(join(tmpdir(), "fa-chan-"));
 
 describe("loadChannels (filesystem discovery)", () => {
   it("discovers channels/* and merges their routes; missing channels/ is empty", async () => {
     const dir = await freshDir();
-    expect(await loadChannels(dir, fakeAgent)).toEqual({ routes: {}, collisions: [] }); // no channels/ yet
+    expect(await loadChannels(dir, fakeCtx)).toEqual({ routes: {}, collisions: [] }); // no channels/ yet
 
     await mkdir(join(dir, "channels"));
     await writeFile(
@@ -23,7 +24,7 @@ describe("loadChannels (filesystem discovery)", () => {
       join(dir, "channels", "stripe.mjs"),
       `export default (agent) => ({ "POST /stripe": () => new Response(null, { status: 202 }) });`,
     );
-    const { routes, collisions } = await loadChannels(dir, fakeAgent);
+    const { routes, collisions } = await loadChannels(dir, fakeCtx);
     expect(Object.keys(routes).sort()).toEqual(["POST /stripe", "POST /webhook"]);
     expect(collisions).toEqual([]);
   });
@@ -40,7 +41,7 @@ describe("loadChannels (filesystem discovery)", () => {
       join(dir, "channels", "b.mjs"),
       `export default () => ({ "POST /webhook": () => new Response("b") });`,
     );
-    const { routes, collisions } = await loadChannels(dir, fakeAgent);
+    const { routes, collisions } = await loadChannels(dir, fakeCtx);
     expect(Object.keys(routes)).toEqual(["POST /webhook"]);
     const res = await routes["POST /webhook"]!(new Request("http://x/webhook"));
     expect(await res.text()).toBe("a");
@@ -56,7 +57,7 @@ describe("loadChannels (filesystem discovery)", () => {
       join(dir, "channels", "b.mjs"),
       `export default () => ({ "POST /webhook": () => new Response("b") });`,
     );
-    const { routes, collisions } = await loadChannels(dir, fakeAgent);
+    const { routes, collisions } = await loadChannels(dir, fakeCtx);
     expect(Object.keys(routes)).toEqual(["/webhook"]); // a wins; b dropped, not silently shadowed
     expect(collisions).toEqual([{ route: "POST /webhook", source: "channels/b.mjs" }]);
   });
@@ -69,7 +70,7 @@ describe("loadChannels (filesystem discovery)", () => {
       join(dir, "channels", "post.mjs"),
       `export default () => ({ "POST /x": () => new Response("p") });`,
     );
-    const { routes, collisions } = await loadChannels(dir, fakeAgent);
+    const { routes, collisions } = await loadChannels(dir, fakeCtx);
     expect(Object.keys(routes).sort()).toEqual(["GET /x", "POST /x"]);
     expect(collisions).toEqual([]);
   });
@@ -83,7 +84,7 @@ describe("loadChannels (filesystem discovery)", () => {
       `export default () => ({ "POST /webhook": () => new Response("x") });`,
     );
     await symlink(join(dir, "real-channels"), join(dir, "channels"));
-    const { routes } = await loadChannels(dir, fakeAgent);
+    const { routes } = await loadChannels(dir, fakeCtx);
     expect(Object.keys(routes)).toEqual(["POST /webhook"]); // followed
 
     // escaping symlink (channels → an external dir): channels would live outside the agent and a deploy
@@ -92,14 +93,21 @@ describe("loadChannels (filesystem discovery)", () => {
     const ext = await freshDir();
     await mkdir(join(ext, "ch"));
     await symlink(join(ext, "ch"), join(esc, "channels"));
-    await expect(loadChannels(esc, fakeAgent)).rejects.toThrow(/outside the workspace/);
+    await expect(loadChannels(esc, fakeCtx)).rejects.toThrow(/outside the workspace/);
+  });
+
+  it("rejects a relative stateRoot at the mount boundary (the contract says absolute — fail visibly)", async () => {
+    const dir = await freshDir();
+    await expect(loadChannels(dir, { agent: {} as Agent, stateRoot: "rel/state" })).rejects.toThrow(
+      /stateRoot must be absolute/,
+    );
   });
 
   it("fails visibly when a channel file does not default-export a function", async () => {
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
     await writeFile(join(dir, "channels", "bad.mjs"), `export const notDefault = 1;`);
-    await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must default-export \(agent\) => Routes/);
+    await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/must default-export \(ctx\) => Routes/);
   });
 
   it("rejects an async factory with a Promise-specific error (and no unhandled rejection)", async () => {
@@ -110,7 +118,7 @@ describe("loadChannels (filesystem discovery)", () => {
       join(dir, "channels", "async.mjs"),
       `export default async () => { throw new Error("setup boom"); };`,
     );
-    await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/not a Promise|async factory is not supported/);
+    await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/not a Promise|async factory is not supported/);
   });
 
   it("rejects any non-async return that yields no routes (null, primitive, array, Map, {})", async () => {
@@ -126,7 +134,7 @@ describe("loadChannels (filesystem discovery)", () => {
       const dir = await freshDir();
       await mkdir(join(dir, "channels"));
       await writeFile(join(dir, "channels", `${name}.mjs`), body);
-      await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must return a Routes object|declared no routes/);
+      await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/must return a Routes object|declared no routes/);
     }
   });
 
@@ -134,7 +142,7 @@ describe("loadChannels (filesystem discovery)", () => {
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
     await writeFile(join(dir, "channels", "bad.mjs"), `export default () => ({ "POST /webhook": 42 });`);
-    await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/must map to a handler function/);
+    await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/must map to a handler function/);
   });
 
   it("rejects a malformed route key (a handler array's numeric key, or a missing leading slash)", async () => {
@@ -146,7 +154,7 @@ describe("loadChannels (filesystem discovery)", () => {
       const dir = await freshDir();
       await mkdir(join(dir, "channels"));
       await writeFile(join(dir, "channels", "bad.mjs"), body);
-      await expect(loadChannels(dir, fakeAgent)).rejects.toThrow(/is not a valid route key/);
+      await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/is not a valid route key/);
     }
   });
 });

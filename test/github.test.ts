@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { type GithubEvent, githubChannel } from "../src/github.ts";
+import { type GithubChannelOptions, type GithubEvent, githubChannel as buildGithubChannel } from "../src/github.ts";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 
 /** A faux Agent that records invocations (contract-only; proves the channel works with any Agent). */
@@ -38,6 +38,10 @@ const PR_OPENED = {
   body: { action: "opened", pull_request: { number: 7 }, repository: { full_name: "o/r" } },
   headers: { "x-github-event": "pull_request", "x-github-delivery": "d1" },
 };
+
+/** The old two-arg shape over the ChannelModule contract, returning the mounted handler directly. */
+const githubChannel = (agent: Agent, opts: GithubChannelOptions) =>
+  buildGithubChannel(opts)({ agent, stateRoot: "/unused-in-tests" })["POST /webhook"]!;
 
 describe("github channel", () => {
   it("rejects non-POST with 405", async () => {

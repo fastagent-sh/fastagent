@@ -4,7 +4,8 @@ import { dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FileError, err } from "@earendil-works/pi-agent-core";
 import {
@@ -18,22 +19,36 @@ import {
 } from "../src/index.ts";
 import { assembleSystemPrompt } from "../src/engines/pi/create.ts";
 import { log } from "../src/log.ts";
-import { isUnderStateDir } from "../src/engines/pi/definition.ts";
+import { ensureStateRootSelfIgnored, isUnderDir } from "../src/engines/pi/definition.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
 
-describe("definition: isUnderStateDir (the leak-guard predicate — path location, not option presence)", () => {
-  const state = join("/work", ".fastagent");
-  it("is true for the dir itself and any path inside it (defaulted OR an explicit path aimed in-tree)", () => {
-    expect(isUnderStateDir(state, state)).toBe(true); // same dir
-    expect(isUnderStateDir(join(state, "auth.json"), state)).toBe(true); // default auth
-    expect(isUnderStateDir(join(state, "sessions"), state)).toBe(true); // default sessions
-    expect(isUnderStateDir(join(state, "nested", "x"), state)).toBe(true); // explicit --auth-path back in-tree
+describe("definition: isUnderDir (the leak-guard predicate — does the state root land in the tree?)", () => {
+  const dir = "/work";
+  it("is true for the dir itself and any path inside it (default `.fastagent` OR a custom in-tree root)", () => {
+    expect(isUnderDir(dir, dir)).toBe(true); // same dir
+    expect(isUnderDir(join(dir, ".fastagent"), dir)).toBe(true); // default root
+    expect(isUnderDir(join(dir, "data"), dir)).toBe(true); // custom in-tree FASTAGENT_STATE_DIR
+    expect(isUnderDir(join(dir, ".fastagent", "sessions"), dir)).toBe(true); // nested
   });
   it("is false for external paths (a mounted volume) and sibling dirs sharing a prefix", () => {
-    expect(isUnderStateDir("/mnt/vol", state)).toBe(false); // operator's volume
-    expect(isUnderStateDir(join("/work", ".fastagent-old"), state)).toBe(false); // prefix sibling, not inside
-    expect(isUnderStateDir(join("/work", "sessions"), state)).toBe(false); // outside .fastagent
+    expect(isUnderDir("/mnt/vol", dir)).toBe(false); // operator's volume
+    expect(isUnderDir("/work-old", dir)).toBe(false); // prefix sibling, not inside
+  });
+});
+
+describe("definition: ensureStateRootSelfIgnored (root-based leak guard)", () => {
+  it("self-ignores a CUSTOM in-tree state root, not just `.fastagent` (the FASTAGENT_STATE_DIR leak)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
+    const root = join(dir, "data"); // FASTAGENT_STATE_DIR=data → in-tree, not under .fastagent
+    await ensureStateRootSelfIgnored(dir, root);
+    expect(await readFile(join(root, ".gitignore"), "utf8")).toBe("*\n");
+  });
+  it("leaves an external-volume root alone (never writes a .gitignore outside the tree)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
+    const ext = await mkdtemp(join(tmpdir(), "fa-vol-"));
+    await ensureStateRootSelfIgnored(dir, ext);
+    expect(existsSync(join(ext, ".gitignore"))).toBe(false);
   });
 });
 

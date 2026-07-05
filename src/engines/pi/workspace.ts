@@ -13,13 +13,14 @@ import type { Agent } from "../../agent.ts";
 import {
   type FastagentConfig,
   type LoadedConfig,
-  defaultProjectAuthPath,
-  defaultProjectSessionsDir,
+  defaultAuthPath,
+  defaultSessionsDir,
   loadConfig,
   resolveModelSpec,
+  resolveStateRoot,
 } from "./config.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
-import { type LoadedDefinition, ensureInTreeStateSelfIgnored } from "./definition.ts";
+import { type LoadedDefinition, ensureStateRootSelfIgnored } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
 
@@ -55,6 +56,8 @@ export async function createPiAgentFromWorkspace(
   configPath?: string;
   /** The resolved "provider/modelId" spec actually in use. */
   modelSpec: string;
+  /** Absolute state root in use (FASTAGENT_STATE_DIR > <dir>/.fastagent) — the ChannelContext's stateRoot. */
+  stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
   sessionsDir: string;
   /** Absolute credentials file in use (for the startup report). */
@@ -71,14 +74,19 @@ export async function createPiAgentFromWorkspace(
     );
   }
   const { tools, toolNames, toolCollisions } = await resolveWorkspaceTools(config, dir);
-  const sessionsDir = options.sessionsDir ?? defaultProjectSessionsDir(dir);
+  // The state root: auth/sessions/channel state all derive from it, so FASTAGENT_STATE_DIR moves the
+  // whole machine-state home in one knob (a container mounts one volume); the finer overrides below
+  // still win for their specific path.
+  const stateRoot = resolveStateRoot(dir);
+  const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
-  // The credentials file: project-level by default (its `.fastagent` dir is self-ignored below); only
-  // READ here, so no mkdir (a missing file reads as not-configured — `fastagent login` creates it).
-  const authPath = options.authPath ?? defaultProjectAuthPath(dir);
-  // Self-ignore the in-tree `.fastagent` iff sessions OR auth actually lands under it (decided by path
-  // location, not which option was passed; the single owner also skips the HOME-global dir).
-  await ensureInTreeStateSelfIgnored(dir, sessionsDir, authPath);
+  // The credentials file: project-level by default (under the self-ignored state root); only READ here,
+  // so no mkdir (a missing file reads as not-configured — `fastagent login` creates it).
+  const authPath = options.authPath ?? defaultAuthPath(stateRoot);
+  // Self-ignore the state root iff it lands in-tree — which covers everything under it (sessions, auth,
+  // every channel's `channels/<kind>` home), including a custom in-tree `FASTAGENT_STATE_DIR`. A
+  // per-path override to an external volume is out-of-tree and correctly left alone.
+  await ensureStateRootSelfIgnored(dir, stateRoot);
   const { agent, definition } = await createPiAgentFromDefinition(dir, {
     model: modelSpec,
     tools,
@@ -86,5 +94,16 @@ export async function createPiAgentFromWorkspace(
     // Skills are definition-only (the agent is its folder), so dev mirrors deployment exactly.
     sessions: jsonlSessionStore({ dir: sessionsDir, cwd: dir }),
   });
-  return { agent, definition, config, configPath, modelSpec, sessionsDir, authPath, toolNames, toolCollisions };
+  return {
+    agent,
+    definition,
+    config,
+    configPath,
+    modelSpec,
+    stateRoot,
+    sessionsDir,
+    authPath,
+    toolNames,
+    toolCollisions,
+  };
 }

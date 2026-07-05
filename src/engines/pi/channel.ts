@@ -5,14 +5,10 @@
  * channel always needs glue, so it is always a file.
  */
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
-import type { Agent } from "../../agent.ts";
-import { parseRouteKey, type Routes } from "../../host/node.ts";
+import { isAbsolute, join } from "node:path";
+import { type ChannelContext, type ChannelModule, parseRouteKey, type Routes } from "../../host/node.ts";
 import { assertInsideWorkspace } from "../../workspace.ts";
 import { isModuleFile, loadModuleDir } from "./loader.ts";
-
-/** A `channels/<name>.ts` default export: receives the assembled agent, returns the routes it mounts. */
-export type ChannelModule = (agent: Agent) => Routes;
 
 /** A dropped route: two channels claim the same key. Surfaced, never silent. */
 export interface ChannelCollision {
@@ -42,15 +38,20 @@ export async function discoverChannelFiles(dir: string): Promise<string[]> {
 }
 
 /**
- * Discover channels in `<dir>/channels/`: each `*.ts|.js|.mjs` default-exports a `(agent) => Routes`
- * factory, called here with the assembled agent; the returned route maps are merged (first file
- * wins a route-key clash, the dropped route surfaced). A file that does not contribute a valid,
- * non-empty Routes object fails visibly.
+ * Discover channels in `<dir>/channels/`: each `*.ts|.js|.mjs` default-exports a `(ctx) => Routes`
+ * factory ({@link ChannelModule}), called here with the mount context; the returned route maps are
+ * merged (first file wins a route-key clash, the dropped route surfaced). A file that does not
+ * contribute a valid, non-empty Routes object fails visibly.
  */
 export async function loadChannels(
   dir: string,
-  agent: Agent,
+  ctx: ChannelContext,
 ): Promise<{ routes: Routes; collisions: ChannelCollision[] }> {
+  // The contract says stateRoot is absolute; enforce it at the mount boundary so a relative root fails
+  // fast HERE instead of silently re-anchoring some channel's state on the process cwd.
+  if (!isAbsolute(ctx.stateRoot)) {
+    throw new Error(`ChannelContext.stateRoot must be absolute, got "${ctx.stateRoot}"`);
+  }
   // A symlinked channels/ is followed only if it stays inside the workspace, so a deploy that copies
   // the dir includes it (the directory is the agent).
   await assertInsideWorkspace(dir, "channels");
@@ -60,11 +61,11 @@ export async function loadChannels(
   for (const { label, mod } of modules) {
     const factory = mod.default;
     if (typeof factory !== "function") {
-      throw new Error(`${label} must default-export (agent) => Routes`);
+      throw new Error(`${label} must default-export (ctx) => Routes`);
     }
     let declared: Routes;
     try {
-      declared = (factory as ChannelModule)(agent);
+      declared = (factory as ChannelModule)(ctx);
     } catch (error) {
       throw new Error(`${label}: ${(error as Error).message}`);
     }

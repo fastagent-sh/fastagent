@@ -31,9 +31,10 @@ A workspace channel is a module in `channels/` that default-exports a `ChannelMo
 ```ts
 import type { ChannelModule } from "@kid7st/fastagent";
 
-const channel: ChannelModule = (agent) => ({
+const channel: ChannelModule = ({ agent, stateRoot }) => ({
   "POST /slack": async (req) => {
-    // parse request, call agent, return response
+    // parse request, call agent, return response; durable channel state goes under
+    // `${stateRoot}/channels/<kind>` (never process.cwd())
     return new Response(null, { status: 204 });
   },
 });
@@ -72,44 +73,47 @@ Do not import from `src/engines/*` or `@earendil-works/*` in a channel package. 
 A reusable adapter is usually shaped like this:
 
 ```ts
-import { AgentFailure, type Agent, collect, readBodyCapped, text } from "@kid7st/fastagent";
+import { AgentFailure, type ChannelModule, collect, readBodyCapped, text } from "@kid7st/fastagent";
 
 export interface AcmeChannelOptions {
   secret: string;
   on(event: AcmeEvent): { session: string; text: string } | null;
 }
 
-export function acmeChannel(agent: Agent, options: AcmeChannelOptions): (req: Request) => Promise<Response> {
+// Policy options in, a ChannelModule out: the framework (or an embedder) supplies { agent, stateRoot }.
+export function acmeChannel(options: AcmeChannelOptions): ChannelModule {
   if (!options.secret) throw new Error("acmeChannel requires a non-empty secret");
 
-  return async (req) => {
-    if (req.method !== "POST") return text("POST only\n", 405);
+  return ({ agent }) => ({
+    // The route key owns the method: the router 405s anything else. Add an in-handler method guard
+    // only as defense-in-depth for embedders who mount the bare handler outside the router.
+    "POST /acme": async (req) => {
+      const body = await readBodyCapped(req, 1 << 20);
+      if ("tooLarge" in body) return text("payload too large\n", 413);
 
-    const body = await readBodyCapped(req, 1 << 20);
-    if ("tooLarge" in body) return text("payload too large\n", 413);
+      if (!verify(req.headers, body.text, options.secret)) return text("invalid signature\n", 401);
 
-    if (!verify(req.headers, body.text, options.secret)) return text("invalid signature\n", 401);
-
-    let event: AcmeEvent;
-    try {
-      event = JSON.parse(body.text) as AcmeEvent;
-    } catch {
-      return text("invalid json\n", 400);
-    }
-
-    const intent = options.on(event);
-    if (!intent) return new Response(null, { status: 204 });
-
-    try {
-      const result = await collect(agent.invoke({ session: intent.session }, { text: intent.text }));
-      return Response.json({ text: result.text, data: result.data ?? null });
-    } catch (error) {
-      if (error instanceof AgentFailure) {
-        return Response.json({ error: error.details, retryable: error.retryable }, { status: 502 });
+      let event: AcmeEvent;
+      try {
+        event = JSON.parse(body.text) as AcmeEvent;
+      } catch {
+        return text("invalid json\n", 400);
       }
-      throw error;
-    }
-  };
+
+      const intent = options.on(event);
+      if (!intent) return new Response(null, { status: 204 });
+
+      try {
+        const result = await collect(agent.invoke({ session: intent.session }, { text: intent.text }));
+        return Response.json({ text: result.text, data: result.data ?? null });
+      } catch (error) {
+        if (error instanceof AgentFailure) {
+          return Response.json({ error: error.details, retryable: error.retryable }, { status: 502 });
+        }
+        throw error;
+      }
+    },
+  });
 }
 ```
 
@@ -203,16 +207,11 @@ The user's workspace installs the adapter and wires it in `channels/acme.ts`:
 
 ```ts
 import { acmeChannel } from "fastagent-channel-acme";
-import type { ChannelModule } from "@kid7st/fastagent";
 
-const channel: ChannelModule = (agent) => ({
-  "POST /acme": acmeChannel(agent, {
-    secret: process.env.ACME_WEBHOOK_SECRET ?? "",
-    on: (event) => ({ session: event.id, text: event.text }),
-  }),
+export default acmeChannel({
+  secret: process.env.ACME_WEBHOOK_SECRET ?? "",
+  on: (event) => ({ session: event.id, text: event.text }),
 });
-
-export default channel;
 ```
 
 Keep workspace-specific policy in the user's `channels/*.ts`; keep transport mechanics in the adapter package.

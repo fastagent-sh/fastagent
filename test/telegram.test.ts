@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  defaultTelegramRoute,
+  type TelegramChannelOptions,
   type TelegramUpdate,
+  defaultTelegramRoute,
   telegramChannel as buildTelegramChannel,
   telegramEnvelope,
 } from "../src/telegram.ts";
@@ -77,18 +78,29 @@ afterEach(() => {
   for (const d of stateDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** A fresh throwaway state dir (cleaned up in afterEach). */
+/** A fresh throwaway CHANNEL HOME (`<temp root>/channels/telegram`, what the channel derives from
+ *  ctx.stateRoot; the temp root is cleaned up in afterEach). Assertions read files at the home. */
 const stateDirs: string[] = [];
+const rootOfHome = new Map<string, string>();
 const freshStateDir = (): string => {
-  const d = mkdtempSync(join(tmpdir(), "tg-state-"));
-  stateDirs.push(d);
-  return d;
+  const root = mkdtempSync(join(tmpdir(), "tg-state-"));
+  stateDirs.push(root);
+  const home = join(root, "channels", "telegram");
+  mkdirSync(home, { recursive: true }); // tests may seed files at the home before the channel boots
+  rootOfHome.set(home, root);
+  return home;
 };
 
-/** telegramChannel with an isolated default stateDir, so tests never write the repo's `.fastagent`.
- *  Persistence tests pass an explicit shared `stateDir` to simulate a restart. */
-const telegramChannel: typeof buildTelegramChannel = (agent, opts) =>
-  buildTelegramChannel(agent, { stateDir: freshStateDir(), ...opts });
+/** The old two-arg shape over the ChannelModule contract, returning the mounted handler directly —
+ *  keeps every call site terse. The test-only `stateDir` field is the channel HOME from
+ *  {@link freshStateDir} (mapped back to its root for ctx), so persistence tests share one home across
+ *  "restarts" and read files at the same paths. */
+const telegramChannel = (agent: Agent, { stateDir, ...opts }: TelegramChannelOptions & { stateDir?: string }) => {
+  const home = stateDir ?? freshStateDir();
+  const root = rootOfHome.get(home);
+  if (!root) throw new Error("test stateDir must come from freshStateDir()");
+  return buildTelegramChannel(opts)({ agent, stateRoot: root })["POST /telegram"]!;
+};
 
 describe("durable group buffer (single-process restarts)", () => {
   const okFetch = () =>
@@ -122,6 +134,30 @@ describe("durable group buffer (single-process restarts)", () => {
     await ch2(tgRequest(group(2, "@go what broke?")));
     await flush();
     expect(String(a2.calls[0]?.text)).toContain("the deploy is broken"); // folded from the RELOADED buffer
+  });
+
+  it("derives its durable home from ctx.stateRoot (<root>/channels/telegram)", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    // A clean state ROOT (not a channel home): this test pins the derivation home = <root>/channels/telegram.
+    const root = mkdtempSync(join(tmpdir(), "tg-root-"));
+    stateDirs.push(root);
+    const { agent } = replyingAgent("ok");
+    const ch = buildTelegramChannel({ secretToken: SECRET, botToken: "1:A", route })({ agent, stateRoot: root })[
+      "POST /telegram"
+    ]!;
+    expect((await ch(tgRequest(group(1, "hello state root")))).status).toBe(200);
+    // The buffer landed under the DERIVED channel home, not the root itself and not process.cwd().
+    const home = join(root, "channels", "telegram");
+    const onDisk = JSON.parse(readFileSync(join(home, "buffers.json"), "utf8")) as Record<string, unknown[]>;
+    expect(onDisk["-100"]?.length).toBe(1);
+    expect(existsSync(join(root, "buffers.json"))).toBe(false);
+  });
+
+  it("rejects a relative ctx.stateRoot for embedders that mount without loadChannels (fail visibly)", () => {
+    const { agent } = replyingAgent("ok");
+    expect(() => buildTelegramChannel({ secretToken: SECRET, botToken: "1:A" })({ agent, stateRoot: "rel" })).toThrow(
+      /stateRoot/,
+    );
   });
 
   it("a FAILED turn keeps the folded discussion — the next summon re-folds it (commit on completed only)", async () => {

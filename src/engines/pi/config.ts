@@ -151,8 +151,8 @@ function resolveOverridePath(raw: string | undefined): string | undefined {
 
 /**
  * `start`'s sessions-dir override: `--sessions-dir` flag > `FASTAGENT_SESSIONS_DIR` env > undefined
- * (the opener then falls back to {@link defaultProjectSessionsDir}). Resolved to absolute so the store
- * and the startup report agree regardless of cwd.
+ * (the opener then falls back to {@link defaultSessionsDir} under the {@link resolveStateRoot} root).
+ * Resolved to absolute so the store and the startup report agree regardless of cwd.
  */
 export function resolveSessionsDirOverride(
   flag: string | undefined,
@@ -163,8 +163,8 @@ export function resolveSessionsDirOverride(
 
 /**
  * The auth-file override: `--auth-path` flag > `FASTAGENT_AUTH_PATH` env > undefined (the opener then
- * falls back to `<dir>/.fastagent/auth.json`, the project-level default). Resolved to absolute so the
- * store and the startup report agree regardless of cwd. No implicit project↔global fallback (isolation
+ * falls back to {@link defaultAuthPath} under the {@link resolveStateRoot} root). Resolved to absolute
+ * so the store and the startup report agree regardless of cwd. No implicit project↔global fallback (isolation
  * + fail-visibly; see auth.ts); to share one account across projects, point this at the global
  * `~/.fastagent/auth.json` — sharing ONE file is safe under the store's cross-process refresh lock.
  */
@@ -176,24 +176,35 @@ export function resolveAuthPathOverride(
 }
 
 /**
- * The project state-dir root, `<dir>/.fastagent` (machine state: sessions + auth.json, self-ignored).
- * THE single definition of that path segment — the auth/sessions defaults below and the leak guard
- * (`ensureInTreeStateSelfIgnored`) all derive from it, so the `.fastagent` literal lives in one place
- * and the self-ignore invariant cannot drift out of sync with where state actually lands.
+ * The IN-TREE default state root, `<dir>/.fastagent` — what {@link resolveStateRoot} falls back to when
+ * `FASTAGENT_STATE_DIR` moves state nowhere. THE single definition of that path segment.
  */
 export function projectStateDir(dir: string): string {
   return join(dir, ".fastagent");
 }
 
 /**
- * The project-level default credentials file, `<dir>/.fastagent/auth.json` — used whenever no override
- * applies. Single source so every call site (the opener, `info`, `login`) agrees.
+ * The resolved state root — the ONE durable machine-state home everything derives from (auth.json,
+ * sessions/, channels/<kind>/): `FASTAGENT_STATE_DIR` env > `<dir>/.fastagent`. Absolute, so channels
+ * and the startup report agree regardless of cwd. Definition: single lifecycle (precious, survives
+ * redeploy), single process — a container mounts ONE volume here. The finer knobs
+ * (`FASTAGENT_SESSIONS_DIR`, `FASTAGENT_AUTH_PATH`) still override their specific path on top.
+ *
+ * `FASTAGENT_STATE_DIR` is an OPERATOR override, so a relative value resolves against `process.cwd()`
+ * — the CLI convention its sibling knobs share (`resolveOverridePath`), NOT against `dir`. Only the
+ * DEFAULT (`<dir>/.fastagent`) is dir-anchored. Deployments set an absolute path (a mounted volume);
+ * a relative value is in-tree — hence self-ignored — only when run from the definition dir (cwd == dir).
  */
-export function defaultProjectAuthPath(dir: string): string {
-  return join(projectStateDir(dir), "auth.json");
+export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? resolve(projectStateDir(dir));
 }
 
-/** The project-level default sessions dir, `<dir>/.fastagent/sessions` (the opener's fallback). */
-export function defaultProjectSessionsDir(dir: string): string {
-  return join(projectStateDir(dir), "sessions");
+/** The default credentials file under a resolved state root ({@link resolveStateRoot}). */
+export function defaultAuthPath(stateRoot: string): string {
+  return join(stateRoot, "auth.json");
+}
+
+/** The default sessions dir under a resolved state root ({@link resolveStateRoot}). */
+export function defaultSessionsDir(stateRoot: string): string {
+  return join(stateRoot, "sessions");
 }

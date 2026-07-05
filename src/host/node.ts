@@ -5,6 +5,7 @@
  */
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Agent } from "../agent.ts";
 import { nodeListener } from "../channels/http.ts";
 import { text } from "../channels/respond.ts";
 
@@ -13,6 +14,23 @@ export type ChannelHandler = (req: Request) => Response | Promise<Response>;
 
 /** This deployment's HTTP surface: route key → handler. Key is `"/path"` or `"METHOD /path"`. */
 export type Routes = Record<string, ChannelHandler>;
+
+/**
+ * What the framework hands a channel at mount time: the assembled agent plus the resolved state ROOT
+ * (absolute; `FASTAGENT_STATE_DIR` > `<dir>/.fastagent`). Channels derive their OWN durable home from
+ * it (`<stateRoot>/channels/<kind>/`) — they never anchor on `process.cwd()`. env is the OPERATOR
+ * input plane; this context is how the resolved result reaches code (embedders without the workspace
+ * opener construct it explicitly).
+ */
+export interface ChannelContext {
+  agent: Agent;
+  stateRoot: string;
+}
+
+/** A `channels/<name>.ts` default export: receives the mount context, returns the routes it mounts.
+ *  Adapters (`telegramChannel(opts)`, `githubChannel(opts)`) RETURN one of these, so user glue holds
+ *  only policy — the framework pipes `agent`/`stateRoot` to the adapter without transiting user code. */
+export type ChannelModule = (ctx: ChannelContext) => Routes;
 
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 export function parseRouteKey(key: string): { method?: string; path: string } {
@@ -25,7 +43,10 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
  * 405 when the path exists under another method, 404 otherwise. No params/wildcards.
  */
 export function router(routes: Routes): ChannelHandler {
-  const entries = Object.entries(routes).map(([key, handler]) => ({ ...parseRouteKey(key), handler }));
+  const entries = Object.entries(routes).map(([key, handler]) => ({
+    ...parseRouteKey(key),
+    handler,
+  }));
   return (req) => {
     const { pathname } = new URL(req.url);
     const onPath = entries.filter((e) => e.path === pathname);

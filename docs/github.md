@@ -21,27 +21,22 @@ This creates `channels/github.ts` and appends the required env var to `.env.exam
 
 ```ts
 import { githubChannel } from "@kid7st/fastagent/github";
-import type { ChannelModule } from "@kid7st/fastagent";
 
-const channel: ChannelModule = (agent) => ({
-  "POST /webhook": githubChannel(agent, {
-    secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
-    on: (event) => {
-      if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
-        const { repository, pull_request } = event.payload;
-        return [
-          {
-            session: event.deliveryId,
-            text: `Review PR #${pull_request.number} in ${repository.full_name}`,
-          },
-        ];
-      }
-      return [];
-    },
-  }),
+export default githubChannel({
+  secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
+  on: (event) => {
+    if (event.event === "pull_request" && event.action === "opened" && "pull_request" in event.payload) {
+      const { repository, pull_request } = event.payload;
+      return [
+        {
+          session: event.deliveryId,
+          text: `Review PR #${pull_request.number} in ${repository.full_name}`,
+        },
+      ];
+    }
+    return [];
+  },
 });
-
-export default channel;
 ```
 
 `fastagent dev` and `fastagent start` discover `channels/*.ts` automatically. You do not add a config entry.
