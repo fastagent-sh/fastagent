@@ -49,11 +49,82 @@ export function inProcessLease(): Lease {
 }
 
 // ── §2 translate: the single pi↔SPEC translation point ───────────────────────
+//
+// `retryable` = worth re-sending with the same session (SPEC §6: advisory, not a session-atomicity
+// guarantee). Classify from the STRUCTURED signal first, prose only as the last-resort ceiling. What
+// is actually available differs by path, and the two are NOT symmetric:
+//   - thrown error (errorToTerminal): an HTTP `.status`/`.statusCode` AND a network `.code` (incl.
+//     `.cause.code`) — this is where a numeric status genuinely drives the decision.
+//   - failed message (toTerminal): ONLY `diagnostics[].error.code`. pi's `DiagnosticErrorInfo` carries
+//     a `code` (a network code, or a status delivered as a code), with no separate HTTP-status field —
+//     so a message whose provider `code` is a string label (e.g. "rate_limit_exceeded") is not
+//     decisive here and falls to prose.
+// The prose fallback is bounded, not a cop-out: pi-ai already ran its own status-code-based client
+// retries (harness.ts PROVIDER_MAX_RETRIES) before surfacing, so an error that reaches this point has
+// already exhausted the cleanly-retryable cases. The regex is the narrow ceiling, not the classifier.
+// Upstream ask: a first-class `retryable`/`kind` on pi's terminal error would retire the prose path
+// entirely (mirrors the §11 "the deeper fix is upstream in pi" pattern).
 
-/** Whether a failure's `details` is worth re-sending with the same session (transient-looking). */
-const RETRYABLE =
+/** Clearly-transient network error codes (Node/undici), decisive on their own. */
+const RETRYABLE_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EAI_AGAIN",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+/** 429 (rate limit) and 5xx (server) are worth retrying; other statuses are decisive NON-retryable. */
+const statusIsRetryable = (status: number): boolean => status === 429 || (status >= 500 && status < 600);
+
+/** Last-resort prose match, used only when no structured status/code is available. */
+const RETRYABLE_MESSAGE =
   /\b(429|5\d\d|timeout|timed out|rate.?limit|overloaded|ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|socket hang up)\b/i;
-const isRetryable = (details: string): boolean => RETRYABLE.test(details);
+
+/** A structured status/code decision, or `null` when the signal is absent/undecisive → fall to prose. */
+function retryableFromSignal(signal: { status?: number; code?: unknown }): boolean | null {
+  if (typeof signal.status === "number") return statusIsRetryable(signal.status);
+  const { code } = signal;
+  if (typeof code === "number") return statusIsRetryable(code);
+  if (typeof code === "string") {
+    if (RETRYABLE_CODES.has(code)) return true;
+    if (/^\d{3}$/.test(code)) return statusIsRetryable(Number(code)); // a status carried as a string
+  }
+  return null; // no code, or an unknown one — not decisive on its own
+}
+
+/** Classify `retryable`: structured status/code first, message prose only as the last-resort ceiling. */
+export function classifyRetryable(details: string, signal: { status?: number; code?: unknown }): boolean {
+  return retryableFromSignal(signal) ?? RETRYABLE_MESSAGE.test(details);
+}
+
+/** Pull a structured status/code off a thrown error (HTTP status or a network code, incl. its cause). */
+function errorSignal(error: unknown): { status?: number; code?: unknown } {
+  if (!error || typeof error !== "object") return {};
+  const e = error as { status?: unknown; statusCode?: unknown; code?: unknown; cause?: unknown };
+  const status = typeof e.status === "number" ? e.status : typeof e.statusCode === "number" ? e.statusCode : undefined;
+  const causeCode = e.cause && typeof e.cause === "object" ? (e.cause as { code?: unknown }).code : undefined;
+  return { status, code: e.code ?? causeCode };
+}
+
+/**
+ * Pull the structured error `code` pi records on a failed message's diagnostics. `diagnostics`
+ * accumulates across attempts (`appendAssistantMessageDiagnostic`), so the terminal cause is the LAST
+ * code-bearing entry — `findLast`, not `find`: an earlier attempt's transient 503 must not classify a
+ * terminal 400/auth failure as retryable. (Reverse scan rather than `findLast` — the tsconfig lib is
+ * ES2022.)
+ */
+function messageSignal(message: AssistantMessage): { status?: number; code?: unknown } {
+  const diagnostics = message.diagnostics ?? [];
+  for (let i = diagnostics.length - 1; i >= 0; i--) {
+    const code = diagnostics[i]?.error?.code;
+    if (code !== undefined) return { code };
+  }
+  return {};
+}
 
 /** In-stream event mapping. Non text/tool_* pi events (turn_start, message_start, …) are dropped. */
 function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
@@ -78,17 +149,17 @@ function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
  * with stopReason "error"/"aborted" rather than throwing, so relying on catch alone would miss this
  * entire failure class (violating SPEC MUST 1).
  */
-function toTerminal(message: AssistantMessage): AgentEvent {
+export function toTerminal(message: AssistantMessage): AgentEvent {
   if (message.stopReason === "error" || message.stopReason === "aborted") {
     const details = message.errorMessage ?? `model stopped: ${message.stopReason}`;
-    return { type: "failed", details, retryable: isRetryable(details) };
+    return { type: "failed", details, retryable: classifyRetryable(details, messageSignal(message)) };
   }
   return { type: "completed" };
 }
 
-function errorToTerminal(error: unknown): AgentEvent {
+export function errorToTerminal(error: unknown): AgentEvent {
   const details = error instanceof Error ? error.message : String(error);
-  return { type: "failed", details, retryable: isRetryable(details) };
+  return { type: "failed", details, retryable: classifyRetryable(details, errorSignal(error)) };
 }
 
 type PiHarness = Awaited<ReturnType<PiHarnessFactory>>;

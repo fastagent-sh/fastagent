@@ -4,7 +4,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, fauxThinking, fauxToolCall, Type, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
 import { inMemorySessionStore, inProcessLease, type AgentEvent } from "../src/index.ts";
-import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
+import { classifyRetryable, createPiAgentFromHarness, errorToTerminal, toTerminal } from "../src/engines/pi/invoke.ts";
 import { type PiHarnessFactory, piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -447,5 +447,81 @@ describe("invoke: auto-compaction", () => {
     expect(events.at(-1)).toEqual({ type: "completed" }); // turn still completed
     expect(compact).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/auto-compaction failed/));
+  });
+});
+
+describe("classifyRetryable (structured signal first, prose as last resort)", () => {
+  it("uses HTTP status when present: 429/5xx retryable, other statuses decisively not", () => {
+    // A status wins even when the message prose would match — no false positive from wording.
+    expect(classifyRetryable("bad request mentioning timeout", { status: 400 })).toBe(false);
+    expect(classifyRetryable("nope", { status: 429 })).toBe(true);
+    expect(classifyRetryable("nope", { status: 503 })).toBe(true);
+    expect(classifyRetryable("nope", { status: 401 })).toBe(false);
+  });
+
+  it("uses a network/error code when present (string or numeric status-as-code)", () => {
+    expect(classifyRetryable("x", { code: "ECONNRESET" })).toBe(true);
+    expect(classifyRetryable("x", { code: "ETIMEDOUT" })).toBe(true);
+    expect(classifyRetryable("x", { code: "429" })).toBe(true);
+    expect(classifyRetryable("x", { code: 503 })).toBe(true);
+    expect(classifyRetryable("x", { code: "ENOENT" })).toBe(false); // unknown code, prose "x" → false
+  });
+
+  it("falls back to message prose only when no structured signal exists", () => {
+    expect(classifyRetryable("model is overloaded, try again", {})).toBe(true);
+    expect(classifyRetryable("request timed out", {})).toBe(true);
+    expect(classifyRetryable("invalid api key", {})).toBe(false);
+  });
+});
+
+describe("terminal signal extraction (pins the pi shapes classifyRetryable reads)", () => {
+  // A failed AssistantMessage: only diagnostics[].error.code is available (no HTTP status field).
+  const errorMessage = (over: Partial<AssistantMessage>): AssistantMessage =>
+    ({ role: "assistant", stopReason: "error", ...over }) as unknown as AssistantMessage;
+
+  it("toTerminal reads diagnostics[].error.code as a status, overriding the prose", () => {
+    const msg = errorMessage({
+      errorMessage: "the model said something unrecognizable", // prose alone → not retryable
+      diagnostics: [{ type: "stream_error", timestamp: 0, error: { message: "m", code: 503 } }],
+    });
+    expect(toTerminal(msg)).toEqual({ type: "failed", details: expect.any(String), retryable: true });
+  });
+
+  it("toTerminal uses the LAST code-bearing diagnostic (terminal cause), not an earlier attempt's", () => {
+    // An earlier attempt logged a transient 503; the terminal cause is a fatal 400 — must be non-retryable.
+    const msg = errorMessage({
+      errorMessage: "bad request",
+      diagnostics: [
+        { type: "stream_error", timestamp: 0, error: { message: "transient", code: 503 } },
+        { type: "api_error", timestamp: 1, error: { message: "fatal", code: 400 } },
+      ],
+    });
+    expect((toTerminal(msg) as { retryable: boolean }).retryable).toBe(false);
+  });
+
+  it("toTerminal: a provider string code is not decisive, so it falls to prose", () => {
+    const msg = errorMessage({
+      errorMessage: "quota exhausted", // no retryable token → false
+      diagnostics: [{ type: "api_error", timestamp: 0, error: { message: "m", code: "insufficient_quota" } }],
+    });
+    expect((toTerminal(msg) as { retryable: boolean }).retryable).toBe(false);
+  });
+
+  it("toTerminal on a clean stop is completed", () => {
+    expect(toTerminal(errorMessage({ stopReason: "stop" }))).toEqual({ type: "completed" });
+  });
+
+  it("errorToTerminal reads .status / .statusCode / .cause.code off a thrown error", () => {
+    expect((errorToTerminal(Object.assign(new Error("x"), { status: 500 })) as { retryable: boolean }).retryable).toBe(
+      true,
+    );
+    expect(
+      (errorToTerminal(Object.assign(new Error("x"), { statusCode: 400 })) as { retryable: boolean }).retryable,
+    ).toBe(false); // a decisive non-5xx status wins over any prose
+    expect(
+      (errorToTerminal(Object.assign(new Error("x"), { cause: { code: "ECONNRESET" } })) as { retryable: boolean })
+        .retryable,
+    ).toBe(true);
+    expect((errorToTerminal(new Error("plain failure")) as { retryable: boolean }).retryable).toBe(false);
   });
 });
