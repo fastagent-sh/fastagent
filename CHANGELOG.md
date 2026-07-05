@@ -8,6 +8,17 @@ While the project is pre-1.0, minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Removed
+
+- **Tightened the public API surface** (pre-1.0 cleanup, `src/index.ts`): dropped exports that
+  reference no public signature and only leak engine internals — `scaffoldWorkspace` / `ScaffoldResult`
+  (the `init` implementation, CLI-internal), `piBasePrompt` / `piDefaultTools` (engine assets), and
+  `loadAgentDefinition` / `LoadAgentDefinitionOptions` (the standalone loader; the ladder rungs own
+  loading). `LoadedDefinition` and `SkillCollision` stay — they are load-bearing on the
+  `createPiAgentFrom*` return surface. **Upgrading:** for custom wiring/tests, import these from their
+  modules directly (`./engines/pi/create.ts`, `./engines/pi/definition.ts`, `./scaffold/init.ts`)
+  instead of the package root.
+
 ### Changed
 
 - **`init` now scaffolds a minimal self-iterating agent.** A fresh workspace is `AGENTS.md` (a

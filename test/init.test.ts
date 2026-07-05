@@ -4,7 +4,9 @@ import { access, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPiAgentFromWorkspace, loadAgentDefinition, scaffoldWorkspace } from "../src/index.ts";
+import { createPiAgentFromWorkspace } from "../src/index.ts";
+import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
+import { scaffoldWorkspace } from "../src/scaffold/init.ts";
 import { nextStepCd } from "../src/scaffold/init.ts";
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
 

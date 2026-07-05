@@ -34,9 +34,6 @@ export {
   type CreatePiAgentFromDefinitionOptions,
 } from "./engines/pi/create.ts";
 
-// init: scaffold a runnable workspace.
-export { scaffoldWorkspace, type ScaffoldResult } from "./scaffold/init.ts";
-
 // Tool authoring: defineTool (+ re-exported z) and tools/ discovery.
 // Re-export rule: the engine-neutral contract (agent.ts) owns its types; the pi reference-impl
 // surface is openly engine-coupled, so every pi type that appears in its signatures is re-exported
@@ -61,18 +58,11 @@ export {
   type CreatePiAgentFromWorkspaceOptions,
 } from "./engines/pi/workspace.ts";
 
-// Definition domain (load).
-export {
-  loadAgentDefinition,
-  type LoadedDefinition,
-  type LoadAgentDefinitionOptions,
-  type SkillCollision,
-} from "./engines/pi/definition.ts";
+// Definition domain: the types on the createPiAgentFrom* return surface (`definition.collisions`,
+// `definition.diagnostics`). The loader itself (loadAgentDefinition) is internal — the ladder rungs
+// own loading; import it from ./engines/pi/definition.ts for custom wiring/tests.
+export type { LoadedDefinition, SkillCollision } from "./engines/pi/definition.ts";
 export type { Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
-
-// Engine assets (prompt base + toolset). Internal assembly helpers (assembleSystemPrompt,
-// resolveTools) are NOT public: the ladder rungs own assembly.
-export { piBasePrompt, piDefaultTools } from "./engines/pi/create.ts";
 
 // Config subsystem. loadConfig is internal (L3 owns config loading); resolveModel bridges a
 // "provider/modelId" string to a model for L1/L2 embedders.
