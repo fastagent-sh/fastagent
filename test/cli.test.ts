@@ -76,6 +76,32 @@ describe("cli papercuts", () => {
     await expect(stat(join(dir, ".fastagent"))).rejects.toThrow(); // read-only: never creates sessions dir
   });
 
+  it("info degrades when a tool can't load (missing dep) — reports it, still shows the surface, exits 0", async () => {
+    // The scaffold ships tools/ that import @kid7st/fastagent; before `npm install` the import fails.
+    // info is read-only diagnosis ("run it first when something looks off") — a broken tool must be
+    // reported, not abort the whole report. dev/start still fail hard (you cannot serve broken tools).
+    const dir = await mkdtemp(join(tmpdir(), "fa-info-toolfail-"));
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
+    await writeFile(join(dir, "tools", "broken.ts"), 'import "totally-not-a-real-package-xyz";\nexport default {};\n');
+    const env = { ...process.env };
+    delete env.FASTAGENT_MODEL;
+
+    const { code, stdout } = await run(["info", dir, "--json"], undefined, env);
+    expect(code).toBe(0); // reported, not fatal
+    const info = JSON.parse(stdout);
+    expect(info.tools).toEqual([]); // could not load
+    expect(info.toolError).toMatch(/broken\.ts/); // the reason is surfaced to a JSON consumer
+    expect(info.instructions).toBe(true); // the rest of the surface still shows
+    await expect(stat(join(dir, ".fastagent"))).rejects.toThrow(); // still read-only
+
+    // text mode: the tools line degrades and the reason goes to stderr as a warning
+    const text = await run(["info", dir], undefined, env);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toMatch(/tools:\s+\(could not load/);
+    expect(text.stderr).toMatch(/broken\.ts/);
+  });
+
   it("login self-ignores .fastagent on an adapted dir before it writes the credential file", async () => {
     // login is the command that CREATES the secret, so its self-ignore must fire independently of the
     // opener. A bogus provider fails the auth flow AFTER the self-ignore, so the .gitignore is the

@@ -104,7 +104,8 @@ function usage(code: number): never {
                    point it at ~/.fastagent/auth.json to share one credential across projects)
          --tunnel  same as dev: a public HTTPS URL + auto-registered webhooks, for hosting a bot from
                    your own box without deploying (the quick-tunnel URL is ephemeral, not for production)
-  add    github | telegram: scaffold channels/<kind>.ts (third-party adapter glue, an on() to edit).
+  add    github | telegram: scaffold channels/<kind>.ts — third-party adapter glue with the policy
+         to edit (github maps events in on(); telegram routes in the optional route()).
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   login  authenticate a model provider into the project-level <state root>/auth.json — default
@@ -234,7 +235,12 @@ async function runInfo(): Promise<void> {
   const { config, path: configPath } = await loadConfig(dir).catch(failStartup);
   const modelSpec = resolveModelSpec(values.model, config);
   const definition = await loadAgentDefinition(dir).catch(failStartup);
-  const { toolNames, toolCollisions } = await resolveWorkspaceTools(config, dir).catch(failStartup);
+  // A tool that fails to import (typically a missing dep before `npm install`) must NOT abort a
+  // read-only inspect: report it and still show model/skills/channels/state. dev/start keep
+  // failStartup — you cannot serve broken tools, but `info` exists to diagnose "something looks off".
+  const tools = await resolveWorkspaceTools(config, dir)
+    .then((r) => ({ names: r.toolNames, collisions: r.toolCollisions, error: undefined as string | undefined }))
+    .catch((e: unknown) => ({ names: [] as string[], collisions: [], error: (e as Error).message }));
   const channels = await discoverChannelFiles(dir).catch(failStartup);
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login
   // create them, info must not).
@@ -251,14 +257,15 @@ async function runInfo(): Promise<void> {
           model: modelSpec ?? null,
           instructions: definition.instructions !== undefined,
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
-          tools: toolNames,
+          tools: tools.names,
+          toolError: tools.error ?? null,
           channels,
           stateRoot,
           sessionsDir,
           authPath,
           diagnostics: definition.diagnostics,
           skillCollisions: definition.collisions,
-          toolCollisions,
+          toolCollisions: tools.collisions,
         },
         null,
         2,
@@ -271,12 +278,13 @@ async function runInfo(): Promise<void> {
   console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
   console.log(`agents:   ${definition.instructions ? "AGENTS.md" : "(none)"}`);
   console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
-  console.log(`tools:    ${toolNames.join(", ") || "(none)"}`);
+  console.log(`tools:    ${tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)"}`);
   console.log(`channels: ${channels.join(", ") || "(none)"}`);
   console.log(`state:    ${stateRoot}`);
   console.log(`sessions: ${sessionsDir}`);
   console.log(`auth:     ${authPath}`);
-  reportToolCollisions(toolCollisions);
+  reportToolCollisions(tools.collisions);
+  if (tools.error) log.warn(`[fastagent] ${tools.error}`);
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 }
 
