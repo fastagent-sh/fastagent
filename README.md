@@ -48,7 +48,7 @@ npm i -g @kid7st/fastagent   # CLI: fastagent init/dev/start/...
 npm i @kid7st/fastagent      # library API for embedding or code tools
 ```
 
-Requires **Node >= 22.19**. The npm package ships compiled JavaScript and type declarations.
+Requires **Node >= 22.19** — the floor is inherited from the reference engine (`@earendil-works/pi-agent-core`) and `undici`, both of which require it. The npm package ships compiled JavaScript and type declarations.
 
 ## Quickstart
 
