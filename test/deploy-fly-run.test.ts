@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  type FlyRunPlan,
-  type FlyRunner,
-  assembleFlySecrets,
-  authSeedBytes,
-  deployFlyRun,
-} from "../src/deploy/fly-run.ts";
+import { type FlyRunPlan, type FlyRunner, authSeedBytes, deployFlyRun } from "../src/deploy/fly-run.ts";
+import { assembleSecrets } from "../src/deploy/secrets.ts";
 
 /** A fake flyctl: records every call, returns per-command scripted results (default code 0, empty out). */
 function fakeFly(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
@@ -107,9 +102,9 @@ describe("deploy/fly-run: the coding-agent deploy journey (benchmark)", () => {
   });
 });
 
-describe("deploy/fly-run: assembleFlySecrets (credential wiring)", () => {
+describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
   it("an env-key model auth travels as its own secret (value from env)", () => {
-    const r = assembleFlySecrets({
+    const r = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
       channels: [],
@@ -120,27 +115,27 @@ describe("deploy/fly-run: assembleFlySecrets (credential wiring)", () => {
   });
 
   it("OAuth/stored auth (no env key) rides as a base64 FASTAGENT_AUTH_SEED", () => {
-    const r = assembleFlySecrets({ modelAuth: "OAuth", authFile: Buffer.from('{"a":1}'), channels: [], env: {} });
+    const r = assembleSecrets({ modelAuth: "OAuth", authFile: Buffer.from('{"a":1}'), channels: [], env: {} });
     expect(r.secrets.FASTAGENT_AUTH_SEED).toBe(Buffer.from('{"a":1}').toString("base64"));
     expect(r.needsModelCredential).toBe(false);
   });
 
   it("no env key AND no auth file → needsModelCredential (its own login gate, NOT missingSecrets)", () => {
-    const r = assembleFlySecrets({ modelAuth: undefined, authFile: undefined, channels: [], env: {} });
+    const r = assembleSecrets({ modelAuth: undefined, authFile: undefined, channels: [], env: {} });
     expect(r.needsModelCredential).toBe(true);
     expect(r.missingSecrets).toEqual([]);
   });
 
   it("channel secrets come from env; never minted (a re-run is stable; a human-shared secret stays known)", () => {
     const env = { OPENAI_API_KEY: "k", TELEGRAM_BOT_TOKEN: "bot", TELEGRAM_SECRET_TOKEN: "sec" };
-    const r = assembleFlySecrets({ modelAuth: "OPENAI_API_KEY", authFile: undefined, channels: ["telegram"], env });
+    const r = assembleSecrets({ modelAuth: "OPENAI_API_KEY", authFile: undefined, channels: ["telegram"], env });
     expect(r.secrets.TELEGRAM_SECRET_TOKEN).toBe("sec"); // from env, not a mint
     expect(r.missingSecrets).toEqual([]);
   });
 
   it("any absent channel secret — including a scaffold `generate` one — lands in missingSecrets (never minted)", () => {
     // github's webhook secret is human-shared: it MUST be operator-provided, not silently minted.
-    const r = assembleFlySecrets({
+    const r = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
       authFile: undefined,
       channels: ["github", "telegram"],
