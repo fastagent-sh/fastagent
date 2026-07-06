@@ -39,7 +39,7 @@ FastAgent is the missing bridge from local agent directory to real service.
 - **Channels.** Serve the same agent as a GitHub PR reviewer, a Telegram bot, an HTTP/SSE endpoint, or your own adapter — verified webhooks, streaming replies, group-aware.
 - **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` (the filename is the name, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
 - **App embedding — your stack, we plug in.** Like Flask/FastAPI for agents: FastAgent never owns your framework. Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler — your auth, your database, your host.
-- **Deploy anywhere.** Run the directory directly — no build step; `fastagent deploy fly|railway` generates the host config + a runbook and hands off (`fly --run` drives the deploy to completion). Cloud-neutral: the directory is the deployable unit.
+- **Deploy anywhere.** Run the directory directly — no build step; `fastagent deploy fly|railway` generates the host config + a runbook and hands off (`--run` drives the deploy to completion). Cloud-neutral: the directory is the deployable unit.
 
 **Designed for more — [help build it](CONTRIBUTING.md).** FastAgent's neutral contract and injection seams are laid out for the capabilities it is growing into. Honest works-in-progress, open to contributors:
 

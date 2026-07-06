@@ -239,7 +239,7 @@ Durable decisions this architecture encodes:
 
 ## 10. Running and deployment (design)
 
-The directory IS the agent: there is no build step and no artifact. `dev` and `start` both run the definition directory directly (§4 opener). An agent has no compile output — instructions and skills are markdown, code tools are imported directly in dev and start alike — so packaging was never a *runtime* prerequisite. Packaging for remote deployment (exclude dev cruft, mount state, pin the image) is never a build the author runs by hand to serve; it is what **`fastagent deploy fly`** generates on demand (§10.5) — host artifacts + a runbook, not a step baked into `dev`/`start`.
+The directory IS the agent: there is no build step and no artifact. `dev` and `start` both run the definition directory directly (§4 opener). An agent has no compile output — instructions and skills are markdown, code tools are imported directly in dev and start alike — so packaging was never a *runtime* prerequisite. Packaging for remote deployment (exclude dev cruft, mount state, pin the image) is never a build the author runs by hand to serve; it is what **`fastagent deploy fly|railway`** generates on demand (§10.5) — host artifacts + a runbook, not a step baked into `dev`/`start`.
 
 ### 10.1 What an agent is (the M/K seam)
 
@@ -314,7 +314,7 @@ Resolution order is upstream-owned: a stored credential owns the provider; env i
 
 OAuth refresh tokens are single-use, so refresh is serialized (the file lock) and the new credentials written back — the persistence above. **Single machine/container** is covered by that file lock. **Multi-instance** deployments need a shared credential store with row-locked refresh; that uses the same `CredentialStore` seam and is deferred with the K-axis backends.
 
-### 10.5 Container recipe & `fastagent deploy fly`
+### 10.5 Container recipe & `fastagent deploy fly|railway`
 
 The container is the v1 "machine-state independence" boundary, and with no build step it is trivial:
 
