@@ -41,6 +41,7 @@ FastAgent is the missing bridge from local agent directory to real service.
 - **Sandboxed execution** — tools run behind an `ExecutionEnv` port (local by default); E2B / micro-VM backends drop in.
 - **Observability export** — leveled logs and per-turn traces today; an OpenTelemetry exporter is a clean seam.
 - **More engines & channels** — the Agent Handler contract is engine-neutral (a second engine proves the seams); Slack, Discord, and other adapters plug into the channel kit.
+- **More deploy targets** — `deploy fly` ships today, and the container recipe already runs the directory on any Docker host; the host-scoped `deploy <host>` seam is laid out for Cloudflare, Railway, Render, and beyond.
 
 Using a coding agent? Give it [`docs/ai-start.md`](docs/ai-start.md) for an AI-guided setup path.
 
