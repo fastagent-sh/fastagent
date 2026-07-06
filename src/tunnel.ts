@@ -20,7 +20,7 @@ export interface Tunnel {
 // `(?!api\.)`: cloudflared's ERROR lines mention its request endpoint (`https://api.trycloudflare.com/tunnel`,
 // e.g. "failed to request quick Tunnel: Post ... timeout" under a flaky proxy) — without the exclusion a
 // transient error line parses as the assigned URL and the webhook gets registered against Cloudflare's
-// API host instead of the tunnel (found live in the 0.8.0 release verification).
+// API host instead of the tunnel.
 const TUNNEL_URL_RE = /https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/i;
 
 /** Extract a Cloudflare quick-tunnel URL from a chunk of cloudflared output, if present. */

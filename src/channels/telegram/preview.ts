@@ -158,7 +158,7 @@ export async function streamReply(
   // message to the LATEST view() with at most ONE edit in flight, paced by a throttle. One-in-flight is
   // the whole point: concurrent edits can reach Telegram out of order — an older frame landing over a
   // newer one is the "shows 3-4 steps, blanks, re-fills" flicker. Serializing keeps frames monotonic.
-  // (No keepalive: a real message does not expire, unlike the old 30s draft.)
+  // (No keepalive: a real message does not expire, unlike a Bot API `sendMessageDraft` (30s window).)
   let dirty = false;
   let pumping = false;
   let stopped = false;

@@ -597,9 +597,9 @@ async function reportAuth(modelSpec: string, authPath: string): Promise<void> {
   const source = await probeAuthSource(createPiModels({ authPath }), modelSpec);
   log.info(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`} — ${authPath}`);
   if (source !== undefined) return;
-  // Lead with `fastagent login`: the default model (openai-codex) is OAuth-only, and the provider-
-  // specific env var name is not exported, so keep the env path generic. login writes to this same
-  // project-level path, so a follow-up `fastagent login` here fixes it in place.
+  // Lead with `fastagent login`: it covers every provider (including OAuth-only ones like openai-codex),
+  // and the provider-specific env var name is not exported, so keep the env path generic. login writes to
+  // this same project-level path, so a follow-up `fastagent login` here fixes it in place.
   log.warn(
     `[fastagent] no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
   );

@@ -129,13 +129,11 @@ Skills are markdown/file assets. Loading is **definition-only, period**: an agen
 
 The `skills/` format is **Agent Skills** ([agentskills.io](https://agentskills.io)) compatible — a `skills/<name>/SKILL.md` with `name`/`description` frontmatter and progressive disclosure (name+description at startup, the body on activation), as implemented by pi's `loadSkills`. Any standard skill (e.g. from [anthropics/skills](https://github.com/anthropics/skills)) works by **vendoring**: copy the folder into `skills/`, git-tracked, and it Just Works — unsupported optional fields (`license`, `metadata`, `compatibility`) are ignored without error. **There is no registry, and none is needed**: the filesystem is the registry, git is the distribution, and the user owns trust (a vendored skill's `scripts/` is code they audit, like an npm dependency). fastagent is the serving layer, not a skill marketplace.
 
-Loading the machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`) was removed deliberately. It made the agent depend on ambient machine state and recreated the "works on my machine, breaks deployed" trap fastagent exists to kill. The principle is general: **the definition directory is the agent's only source of truth; nothing the code can't see is loaded into its behavior** (credentials and env are deployment config, not behavior — they stay outside the directory by design). To ship a skill, put it in `skills/`.
+FastAgent deliberately does not load the machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`): it would make the agent depend on ambient machine state and recreate the "works on my machine, breaks deployed" trap fastagent exists to kill. The principle is general: **the definition directory is the agent's only source of truth; nothing the code can't see is loaded into its behavior** (credentials and env are deployment config, not behavior — they stay outside the directory by design). To ship a skill, put it in `skills/`.
 
 Definition-local skills win name collisions (the deployable unit is authoritative); collisions are surfaced as diagnostics, not swallowed.
 
-Code tools are TypeScript/JavaScript modules. The vibe path is `defineTool` + filesystem discovery: drop a file in `tools/`, default-export `defineTool({ description, input, execute })`, and it is auto-discovered, named from the filename (authoritative), schema-validated, and injected — no `name` field, no manual registration. `defineTool` takes a Zod `input` schema (re-exported as `z` from the package), converts it to JSON Schema for the model, validates the model's arguments before `execute` (a validation failure becomes an error result the model can correct, not a crash), and wraps a plain return value into pi's result shape.
-
-> Reversal: an earlier draft said "FastAgent does not auto-load a magic `tools/` directory." That rationale conflated dependency installation with registration — they are orthogonal. Filesystem discovery is the bigger DX win because it removes both the `name` field and the wiring. So fastagent now auto-discovers `tools/`.
+Code tools are TypeScript/JavaScript modules. The vibe path is `defineTool` + filesystem discovery: drop a file in `tools/`, default-export `defineTool({ description, input, execute })`, and it is auto-discovered, named from the filename (authoritative), schema-validated, and injected — no `name` field, no manual registration. `defineTool` takes a Zod `input` schema (re-exported as `z` from the package), converts it to JSON Schema for the model, validates the model's arguments before `execute` (a validation failure becomes an error result the model can correct, not a crash), and wraps a plain return value into pi's result shape. (Dependency installation and registration are orthogonal: discovery removes the `name` field and the wiring, and does not require the deps a tool imports to be installed — that is the workspace's `npm install`.)
 
 `config.tools` remains as the programmatic/advanced injection path; discovered tools are merged after pi defaults + `config.tools`, deduped by name (existing win; dropped tools are surfaced, not silent). A code-tool workspace must be ESM (`"type": "module"` in package.json) so a tool's `import` resolves. `fastagent tool <name> '<json>'` runs one tool's body directly — no model, no server, no tokens — the tightest authoring feedback loop. Declarative MCP tool mounting via `.mcp.json` is future support, not implemented today.
 
@@ -217,10 +215,9 @@ Durable decisions this architecture encodes:
   *no-redelivery* case. L1 recovers it: `turn-store.ts` persists an accepted turn's intent pre-ACK
   (like the context buffer) and, on the next start, replays anything an interrupted run left mid-flight.
   "Interrupted" is not just a rare crash: `runStart` has no graceful drain, so a SIGTERM — every rolling
-  deploy — exits mid-turn too. This is a per-process WAL by another name, and a deliberate reversal of
-  the earlier "accept the loss" stance — the atomic-rename primitive (`state.ts`) already in the channel
-  makes it cheap enough to be worth the ACKed-but-unfinished window that a single re-ask otherwise
-  costs. It is **at-least-once, not exactly-once**: replay re-runs the whole turn (re-running
+  deploy — exits mid-turn too. This is a per-process WAL: the atomic-rename primitive (`state.ts`)
+  already in the channel makes it cheap enough to be worth the ACKed-but-unfinished window that a single
+  re-ask otherwise costs. It is **at-least-once, not exactly-once**: replay re-runs the whole turn (re-running
   side-effecting tools — so the idempotency bar is judged against DEPLOY frequency, not rare crashes —
   and possibly orphaning a preview), and the pre-ACK window can overlap Telegram redelivery (same
   update_id, no dedup) — a turn may run twice. An execution ceiling drops a poison turn on its own
@@ -279,7 +276,7 @@ Consequence: skills need progressive disclosure (a prompt listing); authored con
 
 The agent's working directory (tool `cwd`, where `read`/`bash`/`write` operate) = the definition directory = the directory holding `AGENTS.md`. With no separate artifact, cwd is a **real, persistent, writable** directory (your repo locally; the COPY'd project in a container) — never an ephemeral build output that a rebuild replaces. Two consequences:
 
-- **No write-to-ephemeral footgun.** Tools write into a durable directory, not one the next build wipes (the old build/artifact made cwd the throwaway `.fastagent/build`).
+- **No write-to-ephemeral footgun.** Tools write into a durable directory, not an ephemeral build output that a rebuild would wipe.
 - **Self-modification is coherent.** An agent that edits its own `AGENTS.md`/`skills/` edits a real, git-versioned directory (revertable, reviewable) — a deliberate option, should it ever be wanted, not an accident of where cwd points.
 
 Durable *runtime output* still belongs outside the directory (object storage / DB / the response), and in a stateless multi-instance deployment the working dir is per-replica scratch — but the *definition* it roots on is the persistent directory, not a throwaway.
