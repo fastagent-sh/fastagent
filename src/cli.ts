@@ -443,9 +443,9 @@ async function runDeploy(): Promise<void> {
   // a known crash-loop).
   const modelIssue = modelTravelIssue(config.model, modelSpec);
   if (modelIssue) {
-    // The hard gate is fly-only: `fly --run` would deploy a crash-looping box, so stop it. `railway
-    // --run` already degrades to the manual runbook (Phase 1), so it takes the same warn as the runbook.
-    if (values.run && host === "fly") {
+    // `--run` fully deploys on either host now, so a model that won't travel would ship a known
+    // crash-looping box — hard-stop before that. (Generate-only still just warns, for the runbook.)
+    if (values.run) {
       console.error(`[fastagent] deploy stopped: ${modelIssue}`);
       process.exit(1);
     }
