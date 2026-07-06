@@ -113,7 +113,10 @@ function usage(code: number): never {
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   deploy fly [dir]: generate fly.toml/Dockerfile/.dockerignore (autostop=suspend, state→volume) from
          the definition and print an ordered flyctl runbook + the post-deploy webhook step. Does not
-         run flyctl — a coding agent (or you) executes the runbook. --force overwrites existing artifacts.
+         run flyctl — a coding agent (or you) executes the runbook.
+         --stop            autostop by stopping (cold start) instead of suspending (fast resume)
+         --no-scale-to-zero keep one machine running when idle (min_machines_running=1)
+         --force           overwrite existing fly.toml/Dockerfile/.dockerignore (else kept)
   login  authenticate a model provider into the project-level <state root>/auth.json — default
          <cwd>/.fastagent/auth.json (root: FASTAGENT_STATE_DIR; file: --auth-path / FASTAGENT_AUTH_PATH;
          run from $HOME for the global ~/.fastagent/auth.json): pick
@@ -135,6 +138,8 @@ const { positionals, values } = parseArgs({
     tunnel: { type: "boolean" },
     update: { type: "boolean" },
     force: { type: "boolean" },
+    stop: { type: "boolean" },
+    "no-scale-to-zero": { type: "boolean" },
     json: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean", short: "v" },
@@ -461,6 +466,14 @@ async function runDeploy(): Promise<void> {
   if (flyTomlExists && values.force) {
     console.error(`[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`);
   }
+  // Autostop flags shape the GENERATED fly.toml only. In KEEP mode (fly.toml exists, no --force) it is
+  // not rewritten, so the flags would silently do nothing — surface that instead of a confusing no-op.
+  if (flyTomlExists && !values.force && (values.stop || values["no-scale-to-zero"])) {
+    console.error(
+      `[fastagent] warn: --stop/--no-scale-to-zero only shape a freshly generated fly.toml — yours exists and ` +
+        `was kept. Edit auto_stop_machines/min_machines_running in fly.toml, or pass --force to regenerate.`,
+    );
+  }
   // A code workspace with no package-lock.json builds via `npm install` (caret ranges resolve at build
   // time) — not a reproducible redeploy. A pnpm/yarn user gets an accurate message (their lockfile is
   // ignored by the npm Dockerfile), not the misleading "commit an npm lockfile".
@@ -499,6 +512,8 @@ async function runDeploy(): Promise<void> {
     hasPackageJson,
     hasLockfile,
     version: await fastagentVersion(),
+    autostop: values.stop ? "stop" : "suspend",
+    scaleToZero: !values["no-scale-to-zero"],
   });
 
   for (const a of plan.artifacts) {

@@ -5,8 +5,16 @@ const flyToml = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) =>
 const dockerfile = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "Dockerfile")!.content;
 const runbook = (p: ReturnType<typeof planFlyDeploy>) => p.runbook.join("\n");
 
-/** Defaults for the fields a test doesn't care about (a code workspace with a lockfile). */
-const base = { appName: "bot", port: 8787, hasPackageJson: true, hasLockfile: true, version: "9.9.9" } as const;
+/** Defaults for the fields a test doesn't care about (a code workspace with a lockfile, default autostop). */
+const base = {
+  appName: "bot",
+  port: 8787,
+  hasPackageJson: true,
+  hasLockfile: true,
+  version: "9.9.9",
+  autostop: "suspend",
+  scaleToZero: true,
+} as const;
 
 describe("deploy/fly: planFlyDeploy", () => {
   it("wires the state root to the volume and tunes autostop to suspend", () => {
@@ -25,6 +33,18 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["telegram"] }))).toContain(
       "min_machines_running = 0",
     );
+  });
+
+  it("--stop and --no-scale-to-zero flags shape the generated autostop", () => {
+    const stopped = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], autostop: "stop" }));
+    expect(stopped).toContain('auto_stop_machines = "stop"');
+    const kept = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], scaleToZero: false }));
+    expect(kept).toContain("min_machines_running = 1");
+    expect(kept).toContain("--no-scale-to-zero"); // reason-tagged comment, not the github one
+    // default is suspend + scale-to-zero
+    const def = flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    expect(def).toContain('auto_stop_machines = "suspend"');
+    expect(def).toContain("min_machines_running = 0");
   });
 
   it("computes the secret list from the model key + discovered channels", () => {

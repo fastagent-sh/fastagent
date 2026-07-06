@@ -17,8 +17,11 @@ While the project is pre-1.0, minor versions may include breaking changes.
   an ordered flyctl runbook — `fly apps/volumes/secrets/deploy` with the exact secret list (model auth
   + discovered channels) and the post-deploy webhook step. It does **not** run flyctl: cloud-neutral by
   design, fastagent owns the two ends it uniquely knows (definition-aware artifacts; webhook
-  registration) and hands the middle to a coding agent (or you) to execute. `--force` overwrites
-  existing artifacts (else kept). Single-machine tier (one volume, one machine); the runbook says so.
+  registration) and hands the middle to a coding agent (or you) to execute. Autostop is a Fly headline
+  feature, so one-shot generation flags shape it: `--stop` (stop instead of suspend), `--no-scale-to-zero`
+  (keep one machine up); fly.toml stays the single source (a kept one wins — the flags only shape a fresh
+  or `--force`d file). `--force` overwrites existing artifacts (else kept). Single-machine tier (one
+  volume, one machine); the runbook says so.
 
 - **Acknowledgements + npm metadata.** README now credits the open-source stack it builds on — pi
   (`@earendil-works/pi-*`, the reference engine) and the MIT libraries it depends on — with a
