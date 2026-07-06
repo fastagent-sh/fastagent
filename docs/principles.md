@@ -73,6 +73,7 @@ Typed boundaries are product UX, not ceremony. FastAgent applies them where agen
 | Agent-as-a-feature | Agent-as-a-platform | The common job is adding an agent to a product or channel the user already has, not adopting a second framework. |
 | `invoke` as the neutral contract | HTTP handlers as the only contract | The same agent can run behind an app route, GitHub, Telegram, tests, or future channels. |
 | Channel adapters | One-off webhook/bot implementations | Channel code should translate events, not duplicate the agent loop. |
+| The agent's own reasoning as control flow | A bundled workflow/orchestration engine | The agent decides its steps; deterministic multi-step orchestration is the app's job — call `invoke` from your queue or workflow. |
 | Definition-local skills | Global or machine-local skills | Deployment behavior must come from the repo, not a developer's home directory. |
 | No required build step | Generated runtime artifacts | The directory is already the deployable unit; fewer artifacts means less drift. |
 | Host-provided runtime concerns | Framework-owned everything | Secrets, sessions, execution environment, and policy vary by host and app. |
