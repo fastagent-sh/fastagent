@@ -13,7 +13,7 @@ const freshDir = () => mkdtemp(join(tmpdir(), "fa-chan-"));
 describe("loadChannels (filesystem discovery)", () => {
   it("discovers channels/* and merges their routes; missing channels/ is empty", async () => {
     const dir = await freshDir();
-    expect(await loadChannels(dir, fakeCtx)).toEqual({ routes: {}, collisions: [] }); // no channels/ yet
+    expect(await loadChannels(dir, fakeCtx)).toEqual({ routes: {}, collisions: [], failures: [] }); // no channels/ yet
 
     await mkdir(join(dir, "channels"));
     await writeFile(
@@ -27,6 +27,43 @@ describe("loadChannels (filesystem discovery)", () => {
     const { routes, collisions } = await loadChannels(dir, fakeCtx);
     expect(Object.keys(routes).sort()).toEqual(["POST /stripe", "POST /webhook"]);
     expect(collisions).toEqual([]);
+  });
+
+  it("ISOLATES a channel that throws on import — reports it in failures, still mounts the others (G2)", async () => {
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    await writeFile(
+      join(dir, "channels", "boom.mjs"),
+      `throw new Error("bad top-level init");\nexport default () => ({});`,
+    );
+    await writeFile(
+      join(dir, "channels", "ok.mjs"),
+      `export default () => ({ "POST /ok": () => new Response(null, { status: 202 }) });`,
+    );
+    const { routes, failures } = await loadChannels(dir, fakeCtx);
+    expect(Object.keys(routes)).toEqual(["POST /ok"]); // the good channel still mounts — no crash
+    expect(failures).toHaveLength(1);
+    expect(failures[0]!.label).toBe("channels/boom.mjs");
+    expect(failures[0]!.message).toMatch(/bad top-level init/);
+  });
+
+  it("ISOLATES a channel whose FACTORY throws at init (missing env) — reports it, mounts the rest (G2)", async () => {
+    // The common deploy failure: a factory reads a required env var / validates config and throws. That
+    // must not crash the server — skip the channel, keep serving the rest.
+    const dir = await freshDir();
+    await mkdir(join(dir, "channels"));
+    await writeFile(
+      join(dir, "channels", "needsenv.mjs"),
+      `export default () => { throw new Error("TELEGRAM_SECRET_TOKEN required"); };`,
+    );
+    await writeFile(
+      join(dir, "channels", "ok.mjs"),
+      `export default () => ({ "POST /ok": () => new Response(null, { status: 202 }) });`,
+    );
+    const { routes, failures } = await loadChannels(dir, fakeCtx);
+    expect(Object.keys(routes)).toEqual(["POST /ok"]); // the healthy channel still mounts
+    expect(failures.map((f) => f.label)).toEqual(["channels/needsenv.mjs"]);
+    expect(failures[0]!.message).toMatch(/TELEGRAM_SECRET_TOKEN/);
   });
 
   it("surfaces a route collision (first file wins; the duplicate is dropped, never silent)", async () => {
@@ -103,14 +140,16 @@ describe("loadChannels (filesystem discovery)", () => {
     );
   });
 
-  it("fails visibly when a channel file does not default-export a function", async () => {
+  it("isolates (surfaces, not fatal) a channel file that does not default-export a function", async () => {
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
     await writeFile(join(dir, "channels", "bad.mjs"), `export const notDefault = 1;`);
-    await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/must default-export \(ctx\) => Routes/);
+    const { routes, failures } = await loadChannels(dir, fakeCtx);
+    expect(routes).toEqual({}); // not mounted…
+    expect(failures[0]!.message).toMatch(/must default-export \(ctx\) => Routes/); // …but surfaced, never silent
   });
 
-  it("rejects an async factory with a Promise-specific error (and no unhandled rejection)", async () => {
+  it("surfaces an async factory with a Promise-specific message (and no unhandled rejection)", async () => {
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
     // Rejects after the (microtask) tick — the guard must mark it handled, not leave it unhandled.
@@ -118,7 +157,8 @@ describe("loadChannels (filesystem discovery)", () => {
       join(dir, "channels", "async.mjs"),
       `export default async () => { throw new Error("setup boom"); };`,
     );
-    await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/not a Promise|async factory is not supported/);
+    const { failures } = await loadChannels(dir, fakeCtx); // isolated; the Promise is marked handled — no unhandled rejection
+    expect(failures[0]!.message).toMatch(/not a Promise|async factory is not supported/);
   });
 
   it("rejects any non-async return that yields no routes (null, primitive, array, Map, {})", async () => {
@@ -134,7 +174,9 @@ describe("loadChannels (filesystem discovery)", () => {
       const dir = await freshDir();
       await mkdir(join(dir, "channels"));
       await writeFile(join(dir, "channels", `${name}.mjs`), body);
-      await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/must return a Routes object|declared no routes/);
+      const { routes, failures } = await loadChannels(dir, fakeCtx);
+      expect(routes).toEqual({}); // nothing mounted
+      expect(failures[0]!.message).toMatch(/must return a Routes object|declared no routes/);
     }
   });
 
@@ -142,7 +184,8 @@ describe("loadChannels (filesystem discovery)", () => {
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
     await writeFile(join(dir, "channels", "bad.mjs"), `export default () => ({ "POST /webhook": 42 });`);
-    await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/must map to a handler function/);
+    const { failures } = await loadChannels(dir, fakeCtx);
+    expect(failures[0]!.message).toMatch(/must map to a handler function/);
   });
 
   it("rejects a malformed route key (a handler array's numeric key, or a missing leading slash)", async () => {
@@ -154,7 +197,9 @@ describe("loadChannels (filesystem discovery)", () => {
       const dir = await freshDir();
       await mkdir(join(dir, "channels"));
       await writeFile(join(dir, "channels", "bad.mjs"), body);
-      await expect(loadChannels(dir, fakeCtx)).rejects.toThrow(/is not a valid route key/);
+      const { routes, failures } = await loadChannels(dir, fakeCtx);
+      expect(routes).toEqual({}); // no partial mount
+      expect(failures[0]!.message).toMatch(/is not a valid route key/);
     }
   });
 });

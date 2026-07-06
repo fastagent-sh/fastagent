@@ -20,6 +20,7 @@ import {
   resolveStateRoot,
 } from "./config.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
+import type { ModuleLoadFailure } from "./loader.ts";
 import { type LoadedDefinition, ensureStateRootSelfIgnored } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
@@ -65,6 +66,8 @@ export async function createPiAgentFromWorkspace(
   /** Non-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
   toolCollisions: ToolCollision[];
+  /** `tools/` files that failed to import — skipped, reported by the caller, never fatal. */
+  toolFailures: ModuleLoadFailure[];
 }> {
   const { config, path: configPath }: LoadedConfig = await loadConfig(dir);
   const modelSpec = resolveModelSpec(options.model, config);
@@ -73,7 +76,7 @@ export async function createPiAgentFromWorkspace(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  const { tools, toolNames, toolCollisions } = await resolveWorkspaceTools(config, dir);
+  const { tools, toolNames, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, dir);
   // The state root: auth/sessions/channel state all derive from it, so FASTAGENT_STATE_DIR moves the
   // whole machine-state home in one knob (a container mounts one volume); the finer overrides below
   // still win for their specific path.
@@ -105,5 +108,6 @@ export async function createPiAgentFromWorkspace(
     authPath,
     toolNames,
     toolCollisions,
+    toolFailures,
   };
 }

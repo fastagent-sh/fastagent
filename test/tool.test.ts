@@ -61,10 +61,30 @@ describe("loadTools (filesystem discovery)", () => {
     expect((await tools[0]!.execute("c", {})).details).toBe("pong");
   });
 
-  it("fails visibly when a tool file does not default-export a tool", async () => {
+  it("isolates (surfaces, not fatal) a tool file that does not default-export a tool", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-tools-"));
     await mkdir(join(dir, "tools"));
     await writeFile(join(dir, "tools", "bad.mjs"), `export const notDefault = 1;`);
-    await expect(loadTools(dir)).rejects.toThrow(/must default-export defineTool/);
+    const { tools, failures } = await loadTools(dir);
+    expect(tools).toEqual([]); // not mounted…
+    expect(failures[0]!.message).toMatch(/must default-export defineTool/); // …but surfaced, never silent
+  });
+
+  it("ISOLATES a tool that throws on import — reports it in failures, still loads the others (G2)", async () => {
+    // A repo turned into an agent may have a tools/ dir of its OWN build scripts that throw at module
+    // top level (the real case: `APP_BASE ?? throw`). One such file must not crash `start` — it's skipped
+    // and reported, the rest load, the agent keeps serving.
+    const dir = await mkdtemp(join(tmpdir(), "fa-tools-"));
+    await mkdir(join(dir, "tools"));
+    await writeFile(join(dir, "tools", "boom.mjs"), `throw new Error("APP_BASE env required");\nexport default {};`);
+    await writeFile(
+      join(dir, "tools", "ok.mjs"),
+      `export default { description: "o", parameters: { type: "object" }, async execute() { return "ok"; } };`,
+    );
+    const { tools, failures } = await loadTools(dir);
+    expect(tools.map((t) => t.name)).toEqual(["ok"]); // the good tool still loads — no crash
+    expect(failures).toHaveLength(1);
+    expect(failures[0]!.label).toBe("tools/boom.mjs");
+    expect(failures[0]!.message).toMatch(/APP_BASE/); // the throw reason is surfaced, not swallowed
   });
 });
