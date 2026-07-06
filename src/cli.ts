@@ -54,7 +54,9 @@ import { exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
 import { modelTravelIssue, parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
 import { planRailwayDeploy } from "./deploy/railway.ts";
-import { type FlyRunner, assembleFlySecrets, authSeedBytes, deployFlyRun } from "./deploy/fly-run.ts";
+import { type RailwayRunner, deployRailwayRun } from "./deploy/railway-run.ts";
+import { type FlyRunner, authSeedBytes, deployFlyRun } from "./deploy/fly-run.ts";
+import { assembleSecrets } from "./deploy/secrets.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 
 function usage(code: number): never {
@@ -119,10 +121,11 @@ function usage(code: number): never {
          coding agent (or you) executes the runbook. fly: fly.toml (autostop=suspend, state→volume).
          railway: railway.json (healthcheck /health); its volume/variables/App-Sleeping are dashboard/
          CLI steps the runbook states (see the runbook).
-         --run             (fly only) drive flyctl to completion (idempotent, resumable): app/volume/
-                           secrets/deploy + telegram webhook. Carries your local credential (env key or
-                           the OAuth auth.json) to the box. Stops at a gate (fly auth login, a missing
-                           secret) with one actionable line; needs flyctl. Without it: prints the runbook.
+         --run             drive the host CLI to completion: app/service + volume + secrets + deploy +
+                           telegram webhook (railway also mints the public domain). Carries your local
+                           credential (env key or the OAuth auth.json) to the box. Stops at a gate (not
+                           logged in, a missing secret) with one actionable line; needs flyctl / the
+                           railway CLI. Without it: prints the runbook.
          --stop            (fly only) autostop by stopping (cold start) instead of suspending (fast resume)
          --no-scale-to-zero (fly only) keep one machine running when idle (min_machines_running=1)
          --force           overwrite existing host config/Dockerfile/.dockerignore (else kept)
@@ -503,7 +506,7 @@ async function runDeploy(): Promise<void> {
   const port = config.http?.port ?? 8787;
 
   // Railway: thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
-  // planRailwayDeploy). --run lands in Phase 2; for now generate + print the runbook.
+  // planRailwayDeploy). --run drives the railway CLI to completion; otherwise print the runbook.
   if (host === "railway") {
     if (values.stop || values["no-scale-to-zero"]) {
       console.error(
@@ -519,15 +522,8 @@ async function runDeploy(): Promise<void> {
         .replace(/^-+|-+$/g, "") || "agent";
     const plan = planRailwayDeploy({ serviceName, modelAuth, channels, ...container });
     await writeArtifacts(target, plan.artifacts);
-    // --run is Fly-only for now. Print the runbook (the manual path) FIRST, then exit non-zero so a
-    // script sees the requested run did not happen — and the "below" the message points at is really there.
-    if (values.run) {
-      console.error(
-        `[fastagent] deploy railway --run is not available yet (Phase 2) — the runbook below runs it manually:`,
-      );
-    }
+    if (values.run) return runDeployRailway(target, serviceName, modelAuth, authPath, channels);
     console.log(plan.runbook.join("\n"));
-    if (values.run) process.exit(1);
     return;
   }
 
@@ -622,7 +618,7 @@ async function runDeployFly(
   }
 
   const region = parseFlyRegion(await readFile(flyTomlPath, "utf8")) ?? "iad";
-  const { secrets, missingSecrets, needsModelCredential } = assembleFlySecrets({
+  const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
     modelAuth,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
@@ -648,6 +644,65 @@ async function runDeployFly(
     process.exit(1);
   }
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
+}
+
+/**
+ * `deploy railway --run`: drive the railway CLI to completion. Mirrors {@link runDeployFly} — same
+ * credential carry (env key OR the OAuth auth.json as `FASTAGENT_AUTH_SEED`) via {@link assembleSecrets},
+ * same runner seam (spawned `railway`, cwd = the workspace so `railway up`'s upload is the agent). The
+ * Railway-specific sequence (linked-check → init/add/volume when fresh → variables → up → domain →
+ * webhook) lives in {@link deployRailwayRun}; see there for why Railway differs from Fly.
+ */
+async function runDeployRailway(
+  target: string,
+  name: string,
+  modelAuth: string | undefined,
+  authPath: string,
+  channels: ChannelKind[],
+): Promise<void> {
+  const railway: RailwayRunner = (args, opts) =>
+    new Promise((res) => {
+      const child = spawn("railway", args, {
+        cwd: target,
+        stdio: [opts?.input ? "pipe" : "inherit", opts?.capture ? "pipe" : "inherit", "inherit"],
+      });
+      let out = "";
+      child.stdout?.on("data", (d) => (out += String(d)));
+      if (opts?.input) child.stdin?.end(opts.input);
+      child.on("close", (code) => res({ code: code ?? 1, stdout: out }));
+      child.on("error", () => res({ code: 127, stdout: "" })); // ENOENT: railway not on PATH
+    });
+  // Fail fast if the railway CLI is absent (spawn ENOENT → 127), with the install link.
+  if ((await railway(["--version"], { capture: true })).code === 127) {
+    console.error(`[fastagent] railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run`);
+    process.exit(1);
+  }
+
+  const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
+    modelAuth,
+    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
+    channels,
+    env: process.env,
+  });
+  // Model credential has its OWN remediation (login), distinct from a missing secret's (.env).
+  if (needsModelCredential) {
+    console.error(
+      `[fastagent] deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
+    );
+    process.exit(1);
+  }
+
+  const outcome = await deployRailwayRun(
+    { name, mountPath: "/data", secrets, missingSecrets, channels },
+    railway,
+    (m) => console.error(`[fastagent] ${m}`),
+    (baseUrl) => registerTelegramWebhook(baseUrl),
+  );
+  if (!outcome.ok) {
+    console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
+    process.exit(1);
+  }
+  console.error(`[fastagent] deployed → ${outcome.url}`);
 }
 
 /**

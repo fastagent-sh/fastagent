@@ -48,16 +48,6 @@ describe("cli papercuts", () => {
     expect(stdout).toBe(""); // a failure never pollutes stdout
   });
 
-  it("deploy railway --run prints the runbook then exits non-zero (fail-visible: the run didn't happen)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-rw-run-"));
-    await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
-    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai/gpt-4o-mini" };\n');
-    const { code, stdout, stderr } = await run(["deploy", "railway", "--run", dir]);
-    expect(code).toBe(1); // --run is Fly-only → non-zero so a script sees the requested run did NOT happen
-    expect(stderr).toMatch(/--run is not available yet/); // ...with an actionable reason
-    expect(stdout).toContain("railway up"); // ...and the manual runbook is still printed (the "below")
-  });
-
   it("info reports the assembled surface as JSON (incl. load diagnostics), read-only (no sessions dir)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-info-"));
     await mkdir(join(dir, "skills", "greet"), { recursive: true });
