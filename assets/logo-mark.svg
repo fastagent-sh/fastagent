@@ -5,12 +5,11 @@
       <stop offset="1" stop-color="#c4c9d0"/>
     </linearGradient>
   </defs>
-  <!-- »  fast-forward (fast) + terminal prompt (agent), forward lean = speed; the chevrons point at a live signal -->
+  <!-- »  fast-forward (fast) + terminal prompt (agent); the live dot settles bottom-right -->
   <g transform="translate(2,0) skewX(-9)" fill="none" stroke="url(#ink)" stroke-width="36"
      stroke-linecap="round" stroke-linejoin="round">
     <polyline points="52,58 112,118 52,178"/>
     <polyline points="114,58 174,118 114,178"/>
   </g>
-  <circle cx="206" cy="150" r="15" fill="#f2f3f5"/>
-  <circle cx="206" cy="150" r="26" fill="none" stroke="#f2f3f5" stroke-opacity="0.3" stroke-width="4"/>
+  <circle cx="202" cy="190" r="15" fill="#f2f3f5"/>
 </svg>
