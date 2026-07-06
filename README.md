@@ -39,7 +39,7 @@ FastAgent is the missing bridge from local agent directory to real service.
 - **Channels.** Serve the same agent as a GitHub PR reviewer, a Telegram bot, an HTTP/SSE endpoint, or your own adapter — verified webhooks, streaming replies, group-aware.
 - **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` (the filename is the name, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
 - **App embedding — your stack, we plug in.** Like Flask/FastAPI for agents: FastAgent never owns your framework. Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler — your auth, your database, your host.
-- **Deploy anywhere.** Run the directory directly — no build step; `fastagent deploy fly` generates the artifacts + a runbook and hands off. Cloud-neutral: the directory is the deployable unit.
+- **Deploy anywhere.** Run the directory directly — no build step; `fastagent deploy fly|railway` generates the host config + a runbook and hands off (`fly --run` drives the deploy to completion). Cloud-neutral: the directory is the deployable unit.
 
 **Designed for more — [help build it](CONTRIBUTING.md).** FastAgent's neutral contract and injection seams are laid out for the capabilities it is growing into. Honest works-in-progress, open to contributors:
 
@@ -47,7 +47,7 @@ FastAgent is the missing bridge from local agent directory to real service.
 - **Sandboxed execution** — tools run behind an `ExecutionEnv` port (local by default); E2B / micro-VM backends drop in.
 - **Observability export** — leveled logs and per-turn traces today; an OpenTelemetry exporter is a clean seam.
 - **More engines & channels** — the Agent Handler contract is engine-neutral (a second engine proves the seams); Slack, Discord, and other adapters plug into the channel kit.
-- **More deploy targets** — `deploy fly` ships today, and the container recipe already runs the directory on any Docker host; the host-scoped `deploy <host>` seam is laid out for Cloudflare, Railway, Render, and beyond.
+- **More deploy targets** — `deploy fly` and `deploy railway` ship today, and the container recipe already runs the directory on any Docker host; the host-scoped `deploy <host>` seam is laid out for Cloudflare, Render, and beyond.
 
 Using a coding agent? Give it [`docs/ai-start.md`](docs/ai-start.md) for an AI-guided setup path.
 
