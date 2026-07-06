@@ -9,7 +9,7 @@
 <p align="center">
   <sub>Built on</sub>
   <a href="https://pi.dev"><img src="https://pi.dev/logo-auto.svg" alt="pi" height="22" /></a>
-  <sub>— the MIT agent harness &amp; multi-provider LLM API (<code>@earendil-works/pi-*</code>)</sub>
+  <sub>— the agent harness &amp; multi-provider LLM API under the hood</sub>
 </p>
 
 **Vibe first. Then FastAgent.** Any folder can become a live agent service. FastAgent takes your local agent folder out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
@@ -173,12 +173,12 @@ FastAgent is pre-1.0. The stable design center is the Agent Handler contract in 
 
 ## Acknowledgements
 
-FastAgent stands on open source. The reference implementation is built on **[pi](https://pi.dev)** (`@earendil-works/pi-*`, MIT) — the agent harness, the multi-provider LLM API, and the interactive TUI that `fastagent chat` drives.
+FastAgent stands on open source. The reference implementation is built on **[pi](https://github.com/earendil-works/pi)** ([pi.dev](https://pi.dev)) — its agent harness, multi-provider LLM API, and the interactive TUI that `fastagent chat` drives.
 
-It also depends on, and is grateful to, these MIT projects: [zod](https://github.com/colinhacks/zod), [undici](https://github.com/nodejs/undici), [chokidar](https://github.com/paulmillr/chokidar), [giget](https://github.com/unjs/giget), [@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore), and [@octokit/webhooks-*](https://github.com/octokit/webhooks).
+It also depends on, and is grateful to, [zod](https://github.com/colinhacks/zod), [undici](https://github.com/nodejs/undici), [chokidar](https://github.com/paulmillr/chokidar), [giget](https://github.com/unjs/giget), [@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore), and [octokit/webhooks](https://github.com/octokit/webhooks).
 
-The scaffolded `writing-great-skills` skill is vendored from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT), with its license included.
+The scaffolded `writing-great-skills` skill is vendored from [mattpocock/skills](https://github.com/mattpocock/skills), with its license included.
 
 ## License
 
-[MIT](LICENSE). All runtime dependencies are MIT; FastAgent does not bundle their code (npm installs each separately), so their licenses ship with them.
+[MIT](LICENSE). Every runtime dependency is also MIT-licensed, and FastAgent does not bundle their code — npm installs each separately, so their licenses ship with them and none is redistributed here.
