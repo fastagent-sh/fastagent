@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFlyAppName, planFlyDeploy, toFlyAppName } from "../src/deploy/fly.ts";
+import { modelTravelIssue, parseFlyAppName, planFlyDeploy, toFlyAppName } from "../src/deploy/fly.ts";
 
 const flyToml = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "fly.toml")!.content;
 const dockerfile = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "Dockerfile")!.content;
@@ -82,6 +82,15 @@ describe("deploy/fly: planFlyDeploy", () => {
       "npm install --omit=dev",
     );
     expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).toContain("npm ci --omit=dev");
+  });
+
+  it("flags a model that won't travel — config.model is the deployed box's only source", () => {
+    // A model in config.ts travels (in the image) → no issue.
+    expect(modelTravelIssue("openai/gpt-4o", "openai/gpt-4o")).toBeUndefined();
+    // Resolved from env/flag but NOT in config → won't reach the box; the message names config.ts + the spec.
+    expect(modelTravelIssue(undefined, "openai/gpt-4o")).toMatch(/fastagent\.config\.ts.*openai\/gpt-4o/s);
+    // No model at all.
+    expect(modelTravelIssue(undefined, undefined)).toMatch(/no model/);
   });
 
   it("sanitizes a dir basename into a valid Fly app name", () => {

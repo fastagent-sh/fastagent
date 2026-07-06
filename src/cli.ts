@@ -52,7 +52,7 @@ import {
 } from "./scaffold/add-channel.ts";
 import { exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
-import { parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
+import { modelTravelIssue, parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
 import { type FlyRunner, assembleFlySecrets, authSeedBytes, deployFlyRun } from "./deploy/fly-run.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 
@@ -431,6 +431,17 @@ async function runDeploy(): Promise<void> {
   loadDotEnv(target); // a custom provider/tool may read a key at config load
   const { config } = await loadConfig(target).catch(failStartup);
   const modelSpec = resolveModelSpec(values.model, config);
+  // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via
+  // env/flag/.env doesn't travel. Surface it: warn for the runbook, hard gate for `--run` (don't deploy
+  // a known crash-loop).
+  const modelIssue = modelTravelIssue(config.model, modelSpec);
+  if (modelIssue) {
+    if (values.run) {
+      console.error(`[fastagent] deploy stopped: ${modelIssue}`);
+      process.exit(1);
+    }
+    console.error(`[fastagent] warn: ${modelIssue}`);
+  }
   // Known channel kinds only — a custom channel's secrets/webhook are unknown to us; warn and let the
   // author wire them. probeAuthSource is best-effort (default providers): an env key becomes a secret,
   // a local OAuth/stored login surfaces as guidance, an unknown provider degrades to a generic note.
