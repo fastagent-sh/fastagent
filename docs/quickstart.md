@@ -39,7 +39,7 @@ my-agent/
 └── .gitignore
 ```
 
-`AGENTS.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills), MIT) is the guide it consults to write them. Add more skills with `fastagent add skill <owner/repo/path>`. For a workspace with no code tool or dependencies (AGENTS.md + the skill + config only):
+`AGENTS.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)) is the guide it consults to write them. Add more skills with `fastagent add skill <owner/repo/path>`. For a workspace with no code tool or dependencies (AGENTS.md + the skill + config only):
 
 ```bash
 fastagent init my-agent --minimal

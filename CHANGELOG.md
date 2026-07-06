@@ -24,8 +24,7 @@ While the project is pre-1.0, minor versions may include breaking changes.
   volume, one machine); the runbook says so.
 
 - **Acknowledgements + npm metadata.** README now credits the open-source stack it builds on — pi
-  (`@earendil-works/pi-*`, the reference engine) and the MIT libraries it depends on — with a
-  "built with pi" badge. `package.json` gains `homepage`, `bugs`, and `author`. All runtime
+  (the reference engine) and the libraries it depends on — with a "built with pi" badge. `package.json` gains `homepage`, `bugs`, and `author`. All runtime
   dependencies are MIT and are not bundled, so no third-party license ships in this package's tarball;
   the one vendored asset (the `writing-great-skills` skill) already includes its license.
 - **First-run model picker.** A scaffolded workspace no longer hard-codes a model. When no model is
