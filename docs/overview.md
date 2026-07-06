@@ -45,12 +45,10 @@ See [Design principles](principles.md) for the full rationale and non-goals.
 
 FastAgent stays a small serving layer, so it never dictates your stack. Capabilities other agent frameworks bake into a platform, we leave to your app, your host, or the agent itself — composed in, not locked in.
 
-- **No new format or DSL** — bring the `AGENTS.md` + `skills/` you already have; no rewrite into our project shape.
-- **No platform to move to** — no dashboard, no control plane, no runtime you deploy *into*.
-- **No framework that owns your app** — your auth, database, routes, and deployment stay yours; FastAgent plugs in.
+- **No platform to move to** — no dashboard, no control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
+- **No new format or DSL** — `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE; FastAgent consumes the standards you already use, not a parallel ecosystem.
 - **No workflow engine** — the agent decides its own steps; for deterministic orchestration, call `invoke` from your own queue or workflow.
 - **No engine, model, or cloud lock-in** — one neutral `invoke` contract; swap the engine, the model, or the host without touching the agent.
-- **No build step** — the directory runs directly, with no artifact to drift from source.
 
 ## Two main use cases
 

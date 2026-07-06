@@ -32,7 +32,7 @@ FastAgent is the missing bridge from local agent directory to real service.
 - **Vibe first — a directory is an agent.** Point FastAgent at the `AGENTS.md` + `skills/` you already vibed in a coding agent. Markdown instructions, reusable skills, and TypeScript tools stay as files you inspect, edit, and commit — no new DSL, no framework rewrite.
 - **Channels.** Serve the same agent as a GitHub PR reviewer, a Telegram bot, an HTTP/SSE endpoint, or your own adapter — verified webhooks, streaming replies, group-aware.
 - **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` (the filename is the name, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
-- **App embedding — your stack, we plug in.** Like Flask/FastAPI for agents: FastAgent never owns your framework. Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler — your auth, your database, your host. No lock-in.
+- **App embedding — your stack, we plug in.** Like Flask/FastAPI for agents: FastAgent never owns your framework. Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler — your auth, your database, your host.
 - **Deploy anywhere.** Run the directory directly — no build step; `fastagent deploy fly` generates the artifacts + a runbook and hands off. Cloud-neutral: the directory is the deployable unit.
 
 **Designed for more — [help build it](CONTRIBUTING.md).** FastAgent's neutral contract and injection seams are laid out for the capabilities it is growing into. Honest works-in-progress, open to contributors:
@@ -60,12 +60,10 @@ Read [Design principles](docs/principles.md) for the full rationale.
 
 FastAgent stays a small serving layer, so it never dictates your stack. Capabilities other agent frameworks bake into a platform, we leave to your app, your host, or the agent itself — composed in, not locked in.
 
-- **No new format or DSL.** Bring the `AGENTS.md` + `skills/` you already vibed; we serve it as-is, with no rewrite into our project shape.
 - **No platform to move to.** No dashboard, no control plane, no runtime you deploy *into* — run it locally, embed it in your app, or ship the directory to any host.
-- **No framework that owns your app.** Your auth, database, routes, and deployment stay yours. FastAgent is the plug-in (Flask/FastAPI-shaped), not the framework.
-- **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, call `invoke` from your own queue or workflow — FastAgent doesn't bake in a second control flow.
+- **No new format or DSL.** `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE — FastAgent consumes the standards you already use instead of a parallel ecosystem.
+- **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, call `invoke` from your own queue or workflow.
 - **No engine, model, or cloud lock-in.** One neutral `invoke` contract: swap the engine, the model (any provider, OAuth or API key), or the host without touching the agent.
-- **No build step.** The directory runs directly — nothing to compile, no artifact to drift from source.
 
 ## Install
 
