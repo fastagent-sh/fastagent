@@ -46,7 +46,8 @@ type TunnelSpawn =
  * cloudflared sometimes exits before printing a URL (a transient trycloudflare API error), so retry a
  * few times. ALWAYS resolves to undefined WITH an operator log saying why — missing binary, the exit
  * reason, or "gave up after retries" — never silently; serving continues without a tunnel either way.
- * (Edge warmup AFTER the URL appears is the caller's concern: announceWebhooks polls /health.)
+ * (Edge warmup AFTER the URL appears is handled downstream: the telegram registrar polls /health before
+ * it calls setWebhook, so a not-yet-routable tunnel just delays registration rather than failing it.)
  */
 export async function startCloudflareTunnel(
   port: number,
@@ -140,31 +141,13 @@ export async function announceWebhooks(dir: string, baseUrl: string): Promise<vo
   }
   const channels = channelBasenames(dir);
   if (channels.length === 0) return;
-  // A fresh quick tunnel returns Cloudflare 530 for ~20-30s before its origin connects; registering a
-  // webhook before then fails with "Failed to resolve host". Wait until /health actually serves.
-  log.info("[fastagent] waiting for the tunnel to come up…");
-  if (!(await waitForTunnel(baseUrl))) {
-    log.warn(`[fastagent] tunnel did not respond in time; webhook registration may fail (URL: ${baseUrl})`);
-  }
+  // Readiness is the registrar's job now: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before
+  // its origin connects, and registerTelegramWebhook polls /health until it serves before setWebhook (the
+  // same wait the deploy runners rely on). github needs no wait — the operator adds that webhook by hand.
   if (channels.includes("telegram")) await registerTelegramWebhook(baseUrl);
   if (channels.includes("github")) {
     log.info(
       `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
   }
-}
-
-/** Poll the tunnel's `/health` until it serves a 2xx (a fresh quick tunnel returns 530 until its origin connects). */
-async function waitForTunnel(baseUrl: string, timeoutMs = 60000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(8000) });
-      if (res.ok) return true;
-    } catch {
-      /* edge not reachable yet */
-    }
-    await sleep(3000);
-  }
-  return false;
 }
