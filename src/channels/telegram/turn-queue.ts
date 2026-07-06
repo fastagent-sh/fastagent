@@ -4,7 +4,7 @@
  * is the corruption floor beneath this; this adds the group-UX queue (a second summon waits its turn
  * instead of colliding on the lease and being dropped as "busy").
  *
- * Channel-neutral (records are opaque beyond a `session` key); it lives in the telegram folder
+ * Channel-neutral (records are opaque beyond a `session` key); it lives in the telegram directory
  * because that is its only consumer today. Durability is layered ON TOP by the caller: turn-store.ts
  * persists an accepted turn's intent pre-ACK and replays a crash-surviving one on the next start (L1,
  * process-crash recovery, at-least-once). Exactly-once / deterministic step-replay (L2) is the K-axis

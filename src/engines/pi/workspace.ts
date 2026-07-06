@@ -91,7 +91,7 @@ export async function createPiAgentFromWorkspace(
     model: modelSpec,
     tools,
     authPath,
-    // Skills are definition-only (the agent is its folder), so dev mirrors deployment exactly.
+    // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions: jsonlSessionStore({ dir: sessionsDir, cwd: dir }),
   });
   return {

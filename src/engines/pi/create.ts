@@ -2,7 +2,7 @@
  * Agent assembly (configuration-time): the engine assets (tools, prompt) plus the reusable ladder
  * that puts a pi agent together.
  *
- *   L2  createPiAgentFromDefinition(dir, options)   — load a definition folder, assemble, then L1.
+ *   L2  createPiAgentFromDefinition(dir, options)   — load a definition directory, assemble, then L1.
  *   L1  createPiAgent(options)                       — assemble from typed parts (the canonical ctor).
  *   L0  createPiAgentFromHarness({ harnessFactory }) — in invoke.ts (its body is the turn mechanism).
  *
@@ -127,7 +127,7 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
 /**
  * Shared low-level wiring: resolve the model spec against the collection, default the K ports, build
  * the agent. Internal — the public rungs decide the systemPrompt (L1 from instructions, L2 from the
- * folder) and route through here.
+ * directory) and route through here.
  */
 function buildPiAgent(opts: {
   model: string;
@@ -183,7 +183,7 @@ export interface CreatePiAgentOptions {
   /**
    * The system prompt — your agent's persona, the code-side equivalent of AGENTS.md. A plain string
    * or a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
-   * No engine persona is prepended (that is a folder-fidelity concern of createPiAgentFromDefinition).
+   * No engine persona is prepended (that is a directory-fidelity concern of createPiAgentFromDefinition).
    */
   instructions?: string | (() => string);
   tools?: AgentTool[];
@@ -197,7 +197,7 @@ export interface CreatePiAgentOptions {
   providers?: Provider[];
   /**
    * Credentials file for stored OAuth/API-key auth. Defaults to `~/.fastagent/auth.json`; the
-   * folder opener passes the project-level `<dir>/.fastagent/auth.json` instead. Env vars are still
+   * directory opener passes the project-level `<dir>/.fastagent/auth.json` instead. Env vars are still
    * consulted when a provider is absent from the file (resolution order is upstream-owned).
    */
   authPath?: string;
@@ -225,7 +225,7 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
 }
 
 /**
- * L2 options. `instructions`/`skills` are absent by design — they come from the definition folder
+ * L2 options. `instructions`/`skills` are absent by design — they come from the definition directory
  * (AGENTS.md + skills/), which is the whole point of L2.
  */
 export interface CreatePiAgentFromDefinitionOptions {
@@ -256,7 +256,7 @@ function findingsSignature(def: LoadedDefinition): string {
 }
 
 /**
- * L2: "point at a folder → agent": load + assemble (base + AGENTS.md + skills + env) + L1 in one
+ * L2: "point at a directory → agent": load + assemble (base + AGENTS.md + skills + env) + L1 in one
  * call. Returns the definition so callers can surface diagnostics/collisions.
  */
 export async function createPiAgentFromDefinition(
@@ -264,7 +264,7 @@ export async function createPiAgentFromDefinition(
   options: CreatePiAgentFromDefinitionOptions,
 ): Promise<{ agent: Agent; definition: LoadedDefinition }> {
   const env = options.env ?? new NodeExecutionEnv({ cwd: dir });
-  // Boot-time load: fail-visibly at startup on a broken folder, and give callers the snapshot to
+  // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to
   // report (skills/diagnostics/collisions). Serving does NOT close over it — see `live` below.
   const definition = await loadAgentDefinition(dir, { env });
   // Findings the caller already reported at boot; `live` re-reports only when the set CHANGES — a
@@ -279,7 +279,7 @@ export async function createPiAgentFromDefinition(
     // Dir-aware default: the same state-root-derived file the opener uses for this dir (the opener
     // passes an explicit authPath, so this only affects direct L2 callers).
     authPath: options.authPath ?? defaultAuthPath(resolveStateRoot(dir)),
-    // The folder is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills
+    // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills
     // edits (the author's, or the agent's own self-modification) take effect on the next turn with
     // no process restart — restarts are reserved for code (tools/channels/config, module cache).
     // One read yields prompt AND skills (they can never diverge), `date` is the turn's date, and the

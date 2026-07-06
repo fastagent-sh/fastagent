@@ -6,7 +6,7 @@
  *
  * Watch scope is deliberately narrow: only inputs whose changes REQUIRE a new process — imported
  * code (tools/, channels/), fastagent.config.*, package.json, .env. The definition (AGENTS.md,
- * skills/) is re-read per invoke by the folder rung, so its edits go live on the next turn with no
+ * skills/) is re-read per invoke by the directory rung, so its edits go live on the next turn with no
  * restart — and, critically, an agent that writes files into its own workspace (its normal work
  * product, including editing its own AGENTS.md) never has its in-flight turn killed by the watcher.
  */

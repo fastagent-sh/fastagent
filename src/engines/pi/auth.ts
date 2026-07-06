@@ -67,7 +67,7 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
 }
 
 /** A read-write `CredentialStore` backed by the given credentials file (default {@link GLOBAL_AUTH_PATH};
- *  the folder opener passes the project-level `<dir>/.fastagent/auth.json`). */
+ *  the directory opener passes the project-level `<dir>/.fastagent/auth.json`). */
 export function fastagentCredentialStore(
   authPath: string = GLOBAL_AUTH_PATH,
   options: FastagentAuthOptions = {},

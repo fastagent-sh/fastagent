@@ -5,7 +5,7 @@ status: current
 
 # FastAgent documentation
 
-FastAgent is the serving layer for local agent folders. It takes a folder out of the terminal and turns it into a running service: embedded in your app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind your own channel. `AGENTS.md` is recommended for identity, but the folder is the unit.
+FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running service: embedded in your app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind your own channel. `AGENTS.md` is recommended for identity, but the directory is the unit.
 
 ## Recommended path
 
@@ -46,7 +46,7 @@ Using a coding agent? Give it the repository's [`ai-start.md`](ai-start.md) for 
 
 ## Core concepts
 
-- **The folder is the agent.** Runtime behavior comes from the workspace: optional `AGENTS.md`, `skills/`, `tools/`, `channels/`, and markdown context.
+- **The directory is the agent.** Runtime behavior comes from the workspace: optional `AGENTS.md`, `skills/`, `tools/`, `channels/`, and markdown context.
 - **`invoke` is the contract.** Every channel or host drives an `Agent` through `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 - **Channels are adapters.** A channel receives external events (HTTP, GitHub, Telegram, Slack, …), maps them to one or more agent turns, and returns host-specific responses.
 - **Hosts own runtime state.** Sessions, credentials, execution environment, and locking are runtime concerns, not part of the agent definition.

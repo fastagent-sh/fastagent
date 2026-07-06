@@ -18,7 +18,7 @@
 
   <!-- eyebrow -->
   <text x="98" y="150" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="24" font-weight="700" letter-spacing="6" fill="#1fb6c9">FROM A FOLDER TO A LIVE SERVICE</text>
+        font-size="24" font-weight="700" letter-spacing="6" fill="#1fb6c9">FROM A DIRECTORY TO A LIVE SERVICE</text>
 
   <!-- wordmark -->
   <text x="94" y="288" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
@@ -30,7 +30,7 @@
 
   <!-- one-liner (two lines) -->
   <text x="98" y="436" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="31" font-weight="400" fill="#aebfc5">Turn a local agent folder (AGENTS.md + skills) into a running</text>
+        font-size="31" font-weight="400" fill="#aebfc5">Turn a local agent directory (AGENTS.md + skills) into a running</text>
   <text x="98" y="478" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
         font-size="31" font-weight="400" fill="#aebfc5">service &#8212; in your app, on GitHub, in Telegram, or any channel.</text>
 

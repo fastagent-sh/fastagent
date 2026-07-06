@@ -93,7 +93,7 @@ describe("definition: loadAgentDefinition", () => {
     );
   });
 
-  it("loads only the definition's own skills/ — no external or global mount (your folder is the agent)", async () => {
+  it("loads only the definition's own skills/ — no external or global mount (your directory is the agent)", async () => {
     const def = await loadAgentDefinition(fixtureDir);
     expect(def.skills.map((s) => s.name)).toEqual(["season-words"]);
     expect(def.collisions).toEqual([]);
@@ -178,7 +178,7 @@ describe("create L2: types only promise options the implementation honors", () =
   it("L2 options do not accept skills/instructions because they come from the definition directory", () => {
     const base: CreatePiAgentFromDefinitionOptions = { model: "p/m" };
     expect(base.model).toBeDefined();
-    // @ts-expect-error -- skills must come from the definition folder, not the caller
+    // @ts-expect-error -- skills must come from the definition directory, not the caller
     const withSkills: CreatePiAgentFromDefinitionOptions = { model: "p/m", skills: [] };
     // @ts-expect-error -- instructions are assembled from the definition (AGENTS.md), not passed in
     const withPrompt: CreatePiAgentFromDefinitionOptions = { model: "p/m", instructions: "x" };
@@ -236,7 +236,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     expect(seen).toBe("You are a support bot."); // verbatim: instructions ARE the prompt
-    expect(seen).not.toContain("operating inside pi"); // no coding base (that is L2/folder fidelity)
+    expect(seen).not.toContain("operating inside pi"); // no coding base (that is L2/directory fidelity)
   });
 
   it("appends the skills listing when skills are mounted", async () => {
@@ -290,7 +290,7 @@ describe("create: toolset (real pi tools, fidelity)", () => {
   });
 });
 
-describe("create L2: the folder is LIVE (definition re-read per invoke)", () => {
+describe("create L2: the directory is LIVE (definition re-read per invoke)", () => {
   it("an AGENTS.md/skill edit between two invokes reaches the next turn's prompt and skill resources — no restart", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-live-"));
     await writeFile(join(dir, "AGENTS.md"), "You are DRAFT-PERSONA.\n");

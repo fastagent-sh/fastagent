@@ -37,15 +37,15 @@ The stream ends with exactly one `completed` / `failed`, or is cancelled by the 
 
 | You have | Use | Returns |
 |---|---|---|
-| An agent folder (`AGENTS.md` + `skills/` + `tools/` + config) | `createPiAgentFromWorkspace(dir, { model? })` | `{ agent, definition, modelSpec, … }` — auto-discovers everything |
-| A definition folder, but you want to control the K ports | `createPiAgentFromDefinition(dir, { model, … })` | `{ agent, definition }` |
-| No folder — assemble from code | `createPiAgent({ model, instructions, tools })` | `agent` |
+| An agent directory (`AGENTS.md` + `skills/` + `tools/` + config) | `createPiAgentFromWorkspace(dir, { model? })` | `{ agent, definition, modelSpec, … }` — auto-discovers everything |
+| A definition directory, but you want to control the K ports | `createPiAgentFromDefinition(dir, { model, … })` | `{ agent, definition }` |
+| No directory — assemble from code | `createPiAgent({ model, instructions, tools })` | `agent` |
 
 ```ts
-// A) folder, batteries-included (the same assembly `fastagent dev` uses)
+// A) directory, batteries-included (the same assembly `fastagent dev` uses)
 const { agent } = await createPiAgentFromWorkspace("./agent", { model: "openai-codex/gpt-5.5" });
 
-// B) no folder — Tier 1: three concrete fields
+// B) no directory — Tier 1: three concrete fields
 import { createPiAgent, defineTool, z } from "@kid7st/fastagent";
 
 const lookupOrder = defineTool({
@@ -66,7 +66,7 @@ const agent = createPiAgent({
 
 Author tool schemas with the `z` re-exported from `@kid7st/fastagent` (as above), not a separately installed `zod` — `defineTool` converts the schema with its own zod, so a single shared copy avoids version-skew surprises. Every type on this surface (`AgentTool`, `Skill`, `Session`, `Model`, …) is re-exported too, so you never import from `@earendil-works/*` (the one exception is a provider's wire-protocol `api`, see §5).
 
-`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. (The folder path assembles `AGENTS.md` differently: it adds the pi engine base + skills + env for fidelity with local pi. See [core design §2](design/core.md).)
+`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. (The directory path assembles `AGENTS.md` differently: it adds the pi engine base + skills + env for fidelity with local pi. See [core design §2](design/core.md).)
 
 ## 2. Consume the stream (three ways)
 
@@ -134,7 +134,7 @@ createPiAgent({
 
 ## 4. Auth
 
-Auth never appears in your agent code. It resolves, in order, from a **credentials file** then **ambient env vars** (e.g. `ANTHROPIC_API_KEY`). The dir-aware rungs default it to the **project-level** `<state root>/auth.json` (the root resolves `FASTAGENT_STATE_DIR` > `<dir>/.fastagent`): the folder opener (`createPiAgentFromWorkspace`, i.e. `dev`/`start`) and `createPiAgentFromDefinition(dir)`. The dir-less `createPiAgent` / `createPiModels` default to the global `~/.fastagent/auth.json`; all of them accept an explicit `authPath`. A server deploy that only sets an env key Just Works; a dev machine uses `fastagent login` (which writes the project-level file by default). There is no implicit fallback between the project and global files — each owns its own OAuth refresh lifecycle.
+Auth never appears in your agent code. It resolves, in order, from a **credentials file** then **ambient env vars** (e.g. `ANTHROPIC_API_KEY`). The dir-aware rungs default it to the **project-level** `<state root>/auth.json` (the root resolves `FASTAGENT_STATE_DIR` > `<dir>/.fastagent`): the directory opener (`createPiAgentFromWorkspace`, i.e. `dev`/`start`) and `createPiAgentFromDefinition(dir)`. The dir-less `createPiAgent` / `createPiModels` default to the global `~/.fastagent/auth.json`; all of them accept an explicit `authPath`. A server deploy that only sets an env key Just Works; a dev machine uses `fastagent login` (which writes the project-level file by default). There is no implicit fallback between the project and global files — each owns its own OAuth refresh lifecycle.
 
 To check what's in effect: `probeAuthSource(createPiModels({ authPath }), "openai-codex/gpt-5.5")` returns the resolved source label — `"OAuth"` for a stored OAuth credential (what a logged-in `openai-codex` user sees), `"stored credential"` for a stored API key, an env-var name like `"ANTHROPIC_API_KEY"`, or `undefined`.
 

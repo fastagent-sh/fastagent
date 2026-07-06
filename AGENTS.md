@@ -2,7 +2,7 @@
 
 ## What this is
 
-fastagent is "Vibe first. Then FastAgent" for agent folders: it turns an existing agent definition (`AGENTS.md` + `skills/`) into a running agent service inside an app, reviewing GitHub PRs, helping users in Telegram, or running behind a custom channel without rewriting it. Engine-neutral, model-neutral, cloud-neutral.
+fastagent is "Vibe first. Then FastAgent" for agent directories: it turns an existing agent definition (`AGENTS.md` + `skills/`) into a running agent service inside an app, reviewing GitHub PRs, helping users in Telegram, or running behind a custom channel without rewriting it. Engine-neutral, model-neutral, cloud-neutral.
 
 The stable design center is the Agent Handler contract (`docs/SPEC.md`). The reference implementation is built on pi (`@earendil-works/pi-*`).
 

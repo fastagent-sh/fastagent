@@ -12,7 +12,7 @@
   <sub>— the agent harness &amp; multi-provider LLM API under the hood</sub>
 </p>
 
-**Vibe first. Then FastAgent.** Any folder can become a live agent service. FastAgent takes your local agent folder out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
+**Vibe first. Then FastAgent.** Any directory can become a live agent service. FastAgent takes your local agent directory out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
 
 Leave the terminal. Become a real service.
 
@@ -23,15 +23,15 @@ FastAgent is not another agent framework. It does not ask you to rewrite your ag
 
 ## Why FastAgent
 
-Coding agents made it cheap to vibe useful agent folders. The hard part is the next step: local agents live in terminals, but real services receive webhooks, join Telegram, serve product users, and expose stable APIs.
+Coding agents made it cheap to vibe useful agent directories. The hard part is the next step: local agents live in terminals, but real services receive webhooks, join Telegram, serve product users, and expose stable APIs.
 
-FastAgent is the missing bridge from local agent folder to real service.
+FastAgent is the missing bridge from local agent directory to real service.
 
 ## Features
 
 |  |  |
 |---|---|
-| **The folder is the agent**<br>Keep identity, skills, tools, channels, and markdown context as files you can inspect, edit, and commit. No framework rewrite. | **App embedding**<br>Mount the same agent inside your Next, Astro, or Node app with one route, your auth, your database, and your host. |
+| **The directory is the agent**<br>Keep identity, skills, tools, channels, and markdown context as files you can inspect, edit, and commit. No framework rewrite. | **App embedding**<br>Mount the same agent inside your Next, Astro, or Node app with one route, your auth, your database, and your host. |
 | **Always-on channels**<br>Connect the same agent to GitHub PR review, Telegram support, or any custom channel adapter. | **Fast local loop**<br>Use `fastagent info`, `dev`, `chat`, `tool`, and `invoke` to inspect and test before serving. |
 | **Typed tools and reusable skills**<br>Add TypeScript tools and Agent Skills without rewriting the agent loop. | **Neutral handler contract**<br>Engine-, model-, and host-neutral at the Agent Handler layer. The current reference implementation is built on pi. |
 
@@ -44,7 +44,7 @@ FastAgent is built around a small serving contract, app-owned runtime concerns, 
 - **Small serving core** — `invoke` decouples channels, agents, engines, and hosts.
 - **App-owned runtime** — no takeover of your auth, database, routes, or deployment.
 - **Typed edges** — typed tools, explicit events, boundary validation.
-- **Agent-native shape** — the folder is the deployable unit, and channels drive the same contract.
+- **Agent-native shape** — the directory is the deployable unit, and channels drive the same contract.
 
 Read [Design principles](docs/principles.md) for the full rationale.
 
@@ -93,7 +93,7 @@ const { agent } = await createPiAgentFromDefinition("./agent", {
 export const POST = createInvokeHandler(agent); // Fetch-shaped handler
 ```
 
-No folder? Assemble from typed parts:
+No directory? Assemble from typed parts:
 
 ```ts
 import { createPiAgent, defineTool, z } from "@kid7st/fastagent";

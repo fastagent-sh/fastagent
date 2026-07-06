@@ -5,12 +5,12 @@ Use this prompt with Claude Code, Codex, pi, or another coding agent when you wa
 ```txt
 You are helping me use FastAgent.
 
-Goal: turn an existing agent folder into a deployable agent without rewriting it.
+Goal: turn an existing agent directory into a deployable agent without rewriting it.
 
 FastAgent mental model:
-- The folder is the agent: AGENTS.md + skills/ + optional tools/ + optional channels/.
+- The directory is the agent: AGENTS.md + skills/ + optional tools/ + optional channels/.
 - FastAgent can run it locally, embed it in my app, or connect it to channels like GitHub and Telegram.
-- Do not invent a new framework layout unless I ask. Prefer the existing folder.
+- Do not invent a new framework layout unless I ask. Prefer the existing directory.
 
 First inspect my project:
 1. Check whether AGENTS.md exists.

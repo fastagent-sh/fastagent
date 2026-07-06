@@ -31,7 +31,7 @@ export interface PiHarnessFactoryOptions {
   tools?: AgentTool[];
   /**
    * Final assembled prompt, or a SYNC factory re-evaluated per invoke (how L1 serves dynamic
-   * `instructions` + the skills listing). Distinct from {@link live}, which is the folder rung's
+   * `instructions` + the skills listing). Distinct from {@link live}, which is the directory rung's
    * ASYNC re-read of prompt AND skills as one pair — both are exercised, by different rungs.
    */
   systemPrompt?: string | (() => string);
@@ -41,7 +41,7 @@ export interface PiHarnessFactoryOptions {
    * Per-invoke source for the prompt+skills PAIR, re-evaluated on every harness build. When set it
    * supersedes {@link systemPrompt}/{@link skills} — one call yields both, so the skills listing
    * inside the prompt and the mounted skill resources can never come from two different reads. The
-   * folder rung (L2) uses it to re-read the definition, so AGENTS.md/skills edits — the author's or
+   * directory rung (L2) uses it to re-read the definition, so AGENTS.md/skills edits — the author's or
    * the agent's own — take effect on the next turn without a process restart. A rejection surfaces
    * as that invoke's `failed` event (the factory throw path), never a crash.
    */

@@ -1,11 +1,11 @@
 # FastAgent
 
-> FastAgent is the serving layer for local agent folders. It takes a folder out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind a custom channel. Engine-, model-, and host-neutral; the reference implementation is built on the pi engine.
+> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind a custom channel. Engine-, model-, and host-neutral; the reference implementation is built on the pi engine.
 
 Key facts:
 
 - Install: `npm i -g @kid7st/fastagent` (CLI) or `npm i @kid7st/fastagent` (library). Requires Node >= 22.19.
-- The folder is the agent: optional `AGENTS.md`, `skills/`, `tools/`, `channels/`, markdown context, and `fastagent.config.*`. No framework rewrite, no build step.
+- The directory is the agent: optional `AGENTS.md`, `skills/`, `tools/`, `channels/`, markdown context, and `fastagent.config.*`. No framework rewrite, no build step.
 - The contract is `invoke(scope, prompt) => AsyncIterable<AgentEvent>` (the Agent Handler SPEC).
 - Core CLI: `fastagent init | info | dev | chat | invoke | tool | start | add | login`.
 - Channels: HTTP/SSE (default), GitHub, Telegram, plus custom adapters.

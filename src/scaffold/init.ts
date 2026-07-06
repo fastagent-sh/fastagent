@@ -3,7 +3,7 @@
  * the writing-great-skills skill + a fetch-url code tool + fastagent.config.mjs + package.json +
  * .gitignore); `--minimal` drops the code tool and package.json (AGENTS.md + skill + config only).
  * AGENTS.md IS the system prompt; skills/ and tools/ are the agent's self-editable capabilities
- * (folder is the agent, re-read each turn); .gitignore lists `.env`.
+ * (directory is the agent, re-read each turn); .gitignore lists `.env`.
  *
  * Scope: init is best-effort atomic for ORDINARY inputs — it never overwrites an existing workspace,
  * preflights non-directory scaffold parents, and rolls back a partial write. It does not defend

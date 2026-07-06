@@ -95,7 +95,7 @@ function usage(code: number): never {
          to stdout, tool/diagnostics to stderr, a failed turn exits non-zero. The all-agent
          counterpart of tool, for CI smoke and quick checks. Same model resolution as dev.
   start  run the agent in dir (default .) in production posture — the SAME assembly as dev
-         (your folder is the agent), just no file-watching. No build step: start reads the
+         (your directory is the agent), just no file-watching. No build step: start reads the
          definition directly; model/http come from fastagent.config.ts (frozen by git).
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          port precedence:  --port > PORT env > fastagent.config.ts http.port > 8787

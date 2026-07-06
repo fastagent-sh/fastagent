@@ -1,7 +1,7 @@
 {
   "name": "@kid7st/fastagent",
   "version": "0.9.0",
-  "description": "Vibe first. Then FastAgent: turn a local agent folder into a running service in your app, on GitHub, in Telegram, or behind any channel.",
+  "description": "Vibe first. Then FastAgent: turn a local agent directory into a running service in your app, on GitHub, in Telegram, or behind any channel.",
   "keywords": [
     "agent",
     "ai-agent",
