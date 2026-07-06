@@ -8,7 +8,6 @@
     "llm",
     "agents.md",
     "agent-skills",
-    "mcp",
     "agent-serving",
     "sse",
     "pi",
