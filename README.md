@@ -6,6 +6,12 @@
 [![node](https://img.shields.io/node/v/@kid7st/fastagent.svg)](https://nodejs.org)
 [![built with pi](https://img.shields.io/badge/built%20with-pi-0b7285.svg)](https://pi.dev)
 
+<p align="center">
+  <sub>Built on</sub>
+  <a href="https://pi.dev"><img src="https://pi.dev/logo-auto.svg" alt="pi" height="22" /></a>
+  <sub>— the MIT agent harness &amp; multi-provider LLM API (<code>@earendil-works/pi-*</code>)</sub>
+</p>
+
 **Vibe first. Then FastAgent.** Any folder can become a live agent service. FastAgent takes your local agent folder out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
 
 Leave the terminal. Become a real service.
