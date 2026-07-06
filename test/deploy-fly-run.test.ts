@@ -144,6 +144,36 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     expect(r.missingSecrets).toEqual(["GITHUB_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
     expect(r.secrets).toEqual({ OPENAI_API_KEY: "k" }); // no minted values
   });
+
+  it("config deploy.secrets (extraSecrets) carry from env like channel secrets; absent → missingSecrets (G4)", () => {
+    const present = assembleSecrets({
+      modelAuth: "OPENAI_API_KEY",
+      authFile: undefined,
+      channels: [],
+      extraSecrets: ["GH_TOKEN"],
+      env: { OPENAI_API_KEY: "k", GH_TOKEN: "ghp_x" },
+    });
+    expect(present.secrets.GH_TOKEN).toBe("ghp_x"); // value from the local env
+    expect(present.missingSecrets).toEqual([]);
+    const absent = assembleSecrets({
+      modelAuth: "OPENAI_API_KEY",
+      authFile: undefined,
+      channels: [],
+      extraSecrets: ["GH_TOKEN"],
+      env: { OPENAI_API_KEY: "k" },
+    });
+    expect(absent.missingSecrets).toEqual(["GH_TOKEN"]); // declared but no local value → gates --run
+
+    // Dedup: an extraSecret that repeats a channel secret is not listed twice in missingSecrets.
+    const dup = assembleSecrets({
+      modelAuth: "OPENAI_API_KEY",
+      authFile: undefined,
+      channels: ["telegram"],
+      extraSecrets: ["TELEGRAM_BOT_TOKEN"],
+      env: { OPENAI_API_KEY: "k" },
+    });
+    expect(dup.missingSecrets.filter((n) => n === "TELEGRAM_BOT_TOKEN")).toHaveLength(1);
+  });
 });
 
 describe("deploy/fly-run: authSeedBytes (the start-side seed guard)", () => {

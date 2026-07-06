@@ -52,6 +52,7 @@ import {
 } from "./scaffold/add-channel.ts";
 import { exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
+import { isGeneratedDockerfile } from "./deploy/container.ts";
 import { modelTravelIssue, parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
 import { planRailwayDeploy } from "./deploy/railway.ts";
 import { type RailwayRunner, deployRailwayRun } from "./deploy/railway-run.ts";
@@ -516,8 +517,22 @@ async function runDeploy(): Promise<void> {
       );
     }
   }
-  const container = { hasPackageJson, hasLockfile, version: await fastagentVersion() };
+  const container = { hasPackageJson, hasLockfile, version: await fastagentVersion(), apt: config.deploy?.apt };
   const port = config.http?.port ?? 8787;
+  // What the agent declared it needs on the box (fastagent.config deploy.secrets) — carried like channel
+  // secrets: listed in the runbook, set from the local env under --run, gated if a value is missing.
+  const extraSecrets = config.deploy?.secrets ?? [];
+  // deploy.apt only shapes the GENERATED Dockerfile. Warn ONLY when the kept Dockerfile is HAND-WRITTEN
+  // (its apt won't include these) — a fastagent-generated one is handled by writeArtifacts (kept if current,
+  // flagged stale otherwise). Don't suggest --force here: it would overwrite the user's hand-written file.
+  if (config.deploy?.apt?.length && !values.force && (await exists(join(target, "Dockerfile")))) {
+    if (!isGeneratedDockerfile(await readFile(join(target, "Dockerfile"), "utf8"))) {
+      console.error(
+        `[fastagent] warn: kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
+          `NOT applied; install those packages in your Dockerfile.`,
+      );
+    }
+  }
 
   // Railway: thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
   // planRailwayDeploy). --run drives the railway CLI to completion; otherwise print the runbook.
@@ -534,9 +549,9 @@ async function runDeploy(): Promise<void> {
       basename(target)
         .replace(/[^a-zA-Z0-9-]+/g, "-")
         .replace(/^-+|-+$/g, "") || "agent";
-    const plan = planRailwayDeploy({ serviceName, modelAuth, channels, ...container });
+    const plan = planRailwayDeploy({ serviceName, modelAuth, channels, extraSecrets, ...container });
     await writeArtifacts(target, plan.artifacts);
-    if (values.run) return runDeployRailway(target, serviceName, modelAuth, authPath, channels);
+    if (values.run) return runDeployRailway(target, serviceName, modelAuth, authPath, channels, extraSecrets);
     console.log(plan.runbook.join("\n"));
     return;
   }
@@ -581,21 +596,37 @@ async function runDeploy(): Promise<void> {
     port,
     modelAuth,
     channels,
+    extraSecrets,
     ...container,
     autostop: values.stop ? "stop" : "suspend",
     scaleToZero: !values["no-scale-to-zero"],
   });
   await writeArtifacts(target, plan.artifacts);
-  if (values.run) return runDeployFly(target, appName, modelAuth, authPath, channels, flyTomlPath);
+  if (values.run) return runDeployFly(target, appName, modelAuth, authPath, channels, flyTomlPath, extraSecrets);
   console.log(plan.runbook.join("\n"));
 }
 
-/** Write each generated artifact, skipping any that exists unless --force (never clobber hand edits). */
+/**
+ * Write each generated artifact. An existing file is KEPT unless --force — deploy NEVER clobbers a file
+ * without it (no silent data loss). A Dockerfile WE generated is derived from the current config, so a KEPT
+ * one that no longer matches what deploy would generate now (a changed deploy.apt, a new lockfile, a bumped
+ * version — OR the user's own edits, which we can't tell apart) is flagged stale so the drift is visible;
+ * --force regenerates it. A hand-written Dockerfile / a hand-written .dockerignore / fly.toml's app+region
+ * state are just kept.
+ */
 async function writeArtifacts(target: string, artifacts: { path: string; content: string }[]): Promise<void> {
   for (const a of artifacts) {
     const abs = join(target, a.path);
     if (!values.force && (await exists(abs))) {
-      console.error(`[fastagent] kept ${a.path} (exists — pass --force to overwrite)`);
+      const existing = await readFile(abs, "utf8");
+      if (a.path === "Dockerfile" && isGeneratedDockerfile(existing) && existing !== a.content) {
+        console.error(
+          `[fastagent] kept ${a.path} — it no longer matches what deploy would generate (config changed, or ` +
+            `you edited it); pass --force to regenerate.`,
+        );
+      } else {
+        console.error(`[fastagent] kept ${a.path} (exists — pass --force to overwrite)`);
+      }
       continue;
     }
     await writeFile(abs, a.content);
@@ -617,6 +648,7 @@ async function runDeployFly(
   authPath: string,
   channels: ChannelKind[],
   flyTomlPath: string,
+  extraSecrets: string[],
 ): Promise<void> {
   const fly: FlyRunner = (args, opts) =>
     new Promise((res) => {
@@ -641,6 +673,7 @@ async function runDeployFly(
     modelAuth,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
+    extraSecrets,
     env: process.env,
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env) — gate it
@@ -678,6 +711,7 @@ async function runDeployRailway(
   modelAuth: string | undefined,
   authPath: string,
   channels: ChannelKind[],
+  extraSecrets: string[],
 ): Promise<void> {
   const railway: RailwayRunner = (args, opts) =>
     new Promise((res) => {
@@ -701,6 +735,7 @@ async function runDeployRailway(
     modelAuth,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
+    extraSecrets,
     env: process.env,
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env).

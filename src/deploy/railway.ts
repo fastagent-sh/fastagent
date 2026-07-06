@@ -38,6 +38,10 @@ export interface RailwayPlanInput {
   hasPackageJson: boolean;
   hasLockfile: boolean;
   version: string;
+  /** Extra apt packages for the image (fastagent.config deploy.apt). */
+  apt?: string[];
+  /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
+  extraSecrets?: string[];
 }
 
 export interface RailwayPlan {
@@ -69,7 +73,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, modelAuth, channels } = input;
   const artifacts: Artifact[] = [{ path: "railway.json", content: railwayJson() }, ...containerArtifacts(input)];
 
-  const secrets = requiredSecrets(modelAuth, channels);
+  const secrets = requiredSecrets(modelAuth, channels, input.extraSecrets);
 
   // Order matters, not cosmetics: `railway init` creates a PROJECT with no service, but the volume and
   // variables are service-scoped and `railway up` deploys THE service — so the service must exist first

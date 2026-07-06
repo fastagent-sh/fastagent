@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/container.ts";
+import { fastagentVersion } from "../src/version.ts";
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
@@ -46,6 +48,46 @@ describe("cli papercuts", () => {
     expect(code).toBe(1);
     expect(stderr).toMatch(/missing model/);
     expect(stdout).toBe(""); // a failure never pollutes stdout
+  });
+
+  it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {
+    // deploy KEEPS any existing Dockerfile without --force (no silent data loss). A generated one (marker)
+    // that drifted from current config is flagged stale; a hand-written one is kept + warned (its apt won't
+    // apply). An up-to-date generated one is kept quietly. Marker/predicate come from container.ts (single source).
+    const setup = async (dockerfileContent: string) => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-apt-"));
+      await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
+      await writeFile(
+        join(dir, "fastagent.config.mjs"),
+        `export default { model: "openai/gpt-4o-mini", deploy: { apt: ["git"] } };\n`,
+      );
+      await writeFile(join(dir, "Dockerfile"), dockerfileContent);
+      const res = await run(["deploy", "railway", dir]);
+      return { res, dockerfile: await readFile(join(dir, "Dockerfile"), "utf8") };
+    };
+
+    // A generated-but-edited Dockerfile (marker kept, a hand-added line) → flagged stale, NEVER overwritten.
+    const edited = `${GENERATED_DOCKERFILE_MARKER}. was generated\nFROM node:22-slim\nRUN echo my-own-edit\n`;
+    const gen = await setup(edited);
+    expect(gen.res.stderr).toMatch(/no longer matches what deploy would generate/); // stale flagged
+    expect(gen.res.stderr).toMatch(/--force to regenerate/);
+    expect(gen.dockerfile).toBe(edited); // preserved — the user's edit survives (no data loss)
+    expect(gen.res.stderr).not.toMatch(/deploy\.apt.*NOT applied/); // generated → not the hand-written warn
+
+    // An up-to-date generated Dockerfile (built with the SAME inputs deploy uses) → kept quietly, no stale flag.
+    const current = containerArtifacts({
+      hasPackageJson: false,
+      hasLockfile: false,
+      version: await fastagentVersion(),
+      apt: ["git"],
+    }).find((a) => a.path === "Dockerfile")!.content;
+    const fresh = await setup(current);
+    expect(fresh.res.stderr).not.toMatch(/no longer matches/); // identical → nothing to flag
+
+    // A HAND-WRITTEN Dockerfile (no marker) → kept verbatim + warned (its apt won't include the packages).
+    const hw = await setup("FROM python:3.12\n");
+    expect(hw.dockerfile).toBe("FROM python:3.12\n"); // preserved, never clobbered
+    expect(hw.res.stderr).toMatch(/deploy\.apt.*NOT applied/); // warn: install those packages yourself
   });
 
   it("info reports the assembled surface as JSON (incl. load diagnostics), read-only (no sessions dir)", async () => {
