@@ -29,11 +29,18 @@ FastAgent is the missing bridge from local agent directory to real service.
 
 ## Features
 
-|  |  |
-|---|---|
-| **The directory is the agent**<br>Keep identity, skills, tools, channels, and markdown context as files you can inspect, edit, and commit. No framework rewrite. | **App embedding**<br>Mount the same agent inside your Next, Astro, or Node app with one route, your auth, your database, and your host. |
-| **Always-on channels**<br>Connect the same agent to GitHub PR review, Telegram support, or any custom channel adapter. | **Fast local loop**<br>Use `fastagent info`, `dev`, `chat`, `tool`, and `invoke` to inspect and test before serving. |
-| **Typed tools and reusable skills**<br>Add TypeScript tools and Agent Skills without rewriting the agent loop. | **Neutral handler contract**<br>Engine-, model-, and host-neutral at the Agent Handler layer. The current reference implementation is built on pi. |
+- **Vibe first — a directory is an agent.** Point FastAgent at the `AGENTS.md` + `skills/` you already vibed in a coding agent. Markdown instructions, reusable skills, and TypeScript tools stay as files you inspect, edit, and commit — no new DSL, no framework rewrite.
+- **Channels.** Serve the same agent as a GitHub PR reviewer, a Telegram bot, an HTTP/SSE endpoint, or your own adapter — verified webhooks, streaming replies, group-aware.
+- **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` (the filename is the name, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
+- **App embedding — your stack, we plug in.** Like Flask/FastAPI for agents: FastAgent never owns your framework. Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler — your auth, your database, your host. No lock-in.
+- **Deploy anywhere.** Run the directory directly — no build step; `fastagent deploy fly` generates the artifacts + a runbook and hands off. Cloud-neutral: the directory is the deployable unit.
+
+**Designed for more — [help build it](CONTRIBUTING.md).** FastAgent's neutral contract and injection seams are laid out for the capabilities it is growing into. Honest works-in-progress, open to contributors:
+
+- **Durable execution** — accepted turns already replay across a crash or redeploy on Telegram (at-least-once); generalizing to every channel and exactly-once is a backend on the `PiSessionStore` / `Lease` seams.
+- **Sandboxed execution** — tools run behind an `ExecutionEnv` port (local by default); E2B / micro-VM backends drop in.
+- **Observability export** — leveled logs and per-turn traces today; an OpenTelemetry exporter is a clean seam.
+- **More engines & channels** — the Agent Handler contract is engine-neutral (a second engine proves the seams); Slack, Discord, and other adapters plug into the channel kit.
 
 Using a coding agent? Give it [`docs/ai-start.md`](docs/ai-start.md) for an AI-guided setup path.
 
