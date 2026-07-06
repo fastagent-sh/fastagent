@@ -14,10 +14,10 @@
  * "interrupted" is not just a rare crash: `runStart` has no graceful drain (cli.ts), so a SIGTERM exits
  * mid-turn too, i.e. EVERY rolling deploy that catches an in-flight turn. Recovery re-enqueues it next start.
  *
- * This recovers the ACKed-but-unfinished window the in-memory turn-queue drops (turn-queue.ts) — a
- * deliberate reversal of the old "accept the loss" stance. Weigh the trade before trusting it: the loss
- * it replaces was VISIBLE and self-correcting (the turn vanished, the asker re-asks); replay's sharpest
- * cost is the opposite — invisible. It is at-least-once, not exactly-once:
+ * This recovers the ACKed-but-unfinished window the in-memory turn-queue drops (turn-queue.ts). Weigh
+ * the trade before trusting it: the alternative (dropping the turn) fails VISIBLY and self-corrects
+ * (the turn vanished, the asker re-asks); replay's sharpest cost is the opposite — invisible. It is
+ * at-least-once, not exactly-once:
  *   - PRIMARY cost: replay re-runs the WHOLE turn, so every external side effect happens AGAIN — re-sent
  *     messages, re-fired tool actions — and nobody may notice (unlike the visible loss it replaces).
  *     And the trigger is not rare (above): it fires on every deploy that interrupts an in-flight turn,
