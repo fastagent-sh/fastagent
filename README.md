@@ -24,7 +24,7 @@ Leave the terminal. Become a real service.
 FastAgent is not another agent framework. It does not ask you to rewrite your agent in a new DSL or project layout. You bring the agent definition; FastAgent provides the serving layer around it.
 
 <p align="center">
-  <img src="./assets/demo.svg" alt="fastagent dev boots an existing agent directory (AGENTS.md, skills/, tools/, channels/) into a live service; a GitHub pull_request.opened webhook arrives and the agent reviews PR #42 and posts inline comments." width="860">
+  <img src="https://cdn.jsdelivr.net/gh/kid7st/fastagent@main/assets/demo.svg" alt="fastagent dev boots an existing agent directory (AGENTS.md, skills/, tools/, channels/) into a live service; a GitHub pull_request.opened webhook arrives and the agent reviews PR #42 and posts inline comments." width="860">
 </p>
 
 ## Why FastAgent
