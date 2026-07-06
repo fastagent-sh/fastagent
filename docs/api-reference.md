@@ -135,7 +135,7 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load `AGENTS.md` and `skills/` from a folder, assemble the pi prompt, and return an agent.
+Load `AGENTS.md` and `skills/` from a directory, assemble the pi prompt, and return an agent.
 
 ### `createPiAgentFromWorkspace`
 
@@ -157,7 +157,7 @@ function createPiAgentFromWorkspace(
 }>;
 ```
 
-The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the folder.
+The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory.
 
 ## Tool authoring
 

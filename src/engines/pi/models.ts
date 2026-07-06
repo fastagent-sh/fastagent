@@ -10,7 +10,7 @@ import { log } from "../../log.ts";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
-  /** Credentials file path. Defaults to the global `~/.fastagent/auth.json`; the folder opener passes
+  /** Credentials file path. Defaults to the global `~/.fastagent/auth.json`; the directory opener passes
    *  the project-level `<dir>/.fastagent/auth.json`. */
   authPath?: string;
   /** Extra providers registered on top of the built-ins (same id overrides a built-in). */

@@ -26,7 +26,7 @@ fastagent init my-agent
 cd my-agent
 ```
 
-The default scaffold is a **self-iterating agent** — the folder is the agent, and it can edit its own definition (AGENTS.md and skills are re-read every turn). A fresh workspace is minimal:
+The default scaffold is a **self-iterating agent** — the directory is the agent, and it can edit its own definition (AGENTS.md and skills are re-read every turn). A fresh workspace is minimal:
 
 ```txt
 my-agent/

@@ -1,5 +1,5 @@
 /**
- * Definition domain: read an agent definition folder (AGENTS.md + skills/) into memory. Produces
+ * Definition domain: read an agent definition directory (AGENTS.md + skills/) into memory. Produces
  * data; create.ts consumes it.
  *
  * IO policy: the runtime load path (loadAgentDefinition) does IO only through ExecutionEnv (portable
@@ -25,7 +25,7 @@ export interface SkillCollision {
   loserPath: string;
 }
 
-/** Result of loading a definition folder. Produced by {@link loadAgentDefinition}. */
+/** Result of loading a definition directory. Produced by {@link loadAgentDefinition}. */
 export interface LoadedDefinition {
   /** Verbatim AGENTS.md content (feeds prompt segment ②); undefined when the file does not exist. */
   instructions?: string;
@@ -34,7 +34,7 @@ export interface LoadedDefinition {
   diagnostics: SkillDiagnostic[];
   /** Same-name conflicts across mounts (first-wins). */
   collisions: SkillCollision[];
-  /** Absolute definition folder path. AGENTS.md, when present, is at join(dir, "AGENTS.md"). */
+  /** Absolute definition directory path. AGENTS.md, when present, is at join(dir, "AGENTS.md"). */
   dir: string;
 }
 
@@ -42,7 +42,7 @@ export interface LoadAgentDefinitionOptions {
   env?: ExecutionEnv;
 }
 
-/** Read a definition folder. env defaults to local Node (cwd=dir); non-local deployments inject their env. */
+/** Read a definition directory. env defaults to local Node (cwd=dir); non-local deployments inject their env. */
 export async function loadAgentDefinition(
   dir: string,
   options: LoadAgentDefinitionOptions = {},

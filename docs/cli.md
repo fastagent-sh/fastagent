@@ -36,7 +36,7 @@ Most commands take an optional workspace directory. When omitted, the current di
 fastagent init [dir] [--minimal] [--no-install]
 ```
 
-Creates a self-iterating agent — the folder is the agent, and it can edit its own definition (AGENTS.md and skills are re-read every turn). A fresh workspace has `AGENTS.md` (the persona: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.env.example`, and `.gitignore`. Everything is written offline; by default it also writes `package.json` and runs `npm install`.
+Creates a self-iterating agent — the directory is the agent, and it can edit its own definition (AGENTS.md and skills are re-read every turn). A fresh workspace has `AGENTS.md` (the persona: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.env.example`, and `.gitignore`. Everything is written offline; by default it also writes `package.json` and runs `npm install`.
 
 Options:
 
