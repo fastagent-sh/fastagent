@@ -1,47 +1,29 @@
 <svg width="1280" height="400" viewBox="0 0 1280 400" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#c4c9d0"/>
-    </linearGradient>
-    <linearGradient id="pagebg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0a0b0d"/>
-      <stop offset="1" stop-color="#08090b"/>
-    </linearGradient>
-    <radialGradient id="pagesheen" cx="0.5" cy="0" r="0.9">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.05"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#c2c7cf"/>
-    </linearGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#c4c9d0"/></linearGradient>
+    <linearGradient id="pagebg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0a0b0d"/><stop offset="1" stop-color="#08090b"/></linearGradient>
+    <radialGradient id="pagesheen" cx="0.5" cy="0" r="0.9"><stop offset="0" stop-color="#ffffff" stop-opacity="0.05"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#c2c7cf"/></linearGradient>
   </defs>
 
   <rect width="1280" height="400" fill="url(#pagebg)"/>
   <rect width="1280" height="400" fill="url(#pagesheen)"/>
 
-  <!-- giant faint chevron speed motif, bleeding off the right -->
-  <g transform="translate(150,0) skewX(-9)" fill="none" stroke="#ffffff" stroke-opacity="0.045"
-     stroke-width="70" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="880,70 1080,200 880,330"/>
-    <polyline points="1050,70 1250,200 1050,330"/>
-  </g>
-
-  <!-- boxless » mark + live dot -->
-  <g transform="translate(58,74) scale(0.92)">
-    <g transform="translate(2,0) skewX(-9)" fill="none" stroke="url(#ink)" stroke-width="36"
-       stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="52,58 112,118 52,178"/>
-      <polyline points="114,58 174,118 114,178"/>
+  <g transform="translate(1000,352) scale(2.0)" fill="#ffffff">
+    <g transform="skewX(-5)">
+      <g opacity="0.02" transform="translate(-52,0)"><text font-family="Newsreader" font-size="200" font-weight="700" font-style="italic" fill="url(#ink)">F</text></g>
+      <g opacity="0.03" transform="translate(-27,0)"><text font-family="Newsreader" font-size="200" font-weight="700" font-style="italic" fill="url(#ink)">F</text></g>
+      <g opacity="0.05"><text font-family="Newsreader" font-size="200" font-weight="700" font-style="italic" fill="url(#ink)">F</text></g>
     </g>
-    <circle cx="176" cy="190" r="15" fill="#f2f3f5"/>
   </g>
 
-  <text x="268" y="210" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="96" font-weight="800" letter-spacing="-2" font-style="italic" fill="url(#word)">FastAgent</text>
-  <text x="272" y="268" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="34" font-weight="700" fill="#f4f5f7">Vibe first. Then FastAgent.</text>
-  <text x="272" y="312" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="23" font-weight="400" fill="#868b93">An agent directory becomes a live service &#8212; your app, GitHub, Telegram, or any channel.</text>
+  <g transform="translate(84,188) skewX(-5)">
+      <g opacity="0.16" transform="translate(-30,0)"><text font-family="Newsreader" font-size="115" font-weight="700" font-style="italic" fill="url(#ink)">F</text></g>
+      <g opacity="0.34" transform="translate(-16,0)"><text font-family="Newsreader" font-size="115" font-weight="700" font-style="italic" fill="url(#ink)">F</text></g>
+      <text font-family="Newsreader" font-size="115" font-weight="700" font-style="italic" fill="url(#ink)">F</text>
+    </g>
+  <text x="142" y="188" font-family="Newsreader" font-size="96" font-weight="700" font-style="italic" fill="url(#word)">astAgent</text>
+
+  <text x="88" y="250" font-family="Archivo" font-size="34" font-weight="700" fill="#f4f5f7">Vibe first. Then FastAgent.</text>
+  <text x="88" y="294" font-family="Archivo" font-size="23" font-weight="400" fill="#868b93">An agent directory becomes a live service &#8212; your app, GitHub, Telegram, or any channel.</text>
 </svg>

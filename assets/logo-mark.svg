@@ -1,15 +1,4 @@
 <svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#c4c9d0"/>
-    </linearGradient>
-  </defs>
-  <!-- »  fast-forward (fast) + terminal prompt (agent); the live dot settles bottom-right -->
-  <g transform="translate(2,0) skewX(-9)" fill="none" stroke="url(#ink)" stroke-width="36"
-     stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="52,58 112,118 52,178"/>
-    <polyline points="114,58 174,118 114,178"/>
-  </g>
-  <circle cx="202" cy="190" r="15" fill="#f2f3f5"/>
+  <defs><linearGradient id="ink" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#c4c9d0"/></linearGradient></defs>
+  <g transform="translate(83.2,193.5) scale(0.9213)"><g transform="skewX(-5)"><path d="M97.900-92.500L108.300-92.500L92.300-40.300L82-40.300L86.100-60.200L57.900-60.200L42.600-10.300L55.700-5.200L54.200 0L-5.700 0L-4.100-5.200L11.600-10.800L46.500-124.900L33.400-130L35-135.200L124.200-135.200L138.100-142.200L142.600-142.200L135.100-94.800L127.300-94.800L121.800-122.400L76.900-122.400L61.700-72.700L89.800-72.700" fill="url(#ink)" opacity="0.16" transform="translate(-52,0)"/><path d="M97.900-92.500L108.300-92.500L92.300-40.300L82-40.300L86.100-60.200L57.900-60.200L42.600-10.300L55.700-5.200L54.200 0L-5.700 0L-4.100-5.200L11.600-10.800L46.500-124.900L33.400-130L35-135.200L124.200-135.200L138.100-142.200L142.600-142.200L135.100-94.800L127.300-94.800L121.800-122.400L76.900-122.400L61.700-72.700L89.800-72.700" fill="url(#ink)" opacity="0.34" transform="translate(-27,0)"/><path d="M97.900-92.500L108.300-92.500L92.300-40.300L82-40.300L86.100-60.200L57.900-60.200L42.600-10.300L55.700-5.200L54.200 0L-5.700 0L-4.100-5.200L11.600-10.800L46.500-124.900L33.400-130L35-135.200L124.200-135.200L138.100-142.200L142.600-142.200L135.100-94.800L127.300-94.800L121.800-122.400L76.900-122.400L61.700-72.700L89.800-72.700" fill="url(#ink)"/></g></g>
 </svg>
