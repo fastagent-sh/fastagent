@@ -5,8 +5,9 @@
  *
  * fastagent owns the two ends only it can know — generate definition-aware artifacts (state root →
  * volume, autostop tuned to the turn model, the exact secret list) and the post-deploy webhook step —
- * and GUIDES the middle (flyctl app/volume/secrets/deploy). The consumer is a coding agent that runs
- * flyctl itself; this hands it a precise, values-resolved runbook rather than running it. The runbook
+ * and GUIDES the middle (flyctl app/volume/secrets/deploy) as a precise, values-resolved runbook. By
+ * default a coding agent (or you) runs flyctl from that runbook; `deploy fly --run` drives it from the
+ * CLI instead. This module stays pure either way — it produces the plan, never runs flyctl. The runbook
  * is a FIRST-deploy sequence: `apps`/`volumes create` are one-time (marked so — re-running would make a
  * second volume, the state split it warns against); a redeploy is `fly deploy` alone.
  *
