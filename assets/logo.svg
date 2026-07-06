@@ -16,10 +16,9 @@
       <polyline points="52,58 112,118 52,178"/>
       <polyline points="114,58 174,118 114,178"/>
     </g>
-    <circle cx="206" cy="150" r="15" fill="#f2f3f5"/>
-    <circle cx="206" cy="150" r="26" fill="none" stroke="#f2f3f5" stroke-opacity="0.3" stroke-width="4"/>
+    <circle cx="176" cy="190" r="15" fill="#f2f3f5"/>
   </g>
 
-  <text x="212" y="118" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+  <text x="176" y="118" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
         font-size="76" font-weight="800" letter-spacing="-2" font-style="italic" fill="url(#word)">FastAgent</text>
 </svg>

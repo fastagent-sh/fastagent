@@ -35,14 +35,13 @@
       <polyline points="52,58 112,118 52,178"/>
       <polyline points="114,58 174,118 114,178"/>
     </g>
-    <circle cx="206" cy="150" r="15" fill="#f2f3f5"/>
-    <circle cx="206" cy="150" r="26" fill="none" stroke="#f2f3f5" stroke-opacity="0.3" stroke-width="4"/>
+    <circle cx="176" cy="190" r="15" fill="#f2f3f5"/>
   </g>
 
-  <text x="300" y="210" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+  <text x="268" y="210" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
         font-size="96" font-weight="800" letter-spacing="-2" font-style="italic" fill="url(#word)">FastAgent</text>
-  <text x="304" y="268" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+  <text x="272" y="268" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
         font-size="34" font-weight="700" fill="#f4f5f7">Vibe first. Then FastAgent.</text>
-  <text x="304" y="312" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+  <text x="272" y="312" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
         font-size="23" font-weight="400" fill="#868b93">An agent directory becomes a live service &#8212; your app, GitHub, Telegram, or any channel.</text>
 </svg>
