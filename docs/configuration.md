@@ -44,6 +44,8 @@ Supported keys:
 
 Unknown keys fail at startup. This catches typos such as `modle` instead of silently running zero-config.
 
+The generated `.dockerignore` excludes `.git` to keep the image small. If your agent runs git over its **own** history (e.g. `git log`/`git blame` on the repo it ships in), delete the `.git` line from the generated `.dockerignore` so that history is included in the image.
+
 ## Model selection
 
 Model specs are strings like:
@@ -144,6 +146,10 @@ tools/lookup-order.ts  ->  lookup-order
 ```
 
 `config.tools` are appended after the default pi tools. Discovered `tools/` are appended after those. Name collisions are surfaced as warnings; existing tools win.
+
+### When the repo already owns `tools/` (or `channels/`)
+
+Turning an existing repo into an agent, those directory names may already hold the repo's OWN scripts, not fastagent tools. That is fine: fastagent imports each file, and any that isn't usable — a failed import, no valid tool/channel export, or (for a channel) a factory that throws when called — is **isolated: reported as a warning and skipped, never crashing `start`**; the agent serves the tools that did load. If you want fastagent tools alongside the repo's `tools/`, declare them with `config.tools` (they don't have to live in the directory).
 
 ## Channels
 

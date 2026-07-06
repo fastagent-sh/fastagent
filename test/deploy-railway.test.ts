@@ -18,8 +18,12 @@ describe("deploy/railway: planRailwayDeploy", () => {
   });
 
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
-    const paths = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }).artifacts.map((a) => a.path);
-    expect(paths).toEqual(["railway.json", "Dockerfile", ".dockerignore"]);
+    const artifacts = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }).artifacts;
+    expect(artifacts.map((a) => a.path)).toEqual(["railway.json", "Dockerfile", ".dockerignore"]);
+    // .git must stay an EFFECTIVE ignore line (a size/secret contract), never fumbled into a `# .git`
+    // comment — that would silently ship the whole repo history into the image.
+    const dockerignore = artifacts.find((a) => a.path === ".dockerignore")!.content;
+    expect(dockerignore.split("\n")).toContain(".git");
   });
 
   it("sets the state root as a variable matched to the volume mount, + the secret list", () => {
