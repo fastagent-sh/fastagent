@@ -71,12 +71,14 @@ CMD ["npx", "fastagent", "start", "/app"]
 }
 
 const DOCKERIGNORE = `node_modules
-.git
 .fastagent
 .env
 .env.*
 !.env.example
 *.log
+# .git is excluded to keep the image small. If your agent runs git on its OWN history
+# (git log/blame over the repo it ships in), delete the next line so that history is in the image.
+.git
 `;
 
 /** The Dockerfile + .dockerignore artifacts — spread into any host's artifact list. */
