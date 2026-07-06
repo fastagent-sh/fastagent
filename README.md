@@ -56,6 +56,17 @@ FastAgent is built around a small serving contract, app-owned runtime concerns, 
 
 Read [Design principles](docs/principles.md) for the full rationale.
 
+## What we didn't build
+
+FastAgent stays a small serving layer, so it never dictates your stack. Capabilities other agent frameworks bake into a platform, we leave to your app, your host, or the agent itself — composed in, not locked in.
+
+- **No new format or DSL.** Bring the `AGENTS.md` + `skills/` you already vibed; we serve it as-is, with no rewrite into our project shape.
+- **No platform to move to.** No dashboard, no control plane, no runtime you deploy *into* — run it locally, embed it in your app, or ship the directory to any host.
+- **No framework that owns your app.** Your auth, database, routes, and deployment stay yours. FastAgent is the plug-in (Flask/FastAPI-shaped), not the framework.
+- **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, call `invoke` from your own queue or workflow — FastAgent doesn't bake in a second control flow.
+- **No engine, model, or cloud lock-in.** One neutral `invoke` contract: swap the engine, the model (any provider, OAuth or API key), or the host without touching the agent.
+- **No build step.** The directory runs directly — nothing to compile, no artifact to drift from source.
+
 ## Install
 
 ```bash
