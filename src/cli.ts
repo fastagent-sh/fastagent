@@ -53,6 +53,7 @@ import {
 import { exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
 import { modelTravelIssue, parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
+import { planRailwayDeploy } from "./deploy/railway.ts";
 import { type FlyRunner, assembleFlySecrets, authSeedBytes, deployFlyRun } from "./deploy/fly-run.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 
@@ -113,16 +114,18 @@ function usage(code: number): never {
          to edit (github maps events in on(); telegram routes in the optional route()).
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
-  deploy fly [dir]: generate fly.toml/Dockerfile/.dockerignore (autostop=suspend, state→volume) from
-         the definition and print an ordered flyctl runbook + the post-deploy webhook step. By default
-         it prints the runbook (a coding agent or you run it); --run drives flyctl to completion.
-         --run             drive flyctl to completion (idempotent, resumable): app/volume/secrets/
-                           deploy + telegram webhook. Carries your local credential (env key or the
-                           OAuth auth.json) to the box. Stops at a gate (fly auth login, a missing
+  deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
+         print an ordered deploy runbook + the post-deploy webhook step. Does not run the host CLI — a
+         coding agent (or you) executes the runbook. fly: fly.toml (autostop=suspend, state→volume).
+         railway: railway.json (healthcheck /health); its volume/variables/App-Sleeping are dashboard/
+         CLI steps the runbook states (see the runbook).
+         --run             (fly only) drive flyctl to completion (idempotent, resumable): app/volume/
+                           secrets/deploy + telegram webhook. Carries your local credential (env key or
+                           the OAuth auth.json) to the box. Stops at a gate (fly auth login, a missing
                            secret) with one actionable line; needs flyctl. Without it: prints the runbook.
-         --stop            autostop by stopping (cold start) instead of suspending (fast resume)
-         --no-scale-to-zero keep one machine running when idle (min_machines_running=1)
-         --force           overwrite existing fly.toml/Dockerfile/.dockerignore (else kept)
+         --stop            (fly only) autostop by stopping (cold start) instead of suspending (fast resume)
+         --no-scale-to-zero (fly only) keep one machine running when idle (min_machines_running=1)
+         --force           overwrite existing host config/Dockerfile/.dockerignore (else kept)
   login  authenticate a model provider into the project-level <state root>/auth.json — default
          <cwd>/.fastagent/auth.json (root: FASTAGENT_STATE_DIR; file: --auth-path / FASTAGENT_AUTH_PATH;
          run from $HOME for the global ~/.fastagent/auth.json): pick
@@ -415,18 +418,18 @@ async function runAddSkill(): Promise<void> {
 
 /**
  * `fastagent deploy <host> [dir]`: generate host artifacts from the resolved definition and print an
- * ordered flyctl runbook. Host-scoped (`fly` for now — the extension seam). By DEFAULT it does not run
- * flyctl: fastagent owns the two ends it uniquely knows (definition-aware artifacts; the post-deploy
- * webhook step) and hands the flyctl middle to a coding agent (or human) as a precise, values-resolved
- * runbook. `--run` drives flyctl to completion instead (idempotent, resumable; see runDeployFly).
- * Read-only on the definition; the only writes to the workspace are the generated artifacts (never
- * clobbered without --force) — `--run` additionally executes flyctl (apps/volumes/secrets/deploy).
+ * ordered deploy runbook. Host-scoped (`fly` | `railway` — the extension seam). It does NOT run the
+ * host CLI: fastagent owns the two ends it uniquely knows (definition-aware artifacts; the post-deploy
+ * webhook step), and hands the middle to a coding agent (or human) as a precise, values-resolved
+ * runbook. The pre-flight (config/model/channels/container facts) is host-neutral; the host branch adds
+ * its config file + runbook. Read-only on the definition; the only writes are the generated artifacts
+ * (never clobbered without --force). `--run` (fly today) drives the host CLI instead of printing.
  */
 async function runDeploy(): Promise<void> {
   const host = positionals[1];
   const target = resolve(positionals[2] ?? ".");
-  if (host !== "fly") {
-    console.error(`usage: fastagent deploy fly [dir]   # supported hosts: fly`);
+  if (host !== "fly" && host !== "railway") {
+    console.error(`usage: fastagent deploy <fly|railway> [dir]`);
     process.exit(1);
   }
   loadDotEnv(target); // a custom provider/tool may read a key at config load
@@ -437,7 +440,9 @@ async function runDeploy(): Promise<void> {
   // a known crash-loop).
   const modelIssue = modelTravelIssue(config.model, modelSpec);
   if (modelIssue) {
-    if (values.run) {
+    // The hard gate is fly-only: `fly --run` would deploy a crash-looping box, so stop it. `railway
+    // --run` already degrades to the manual runbook (Phase 1), so it takes the same warn as the runbook.
+    if (values.run && host === "fly") {
       console.error(`[fastagent] deploy stopped: ${modelIssue}`);
       process.exit(1);
     }
@@ -458,41 +463,12 @@ async function runDeploy(): Promise<void> {
   // credential and falsely report "none configured".
   const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultAuthPath(resolveStateRoot(target));
   const modelAuth = modelSpec ? await probeAuthSource(createPiModels({ authPath }), modelSpec) : undefined;
-  // The replay floor that makes scale-to-zero safe is Telegram-only (its L1 turn store). GitHub turns
-  // are fire-and-forget (no replay), so the generated fly.toml keeps one machine running for them —
-  // a note, not a warn, since the plan already did the safe thing (definition-aware autostop).
-  if (channels.includes("github")) {
-    console.error(
-      `[fastagent] note: github turns have no replay — the generated fly.toml uses min_machines_running=1 ` +
-        `(no scale-to-zero) so autostop can't drop an in-flight review. Set it to 0 to accept that trade.`,
-    );
-  }
+  // Container facts (shared by every host) + the warnings that follow. The generated Dockerfile is
+  // npm-based (npm ci/install + npx); a pnpm/yarn workspace has no package-lock.json, so the npm-only
+  // assumption is made EXPLICIT rather than silently routing them to `npm install`.
   const hasPackageJson = await exists(join(target, "package.json"));
   const hasLockfile = await exists(join(target, "package-lock.json"));
-  // The generated Dockerfile is npm-based (npm ci/install + npx). A pnpm/yarn workspace has no
-  // package-lock.json, so make that npm-only assumption EXPLICIT rather than silently routing them to
-  // `npm install` and telling them to commit an npm lockfile (which would ignore their real one).
   const hasOtherLock = (await exists(join(target, "pnpm-lock.yaml"))) || (await exists(join(target, "yarn.lock")));
-  // Two consistent modes. KEEP (no --force): an existing fly.toml is authoritative — not rewritten,
-  // and the runbook reads its `app=` (Fly app names are globally unique, so the basename guess may be
-  // taken and the user renamed it). --force: the template is authoritative — the WHOLE fly.toml resets
-  // (app→basename, region→iad, vm→defaults), so we do NOT round-trip `app` and warn that hand edits go.
-  const flyTomlPath = join(target, "fly.toml");
-  const flyTomlExists = await exists(flyTomlPath);
-  const keptApp = flyTomlExists && !values.force ? parseFlyAppName(await readFile(flyTomlPath, "utf8")) : undefined;
-  const appName = keptApp ?? toFlyAppName(basename(target));
-  if (keptApp) console.error(`[fastagent] app: ${keptApp} (from fly.toml)`);
-  if (flyTomlExists && values.force) {
-    console.error(`[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`);
-  }
-  // Autostop flags shape the GENERATED fly.toml only. In KEEP mode (fly.toml exists, no --force) it is
-  // not rewritten, so the flags would silently do nothing — surface that instead of a confusing no-op.
-  if (flyTomlExists && !values.force && (values.stop || values["no-scale-to-zero"])) {
-    console.error(
-      `[fastagent] warn: --stop/--no-scale-to-zero only shape a freshly generated fly.toml — yours exists and ` +
-        `was kept. Edit auto_stop_machines/min_machines_running in fly.toml, or pass --force to regenerate.`,
-    );
-  }
   // A code workspace with no package-lock.json builds via `npm install` (caret ranges resolve at build
   // time) — not a reproducible redeploy. A pnpm/yarn user gets an accurate message (their lockfile is
   // ignored by the npm Dockerfile), not the misleading "commit an npm lockfile".
@@ -523,19 +499,85 @@ async function runDeploy(): Promise<void> {
       );
     }
   }
+  const container = { hasPackageJson, hasLockfile, version: await fastagentVersion() };
+  const port = config.http?.port ?? 8787;
+
+  // Railway: thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
+  // planRailwayDeploy). --run lands in Phase 2; for now generate + print the runbook.
+  if (host === "railway") {
+    if (values.stop || values["no-scale-to-zero"]) {
+      console.error(
+        `[fastagent] warn: --stop/--no-scale-to-zero are Fly-only — Railway's App Sleeping is a dashboard toggle ` +
+          `(the runbook states the manual step).`,
+      );
+    }
+    // Railway service names are project-scoped (not globally unique like a Fly app); slug the dir
+    // basename so a name with spaces/odd chars can't break the `railway add --service <name>` command.
+    const serviceName =
+      basename(target)
+        .replace(/[^a-zA-Z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "agent";
+    const plan = planRailwayDeploy({ serviceName, modelAuth, channels, ...container });
+    await writeArtifacts(target, plan.artifacts);
+    // --run is Fly-only for now. Print the runbook (the manual path) FIRST, then exit non-zero so a
+    // script sees the requested run did not happen — and the "below" the message points at is really there.
+    if (values.run) {
+      console.error(
+        `[fastagent] deploy railway --run is not available yet (Phase 2) — the runbook below runs it manually:`,
+      );
+    }
+    console.log(plan.runbook.join("\n"));
+    if (values.run) process.exit(1);
+    return;
+  }
+
+  // host === "fly".
+  // The replay floor that makes scale-to-zero safe is Telegram-only (its L1 turn store). GitHub turns
+  // are fire-and-forget (no replay), so the generated fly.toml keeps one machine running for them —
+  // a note, not a warn, since the plan already did the safe thing (definition-aware autostop).
+  if (channels.includes("github")) {
+    console.error(
+      `[fastagent] note: github turns have no replay — the generated fly.toml uses min_machines_running=1 ` +
+        `(no scale-to-zero) so autostop can't drop an in-flight review. Set it to 0 to accept that trade.`,
+    );
+  }
+  // Two consistent modes. KEEP (no --force): an existing fly.toml is authoritative — not rewritten,
+  // and the runbook reads its `app=` (Fly app names are globally unique, so the basename guess may be
+  // taken and the user renamed it). --force: the template is authoritative — the WHOLE fly.toml resets
+  // (app→basename, region→iad, vm→defaults), so we do NOT round-trip `app` and warn that hand edits go.
+  const flyTomlPath = join(target, "fly.toml");
+  const flyTomlExists = await exists(flyTomlPath);
+  const keptApp = flyTomlExists && !values.force ? parseFlyAppName(await readFile(flyTomlPath, "utf8")) : undefined;
+  const appName = keptApp ?? toFlyAppName(basename(target));
+  if (keptApp) console.error(`[fastagent] app: ${keptApp} (from fly.toml)`);
+  if (flyTomlExists && values.force) {
+    console.error(`[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`);
+  }
+  // Autostop flags shape the GENERATED fly.toml only. In KEEP mode (fly.toml exists, no --force) it is
+  // not rewritten, so the flags would silently do nothing — surface that instead of a confusing no-op.
+  if (flyTomlExists && !values.force && (values.stop || values["no-scale-to-zero"])) {
+    console.error(
+      `[fastagent] warn: --stop/--no-scale-to-zero only shape a freshly generated fly.toml — yours exists and ` +
+        `was kept. Edit auto_stop_machines/min_machines_running in fly.toml, or pass --force to regenerate.`,
+    );
+  }
   const plan = planFlyDeploy({
     appName,
-    port: config.http?.port ?? 8787,
+    port,
     modelAuth,
     channels,
-    hasPackageJson,
-    hasLockfile,
-    version: await fastagentVersion(),
+    ...container,
     autostop: values.stop ? "stop" : "suspend",
     scaleToZero: !values["no-scale-to-zero"],
   });
+  await writeArtifacts(target, plan.artifacts);
+  if (values.run) return runDeployFly(target, appName, modelAuth, authPath, channels, flyTomlPath);
+  console.log(plan.runbook.join("\n"));
+}
 
-  for (const a of plan.artifacts) {
+/** Write each generated artifact, skipping any that exists unless --force (never clobber hand edits). */
+async function writeArtifacts(target: string, artifacts: { path: string; content: string }[]): Promise<void> {
+  for (const a of artifacts) {
     const abs = join(target, a.path);
     if (!values.force && (await exists(abs))) {
       console.error(`[fastagent] kept ${a.path} (exists — pass --force to overwrite)`);
@@ -544,9 +586,6 @@ async function runDeploy(): Promise<void> {
     await writeFile(abs, a.content);
     console.error(`[fastagent] wrote ${a.path}`);
   }
-
-  if (values.run) return runDeployFly(target, appName, modelAuth, authPath, channels, flyTomlPath);
-  console.log(plan.runbook.join("\n"));
 }
 
 /**

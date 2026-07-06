@@ -18,7 +18,7 @@
  * never land in argv/process listings.
  */
 import { type ChannelKind, channelSetup } from "../scaffold/add-channel.ts";
-import { isEnvKey } from "./fly.ts";
+import { isEnvKey } from "./secrets.ts";
 
 export interface FlyRunResult {
   code: number;

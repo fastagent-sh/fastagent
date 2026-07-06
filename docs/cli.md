@@ -28,6 +28,7 @@ Most commands take an optional workspace directory. When omitted, the current di
 | `add github|telegram [dir]` | Scaffold a first-party channel. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--stop` (stop instead of suspend), `--no-scale-to-zero` (keep one machine up), `--force` (overwrite artifacts). |
+| `deploy railway [dir]` | Generate Railway artifacts (`railway.json` with `healthcheckPath=/health`, plus the shared `Dockerfile`/`.dockerignore`) and print a `railway` runbook: init a project, create a service (`railway add --service`), attach a `/data` volume, set the state root + secrets as variables (`railway variables set`, before the first deploy), `railway up`, then mint a domain (`railway domain`) and register the webhook. Scale-to-zero (App Sleeping) is a dashboard-only step the runbook states. `--force` overwrites artifacts. (`--run` is Fly-only for now.) |
 | `start [dir]` | Serve without watch. |
 
 ## `fastagent init`
