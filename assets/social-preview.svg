@@ -2,7 +2,7 @@
   <defs>
     <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#b9bec6"/>
+      <stop offset="1" stop-color="#c4c9d0"/>
     </linearGradient>
     <linearGradient id="pagebg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0a0b0d"/>
@@ -10,14 +10,6 @@
     </linearGradient>
     <radialGradient id="pagesheen" cx="0.5" cy="0" r="0.9">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.05"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="badge" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#17181b"/>
-      <stop offset="1" stop-color="#0b0c0e"/>
-    </linearGradient>
-    <radialGradient id="sheen" cx="0.4" cy="0.34" r="0.7">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
       <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
     <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
@@ -29,20 +21,18 @@
   <rect width="1280" height="640" fill="url(#pagebg)"/>
   <rect width="1280" height="640" fill="url(#pagesheen)"/>
 
-  <!-- brand lockup: chevron mark + italic wordmark -->
-  <g transform="translate(92,168) scale(0.46)">
-    <rect x="2" y="2" width="252" height="252" rx="58" fill="url(#badge)" stroke="#2b2e34" stroke-width="2"/>
-    <rect x="2" y="2" width="252" height="252" rx="58" fill="url(#sheen)"/>
-    <g transform="translate(6,0) skewX(-9)" fill="none" stroke="url(#ink)" stroke-width="34"
+  <!-- boxless » mark + live dot -->
+  <g transform="translate(64,152) scale(0.84)">
+    <g transform="translate(2,0) skewX(-9)" fill="none" stroke="url(#ink)" stroke-width="36"
        stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="86,74 140,128 86,182"/>
-      <polyline points="146,74 200,128 146,182"/>
+      <polyline points="52,58 112,118 52,178"/>
+      <polyline points="114,58 174,118 114,178"/>
     </g>
-    <circle cx="206" cy="196" r="14" fill="#f2f3f5"/>
-    <circle cx="206" cy="196" r="14" fill="none" stroke="#0b0c0e" stroke-width="5"/>
+    <circle cx="206" cy="150" r="15" fill="#f2f3f5"/>
+    <circle cx="206" cy="150" r="26" fill="none" stroke="#f2f3f5" stroke-opacity="0.3" stroke-width="4"/>
   </g>
-  <text x="240" y="270" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="94" font-weight="800" letter-spacing="-2" font-style="italic" fill="url(#word)">FastAgent</text>
+  <text x="278" y="268" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="92" font-weight="800" letter-spacing="-2" font-style="italic" fill="url(#word)">FastAgent</text>
 
   <text x="96" y="352" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
         font-size="40" font-weight="700" fill="#f4f5f7">Vibe first. Then FastAgent.</text>
