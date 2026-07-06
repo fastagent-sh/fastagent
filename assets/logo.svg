@@ -1,0 +1,38 @@
+<svg width="640" height="184" viewBox="0 0 640 184" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="0.5" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e181e"/>
+      <stop offset="1" stop-color="#0a1216"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.42" cy="0.4" r="0.65">
+      <stop offset="0" stop-color="#2dd4bf" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38dcf0"/>
+      <stop offset="0.42" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+
+  <!-- chevron mark (256-space) scaled to 132 at (12,26) -->
+  <g transform="translate(12,26) scale(0.515)">
+    <rect x="2" y="2" width="252" height="252" rx="58" fill="url(#bg)" stroke="#263a42" stroke-width="2"/>
+    <rect x="2" y="2" width="252" height="252" rx="58" fill="url(#glow)"/>
+    <g transform="translate(6,0) skewX(-9)" fill="none" stroke="url(#acc)" stroke-width="34"
+       stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="86,74 140,128 86,182"/>
+      <polyline points="146,74 200,128 146,182"/>
+    </g>
+    <circle cx="206" cy="196" r="15" fill="#34d399"/>
+    <circle cx="206" cy="196" r="15" fill="none" stroke="#0a1216" stroke-width="5"/>
+  </g>
+
+  <text x="180" y="118" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="76" font-weight="800" letter-spacing="-2" font-style="italic" fill="url(#word)">FastAgent</text>
+</svg>
