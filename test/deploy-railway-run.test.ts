@@ -3,9 +3,10 @@ import {
   type RailwayRunPlan,
   type RailwayRunner,
   deployRailwayRun,
+  isLinked,
+  linkedName,
   parseDomainUrl,
   parseHasVolume,
-  parseLinked,
 } from "../src/deploy/railway-run.ts";
 
 /** A fake railway CLI: records every call, returns per-command scripted results (default code 0, empty). */
@@ -25,20 +26,23 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   secrets: {},
   missingSecrets: [],
   channels: [],
+  intoLinked: false,
   ...over,
 });
+
+// `railway status --json` for a linked project — only the top-level `name` is used (for the gate/log).
+// Mirrors the real 5.15.0 sample (keys {buckets, deletedAt, environments, id, name, services, workspace}).
+const LINKED = JSON.stringify({ name: "bot", id: "proj-1" });
+// A minted domain, as `railway domain --json` would return it (field name unknown → parser scans values).
+const DOMAIN_JSON = JSON.stringify({ domain: "bot-production.up.railway.app" });
 
 const run = (p: RailwayRunPlan, railway: RailwayRunner, tg = vi.fn(async () => {})) =>
   deployRailwayRun(p, railway, () => {}, tg);
 
-// A minted domain, as `railway domain --json` would return it (field name unknown → parser scans values).
-const DOMAIN_JSON = JSON.stringify({ domain: "bot-production.up.railway.app" });
-
 describe("deploy/railway-run: the coding-agent deploy journey (benchmark)", () => {
-  it("fresh: auth → init+add+volume → variables → up → domain → telegram webhook", async () => {
-    // Unlinked (status stdout empty); everything succeeds; bare `railway domain` returns/mints the URL.
+  it("fresh (unlinked): auth → init+add+volume → variables → up → domain → telegram webhook", async () => {
     const { railway, cmds } = fakeRailway((a) => {
-      if (a[0] === "status") return { stdout: "" }; // unlinked
+      if (a[0] === "status") return { stdout: "" }; // unlinked → create
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
@@ -55,11 +59,11 @@ describe("deploy/railway-run: the coding-agent deploy journey (benchmark)", () =
       "status --json",
       "init --name bot",
       "add --service bot",
-      "volume list --json",
-      "volume add --mount-path /data",
-      "variables set FASTAGENT_STATE_DIR=/data --service bot",
+      "variables set FASTAGENT_STATE_DIR=/data --service bot", // first --service cmd, BEFORE the volume
       "variables set TELEGRAM_BOT_TOKEN --stdin --service bot",
       "variables set TELEGRAM_SECRET_TOKEN --stdin --service bot",
+      "volume list --json",
+      "volume add --mount-path /data",
       "up --ci --service bot",
       "domain --json --service bot", // bare `domain` only — NOT `domain list` (destructive on older CLIs)
     ]);
@@ -79,35 +83,73 @@ describe("deploy/railway-run: the coding-agent deploy journey (benchmark)", () =
     expect(setKey.input).toBe("sk-x"); // on stdin
   });
 
-  it("redeploy: a linked project skips init/add, reuses the existing volume, still sets vars + up", async () => {
+  it("--into-linked: provisions INTO the linked project (skips init/add), reuses an existing volume", async () => {
     const { railway, cmds } = fakeRailway((a) => {
-      if (a[0] === "status") return { stdout: JSON.stringify({ project: "bot", service: "bot" }) }; // linked
+      if (a[0] === "status") return { stdout: LINKED }; // linked
       if (a[0] === "volume" && a[1] === "list") return { stdout: `[{"mountPath":"/data"}]` }; // volume present
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
-    const out = await run(plan(), railway);
+    const out = await run(plan({ intoLinked: true }), railway);
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
-    expect(cmds()).not.toContain("init --name bot"); // re-running init would DUPLICATE the project/service
+    expect(cmds()).not.toContain("init --name bot"); // never re-create (would duplicate the project)
     expect(cmds()).not.toContain("add --service bot");
     expect(cmds()).not.toContain("volume add --mount-path /data"); // volume already present → not re-added
-    expect(cmds()).toContain("up --ci --service bot"); // redeploy still happens
+    expect(cmds()).toContain("up --ci --service bot");
     expect(cmds()).not.toContain("domain list --json --service bot"); // never the destructive list subcommand
   });
 
-  it("linked but volume MISSING (half-provisioned prior run) → volume is re-created, not silently skipped", async () => {
-    // add succeeded, volume add failed on a prior run: status is linked yet no volume. parseLinked=true
-    // must NOT be read as "fully provisioned" — else the deploy has no persistence (silent state loss).
+  it("--into-linked with a MISSING volume heals it (check-then-act) — no deploy without persistence", async () => {
     const { railway, cmds } = fakeRailway((a) => {
-      if (a[0] === "status") return { stdout: JSON.stringify({ project: "bot" }) }; // linked
+      if (a[0] === "status") return { stdout: LINKED };
       if (a[0] === "volume" && a[1] === "list") return { stdout: "[]" }; // NO volume
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
+    const out = await run(plan({ intoLinked: true }), railway);
+    expect(out.ok).toBe(true);
+    expect(cmds()).not.toContain("init --name bot");
+    expect(cmds()).toContain("volume add --mount-path /data"); // heals the missing volume
+  });
+
+  it("gate (SAFETY): a linked dir WITHOUT --into-linked is refused before any side effect — names the project", async () => {
+    // The near-miss: the dir is linked to an unrelated/production project. `--run` only creates on an
+    // unlinked dir, so a link is refused; the gate names the project so the operator sees it isn't theirs.
+    const { railway, cmds } = fakeRailway((a) =>
+      a[0] === "status" ? { stdout: JSON.stringify({ name: "prod-app", id: "prod-99" }) } : {},
+    );
     const out = await run(plan(), railway);
-    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
-    expect(cmds()).not.toContain("init --name bot"); // still skips creation (avoid dup project)
-    expect(cmds()).toContain("volume add --mount-path /data"); // ...but heals the missing volume
+    expect(out.ok).toBe(false);
+    const gate = out.ok ? "" : out.gate;
+    expect(gate).toContain("prod-app"); // names the linked project so it's recognizable as not-theirs
+    expect(gate).toMatch(/--into-linked/); // and how to proceed if it IS the target
+    expect(cmds()).toEqual(["whoami", "status --json"]); // NOTHING after the read-only status — no init, no up
+  });
+
+  it("gate: a linked dir with an UNREADABLE status is still refused (not mistaken for unlinked → duplicate)", async () => {
+    // Non-empty status we can't parse — any non-empty output counts as linked. Refuse (don't init a
+    // duplicate); the message admits the name is unreadable rather than claiming a specific project.
+    const { railway, cmds } = fakeRailway((a) => (a[0] === "status" ? { stdout: "weird non-json output" } : {}));
+    const out = await run(plan(), railway);
+    expect(out.ok).toBe(false);
+    expect(out.ok ? "" : out.gate).toMatch(/name unreadable|--into-linked/);
+    expect(cmds()).toEqual(["whoami", "status --json"]); // no init
+  });
+
+  it("warns when --into-linked is passed on an UNLINKED dir (the flag would otherwise be a silent no-op)", async () => {
+    const { railway } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" }; // unlinked
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const logs: string[] = [];
+    await deployRailwayRun(
+      plan({ intoLinked: true }),
+      railway,
+      (m) => logs.push(m),
+      vi.fn(async () => {}),
+    );
+    expect(logs.join("\n")).toMatch(/--into-linked.*isn't linked|creating a fresh/i);
   });
 
   it("gate: not logged in → stops before any side effect", async () => {
@@ -134,6 +176,23 @@ describe("deploy/railway-run: the coding-agent deploy journey (benchmark)", () =
     expect(out).toEqual({ ok: false, gate: expect.stringMatching(/workspace/) });
   });
 
+  it("gate: `railway add --service` failure gives PRECISE recovery (project made, service not)", async () => {
+    // init OK (dir now linked) → add fails. A plain re-run would hit the linked-gate, and --into-linked
+    // skips add → fails at the volume (no service). So the gate must name the exact manual recovery, not
+    // just "fix and re-run" (which the deleted marker design had, and the redesign must not lose).
+    const { railway } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" }; // unlinked → create path
+      if (a[0] === "add") return { code: 1 }; // service creation fails after init
+      return {};
+    });
+    const out = await run(plan(), railway);
+    expect(out.ok).toBe(false);
+    const gate = out.ok ? "" : out.gate;
+    expect(gate).toContain("railway add --service bot"); // the exact manual step to run
+    expect(gate).toMatch(/--into-linked/); // ...then --into-linked
+    expect(gate).toMatch(/railway unlink/); // ...or unlink to restart
+  });
+
   it("gate: an unreadable domain stops with the manual instruction (no silent success)", async () => {
     const { railway } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" };
@@ -146,10 +205,17 @@ describe("deploy/railway-run: the coding-agent deploy journey (benchmark)", () =
 });
 
 describe("deploy/railway-run: pure parsers", () => {
-  it("parseLinked: JSON on stdout = linked; empty/non-JSON = not (status exits 0 either way)", () => {
-    expect(parseLinked(JSON.stringify({ project: "x" }))).toBe(true);
-    expect(parseLinked("")).toBe(false); // unlinked prints its message to stderr, stdout empty
-    expect(parseLinked("No linked project found")).toBe(false);
+  it("isLinked: non-empty stdout = linked; empty = not (status exits 0 either way)", () => {
+    expect(isLinked(LINKED)).toBe(true);
+    expect(isLinked("weird non-json")).toBe(true); // any non-empty output counts as linked (refuse-safe)
+    expect(isLinked("")).toBe(false); // unlinked: message → stderr, stdout empty
+    expect(isLinked("   \n")).toBe(false);
+  });
+
+  it("linkedName: the top-level name when present; undefined when unparseable (still linked)", () => {
+    expect(linkedName(LINKED)).toBe("bot");
+    expect(linkedName("not json")).toBeUndefined();
+    expect(linkedName(JSON.stringify({ id: "p1" }))).toBeUndefined(); // no name
   });
 
   it("parseDomainUrl: finds a *.railway.app host anywhere in the JSON, as https; else undefined", () => {
