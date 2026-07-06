@@ -15,9 +15,14 @@
     "fastagent"
   ],
   "license": "MIT",
+  "author": "the fastagent authors (https://github.com/kid7st/fastagent)",
+  "homepage": "https://github.com/kid7st/fastagent#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kid7st/fastagent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kid7st/fastagent/issues"
   },
   "type": "module",
   "sideEffects": false,

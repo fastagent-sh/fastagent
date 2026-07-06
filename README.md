@@ -4,6 +4,7 @@
 [![npm version](https://img.shields.io/npm/v/@kid7st/fastagent.svg)](https://www.npmjs.com/package/@kid7st/fastagent)
 [![license](https://img.shields.io/npm/l/@kid7st/fastagent.svg)](LICENSE)
 [![node](https://img.shields.io/node/v/@kid7st/fastagent.svg)](https://nodejs.org)
+[![built with pi](https://img.shields.io/badge/built%20with-pi-0b7285.svg)](https://pi.dev)
 
 **Vibe first. Then FastAgent.** Any folder can become a live agent service. FastAgent takes your local agent folder out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
 
@@ -164,6 +165,14 @@ FastAgent is pre-1.0. The stable design center is the Agent Handler contract in 
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
+## Acknowledgements
+
+FastAgent stands on open source. The reference implementation is built on **[pi](https://pi.dev)** (`@earendil-works/pi-*`, MIT) — the agent harness, the multi-provider LLM API, and the interactive TUI that `fastagent chat` drives.
+
+It also depends on, and is grateful to, these MIT projects: [zod](https://github.com/colinhacks/zod), [undici](https://github.com/nodejs/undici), [chokidar](https://github.com/paulmillr/chokidar), [giget](https://github.com/unjs/giget), [@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore), and [@octokit/webhooks-*](https://github.com/octokit/webhooks).
+
+The scaffolded `writing-great-skills` skill is vendored from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT), with its license included.
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). All runtime dependencies are MIT; FastAgent does not bundle their code (npm installs each separately), so their licenses ship with them.
