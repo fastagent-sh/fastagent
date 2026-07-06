@@ -41,13 +41,16 @@ FastAgent deliberately keeps the serving layer small and composable:
 
 See [Design principles](principles.md) for the full rationale and non-goals.
 
-## What FastAgent is not
+## What we didn't build
 
-- Not another agent framework.
-- Not a new agent definition format or DSL.
-- Not a full application framework that owns your routes, database, or deployment layout.
-- Not a durable workflow engine.
-- Not a replacement for the underlying harness engine.
+FastAgent stays a small serving layer, so it never dictates your stack. Capabilities other agent frameworks bake into a platform, we leave to your app, your host, or the agent itself — composed in, not locked in.
+
+- **No new format or DSL** — bring the `AGENTS.md` + `skills/` you already have; no rewrite into our project shape.
+- **No platform to move to** — no dashboard, no control plane, no runtime you deploy *into*.
+- **No framework that owns your app** — your auth, database, routes, and deployment stay yours; FastAgent plugs in.
+- **No workflow engine** — the agent decides its own steps; for deterministic orchestration, call `invoke` from your own queue or workflow.
+- **No engine, model, or cloud lock-in** — one neutral `invoke` contract; swap the engine, the model, or the host without touching the agent.
+- **No build step** — the directory runs directly, with no artifact to drift from source.
 
 ## Two main use cases
 
