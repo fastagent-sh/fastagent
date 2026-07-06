@@ -162,14 +162,12 @@ independent dependencies/versioning actually exists.
 
 ## Status
 
-FastAgent is pre-1.0. The stable design center is the Agent Handler contract in `docs/SPEC.md`; the package API may still tighten before 1.0. See [CHANGELOG.md](CHANGELOG.md) for notable changes.
+FastAgent is pre-1.0. The stable design center is the Agent Handler contract in `docs/SPEC.md`; the package API may still tighten before 1.0. Notable changes are recorded in the [GitHub Releases](https://github.com/kid7st/fastagent/releases).
 
 ## Project
 
 - [Contributing](CONTRIBUTING.md)
-- [Code of conduct](CODE_OF_CONDUCT.md)
 - [Security policy](SECURITY.md)
-- [Changelog](CHANGELOG.md)
 
 ## Acknowledgements
 

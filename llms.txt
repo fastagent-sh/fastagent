@@ -40,4 +40,3 @@ Key facts:
 - [Core design notes](https://github.com/kid7st/fastagent/blob/main/docs/design/core.md): pi reference implementation architecture.
 - [Contributing](https://github.com/kid7st/fastagent/blob/main/CONTRIBUTING.md): branch model, PR loop, and review tiers.
 - [Security policy](https://github.com/kid7st/fastagent/blob/main/SECURITY.md): how to report a vulnerability.
-- [Changelog](https://github.com/kid7st/fastagent/blob/main/CHANGELOG.md): notable changes.

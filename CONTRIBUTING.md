@@ -4,8 +4,6 @@ This repository follows **GitHub Flow** (single trunk) with a local-first iterat
 
 All repository-facing text — code, comments, docs, commit messages, PR descriptions — is **English**. This is an open-source project for a global audience.
 
-By participating, you agree to uphold the [Code of Conduct](CODE_OF_CONDUCT.md).
-
 ## Branch model
 
 - `main` is the only long-lived branch. It is protected: linear history, required CI, no force-push, no deletion.
