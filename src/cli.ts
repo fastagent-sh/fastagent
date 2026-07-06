@@ -12,6 +12,7 @@ import { parseArgs } from "node:util";
 import type { Agent } from "./agent.ts";
 import { logAgentLoop } from "./observe.ts";
 import { log, setLogLevel } from "./log.ts";
+import { loadEnvFile } from "./env.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
@@ -1128,7 +1129,7 @@ function serve(routes: Routes, port: number, onListening?: (boundPort: number) =
 /** .env (secrets) → process.env. Only a missing file is normal; surface anything else. */
 function loadDotEnv(d: string): void {
   try {
-    process.loadEnvFile(join(d, ".env"));
+    loadEnvFile(join(d, ".env"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

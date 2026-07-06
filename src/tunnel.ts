@@ -10,6 +10,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
+import { loadEnvFile } from "./env.ts";
 import { log } from "./log.ts";
 
 export interface Tunnel {
@@ -135,7 +136,7 @@ function channelBasenames(dir: string): string[] {
 export async function announceWebhooks(dir: string, baseUrl: string): Promise<void> {
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
-    process.loadEnvFile(join(dir, ".env")); // so telegram registration sees the tokens
+    loadEnvFile(join(dir, ".env")); // so telegram registration sees the tokens
   } catch {
     /* no .env is fine */
   }
