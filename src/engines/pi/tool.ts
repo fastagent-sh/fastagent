@@ -13,7 +13,7 @@
 import { join } from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
-import { loadModuleDir } from "./loader.ts";
+import { type ModuleLoadFailure, loadModuleDir } from "./loader.ts";
 
 export interface ToolContext {
   /** Abort signal for the current turn — honor it to cancel in-flight work on cancellation. */
@@ -62,15 +62,24 @@ export interface ToolCollision {
   source: string;
 }
 
-/** Discover code tools in `<dir>/tools/`: each `*.ts|.js|.mjs` default-exports a tool, named from its filename. */
-export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; collisions: ToolCollision[] }> {
-  const modules = await loadModuleDir(join(dir, "tools"));
+/**
+ * Discover code tools in `<dir>/tools/`: each `*.ts|.js|.mjs` default-exports a tool, named from its
+ * filename. A file broken for ANY reason — a failed import (from {@link loadModuleDir}) or not being a
+ * tool (no `execute`) — is ISOLATED into `failures` (skipped + reported, not thrown) so one broken file
+ * can't crash `start`; the agent serves the tools that loaded. A repo turned into an agent often has a
+ * `tools/` dir of its OWN scripts, which is exactly this case.
+ */
+export async function loadTools(
+  dir: string,
+): Promise<{ tools: AgentTool[]; collisions: ToolCollision[]; failures: ModuleLoadFailure[] }> {
+  const { modules, failures } = await loadModuleDir(join(dir, "tools"));
   const byName = new Map<string, AgentTool>();
   const collisions: ToolCollision[] = [];
-  for (const { name, label, mod } of modules) {
+  for (const { name, label, file, mod } of modules) {
     const tool = mod.default as Partial<AgentTool> | undefined;
     if (!tool || typeof tool.execute !== "function") {
-      throw new Error(`${label} must default-export defineTool({...})`);
+      failures.push({ label, file, message: `${label} must default-export defineTool({...})` });
+      continue;
     }
     if (byName.has(name)) {
       collisions.push({ name, source: label });
@@ -78,7 +87,7 @@ export async function loadTools(dir: string): Promise<{ tools: AgentTool[]; coll
     }
     byName.set(name, { ...(tool as AgentTool), name });
   }
-  return { tools: [...byName.values()], collisions };
+  return { tools: [...byName.values()], collisions, failures };
 }
 
 /**

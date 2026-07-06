@@ -78,8 +78,8 @@ describe("cli papercuts", () => {
 
   it("info degrades when a tool can't load (missing dep) — reports it, still shows the surface, exits 0", async () => {
     // The scaffold ships tools/ that import @kid7st/fastagent; before `npm install` the import fails.
-    // info is read-only diagnosis ("run it first when something looks off") — a broken tool must be
-    // reported, not abort the whole report. dev/start still fail hard (you cannot serve broken tools).
+    // A broken tool file is ISOLATED (skipped + reported, not thrown) so it can't crash the load — info
+    // reports it, and dev/start degrade the SAME way (G2): the agent keeps serving without that one tool.
     const dir = await mkdtemp(join(tmpdir(), "fa-info-toolfail-"));
     await mkdir(join(dir, "tools"), { recursive: true });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
@@ -90,16 +90,17 @@ describe("cli papercuts", () => {
     const { code, stdout } = await run(["info", dir, "--json"], undefined, env);
     expect(code).toBe(0); // reported, not fatal
     const info = JSON.parse(stdout);
-    expect(info.tools).toEqual([]); // could not load
-    expect(info.toolError).toMatch(/broken\.ts/); // the reason is surfaced to a JSON consumer
+    expect(info.tools).toEqual([]); // the broken tool isn't loaded…
+    expect(JSON.stringify(info.toolFailures)).toMatch(/broken\.ts/); // …it's surfaced as a per-file load failure
+    expect(info.toolError).toBeNull(); // isolated, so NOT a whole-load abort
     expect(info.instructions).toBe(true); // the rest of the surface still shows
     await expect(stat(join(dir, ".fastagent"))).rejects.toThrow(); // still read-only
 
     // text mode: the tools line degrades and the reason goes to stderr as a warning
     const text = await run(["info", dir], undefined, env);
     expect(text.code).toBe(0);
-    expect(text.stdout).toMatch(/tools:\s+\(could not load/);
-    expect(text.stderr).toMatch(/broken\.ts/);
+    expect(text.stdout).toMatch(/tools:\s+\(none\)/); // the broken tool was skipped, nothing else to show
+    expect(text.stderr).toMatch(/broken\.ts/); // the reason is a warning on stderr
   });
 
   it("login self-ignores .fastagent on an adapted dir before it writes the credential file", async () => {

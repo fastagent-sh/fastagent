@@ -38,7 +38,7 @@ import { configuredModelSpecs, createPiModels, probeAuthSource } from "./engines
 import { ensureStateRootSelfIgnored, isUnderDir, loadAgentDefinition } from "./engines/pi/definition.ts";
 import { loadRootIgnore } from "./workspace.ts";
 import { runInvokeStream } from "./invoke-stream.ts";
-import { reportDefinitionWarnings, reportToolCollisions } from "./engines/pi/report.ts";
+import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "./engines/pi/workspace.ts";
 import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import {
@@ -205,12 +205,13 @@ async function runTool(): Promise<void> {
   const { config } = await loadConfig(toolDir).catch(failStartup);
   // The same tool set dev/start mount (defaults + config.tools + discovered, deduped), so the runner
   // exercises exactly what gets served — a shadowed tool is surfaced, not silently run.
-  const { tools, toolCollisions } = await resolveWorkspaceTools(config, toolDir).catch(failStartup);
+  const { tools, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, toolDir).catch(failStartup);
   for (const c of toolCollisions) {
     console.error(
       `[fastagent] warn: tool "${c.name}" (${c.source}) is shadowed by a default/config tool — not mounted`,
     );
   }
+  reportModuleLoadFailures(toolFailures);
   const tool = tools.find((t) => t.name === name);
   if (!tool) {
     console.error(`unknown tool "${name}". available: ${tools.map((t) => t.name).join(", ") || "(none)"}`);
@@ -267,12 +268,18 @@ async function runInfo(): Promise<void> {
   const { config, path: configPath } = await loadConfig(dir).catch(failStartup);
   const modelSpec = resolveModelSpec(values.model, config);
   const definition = await loadAgentDefinition(dir).catch(failStartup);
-  // A tool that fails to import (typically a missing dep before `npm install`) must NOT abort a
-  // read-only inspect: report it and still show model/skills/channels/state. dev/start keep
-  // failStartup — you cannot serve broken tools, but `info` exists to diagnose "something looks off".
+  // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a
+  // tool), is isolated the same way everywhere (G2): info, dev, AND start report it and keep going with
+  // the tools that loaded. The `error`/`.catch` below only fires for a whole-load fault (an unreadable
+  // tools/ dir), not a single bad file.
   const tools = await resolveWorkspaceTools(config, dir)
-    .then((r) => ({ names: r.toolNames, collisions: r.toolCollisions, error: undefined as string | undefined }))
-    .catch((e: unknown) => ({ names: [] as string[], collisions: [], error: (e as Error).message }));
+    .then((r) => ({
+      names: r.toolNames,
+      collisions: r.toolCollisions,
+      failures: r.toolFailures,
+      error: undefined as string | undefined,
+    }))
+    .catch((e: unknown) => ({ names: [] as string[], collisions: [], failures: [], error: (e as Error).message }));
   const channels = await discoverChannelFiles(dir).catch(failStartup);
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login
   // create them, info must not).
@@ -298,6 +305,7 @@ async function runInfo(): Promise<void> {
           diagnostics: definition.diagnostics,
           skillCollisions: definition.collisions,
           toolCollisions: tools.collisions,
+          toolFailures: tools.failures,
         },
         null,
         2,
@@ -316,6 +324,7 @@ async function runInfo(): Promise<void> {
   console.log(`sessions: ${sessionsDir}`);
   console.log(`auth:     ${authPath}`);
   reportToolCollisions(tools.collisions);
+  reportModuleLoadFailures(tools.failures);
   if (tools.error) log.warn(`[fastagent] ${tools.error}`);
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 }
@@ -894,6 +903,7 @@ function reportAgentsSkillsTools(a: Assembled): void {
   log.info(`[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (a.toolNames.length > 0) log.info(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
   reportToolCollisions(a.toolCollisions);
+  reportModuleLoadFailures(a.toolFailures);
   reportDefinitionWarnings(a.definition.collisions, a.definition.diagnostics);
 }
 
@@ -988,12 +998,22 @@ async function runStart(): Promise<void> {
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(values["sessions-dir"]);
-  const { agent, definition, config, modelSpec, stateRoot, sessionsDir, authPath, toolNames, toolCollisions } =
-    await createPiAgentFromWorkspace(dir, {
-      model: values.model,
-      sessionsDir: sessionsDirOverride,
-      authPath: authPathOverride,
-    }).catch(failStartup);
+  const {
+    agent,
+    definition,
+    config,
+    modelSpec,
+    stateRoot,
+    sessionsDir,
+    authPath,
+    toolNames,
+    toolCollisions,
+    toolFailures,
+  } = await createPiAgentFromWorkspace(dir, {
+    model: values.model,
+    sessionsDir: sessionsDirOverride,
+    authPath: authPathOverride,
+  }).catch(failStartup);
 
   log.info(`[fastagent] start:  ${dir}`);
   log.info(`[fastagent] model:  ${modelSpec}`);
@@ -1002,6 +1022,7 @@ async function runStart(): Promise<void> {
   log.info(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (toolNames.length > 0) log.info(`[fastagent] tools:  ${toolNames.join(", ")}`);
   reportToolCollisions(toolCollisions);
+  reportModuleLoadFailures(toolFailures);
   log.info(`[fastagent] state:  ${stateRoot}`);
   log.info(`[fastagent] sessions: ${sessionsDir}`);
   // State defaults under the definition dir, which a redeploy may replace wholesale. Gate on where the
@@ -1033,12 +1054,13 @@ async function runStart(): Promise<void> {
  * `channels/` — or the default invoke channel at POST /invoke when none are declared.
  */
 async function routesFor(workspaceDir: string, agent: Agent, stateRoot: string): Promise<Routes> {
-  const { routes, collisions } = await loadChannels(workspaceDir, { agent, stateRoot });
+  const { routes, collisions, failures } = await loadChannels(workspaceDir, { agent, stateRoot });
   for (const c of collisions) {
     console.error(
       `[fastagent] warn: channel route "${c.route}" (${c.source}) collides with an earlier channel — not mounted`,
     );
   }
+  reportModuleLoadFailures(failures);
   const channels = Object.keys(routes).length > 0 ? routes : { "POST /invoke": createInvokeHandler(agent) };
   // Add a default GET /health unless a channel already covers it (overlap, not exact-key: an
   // any-method `/health` also handles GET, so the built-in steps aside).

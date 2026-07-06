@@ -39,7 +39,7 @@ import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from
 import { createPiModels } from "./models.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { loadTools, mergeDiscoveredTools } from "./tool.ts";
-import { reportDefinitionWarnings, reportToolCollisions } from "./report.ts";
+import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 
 export interface RunPiChatOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -77,6 +77,7 @@ export async function buildChatRuntime(
     const discovered = await loadTools(cwd);
     const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
     reportToolCollisions([...discovered.collisions, ...crossCollisions]);
+    reportModuleLoadFailures(discovered.failures);
     const defaultNames = piDefaultTools(cwd).map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts it).

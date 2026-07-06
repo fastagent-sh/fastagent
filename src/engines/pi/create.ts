@@ -23,6 +23,7 @@ import { piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
 import { reportDefinitionWarnings } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
+import type { ModuleLoadFailure } from "./loader.ts";
 import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
@@ -51,13 +52,18 @@ export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] 
 export async function resolveWorkspaceTools(
   config: FastagentConfig,
   dir: string,
-): Promise<{ tools: AgentTool[]; toolNames: string[]; toolCollisions: ToolCollision[] }> {
+): Promise<{
+  tools: AgentTool[];
+  toolNames: string[];
+  toolCollisions: ToolCollision[];
+  toolFailures: ModuleLoadFailure[];
+}> {
   const discovered = await loadTools(dir);
   const { tools, collisions } = mergeDiscoveredTools(resolveTools(config, dir), discovered.tools);
   const toolCollisions = [...discovered.collisions, ...collisions];
   const defaultNames = new Set(piDefaultTools(dir).map((t) => t.name));
   const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));
-  return { tools, toolNames, toolCollisions };
+  return { tools, toolNames, toolCollisions, toolFailures: discovered.failures };
 }
 
 // ── §2 prompt: four-segment systemPrompt assembly ───────────────────────────
