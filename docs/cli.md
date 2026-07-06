@@ -27,7 +27,7 @@ Most commands take an optional workspace directory. When omitted, the current di
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
 | `add github|telegram [dir]` | Scaffold a first-party channel. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
-| `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) from the definition and print a flyctl runbook + webhook step. Does not run flyctl. `--stop` (stop instead of suspend), `--no-scale-to-zero` (keep one machine up), `--force` (overwrite artifacts). |
+| `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--stop` (stop instead of suspend), `--no-scale-to-zero` (keep one machine up), `--force` (overwrite artifacts). |
 | `start [dir]` | Serve without watch. |
 
 ## `fastagent init`

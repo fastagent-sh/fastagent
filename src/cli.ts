@@ -5,8 +5,8 @@
  */
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
-import { basename, join, relative, resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
 import type { Agent } from "./agent.ts";
@@ -52,7 +52,9 @@ import {
 } from "./scaffold/add-channel.ts";
 import { exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
-import { parseFlyAppName, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
+import { parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
+import { type FlyRunner, assembleFlySecrets, authSeedBytes, deployFlyRun } from "./deploy/fly-run.ts";
+import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 
 function usage(code: number): never {
   console.error(`usage:
@@ -114,6 +116,10 @@ function usage(code: number): never {
   deploy fly [dir]: generate fly.toml/Dockerfile/.dockerignore (autostop=suspend, state→volume) from
          the definition and print an ordered flyctl runbook + the post-deploy webhook step. Does not
          run flyctl — a coding agent (or you) executes the runbook.
+         --run             drive flyctl to completion (idempotent, resumable): app/volume/secrets/
+                           deploy + telegram webhook. Carries your local credential (env key or the
+                           OAuth auth.json) to the box. Stops at a gate (fly auth login, a missing
+                           secret) with one actionable line; needs flyctl. Without it: prints the runbook.
          --stop            autostop by stopping (cold start) instead of suspending (fast resume)
          --no-scale-to-zero keep one machine running when idle (min_machines_running=1)
          --force           overwrite existing fly.toml/Dockerfile/.dockerignore (else kept)
@@ -140,6 +146,7 @@ const { positionals, values } = parseArgs({
     force: { type: "boolean" },
     stop: { type: "boolean" },
     "no-scale-to-zero": { type: "boolean" },
+    run: { type: "boolean" },
     json: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean", short: "v" },
@@ -525,7 +532,71 @@ async function runDeploy(): Promise<void> {
     await writeFile(abs, a.content);
     console.error(`[fastagent] wrote ${a.path}`);
   }
+
+  if (values.run) return runDeployFly(target, appName, modelAuth, authPath, channels, flyTomlPath);
   console.log(plan.runbook.join("\n"));
+}
+
+/**
+ * `deploy fly --run`: drive flyctl to completion (idempotent, resumable). Gathers the secret VALUES
+ * from the local env — the model key (env auth) or the whole auth.json as a `FASTAGENT_AUTH_SEED` seed
+ * (OAuth/stored auth: the deployed box materializes it onto the /data volume on first boot, so a
+ * personal deploy runs on the SAME subscription) plus channel secrets — then runs the flyctl steps
+ * behind the {@link FlyRunner} seam (spawned `fly`, cwd = the workspace so the build context is the agent).
+ */
+async function runDeployFly(
+  target: string,
+  appName: string,
+  modelAuth: string | undefined,
+  authPath: string,
+  channels: ChannelKind[],
+  flyTomlPath: string,
+): Promise<void> {
+  const fly: FlyRunner = (args, opts) =>
+    new Promise((res) => {
+      const child = spawn("fly", args, {
+        cwd: target,
+        stdio: [opts?.input ? "pipe" : "inherit", opts?.capture ? "pipe" : "inherit", "inherit"],
+      });
+      let out = "";
+      child.stdout?.on("data", (d) => (out += String(d)));
+      if (opts?.input) child.stdin?.end(opts.input);
+      child.on("close", (code) => res({ code: code ?? 1, stdout: out }));
+      child.on("error", () => res({ code: 127, stdout: "" })); // ENOENT: flyctl not on PATH
+    });
+  // Fail fast if flyctl is absent (spawn ENOENT → 127), with the install link — not a confusing auth gate.
+  if ((await fly(["version"], { capture: true })).code === 127) {
+    console.error(`[fastagent] flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`);
+    process.exit(1);
+  }
+
+  const region = parseFlyRegion(await readFile(flyTomlPath, "utf8")) ?? "iad";
+  const { secrets, missingSecrets, needsModelCredential } = assembleFlySecrets({
+    modelAuth,
+    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
+    channels,
+    env: process.env,
+  });
+  // Model credential has its OWN remediation (login), distinct from a missing secret's (.env) — gate it
+  // here, not through missingSecrets, so the message isn't a contradictory mash of both.
+  if (needsModelCredential) {
+    console.error(
+      `[fastagent] deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
+    );
+    process.exit(1);
+  }
+
+  const outcome = await deployFlyRun(
+    { appName, region, secrets, missingSecrets, channels, flyConfig: "fly.toml" },
+    fly,
+    (m) => console.error(`[fastagent] ${m}`),
+    (baseUrl) => registerTelegramWebhook(baseUrl),
+  );
+  if (!outcome.ok) {
+    console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
+    process.exit(1);
+  }
+  console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
 }
 
 /**
@@ -579,6 +650,20 @@ function terminalLoginIO(): LoginIO {
     note: (message) => clackLog.info(message),
     openUrl: openBrowser,
   };
+}
+
+/**
+ * Materialize `FASTAGENT_AUTH_SEED` (base64 of an auth.json, set by `deploy fly --run`) onto the
+ * writable state root ONCE — only when the seed is set AND the auth file is absent, so a refreshed
+ * volume copy is never clobbered by the stale seed. Lets a deploy carry the operator's local
+ * OAuth/API credential so the box runs on the SAME subscription. No-op locally (the seed is unset).
+ */
+async function maybeSeedAuth(authPath: string): Promise<void> {
+  const bytes = authSeedBytes(process.env.FASTAGENT_AUTH_SEED, await exists(authPath));
+  if (!bytes) return;
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(authPath, bytes);
+  log.info(`[fastagent] seeded ${authPath} from FASTAGENT_AUTH_SEED (first boot)`);
 }
 
 /** Run `npm install` in `cwd` (inherit stdio). Returns the exit code. */
@@ -780,13 +865,18 @@ async function runStart(): Promise<void> {
   installProxyFetch();
   await resolveFirstRunModel(dir);
 
+  // A `deploy fly --run` deploy may carry the operator's local credential as FASTAGENT_AUTH_SEED —
+  // materialize it onto the writable state root BEFORE the opener resolves auth (once, absent-only).
+  const authPathOverride = resolveAuthPathOverride(values["auth-path"]);
+  await maybeSeedAuth(authPathOverride ?? defaultAuthPath(resolveStateRoot(dir)));
+
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(values["sessions-dir"]);
   const { agent, definition, config, modelSpec, stateRoot, sessionsDir, authPath, toolNames, toolCollisions } =
     await createPiAgentFromWorkspace(dir, {
       model: values.model,
       sessionsDir: sessionsDirOverride,
-      authPath: resolveAuthPathOverride(values["auth-path"]),
+      authPath: authPathOverride,
     }).catch(failStartup);
 
   log.info(`[fastagent] start:  ${dir}`);
