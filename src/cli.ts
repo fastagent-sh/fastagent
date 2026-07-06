@@ -551,7 +551,7 @@ async function runDeploy(): Promise<void> {
         .replace(/^-+|-+$/g, "") || "agent";
     const plan = planRailwayDeploy({ serviceName, modelAuth, channels, extraSecrets, ...container });
     await writeArtifacts(target, plan.artifacts);
-    if (values.run) return runDeployRailway(target, serviceName, modelAuth, authPath, channels, extraSecrets);
+    if (values.run) return runDeployRailway({ target, name: serviceName, modelAuth, authPath, channels, extraSecrets });
     console.log(plan.runbook.join("\n"));
     return;
   }
@@ -602,7 +602,7 @@ async function runDeploy(): Promise<void> {
     scaleToZero: !values["no-scale-to-zero"],
   });
   await writeArtifacts(target, plan.artifacts);
-  if (values.run) return runDeployFly(target, appName, modelAuth, authPath, channels, flyTomlPath, extraSecrets);
+  if (values.run) return runDeployFly({ target, appName, modelAuth, authPath, channels, flyTomlPath, extraSecrets });
   console.log(plan.runbook.join("\n"));
 }
 
@@ -641,15 +641,16 @@ async function writeArtifacts(target: string, artifacts: { path: string; content
  * personal deploy runs on the SAME subscription) plus channel secrets — then runs the flyctl steps
  * behind the {@link FlyRunner} seam (spawned `fly`, cwd = the workspace so the build context is the agent).
  */
-async function runDeployFly(
-  target: string,
-  appName: string,
-  modelAuth: string | undefined,
-  authPath: string,
-  channels: ChannelKind[],
-  flyTomlPath: string,
-  extraSecrets: string[],
-): Promise<void> {
+async function runDeployFly(params: {
+  target: string;
+  appName: string;
+  modelAuth: string | undefined;
+  authPath: string;
+  channels: ChannelKind[];
+  flyTomlPath: string;
+  extraSecrets: string[];
+}): Promise<void> {
+  const { target, appName, modelAuth, authPath, channels, flyTomlPath, extraSecrets } = params;
   const fly: FlyRunner = (args, opts) =>
     new Promise((res) => {
       const child = spawn("fly", args, {
@@ -705,14 +706,15 @@ async function runDeployFly(
  * Railway-specific sequence (linked-check → init/add/volume when fresh → variables → up → domain →
  * webhook) lives in {@link deployRailwayRun}; see there for why Railway differs from Fly.
  */
-async function runDeployRailway(
-  target: string,
-  name: string,
-  modelAuth: string | undefined,
-  authPath: string,
-  channels: ChannelKind[],
-  extraSecrets: string[],
-): Promise<void> {
+async function runDeployRailway(params: {
+  target: string;
+  name: string;
+  modelAuth: string | undefined;
+  authPath: string;
+  channels: ChannelKind[];
+  extraSecrets: string[];
+}): Promise<void> {
+  const { target, name, modelAuth, authPath, channels, extraSecrets } = params;
   const railway: RailwayRunner = (args, opts) =>
     new Promise((res) => {
       const child = spawn("railway", args, {
