@@ -149,6 +149,26 @@ describe("config: loadConfig", () => {
     await expect(loadConfig(dir)).rejects.toThrow(/unknown key "modle"/);
   });
 
+  it("validates deploy.secrets / deploy.apt shape (env-name / package-name), rejects unknown deploy keys", async () => {
+    // A fresh dir per case: ESM caches a module by URL, so re-writing one file wouldn't re-import.
+    const load = async (body: string) => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      return loadConfig(dir);
+    };
+    const { config } = await load(`export default { deploy: { secrets: ["GH_TOKEN"], apt: ["git", "ripgrep"] } };`);
+    expect(config.deploy).toEqual({ secrets: ["GH_TOKEN"], apt: ["git", "ripgrep"] }); // valid
+    await expect(load(`export default { deploy: { secrets: ["gh token"] } };`)).rejects.toThrow(
+      /"deploy\.secrets\[0\]" must be an UPPER_SNAKE/,
+    ); // not UPPER_SNAKE
+    await expect(load(`export default { deploy: { apt: ["git; rm -rf /"] } };`)).rejects.toThrow(
+      /"deploy\.apt\[0\]" must be a Debian package name/,
+    ); // shell-injection shaped
+    await expect(load(`export default { deploy: { image: "python" } };`)).rejects.toThrow(
+      /unknown key "deploy\.image"/,
+    ); // unknown deploy key
+  });
+
   it("unknown http subkeys throw instead of silently falling back to the default port", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { http: { porrt: 9999 } };`);

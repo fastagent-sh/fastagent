@@ -38,6 +38,10 @@ export interface FlyPlanInput {
   hasLockfile: boolean;
   /** This fastagent version, to PIN the global install on the markdown path (reproducible redeploys). */
   version: string;
+  /** Extra apt packages for the image (fastagent.config deploy.apt). */
+  apt?: string[];
+  /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
+  extraSecrets?: string[];
   /** `auto_stop_machines` — `"suspend"` (default, fast resume) or `"stop"` (cold start). CLI `--stop`. */
   autostop: "suspend" | "stop";
   /** Allow scaling to zero when idle (default true → `min_machines_running=0`). CLI `--no-scale-to-zero`
@@ -114,7 +118,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   // model key (when local auth is an env key) + every discovered channel's secrets. Names + hints as
   // COMMENT lines (a `#` inside a `\`-continued command would break the shell), then one flat, executable
   // `fly secrets set` the coding agent fills — `<value>` placeholders, never inline comments.
-  const secrets = requiredSecrets(modelAuth, channels);
+  const secrets = requiredSecrets(modelAuth, channels, input.extraSecrets);
 
   const runbook: string[] = [
     `# Deploy "${appName}" to Fly.io. fly.toml / Dockerfile / .dockerignore are generated above.`,

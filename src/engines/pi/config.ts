@@ -21,6 +21,18 @@ export interface FastagentConfig {
   /** Extra custom tools, appended after pi defaults — never replaces them. */
   tools?: AgentTool[];
   http?: { port?: number };
+  /** Deploy-time declarations for what the agent needs on the box, so real agents don't hand-write a
+   *  Dockerfile / hand-set variables. */
+  deploy?: {
+    /** Extra secret env-var NAMES the deployed agent needs beyond the model key + channel secrets — e.g.
+     *  a `GH_TOKEN` its tools use. `deploy` carries each from the LOCAL env to the host secret store and
+     *  lists them in the runbook; a missing value gates `--run` (like a channel secret). */
+    secrets?: string[];
+    /** Extra apt packages baked into the generated image (Debian default repos: git, ripgrep, jq…). For a
+     *  package needing a custom apt repo (e.g. gh) or a different base image, provide your own Dockerfile
+     *  — `deploy` keeps an existing one. */
+    apt?: string[];
+  };
 }
 
 /** Identity function for typing and IDE completion (vite/next-style). */
@@ -37,6 +49,18 @@ export interface LoadedConfig {
 /** A valid bindable port. */
 export function isValidPort(n: number): boolean {
   return Number.isInteger(n) && n >= 0 && n <= 65535;
+}
+
+/** Validate an optional `string[]` config field where each entry must match `shape` — used for
+ *  deploy.secrets (env-var names) and deploy.apt (package names); undefined is fine (field omitted). */
+function validateStringList(value: unknown, key: string, shape: RegExp, desc: string, path: string): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) throw new Error(`${path}: "${key}" must be an array of strings`);
+  for (const [i, v] of value.entries()) {
+    if (typeof v !== "string" || !shape.test(v)) {
+      throw new Error(`${path}: "${key}[${i}]" must be ${desc}`);
+    }
+  }
 }
 
 /** Load `<dir>/fastagent.config.ts|.js|.mjs`. No file = zero-config; a wrong-shape file throws. */
@@ -66,8 +90,8 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a .js/.mjs config
   // (`modle:`) must not silently degrade to zero-config.
   for (const key of Object.keys(c)) {
-    if (key !== "model" && key !== "tools" && key !== "http") {
-      throw new Error(`${path}: unknown key "${key}" (valid keys: model, tools, http)`);
+    if (key !== "model" && key !== "tools" && key !== "http" && key !== "deploy") {
+      throw new Error(`${path}: unknown key "${key}" (valid keys: model, tools, http, deploy)`);
     }
   }
   if (c.model !== undefined && typeof c.model !== "string") {
@@ -98,6 +122,19 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   if (c.http?.port !== undefined && (typeof c.http.port !== "number" || !isValidPort(c.http.port))) {
     throw new Error(`${path}: "http.port" must be an integer 0-65535`);
   }
+  if (c.deploy !== undefined && (typeof c.deploy !== "object" || c.deploy === null)) {
+    throw new Error(`${path}: "deploy" must be an object`);
+  }
+  for (const key of Object.keys(c.deploy ?? {})) {
+    if (key !== "secrets" && key !== "apt") {
+      throw new Error(`${path}: unknown key "deploy.${key}" (valid keys: secrets, apt)`);
+    }
+  }
+  // secrets are UPPER_SNAKE env-var names (deploy reads their VALUES from the local env); apt entries are
+  // Debian package names. Both go into a shell/env context on the host, so shape-validate them — catches a
+  // typo and refuses an injection-shaped value from an otherwise-trusted config.
+  validateStringList(c.deploy?.secrets, "deploy.secrets", /^[A-Z_][A-Z0-9_]*$/, "an UPPER_SNAKE env-var name", path);
+  validateStringList(c.deploy?.apt, "deploy.apt", /^[a-z0-9][a-z0-9.+-]*$/, "a Debian package name", path);
   return { config: c, path };
 }
 

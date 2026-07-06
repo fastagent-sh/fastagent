@@ -47,13 +47,23 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(def).toContain("min_machines_running = 0");
   });
 
-  it("computes the secret list from the model key + discovered channels", () => {
-    const out = runbook(planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram"] }));
+  it("computes the secret list from the model key + discovered channels + config deploy.secrets", () => {
+    const out = runbook(
+      planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram"], extraSecrets: ["GH_TOKEN"] }),
+    );
     expect(out).toContain("OPENAI_API_KEY=");
     expect(out).toContain("TELEGRAM_BOT_TOKEN=");
     expect(out).toContain("TELEGRAM_SECRET_TOKEN=");
+    expect(out).toContain("GH_TOKEN="); // G4: an agent-declared extra secret joins the list
     // the fastagent-only post step: point the webhook at the live URL
     expect(out).toContain("https://bot.fly.dev/telegram");
+  });
+
+  it("bakes config deploy.apt into the generated Dockerfile (G6 — system tools the agent's tools need)", () => {
+    const docker = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], apt: ["git", "ripgrep"] }));
+    expect(docker).toMatch(/apt-get install -y --no-install-recommends git ripgrep/);
+    // omitted when no apt declared: no apt layer at all
+    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).not.toContain("apt-get");
   });
 
   it("turns a non-env auth label into guidance, not a secret (positive env-name match)", () => {

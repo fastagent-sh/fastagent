@@ -24,11 +24,18 @@ export function isEnvKey(source: string | undefined): source is string {
 export function requiredSecrets(
   modelAuth: string | undefined,
   channels: ChannelKind[],
+  extraSecrets: string[] = [],
 ): { name: string; hint: string }[] {
   const secrets: { name: string; hint: string }[] = [];
   if (isEnvKey(modelAuth)) secrets.push({ name: modelAuth, hint: "your model provider key" });
   for (const kind of channels) {
     for (const e of channelSetup(kind).env) secrets.push({ name: e.name, hint: e.hint });
+  }
+  // Dedup: a name already covered by the model key / a channel secret must not appear twice in the runbook.
+  for (const name of extraSecrets) {
+    if (!secrets.some((s) => s.name === name)) {
+      secrets.push({ name, hint: "declared in fastagent.config deploy.secrets" });
+    }
   }
   return secrets;
 }
@@ -51,6 +58,8 @@ export function assembleSecrets(input: {
   modelAuth: string | undefined;
   authFile: Buffer | undefined;
   channels: ChannelKind[];
+  /** Extra secret env-var names from `fastagent.config` deploy.secrets — carried like channel secrets. */
+  extraSecrets?: string[];
   env: NodeJS.ProcessEnv;
 }): {
   secrets: Record<string, string>;
@@ -77,6 +86,12 @@ export function assembleSecrets(input: {
       if (v) secrets[e.name] = v;
       else missingSecrets.push(e.name); // operator-provided (in .env); a human-shared secret can't be minted
     }
+  }
+  for (const name of input.extraSecrets ?? []) {
+    if (name in secrets || missingSecrets.includes(name)) continue; // already covered by model/channel — no dup
+    const v = input.env[name];
+    if (v) secrets[name] = v;
+    else missingSecrets.push(name); // declared in config but no local value — same .env remediation
   }
   return { secrets, missingSecrets, needsModelCredential };
 }

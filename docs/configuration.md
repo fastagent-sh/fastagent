@@ -39,6 +39,8 @@ Supported keys:
 | `model` | Default model spec, in `provider/modelId` form. |
 | `tools` | Extra programmatic tools appended after default pi tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
+| `deploy.secrets` | Extra secret env-var names the deployed agent needs (e.g. `["GH_TOKEN"]`). `deploy` lists them in the runbook and, under `--run`, carries each value from your local env to the host secret store; a missing value gates the run. |
+| `deploy.apt` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile) is kept but flagged stale; `--force` regenerates it. |
 
 Unknown keys fail at startup. This catches typos such as `modle` instead of silently running zero-config.
 

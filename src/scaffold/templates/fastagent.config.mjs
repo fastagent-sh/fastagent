@@ -7,4 +7,10 @@
 export default {
   // model: "openai-codex/gpt-5.5",
   http: { port: 8787 },
+  // deploy: what the agent needs on the box (so `fastagent deploy` doesn't need a hand-written Dockerfile
+  // or hand-set host variables). Uncomment as needed:
+  // deploy: {
+  //   secrets: ["GH_TOKEN"], // extra secret env vars your tools use — deploy carries them from your local env
+  //   apt: ["git"],          // extra apt packages baked into the image (git, ripgrep, …; default repos only)
+  // },
 };
