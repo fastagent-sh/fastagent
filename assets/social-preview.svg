@@ -1,103 +1,81 @@
 <svg width="1280" height="640" viewBox="0 0 1280 640" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="0.4">
-      <stop offset="0" stop-color="#22d3ee"/>
-      <stop offset="0.5" stop-color="#2dd4bf"/>
-      <stop offset="1" stop-color="#34d399"/>
+    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#b9bec6"/>
     </linearGradient>
     <linearGradient id="pagebg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#080d12"/>
-      <stop offset="1" stop-color="#0a151a"/>
+      <stop offset="0" stop-color="#0a0b0d"/>
+      <stop offset="1" stop-color="#08090b"/>
     </linearGradient>
-    <radialGradient id="glowE" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#10b981" stop-opacity="0.26"/>
-      <stop offset="1" stop-color="#10b981" stop-opacity="0"/>
+    <radialGradient id="pagesheen" cx="0.5" cy="0" r="0.9">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="glowI" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#6366f1" stop-opacity="0.20"/>
-      <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="markbg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0e181e"/>
-      <stop offset="1" stop-color="#0a1216"/>
+    <linearGradient id="badge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#17181b"/>
+      <stop offset="1" stop-color="#0b0c0e"/>
     </linearGradient>
-    <radialGradient id="markglow" cx="0.42" cy="0.4" r="0.65">
-      <stop offset="0" stop-color="#2dd4bf" stop-opacity="0.26"/>
-      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    <radialGradient id="sheen" cx="0.4" cy="0.34" r="0.7">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#22d3ee"/>
-      <stop offset="1" stop-color="#34d399"/>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#c2c7cf"/>
     </linearGradient>
   </defs>
 
   <rect width="1280" height="640" fill="url(#pagebg)"/>
-  <ellipse cx="1120" cy="90" rx="620" ry="440" fill="url(#glowE)"/>
-  <ellipse cx="140" cy="620" rx="560" ry="420" fill="url(#glowI)"/>
-  <rect x="0" y="0" width="1280" height="5" fill="url(#rule)"/>
-
-  <text x="92" y="112" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="22" font-weight="700" letter-spacing="6" fill="#2dd4bf">POINT AT A DIRECTORY &#183; SHIP A LIVE AGENT</text>
+  <rect width="1280" height="640" fill="url(#pagesheen)"/>
 
   <!-- brand lockup: chevron mark + italic wordmark -->
-  <g transform="translate(88,150) scale(0.42)">
-    <rect x="2" y="2" width="252" height="252" rx="58" fill="url(#markbg)" stroke="#263a42" stroke-width="2"/>
-    <rect x="2" y="2" width="252" height="252" rx="58" fill="url(#markglow)"/>
-    <g transform="translate(6,0) skewX(-9)" fill="none" stroke="url(#acc)" stroke-width="34"
+  <g transform="translate(92,168) scale(0.46)">
+    <rect x="2" y="2" width="252" height="252" rx="58" fill="url(#badge)" stroke="#2b2e34" stroke-width="2"/>
+    <rect x="2" y="2" width="252" height="252" rx="58" fill="url(#sheen)"/>
+    <g transform="translate(6,0) skewX(-9)" fill="none" stroke="url(#ink)" stroke-width="34"
        stroke-linecap="round" stroke-linejoin="round">
       <polyline points="86,74 140,128 86,182"/>
       <polyline points="146,74 200,128 146,182"/>
     </g>
-    <circle cx="206" cy="196" r="15" fill="#34d399"/>
-    <circle cx="206" cy="196" r="15" fill="none" stroke="#0a1216" stroke-width="5"/>
+    <circle cx="206" cy="196" r="14" fill="#f2f3f5"/>
+    <circle cx="206" cy="196" r="14" fill="none" stroke="#0b0c0e" stroke-width="5"/>
   </g>
-  <text x="214" y="250" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="96" font-weight="800" letter-spacing="-2" font-style="italic" fill="url(#acc)">FastAgent</text>
+  <text x="240" y="270" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="94" font-weight="800" letter-spacing="-2" font-style="italic" fill="url(#word)">FastAgent</text>
 
-  <text x="94" y="312" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="38" font-weight="700" fill="#eef3f4">Vibe first. Then FastAgent.</text>
+  <text x="96" y="352" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="40" font-weight="700" fill="#f4f5f7">Vibe first. Then FastAgent.</text>
 
-  <text x="94" y="372" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="26" font-weight="400" fill="#93a7af">An agent directory becomes a live service &#8212;</text>
-  <text x="94" y="408" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="26" font-weight="400" fill="#93a7af">your app, GitHub, Telegram, or any channel.</text>
-
-  <!-- channel chips -->
-  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="21" font-weight="600">
-    <rect x="94"  y="462" width="120" height="42" rx="21" fill="#0e1c20" stroke="#1f3a3f"/>
-    <text x="154" y="489" text-anchor="middle" fill="#7fe0cf">GitHub</text>
-    <rect x="226" y="462" width="140" height="42" rx="21" fill="#0e1c20" stroke="#1f3a3f"/>
-    <text x="296" y="489" text-anchor="middle" fill="#7fe0cf">Telegram</text>
-    <rect x="378" y="462" width="140" height="42" rx="21" fill="#0e1c20" stroke="#1f3a3f"/>
-    <text x="448" y="489" text-anchor="middle" fill="#7fe0cf">HTTP / SSE</text>
-    <rect x="530" y="462" width="168" height="42" rx="21" fill="#0e1c20" stroke="#1f3a3f"/>
-    <text x="614" y="489" text-anchor="middle" fill="#5f7b83">+ your channel</text>
-  </g>
+  <text x="96" y="418" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="27" font-weight="400" fill="#868b93">An agent directory becomes a live service &#8212;</text>
+  <text x="96" y="456" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="27" font-weight="400" fill="#868b93">your app, GitHub, Telegram, or any channel.</text>
 
   <!-- directory / editor card -->
   <g>
-    <rect x="742" y="150" width="454" height="300" rx="18" fill="#0d151a" stroke="#22343c" stroke-width="1.5"/>
-    <rect x="742" y="150" width="454" height="44" rx="18" fill="#0f1e24"/>
-    <rect x="742" y="176" width="454" height="18" fill="#0f1e24"/>
-    <circle cx="770" cy="172" r="5.5" fill="#2c4a52"/>
-    <circle cx="790" cy="172" r="5.5" fill="#2c4a52"/>
-    <circle cx="810" cy="172" r="5.5" fill="#2c4a52"/>
-    <text x="836" y="178" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="19" fill="#5f757d">agent/</text>
-    <g font-family="Menlo, DejaVu Sans Mono, monospace" font-size="25">
-      <text x="770" y="242" fill="#7fe0cf">agent/</text>
-      <text x="770" y="280" fill="#8fa3ab">&#9500;&#9472; AGENTS.md</text>
-      <text x="770" y="318" fill="#8fa3ab">&#9500;&#9472; skills/</text>
-      <text x="770" y="356" fill="#8fa3ab">&#9500;&#9472; tools/</text>
-      <text x="770" y="394" fill="#8fa3ab">&#9492;&#9472; channels/</text>
-      <text x="770" y="430" fill="#34d399">$ fastagent dev</text>
+    <rect x="742" y="196" width="446" height="286" rx="18" fill="#101113" stroke="#26282e" stroke-width="1.5"/>
+    <rect x="742" y="196" width="446" height="44" rx="18" fill="#17181b"/>
+    <rect x="742" y="222" width="446" height="18" fill="#17181b"/>
+    <circle cx="770" cy="218" r="5.5" fill="#3a3d43"/>
+    <circle cx="790" cy="218" r="5.5" fill="#3a3d43"/>
+    <circle cx="810" cy="218" r="5.5" fill="#3a3d43"/>
+    <text x="836" y="224" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="19" fill="#6a6f77">agent/</text>
+    <g font-family="Menlo, DejaVu Sans Mono, monospace" font-size="24">
+      <text x="770" y="286" fill="#d7dbe1">agent/</text>
+      <text x="770" y="322" fill="#8b9098">&#9500;&#9472; AGENTS.md</text>
+      <text x="770" y="358" fill="#8b9098">&#9500;&#9472; skills/</text>
+      <text x="770" y="394" fill="#8b9098">&#9500;&#9472; tools/</text>
+      <text x="770" y="430" fill="#8b9098">&#9492;&#9472; channels/</text>
+      <text x="770" y="464" fill="#f2f3f5">$ fastagent dev</text>
     </g>
-    <circle cx="1090" cy="422" r="6" fill="#34d399"/>
-    <text x="1104" y="430" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="21" fill="#6f8a92">live</text>
+    <circle cx="1086" cy="456" r="6" fill="#f2f3f5"/>
+    <text x="1100" y="464" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="21" fill="#8b9098">live</text>
   </g>
 
   <!-- footer -->
-  <rect x="94" y="556" width="1094" height="1.5" fill="#182a30"/>
-  <text x="94" y="600" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="26" fill="#6fe3d0">$ npm i -g @kid7st/fastagent</text>
-  <text x="1188" y="600" text-anchor="end" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="23" font-weight="600" fill="#6b828a">Built on pi &#183; MIT &#183; Node &#8805; 22.19</text>
+  <rect x="96" y="556" width="1088" height="1.5" fill="#1e2126"/>
+  <text x="96" y="600" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="26" fill="#d7dbe1">$ npm i -g @kid7st/fastagent</text>
+  <text x="1184" y="600" text-anchor="end" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="23" font-weight="600" fill="#6a6f77">Built on pi &#183; MIT &#183; Node &#8805; 22.19</text>
 </svg>
