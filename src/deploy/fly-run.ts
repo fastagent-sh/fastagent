@@ -1,0 +1,206 @@
+/**
+ * `fastagent deploy fly --run` — drive flyctl to completion. The middle of the deploy (app / volume /
+ * secrets / deploy) that the plain runbook hands to the operator; `--run` executes it instead, so a
+ * coding agent runs ONE command. Idempotent (app/volume check-then-act; channel secrets come from the
+ * local env — NOT minted — so a re-run sets the same values) and resumable: it STOPS at a human gate
+ * (not logged in, a missing secret value, a taken app name) with one actionable line and a non-zero
+ * exit, so the agent clears the gate and re-runs. A `generate` channel secret absent from `.env` is a
+ * gate too (`missingSecrets`), not a silent mint — fill it in `.env` (use the random string that
+ * `add <channel>` prints).
+ *
+ * flyctl is behind the {@link FlyRunner} seam — production spawns `fly`, tests inject a fake that
+ * records the command sequence and scripts outputs. That seam is the benchmark: the agent's journey
+ * encoded as an asserted command sequence + gate behavior, validated without a real Fly account.
+ *
+ * Non-interactive incantations the agent would otherwise get wrong: `--remote-only` (build on Fly's
+ * builders — no local Docker in a sandbox), `--yes` (no prompts), `--ha=false` + the mounted volume
+ * (one machine, the single-machine tier). Secrets go in via `secrets import` over stdin, so values
+ * never land in argv/process listings.
+ */
+import { type ChannelKind, channelSetup } from "../scaffold/add-channel.ts";
+import { isEnvKey } from "./fly.ts";
+
+export interface FlyRunResult {
+  code: number;
+  /** Captured stdout, for `--json` queries; empty for streamed (inherited) commands. flyctl's stderr
+   *  is always inherited straight to the terminal, so it is not a field here. */
+  stdout: string;
+}
+
+/**
+ * The flyctl dispatcher seam. `capture` collects stdout (for `--json` queries); without it the command
+ * streams to the terminal (create/deploy) and stdout is empty. `input` is fed to stdin (secrets import).
+ */
+export type FlyRunner = (args: string[], opts?: { capture?: boolean; input?: string }) => Promise<FlyRunResult>;
+
+/**
+ * Assemble the Fly secret set from the local credential + channels — pure, so the security-sensitive
+ * key wiring is testable. The model credential travels one of two ways: an env-key auth as its own
+ * secret (value from `env`), OR an OAuth/stored login (no plaintext key) as `FASTAGENT_AUTH_SEED`
+ * (base64 auth.json) which `start` materializes on first boot. `needsModelCredential` (neither present)
+ * is a DISTINCT signal: its remediation is `fastagent login`, not the `.env` one that `missingSecrets`
+ * (real secret NAMES with no value) carries.
+ *
+ * Channel secrets come from the local env only — NEVER minted. A random mint would be wrong for a
+ * human-shared secret (github's webhook secret must match the value the operator enters in the repo,
+ * which a silent mint never surfaces) and would rotate every run (breaking idempotency). Absent →
+ * `missingSecrets`, same as the plain runbook's operator-filled placeholders.
+ */
+export function assembleFlySecrets(input: {
+  modelAuth: string | undefined;
+  authFile: Buffer | undefined;
+  channels: ChannelKind[];
+  env: NodeJS.ProcessEnv;
+}): {
+  secrets: Record<string, string>;
+  missingSecrets: string[];
+  needsModelCredential: boolean;
+} {
+  const secrets: Record<string, string> = {};
+  const missingSecrets: string[] = [];
+  let needsModelCredential = false;
+
+  if (isEnvKey(input.modelAuth)) {
+    const v = input.env[input.modelAuth];
+    if (v) secrets[input.modelAuth] = v;
+    else missingSecrets.push(input.modelAuth); // an env-key name with no value — `.env` remediation fits
+  } else if (input.authFile) {
+    secrets.FASTAGENT_AUTH_SEED = input.authFile.toString("base64");
+  } else {
+    needsModelCredential = true; // no env key, no auth.json — `fastagent login` remediation
+  }
+
+  for (const kind of input.channels) {
+    for (const e of channelSetup(kind).env) {
+      const v = input.env[e.name];
+      if (v) secrets[e.name] = v;
+      else missingSecrets.push(e.name); // operator-provided (in .env); a human-shared secret can't be minted
+    }
+  }
+  return { secrets, missingSecrets, needsModelCredential };
+}
+
+/**
+ * The bytes to seed to the auth file, or undefined to leave it alone — the pure core of `start`'s
+ * FASTAGENT_AUTH_SEED materialization. ABSENT-ONLY by design: a present file (a refreshed volume copy)
+ * is never overwritten by the stale seed, so a box that ran its own OAuth refresh is not rolled back.
+ */
+export function authSeedBytes(seed: string | undefined, fileExists: boolean): Buffer | undefined {
+  return !seed || fileExists ? undefined : Buffer.from(seed, "base64");
+}
+
+export interface FlyRunPlan {
+  appName: string;
+  region: string;
+  /** `KEY=value` secrets to set on Fly: model key (env auth) or `FASTAGENT_AUTH_SEED` (file auth) +
+   *  channel secrets. Set via stdin, never argv. */
+  secrets: Record<string, string>;
+  /** Required secret names with NO local value — the run gates on these before any side effect. */
+  missingSecrets: string[];
+  channels: ChannelKind[];
+  /** fly.toml path passed to `fly deploy -c` (relative to the run cwd = the workspace dir). */
+  flyConfig: string;
+}
+
+/** Done, or a gate the operator must clear before re-running (printed + non-zero exit by the CLI). */
+export type FlyRunOutcome = { ok: true } | { ok: false; gate: string };
+
+/** Whether a `fly … list --json` array contains an object named `name` (Fly capitalizes `Name`; accept both). */
+function listHasName(stdout: string, name: string): boolean {
+  try {
+    const arr = JSON.parse(stdout) as unknown;
+    return (
+      Array.isArray(arr) &&
+      arr.some((o) => (o as { Name?: string; name?: string }).Name === name || (o as { name?: string }).name === name)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run the deploy through `fly`. `log` reports progress; `registerTelegram(baseUrl)` performs the
+ * post-deploy webhook step (the CLI passes its telegram registrar). Every gate is fail-visible.
+ */
+export async function deployFlyRun(
+  plan: FlyRunPlan,
+  fly: FlyRunner,
+  log: (msg: string) => void,
+  registerTelegram: (baseUrl: string) => Promise<void>,
+): Promise<FlyRunOutcome> {
+  const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
+
+  // 1. Auth is the one gate a coding agent can't clear itself (browser OAuth). `whoami` succeeds with
+  //    either an interactive login or FLY_API_TOKEN, so one check covers both.
+  if ((await fly(["auth", "whoami"], { capture: true })).code !== 0) {
+    return gate("not logged in to Fly — run `fly auth login` (opens a browser), or set FLY_API_TOKEN, then re-run");
+  }
+
+  // 2. Gate missing required secret VALUES before any side effect (no half-created infra).
+  if (plan.missingSecrets.length > 0) {
+    return gate(
+      `no local value for: ${plan.missingSecrets.join(", ")} — set them in .env (or the environment) and re-run`,
+    );
+  }
+
+  // 3. App — idempotent (create only if absent; a taken global name is a gate). A FAILED list is its own
+  //    gate: inferring "absent" from an errored query would then misreport the create as a name clash.
+  const appsList = await fly(["apps", "list", "--json"], { capture: true });
+  if (appsList.code !== 0) return gate("`fly apps list` failed — see the flyctl output above; fix and re-run");
+  if (listHasName(appsList.stdout, plan.appName)) {
+    log(`app ${plan.appName} exists — skipping create`);
+  } else {
+    log(`creating app ${plan.appName}…`);
+    if ((await fly(["apps", "create", plan.appName])).code !== 0) {
+      return gate(
+        `\`fly apps create ${plan.appName}\` failed — Fly app names are globally unique and it may be taken. ` +
+          `Set a unique \`app\` in fly.toml and re-run.`,
+      );
+    }
+  }
+
+  // 4. Volume — idempotent; region comes from fly.toml (must match the machine's region). A failed list
+  //    gates for the same reason as the app list above.
+  const volList = await fly(["volumes", "list", "-a", plan.appName, "--json"], { capture: true });
+  if (volList.code !== 0) return gate("`fly volumes list` failed — see the flyctl output above; fix and re-run");
+  if (listHasName(volList.stdout, "data")) {
+    log(`volume data exists — skipping create`);
+  } else {
+    log(`creating volume data in ${plan.region}…`);
+    if (
+      (await fly(["volumes", "create", "data", "-a", plan.appName, "--region", plan.region, "--size", "1", "--yes"]))
+        .code !== 0
+    ) {
+      return gate("`fly volumes create` failed — see the flyctl output above");
+    }
+  }
+
+  // 5. Secrets — staged (no deploy yet; we deploy with fly.toml next). Values over stdin, not argv.
+  const keys = Object.keys(plan.secrets);
+  if (keys.length > 0) {
+    log(`setting ${keys.length} secret(s): ${keys.join(", ")}`);
+    const input = `${keys.map((k) => `${k}=${plan.secrets[k]}`).join("\n")}\n`;
+    if ((await fly(["secrets", "import", "--stage", "-a", plan.appName], { input })).code !== 0) {
+      return gate("`fly secrets import` failed — see the flyctl output above");
+    }
+  }
+
+  // 6. Deploy — remote builder (no local Docker), one machine.
+  log("deploying (remote build)…");
+  if (
+    (await fly(["deploy", "-a", plan.appName, "-c", plan.flyConfig, "--remote-only", "--yes", "--ha=false"])).code !== 0
+  ) {
+    return gate("`fly deploy` failed — see the flyctl output above; fix and re-run");
+  }
+
+  // 7. Post-deploy webhook — telegram end-to-end (fastagent has the token + the live URL); github is a
+  //    repo-settings step only a human can do.
+  if (plan.channels.includes("telegram")) {
+    log("registering telegram webhook…");
+    await registerTelegram(`https://${plan.appName}.fly.dev`);
+  }
+  if (plan.channels.includes("github")) {
+    log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
+  }
+  return { ok: true };
+}

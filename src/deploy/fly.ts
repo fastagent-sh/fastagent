@@ -60,7 +60,7 @@ export interface FlyPlan {
  * labels: a new non-env `AuthResult.source` (e.g. `keychain`) then degrades to guidance, never a fake
  * `keychain=<value>` secret — the two modules don't couple through an exhaustive string list.
  */
-function isEnvKey(source: string | undefined): source is string {
+export function isEnvKey(source: string | undefined): source is string {
   return source !== undefined && /^[A-Z][A-Z0-9_]*$/.test(source);
 }
 
@@ -245,6 +245,12 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
  */
 export function parseFlyAppName(toml: string): string | undefined {
   return toml.match(/^\s*app\s*=\s*["']([^"']+)["']/m)?.[1];
+}
+
+/** The `primary_region` from a fly.toml, or undefined — `--run` passes it to `fly volumes create` so the
+ *  volume lands in the machine's region (fly.toml is the single source; see {@link parseFlyAppName}). */
+export function parseFlyRegion(toml: string): string | undefined {
+  return toml.match(/^\s*primary_region\s*=\s*["']([^"']+)["']/m)?.[1];
 }
 
 /** Sanitize a directory basename into a Fly app name: lowercase, [a-z0-9-], must start with a letter. */
