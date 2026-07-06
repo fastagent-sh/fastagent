@@ -114,8 +114,8 @@ function usage(code: number): never {
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   deploy fly [dir]: generate fly.toml/Dockerfile/.dockerignore (autostop=suspend, state→volume) from
-         the definition and print an ordered flyctl runbook + the post-deploy webhook step. Does not
-         run flyctl — a coding agent (or you) executes the runbook.
+         the definition and print an ordered flyctl runbook + the post-deploy webhook step. By default
+         it prints the runbook (a coding agent or you run it); --run drives flyctl to completion.
          --run             drive flyctl to completion (idempotent, resumable): app/volume/secrets/
                            deploy + telegram webhook. Carries your local credential (env key or the
                            OAuth auth.json) to the box. Stops at a gate (fly auth login, a missing
@@ -415,11 +415,12 @@ async function runAddSkill(): Promise<void> {
 
 /**
  * `fastagent deploy <host> [dir]`: generate host artifacts from the resolved definition and print an
- * ordered flyctl runbook. Host-scoped (`fly` for now — the extension seam). It does NOT run flyctl:
- * fastagent owns the two ends it uniquely knows (definition-aware artifacts; the post-deploy webhook
- * step), and hands the middle to a coding agent (or human) as a precise, values-resolved runbook.
- * Read-only on the definition; the only writes are the generated artifacts (never clobbered without
- * --force).
+ * ordered flyctl runbook. Host-scoped (`fly` for now — the extension seam). By DEFAULT it does not run
+ * flyctl: fastagent owns the two ends it uniquely knows (definition-aware artifacts; the post-deploy
+ * webhook step) and hands the flyctl middle to a coding agent (or human) as a precise, values-resolved
+ * runbook. `--run` drives flyctl to completion instead (idempotent, resumable; see runDeployFly).
+ * Read-only on the definition; the only writes to the workspace are the generated artifacts (never
+ * clobbered without --force) — `--run` additionally executes flyctl (apps/volumes/secrets/deploy).
  */
 async function runDeploy(): Promise<void> {
   const host = positionals[1];
