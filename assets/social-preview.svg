@@ -1,52 +1,85 @@
 <svg width="1280" height="640" viewBox="0 0 1280 640" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0b1e24"/>
-      <stop offset="0.55" stop-color="#081419"/>
-      <stop offset="1" stop-color="#050d10"/>
+      <stop offset="0" stop-color="#080d12"/>
+      <stop offset="1" stop-color="#0a151a"/>
     </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#1fb6c9"/>
-      <stop offset="1" stop-color="#37d0b6"/>
+    <radialGradient id="glowE" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#10b981" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#10b981" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowI" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6366f1" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0.4">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="0.55" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#34d399"/>
     </linearGradient>
   </defs>
 
   <rect width="1280" height="640" fill="url(#bg)"/>
-  <!-- top + bottom accent rules -->
-  <rect x="0" y="0" width="1280" height="6" fill="url(#accent)"/>
-  <rect x="96" y="544" width="1088" height="1.5" fill="#1c333b"/>
+  <ellipse cx="1120" cy="90" rx="620" ry="440" fill="url(#glowE)"/>
+  <ellipse cx="140" cy="620" rx="560" ry="420" fill="url(#glowI)"/>
+  <rect x="0" y="0" width="1280" height="5" fill="url(#rule)"/>
 
-  <!-- eyebrow -->
-  <text x="98" y="150" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="24" font-weight="700" letter-spacing="6" fill="#1fb6c9">FROM A DIRECTORY TO A LIVE SERVICE</text>
+  <!-- ── left: hero ── -->
+  <text x="92" y="128" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="22" font-weight="700" letter-spacing="6" fill="#2dd4bf">POINT AT A DIRECTORY &#183; SHIP A LIVE AGENT</text>
 
-  <!-- wordmark -->
-  <text x="94" y="288" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="132" font-weight="800" fill="#f5f8f9" letter-spacing="-2">FastAgent</text>
+  <text x="88" y="256" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="104" font-weight="800" letter-spacing="-3" fill="url(#accent)">FastAgent</text>
 
-  <!-- tagline -->
-  <text x="98" y="360" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="42" font-weight="700" fill="url(#accent)">Vibe first. Then FastAgent.</text>
+  <text x="92" y="322" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="38" font-weight="700" fill="#eef3f4">Vibe first. Then FastAgent.</text>
 
-  <!-- one-liner (two lines) -->
-  <text x="98" y="436" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="31" font-weight="400" fill="#aebfc5">Turn a local agent directory (AGENTS.md + skills) into a running</text>
-  <text x="98" y="478" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="31" font-weight="400" fill="#aebfc5">service &#8212; in your app, on GitHub, in Telegram, or any channel.</text>
+  <text x="92" y="382" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="26" font-weight="400" fill="#93a7af">An agent directory becomes a live service —</text>
+  <text x="92" y="418" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="26" font-weight="400" fill="#93a7af">your app, GitHub, Telegram, or any channel.</text>
 
-  <!-- footer: install command + credit -->
-  <text x="98" y="600" font-family="Menlo, DejaVu Sans Mono, monospace"
-        font-size="27" fill="#6fe3d0">$ npm i -g @kid7st/fastagent</text>
-  <text x="1182" y="600" text-anchor="end" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
-        font-size="24" font-weight="600" fill="#7c9299">Built on pi &#183; MIT &#183; Node &#8805; 22.19</text>
-
-  <!-- decorative prompt glyph, top-right -->
-  <g transform="translate(1040,150)" opacity="0.9">
-    <rect x="0" y="0" width="150" height="112" rx="14" fill="none" stroke="#1c3b43" stroke-width="3"/>
-    <rect x="0" y="0" width="150" height="30" rx="14" fill="#0e2a31"/>
-    <circle cx="20" cy="15" r="4.5" fill="#2b4a52"/>
-    <circle cx="38" cy="15" r="4.5" fill="#2b4a52"/>
-    <circle cx="56" cy="15" r="4.5" fill="#2b4a52"/>
-    <text x="20" y="78" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="30" fill="#37d0b6">&#8250; _</text>
+  <!-- channel chips -->
+  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="21" font-weight="600">
+    <rect x="92"  y="470" width="120" height="42" rx="21" fill="#0e1c20" stroke="#1f3a3f"/>
+    <text x="152" y="497" text-anchor="middle" fill="#7fe0cf">GitHub</text>
+    <rect x="224" y="470" width="140" height="42" rx="21" fill="#0e1c20" stroke="#1f3a3f"/>
+    <text x="294" y="497" text-anchor="middle" fill="#7fe0cf">Telegram</text>
+    <rect x="376" y="470" width="140" height="42" rx="21" fill="#0e1c20" stroke="#1f3a3f"/>
+    <text x="446" y="497" text-anchor="middle" fill="#7fe0cf">HTTP / SSE</text>
+    <rect x="528" y="470" width="168" height="42" rx="21" fill="#0e1c20" stroke="#1f3a3f"/>
+    <text x="612" y="497" text-anchor="middle" fill="#5f7b83">+ your channel</text>
   </g>
+
+  <!-- ── right: editor / directory card ── -->
+  <g>
+    <rect x="742" y="150" width="454" height="300" rx="18" fill="#0d151a" stroke="#22343c" stroke-width="1.5"/>
+    <rect x="742" y="150" width="454" height="44" rx="18" fill="#0f1e24"/>
+    <rect x="742" y="176" width="454" height="18" fill="#0f1e24"/>
+    <circle cx="770" cy="172" r="5.5" fill="#2c4a52"/>
+    <circle cx="790" cy="172" r="5.5" fill="#2c4a52"/>
+    <circle cx="810" cy="172" r="5.5" fill="#2c4a52"/>
+    <text x="836" y="178" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="19" fill="#5f757d">agent/</text>
+
+    <g font-family="Menlo, DejaVu Sans Mono, monospace" font-size="25">
+      <text x="770" y="242" fill="#7fe0cf">agent/</text>
+      <text x="770" y="280" fill="#8fa3ab">&#9500;&#9472; AGENTS.md</text>
+      <text x="770" y="318" fill="#8fa3ab">&#9500;&#9472; skills/</text>
+      <text x="770" y="356" fill="#8fa3ab">&#9500;&#9472; tools/</text>
+      <text x="770" y="394" fill="#8fa3ab">&#9492;&#9472; channels/</text>
+      <text x="770" y="430" fill="#34d399">$ fastagent dev</text>
+    </g>
+    <circle cx="1090" cy="422" r="6" fill="#34d399"/>
+    <text x="1104" y="430" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="21" fill="#6f8a92">live</text>
+  </g>
+
+  <!-- ── footer ── -->
+  <rect x="92" y="556" width="1096" height="1.5" fill="#182a30"/>
+  <text x="92" y="600" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="26" fill="#6fe3d0">$ npm i -g @kid7st/fastagent</text>
+  <text x="1188" y="600" text-anchor="end" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="23" font-weight="600" fill="#6b828a">Built on pi &#183; MIT &#183; Node &#8805; 22.19</text>
 </svg>
