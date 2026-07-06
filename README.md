@@ -1,4 +1,6 @@
-# FastAgent
+<p align="center">
+  <a href="https://github.com/kid7st/fastagent"><img src="https://raw.githubusercontent.com/kid7st/fastagent/main/assets/hero.png" alt="FastAgent — Vibe first. Then FastAgent. An agent directory becomes a live service in your app, on GitHub, in Telegram, or any channel." width="860"></a>
+</p>
 
 [![CI](https://github.com/kid7st/fastagent/actions/workflows/ci.yml/badge.svg)](https://github.com/kid7st/fastagent/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@kid7st/fastagent.svg)](https://www.npmjs.com/package/@kid7st/fastagent)
@@ -12,7 +14,7 @@
   <sub>— the agent harness &amp; multi-provider LLM API under the hood</sub>
 </p>
 
-**Vibe first. Then FastAgent.** Any directory can become a live agent service. FastAgent takes your local agent directory out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
+Any directory can become a live agent service. FastAgent takes your local agent directory out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
 
 Leave the terminal. Become a real service.
 
