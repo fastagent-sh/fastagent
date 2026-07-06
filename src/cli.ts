@@ -126,6 +126,10 @@ function usage(code: number): never {
                            credential (env key or the OAuth auth.json) to the box. Stops at a gate (not
                            logged in, a missing secret) with one actionable line; needs flyctl / the
                            railway CLI. Without it: prints the runbook.
+         --into-linked     (railway --run) provision INTO the project this dir is already linked to (skip
+                           create). By default --run only creates on an unlinked dir and refuses a
+                           pre-existing link (could be unrelated/production) — this is the explicit opt-in.
+                           A routine redeploy of an already-provisioned agent is just 'railway up'.
          --stop            (fly only) autostop by stopping (cold start) instead of suspending (fast resume)
          --no-scale-to-zero (fly only) keep one machine running when idle (min_machines_running=1)
          --force           overwrite existing host config/Dockerfile/.dockerignore (else kept)
@@ -153,6 +157,7 @@ const { positionals, values } = parseArgs({
     stop: { type: "boolean" },
     "no-scale-to-zero": { type: "boolean" },
     run: { type: "boolean" },
+    "into-linked": { type: "boolean" },
     json: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean", short: "v" },
@@ -528,6 +533,11 @@ async function runDeploy(): Promise<void> {
   }
 
   // host === "fly".
+  if (values["into-linked"]) {
+    console.error(
+      `[fastagent] warn: --into-linked is railway-only (fly --run is idempotent — it reuses an existing app/volume)`,
+    );
+  }
   // The replay floor that makes scale-to-zero safe is Telegram-only (its L1 turn store). GitHub turns
   // are fire-and-forget (no replay), so the generated fly.toml keeps one machine running for them —
   // a note, not a warn, since the plan already did the safe thing (definition-aware autostop).
@@ -693,7 +703,7 @@ async function runDeployRailway(
   }
 
   const outcome = await deployRailwayRun(
-    { name, mountPath: "/data", secrets, missingSecrets, channels },
+    { name, mountPath: "/data", secrets, missingSecrets, channels, intoLinked: !!values["into-linked"] },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
