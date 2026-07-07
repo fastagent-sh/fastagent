@@ -8,7 +8,7 @@
  * gate too (`missingSecrets`), not a silent mint — fill it in `.env` (use the random string that
  * `add <channel>` prints).
  *
- * flyctl is behind the {@link FlyRunner} seam — production spawns `fly`, tests inject a fake that
+ * flyctl is behind the shared {@link CliRunner} seam — production spawns `fly`, tests inject a fake that
  * records the command sequence and scripts outputs. That seam is the benchmark: the agent's journey
  * encoded as an asserted command sequence + gate behavior, validated without a real Fly account.
  *
@@ -17,20 +17,8 @@
  * (one machine, the single-machine tier). Secrets go in via `secrets import` over stdin, so values
  * never land in argv/process listings.
  */
-import type { ChannelKind } from "../scaffold/add-channel.ts";
-
-export interface FlyRunResult {
-  code: number;
-  /** Captured stdout, for `--json` queries; empty for streamed (inherited) commands. flyctl's stderr
-   *  is always inherited straight to the terminal, so it is not a field here. */
-  stdout: string;
-}
-
-/**
- * The flyctl dispatcher seam. `capture` collects stdout (for `--json` queries); without it the command
- * streams to the terminal (create/deploy) and stdout is empty. `input` is fed to stdin (secrets import).
- */
-export type FlyRunner = (args: string[], opts?: { capture?: boolean; input?: string }) => Promise<FlyRunResult>;
+import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import type { CliRunner } from "../runner.ts";
 
 /**
  * The bytes to seed to the auth file, or undefined to leave it alone — the pure core of `start`'s
@@ -76,7 +64,7 @@ function listHasName(stdout: string, name: string): boolean {
  */
 export async function deployFlyRun(
   plan: FlyRunPlan,
-  fly: FlyRunner,
+  fly: CliRunner,
   log: (msg: string) => void,
   registerTelegram: (baseUrl: string) => Promise<void>,
 ): Promise<FlyRunOutcome> {

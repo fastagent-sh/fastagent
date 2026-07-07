@@ -16,9 +16,9 @@
  * snapshot is discarded replays on the next start (the Telegram L1 turn store) — at-least-once, the
  * documented floor. State on the /data volume survives stop/suspend on the same machine.
  */
-import type { ChannelKind } from "../scaffold/add-channel.ts";
-import { type Artifact, type ContainerInput, containerArtifacts } from "./container.ts";
-import { isEnvKey, requiredSecrets } from "./secrets.ts";
+import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { isEnvKey, requiredSecrets } from "../secrets.ts";
 
 export interface FlyPlanInput extends ContainerInput {
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from
@@ -197,22 +197,6 @@ export function parseFlyAppName(toml: string): string | undefined {
  *  volume lands in the machine's region (fly.toml is the single source; see {@link parseFlyAppName}). */
 export function parseFlyRegion(toml: string): string | undefined {
   return toml.match(/^\s*primary_region\s*=\s*["']([^"']+)["']/m)?.[1];
-}
-
-/**
- * Why the resolved model won't reach the deployed box, or undefined if it will. `fastagent.config.ts`
- * is the model's committed home (config's charter: model / tools / http) and the only source deploy
- * ships — a `--model`/`FASTAGENT_MODEL`/`.env` value is builder-local and doesn't travel (`.env` is
- * dockerignored), so a model NOT in config crash-loops the box with "missing model". The CLI warns
- * (runbook) or gates (`--run`). Single source on purpose: fly.toml `[env]` is NOT advertised as a
- * second home (it would contradict this check and split the source, like the app/region single-source).
- */
-export function modelTravelIssue(configModel: string | undefined, modelSpec: string | undefined): string | undefined {
-  if (configModel) return undefined;
-  return modelSpec
-    ? `model "${modelSpec}" is set via --model/FASTAGENT_MODEL, not fastagent.config.ts — it won't reach ` +
-        `the deployed box. Add \`model: "${modelSpec}"\` to fastagent.config.ts.`
-    : `no model in fastagent.config.ts — the deployed box can't resolve one. Add \`model: "provider/id"\`.`;
 }
 
 /** Sanitize a directory basename into a Fly app name: lowercase, [a-z0-9-], must start with a letter. */

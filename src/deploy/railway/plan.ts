@@ -21,9 +21,9 @@
  * the required-secret list. `railway.json`'s `healthcheckPath=/health` also fixes the "routed before the
  * server is listening" boot race Fly's deploy hit — Railway only routes once /health passes.
  */
-import type { ChannelKind } from "../scaffold/add-channel.ts";
-import { type Artifact, type ContainerInput, containerArtifacts } from "./container.ts";
-import { isEnvKey, requiredSecrets } from "./secrets.ts";
+import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { isEnvKey, requiredSecrets } from "../secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
   // No `port`: Railway injects PORT and the container CMD/railway.json never name one (unlike Fly's

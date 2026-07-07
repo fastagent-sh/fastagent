@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { modelTravelIssue, parseFlyAppName, planFlyDeploy, toFlyAppName } from "../src/deploy/fly.ts";
+import { parseFlyAppName, planFlyDeploy, toFlyAppName } from "../src/deploy/fly/plan.ts";
+import { modelTravelIssue } from "../src/deploy/preflight.ts";
 
 const flyToml = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "fly.toml")!.content;
 const dockerfile = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "Dockerfile")!.content;

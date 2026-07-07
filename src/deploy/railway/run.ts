@@ -2,7 +2,7 @@
  * `fastagent deploy railway --run` — drive the Railway CLI to completion. The middle of the deploy the
  * plain runbook hands to the operator; `--run` executes it so a coding agent runs ONE command.
  *
- * Railway's model forces differences from the Fly runner (fly-run.ts), all validated against CLI 5.15.0:
+ * Railway's model forces differences from the Fly runner (fly/run.ts), all validated against CLI 5.15.0:
  *
  *  - **`--run` PROVISIONS a project and only runs on an UNLINKED directory** — so it can never deploy
  *    into a project it didn't create. `railway init` isn't check-then-act (it ALWAYS makes a new project)
@@ -23,19 +23,8 @@
  * no bulk stdin import like Fly's `secrets import`). Auth needs an ACCOUNT credential (login or
  * `RAILWAY_API_KEY`), not a project token: `init` creates a project that a project token can't predate.
  */
-import type { ChannelKind } from "../scaffold/add-channel.ts";
-
-export interface RailwayRunResult {
-  code: number;
-  /** Captured stdout, for `--json` queries; empty for streamed (inherited) commands. */
-  stdout: string;
-}
-
-/**
- * The `railway` dispatcher seam. `capture` collects stdout (for `--json` queries); without it the command
- * streams to the terminal (up/deploy) and stdout is empty. `input` is fed to stdin (a secret value).
- */
-export type RailwayRunner = (args: string[], opts?: { capture?: boolean; input?: string }) => Promise<RailwayRunResult>;
+import type { ChannelKind } from "../../scaffold/add-channel.ts";
+import type { CliRunner } from "../runner.ts";
 
 export interface RailwayRunPlan {
   /** Names both the project (`railway init --name`) and the service (`railway add --service`). Railway
@@ -129,7 +118,7 @@ export function parseHasVolume(stdout: string, mountPath: string): boolean {
  */
 export async function deployRailwayRun(
   plan: RailwayRunPlan,
-  railway: RailwayRunner,
+  railway: CliRunner,
   log: (msg: string) => void,
   registerTelegram: (baseUrl: string) => Promise<void>,
 ): Promise<RailwayRunOutcome> {
