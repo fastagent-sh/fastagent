@@ -36,6 +36,7 @@ import {
   WORKSPACE_CONFIG_NAMES,
 } from "./engines/pi/config.ts";
 import { formatModelsCommand } from "./cli-models.ts";
+import { formatAuthReport } from "./cli-auth.ts";
 import { fastagentCredentialStore } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { configuredModelSpecs, createPiModels, probeAuthSource } from "./engines/pi/models.ts";
@@ -903,28 +904,17 @@ function parsePort(value: string | undefined, source: string): number | undefine
 async function reportAuth(modelSpec: string, authPath: string): Promise<void> {
   const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
   const source = await probeAuthSource(createPiModels({ authPath }), modelSpec);
-  if (source !== undefined) {
-    log.info(`[fastagent] auth:   ${source} (${provider}) — ${authPath}`);
-    return;
-  }
-  // A `source` of undefined has TWO causes probeAuthSource can't tell apart (it swallows the throw): no
-  // credential at all, OR one that IS stored but couldn't be made usable — an expired/revoked OAuth whose
-  // refresh failed. Read the store WITHOUT triggering a refresh to distinguish them, so neither the status
-  // line nor the hint says "(none found)" when a login is merely stale (the actual failure would then be a
-  // contradictory "OAuth refresh failed"). Lead with `fastagent login` — it covers every provider (incl.
-  // OAuth-only ones) and writes this same path, fixing it in place.
-  const stored = await fastagentCredentialStore(authPath)
-    .read(provider)
-    .catch(() => undefined);
-  if (stored) {
-    log.info(`[fastagent] auth:   stored ${provider} ${stored.type}, expired/unusable — ${authPath}`);
-    log.warn(`[fastagent] the "${provider}" login is expired or unusable — run \`fastagent login\` to refresh it`);
-  } else {
-    log.info(`[fastagent] auth:   (none found) — ${authPath}`);
-    log.warn(
-      `[fastagent] no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
-    );
-  }
+  // Only when nothing satisfies auth do we read the store (refresh-FREE) to tell "nothing stored" from
+  // "stored but unusable" — see formatAuthReport for why. store.read warns on a corrupt file itself.
+  const stored =
+    source === undefined
+      ? await fastagentCredentialStore(authPath)
+          .read(provider)
+          .catch(() => undefined)
+      : undefined;
+  const report = formatAuthReport(provider, authPath, source, stored);
+  log.info(`[fastagent] ${report.line}`);
+  if (report.warn) log.warn(`[fastagent] ${report.warn}`);
 }
 
 /** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
