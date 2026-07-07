@@ -22,10 +22,10 @@
  * server is listening" boot race Fly's deploy hit — Railway only routes once /health passes.
  */
 import type { ChannelKind } from "../scaffold/add-channel.ts";
-import { type Artifact, containerArtifacts } from "./container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts } from "./container.ts";
 import { isEnvKey, requiredSecrets } from "./secrets.ts";
 
-export interface RailwayPlanInput {
+export interface RailwayPlanInput extends ContainerInput {
   // No `port`: Railway injects PORT and the container CMD/railway.json never name one (unlike Fly's
   // internal_port) — the server binds $PORT at runtime. Nothing here would use it.
   /** The service name to create (`railway add --service`). Railway service names are project-scoped, not
@@ -35,11 +35,8 @@ export interface RailwayPlanInput {
   modelAuth: string | undefined;
   /** Channels discovered in the workspace — each contributes its required secrets + webhook step. */
   channels: ChannelKind[];
-  hasPackageJson: boolean;
-  hasLockfile: boolean;
-  version: string;
-  /** Extra apt packages for the image (fastagent.config deploy.apt). */
-  apt?: string[];
+  // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from
+  // ContainerInput — ONE source, so the plan and the generated Dockerfile can't drift.
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
   extraSecrets?: string[];
 }

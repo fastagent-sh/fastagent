@@ -17,10 +17,12 @@
  * documented floor. State on the /data volume survives stop/suspend on the same machine.
  */
 import type { ChannelKind } from "../scaffold/add-channel.ts";
-import { type Artifact, containerArtifacts } from "./container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts } from "./container.ts";
 import { isEnvKey, requiredSecrets } from "./secrets.ts";
 
-export interface FlyPlanInput {
+export interface FlyPlanInput extends ContainerInput {
+  // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from
+  // ContainerInput — ONE source, so the plan and the generated Dockerfile can't drift.
   /** Fly app name — globally unique, lowercase; the CLI sanitizes it from the dir basename. */
   appName: string;
   /** The port the app listens on (config.http.port ?? 8787); fly.toml routes to it. */
@@ -32,14 +34,6 @@ export interface FlyPlanInput {
   modelAuth: string | undefined;
   /** Channels discovered in the workspace — each contributes its required secrets + webhook step. */
   channels: ChannelKind[];
-  /** Whether the workspace has a package.json (a code workspace); else a pure markdown/skills agent. */
-  hasPackageJson: boolean;
-  /** Whether a package-lock.json exists — `npm ci` needs it; without it the Dockerfile uses `npm install`. */
-  hasLockfile: boolean;
-  /** This fastagent version, to PIN the global install on the markdown path (reproducible redeploys). */
-  version: string;
-  /** Extra apt packages for the image (fastagent.config deploy.apt). */
-  apt?: string[];
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
   extraSecrets?: string[];
   /** `auto_stop_machines` — `"suspend"` (default, fast resume) or `"stop"` (cold start). CLI `--stop`. */

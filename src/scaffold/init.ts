@@ -12,8 +12,9 @@
  * Sibling scaffold modules: add-channel.ts (`add <channel>`), vendor-skill.ts (`add skill`). The files
  * this module writes are real templates under templates/, read through templates.ts.
  */
-import { access, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { access, appendFile, lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { detectRuntime } from "../runtime.ts";
 import { loadRootIgnore } from "../workspace.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
@@ -59,6 +60,65 @@ export async function exists(p: string): Promise<boolean> {
     () => true,
     () => false,
   );
+}
+
+export interface AdoptResult {
+  dir: string;
+  /** Files created by adopt (fastagent.config.mjs, and .gitignore if there was none). */
+  created: string[];
+  /** Files appended to (.gitignore, to exclude secrets/state). */
+  patched: string[];
+  /** The workspace's JS runtime — drives the dep-install hint (bun add vs npm install). */
+  runtime: "node" | "bun";
+  /** Whether a package.json is present (a channel needs one). */
+  hasPackageJson: boolean;
+  /** Whether @kid7st/fastagent is already a dependency (a channel imports it). */
+  hasFastagentDep: boolean;
+}
+
+/**
+ * ADOPT an existing repo (it already has AGENTS.md) into a fastagent workspace, instead of refusing it.
+ * This is the B-mode on-ramp: the repo IS the agent, so adopt adds ONLY the missing fastagent piece —
+ * `fastagent.config.mjs` — and makes secrets safe (.gitignore excludes `.env`/`.fastagent`). It never
+ * writes or clobbers AGENTS.md / skills / tools (the repo's own), and never hand-edits package.json (the
+ * package manager owns the lockfile — the caller PRINTS the right `bun add`/`npm install` for {@link
+ * AdoptResult.runtime} instead). Precondition (caller-checked): AGENTS.md present, no fastagent.config.*.
+ */
+export async function adoptWorkspace(dir: string): Promise<AdoptResult> {
+  const created: string[] = [];
+  const patched: string[] = [];
+
+  // The one missing piece for an existing-AGENTS.md repo: the config (model + deploy knobs).
+  await writeFile(join(dir, "fastagent.config.mjs"), baseTemplate("fastagent.config.mjs"), { flag: "wx" });
+  created.push("fastagent.config.mjs");
+
+  // Secrets/state must not ship in a deploy copy: ensure .gitignore excludes .env and .fastagent.
+  const rootIgnore = await loadRootIgnore(dir);
+  const need = [".env", ".fastagent"].filter((p) => !rootIgnore?.ignores(p));
+  if (need.length > 0) {
+    const gitignore = join(dir, ".gitignore");
+    const had = await exists(gitignore);
+    await appendFile(gitignore, `${had ? "\n" : ""}# fastagent\n${need.join("\n")}\n`);
+    (had ? patched : created).push(".gitignore");
+  }
+
+  // Runtime + dep status for the caller's next-steps (adopt guides; it does not touch package.json).
+  const hasPackageJson = await exists(join(dir, "package.json"));
+  let pkg: {
+    packageManager?: unknown;
+    dependencies?: Record<string, unknown>;
+    devDependencies?: Record<string, unknown>;
+  } = {};
+  if (hasPackageJson) {
+    try {
+      pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
+    } catch {
+      /* malformed — the runtime hint degrades to node; the user's build would surface the real error */
+    }
+  }
+  const { runtime } = detectRuntime(dir, pkg);
+  const hasFastagentDep = "@kid7st/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies };
+  return { dir, created, patched, runtime, hasPackageJson, hasFastagentDep };
 }
 
 /**

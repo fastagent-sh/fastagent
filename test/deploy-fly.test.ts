@@ -10,6 +10,7 @@ const base = {
   appName: "bot",
   port: 8787,
   hasPackageJson: true,
+  runtime: "node",
   hasLockfile: true,
   version: "9.9.9",
   autostop: "suspend",
@@ -88,10 +89,26 @@ describe("deploy/fly: planFlyDeploy", () => {
   });
 
   it("falls back to npm install when a code workspace has no lockfile (npm ci would hard-fail)", () => {
-    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasLockfile: false }))).toContain(
-      "npm install --omit=dev",
+    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasLockfile: false }))).toMatch(
+      /RUN npm install\n/, // no lockfile → npm install; all deps (no --omit=dev — the agent needs its toolchain)
     );
-    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).toContain("npm ci --omit=dev");
+    expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).toMatch(/RUN npm ci\n/);
+  });
+
+  it("generates a Bun Dockerfile for a bun workspace (oven/bun base, bun install, bunx)", () => {
+    const bun = dockerfile(
+      planFlyDeploy({ ...base, modelAuth: undefined, channels: [], runtime: "bun", bunVersion: "1.3.13" }),
+    );
+    expect(bun).toContain("FROM oven/bun:1.3.13");
+    expect(bun).toContain("bun install --frozen-lockfile"); // base.hasLockfile: true → frozen
+    expect(bun).toContain('CMD ["bunx", "fastagent", "start", "/app"]');
+    expect(bun).not.toContain("node:22-slim");
+    // Unpinned bun (a bun lockfile but no packageManager version) → oven/bun:1; no lockfile → plain install.
+    const unpinned = dockerfile(
+      planFlyDeploy({ ...base, modelAuth: undefined, channels: [], runtime: "bun", hasLockfile: false }),
+    );
+    expect(unpinned).toContain("FROM oven/bun:1\n");
+    expect(unpinned).toMatch(/RUN bun install\n/); // no --frozen-lockfile without a lockfile
   });
 
   it("flags a model that won't travel — config.model is the deployed box's only source", () => {

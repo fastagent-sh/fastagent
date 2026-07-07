@@ -6,6 +6,7 @@
  */
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { detectRuntime } from "../runtime.ts";
 import { assertInsideWorkspace } from "../workspace.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
@@ -137,7 +138,7 @@ export async function assertChannelReady(dir: string): Promise<void> {
     }
     throw e;
   }
-  let pkg: { type?: string; dependencies?: Record<string, string> };
+  let pkg: { type?: string; packageManager?: unknown; dependencies?: Record<string, string> };
   try {
     pkg = JSON.parse(raw);
   } catch {
@@ -147,8 +148,8 @@ export async function assertChannelReady(dir: string): Promise<void> {
     throw new Error(`${pkgPath}: fastagent channels are ESM — set "type": "module"`);
   }
   if (typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string") {
-    throw new Error(
-      `${pkgPath}: add "@kid7st/fastagent" to dependencies (then \`npm install\`) — the channel file imports it`,
-    );
+    const add =
+      detectRuntime(dir, pkg).runtime === "bun" ? "bun add @kid7st/fastagent" : "npm install @kid7st/fastagent";
+    throw new Error(`${pkgPath}: @kid7st/fastagent is not a dependency — run \`${add}\` (the channel file imports it)`);
   }
 }

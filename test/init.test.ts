@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromWorkspace } from "../src/index.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
-import { scaffoldWorkspace } from "../src/scaffold/init.ts";
+import { adoptWorkspace, scaffoldWorkspace } from "../src/scaffold/init.ts";
 import { nextStepCd } from "../src/scaffold/init.ts";
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
 
@@ -168,6 +168,64 @@ describe("init: scaffoldWorkspace", () => {
     await expect(scaffoldWorkspace(dir2)).rejects.toThrow(/already has fastagent\.config\.ts/);
   });
 
+  it("adopts an existing repo (AGENTS.md, no config): adds config + secret-safe .gitignore, keeps the repo's files, bun-aware", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, "AGENTS.md"), "# My real agent\n"); // the repo IS the agent
+    await writeFile(join(dir, "package.json"), `{"type":"module","packageManager":"bun@1.3.13","dependencies":{}}`);
+    await writeFile(join(dir, ".gitignore"), "dist/\n"); // pre-existing, without .env
+
+    const r = await adoptWorkspace(dir);
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("# My real agent\n"); // NEVER touched
+    expect(await exists(join(dir, "fastagent.config.mjs"))).toBe(true); // the one missing piece
+    expect(r.created).toContain("fastagent.config.mjs");
+    const gitignore = await readFile(join(dir, ".gitignore"), "utf8");
+    expect(gitignore).toContain("dist/"); // kept
+    expect(gitignore).toMatch(/^\.env$/m); // secrets now excluded
+    expect(gitignore).toMatch(/^\.fastagent$/m);
+    expect(r.runtime).toBe("bun"); // drives the `bun add` hint the CLI prints
+    expect(r.hasFastagentDep).toBe(false);
+    // No example skill/tool/package.json written — adopt adds only what's missing, not a scaffold.
+    expect(await exists(join(dir, "tools"))).toBe(false);
+    expect(await exists(join(dir, "skills"))).toBe(false);
+  });
+
+  it("adopt's secret-safe .gitignore: creates one when absent, skips when .env is already ignored", async () => {
+    // No .gitignore → adopt CREATES it (the `created` branch) so the secret-safe invariant still holds.
+    const none = await freshDir();
+    await writeFile(join(none, "AGENTS.md"), "# a\n");
+    const r1 = await adoptWorkspace(none);
+    expect(r1.created).toContain(".gitignore");
+    expect(await readFile(join(none, ".gitignore"), "utf8")).toMatch(/^\.env$/m);
+
+    // .env already ignored → adopt neither creates nor patches (no duplicate line).
+    const covered = await freshDir();
+    await writeFile(join(covered, "AGENTS.md"), "# a\n");
+    await writeFile(join(covered, ".gitignore"), ".env\n.fastagent\n");
+    const r2 = await adoptWorkspace(covered);
+    expect([...r2.created, ...r2.patched]).not.toContain(".gitignore");
+    expect((await readFile(join(covered, ".gitignore"), "utf8")).match(/^\.env$/gm)).toHaveLength(1);
+  });
+
+  it("`init` ROUTES to adopt vs scaffold vs refuse by what's already there", async () => {
+    // AGENTS.md, no config → ADOPT (not scaffold: keeps AGENTS.md, writes NO example skill).
+    const repo = await freshDir();
+    await writeFile(join(repo, "AGENTS.md"), "# My real agent\n");
+    const adopt = await cliInit(["init"], repo);
+    expect(adopt).toMatch(/adopted/);
+    expect(await readFile(join(repo, "AGENTS.md"), "utf8")).toBe("# My real agent\n");
+    expect(await exists(join(repo, "skills"))).toBe(false); // scaffold would have written the example skill
+
+    // Fresh dir → SCAFFOLD (writes AGENTS.md + the example skill).
+    const fresh = await cliInit(["init", "--no-install"], await freshDir());
+    expect(fresh).toMatch(/initialized/);
+
+    // AGENTS.md + a config → already a workspace → REFUSE (adopt only fires when there's no config).
+    const done = await freshDir();
+    await writeFile(join(done, "AGENTS.md"), "# x\n");
+    await writeFile(join(done, "fastagent.config.mjs"), "export default {};\n");
+    expect(await cliInit(["init"], done)).toMatch(/already has .*refuses to overwrite/);
+  });
+
   it("prints a `cd <dir>` step for a named target so the dev/.env/config steps are correct", async () => {
     const base = await freshDir();
     // init into a subdir from `base` as cwd: the next steps must lead with `cd my-agent`.
@@ -317,7 +375,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
           await writeFile(join(d, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
           return d;
         },
-        /@kid7st\/fastagent.*dependencies/, // ESM but missing the dep
+        /@kid7st\/fastagent is not a dependency.*npm install/, // ESM but missing the dep (node → npm hint)
       ],
     ];
     for (const [make, msg] of cases) {

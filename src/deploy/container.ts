@@ -26,8 +26,14 @@ export function isGeneratedDockerfile(content: string): boolean {
 export interface ContainerInput {
   /** Whether the workspace has a package.json (a code workspace); else a pure markdown/skills agent. */
   hasPackageJson: boolean;
-  /** Whether a package-lock.json exists — `npm ci` needs it; without it the Dockerfile uses `npm install`. */
+  /** The package manager the generated image targets: `bun` (packageManager: bun / a bun lockfile) gets an
+   *  `oven/bun` base + `bun install` + `bunx fastagent`; otherwise npm on `node:22-slim`. */
+  runtime: "node" | "bun";
+  /** Whether the runtime's lockfile exists (package-lock.json for npm, bun.lock/bun.lockb for bun) — a
+   *  frozen/ci install needs it; without it the build resolves versions at build time (not reproducible). */
   hasLockfile: boolean;
+  /** For `runtime: "bun"`, the `FROM oven/bun:<tag>` version (from packageManager `bun@x`), else `"1"`. */
+  bunVersion?: string;
   /** This fastagent version, to PIN the global install on the markdown path (reproducible redeploys). */
   version: string;
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
@@ -45,24 +51,42 @@ function dockerfile(input: ContainerInput): string {
  && rm -rf /var/lib/apt/lists/*
 `
       : "";
+  const isBun = input.runtime === "bun";
+  const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : "node:22-slim";
+  const note = isBun
+    ? "# Bun-based (packageManager: bun / a bun lockfile detected). fastagent runs under Bun (bunx)."
+    : "# npm-based — for pnpm/yarn, adapt the install line + the lockfile COPY (corepack enable, etc.).";
   const head = `${GENERATED_DOCKERFILE_MARKER}. The directory IS the agent — no build step.
-# npm-based — for pnpm/yarn, adapt the install line + the lockfile COPY (corepack enable, etc.).
-FROM node:22-slim
+${note}
+FROM ${base}
 ${apt}WORKDIR /app
 `;
   // No package.json → pure markdown/skills agent: install the CLI globally, PINNED for reproducible
-  // redeploys (the code path is pinned by its lockfile; this path has no other lock).
+  // redeploys (a markdown agent has no packageManager, so this is always the Node/npm path).
   if (!input.hasPackageJson) {
     return `${head}RUN npm i -g @kid7st/fastagent@${input.version}
 COPY . .
 CMD ["fastagent", "start", "/app"]
 `;
   }
+  // Install ALL deps (no --omit=dev / --production): a repo-as-agent (e.g. an Astro site it operates on)
+  // needs its full toolchain — the build/check tools that live in devDependencies — to do its work, and
+  // we can't tell a repo-as-agent from a purpose-built workspace, so the safe default keeps everything.
+  if (isBun) {
+    // `--frozen-lockfile` needs bun.lock and hard-fails without it; fall back to a plain `bun install`
+    // (resolves at build time — not reproducible; the CLI warns to commit the lockfile).
+    const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
+    return `${head}COPY package.json bun.lock* ./
+RUN ${install}
+COPY . .
+CMD ["bunx", "fastagent", "start", "/app"]
+`;
+  }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` workspace);
   // fall back to `npm install` when there is none so the build never breaks. Caveat: `npm install`
   // resolves caret ranges at build time, so THIS branch is NOT reproducible — unlike the pinned
   // `npm ci` (lockfile) and pinned global (markdown) paths. The CLI warns to commit a lockfile.
-  const install = input.hasLockfile ? "npm ci --omit=dev" : "npm install --omit=dev";
+  const install = input.hasLockfile ? "npm ci" : "npm install";
   return `${head}COPY package.json package-lock.json* ./
 RUN ${install}
 COPY . .

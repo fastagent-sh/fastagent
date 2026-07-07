@@ -77,6 +77,7 @@ describe("cli papercuts", () => {
     // An up-to-date generated Dockerfile (built with the SAME inputs deploy uses) → kept quietly, no stale flag.
     const current = containerArtifacts({
       hasPackageJson: false,
+      runtime: "node",
       hasLockfile: false,
       version: await fastagentVersion(),
       apt: ["git"],

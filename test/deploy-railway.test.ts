@@ -5,7 +5,13 @@ const json = (p: ReturnType<typeof planRailwayDeploy>) => p.artifacts.find((a) =
 const runbook = (p: ReturnType<typeof planRailwayDeploy>) => p.runbook.join("\n");
 
 /** Defaults for the fields a test doesn't care about (a code workspace with a lockfile). */
-const base = { serviceName: "bot", hasPackageJson: true, hasLockfile: true, version: "9.9.9" } as const;
+const base = {
+  serviceName: "bot",
+  hasPackageJson: true,
+  runtime: "node",
+  hasLockfile: true,
+  version: "9.9.9",
+} as const;
 
 describe("deploy/railway: planRailwayDeploy", () => {
   it("generates a thin railway.json — build from Dockerfile, healthcheck /health (no boot-race routing)", () => {

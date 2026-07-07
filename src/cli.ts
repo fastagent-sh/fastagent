@@ -20,6 +20,7 @@ import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { runDevSupervisor } from "./dev-supervisor.ts";
 import { announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 import { discoverChannelFiles, loadChannels } from "./engines/pi/channel.ts";
+import { detectRuntime } from "./runtime.ts";
 import { fastagentVersion } from "./version.ts";
 import {
   defaultAuthPath,
@@ -51,7 +52,7 @@ import {
   channelSetup,
   scaffoldChannel,
 } from "./scaffold/add-channel.ts";
-import { exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
+import { adoptWorkspace, exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
 import { isGeneratedDockerfile } from "./deploy/container.ts";
 import { modelTravelIssue, parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
@@ -332,6 +333,12 @@ async function runInfo(): Promise<void> {
 }
 
 async function runInit(): Promise<void> {
+  // An existing repo (AGENTS.md) with no fastagent.config → ADOPT it (the B-mode on-ramp), don't refuse:
+  // the repo IS the agent, so add the missing config + guide, keeping AGENTS.md/skills/tools untouched.
+  const configNames = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"];
+  const hasConfig = (await Promise.all(configNames.map((n) => exists(join(dir, n))))).some(Boolean);
+  if (!hasConfig && (await exists(join(dir, "AGENTS.md")))) return runAdopt();
+
   const minimal = values.minimal ?? false;
   const { complete, created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir, { minimal }).catch(
     failStartup,
@@ -364,6 +371,28 @@ async function runInit(): Promise<void> {
   console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
 }
 
+/** `fastagent init` on an existing AGENTS.md repo: adopt it (add config + guide), keeping its own files. */
+async function runAdopt(): Promise<void> {
+  const r = await adoptWorkspace(dir).catch(failStartup);
+  console.error(`[fastagent] adopted ${dir} — kept your AGENTS.md`);
+  // --minimal shapes a fresh scaffold; adopt writes only the missing config, so it has no effect here.
+  // Say so rather than silently ignore the flag (the user may think they got a minimal scaffold).
+  if (values.minimal) console.error(`  note: --minimal ignored — adopting an existing repo, not scaffolding`);
+  if (r.created.length > 0) console.error(`  created: ${r.created.join(", ")}`);
+  if (r.patched.length > 0) console.error(`  updated: ${r.patched.join(", ")}`);
+  const add = r.runtime === "bun" ? "bun add @kid7st/fastagent" : "npm install @kid7st/fastagent";
+  console.error(`  next steps:`);
+  const cdTarget = nextStepCd(process.cwd(), dir);
+  if (cdTarget) console.error(`    cd ${cdTarget}`);
+  console.error(`    set model in fastagent.config.mjs   # \`fastagent models\` lists the specs`);
+  if (!r.hasPackageJson) {
+    console.error(`    ${r.runtime === "bun" ? "bun init" : "npm init -y"}   # a channel needs a package.json`);
+  }
+  if (!r.hasFastagentDep) console.error(`    ${add}   # a channel file imports it`);
+  console.error(`    fastagent add telegram   # or github — a channel to serve on`);
+  console.error(`    fastagent dev            # serve locally and iterate`);
+}
+
 /** `fastagent add <channel> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
 async function runAdd(): Promise<void> {
   const kind = positionals[1];
@@ -393,8 +422,10 @@ async function runAdd(): Promise<void> {
     );
   }
   const { env, steps } = channelSetup(channelKind);
+  const install =
+    detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
   console.error(`  next steps:`);
-  console.error(`    npm install                      # if @kid7st/fastagent is not installed yet`);
+  console.error(`    ${install}                      # if @kid7st/fastagent is not installed yet`);
   for (const e of env) {
     const value = e.generate ? `=${randomBytes(24).toString("hex")}` : "";
     console.error(`    set ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
@@ -482,43 +513,46 @@ async function runDeploy(): Promise<void> {
   // credential and falsely report "none configured".
   const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultAuthPath(resolveStateRoot(target));
   const modelAuth = modelSpec ? await probeAuthSource(createPiModels({ authPath }), modelSpec) : undefined;
-  // Container facts (shared by every host) + the warnings that follow. The generated Dockerfile is
-  // npm-based (npm ci/install + npx); a pnpm/yarn workspace has no package-lock.json, so the npm-only
-  // assumption is made EXPLICIT rather than silently routing them to `npm install`.
+  // Container facts (shared by every host) + the warnings that follow. The generated Dockerfile targets
+  // the workspace's package manager — bun (packageManager: bun / a bun lockfile) or npm — made EXPLICIT
+  // rather than silently routing a bun/pnpm/yarn workspace through npm.
   const hasPackageJson = await exists(join(target, "package.json"));
-  const hasLockfile = await exists(join(target, "package-lock.json"));
-  const hasOtherLock = (await exists(join(target, "pnpm-lock.yaml"))) || (await exists(join(target, "yarn.lock")));
-  // A code workspace with no package-lock.json builds via `npm install` (caret ranges resolve at build
-  // time) — not a reproducible redeploy. A pnpm/yarn user gets an accurate message (their lockfile is
-  // ignored by the npm Dockerfile), not the misleading "commit an npm lockfile".
+  const pkg = await readPackageJson(target);
+  const { runtime, bunVersion, hasLockfile } = detectRuntime(target, pkg);
+  const install = runtime === "bun" ? "bun install" : "npm install";
+  const runner = runtime === "bun" ? "bunx fastagent" : "npx fastagent";
+  const hasOtherLock =
+    runtime === "node" && ((await exists(join(target, "pnpm-lock.yaml"))) || (await exists(join(target, "yarn.lock"))));
+  // A code workspace with no lockfile builds via a non-frozen install (ranges resolve at build time) —
+  // not a reproducible redeploy. A pnpm/yarn user gets an accurate message (their lockfile is ignored by
+  // the npm Dockerfile), not the misleading "commit an npm lockfile".
   if (hasPackageJson && !hasLockfile) {
+    const lock = runtime === "bun" ? "bun.lock" : "package-lock.json";
     console.error(
       hasOtherLock
         ? `[fastagent] warn: the generated Dockerfile is npm-based — your pnpm/yarn lockfile is NOT used (build runs ` +
             `\`npm install\`, not reproducible). Edit the Dockerfile for your package manager, or vendor a package-lock.json.`
-        : `[fastagent] warn: no package-lock.json — the image build resolves deps at build time (not reproducible). ` +
-            `Run \`npm install\` and commit the lockfile for pinned redeploys.`,
+        : `[fastagent] warn: no ${lock} — the image build resolves deps at build time (not reproducible). ` +
+            `Run \`${install}\` and commit the lockfile for pinned redeploys.`,
     );
   }
-  // The code-path Dockerfile runs `npx fastagent`: that resolves the workspace's OWN dependency, so a
+  // The code-path Dockerfile runs `${runner}`: that resolves the workspace's OWN dependency, so a
   // package.json missing it would make the CONTAINER fetch an unpinned build at runtime (offline-fragile,
   // the failure moved from build to prod). Warn at plan time, like `add`'s dep check (which throws).
-  if (hasPackageJson) {
-    let hasDep = false;
-    try {
-      const pkg = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
-      hasDep = "@kid7st/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies };
-    } catch {
-      /* malformed package.json — the build would surface it; skip this check */
-    }
-    if (!hasDep) {
-      console.error(
-        `[fastagent] warn: package.json does not list @kid7st/fastagent — the image's \`npx fastagent\` would ` +
-          `fetch it at runtime (offline-fragile, unpinned). Add it to dependencies and re-run \`npm install\`.`,
-      );
-    }
+  if (hasPackageJson && !("@kid7st/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies })) {
+    console.error(
+      `[fastagent] warn: package.json does not list @kid7st/fastagent — the image's \`${runner}\` would ` +
+        `fetch it at runtime (offline-fragile, unpinned). Add it to dependencies and re-run \`${install}\`.`,
+    );
   }
-  const container = { hasPackageJson, hasLockfile, version: await fastagentVersion(), apt: config.deploy?.apt };
+  const container = {
+    hasPackageJson,
+    runtime,
+    bunVersion,
+    hasLockfile,
+    version: await fastagentVersion(),
+    apt: config.deploy?.apt,
+  };
   const port = config.http?.port ?? 8787;
   // What the agent declared it needs on the box (fastagent.config deploy.secrets) — carried like channel
   // secrets: listed in the runbook, set from the local env under --run, gated if a value is missing.
@@ -1124,6 +1158,19 @@ function serve(routes: Routes, port: number, onListening?: (boundPort: number) =
       process.exit(1);
     },
   );
+}
+
+/** Parse `<dir>/package.json`, or `{}` when absent/malformed (a real build surfaces the actual error). */
+async function readPackageJson(d: string): Promise<{
+  packageManager?: unknown;
+  dependencies?: Record<string, unknown>;
+  devDependencies?: Record<string, unknown>;
+}> {
+  try {
+    return JSON.parse(await readFile(join(d, "package.json"), "utf8"));
+  } catch {
+    return {};
+  }
 }
 
 /** .env (secrets) → process.env. Only a missing file is normal; surface anything else. */
