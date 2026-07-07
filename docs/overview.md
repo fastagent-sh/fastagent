@@ -96,6 +96,7 @@ fastagent add telegram
 | Use CLI commands | [CLI reference](cli.md) |
 | Embed in an app | [Embedding](embedding.md) |
 | Add webhooks/bots | [Channels](channels.md) |
+| Ship to Fly, Railway, or any Docker host | [Deploy](deploy.md) |
 | Use GitHub webhooks | [GitHub channel](github.md) |
 | Use Telegram bots | [Telegram channel](telegram.md) |
 | Build a channel adapter | [Channel development](channel-development.md) |
