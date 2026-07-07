@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPiAgentFromWorkspace } from "../src/index.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
-import { adoptWorkspace, scaffoldWorkspace } from "../src/scaffold/init.ts";
+import { detectHostSignals, scaffoldWorkspace } from "../src/scaffold/init.ts";
 import { nextStepCd } from "../src/scaffold/init.ts";
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
 
@@ -37,13 +37,14 @@ describe("init: scaffoldWorkspace", () => {
     expect(nextStepCd("/a/b", "/tmp/x")).toBe("/tmp/x"); // outside → absolute, not ../../tmp/x noise
   });
 
-  it("default scaffolds a COMPLETE agent (instructions + the example skill + a code tool + package.json)", async () => {
+  it("default scaffolds a COMPLETE agent (persona + the example skill + a code tool + package.json)", async () => {
     const dir = await freshDir();
-    const { complete, created, warnings } = await scaffoldWorkspace(dir);
+    const { complete, created, patched, warnings } = await scaffoldWorkspace(dir);
     expect(complete).toBe(true);
+    expect(patched).toEqual([]); // our own fresh .gitignore already covers .env/.fastagent — nothing to patch
     expect(created).toEqual(
       expect.arrayContaining([
-        "AGENTS.md",
+        "persona.md",
         join("skills", "writing-great-skills", "SKILL.md"),
         join("skills", "writing-great-skills", "GLOSSARY.md"),
         join("skills", "writing-great-skills", "LICENSE"),
@@ -80,21 +81,22 @@ describe("init: scaffoldWorkspace", () => {
     expect(pkg.dependencies.zod).toBeDefined();
     expect(await readFile(join(dir, "tools", "fetch-url.ts"), "utf8")).toContain('from "@kid7st/fastagent"');
 
-    // AGENTS.md + the bundled skill load as a definition offline (loadAgentDefinition does not touch
-    // tools/). The skill is a real markdown skill, mounted by the runtime loader.
+    // persona.md + the bundled skill load as a definition offline (loadAgentDefinition does not touch
+    // tools/). No AGENTS.md is scaffolded — a fresh agent has no project context (② empty).
     const def = await loadAgentDefinition(dir);
-    expect(def.contextFiles.length).toBeGreaterThan(0);
+    expect(def.persona).toContain("Persona");
+    expect(def.contextFiles).toEqual([]);
     expect(def.skills.map((s) => s.name)).toEqual(["writing-great-skills"]);
     expect(def.collisions).toEqual([]);
   });
 
-  it("--minimal keeps AGENTS.md + the example skill + config (no package.json/tool) and assembles fully offline", async () => {
+  it("--minimal keeps persona.md + the example skill + config (no package.json/tool) and assembles fully offline", async () => {
     const dir = await freshDir();
     const { complete, created } = await scaffoldWorkspace(dir, { minimal: true });
     expect(complete).toBe(false);
     expect(created.sort()).toEqual(
       [
-        "AGENTS.md",
+        "persona.md",
         join("skills", "writing-great-skills", "SKILL.md"),
         join("skills", "writing-great-skills", "GLOSSARY.md"),
         join("skills", "writing-great-skills", "LICENSE"),
@@ -120,22 +122,22 @@ describe("init: scaffoldWorkspace", () => {
     const base = await freshDir();
     const target = join(base, "nested", "agent");
     const { intoNonEmpty } = await scaffoldWorkspace(target);
-    expect(await exists(join(target, "AGENTS.md"))).toBe(true);
+    expect(await exists(join(target, "persona.md"))).toBe(true);
     expect(intoNonEmpty).toBe(false);
   });
 
-  it("preflights blocking parent paths: a file named `tools` or `skills` fails BEFORE writing AGENTS.md (retryable)", async () => {
+  it("preflights blocking parent paths: a file named `tools` or `skills` fails BEFORE writing persona.md (retryable)", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "tools"), "i am a file, not a dir\n"); // blocks tools/
     await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"tools" exists and is not a directory/);
-    // no half-scaffold: AGENTS.md was never written, so a retry is not blocked by the guard
-    expect(await exists(join(dir, "AGENTS.md"))).toBe(false);
+    // no half-scaffold: persona.md was never written, so a retry starts clean
+    expect(await exists(join(dir, "persona.md"))).toBe(false);
 
     // `skills` blocks too — the scaffold writes the example skill there, in default AND --minimal.
     const dir2 = await freshDir();
     await writeFile(join(dir2, "skills"), "i am a file, not a dir\n");
     await expect(scaffoldWorkspace(dir2)).rejects.toThrow(/"skills" exists and is not a directory/);
-    expect(await exists(join(dir2, "AGENTS.md"))).toBe(false);
+    expect(await exists(join(dir2, "persona.md"))).toBe(false);
     await expect(scaffoldWorkspace(dir2, { minimal: true })).rejects.toThrow(/"skills" exists and is not a directory/);
   });
 
@@ -144,7 +146,7 @@ describe("init: scaffoldWorkspace", () => {
     const dir = await freshDir();
     await symlink(external, join(dir, "tools")); // `tools` is a symlink → must be rejected, not followed
     await expect(scaffoldWorkspace(dir)).rejects.toThrow(/"tools" exists and is not a directory/);
-    expect(await exists(join(dir, "AGENTS.md"))).toBe(false); // nothing written in the workspace
+    expect(await exists(join(dir, "persona.md"))).toBe(false); // nothing written in the workspace
     expect(await readdir(external)).toEqual([]); // and nothing escaped into the symlink target
   });
 
@@ -152,78 +154,144 @@ describe("init: scaffoldWorkspace", () => {
     const dir = await freshDir();
     await mkdir(join(dir, ".fastagentignore")); // a dir where a file is expected → loadRootIgnore throws
     await expect(scaffoldWorkspace(dir)).rejects.toThrow(/cannot read .*\.fastagentignore/);
-    // the advisory read sits inside the rollback scope → the scaffolded AGENTS.md was removed,
-    // so a retry is not blocked by the overwrite guard
-    expect(await exists(join(dir, "AGENTS.md"))).toBe(false);
+    // the hygiene read sits inside the rollback scope → the scaffolded persona.md was removed,
+    // so a retry starts clean
+    expect(await exists(join(dir, "persona.md"))).toBe(false);
   });
 
-  it("refuses to overwrite an existing workspace (AGENTS.md or a config), leaving it intact", async () => {
+  it("keeps an existing AGENTS.md (project context, not an ownership marker); refuses only an existing config", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "AGENTS.md"), "# My real agent\n");
-    await expect(scaffoldWorkspace(dir)).rejects.toThrow(/already has AGENTS\.md .* refuses to overwrite/);
-    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("# My real agent\n"); // untouched
+    const { created } = await scaffoldWorkspace(dir);
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("# My real agent\n"); // untouched, adopted as ②
+    expect(created).toContain("persona.md"); // identity added around it
+    expect(created).not.toContain("AGENTS.md"); // never scaffolded
 
     const dir2 = await freshDir();
     await writeFile(join(dir2, "fastagent.config.ts"), "export default {};\n");
     await expect(scaffoldWorkspace(dir2)).rejects.toThrow(/already has fastagent\.config\.ts/);
   });
 
-  it("adopts an existing repo (AGENTS.md, no config): adds config + secret-safe .gitignore, keeps the repo's files, bun-aware", async () => {
+  it("detectHostSignals: toolchain/deploy configs and occupied convention dirs signal; md + loose files don't", async () => {
+    // A markdown-and-scripts directory: nothing claims it → no signals → flat.
+    const notes = await freshDir();
+    await writeFile(join(notes, "AGENTS.md"), "# notes\n");
+    await writeFile(join(notes, "README.md"), "# readme\n");
+    await writeFile(join(notes, "package.json"), `{"name":"x"}`); // a manifest alone is NOT a claim
+    await writeFile(join(notes, "helper.js"), "// loose script\n");
+    expect(await detectHostSignals(notes)).toEqual([]);
+
+    // A deployable host project: toolchain + deploy manifests claim the tree.
+    const host = await freshDir();
+    await writeFile(join(host, "tsconfig.json"), "{}");
+    await writeFile(join(host, "next.config.ts"), "export default {};\n");
+    await writeFile(join(host, "Dockerfile"), "FROM node\n");
+    expect(await detectHostSignals(host)).toEqual(["Dockerfile", "next.config.ts", "tsconfig.json"]);
+
+    // Non-JS ecosystems claim their tree the same way — an AGENTS.md-carrying Go/Python repo must not
+    // get a flat kit (with a package.json) in its root.
+    const goRepo = await freshDir();
+    await writeFile(join(goRepo, "AGENTS.md"), "# conventions\n");
+    await writeFile(join(goRepo, "go.mod"), "module x\n");
+    expect(await detectHostSignals(goRepo)).toEqual(["go.mod"]);
+    const pyRepo = await freshDir();
+    await writeFile(join(pyRepo, "pyproject.toml"), "[project]\n");
+    expect(await detectHostSignals(pyRepo)).toEqual(["pyproject.toml"]);
+
+    // Occupied convention names count (fastagent would scan them as agent surface); empty dirs and
+    // dotfile-only dirs (.DS_Store) don't.
+    const occupied = await freshDir();
+    await mkdir(join(occupied, "tools"), { recursive: true });
+    await writeFile(join(occupied, "tools", "build.js"), "// the host's own script\n");
+    await mkdir(join(occupied, "skills"), { recursive: true }); // empty → not a signal
+    await mkdir(join(occupied, "channels"), { recursive: true });
+    await writeFile(join(occupied, "channels", ".DS_Store"), ""); // dotfiles are not agent surface
+    expect(await detectHostSignals(occupied)).toEqual(["tools/"]);
+  });
+
+  it("detectHostSignals surfaces real IO errors instead of silently deciding the layout (EACCES ≠ absent)", async () => {
     const dir = await freshDir();
-    await writeFile(join(dir, "AGENTS.md"), "# My real agent\n"); // the repo IS the agent
-    await writeFile(join(dir, "package.json"), `{"type":"module","packageManager":"bun@1.3.13","dependencies":{}}`);
-    await writeFile(join(dir, ".gitignore"), "dist/\n"); // pre-existing, without .env
-
-    const r = await adoptWorkspace(dir);
-    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("# My real agent\n"); // NEVER touched
-    expect(await exists(join(dir, "fastagent.config.mjs"))).toBe(true); // the one missing piece
-    expect(r.created).toContain("fastagent.config.mjs");
-    const gitignore = await readFile(join(dir, ".gitignore"), "utf8");
-    expect(gitignore).toContain("dist/"); // kept
-    expect(gitignore).toMatch(/^\.env$/m); // secrets now excluded
-    expect(gitignore).toMatch(/^\.fastagent$/m);
-    expect(r.runtime).toBe("bun"); // drives the `bun add` hint the CLI prints
-    expect(r.hasFastagentDep).toBe(false);
-    // No example skill/tool/package.json written — adopt adds only what's missing, not a scaffold.
-    expect(await exists(join(dir, "tools"))).toBe(false);
-    expect(await exists(join(dir, "skills"))).toBe(false);
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await writeFile(join(dir, "tools", "x.js"), "//\n");
+    await chmod(join(dir, "tools"), 0o000); // unreadable — a REAL failure, not "nothing there"
+    try {
+      await expect(detectHostSignals(dir)).rejects.toThrow();
+    } finally {
+      await chmod(join(dir, "tools"), 0o755); // restore so tmp cleanup works
+    }
   });
 
-  it("adopt's secret-safe .gitignore: creates one when absent, skips when .env is already ignored", async () => {
-    // No .gitignore → adopt CREATES it (the `created` branch) so the secret-safe invariant still holds.
-    const none = await freshDir();
-    await writeFile(join(none, "AGENTS.md"), "# a\n");
-    const r1 = await adoptWorkspace(none);
-    expect(r1.created).toContain(".gitignore");
-    expect(await readFile(join(none, ".gitignore"), "utf8")).toMatch(/^\.env$/m);
-
-    // .env already ignored → adopt neither creates nor patches (no duplicate line).
-    const covered = await freshDir();
-    await writeFile(join(covered, "AGENTS.md"), "# a\n");
-    await writeFile(join(covered, ".gitignore"), ".env\n.fastagent\n");
-    const r2 = await adoptWorkspace(covered);
-    expect([...r2.created, ...r2.patched]).not.toContain(".gitignore");
-    expect((await readFile(join(covered, ".gitignore"), "utf8")).match(/^\.env$/gm)).toHaveLength(1);
+  it("agentDir layout: the kit lands in ./agent, config at the root points there, host files untouched", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, "AGENTS.md"), "# Host repo spec\n");
+    await writeFile(join(dir, "tsconfig.json"), "{}");
+    const { created, agentDir } = await scaffoldWorkspace(dir, { agentDir: "./agent" });
+    expect(agentDir).toBe("./agent");
+    expect(created).toEqual(
+      expect.arrayContaining([
+        join("agent", "persona.md"),
+        join("agent", "skills", "writing-great-skills", "SKILL.md"),
+        join("agent", "tools", "fetch-url.ts"),
+        join("agent", "package.json"),
+        "fastagent.config.mjs",
+      ]),
+    );
+    // config at the ROOT carries agentDir, so dev/start/add resolve the kit without flags.
+    const config = await readFile(join(dir, "fastagent.config.mjs"), "utf8");
+    expect(config).toMatch(/agentDir: "\.\/agent"/);
+    // The agent self-contains its deps — the host's own package.json is never created or touched.
+    expect(await exists(join(dir, "package.json"))).toBe(false);
+    expect(await readFile(join(dir, "AGENTS.md"), "utf8")).toBe("# Host repo spec\n"); // ②, untouched
+    // The scaffolded workspace ASSEMBLES: persona from agent/, context walked from the root.
+    const a = await createPiAgentFromWorkspace(dir, { model: "openai-codex/gpt-5.5" });
+    expect(a.agentDir).toBe(join(dir, "agent"));
+    expect(a.definition.persona).toContain("Persona");
+    expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo spec");
   });
 
-  it("`init` ROUTES to adopt vs scaffold vs refuse by what's already there", async () => {
-    // AGENTS.md, no config → ADOPT (not scaffold: keeps AGENTS.md, writes NO example skill).
-    const repo = await freshDir();
-    await writeFile(join(repo, "AGENTS.md"), "# My real agent\n");
-    const adopt = await cliInit(["init"], repo);
-    expect(adopt).toMatch(/adopted/);
-    expect(await readFile(join(repo, "AGENTS.md"), "utf8")).toBe("# My real agent\n");
-    expect(await exists(join(repo, "skills"))).toBe(false); // scaffold would have written the example skill
+  it("`init` decides the layout by jurisdiction signals and prints the reason (no prompt)", async () => {
+    // A claimed tree (tsconfig) → kit into ./agent, reason printed.
+    const host = await freshDir();
+    await writeFile(join(host, "tsconfig.json"), "{}");
+    const out = await cliInit(["init", "--no-install"], host);
+    expect(out).toMatch(/found tsconfig\.json/);
+    expect(out).toMatch(/agent kit in \.\/agent/);
+    expect(await exists(join(host, "agent", "persona.md"))).toBe(true);
 
-    // Fresh dir → SCAFFOLD (writes AGENTS.md + the example skill).
-    const fresh = await cliInit(["init", "--no-install"], await freshDir());
-    expect(fresh).toMatch(/initialized/);
+    // --flat overrides the detection.
+    const flat = await freshDir();
+    await writeFile(join(flat, "tsconfig.json"), "{}");
+    const out2 = await cliInit(["init", "--no-install", "--flat"], flat);
+    expect(out2).not.toMatch(/agent kit in/);
+    expect(await exists(join(flat, "persona.md"))).toBe(true);
 
-    // AGENTS.md + a config → already a workspace → REFUSE (adopt only fires when there's no config).
+    // A config → already a workspace → refuse.
     const done = await freshDir();
-    await writeFile(join(done, "AGENTS.md"), "# x\n");
     await writeFile(join(done, "fastagent.config.mjs"), "export default {};\n");
-    expect(await cliInit(["init"], done)).toMatch(/already has .*refuses to overwrite/);
+    expect(await cliInit(["init"], done)).toMatch(/already a fastagent workspace/);
+  });
+
+  it("--agent-dir: a custom name works; escapes and conflicting flags are refused (containment contract)", async () => {
+    // A legal custom subdir → kit there, config points there.
+    const dir = await freshDir();
+    const out = await cliInit(["init", "--no-install", "--agent-dir", "bot"], dir);
+    expect(out).toMatch(/agent kit in \.\/bot/);
+    expect(await exists(join(dir, "bot", "persona.md"))).toBe(true);
+    expect(await readFile(join(dir, "fastagent.config.mjs"), "utf8")).toMatch(/agentDir: "\.\/bot"/);
+
+    // An escaping value must be refused BEFORE anything is written (the config could never load).
+    const esc = await freshDir();
+    const out2 = await cliInit(["init", "--agent-dir", "../elsewhere"], esc);
+    expect(out2).toMatch(/must be a subdirectory/);
+    expect(await exists(join(esc, "fastagent.config.mjs"))).toBe(false);
+
+    // `.` (= the dir itself) is not a subdirectory — that's what --flat is for.
+    const self = await freshDir();
+    expect(await cliInit(["init", "--agent-dir", "."], self)).toMatch(/must be a subdirectory/);
+
+    // Conflicting flags are refused.
+    const both = await freshDir();
+    expect(await cliInit(["init", "--flat", "--agent-dir", "agent"], both)).toMatch(/conflict/);
   });
 
   it("createPiAgentFromWorkspace wires config.agentDir end-to-end: persona/tools from agentDir, ② context from cwd", async () => {
@@ -259,32 +327,46 @@ describe("init: scaffoldWorkspace", () => {
     expect(cwd).toMatch(/fastagent dev/);
   });
 
-  it("keeps a pre-existing .gitignore; warns when it does not ignore .env (a deploy could ship secrets)", async () => {
+  it("keeps a pre-existing .gitignore's content and APPENDS the missing .env/.fastagent excludes (fix, not warn)", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, ".gitignore"), "custom\n"); // no .env rule
-    const { created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir);
+    const { created, skipped, patched, intoNonEmpty, warnings } = await scaffoldWorkspace(dir);
     expect(skipped).toEqual([".gitignore"]);
-    expect(created).toContain("AGENTS.md");
-    expect(await readFile(join(dir, ".gitignore"), "utf8")).toBe("custom\n"); // kept, NOT mutated
+    expect(patched).toEqual([".gitignore"]);
+    expect(created).toContain("persona.md");
+    const gi = await readFile(join(dir, ".gitignore"), "utf8");
+    expect(gi).toContain("custom"); // the host's own rules kept
+    expect(gi).toMatch(/^\.env$/m); // secrets now excluded
+    expect(gi).toMatch(/^\.fastagent$/m);
     expect(intoNonEmpty).toBe(true); // the dir already had the .gitignore
-    expect(warnings).toEqual([expect.stringMatching(/does not exclude "\.env"/)]);
+    expect(warnings).toEqual([]); // fixed, nothing left to warn about
   });
 
-  it("does not warn when a kept .gitignore already covers .env", async () => {
-    const dir = await freshDir();
-    await writeFile(join(dir, ".gitignore"), "node_modules/\n*.env\n"); // *.env covers .env
-    const { skipped, warnings } = await scaffoldWorkspace(dir);
-    expect(skipped).toEqual([".gitignore"]);
-    expect(warnings).toEqual([]);
+  it("appends only what's missing; a fully-covered .gitignore is left alone", async () => {
+    const covered = await freshDir();
+    await writeFile(join(covered, ".gitignore"), ".env\n.fastagent\n");
+    const r = await scaffoldWorkspace(covered);
+    expect(r.patched).toEqual([]); // no duplicate lines
+    expect((await readFile(join(covered, ".gitignore"), "utf8")).match(/^\.env$/gm)).toHaveLength(1);
+
+    const partial = await freshDir();
+    await writeFile(join(partial, ".gitignore"), "node_modules/\n*.env\n"); // covers .env, not .fastagent
+    const r2 = await scaffoldWorkspace(partial);
+    expect(r2.patched).toEqual([".gitignore"]);
+    const gi = await readFile(join(partial, ".gitignore"), "utf8");
+    expect(gi).toMatch(/^\.fastagent$/m);
+    expect(gi.match(/^\.env$/gm)).toBeNull(); // .env already covered by *.env — not re-added
   });
 
-  // The advisory must mirror build's matcher (loadRootIgnore: .gitignore + .fastagentignore,
+  // The fix must mirror build's matcher (loadRootIgnore: .gitignore + .fastagentignore,
   // fa last, case-SENSITIVE), or it gives false assurance in the dangerous direction.
-  it("warns on a case-mismatched rule (.ENV does not exclude .env under build's case-sensitive matcher)", async () => {
+  it("a case-mismatched rule (.ENV) does not cover .env — the real exclude is appended", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, ".gitignore"), ".ENV\n"); // wrong case → build (ignorecase:false) ships .env
-    const { warnings } = await scaffoldWorkspace(dir);
-    expect(warnings).toEqual([expect.stringMatching(/does not exclude "\.env"/)]);
+    const { patched, warnings } = await scaffoldWorkspace(dir);
+    expect(patched).toEqual([".gitignore"]);
+    expect(await readFile(join(dir, ".gitignore"), "utf8")).toMatch(/^\.env$/m);
+    expect(warnings).toEqual([]);
   });
 
   it("warns when .fastagentignore re-includes .env (applied last, authoritative — build ships it)", async () => {
@@ -292,15 +374,17 @@ describe("init: scaffoldWorkspace", () => {
     await writeFile(join(dir, ".gitignore"), ".env\n"); // git excludes it …
     await writeFile(join(dir, ".fastagentignore"), "!.env\n"); // … but fa un-excludes it (last wins)
     const { warnings } = await scaffoldWorkspace(dir);
+    // The append can't beat a last-wins re-include — this must STAY a visible warning.
     expect(warnings).toEqual([expect.stringMatching(/does not exclude "\.env"/)]);
   });
 
-  it("does not warn when .fastagentignore excludes .env though the kept .gitignore does not (combined matcher)", async () => {
+  it("a .fastagentignore covering .env counts (combined matcher); only .fastagent is appended", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, ".gitignore"), "node_modules/\n"); // kept, NO .env rule
     await writeFile(join(dir, ".fastagentignore"), ".env\n"); // fa covers it → build excludes
-    const { skipped, warnings } = await scaffoldWorkspace(dir);
+    const { skipped, patched, warnings } = await scaffoldWorkspace(dir);
     expect(skipped).toEqual([".gitignore"]);
+    expect(patched).toEqual([".gitignore"]); // .fastagent still needed
     expect(warnings).toEqual([]);
   });
 });
@@ -316,6 +400,24 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     );
     return dir;
   }
+
+  it("routes into config.agentDir: the channel + companion tool land in the kit, .env.example stays at the root", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
+    await writeFile(join(dir, ".env.example"), "# env\n");
+    await mkdir(join(dir, "agent"), { recursive: true });
+    await writeFile(
+      join(dir, "agent", "package.json"),
+      `${JSON.stringify({ type: "module", dependencies: { "@kid7st/fastagent": "^0.4.0" } }, null, 2)}\n`,
+    );
+
+    const out = await cliInit(["add", "telegram"], dir);
+    expect(out).toContain(join("agent", "channels", "telegram.ts")); // reported relative to the run root
+    expect(await exists(join(dir, "agent", "channels", "telegram.ts"))).toBe(true); // in the kit…
+    expect(await exists(join(dir, "agent", "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
+    expect(await exists(join(dir, "channels"))).toBe(false); // NOT at the run root
+    expect(await readFile(join(dir, ".env.example"), "utf8")).toContain("TELEGRAM_BOT_TOKEN"); // env at the root
+  });
 
   it("scaffolds channels/github.ts into a ready workspace, mutates nothing else, and refuses to clobber", async () => {
     const dir = await readyWorkspace();
@@ -466,6 +568,23 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(def.skills.map((s) => s.name)).toContain("greeter"); // really mounted by the runtime loader
 
     await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/already exists/); // refuse overwrite
+  });
+
+  it("`add skill` routes into config.agentDir (symmetric with `add <channel>`) — a root skills/ is never scanned", async () => {
+    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
+    await mkdir(join(srcRoot, "greeter"), { recursive: true });
+    await writeFile(
+      join(srcRoot, "greeter", "SKILL.md"),
+      "---\nname: greeter\ndescription: Greet the user warmly and by name.\n---\nSay hello.\n",
+    );
+    const dir = await freshDir();
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
+    await mkdir(join(dir, "agent"), { recursive: true });
+
+    const out = await cliInit(["add", "skill", join(srcRoot, "greeter")], dir);
+    expect(out).toMatch(/vendored skill "greeter"/);
+    expect(await exists(join(dir, "agent", "skills", "greeter", "SKILL.md"))).toBe(true); // in the kit…
+    expect(await exists(join(dir, "skills"))).toBe(false); // …NOT at the run root (it would never be scanned)
   });
 
   it("rejects a source with no SKILL.md (not an Agent Skills skill), leaving no half-vendor", async () => {

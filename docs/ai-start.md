@@ -8,7 +8,9 @@ You are helping me use FastAgent.
 Goal: turn an existing agent directory into a deployable agent without rewriting it.
 
 FastAgent mental model:
-- The directory is the agent: AGENTS.md + skills/ + optional tools/ + optional channels/.
+- The directory is the agent: persona.md (its identity) + skills/ + optional tools/ + optional
+  channels/. An AGENTS.md is PROJECT CONTEXT the agent reads (its own, or a host repo's) — having an
+  AGENTS.md does not make a directory a fastagent workspace; a fastagent.config.* does.
 - FastAgent can run it locally, embed it in my app, connect it to channels like GitHub and Telegram, or deploy it to a host.
 - Do not invent a new framework layout unless I ask. Prefer the existing directory.
 
@@ -24,20 +26,23 @@ How you run FastAgent commands (you are a non-interactive agent, so this matters
   adding one; never commit `.env`, credentials, sessions, or `.fastagent/` machine state.
 
 First inspect my project:
-1. Check whether AGENTS.md exists.
-2. Check whether skills/, tools/, channels/, fastagent.config.* exist.
+1. Check whether fastagent.config.* exists (= already a workspace; read its agentDir if set).
+2. Check whether persona.md, AGENTS.md, skills/, tools/, channels/ exist — at the root, or under agentDir.
 3. Check package.json for "type": "module" if code tools are present.
 4. Ask before choosing a model provider or adding secrets.
 
-Set up (init is the single entry point — the same command whether or not I already have a workspace):
-- Run: fastagent init <dir> (default: current dir). It adopts an existing AGENTS.md, keeps an existing
-  config, and only fills the missing pieces — idempotent, never clobbers. On a fresh dir it scaffolds a
-  full example agent.
-- Then run: fastagent info (read-only) — it shows what the directory assembles into (model, AGENTS.md,
-  skills, tools, channels). Fix only what it reports.
-- Adopting a directory that is ALSO a TypeScript project? Its tsconfig `include` may compile the
-  scaffolded/added `.ts` tools and channels against deps it doesn't have — keep the agent in a subdir,
-  or add `tools`/`channels` to the host tsconfig `exclude`.
+Set up (run init ONCE per directory — it refuses an already-initialized workspace):
+- Run: fastagent init <dir> (default: current dir). It scaffolds persona.md (the agent's identity),
+  an example skill and tool, and config; it never clobbers existing files, keeps an existing AGENTS.md
+  as project context, and refuses a dir that already has a fastagent.config.* (already a workspace).
+- Layout is decided automatically: flat by default; if an existing toolchain/deploy claims the dir
+  (tsconfig/framework config, a non-JS build manifest like go.mod/pyproject.toml/Cargo.toml,
+  Dockerfile/fly/railway, occupied tools//channels//skills/), the kit goes
+  into ./agent with config.agentDir pointing there — init prints the reason. Override on the FIRST
+  run: --flat / --agent-dir <name> (a re-run is refused once the config exists). To change the layout
+  afterwards: move the kit files yourself and update (or remove) config.agentDir to match.
+- Then run: fastagent info (read-only) — it shows what the directory assembles into (model, persona,
+  context, skills, tools, channels). Fix only what it reports.
 
 For local testing (prefer commands that exit):
 - Smoke-test one turn: fastagent invoke "hello" --model provider/id

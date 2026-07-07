@@ -91,6 +91,18 @@ export async function preflightDeploy(input: {
 
   // Container facts (shared by every host) + the warnings that follow. The generated Dockerfile targets
   // the workspace's package manager — bun or npm — made EXPLICIT rather than silently routing through npm.
+  // agentDir layout: the generated container installs the RUN ROOT's deps only — the kit's own
+  // package.json (agent/package.json) is not installed, so its tools/channels would fail to load on
+  // the box (repo-as-workspace deploy is open work — core.md §11). Known crash → gate --run, warn else
+  // (the same discipline as the model-travel gate).
+  if (agentDir !== target && (await exists(join(agentDir, "package.json")))) {
+    const issue =
+      `config.agentDir has its own package.json — the generated container does not install the agent kit's ` +
+      `dependencies yet (repo-as-workspace deploy is not implemented); its tools/channels would fail to load on the box`;
+    if (run) return { ok: false, gate: issue };
+    messages.push({ level: "warn", text: issue });
+  }
+
   const hasPackageJson = await exists(join(target, "package.json"));
   const pkg = await readPackageJson(target);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(target, pkg);
