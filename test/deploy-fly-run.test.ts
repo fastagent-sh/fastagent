@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { type FlyRunPlan, type FlyRunner, authSeedBytes, deployFlyRun } from "../src/deploy/fly-run.ts";
+import { type FlyRunPlan, authSeedBytes, deployFlyRun } from "../src/deploy/fly/run.ts";
+import type { CliRunner } from "../src/deploy/runner.ts";
 import { assembleSecrets } from "../src/deploy/secrets.ts";
 
 /** A fake flyctl: records every call, returns per-command scripted results (default code 0, empty out). */
 function fakeFly(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
   const calls: { args: string[]; input?: string }[] = [];
-  const fly: FlyRunner = async (args, opts) => {
+  const fly: CliRunner = async (args, opts) => {
     calls.push({ args, input: opts?.input });
     const r = script(args);
     return { code: r.code ?? 0, stdout: r.stdout ?? "" };
@@ -23,9 +24,9 @@ const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   ...over,
 });
 
-const run = (p: FlyRunPlan, fly: FlyRunner, tg = vi.fn(async () => {})) => deployFlyRun(p, fly, () => {}, tg);
+const run = (p: FlyRunPlan, fly: CliRunner, tg = vi.fn(async () => {})) => deployFlyRun(p, fly, () => {}, tg);
 
-describe("deploy/fly-run: the coding-agent deploy journey (benchmark)", () => {
+describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   it("happy path: auth → create app+volume → set secrets → deploy → telegram webhook", async () => {
     // Fresh account: apps/volumes lists are empty, everything succeeds.
     const { fly, cmds } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
@@ -176,7 +177,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
   });
 });
 
-describe("deploy/fly-run: authSeedBytes (the start-side seed guard)", () => {
+describe("deploy/fly/run: authSeedBytes (the start-side seed guard)", () => {
   it("seeds only when the seed is set AND the auth file is absent (absent-only — no rollback)", () => {
     expect(authSeedBytes(undefined, false)).toBeUndefined(); // no seed → no-op
     expect(authSeedBytes(Buffer.from("hi").toString("base64"), true)).toBeUndefined(); // file present → never clobber

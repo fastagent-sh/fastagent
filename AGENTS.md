@@ -25,13 +25,15 @@ src/
 ├── collect.ts               # buffered consumption helper
 ├── index.ts                 # the public API surface (see README "Public API surface & stability")
 ├── cli.ts                   # command entry points (process side effects live here)
-├── invoke-stream.ts, cli-models.ts # command rendering layers (`invoke` stream → exit code, `models` output)
+├── invoke-stream.ts, cli-models.ts, cli-auth.ts # command rendering layers (`invoke` stream → exit code, `models`/auth-report output)
 ├── telegram.ts, github.ts   # subpath-export shims (@kid7st/fastagent/telegram etc. — the supported surface)
 ├── log.ts                   # leveled logging singleton (dev=debug, start=info)
 ├── observe.ts               # turn-trace logging around an Agent
 ├── tunnel.ts                # `--tunnel`: cloudflared + per-channel webhook dispatch
 ├── dev-supervisor.ts        # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
 ├── proxy.ts                 # HTTPS_PROXY wiring
+├── env.ts                   # `.env` → process.env loading (missing file is normal; anything else surfaces)
+├── runtime.ts               # workspace runtime/package-manager detection (node vs bun) + readPackageJson
 ├── workspace.ts, version.ts # neutral helpers (in-workspace guard, ignore files, version)
 ├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
@@ -51,6 +53,14 @@ src/
 │       ├── state.ts         # atomic state files under .fastagent/channels/telegram/
 │       ├── register-webhook.ts # --tunnel setWebhook registration
 │       └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
+├── deploy/                  # `deploy fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §10.5)
+│   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/
+│   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
+│   ├── container.ts         # portable Dockerfile + .dockerignore (host-neutral) + the generated-marker predicate
+│   ├── secrets.ts           # required-secret NAMES (runbook) + assembleSecrets VALUES (--run credential carry)
+│   ├── runner.ts            # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
+│   ├── fly/     { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
+│   └── railway/ { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
 └── engines/pi/              # the pi reference implementation
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
     ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)

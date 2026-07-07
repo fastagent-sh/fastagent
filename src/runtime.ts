@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface WorkspaceRuntime {
@@ -27,4 +28,18 @@ export function detectRuntime(dir: string, pkg: { packageManager?: unknown }): W
     return { runtime: "bun", bunVersion: pm.match(/^bun@([^+]+)/)?.[1], hasLockfile: bunLock };
   }
   return { runtime: "node", hasLockfile: existsSync(join(dir, "package-lock.json")) };
+}
+
+/** Parse `<dir>/package.json`, or `{}` when absent/malformed (a real build surfaces the actual error).
+ *  The already-parsed input to {@link detectRuntime} and the deploy dep/lockfile checks. */
+export async function readPackageJson(dir: string): Promise<{
+  packageManager?: unknown;
+  dependencies?: Record<string, unknown>;
+  devDependencies?: Record<string, unknown>;
+}> {
+  try {
+    return JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
+  } catch {
+    return {};
+  }
 }

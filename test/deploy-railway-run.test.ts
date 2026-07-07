@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   type RailwayRunPlan,
-  type RailwayRunner,
   deployRailwayRun,
   isLinked,
   linkedName,
   parseDomainUrl,
   parseHasVolume,
-} from "../src/deploy/railway-run.ts";
+} from "../src/deploy/railway/run.ts";
+import type { CliRunner } from "../src/deploy/runner.ts";
 
 /** A fake railway CLI: records every call, returns per-command scripted results (default code 0, empty). */
 function fakeRailway(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
   const calls: { args: string[]; input?: string }[] = [];
-  const railway: RailwayRunner = async (args, opts) => {
+  const railway: CliRunner = async (args, opts) => {
     calls.push({ args, input: opts?.input });
     const r = script(args);
     return { code: r.code ?? 0, stdout: r.stdout ?? "" };
@@ -36,10 +36,10 @@ const LINKED = JSON.stringify({ name: "bot", id: "proj-1" });
 // A minted domain, as `railway domain --json` would return it (field name unknown → parser scans values).
 const DOMAIN_JSON = JSON.stringify({ domain: "bot-production.up.railway.app" });
 
-const run = (p: RailwayRunPlan, railway: RailwayRunner, tg = vi.fn(async () => {})) =>
+const run = (p: RailwayRunPlan, railway: CliRunner, tg = vi.fn(async () => {})) =>
   deployRailwayRun(p, railway, () => {}, tg);
 
-describe("deploy/railway-run: the coding-agent deploy journey (benchmark)", () => {
+describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () => {
   it("fresh (unlinked): auth → init+add+volume → variables → up → domain → telegram webhook", async () => {
     const { railway, cmds } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" }; // unlinked → create
@@ -204,7 +204,7 @@ describe("deploy/railway-run: the coding-agent deploy journey (benchmark)", () =
   });
 });
 
-describe("deploy/railway-run: pure parsers", () => {
+describe("deploy/railway/run: pure parsers", () => {
   it("isLinked: non-empty stdout = linked; empty = not (status exits 0 either way)", () => {
     expect(isLinked(LINKED)).toBe(true);
     expect(isLinked("weird non-json")).toBe(true); // any non-empty output counts as linked (refuse-safe)

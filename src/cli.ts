@@ -12,7 +12,7 @@ import { parseArgs } from "node:util";
 import type { Agent } from "./agent.ts";
 import { logAgentLoop } from "./observe.ts";
 import { log, setLogLevel } from "./log.ts";
-import { loadEnvFile } from "./env.ts";
+import { loadDotEnv } from "./env.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
@@ -20,7 +20,7 @@ import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
 import { runDevSupervisor } from "./dev-supervisor.ts";
 import { announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 import { discoverChannelFiles, loadChannels } from "./engines/pi/channel.ts";
-import { detectRuntime } from "./runtime.ts";
+import { detectRuntime, readPackageJson } from "./runtime.ts";
 import { fastagentVersion } from "./version.ts";
 import {
   defaultAuthPath,
@@ -58,10 +58,12 @@ import {
 import { adoptWorkspace, exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
 import { isGeneratedDockerfile } from "./deploy/container.ts";
-import { modelTravelIssue, parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly.ts";
-import { planRailwayDeploy } from "./deploy/railway.ts";
-import { type RailwayRunner, deployRailwayRun } from "./deploy/railway-run.ts";
-import { type FlyRunner, authSeedBytes, deployFlyRun } from "./deploy/fly-run.ts";
+import { parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly/plan.ts";
+import { preflightDeploy } from "./deploy/preflight.ts";
+import { planRailwayDeploy } from "./deploy/railway/plan.ts";
+import { deployRailwayRun } from "./deploy/railway/run.ts";
+import { authSeedBytes, deployFlyRun } from "./deploy/fly/run.ts";
+import { spawnRunner } from "./deploy/runner.ts";
 import { assembleSecrets } from "./deploy/secrets.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 
@@ -487,89 +489,23 @@ async function runDeploy(): Promise<void> {
   loadDotEnv(target); // a custom provider/tool may read a key at config load
   const { config } = await loadConfig(target).catch(failStartup);
   const modelSpec = resolveModelSpec(values.model, config);
-  // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via
-  // env/flag/.env doesn't travel. Surface it: warn for the runbook, hard gate for `--run` (don't deploy
-  // a known crash-loop).
-  const modelIssue = modelTravelIssue(config.model, modelSpec);
-  if (modelIssue) {
-    // `--run` fully deploys on either host now, so a model that won't travel would ship a known
-    // crash-looping box — hard-stop before that. (Generate-only still just warns, for the runbook.)
-    if (values.run) {
-      console.error(`[fastagent] deploy stopped: ${modelIssue}`);
-      process.exit(1);
-    }
-    console.error(`[fastagent] warn: ${modelIssue}`);
+  // The host-neutral pre-flight (model-travel gate, channel discovery, model-auth probe, container facts +
+  // their warnings) lives in deploy/preflight.ts — testable in isolation. The CLI prints its messages and
+  // stops on its gate; the host branch below adds only the host-specific artifacts + runbook + run drive.
+  const pre = await preflightDeploy({
+    target,
+    config,
+    modelSpec,
+    run: !!values.run,
+    force: !!values.force,
+    authPathOverride: resolveAuthPathOverride(values["auth-path"]),
+  }).catch(failStartup);
+  if (!pre.ok) {
+    console.error(`[fastagent] deploy stopped: ${pre.gate}`);
+    process.exit(1);
   }
-  // Known channel kinds only — a custom channel's secrets/webhook are unknown to us; warn and let the
-  // author wire them. probeAuthSource is best-effort (default providers): an env key becomes a secret,
-  // a local OAuth/stored login surfaces as guidance, an unknown provider degrades to a generic note.
-  const discovered = await discoverChannelFiles(target).catch(failStartup);
-  const channels = discovered.filter((c): c is ChannelKind => (CHANNEL_KINDS as string[]).includes(c));
-  for (const c of discovered) {
-    if (!channels.includes(c as ChannelKind)) {
-      console.error(`[fastagent] note: channel "${c}" is custom — set its secrets and webhook yourself`);
-    }
-  }
-  // Probe auth from the SAME project-level file the opener/login use (default `<state root>/auth.json`,
-  // or --auth-path / FASTAGENT_AUTH_PATH) — not the global default, which would miss a `fastagent login`
-  // credential and falsely report "none configured".
-  const authPath = resolveAuthPathOverride(values["auth-path"]) ?? defaultAuthPath(resolveStateRoot(target));
-  const modelAuth = modelSpec ? await probeAuthSource(createPiModels({ authPath }), modelSpec) : undefined;
-  // Container facts (shared by every host) + the warnings that follow. The generated Dockerfile targets
-  // the workspace's package manager — bun (packageManager: bun / a bun lockfile) or npm — made EXPLICIT
-  // rather than silently routing a bun/pnpm/yarn workspace through npm.
-  const hasPackageJson = await exists(join(target, "package.json"));
-  const pkg = await readPackageJson(target);
-  const { runtime, bunVersion, hasLockfile } = detectRuntime(target, pkg);
-  const install = runtime === "bun" ? "bun install" : "npm install";
-  const runner = runtime === "bun" ? "bunx fastagent" : "npx fastagent";
-  const hasOtherLock =
-    runtime === "node" && ((await exists(join(target, "pnpm-lock.yaml"))) || (await exists(join(target, "yarn.lock"))));
-  // A code workspace with no lockfile builds via a non-frozen install (ranges resolve at build time) —
-  // not a reproducible redeploy. A pnpm/yarn user gets an accurate message (their lockfile is ignored by
-  // the npm Dockerfile), not the misleading "commit an npm lockfile".
-  if (hasPackageJson && !hasLockfile) {
-    const lock = runtime === "bun" ? "bun.lock" : "package-lock.json";
-    console.error(
-      hasOtherLock
-        ? `[fastagent] warn: the generated Dockerfile is npm-based — your pnpm/yarn lockfile is NOT used (build runs ` +
-            `\`npm install\`, not reproducible). Edit the Dockerfile for your package manager, or vendor a package-lock.json.`
-        : `[fastagent] warn: no ${lock} — the image build resolves deps at build time (not reproducible). ` +
-            `Run \`${install}\` and commit the lockfile for pinned redeploys.`,
-    );
-  }
-  // The code-path Dockerfile runs `${runner}`: that resolves the workspace's OWN dependency, so a
-  // package.json missing it would make the CONTAINER fetch an unpinned build at runtime (offline-fragile,
-  // the failure moved from build to prod). Warn at plan time, like `add`'s dep check (which throws).
-  if (hasPackageJson && !("@kid7st/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies })) {
-    console.error(
-      `[fastagent] warn: package.json does not list @kid7st/fastagent — the image's \`${runner}\` would ` +
-        `fetch it at runtime (offline-fragile, unpinned). Add it to dependencies and re-run \`${install}\`.`,
-    );
-  }
-  const container = {
-    hasPackageJson,
-    runtime,
-    bunVersion,
-    hasLockfile,
-    version: await fastagentVersion(),
-    apt: config.deploy?.apt,
-  };
-  const port = config.http?.port ?? 8787;
-  // What the agent declared it needs on the box (fastagent.config deploy.secrets) — carried like channel
-  // secrets: listed in the runbook, set from the local env under --run, gated if a value is missing.
-  const extraSecrets = config.deploy?.secrets ?? [];
-  // deploy.apt only shapes the GENERATED Dockerfile. Warn ONLY when the kept Dockerfile is HAND-WRITTEN
-  // (its apt won't include these) — a fastagent-generated one is handled by writeArtifacts (kept if current,
-  // flagged stale otherwise). Don't suggest --force here: it would overwrite the user's hand-written file.
-  if (config.deploy?.apt?.length && !values.force && (await exists(join(target, "Dockerfile")))) {
-    if (!isGeneratedDockerfile(await readFile(join(target, "Dockerfile"), "utf8"))) {
-      console.error(
-        `[fastagent] warn: kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
-          `NOT applied; install those packages in your Dockerfile.`,
-      );
-    }
-  }
+  for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
+  const { channels, modelAuth, authPath, container, port, extraSecrets } = pre;
 
   // Railway: thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
   // planRailwayDeploy). --run drives the railway CLI to completion; otherwise print the runbook.
@@ -676,7 +612,7 @@ async function writeArtifacts(target: string, artifacts: { path: string; content
  * from the local env — the model key (env auth) or the whole auth.json as a `FASTAGENT_AUTH_SEED` seed
  * (OAuth/stored auth: the deployed box materializes it onto the /data volume on first boot, so a
  * personal deploy runs on the SAME subscription) plus channel secrets — then runs the flyctl steps
- * behind the {@link FlyRunner} seam (spawned `fly`, cwd = the workspace so the build context is the agent).
+ * behind the shared {@link spawnRunner} seam (spawned `fly`, cwd = the workspace so the build context is the agent).
  */
 async function runDeployFly(params: {
   target: string;
@@ -688,18 +624,7 @@ async function runDeployFly(params: {
   extraSecrets: string[];
 }): Promise<void> {
   const { target, appName, modelAuth, authPath, channels, flyTomlPath, extraSecrets } = params;
-  const fly: FlyRunner = (args, opts) =>
-    new Promise((res) => {
-      const child = spawn("fly", args, {
-        cwd: target,
-        stdio: [opts?.input ? "pipe" : "inherit", opts?.capture ? "pipe" : "inherit", "inherit"],
-      });
-      let out = "";
-      child.stdout?.on("data", (d) => (out += String(d)));
-      if (opts?.input) child.stdin?.end(opts.input);
-      child.on("close", (code) => res({ code: code ?? 1, stdout: out }));
-      child.on("error", () => res({ code: 127, stdout: "" })); // ENOENT: flyctl not on PATH
-    });
+  const fly = spawnRunner("fly", target);
   // Fail fast if flyctl is absent (spawn ENOENT → 127), with the install link — not a confusing auth gate.
   if ((await fly(["version"], { capture: true })).code === 127) {
     console.error(`[fastagent] flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`);
@@ -752,18 +677,7 @@ async function runDeployRailway(params: {
   extraSecrets: string[];
 }): Promise<void> {
   const { target, name, modelAuth, authPath, channels, extraSecrets } = params;
-  const railway: RailwayRunner = (args, opts) =>
-    new Promise((res) => {
-      const child = spawn("railway", args, {
-        cwd: target,
-        stdio: [opts?.input ? "pipe" : "inherit", opts?.capture ? "pipe" : "inherit", "inherit"],
-      });
-      let out = "";
-      child.stdout?.on("data", (d) => (out += String(d)));
-      if (opts?.input) child.stdin?.end(opts.input);
-      child.on("close", (code) => res({ code: code ?? 1, stdout: out }));
-      child.on("error", () => res({ code: 127, stdout: "" })); // ENOENT: railway not on PATH
-    });
+  const railway = spawnRunner("railway", target);
   // Fail fast if the railway CLI is absent (spawn ENOENT → 127), with the install link.
   if ((await railway(["--version"], { capture: true })).code === 127) {
     console.error(`[fastagent] railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run`);
@@ -1173,28 +1087,6 @@ function serve(routes: Routes, port: number, onListening?: (boundPort: number) =
       process.exit(1);
     },
   );
-}
-
-/** Parse `<dir>/package.json`, or `{}` when absent/malformed (a real build surfaces the actual error). */
-async function readPackageJson(d: string): Promise<{
-  packageManager?: unknown;
-  dependencies?: Record<string, unknown>;
-  devDependencies?: Record<string, unknown>;
-}> {
-  try {
-    return JSON.parse(await readFile(join(d, "package.json"), "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-/** .env (secrets) → process.env. Only a missing file is normal; surface anything else. */
-function loadDotEnv(d: string): void {
-  try {
-    loadEnvFile(join(d, ".env"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
 }
 
 /**

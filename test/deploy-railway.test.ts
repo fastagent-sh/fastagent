@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planRailwayDeploy } from "../src/deploy/railway.ts";
+import { planRailwayDeploy } from "../src/deploy/railway/plan.ts";
 
 const json = (p: ReturnType<typeof planRailwayDeploy>) => p.artifacts.find((a) => a.path === "railway.json")!.content;
 const runbook = (p: ReturnType<typeof planRailwayDeploy>) => p.runbook.join("\n");
