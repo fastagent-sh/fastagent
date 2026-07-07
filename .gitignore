@@ -3,4 +3,3 @@ dist/
 .fastagent/
 *.log
 .DS_Store
-.brooks-lint-history.json
