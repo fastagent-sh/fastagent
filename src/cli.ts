@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { parseArgs } from "node:util";
 import type { Agent } from "./agent.ts";
@@ -34,7 +34,6 @@ import {
   resolveModelSpec,
   resolveSessionsDirOverride,
   rewriteConfigModel,
-  WORKSPACE_CONFIG_NAMES,
 } from "./engines/pi/config.ts";
 import { formatModelsCommand } from "./cli-models.ts";
 import { formatAuthReport } from "./cli-auth.ts";
@@ -56,7 +55,7 @@ import {
   channelSetup,
   scaffoldChannel,
 } from "./scaffold/add-channel.ts";
-import { adoptWorkspace, exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
+import { detectHostSignals, exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
 import { isGeneratedDockerfile } from "./deploy/container.ts";
 import { parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly/plan.ts";
@@ -72,7 +71,7 @@ import { createScheduler, scheduleSession } from "./schedule/scheduler.ts";
 
 function usage(code: number): never {
   console.error(`usage:
-  fastagent init   [dir] [--minimal] [--no-install]
+  fastagent init   [dir] [--minimal] [--no-install] [--flat] [--agent-dir <name>]
   fastagent models [search]
   fastagent info   [dir] [--json] [--auth-path file]
   fastagent tool   <name> '<json-args>' [dir]
@@ -96,13 +95,20 @@ function usage(code: number): never {
          crude REPL) — to try it locally before serving. Same model/tool/skill resolution
          as dev; pi handles login, sessions, and /resume natively.
   init   scaffold a runnable agent in dir (default .) and run npm install. Default is a
-         self-iterating agent: AGENTS.md, a writing-great-skills example skill, a fetch-url
-         code tool, config, package.json, .gitignore. Refuses to overwrite an existing workspace.
-         --minimal      AGENTS.md + the example skill + config only (no code tool / package.json)
-         --no-install   scaffold everything but skip npm install
+         self-iterating agent: persona.md (its identity), a writing-great-skills example skill, a
+         fetch-url code tool, config, package.json, .gitignore. Never overwrites existing files; an
+         existing AGENTS.md is kept as project context. Layout: flat by default ("a directory is an
+         agent"); when an existing toolchain/deploy claims the directory (tsconfig/framework config,
+         a non-JS build manifest like go.mod/pyproject.toml/Cargo.toml, Dockerfile/fly/railway, or
+         occupied tools//channels//skills/), the kit goes into ./agent
+         and config.agentDir points there — the reason is printed, no prompt.
+         --minimal           persona.md + the example skill + config only (no code tool / package.json)
+         --no-install        scaffold everything but skip npm install
+         --flat              force the flat layout (skip detection)
+         --agent-dir <name>  force the kit into ./<name>
   models list the available "provider/modelId" specs ([search] filters by substring; use one with
          --model or in the config).
-  info   print what dir (default .) ASSEMBLES into — model, AGENTS.md, skills, tools (+ collisions),
+  info   print what dir (default .) ASSEMBLES into — model, persona, context files (AGENTS.md), skills, tools (+ collisions),
          channels, sessions, load diagnostics — WITHOUT serving. Read-only (never creates sessions /
          writes .gitignore); an unset model is reported, not fatal. --json for CI. Run it first when
          something looks off.
@@ -164,6 +170,8 @@ const { positionals, values } = parseArgs({
     "auth-path": { type: "string" },
     minimal: { type: "boolean" },
     "no-install": { type: "boolean" },
+    flat: { type: "boolean" },
+    "agent-dir": { type: "string" },
     "no-watch": { type: "boolean" },
     tunnel: { type: "boolean" },
     update: { type: "boolean" },
@@ -396,63 +404,70 @@ async function runInfo(): Promise<void> {
 }
 
 async function runInit(): Promise<void> {
-  // An existing repo (AGENTS.md) with no fastagent.config → ADOPT it (the B-mode on-ramp), don't refuse:
-  // the repo IS the agent, so add the missing config + guide, keeping AGENTS.md/skills/tools untouched.
-  const hasConfig = (await Promise.all(WORKSPACE_CONFIG_NAMES.map((n) => exists(join(dir, n))))).some(Boolean);
-  if (!hasConfig && (await exists(join(dir, "AGENTS.md")))) return runAdopt();
-
   const minimal = values.minimal ?? false;
-  const { complete, created, skipped, intoNonEmpty, warnings } = await scaffoldWorkspace(dir, { minimal }).catch(
-    failStartup,
+  // Layout: flags force; otherwise the jurisdiction rule decides (see detectHostSignals) and the reason
+  // is printed. Deliberately no prompt — non-interactive executors (coding agents) get a deterministic
+  // default they can read and override.
+  if (values.flat && values["agent-dir"]) failStartup(new Error(`--flat and --agent-dir conflict — pick one`));
+  let agentDir: string | undefined;
+  let signals: string[] = [];
+  if (values["agent-dir"]) {
+    // Same containment contract loadConfig enforces on config.agentDir: an escaping value would write
+    // the kit outside the workspace AND produce a config that can never load — refuse up front.
+    const rel = relative(dir, resolve(dir, values["agent-dir"]));
+    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      failStartup(new Error(`--agent-dir ("${values["agent-dir"]}") must be a subdirectory of ${dir}`));
+    }
+    agentDir = `./${rel}`;
+  } else if (!values.flat) {
+    signals = await detectHostSignals(dir).catch(failStartup);
+    if (signals.length > 0) agentDir = "./agent";
+  }
+
+  const { complete, created, skipped, patched, intoNonEmpty, warnings } = await scaffoldWorkspace(dir, {
+    minimal,
+    agentDir,
+  }).catch(failStartup);
+  // The layout reason prints only once the scaffold actually happened — an "already a workspace" refusal
+  // must not be preceded by an announced decision that then never takes place.
+  if (signals.length > 0) {
+    console.error(
+      `[fastagent] found ${signals.join(", ")} — an existing toolchain/deploy claims this directory, so the agent kit goes into ./agent (its own namespace; config.agentDir points there). cwd stays this directory. Override: --flat`,
+    );
+  }
+  console.error(
+    `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"}${agentDir ? ` — agent kit in ${agentDir}` : ""}`,
   );
-  console.error(`[fastagent] initialized ${dir}${complete ? "" : " (minimal)"}`);
   if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
   if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
-  if (intoNonEmpty) {
+  if (patched.length > 0) console.error(`  updated: ${patched.join(", ")} (missing secret/state excludes appended)`);
+  if (intoNonEmpty && !agentDir) {
     console.error(
-      `  note: scaffolded into a non-empty directory; for a clean start, run \`fastagent init <name>\` (a fresh subdir)`,
+      `  note: scaffolded flat into a non-empty directory (nothing claims it — the directory is the agent); use --agent-dir <name> to put the kit in a subdir instead`,
     );
   }
   for (const w of warnings) console.error(`[fastagent] warn: ${w}`);
 
   // Install deps only for a complete agent whose package.json we just wrote (a kept one is not ours).
-  const willInstall = complete && !values["no-install"] && created.includes("package.json");
+  // The manifest lives with the kit (agentDir when set), so the install runs there — never against a
+  // host repo's own package.json.
+  const kitDir = resolve(dir, agentDir ?? ".");
+  const willInstall = complete && !values["no-install"] && created.includes(join(agentDir ?? ".", "package.json"));
   let installFailed = false;
   if (willInstall) {
-    console.error(`[fastagent] installing dependencies (npm install)…`);
-    installFailed = (await npmInstall(dir)) !== 0;
+    console.error(`[fastagent] installing dependencies (npm install${agentDir ? ` in ${agentDir}` : ""})…`);
+    installFailed = (await npmInstall(kitDir)) !== 0;
     if (installFailed)
-      console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
+      console.error(`[fastagent] warn: npm install failed — run it manually in ${kitDir} before \`fastagent dev\``);
   }
 
   console.error(`  next steps:`);
   const cdTarget = nextStepCd(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
-  if (complete && (values["no-install"] || installFailed)) console.error(`    npm install`);
+  if (complete && (values["no-install"] || installFailed))
+    console.error(`    ${agentDir ? `(cd ${agentDir} && npm install)` : "npm install"}`);
   console.error(`    fastagent dev   # serve locally and iterate`);
   console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
-}
-
-/** `fastagent init` on an existing AGENTS.md repo: adopt it (add config + guide), keeping its own files. */
-async function runAdopt(): Promise<void> {
-  const r = await adoptWorkspace(dir).catch(failStartup);
-  console.error(`[fastagent] adopted ${dir} — kept your AGENTS.md`);
-  // --minimal shapes a fresh scaffold; adopt writes only the missing config, so it has no effect here.
-  // Say so rather than silently ignore the flag (the user may think they got a minimal scaffold).
-  if (values.minimal) console.error(`  note: --minimal ignored — adopting an existing repo, not scaffolding`);
-  if (r.created.length > 0) console.error(`  created: ${r.created.join(", ")}`);
-  if (r.patched.length > 0) console.error(`  updated: ${r.patched.join(", ")}`);
-  const add = r.runtime === "bun" ? "bun add @kid7st/fastagent" : "npm install @kid7st/fastagent";
-  console.error(`  next steps:`);
-  const cdTarget = nextStepCd(process.cwd(), dir);
-  if (cdTarget) console.error(`    cd ${cdTarget}`);
-  console.error(`    set model in fastagent.config.mjs   # \`fastagent models\` lists the specs`);
-  if (!r.hasPackageJson) {
-    console.error(`    ${r.runtime === "bun" ? "bun init" : "npm init -y"}   # a channel needs a package.json`);
-  }
-  if (!r.hasFastagentDep) console.error(`    ${add}   # a channel file imports it`);
-  console.error(`    fastagent add telegram   # or github — a channel to serve on`);
-  console.error(`    fastagent dev            # serve locally and iterate`);
 }
 
 /** `fastagent add <channel> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
@@ -465,12 +480,21 @@ async function runAdd(): Promise<void> {
     process.exit(1);
   }
   const channelKind = kind as ChannelKind;
+  // The channel (glue + companion tool) is agent surface — it lands in agentDir (config.agentDir, or
+  // target when flat), the same place dev/start discover channels/. .env(.example) and the secret
+  // hygiene stay at the run root, where .env is actually read.
+  const { config: addConfig } = await loadConfig(target).catch(failStartup);
+  const channelHome = resolveAgentDir(target, addConfig);
   // Preconditions before the write, so a refusal is side-effect-free.
-  if (await channelExists(target, channelKind).catch(failStartup)) {
-    failStartup(new Error(`channels/${channelKind}.ts already exists — edit it, or remove it to re-scaffold`));
+  if (await channelExists(channelHome, channelKind).catch(failStartup)) {
+    failStartup(
+      new Error(
+        `${relative(target, join(channelHome, "channels", `${channelKind}.ts`))} already exists — edit it, or remove it to re-scaffold`,
+      ),
+    );
   }
-  await assertChannelReady(target).catch(failStartup);
-  const file = await scaffoldChannel(target, channelKind).catch(failStartup);
+  await assertChannelReady(channelHome).catch(failStartup);
+  const file = await scaffoldChannel(channelHome, channelKind).catch(failStartup);
   console.error(`[fastagent] created ${relative(target, file)}`);
   if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
@@ -485,9 +509,11 @@ async function runAdd(): Promise<void> {
   }
   const { env, steps } = channelSetup(channelKind);
   const install =
-    detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
+    detectRuntime(channelHome, await readPackageJson(channelHome)).runtime === "bun" ? "bun install" : "npm install";
+  // The kit's manifest lives in channelHome (agentDir when set) — point the install there, not the run root.
+  const installCmd = channelHome === target ? install : `(cd ${relative(target, channelHome)} && ${install})`;
   console.error(`  next steps:`);
-  console.error(`    ${install}                      # if @kid7st/fastagent is not installed yet`);
+  console.error(`    ${installCmd}                      # if @kid7st/fastagent is not installed yet`);
   for (const e of env) {
     const value = e.generate ? `=${randomBytes(24).toString("hex")}` : "";
     console.error(`    set ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
@@ -513,7 +539,10 @@ async function runAddSkill(): Promise<void> {
     );
     process.exit(1);
   }
-  const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
+  // Skills are agent surface — vendored into agentDir/skills (config.agentDir, or target when flat).
+  const { config: skillConfig } = await loadConfig(target).catch(failStartup);
+  const skillHome = resolveAgentDir(target, skillConfig);
+  const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(skillHome, source, {
     update: values.update ?? false,
   }).catch(failStartup);
   console.error(`[fastagent] ${overwritten ? "updated" : "vendored"} skill "${name}" → ${dest}/`);
@@ -525,7 +554,7 @@ async function runAddSkill(): Promise<void> {
       `  warn: this skill ships scripts/ (executable code that runs in your agent) — review it before deploying`,
     );
   }
-  console.error(`  next: mention "${name}" in AGENTS.md so the model knows when to use it; then \`fastagent dev\``);
+  console.error(`  next: mention "${name}" in persona.md so the model knows when to use it; then \`fastagent dev\``);
 }
 
 /**

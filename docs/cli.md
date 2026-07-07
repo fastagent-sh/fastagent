@@ -35,17 +35,21 @@ Most commands take an optional workspace directory. When omitted, the current di
 ## `fastagent init`
 
 ```bash
-fastagent init [dir] [--minimal] [--no-install]
+fastagent init [dir] [--minimal] [--no-install] [--flat] [--agent-dir <name>]
 ```
 
-Creates a self-iterating agent — the directory is the agent, and it can edit its own definition (AGENTS.md and skills are re-read every turn). A fresh workspace has `AGENTS.md` (how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.env.example`, and `.gitignore`. Everything is written offline; by default it also writes `package.json` and runs `npm install`.
+Creates a self-iterating agent — the directory is the agent, and it can edit its own definition (persona.md and skills are re-read every turn). A fresh workspace has `persona.md` (the agent's identity: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.env.example`, and `.gitignore`. No `AGENTS.md` is scaffolded (it is project context, not identity); an existing one is kept untouched. Everything is written offline; by default it also writes `package.json` and runs `npm install`.
+
+**Layout** — flat by default ("a directory is an agent"). When an existing system already claims the directory — a toolchain/build manifest (`tsconfig.json`, `next|vite|astro|svelte|nuxt|remix|webpack|rollup.config.*`, or a non-JS ecosystem's — `go.mod`, `Cargo.toml`, `pyproject.toml`, `setup.py`, `requirements.txt`, `Gemfile`, `pom.xml`, `build.gradle`, `composer.json`, `CMakeLists.txt`), a deploy manifest (`Dockerfile`, `fly.toml`, `railway.toml`, `vercel.json`, `netlify.toml`), or occupied `tools//channels//skills/` — the agent kit goes into `./agent` with `config.agentDir` pointing there, and the reason is printed (no prompt). The agent kit self-contains its `package.json`, so a host repo's manifest and lockfile are never touched. `init` never overwrites existing files and refuses only a directory that already has a `fastagent.config.*`.
 
 Options:
 
 | Option | Meaning |
 |---|---|
-| `--minimal` | AGENTS.md + the example skill + config only — no code tool, package.json, or install. |
+| `--minimal` | persona.md + the example skill + config only — no code tool, package.json, or install. |
 | `--no-install` | Scaffold everything but skip `npm install`. |
+| `--flat` | Force the flat layout (skip the jurisdiction detection). |
+| `--agent-dir <name>` | Force the agent kit into `./<name>`. |
 
 ## `fastagent info`
 
@@ -57,7 +61,7 @@ Prints the assembled surface without starting a server:
 
 - model source,
 - config path,
-- `AGENTS.md` presence,
+- persona presence and context files (`AGENTS.md`),
 - skills and diagnostics,
 - non-default tools and collisions,
 - channel files,
@@ -92,7 +96,7 @@ Authenticates a model provider and stores credentials in the **project-level** `
 fastagent dev [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
 ```
 
-Assembles the workspace and serves it locally. AGENTS.md/`skills/` are re-read every turn (edits go
+Assembles the workspace and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
 live next turn, no restart); a supervisor restarts the worker on edits to the code inputs —
 `tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.env`.
 
@@ -176,7 +180,7 @@ fastagent add github [dir]
 fastagent add telegram [dir]
 ```
 
-Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.env.example` when possible.
+Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.env.example` when possible. When `config.agentDir` is set, the channel (and any companion tool) lands under that subdirectory — the same place `dev`/`start` discover channels — while `.env.example` and the secret hygiene stay at the run root, where `.env` is read.
 
 See:
 
@@ -189,7 +193,7 @@ See:
 fastagent add skill <source> [dir] [--update]
 ```
 
-Vendors an Agent Skills skill into `skills/<name>/`. Sources can be:
+Vendors an Agent Skills skill into `skills/<name>/` (under `config.agentDir` when set). Sources can be:
 
 - a GitHub-style ref,
 - a local path,

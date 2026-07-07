@@ -12,6 +12,30 @@ import { basename, resolve } from "node:path";
 export const baseTemplate = (name: string): string =>
   readFileSync(new URL(`./templates/${name}`, import.meta.url), "utf8");
 
+/** The persona template; in the agentDir layout a locator note is appended (anchor-free — no silent-miss
+ *  risk) so the self-iteration guidance ("write skills beside this file") points into the kit, not the
+ *  run root — a skill written to the root `skills/` would never be scanned. */
+export function personaTemplate(agentDir?: string): string {
+  const base = baseTemplate("persona.md");
+  if (!agentDir) return base;
+  return `${base}\nNote: your definition lives under \`${agentDir}/\` relative to the workspace root — this file is \`${agentDir}/persona.md\`, and a new skill goes to \`${agentDir}/skills/<name>/SKILL.md\` (a \`skills/\` at the root is not scanned).\n`;
+}
+
+/** The config template; when the kit is placed in a subdirectory, `agentDir` is injected as the first key. */
+export function configTemplate(agentDir?: string): string {
+  const base = baseTemplate("fastagent.config.mjs");
+  if (!agentDir) return base;
+  const out = base.replace(
+    "export default {\n",
+    `export default {\n  agentDir: ${JSON.stringify(agentDir)}, // the agent's own surface (persona.md / skills / tools / channels) lives there\n`,
+  );
+  // Fail visibly if the template drifted and the anchor no longer matches — a config that silently
+  // doesn't point at the kit would assemble an EMPTY agent with no error. Check the OPERATION happened
+  // (out !== base), not a substring — a commented `agentDir:` example in the template would fool that.
+  if (out === base) throw new Error("configTemplate: anchor not found in fastagent.config.mjs template");
+  return out;
+}
+
 const channelScaffoldDir = (kind: string): URL => new URL(`../channels/${kind}/scaffold/`, import.meta.url);
 
 /** Read one file from a channel's scaffold bundle (src/channels/<kind>/scaffold/<name>). */

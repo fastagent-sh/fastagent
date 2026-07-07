@@ -26,11 +26,11 @@ fastagent init my-agent
 cd my-agent
 ```
 
-The default scaffold is a **self-iterating agent** — the directory is the agent, and it can edit its own definition (AGENTS.md and skills are re-read every turn). A fresh workspace is minimal:
+The default scaffold is a **self-iterating agent** — the directory is the agent, and it can edit its own definition (persona.md and skills are re-read every turn). A fresh workspace is minimal:
 
 ```txt
 my-agent/
-├── AGENTS.md                          # how to improve yourself
+├── persona.md                         # the agent's identity — how to improve yourself
 ├── skills/writing-great-skills/       # the example skill: how to author skills well
 ├── tools/fetch-url.ts                 # an example code tool
 ├── fastagent.config.mjs
@@ -39,7 +39,7 @@ my-agent/
 └── .gitignore
 ```
 
-`AGENTS.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)) is the guide it consults to write them. Add more skills with `fastagent add skill <owner/repo/path>`. For a workspace with no code tool or dependencies (AGENTS.md + the skill + config only):
+`persona.md` teaches the agent to capture durable improvements as new skills; `writing-great-skills` (vendored from [mattpocock/skills](https://github.com/mattpocock/skills)) is the guide it consults to write them. No `AGENTS.md` is scaffolded — that file is *project context* the agent reads (yours, or a host repo's), not its identity. Add more skills with `fastagent add skill <owner/repo/path>`. For a workspace with no code tool or dependencies (persona.md + the skill + config only):
 
 ```bash
 fastagent init my-agent --minimal
@@ -51,7 +51,9 @@ fastagent init my-agent --minimal
 fastagent info
 ```
 
-`info` is read-only. It prints the model, loaded `AGENTS.md`, skills, discovered tools, channels, diagnostics, and session path without starting a server.
+`info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
+
+**Initializing inside an existing project?** When the directory is already claimed by a toolchain or deploy setup (a `tsconfig.json`/framework config, a non-JS build manifest like `go.mod`/`pyproject.toml`/`Cargo.toml`, a `Dockerfile`/`fly.toml`/`railway.toml`, or occupied `tools//channels//skills/`), `init` puts the agent kit into `./agent` instead of flat, writes `agentDir: "./agent"` into the config, and prints the reason — the host's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. Override with `--flat` or `--agent-dir <name>`.
 
 A fresh workspace presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent lists the models of the providers you are logged into (run `fastagent login`
@@ -70,7 +72,7 @@ FASTAGENT_MODEL=provider/model-id fastagent dev
 fastagent dev
 ```
 
-`dev` assembles the workspace and serves it on `:8787`. AGENTS.md/`skills/` edits go live on the next turn; code edits (`tools/`, `channels/`, config) restart the worker. The default channel is `POST /invoke`.
+`dev` assembles the workspace and serves it on `:8787`. persona.md/AGENTS.md/`skills/` edits go live on the next turn; code edits (`tools/`, `channels/`, config) restart the worker. The default channel is `POST /invoke`.
 
 Send one turn:
 
@@ -103,7 +105,7 @@ fastagent chat
 Run one agent turn without a server:
 
 ```bash
-fastagent invoke "Summarize AGENTS.md in one sentence"
+fastagent invoke "Summarize persona.md in one sentence"
 ```
 
 Run one tool without a model:
@@ -135,7 +137,7 @@ Test it directly:
 fastagent tool reverse '{"text":"hello"}'
 ```
 
-Mention the tool in `AGENTS.md` so the model knows when to use it. `fastagent dev` reloads on save.
+Mention the tool in `persona.md` so the model knows when to use it. `fastagent dev` reloads on save.
 
 ## 6. Serve without watch
 

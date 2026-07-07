@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { preflightDeploy } from "../src/deploy/preflight.ts";
@@ -31,6 +31,21 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pre = await call(dir, {}, { modelSpec: "openai/gpt-4o-mini", run: true });
     expect(pre.ok).toBe(false);
     if (!pre.ok) expect(pre.gate).toMatch(/fastagent\.config/);
+  });
+
+  it("agentDir with its own package.json: gates --run (kit deps never installed on the box), warns without", async () => {
+    const dir = await workspace({ "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n` });
+    const agentDir = join(dir, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "package.json"), `{"type":"module"}`);
+
+    const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { agentDir, run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/agentDir.*package\.json/);
+
+    const warned = await call(dir, { model: "openai/gpt-4o-mini" }, { agentDir });
+    expect(warned.ok).toBe(true);
+    if (warned.ok) expect(JSON.stringify(warned.messages)).toMatch(/agentDir/);
   });
 
   it("warns (not gates) about the same model issue without --run", async () => {
