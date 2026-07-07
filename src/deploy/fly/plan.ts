@@ -41,6 +41,9 @@ export interface FlyPlanInput extends ContainerInput {
   /** Allow scaling to zero when idle (default true → `min_machines_running=0`). CLI `--no-scale-to-zero`
    *  forces one machine up; a github channel forces it too (fire-and-forget turns have no replay). */
   scaleToZero: boolean;
+  /** Time triggers present (schedules/ or selfSchedule) — forces one machine up: cron/wake has no
+   *  external wake-up, so a scaled-to-zero box would sleep through them. */
+  hasTimeTriggers: boolean;
 }
 
 export interface FlyPlan {
@@ -56,16 +59,20 @@ function flyToml(
   hasGithub: boolean,
   autostop: "suspend" | "stop",
   scaleToZero: boolean,
+  hasTimeTriggers: boolean,
 ): string {
-  // min_machines_running: 1 (keep one up) when a github channel is present OR the operator opted out of
-  // scale-to-zero. GitHub's is a SAFETY default — its fire-and-forget turns have no replay (unlike
-  // Telegram's L1 turn store), so scaling to zero could drop an in-flight review; the extra capacity
-  // still suspends, it just never takes the LAST machine down. Reason-tagged so the comment is honest.
+  // min_machines_running: 1 (keep one up) when a github channel is present, TIME triggers exist, OR the
+  // operator opted out of scale-to-zero. GitHub's is a SAFETY default — its fire-and-forget turns have no
+  // replay, so scaling to zero could drop an in-flight review. Time triggers (schedules/wake) have no
+  // external wake-up at all — a scaled-to-zero box sleeps through the cron instant. Reason-tagged so the
+  // comment is honest.
   const min = hasGithub
     ? `  min_machines_running = 1         # github turns have no replay — don't scale to zero (an in-flight review would be lost)`
-    : !scaleToZero
-      ? `  min_machines_running = 1         # kept running (--no-scale-to-zero)`
-      : `  min_machines_running = 0         # scale to zero`;
+    : hasTimeTriggers
+      ? `  min_machines_running = 1         # schedules/wake-ups need a running machine (no external wake-up for a cron instant)`
+      : !scaleToZero
+        ? `  min_machines_running = 1         # kept running (--no-scale-to-zero)`
+        : `  min_machines_running = 0         # scale to zero`;
   const stopLine =
     autostop === "stop"
       ? `  auto_stop_machines = "stop"      # stop on idle (cold start on the next webhook)`
@@ -103,7 +110,14 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const artifacts: Artifact[] = [
     {
       path: "fly.toml",
-      content: flyToml(appName, port, channels.includes("github"), input.autostop, input.scaleToZero),
+      content: flyToml(
+        appName,
+        port,
+        channels.includes("github"),
+        input.autostop,
+        input.scaleToZero,
+        input.hasTimeTriggers,
+      ),
     },
     ...containerArtifacts(input),
   ];
@@ -197,6 +211,13 @@ export function parseFlyAppName(toml: string): string | undefined {
  *  volume lands in the machine's region (fly.toml is the single source; see {@link parseFlyAppName}). */
 export function parseFlyRegion(toml: string): string | undefined {
   return toml.match(/^\s*primary_region\s*=\s*["']([^"']+)["']/m)?.[1];
+}
+
+/** The `min_machines_running` from a fly.toml, or undefined — the KEEP-mode check reads it so a kept
+ *  file that still scales to zero can be warned about when time triggers (schedules/wake) exist. */
+export function parseFlyMinMachines(toml: string): number | undefined {
+  const m = toml.match(/^\s*min_machines_running\s*=\s*(\d+)/m)?.[1];
+  return m === undefined ? undefined : Number(m);
 }
 
 /** Sanitize a directory basename into a Fly app name: lowercase, [a-z0-9-], must start with a letter. */

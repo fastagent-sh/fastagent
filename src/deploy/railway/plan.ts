@@ -39,6 +39,10 @@ export interface RailwayPlanInput extends ContainerInput {
   // ContainerInput — ONE source, so the plan and the generated Dockerfile can't drift.
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
   extraSecrets?: string[];
+  /** Time triggers present (schedules/ or selfSchedule) — the runbook forbids App Sleeping: cron/wake has
+   *  no external wake-up, so a sleeping service sleeps through them. Required (like FlyPlanInput's) so a
+   *  caller can't silently omit it and degrade the sleeping guidance to "optional". */
+  hasTimeTriggers: boolean;
 }
 
 export interface RailwayPlan {
@@ -158,7 +162,9 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     ``,
     channels.includes("github")
       ? `# Scale-to-zero: do NOT enable App Sleeping — github turns have no replay, a sleep mid-review is lost.`
-      : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping.`,
+      : input.hasTimeTriggers
+        ? `# Scale-to-zero: do NOT enable App Sleeping — schedules/wake-ups have no external wake-up; a sleeping service sleeps through them.`
+        : `# Scale-to-zero (optional, dashboard-only — no CLI/API): Settings → Deploy → Serverless → App Sleeping.`,
     `# Keep this a SINGLE service: the ${MOUNT} volume is tied to one service; extra replicas split state.`,
   );
 

@@ -16,6 +16,7 @@ const base = {
   version: "9.9.9",
   autostop: "suspend",
   scaleToZero: true,
+  hasTimeTriggers: false,
 } as const;
 
 describe("deploy/fly: planFlyDeploy", () => {
@@ -31,6 +32,9 @@ describe("deploy/fly: planFlyDeploy", () => {
   it("keeps one machine running for github (no replay), scales to zero otherwise (definition-aware)", () => {
     expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["github"] }))).toContain(
       "min_machines_running = 1",
+    );
+    expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasTimeTriggers: true }))).toContain(
+      "min_machines_running = 1", // schedules/wake need a running machine — no external wake-up for a cron instant
     );
     expect(flyToml(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["telegram"] }))).toContain(
       "min_machines_running = 0",

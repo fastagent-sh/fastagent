@@ -11,6 +11,7 @@ const base = {
   runtime: "node",
   hasLockfile: true,
   version: "9.9.9",
+  hasTimeTriggers: false,
 } as const;
 
 describe("deploy/railway: planRailwayDeploy", () => {
@@ -84,6 +85,10 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["github"] }))).toContain(
       "do NOT enable App Sleeping",
     );
+    // time triggers: cron/wake has no external wake-up — a sleeping service sleeps through them.
+    expect(
+      runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["telegram"], hasTimeTriggers: true })),
+    ).toContain("do NOT enable App Sleeping");
   });
 
   it("turns a non-env auth label into guidance, not a variable (shared secret logic)", () => {
