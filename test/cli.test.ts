@@ -148,15 +148,23 @@ describe("cli papercuts", () => {
 
   it("login self-ignores .fastagent on an adapted dir before it writes the credential file", async () => {
     // login is the command that CREATES the secret, so its self-ignore must fire independently of the
-    // opener. A bogus provider fails the auth flow AFTER the self-ignore, so the .gitignore is the
-    // proof the leak guard ran. Adapted dir = no root .gitignore (the feature's core use case).
+    // opener — and BEFORE the interactive gate below, so the .gitignore is written even though this
+    // non-TTY spawn then fails fast. That .gitignore is the proof the leak guard ran. Adapted dir = no
+    // root .gitignore (the feature's core use case).
     const cwd = await mkdtemp(join(tmpdir(), "fa-login-cli-"));
     const env = { ...process.env };
     delete env.FASTAGENT_AUTH_PATH; // ensure the in-tree default (not a dev's global override)
     const { code } = await run(["login", "no-such-provider"], cwd, env);
-    expect(code).not.toBe(0); // unknown provider fails the flow
+    expect(code).not.toBe(0);
     const { readFile } = await import("node:fs/promises");
     expect(await readFile(join(cwd, ".fastagent", ".gitignore"), "utf8")).toBe("*\n");
+  });
+
+  it("login fails fast in a non-TTY (a pipe/CI) instead of hanging on the interactive menu", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fa-login-tty-"));
+    const { code, stderr } = await run(["login", "openai-codex"], cwd); // run() pipes stdio → not a TTY
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/login is interactive.*run it in a terminal/);
   });
 
   it("login from $HOME does NOT self-ignore the HOME-global ~/.fastagent (a dotfiles repo may track it)", async () => {

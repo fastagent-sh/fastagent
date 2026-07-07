@@ -9,6 +9,11 @@
 export function formatModelsCommand(specs: string[], search?: string): { lines: string[]; error?: string } {
   if (!search) return { lines: specs };
   const q = search.toLowerCase();
-  const lines = specs.filter((spec) => spec.toLowerCase().includes(q));
-  return lines.length === 0 ? { lines, error: `no model matches "${search}"` } : { lines };
+  const matches = specs.filter((spec) => spec.toLowerCase().includes(q));
+  if (matches.length === 0) return { lines: matches, error: `no model matches "${search}"` };
+  // Rank a PROVIDER-name match (query in the part before "/") above an incidental model-id match, so
+  // `models anthropic` leads with anthropic/* rather than burying it under amazon-bedrock/anthropic.*
+  // and google-vertex/…-anthropic-… (which only match in the model id). Order within each group is kept.
+  const providerMatch = (spec: string) => spec.slice(0, spec.indexOf("/")).toLowerCase().includes(q);
+  return { lines: [...matches.filter(providerMatch), ...matches.filter((s) => !providerMatch(s))] };
 }

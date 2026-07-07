@@ -145,7 +145,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     runbook.push(
       ``,
       modelAuth === undefined
-        ? `# Model auth: none configured locally.`
+        ? `# Model auth: none found at the local auth path — a global \`fastagent login\` isn't read here; pass --auth-path <file> (e.g. ~/.fastagent/auth.json), or \`--run\` carries it automatically.`
         : `# Model auth: your local auth is "${modelAuth}" — the plan can't read its value to set as a secret.`,
       `#   Set your provider API key as a Fly secret (fly secrets set KEY=...), OR place auth.json on the /data volume.`,
     );

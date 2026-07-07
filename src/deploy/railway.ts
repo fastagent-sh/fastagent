@@ -112,7 +112,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   if (!isEnvKey(modelAuth)) {
     runbook.push(
       modelAuth === undefined
-        ? `# Model auth: none configured locally.`
+        ? `# Model auth: none found at the local auth path — a global \`fastagent login\` isn't read here; pass --auth-path <file> (e.g. ~/.fastagent/auth.json), or \`--run\` carries it automatically.`
         : `# Model auth: your local auth is "${modelAuth}" — the plan can't read its value to set as a variable.`,
       `#   Set your provider API key as a variable (railway variables set KEY=...), OR place auth.json on the ${MOUNT} volume.`,
     );

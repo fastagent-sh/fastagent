@@ -35,6 +35,7 @@ import {
   rewriteConfigModel,
 } from "./engines/pi/config.ts";
 import { formatModelsCommand } from "./cli-models.ts";
+import { fastagentCredentialStore } from "./engines/pi/auth.ts";
 import { type LoginIO, loginFlow } from "./engines/pi/login.ts";
 import { configuredModelSpecs, createPiModels, probeAuthSource } from "./engines/pi/models.ts";
 import { ensureStateRootSelfIgnored, isUnderDir, loadAgentDefinition } from "./engines/pi/definition.ts";
@@ -819,6 +820,16 @@ async function runLogin(): Promise<void> {
   // actually lands under the in-tree root. An external `--auth-path`/`FASTAGENT_AUTH_PATH` writes
   // nothing in-tree (don't create an empty `.fastagent`); the guard also skips the HOME-global root.
   if (isUnderDir(authPath, stateRoot)) await ensureStateRootSelfIgnored(loginDir, stateRoot);
+  // login is inherently interactive — loginFlow renders provider/method menus and opens a browser (or
+  // prompts for a key). In a non-TTY (a pipe, CI, a coding-agent shell) the menu can't receive keystrokes
+  // and would hang. Fail fast with the reason instead of stalling on an unanswerable prompt. (After the
+  // secret-hygiene self-ignore above, which is cheap prep, so a later terminal login is safe.)
+  if (!isInteractive()) {
+    console.error(
+      `[fastagent] login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`,
+    );
+    process.exit(1);
+  }
   const io = terminalLoginIO();
   const result = await loginFlow(io, { provider: positionals[1], authPath }).catch(failStartup);
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
@@ -892,14 +903,28 @@ function parsePort(value: string | undefined, source: string): number | undefine
 async function reportAuth(modelSpec: string, authPath: string): Promise<void> {
   const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
   const source = await probeAuthSource(createPiModels({ authPath }), modelSpec);
-  log.info(`[fastagent] auth:   ${source === undefined ? "(none found)" : `${source} (${provider})`} — ${authPath}`);
-  if (source !== undefined) return;
-  // Lead with `fastagent login`: it covers every provider (including OAuth-only ones like openai-codex),
-  // and the provider-specific env var name is not exported, so keep the env path generic. login writes to
-  // this same project-level path, so a follow-up `fastagent login` here fixes it in place.
-  log.warn(
-    `[fastagent] no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
-  );
+  if (source !== undefined) {
+    log.info(`[fastagent] auth:   ${source} (${provider}) — ${authPath}`);
+    return;
+  }
+  // A `source` of undefined has TWO causes probeAuthSource can't tell apart (it swallows the throw): no
+  // credential at all, OR one that IS stored but couldn't be made usable — an expired/revoked OAuth whose
+  // refresh failed. Read the store WITHOUT triggering a refresh to distinguish them, so neither the status
+  // line nor the hint says "(none found)" when a login is merely stale (the actual failure would then be a
+  // contradictory "OAuth refresh failed"). Lead with `fastagent login` — it covers every provider (incl.
+  // OAuth-only ones) and writes this same path, fixing it in place.
+  const stored = await fastagentCredentialStore(authPath)
+    .read(provider)
+    .catch(() => undefined);
+  if (stored) {
+    log.info(`[fastagent] auth:   stored ${provider} ${stored.type}, expired/unusable — ${authPath}`);
+    log.warn(`[fastagent] the "${provider}" login is expired or unusable — run \`fastagent login\` to refresh it`);
+  } else {
+    log.info(`[fastagent] auth:   (none found) — ${authPath}`);
+    log.warn(
+      `[fastagent] no credentials for "${provider}" — run \`fastagent login\`, or set the provider's API key in .env; invokes will fail until then`,
+    );
+  }
 }
 
 /** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
