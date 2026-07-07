@@ -132,10 +132,8 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
       const label = `wake ${w.id.slice(0, 8)}`;
       const firedAt = now().toISOString();
       const r = await runTurn(label, w.session, w.prompt);
-      // Re-fire ONLY on a busy session (the turn never started — replay-safe). A wake is one-shot, so a
-      // busy-skip that just dropped it would lose it forever; defer + bounded retry. Every OTHER outcome is
-      // terminal (already claimed/removed) — re-running a turn that DID start risks duplicate side effects.
-      // Busy handling differs by kind. ONE-SHOT: defer (bounded) — it has no "next time", dropping it
+      // Busy handling differs by kind (busy = the turn never started — replay-safe; every other outcome is
+      // terminal for this occurrence, since a turn that DID start may have run side effects). ONE-SHOT: defer (bounded) — it has no "next time", dropping it
       // would lose it forever. RECURRING: the claim already ADVANCED the entry to the next instant (see
       // takeFirstDueWakeup), so a busy occurrence is simply SKIPPED and audited — the next one comes by
       // definition, and never touching the stored entry here is what keeps unwake/cancel race-free.

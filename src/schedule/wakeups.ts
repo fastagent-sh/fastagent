@@ -27,10 +27,10 @@ export interface Wakeup {
   cron?: string;
   /** IANA timezone for `cron` (default UTC). */
   tz?: string;
-  /** CONSECUTIVE busy-defer attempts for the CURRENT occurrence. A wake into a BUSY session (a channel
-   *  mid-turn on the same id) fails with `code: session_busy` — the turn never started, so it is deferred
-   *  (only that case; a failure whose turn DID run is terminal). At the cap a one-shot is dropped; a
-   *  recurring SKIPS the occurrence and re-arms at the next cron instant (attempts reset). */
+  /** ONE-SHOT ONLY: consecutive busy-defer attempts. A one-shot into a BUSY session (`code: session_busy`
+   *  — the turn never started) is deferred, bounded by {@link MAX_WAKE_ATTEMPTS}, then dropped. A RECURRING
+   *  occurrence never defers (this field never increments for it): a busy one is skipped on FIRST contact
+   *  — its claim already advanced the entry, and the next occurrence comes by definition. */
   attempts?: number;
 }
 
@@ -61,8 +61,12 @@ function isWakeup(e: unknown): e is Wakeup {
     typeof w.fireAt === "string" &&
     !Number.isNaN(Date.parse(w.fireAt)) &&
     (w.attempts === undefined || typeof w.attempts === "number") && // a non-number would make deferWakeup's count NaN
-    (w.cron === undefined || typeof w.cron === "string") &&
-    (w.tz === undefined || typeof w.tz === "string")
+    (w.tz === undefined || typeof w.tz === "string") &&
+    // A stored cron must PARSE: a bad one would throw inside the claim's nextRun — before the advance-save
+    // — so its fireAt never moves, it stays first-due forever, and every wakeup behind it starves (a poison
+    // pill worse than the bad-fireAt zombie this validator already guards).
+    (w.cron === undefined ||
+      (typeof w.cron === "string" && cronError(w.cron, typeof w.tz === "string" ? w.tz : undefined) === undefined))
   );
 }
 
