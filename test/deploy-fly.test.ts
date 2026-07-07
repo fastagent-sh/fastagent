@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFlyAppName, planFlyDeploy, toFlyAppName } from "../src/deploy/fly/plan.ts";
+import { parseFlyAppName, parseFlyMinMachines, planFlyDeploy, toFlyAppName } from "../src/deploy/fly/plan.ts";
 import { modelTravelIssue } from "../src/deploy/preflight.ts";
 
 const flyToml = (p: ReturnType<typeof planFlyDeploy>) => p.artifacts.find((a) => a.path === "fly.toml")!.content;
@@ -151,5 +151,13 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(parseFlyAppName('app = "renamed-bot"\nprimary_region = "iad"')).toBe("renamed-bot");
     expect(parseFlyAppName("app = 'single-quoted'")).toBe("single-quoted"); // TOML allows single quotes
     expect(parseFlyAppName('primary_region = "iad"')).toBeUndefined(); // no app line → caller uses basename
+  });
+
+  it("parses min_machines_running from a kept fly.toml (the KEEP-mode time-trigger check)", () => {
+    expect(parseFlyMinMachines("  min_machines_running = 0         # scale to zero")).toBe(0); // explicit 0 → warn/gate
+    expect(parseFlyMinMachines("  min_machines_running = 1         # kept running")).toBe(1); // ≥ 1 → fine
+    // Absent line → undefined; the CALLER treats it as 0 (Fly's platform default) — a hand-written
+    // fly.toml without the line scales to zero exactly like an explicit 0.
+    expect(parseFlyMinMachines('app = "bot"\nprimary_region = "iad"')).toBeUndefined();
   });
 });

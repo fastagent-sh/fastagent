@@ -661,15 +661,23 @@ async function runDeploy(): Promise<void> {
   // KEEP mode + time triggers: the kept fly.toml may still scale to zero — which would sleep through every
   // cron instant / wake-up. The generated plan can't fix a kept file, so surface it instead of the preflight
   // note silently not applying (the author who deployed FIRST and added schedules LATER hits exactly this).
+  // Under `--run` this is a GATE (same discipline as the model-travel gate): a full deploy whose schedules
+  // silently never fire is worse than a crash-loop — nothing fails visibly when a cron instant passes on a
+  // sleeping machine, and unlike github's min=0 there is no legitimate trade to accept here.
   if (flyTomlExists && !values.force && hasTimeTriggers) {
     const min = parseFlyMinMachines(await readFile(flyTomlPath, "utf8"));
     if ((min ?? 0) === 0) {
       // undefined = the line is absent — Fly's platform default for min_machines_running is 0, so a
       // hand-written fly.toml without the line scales to zero exactly like an explicit 0.
-      console.error(
-        `[fastagent] warn: your kept fly.toml has min_machines_running = 0, but schedules/self-scheduling ` +
-          `need a running machine (no external wake-up). Set it to 1, or pass --force to regenerate.`,
-      );
+      const msg =
+        `your kept fly.toml scales to zero (min_machines_running = ${min ?? "absent → platform default 0"}), but ` +
+        `schedules/self-scheduling need a running machine (no external wake-up). Set min_machines_running = 1, ` +
+        `or pass --force to regenerate.`;
+      if (values.run) {
+        console.error(`[fastagent] deploy stopped: ${msg}`);
+        process.exit(1);
+      }
+      console.error(`[fastagent] warn: ${msg}`);
     }
   }
   const plan = planFlyDeploy({
