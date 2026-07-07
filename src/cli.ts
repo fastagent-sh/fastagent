@@ -731,7 +731,7 @@ async function runDeploy(): Promise<void> {
         .replace(/[^a-zA-Z0-9-]+/g, "-")
         .replace(/^-+|-+$/g, "") || "agent";
     const plan = planRailwayDeploy({ serviceName, modelAuth, channels, extraSecrets, hasTimeTriggers, ...container });
-    await writeArtifacts(target, plan.artifacts);
+    await writeArtifacts(target, plan.artifacts, { neverForce: container.kitDir ? [".dockerignore"] : [] });
     if (values.run) return runDeployRailway({ target, name: serviceName, modelAuth, authPath, channels, extraSecrets });
     console.log(plan.runbook.join("\n"));
     return;
@@ -756,7 +756,9 @@ async function runDeploy(): Promise<void> {
   // and the runbook reads its `app=` (Fly app names are globally unique, so the basename guess may be
   // taken and the user renamed it). --force: the template is authoritative — the WHOLE fly.toml resets
   // (app→basename, region→iad, vm→defaults), so we do NOT round-trip `app` and warn that hand edits go.
-  const flyTomlPath = join(target, "fly.toml");
+  // Kit layout: fly.toml lives under the kit (agent/fly.toml) — the host repo's own fly.toml (if any)
+  // belongs to the host's product deploy and is never read or written here.
+  const flyTomlPath = container.kitDir ? join(target, container.kitDir, "fly.toml") : join(target, "fly.toml");
   const flyTomlExists = await exists(flyTomlPath);
   const keptApp = flyTomlExists && !values.force ? parseFlyAppName(await readFile(flyTomlPath, "utf8")) : undefined;
   const appName = keptApp ?? toFlyAppName(basename(target));
@@ -805,7 +807,7 @@ async function runDeploy(): Promise<void> {
     autostop: values.stop ? "stop" : "suspend",
     scaleToZero: !values["no-scale-to-zero"],
   });
-  await writeArtifacts(target, plan.artifacts);
+  await writeArtifacts(target, plan.artifacts, { neverForce: container.kitDir ? [".dockerignore"] : [] });
   if (values.run) return runDeployFly({ target, appName, modelAuth, authPath, channels, flyTomlPath, extraSecrets });
   console.log(plan.runbook.join("\n"));
 }
@@ -818,12 +820,25 @@ async function runDeploy(): Promise<void> {
  * --force regenerates it. A hand-written Dockerfile / a hand-written .dockerignore / fly.toml's app+region
  * state are just kept.
  */
-async function writeArtifacts(target: string, artifacts: { path: string; content: string }[]): Promise<void> {
+async function writeArtifacts(
+  target: string,
+  artifacts: { path: string; content: string }[],
+  options: { neverForce?: string[] } = {},
+): Promise<void> {
   for (const a of artifacts) {
     const abs = join(target, a.path);
+    // Host-owned paths (the root .dockerignore in the agentDir layout): --force means "MY generated
+    // artifact is authoritative", which never licenses clobbering the HOST's file — keep it always.
+    if (options.neverForce?.includes(a.path) && (await exists(abs))) {
+      console.error(
+        `[fastagent] kept ${a.path} — the host repo's own file (never overwritten, even with --force); ` +
+          `see the preflight warnings for what it must contain`,
+      );
+      continue;
+    }
     if (!values.force && (await exists(abs))) {
       const existing = await readFile(abs, "utf8");
-      if (a.path === "Dockerfile" && isGeneratedDockerfile(existing) && existing !== a.content) {
+      if (a.path.endsWith("Dockerfile") && isGeneratedDockerfile(existing) && existing !== a.content) {
         console.error(
           `[fastagent] kept ${a.path} — it no longer matches what deploy would generate (config changed, or ` +
             `you edited it); pass --force to regenerate.`,
@@ -833,6 +848,7 @@ async function writeArtifacts(target: string, artifacts: { path: string; content
       }
       continue;
     }
+    await mkdir(dirname(abs), { recursive: true }); // kit-layout artifacts live under agent/
     await writeFile(abs, a.content);
     console.error(`[fastagent] wrote ${a.path}`);
   }

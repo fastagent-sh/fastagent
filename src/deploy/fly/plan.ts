@@ -106,10 +106,14 @@ ${min}
 
 /** Compute the Fly deploy plan from the resolved definition. */
 export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
-  const { appName, port, modelAuth, channels } = input;
+  const { appName, port, modelAuth, channels, kitDir } = input;
+  // Kit layout: every artifact is namespaced under the kit (agent/fly.toml, agent/Dockerfile) so the
+  // host repo's own deploy files are never touched; the runbook passes explicit -c/--dockerfile flags
+  // (unambiguous across flyctl versions — no reliance on config-relative path resolution).
+  const flyTomlPath = kitDir ? `${kitDir}/fly.toml` : "fly.toml";
   const artifacts: Artifact[] = [
     {
-      path: "fly.toml",
+      path: flyTomlPath,
       content: flyToml(
         appName,
         port,
@@ -128,8 +132,11 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   // `fly secrets set` the coding agent fills — `<value>` placeholders, never inline comments.
   const secrets = requiredSecrets(modelAuth, channels, input.extraSecrets);
 
+  const deployCmd = kitDir
+    ? `fly deploy . --config ${kitDir}/fly.toml --dockerfile ${kitDir}/Dockerfile --app ${appName}`
+    : `fly deploy --app ${appName}`;
   const runbook: string[] = [
-    `# Deploy "${appName}" to Fly.io. fly.toml / Dockerfile / .dockerignore are generated above.`,
+    `# Deploy "${appName}" to Fly.io. ${flyTomlPath} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: flyctl installed (https://fly.io/docs/flyctl/install) and \`fly auth login\`.`,
     ``,
     `# One-time setup (skip on a redeploy — a second run makes a SECOND app/volume, splitting state).`,
@@ -150,7 +157,26 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       `fly secrets set --app ${appName} ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );
   }
-  runbook.push(`fly deploy --app ${appName}`);
+  if (kitDir) {
+    runbook.push(
+      ``,
+      `# Repo-as-workspace: the build context is the REPO ROOT (the whole repo is the agent's cwd); the`,
+      `# config/Dockerfile live under ${kitDir}/ so they never collide with the repo's own deploy files.`,
+      `# Run this from the repo root:`,
+    );
+  }
+  runbook.push(deployCmd);
+  if (kitDir) {
+    runbook.push(
+      ``,
+      `# Write-back mechanics: git ships in the image and GH_TOKEN-style creds ride config.deploy.secrets;`,
+      `# the POLICY (push vs PR, identity, remote) lives in persona.md. CAVEAT — whether .git survives is`,
+      `# host-CLI-dependent (some context packers strip it from the upload): verify \`git status\` on the`,
+      `# box after the first deploy; if it is missing, have the agent \`git clone\` its repo in the`,
+      `# workspace instead (same token). Un-pushed changes never survive a redeploy — the image is a`,
+      `# snapshot; durability lives in git.`,
+    );
+  }
 
   // Model-auth guidance: an env key becomes a secret above. Otherwise the plan can't read the local
   // credential's VALUE to set as a secret — true for OAuth AND a stored API key (both are

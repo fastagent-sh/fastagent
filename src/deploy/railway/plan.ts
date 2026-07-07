@@ -57,11 +57,12 @@ const MOUNT = "/data";
 
 /** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
  *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
-function railwayJson(): string {
+function railwayJson(kitDir?: string): string {
   return `${JSON.stringify(
     {
       $schema: "https://railway.com/railway.schema.json",
-      build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
+      // dockerfilePath is relative to the repo root (`railway up`'s upload context) in BOTH layouts.
+      build: { builder: "DOCKERFILE", dockerfilePath: kitDir ? `${kitDir}/Dockerfile` : "Dockerfile" },
       deploy: { healthcheckPath: "/health", restartPolicyType: "ON_FAILURE" },
     },
     null,
@@ -72,7 +73,14 @@ function railwayJson(): string {
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, modelAuth, channels } = input;
-  const artifacts: Artifact[] = [{ path: "railway.json", content: railwayJson() }, ...containerArtifacts(input)];
+  // Kit layout: railway.json is namespaced under the kit too (the host repo may carry its own
+  // railway.toml/json for the product). Railway reads config-as-code from the repo root by default,
+  // so the runbook adds the dashboard step that points the service at the kit's file (no CLI flag exists).
+  const configPath = input.kitDir ? `${input.kitDir}/railway.json` : "railway.json";
+  const artifacts: Artifact[] = [
+    { path: configPath, content: railwayJson(input.kitDir) },
+    ...containerArtifacts(input),
+  ];
 
   const secrets = requiredSecrets(modelAuth, channels, input.extraSecrets);
 
@@ -81,7 +89,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   // (`railway add --service`), and variables must be set BEFORE the first `up` or the box boots without a
   // model key / FASTAGENT_STATE_DIR and crash-loops against restartPolicy ON_FAILURE + the healthcheck.
   const runbook: string[] = [
-    `# Deploy to Railway. railway.json / Dockerfile / .dockerignore are generated above.`,
+    `# Deploy to Railway. ${configPath} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
     ``,
     `# One-time setup (init → service → volume → variables). SKIP all of it on a redeploy — a redeploy is`,
@@ -122,12 +130,30 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     );
   }
 
+  if (input.kitDir) {
+    runbook.push(
+      ``,
+      `# Repo-as-workspace: point the service at the kit's config file BEFORE the first deploy —`,
+      `# dashboard-only, like App Sleeping (no CLI flag): Service → Settings → Config-as-code →`,
+      `# set the file path to ${configPath}. Without it Railway would read the repo root's own config.`,
+    );
+  }
   runbook.push(
     ``,
     `# Deploy — uploads this dir and builds the Dockerfile on Railway (no local Docker needed). This is`,
     `# also the ENTIRE redeploy: re-run \`railway up\` alone (the one-time setup above is not repeated).`,
     `railway up`,
   );
+  if (input.kitDir) {
+    runbook.push(
+      ``,
+      `# Write-back mechanics: git ships in the image and GH_TOKEN-style creds ride config.deploy.secrets;`,
+      `# the POLICY (push vs PR, identity, remote) lives in persona.md. CAVEAT — \`railway up\` is known to`,
+      `# strip .git from its upload, so expect NO baked history on the box: the agent should \`git clone\``,
+      `# its repo in the workspace (same token) before making changes. Un-pushed changes never survive a`,
+      `# redeploy — the image is a snapshot; durability lives in git.`,
+    );
+  }
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev) — ONE mint step, then each
   // channel's webhook uses that domain (mint once even when both channels are present).

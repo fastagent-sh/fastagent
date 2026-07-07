@@ -10,7 +10,7 @@
  * CLI stops on, distinct from the advisory warnings/notes it prints and proceeds past.
  */
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import type { FastagentConfig } from "../engines/pi/config.ts";
 import { defaultAuthPath, resolveStateRoot } from "../engines/pi/config.ts";
 import { discoverChannelFiles } from "../engines/pi/channel.ts";
@@ -108,27 +108,45 @@ export async function preflightDeploy(input: {
   const authPath = authPathOverride ?? defaultAuthPath(resolveStateRoot(target));
   const modelAuth = modelSpec ? await probeAuthSource(createPiModels({ authPath }), modelSpec) : undefined;
 
-  // Container facts (shared by every host) + the warnings that follow. The generated Dockerfile targets
-  // the workspace's package manager — bun or npm — made EXPLICIT rather than silently routing through npm.
-  // agentDir layout: the generated container installs the RUN ROOT's deps only — the kit's own
-  // package.json (agent/package.json) is not installed, so its tools/channels would fail to load on
-  // the box (repo-as-workspace deploy is open work — core.md §11). Known crash → gate --run, warn else
-  // (the same discipline as the model-travel gate).
-  if (agentDir !== target && (await exists(join(agentDir, "package.json")))) {
-    const issue =
-      `config.agentDir has its own package.json — the generated container does not install the agent kit's ` +
-      `dependencies yet (repo-as-workspace deploy is not implemented); its tools/channels would fail to load on the box`;
-    if (run) return { ok: false, gate: issue };
-    messages.push({ level: "warn", text: issue });
+  // Container facts (shared by every host) + the warnings that follow. Repo-as-workspace layout
+  // (agentDir ≠ target): the facts describe the KIT — its package.json/runtime/lockfile drive the
+  // image's install step — never the host repo's (whose manifest belongs to the host's own deploy).
+  // POSIX-normalized: kitDir lands verbatim in Dockerfile COPY/CMD lines and fly/railway commands,
+  // which all require forward slashes (a Windows `relative()` would emit backslashes).
+  const kitDir = agentDir === target ? undefined : relative(target, agentDir).split(sep).join("/");
+  const factsDir = kitDir ? agentDir : target;
+  if (kitDir && run) {
+    // Generate + runbook fully support the layout; the fly/railway --run drivers do not yet (their
+    // command sequences assume root artifacts). Fail at the gate, not mid-drive.
+    return {
+      ok: false,
+      gate: `--run is not yet supported for the agentDir layout — run the same deploy without --run and follow the printed runbook`,
+    };
   }
 
-  const hasPackageJson = await exists(join(target, "package.json"));
-  const pkg = await readPackageJson(target);
-  const { runtime, bunVersion, hasLockfile } = detectRuntime(target, pkg);
+  const hasPackageJson = await exists(join(factsDir, "package.json"));
+  const pkg = await readPackageJson(factsDir);
+  const { runtime, bunVersion, hasLockfile } = detectRuntime(factsDir, pkg);
   const install = runtime === "bun" ? "bun install" : "npm install";
   const runner = runtime === "bun" ? "bunx fastagent" : "npx fastagent";
   const hasOtherLock =
-    runtime === "node" && ((await exists(join(target, "pnpm-lock.yaml"))) || (await exists(join(target, "yarn.lock"))));
+    runtime === "node" &&
+    ((await exists(join(factsDir, "pnpm-lock.yaml"))) || (await exists(join(factsDir, "yarn.lock"))));
+  if (kitDir) {
+    // After the facts: the deps sentence must match the kit's actual shape (a markdown-only kit has no
+    // package.json and installs nothing — the note must not point at a file that doesn't exist).
+    const deps = hasPackageJson
+      ? `only the kit's deps (${kitDir}/package.json) are installed — the host repo's own deps are the agent's runtime concern`
+      : `the kit has no package.json, so no deps are installed (the pinned global CLI serves the repo)`;
+    messages.push({
+      level: "note",
+      text:
+        `repo-as-workspace image (EXPERIMENTAL — not yet verified end-to-end on a real host): the whole ` +
+        `repo is baked as the agent's cwd; ${deps}. Un-pushed changes on the box do not survive a redeploy ` +
+        `(the image is a snapshot); write-back goes through git (persona owns the policy; GH_TOKEN etc. go ` +
+        `in config.deploy.secrets — see the runbook's caveat on .git surviving the host's upload).`,
+    });
+  }
   // A code workspace with no lockfile builds via a non-frozen install (ranges resolve at build time) — not
   // reproducible. A pnpm/yarn user gets an accurate message (their lockfile is ignored by the npm Dockerfile).
   if (hasPackageJson && !hasLockfile) {
@@ -152,13 +170,45 @@ export async function preflightDeploy(input: {
         `(offline-fragile, unpinned). Add it to dependencies and re-run \`${install}\`.`,
     });
   }
+  // A kept host root .dockerignore silently replaces KIT_DOCKERIGNORE's two protections — read it and
+  // warn SPECIFICALLY (the generic "kept" line suggests --force, which would clobber the host's file):
+  // (a) a .git exclude kills the baked write-back (the runtime-clone fallback applies); (b) without a
+  // recursive **/node_modules the build machine's kit deps (native binaries) clobber the image's.
+  // Not force-gated: the host's root .dockerignore is kept even under --force (never ours to clobber),
+  // so these warnings apply regardless.
+  if (kitDir && (await exists(join(target, ".dockerignore")))) {
+    const lines = (await readFile(join(target, ".dockerignore"), "utf8")).split("\n").map((l) => l.trim());
+    if (lines.some((l) => l === ".git" || l === "/.git" || l === ".git/" || l === "**/.git")) {
+      messages.push({
+        level: "warn",
+        text:
+          `your .dockerignore excludes .git — the baked repo ships WITHOUT history/remote, so the agent ` +
+          `cannot commit/push the baked copy; it must \`git clone\` its repo in the workspace instead ` +
+          `(or remove the .git line).`,
+      });
+    }
+    if (!lines.some((l) => l === "**/node_modules" || l === "**/node_modules/")) {
+      messages.push({
+        level: "warn",
+        text:
+          `your .dockerignore lacks \`**/node_modules\` — the build machine's ${kitDir}/node_modules ` +
+          `(native binaries for YOUR OS) would be uploaded and clobber the image's freshly-installed ones. ` +
+          `Add \`**/node_modules\` to it.`,
+      });
+    }
+  }
+
+  // Write-back mechanics are fastagent's (the policy is the persona's): a kit-layout image always
+  // carries git, so commit/push can work at all. Merged with (never duplicating) config.deploy.apt.
+  const apt = kitDir ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
   const container: ContainerInput = {
     hasPackageJson,
     runtime,
     bunVersion,
     hasLockfile,
     version: await fastagentVersion(),
-    apt: config.deploy?.apt,
+    apt,
+    kitDir,
   };
   const port = config.http?.port ?? 8787;
   // What the agent declared it needs on the box (fastagent.config deploy.secrets) — carried like channel
@@ -167,8 +217,9 @@ export async function preflightDeploy(input: {
   // deploy.apt only shapes the GENERATED Dockerfile. Warn ONLY when the kept Dockerfile is HAND-WRITTEN
   // (its apt won't include these) — a fastagent-generated one is handled by writeArtifacts. Don't suggest
   // --force here: it would overwrite the user's hand-written file.
-  if (config.deploy?.apt?.length && !force && (await exists(join(target, "Dockerfile")))) {
-    if (!isGeneratedDockerfile(await readFile(join(target, "Dockerfile"), "utf8"))) {
+  const dockerfileHome = kitDir ? join(agentDir, "Dockerfile") : join(target, "Dockerfile");
+  if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {
+    if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
       messages.push({
         level: "warn",
         text:
