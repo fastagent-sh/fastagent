@@ -12,11 +12,12 @@
  *    lastFired is claimed BEFORE the invoke (at-most-once per slot: a crash mid-turn won't re-fire it;
  *    "a digest late once" beats "twice"). Strict at-least-once (a per-turn WAL) is a later tier.
  */
-import type { Agent } from "../agent.ts";
+import { type Agent, SESSION_BUSY_CODE } from "../agent.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
-import { type Fires, loadFires, saveFires } from "./state.ts";
+import { loadFires, saveFires } from "./state.ts";
+import { deferWakeup, takeFirstDueWakeup } from "./wakeups.ts";
 
 /** A schedule's turns share this stable session — a continuing conversation, like the telegram channel's
  *  per-chat session. Derived at RUNTIME from the name (never an authored field). */
@@ -45,17 +46,47 @@ export interface SchedulerOptions {
 // A single setTimeout maxes out at ~24.8 days and drifts over long sleeps; cap each wait so a long
 // interval (or a suspended machine) re-checks against the wall clock rather than firing wildly early/late.
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000; // 6h
+// How often to poll the agent's self-scheduled wake-ups (wakeups.ts). A wake fires within this of its
+// due time — fine for "wake me in N minutes"; cheap (reads a small JSON, writes only when one is due).
+const WAKEUP_POLL_MS = 30 * 1000;
 
 export function createScheduler({ agent, stateRoot, schedules, now = () => new Date() }: SchedulerOptions): Scheduler {
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  let wakeupTimer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
 
-  /** Fire one schedule's turn: claim the slot (persist lastFired BEFORE invoking), then drive the turn
-   *  and log its outcome. Total — never throws (the timer callback that calls it is void). */
+  /** Drive ONE turn (a cron fire or a wake-up) and log its outcome. Total — never throws (its callers are
+   *  void-scheduled). Output is the agent's tools' job; this only fires and logs. Returns whether the turn
+   *  failed specifically because the session was BUSY (the turn never started) — the ONLY replay-safe reason
+   *  to re-fire a wake-up; every other outcome (completed, or a failure whose side effects may have run) is
+   *  terminal. */
+  async function runTurn(label: string, session: string, prompt: string): Promise<{ busy: boolean }> {
+    const startedAt = Date.now();
+    log.info(`[schedule] ${label} firing (session=${session})`);
+    try {
+      let failed: string | undefined;
+      let busy = false;
+      for await (const e of agent.invoke({ session }, { text: prompt })) {
+        if (e.type === "failed") {
+          failed = e.details;
+          busy = e.code === SESSION_BUSY_CODE; // structured (SPEC §8), not a details-text match
+        }
+      }
+      if (failed) log.error(`[schedule] ${label} failed (${Date.now() - startedAt}ms): ${failed}`);
+      else log.info(`[schedule] ${label} completed (${Date.now() - startedAt}ms)`);
+      return { busy: failed !== undefined && busy };
+    } catch (e) {
+      // invoke shouldn't throw (SPEC MUST 2 turns failures into events), but stay total regardless. A throw
+      // is not the busy case, so don't defer on it.
+      log.error(`[schedule] ${label} errored (${Date.now() - startedAt}ms): ${String(e)}`);
+      return { busy: false };
+    }
+  }
+
+  /** Fire one schedule's turn: claim the slot (persist lastFired BEFORE invoking) so a crash mid-turn
+   *  does not re-fire this slot on restart, then run the turn. */
   async function fire(s: LoadedSchedule): Promise<void> {
-    const session = scheduleSession(s.name);
-    // Claim the slot before the invoke so a crash mid-turn does not re-fire this slot on restart.
-    const fires: Fires = loadFires(stateRoot);
+    const fires = loadFires(stateRoot);
     fires[s.name] = now().toISOString();
     try {
       saveFires(stateRoot, fires);
@@ -64,19 +95,47 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
       log.error(`[schedule] ${s.name}: cannot persist fire state, skipping this run: ${String(e)}`);
       return;
     }
-    const startedAt = Date.now();
-    log.info(`[schedule] ${s.name} firing (session=${session})`);
-    try {
-      let failed: string | undefined;
-      for await (const e of agent.invoke({ session }, { text: s.prompt })) {
-        if (e.type === "failed") failed = e.details;
+    await runTurn(s.name, scheduleSession(s.name), s.prompt);
+  }
+
+  /**
+   * Fire every due self-scheduled wake-up, ONE at a time (claim → fire → claim next) so a crash loses at
+   * most one. Each fires back into the session it was set in. A wake is one-shot, so unlike a cron slot a
+   * dropped one has no "next time": ONLY when it failed because the session was BUSY (`code: session_busy`
+   * — the turn never started; the very case "wake me in 10 min" hits while the user is still chatting) defer
+   * it to the next poll rather than losing it; a bounded retry then gives up visibly. Any other failure is
+   * terminal (the turn ran — re-running risks duplicate side effects).
+   */
+  async function pollWakeups(): Promise<void> {
+    for (;;) {
+      if (stopped) break; // stop() must halt an in-flight drain, like it clears the cron timers
+      const w = takeFirstDueWakeup(stateRoot, now());
+      if (!w) break;
+      const label = `wake ${w.id.slice(0, 8)}`;
+      const { busy } = await runTurn(label, w.session, w.prompt);
+      // Re-fire ONLY on a busy session (the turn never started — replay-safe). A wake is one-shot, so a
+      // busy-skip that just dropped it would lose it forever; defer + bounded retry. Every OTHER outcome is
+      // terminal (already claimed/removed) — re-running a turn that DID start risks duplicate side effects.
+      if (busy) {
+        const kept = deferWakeup(stateRoot, w, new Date(now().getTime() + WAKEUP_POLL_MS));
+        if (kept) log.info(`[schedule] ${label}: session busy — retrying next poll`);
+        else log.error(`[schedule] ${label}: dropped after too many busy retries`);
       }
-      if (failed) log.error(`[schedule] ${s.name} failed (${Date.now() - startedAt}ms): ${failed}`);
-      else log.info(`[schedule] ${s.name} completed (${Date.now() - startedAt}ms)`);
-    } catch (e) {
-      // invoke shouldn't throw (SPEC MUST 2 turns failures into events), but stay total regardless.
-      log.error(`[schedule] ${s.name} errored (${Date.now() - startedAt}ms): ${String(e)}`);
     }
+  }
+
+  /** Drain due wake-ups, then chain the next poll AFTER — never overlapping two drains. TOTAL: a state-IO
+   *  fault (an unreadable store) is caught + logged and the chain continues, never a crash / a silent stop
+   *  (this is `void`-scheduled, so an escaping throw would be an unhandled rejection). */
+  async function pumpWakeups(): Promise<void> {
+    if (stopped) return;
+    try {
+      await pollWakeups();
+    } catch (e) {
+      log.error(`[schedule] wake-up poll failed (continuing next poll): ${String(e)}`);
+    }
+    if (stopped) return;
+    wakeupTimer = setTimeout(() => void pumpWakeups(), WAKEUP_POLL_MS);
   }
 
   /** Arm a timer for `at`, capped so a long wait re-checks the wall clock instead of trusting one sleep. */
@@ -123,11 +182,17 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
           arm(s, due);
         }
       }
+      // Self-scheduled wake-ups: drain now (catch any overdue while the process was down), then chain the
+      // next poll AFTER this drain finishes — a CHAIN, not setInterval, so a wake turn longer than the poll
+      // interval never overlaps two drains (which would break the one-at-a-time claim→fire→claim promise).
+      void pumpWakeups();
     },
     stop() {
       stopped = true;
       for (const t of timers.values()) clearTimeout(t);
       timers.clear();
+      if (wakeupTimer) clearTimeout(wakeupTimer);
+      wakeupTimer = undefined;
     },
   };
 }

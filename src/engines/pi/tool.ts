@@ -14,10 +14,16 @@ import { join } from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
 import { type ModuleLoadFailure, loadModuleDir } from "./loader.ts";
+import { turnContext } from "./tool-context.ts";
 
 export interface ToolContext {
   /** Abort signal for the current turn — honor it to cancel in-flight work on cancellation. */
   signal?: AbortSignal;
+  /** The session id of the current turn — which conversation this tool is running in. A general tool
+   *  capability: partition per-conversation data, tag logs, scope state. Undefined outside a turn (a bare
+   *  `fastagent tool` run, or any call with no session). (The built-in `wake` tool is one consumer — it
+   *  fires a later turn back into this same session.) */
+  session?: string;
 }
 
 export interface DefineToolOptions<I extends z.ZodType> {
@@ -50,7 +56,7 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
         const detail = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
         return { content: [{ type: "text", text: `Invalid arguments: ${detail}` }], details: { error: detail } };
       }
-      return wrapResult(await options.execute(parsed.data, { signal }));
+      return wrapResult(await options.execute(parsed.data, { signal, session: turnContext.getStore()?.session }));
     },
   };
   return tool as unknown as AgentTool;

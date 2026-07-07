@@ -14,9 +14,10 @@
 import type { AgentHarnessEvent } from "@earendil-works/pi-agent-core";
 import { DEFAULT_COMPACTION_SETTINGS, calculateContextTokens, shouldCompact } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
-import type { Agent, AgentEvent, Json, Prompt, Scope } from "../../agent.ts";
+import { type Agent, type AgentEvent, type Json, type Prompt, type Scope, SESSION_BUSY_CODE } from "../../agent.ts";
 import { log } from "../../log.ts";
 import type { PiHarnessFactory } from "./harness.ts";
+import { turnContext } from "./tool-context.ts";
 
 // ── §1 Lease: single-writer concurrency floor ───────────────────────────────
 //
@@ -266,6 +267,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         type: "failed",
         details: "session busy: a turn is already in flight for this session",
         retryable: true,
+        code: SESSION_BUSY_CODE,
       };
       return;
     }
@@ -286,7 +288,11 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       });
       let completed: AssistantMessage | undefined; // the assistant message of a cleanly completed turn
       try {
-        const run = harness.prompt(prompt.text, await toPiPromptOptions(prompt));
+        // Run the turn inside the session context so a tool's `execute` can read which session it is in
+        // (turnContext / ToolContext.session). prompt() starts the async work synchronously here, so the
+        // store propagates to the tool calls awaited within it.
+        const opts = await toPiPromptOptions(prompt);
+        const run = turnContext.run({ session: scope.session }, () => harness.prompt(prompt.text, opts));
         yield* queue.drainUntil(run);
         let terminal: AgentEvent;
         try {

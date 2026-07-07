@@ -29,6 +29,10 @@ export interface FastagentConfig {
   /** Extra custom tools, appended after pi defaults — never replaces them. */
   tools?: AgentTool[];
   http?: { port?: number };
+  /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling).
+   *  Off by default — self-scheduling is an autonomy capability, opt in when you want it. Only takes
+   *  effect on the serving path (`dev`/`start`, where the scheduler poller honors a wake-up). */
+  selfSchedule?: boolean;
   /** Deploy-time declarations for what the agent needs on the box, so real agents don't hand-write a
    *  Dockerfile / hand-set variables. */
   deploy?: {
@@ -102,8 +106,15 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a .js/.mjs config
   // (`modle:`) must not silently degrade to zero-config.
   for (const key of Object.keys(c)) {
-    if (key !== "model" && key !== "agentDir" && key !== "tools" && key !== "http" && key !== "deploy") {
-      throw new Error(`${path}: unknown key "${key}" (valid keys: model, agentDir, tools, http, deploy)`);
+    if (
+      key !== "model" &&
+      key !== "agentDir" &&
+      key !== "tools" &&
+      key !== "http" &&
+      key !== "deploy" &&
+      key !== "selfSchedule"
+    ) {
+      throw new Error(`${path}: unknown key "${key}" (valid keys: model, agentDir, tools, http, deploy, selfSchedule)`);
     }
   }
   if (c.model !== undefined && typeof c.model !== "string") {
@@ -123,6 +134,9 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
         `${path}: "agentDir" ("${c.agentDir}") must be a subdirectory of the config directory, not escape it`,
       );
     }
+  }
+  if (c.selfSchedule !== undefined && typeof c.selfSchedule !== "boolean") {
+    throw new Error(`${path}: "selfSchedule" must be a boolean`);
   }
   if (c.tools !== undefined && !Array.isArray(c.tools)) {
     throw new Error(`${path}: "tools" must be an array of AgentTool`);

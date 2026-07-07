@@ -4,6 +4,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, fauxThinking, fauxToolCall, Type, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
 import { inMemorySessionStore, inProcessLease, type AgentEvent } from "../src/index.ts";
+import { SESSION_BUSY_CODE } from "../src/agent.ts";
 import { classifyRetryable, createPiAgentFromHarness, errorToTerminal, toTerminal } from "../src/engines/pi/invoke.ts";
 import { type PiHarnessFactory, piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
@@ -300,6 +301,10 @@ describe("lease + setup robustness", () => {
     expect(busy).toHaveLength(1); // exactly one busy
     expect(busy[0]).toHaveLength(1); // the busy one never ran a turn; a single failed event
     expect((busy[0]![0] as any).retryable).toBe(true);
+    // Pin `code` at its SOURCE: the scheduler's replay-safe wake retry hinges on the busy reject carrying
+    // this exact code (SPEC §8 subdivision). A refactor of this lease branch that drops/mistypes it must
+    // fail HERE, not only in a real wake scenario (the scheduler test uses a hand-written code, not this).
+    expect(busy[0]![0]).toMatchObject({ code: SESSION_BUSY_CODE });
   });
 
   it("busy is transient: same session can be used again after the previous turn completes", async () => {

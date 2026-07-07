@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 import { createScheduler, scheduleSession } from "../src/schedule/scheduler.ts";
+import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
 
 /** A fake agent that records each invoke's session + text and yields the scripted terminal. */
 function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
@@ -83,6 +84,66 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(calls).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000); // → 12:00
     expect(calls).toHaveLength(2);
+    s.stop();
+  });
+
+  it("polls and fires a due self-scheduled wake-up into its session, then removes it", async () => {
+    const root = await freshRoot();
+    // Seed a wake-up that is due by the scheduler's clock (set at 10:00 for 11:00; scheduler runs at 12:00).
+    addWakeup(
+      root,
+      { session: "conv-9", prompt: "resume", fireAt: new Date("2026-07-07T11:00:00Z") },
+      new Date("2026-07-07T10:00:00Z"),
+    );
+    const { agent, calls } = recordingAgent();
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    s.start(); // polls wake-ups immediately on start
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0]).toEqual({ session: "conv-9", text: "resume" }); // fired back into the wake-up's session
+    expect(listWakeups(root)).toHaveLength(0); // claimed + fired, not left pending
+    s.stop();
+  });
+
+  it("a wake into a BUSY session is deferred (re-scheduled), not lost", async () => {
+    const root = await freshRoot();
+    addWakeup(
+      root,
+      { session: "busy", prompt: "resume", fireAt: new Date("2026-07-07T11:00:00Z") },
+      new Date("2026-07-07T10:00:00Z"),
+    );
+    // The turn fails retryably (its session is busy — a channel is mid-turn on it).
+    const { agent, calls } = recordingAgent([
+      { type: "failed", retryable: true, code: "session_busy", details: "busy" },
+    ]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    s.start();
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    // NOT dropped: re-scheduled (deferred) with a bumped attempt count — a one-shot wake must not vanish.
+    await vi.waitFor(() => expect(listWakeups(root)).toHaveLength(1));
+    expect(listWakeups(root)[0]).toMatchObject({ session: "busy", attempts: 1 });
+    s.stop();
+  });
+
+  it("a NON-busy retryable failure is terminal (dropped, not replayed — side effects may have run)", async () => {
+    const root = await freshRoot();
+    addWakeup(
+      root,
+      { session: "s", prompt: "go", fireAt: new Date("2026-07-07T11:00:00Z") },
+      new Date("2026-07-07T10:00:00Z"),
+    );
+    // Retryable, but a mid-turn transient (a 429), NOT the busy case: the turn started — don't re-run it.
+    const { agent } = recordingAgent([{ type: "failed", retryable: true, details: "provider 429" }]);
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    s.start();
+    // Wait for the turn's FAILURE to be processed (its log) so the defer/drop decision has definitely run
+    // — not a bare sleep: listWakeups is 0 right after the claim too, before that decision.
+    await vi.waitFor(() => expect(errs.some((e) => /wake .* failed/.test(e))).toBe(true));
+    expect(listWakeups(root)).toHaveLength(0); // dropped — a non-busy failure is not re-added (no replay)
     s.stop();
   });
 

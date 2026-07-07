@@ -62,7 +62,7 @@ type AgentEvent =
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended";   id: string; isError: boolean; content: Json }
   | { type: "completed";    data?: Json }                        // Terminal: success
-  | { type: "failed";       details: string; retryable: boolean }; // Terminal: failure
+  | { type: "failed";       details: string; retryable: boolean; code?: string }; // Terminal: failure (code = §8 subdivision)
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 ```
@@ -139,7 +139,7 @@ The core stays small. The following extensions attach through additional `scope`
 | Mid-turn steering | **Extension, not part of the v0.1 core signature**: add an optional third parameter `input?: AsyncIterable<Prompt>` to `invoke` and feed input into the in-flight turn, corresponding to pi `steer` / `followUp` / `nextTurn`. If the desired behavior is “discard the current turn and go another way”, use cancel + a new `invoke` with the same `session`; no steering extension is required. |
 | Thinking / citations / artifact streaming | Add new non-terminal `AgentEvent` types |
 | Structured / typed result | Per-invoke output-schema negotiation; the validated result rides on `completed.data`. Demand-driven (task-style embed features); not in v0.1 core, and MUST NOT change the frozen terminal set. |
-| Failure subdivision | Add `failed.code?` |
+| Failure subdivision | `failed.code?` — **adopted**: an optional machine-readable code alongside `details` (e.g. the reference engine sets `session_busy` for a same-session-busy reject). |
 
 ## 9. Dependency inversion
 

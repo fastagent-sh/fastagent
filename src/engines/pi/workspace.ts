@@ -21,6 +21,7 @@ import {
   resolveStateRoot,
 } from "./config.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
+import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "./loader.ts";
 import { type LoadedDefinition, ensureStateRootSelfIgnored } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
@@ -41,6 +42,12 @@ export interface CreatePiAgentFromWorkspaceOptions {
    * `~/.fastagent/auth.json` to share one credential across projects.
    */
   authPath?: string;
+  /**
+   * This is a long-running SERVE (`dev`/`start`), where the scheduler poller runs — so a self-scheduled
+   * wake-up is actually honored. One-shot entries (`invoke`/`fire`) leave it off (they exit after the turn
+   * and never poll). The built-in `wake` tool mounts only when this is set AND `config.selfSchedule` is on.
+   */
+  serving?: boolean;
 }
 
 /**
@@ -87,6 +94,9 @@ export async function createPiAgentFromWorkspace(
   // whole machine-state home in one knob (a container mounts one volume); the finer overrides below
   // still win for their specific path.
   const stateRoot = resolveStateRoot(dir);
+  // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND
+  // the author opted into self-scheduling (config.selfSchedule). The workspace's own `wake` wins if defined.
+  const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
   // The credentials file: project-level by default (under the self-ignored state root); only READ here,
@@ -99,7 +109,7 @@ export async function createPiAgentFromWorkspace(
   const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
     model: modelSpec,
     cwd: dir,
-    tools,
+    tools: mountedTools,
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions: jsonlSessionStore({ dir: sessionsDir, cwd: dir }),

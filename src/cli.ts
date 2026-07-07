@@ -1062,6 +1062,7 @@ async function serveOnce(): Promise<void> {
   const a = await createPiAgentFromWorkspace(dir, {
     model: values.model,
     authPath: resolveAuthPathOverride(values["auth-path"]),
+    serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
   log.info(`[fastagent] dir:    ${dir}`);
   if (a.agentDir !== dir) log.info(`[fastagent] agent:  ${a.agentDir}`);
@@ -1073,7 +1074,7 @@ async function serveOnce(): Promise<void> {
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
   const routes = await routesFor(a.agentDir, traced, a.stateRoot).catch(failStartup);
-  await startSchedules(a.agentDir, traced, a.stateRoot);
+  await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
   serve(routes, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.agentDir, p));
 }
 
@@ -1107,6 +1108,7 @@ async function runStart(): Promise<void> {
     model: values.model,
     sessionsDir: sessionsDirOverride,
     authPath: authPathOverride,
+    serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
 
   log.info(`[fastagent] start:  ${dir}`);
@@ -1137,7 +1139,7 @@ async function runStart(): Promise<void> {
   // Same debug turn trace as dev; gated out here by the info level (see serveOnce).
   const traced = logAgentLoop(agent);
   const routes = await routesFor(agentDir, traced, stateRoot).catch(failStartup);
-  await startSchedules(agentDir, traced, stateRoot);
+  await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false);
   serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787, (p) =>
     maybeTunnel(agentDir, p),
   );
@@ -1187,18 +1189,26 @@ function serve(routes: Routes, port: number, onListening?: (boundPort: number) =
 }
 
 /**
- * Load and start the workspace's `schedules/` — a time-trigger firing the agent on each cron. No-op when
- * there are none. The scheduler shares the SAME (trace-wrapped) agent the routes serve, so a scheduled
- * turn is observed like any other. Best-effort stop on exit; dev's watch restart re-reads schedules with
- * the worker (schedules are a code input). Single-process (like all state today).
+ * Load and start the workspace's `schedules/` — a time-trigger firing the agent on each cron. Starts iff
+ * there are static schedules OR `selfSchedule` is on (the scheduler also polls the agent's self-scheduled
+ * wake-ups, which the built-in `wake` tool creates only when opted in). Shares the SAME (trace-wrapped)
+ * agent the routes serve, so a scheduled turn is observed like any other. Best-effort stop on exit; dev's
+ * watch restart re-reads schedules with the worker (schedules are a code input). Single-process.
  */
-async function startSchedules(workspaceDir: string, agent: Agent, stateRoot: string): Promise<void> {
+async function startSchedules(
+  workspaceDir: string,
+  agent: Agent,
+  stateRoot: string,
+  selfSchedule: boolean,
+): Promise<void> {
   const { schedules, failures } = await loadSchedules(workspaceDir).catch(failStartup);
   reportModuleLoadFailures(failures);
-  if (schedules.length === 0) return;
+  // Nothing to run when there are neither static `schedules/` nor self-scheduling (the `wake` tool, and
+  // thus any wake-up to poll, is mounted only when config.selfSchedule is on) — skip the poller entirely.
+  if (schedules.length === 0 && !selfSchedule) return;
   const scheduler = createScheduler({ agent, stateRoot, schedules });
   scheduler.start();
-  log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
+  if (schedules.length > 0) log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
   const stop = (): void => scheduler.stop();
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);

@@ -65,14 +65,17 @@ src/
 │   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types (no session field — it's runtime-derived)
 │   ├── cron.ts             # the one place touching `croner` (zero-dep, IANA tz/DST): nextRun + cronError
 │   ├── discover.ts         # schedules/ filesystem discovery (loadSchedules/discoverScheduleFiles), isolates a bad file (G2)
-│   ├── scheduler.ts        # lifecycle + fire algorithm (overdue catch-up ONCE, claim-before-invoke) + stable per-schedule session
-│   └── state.ts            # fires.json (last-fired per name) atomic write — durability for the catch-up
+│   ├── scheduler.ts        # lifecycle + fire algorithm (overdue catch-up ONCE, claim-before-invoke) + stable per-schedule session + wake-up poll
+│   ├── wakeups.ts          # the agent's self-scheduled one-shot wake-ups (2nd producer): engine-neutral store + guardrails (min delay, cap, claim/defer)
+│   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
 └── engines/pi/              # the pi reference implementation
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
     ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
     ├── workspace.ts         # shared opener: workspace → agent for dev/start/invoke
     ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
     ├── tool.ts              # defineTool (Zod) + tools/ filesystem discovery
+    ├── tool-context.ts      # ToolContext.session via AsyncLocalStorage (set around the turn; read in execute — the wake tool's seam)
+    ├── wake-tool.ts         # the built-in `wake` tool (pi-coupled: defineTool): writes a wake-up into ToolContext.session; withWakeTool mounts it (serving path only)
     ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
     ├── harness.ts           # pi harness wiring (factory)
     ├── definition.ts        # AGENTS.md + skills loading and bundling

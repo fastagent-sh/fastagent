@@ -31,8 +31,20 @@ export type AgentEvent =
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
   /** Terminal: success. `data` is attached only when the engine produces a structured result. */
   | { type: "completed"; data?: Json }
-  /** Terminal: failure. `retryable` means it is worth re-sending with the same session. */
-  | { type: "failed"; details: string; retryable: boolean };
+  /** Terminal: failure. `retryable` means it is worth re-sending with the same session. `code` is the
+   *  optional machine-readable failure subdivision (SPEC §8) — a stable discriminator a consumer can branch
+   *  on without parsing `details` (human-facing prose). */
+  | { type: "failed"; details: string; retryable: boolean; code?: string };
+
+/**
+ * The `failed.code` (SPEC §8 failure subdivision) the reference engine sets when a turn is rejected because
+ * the session is BUSY — another turn is already in flight, so THIS one never started and is replay-safe.
+ * It lives in the contract (a code VALUE, not an engine import) so a neutral consumer — the scheduler,
+ * which re-fires a busy wake-up but not one whose turn may have run side effects — branches on it without
+ * text-matching `details` or reaching into the engine. An internal fastagent seam (engine ↔ scheduler),
+ * not a public cross-engine mandate.
+ */
+export const SESSION_BUSY_CODE = "session_busy";
 
 /**
  * One turn = one invoke, returning a single async event stream. The stream MUST terminate with

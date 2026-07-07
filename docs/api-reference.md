@@ -183,6 +183,12 @@ export default defineTool({
 
 `tools/<name>.ts` files are discovered with `loadTools(dir)`, and the filename becomes the tool name.
 
+The second `execute` argument is a `ToolContext`: `{ signal?, session? }`. `session` is the id of the
+current turn's conversation (undefined outside a turn, e.g. a bare `fastagent tool` run) — a per-turn
+value carried via `AsyncLocalStorage`, not a closure (a tool is built once and reused across sessions).
+The built-in **`wake`** tool uses it to self-schedule: `wake({ in, prompt })` records a one-shot wake-up
+that the scheduler fires back into THIS session after the delay (see [Schedule authoring](#schedule-authoring)).
+
 ## Channel authoring
 
 ```ts
@@ -251,6 +257,13 @@ with `prompt` — borrowing the same `Agent` contract as channels, adding none. 
 
 Single-process (like all state today). `createScheduler({ agent, stateRoot, schedules })` is started by
 the serve path (`dev`/`start`); `fastagent fire <name>` runs one schedule's turn immediately for authoring.
+
+**Self-scheduling.** Opt in with `selfSchedule: true` in `fastagent.config` (off by default — an autonomy
+capability, not given to every agent). Then the serving path (`dev`/`start`, where the poller runs — not the
+one-shot `invoke`/`fire`) mounts a built-in **`wake`** tool so the agent can schedule itself: `wake({ in: "30m", prompt })`
+records a one-shot wake-up (persisted under `<stateRoot>/schedule/`) that the scheduler polls and fires back
+into the SAME session, so the agent resumes the conversation. It reads the current session from
+`ToolContext.session`; guardrails cap the minimum delay and the per-session pending count. Recurring is later.
 
 ## Config and models
 

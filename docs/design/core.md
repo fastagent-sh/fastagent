@@ -295,12 +295,45 @@ pulls luxon, per the dependency philosophy); the scheduler owns fire control, bo
 next-instant computation. `fastagent fire <name>` runs one schedule's turn immediately (the authoring
 loop, like `invoke`), without advancing fire state.
 
+**Self-scheduling (the SECOND producer).** Opt in with `selfSchedule: true` in `fastagent.config` and, on
+the SERVING path (`dev`/`start`, where the poller runs), the opener mounts a built-in `wake` tool that lets
+the agent schedule ITSELF: a turn calls `wake({ in, prompt })` and, after the delay, a new turn runs — back
+in the **same session**, so the agent resumes the conversation it was in ("check the deploy in 10 minutes").
+Off by default — self-scheduling is an autonomy capability (it changes what the agent IS, not just a tool it
+has), so it is an explicit choice, not given to every served agent. Never mounted on the one-shot entries
+(`invoke`/`fire`), which exit after the turn and never poll — there it would be a promise nothing fulfills. Two producers now feed
+the scheduler: the author's `schedules/` files (declarative, guaranteed) and the agent's wake-ups
+(runtime, self-managed) — different reliability contracts, so both stay. Mechanics:
+
+- **The session comes from the turn, not a field.** A `defineTool` tool is built once and reused across
+  sessions, so the session can't be a closure — it rides an `AsyncLocalStorage` set around the harness
+  turn (`invoke`) and read as `ToolContext.session` inside `execute`. The state root (where wake-ups
+  persist) IS a build-time closure (the serving path mounts the tool). This split — per-turn value via ALS,
+  deploy-time ambient via closure — is the general rule for tool context.
+- **Persisted + polled.** A wake-up is written to `<stateRoot>/schedule/wakeups.json` (survives restart);
+  the scheduler polls (~30s) and fires each DUE one, claiming it (remove-before-fire) so it is at-most-once.
+- **Guardrails** (self-scheduling is a real runaway surface): a minimum delay (no busy-loop) and a cap on
+  pending wake-ups (no unbounded fan-out); a rejected `wake` returns the reason to the model. One-shot is
+  naturally bounded (fires once), so recurring self-scheduling — with heavier guardrails — is Phase 4b.
+- **Re-fire only when replay-safe.** A wake into a BUSY session (a channel is mid-turn on the same id — the
+  common "wake me in 10 min while I'm still chatting" case) is deferred and retried (bounded), since the
+  turn never started. Every OTHER failure is terminal: re-running a turn that DID start could duplicate its
+  tools' side effects. The scheduler tells the two apart by the busy event's `code` (`SESSION_BUSY_CODE`, a
+  `failed.code` per SPEC §8 failure subdivision — a structured field on the neutral contract, not a text
+  match on `details` or an engine import).
+- **The collision is only handled one way (a known Phase 4b gap).** The scheduler invokes DIRECTLY,
+  bypassing a channel's turn-queue (telegram's queue exists precisely to serialize instead of colliding on
+  the lease). So the mirror case is unhandled: while a wake turn holds the lease, a user message on the same
+  session collides and the channel shows its "busy, try again" notice. Both directions of "wake fires while
+  the user is still chatting" are equally likely; only the wake→busy direction defers today. The structural
+  fix — wake turns through the same per-session serial seam as channel turns — is Phase 4b.
+- **Deploy note (a Phase 3 gap):** wake has no external wake-up either, so wake-ups make ANY served agent
+  need a machine kept running — not just one with `schedules/`. `deploy`'s keep-1 trigger (Phase 3) must
+  count self-scheduling, not only static schedules; today that is unenforced.
+
 Roadmap: **Phase 2** — a run audit (`runs.jsonl`, full reply) + `fastagent schedule history`. **Phase 3**
-— `deploy` enforces keep-1-machine when schedules exist. **Phase 4** — the agent's `wake` tool
-(self-scheduling): the SECOND producer of scheduled invocations (agent-created, one-shot or recurring)
-into a unified store, needing a `ToolContext` session injection so a wake can continue the current
-conversation. The file producer (this section) and the tool producer carry different reliability
-contracts — declarative/guaranteed vs runtime/self-managed — so both stay.
+— `deploy` enforces keep-1-machine when schedules exist. **Phase 4b** — recurring self-scheduling
+(`wake({ cron })`) + `unwake`/operator cancel, on the same store with heavier guardrails.
 
 ## 10. Running and deployment (design)
 

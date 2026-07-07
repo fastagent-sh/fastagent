@@ -41,6 +41,16 @@ describe("config: loadConfig agentDir validation", () => {
     await expect(loadConfig(bad)).rejects.toThrow(/agentDir.*subdirectory.*not escape/);
   });
 
+  it("selfSchedule: accepts a boolean (opt-in to the wake tool), rejects a non-boolean", async () => {
+    const ok = await mkdtemp(join(tmpdir(), "fa-selfsched-ok-"));
+    await writeFile(join(ok, "fastagent.config.mjs"), `export default { selfSchedule: true };\n`);
+    expect((await loadConfig(ok)).config.selfSchedule).toBe(true);
+
+    const bad = await mkdtemp(join(tmpdir(), "fa-selfsched-bad-"));
+    await writeFile(join(bad, "fastagent.config.mjs"), `export default { selfSchedule: "yes" };\n`);
+    await expect(loadConfig(bad)).rejects.toThrow(/selfSchedule.*must be a boolean/);
+  });
+
   it("resolveAgentDir: config.agentDir relative to dir; = dir when unset (the one shared computation)", () => {
     expect(resolveAgentDir("/repo", { agentDir: "./agent" })).toBe(resolve("/repo", "agent"));
     expect(resolveAgentDir("/repo", {})).toBe(resolve("/repo"));
