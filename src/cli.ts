@@ -58,7 +58,13 @@ import {
 import { detectHostSignals, exists, nextStepCd, scaffoldWorkspace } from "./scaffold/init.ts";
 import { vendorSkill } from "./scaffold/vendor-skill.ts";
 import { isGeneratedDockerfile } from "./deploy/container.ts";
-import { parseFlyAppName, parseFlyRegion, planFlyDeploy, toFlyAppName } from "./deploy/fly/plan.ts";
+import {
+  parseFlyAppName,
+  parseFlyMinMachines,
+  parseFlyRegion,
+  planFlyDeploy,
+  toFlyAppName,
+} from "./deploy/fly/plan.ts";
 import { preflightDeploy } from "./deploy/preflight.ts";
 import { planRailwayDeploy } from "./deploy/railway/plan.ts";
 import { deployRailwayRun } from "./deploy/railway/run.ts";
@@ -593,7 +599,7 @@ async function runDeploy(): Promise<void> {
     process.exit(1);
   }
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
-  const { channels, modelAuth, authPath, container, port, extraSecrets } = pre;
+  const { channels, hasTimeTriggers, modelAuth, authPath, container, port, extraSecrets } = pre;
 
   // Railway: thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
   // planRailwayDeploy). --run drives the railway CLI to completion; otherwise print the runbook.
@@ -610,7 +616,7 @@ async function runDeploy(): Promise<void> {
       basename(target)
         .replace(/[^a-zA-Z0-9-]+/g, "-")
         .replace(/^-+|-+$/g, "") || "agent";
-    const plan = planRailwayDeploy({ serviceName, modelAuth, channels, extraSecrets, ...container });
+    const plan = planRailwayDeploy({ serviceName, modelAuth, channels, extraSecrets, hasTimeTriggers, ...container });
     await writeArtifacts(target, plan.artifacts);
     if (values.run) return runDeployRailway({ target, name: serviceName, modelAuth, authPath, channels, extraSecrets });
     console.log(plan.runbook.join("\n"));
@@ -652,12 +658,27 @@ async function runDeploy(): Promise<void> {
         `was kept. Edit auto_stop_machines/min_machines_running in fly.toml, or pass --force to regenerate.`,
     );
   }
+  // KEEP mode + time triggers: the kept fly.toml may still scale to zero — which would sleep through every
+  // cron instant / wake-up. The generated plan can't fix a kept file, so surface it instead of the preflight
+  // note silently not applying (the author who deployed FIRST and added schedules LATER hits exactly this).
+  if (flyTomlExists && !values.force && hasTimeTriggers) {
+    const min = parseFlyMinMachines(await readFile(flyTomlPath, "utf8"));
+    if ((min ?? 0) === 0) {
+      // undefined = the line is absent — Fly's platform default for min_machines_running is 0, so a
+      // hand-written fly.toml without the line scales to zero exactly like an explicit 0.
+      console.error(
+        `[fastagent] warn: your kept fly.toml has min_machines_running = 0, but schedules/self-scheduling ` +
+          `need a running machine (no external wake-up). Set it to 1, or pass --force to regenerate.`,
+      );
+    }
+  }
   const plan = planFlyDeploy({
     appName,
     port,
     modelAuth,
     channels,
     extraSecrets,
+    hasTimeTriggers,
     ...container,
     autostop: values.stop ? "stop" : "suspend",
     scaleToZero: !values["no-scale-to-zero"],

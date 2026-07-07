@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { FastagentConfig } from "../engines/pi/config.ts";
 import { defaultAuthPath, resolveStateRoot } from "../engines/pi/config.ts";
 import { discoverChannelFiles } from "../engines/pi/channel.ts";
+import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS, type ChannelKind } from "../scaffold/add-channel.ts";
 import { exists } from "../scaffold/init.ts";
@@ -31,6 +32,10 @@ export interface DeployMessage {
 export interface DeployFacts {
   messages: DeployMessage[];
   channels: ChannelKind[];
+  /** Whether the agent has TIME triggers — `schedules/` files or `selfSchedule` (the wake tool). Cron/wake
+   *  has no external wake-up, so the deployment must keep one machine running: the fly plan forces
+   *  `min_machines_running=1`, the railway runbook forbids App Sleeping. */
+  hasTimeTriggers: boolean;
   /** What satisfies model auth locally ({@link probeAuthSource}) — an env-var name, an OAuth/stored label,
    *  or undefined. Drives the runbook's secret guidance and `--run`'s credential carry. */
   modelAuth: string | undefined;
@@ -82,6 +87,20 @@ export async function preflightDeploy(input: {
     if (!channels.includes(c as ChannelKind)) {
       messages.push({ level: "note", text: `channel "${c}" is custom — set its secrets and webhook yourself` });
     }
+  }
+
+  // Time triggers (static schedules or self-scheduling) need a machine kept running — unlike a webhook,
+  // nothing external wakes a scale-to-zero box for a cron instant or a wake-up. The note is CONDITIONAL
+  // ("the generated plan…"): in KEEP mode an existing fly.toml is not rewritten — the CLI warns separately
+  // when a kept fly.toml still scales to zero.
+  const hasTimeTriggers = (await discoverScheduleFiles(agentDir)).length > 0 || !!config.selfSchedule;
+  if (hasTimeTriggers) {
+    messages.push({
+      level: "note",
+      text:
+        `schedules/self-scheduling present — a GENERATED plan keeps one machine running (cron/wake has ` +
+        `no external wake-up; scale-to-zero would sleep through them).`,
+    });
   }
 
   // Probe auth from the SAME project-level file the opener/login use — not the global default, which would
@@ -159,7 +178,7 @@ export async function preflightDeploy(input: {
     }
   }
 
-  return { ok: true, messages, channels, modelAuth, authPath, container, port, extraSecrets };
+  return { ok: true, messages, channels, hasTimeTriggers, modelAuth, authPath, container, port, extraSecrets };
 }
 
 /**

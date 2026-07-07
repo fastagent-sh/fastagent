@@ -97,6 +97,30 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (forced.ok) expect(forced.messages.some((m) => /NOT applied/.test(m.text))).toBe(false);
   });
 
+  it("detects time triggers: schedules/ files OR config.selfSchedule → hasTimeTriggers + a keep-1 note", async () => {
+    // Neither → false, no note.
+    const none = await call(await workspace(), { model: "openai/gpt-4o-mini" });
+    expect(none.ok && !none.hasTimeTriggers).toBe(true);
+
+    // A schedules/ file → true + note (cron has no external wake-up).
+    const dir = await workspace();
+    const { mkdir, writeFile: wf } = await import("node:fs/promises");
+    await mkdir(join(dir, "schedules"), { recursive: true });
+    await wf(join(dir, "schedules", "daily.ts"), "export default {};\n"); // discovery counts files, not validity
+    const withCron = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(withCron.ok && withCron.hasTimeTriggers).toBe(true);
+    if (withCron.ok) {
+      expect(withCron.messages).toContainEqual({
+        level: "note",
+        text: expect.stringMatching(/keeps one machine running/),
+      });
+    }
+
+    // selfSchedule alone (the wake tool) → true: a wake-up needs the box awake just like a cron.
+    const wake = await call(await workspace(), { model: "openai/gpt-4o-mini", selfSchedule: true });
+    expect(wake.ok && wake.hasTimeTriggers).toBe(true);
+  });
+
   it("warns a code workspace with no lockfile and no @kid7st/fastagent dep", async () => {
     const dir = await workspace({ "package.json": JSON.stringify({ name: "a", type: "module" }) });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });

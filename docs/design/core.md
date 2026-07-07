@@ -334,12 +334,11 @@ the scheduler: the author's `schedules/` files (declarative, guaranteed) and the
   busy immediately (their sessions rarely mix with wake sessions; add the same wait if it bites). The
   structural alternative — one shared per-session serial seam — stays deferred: bounded waits cover the
   real scenario at a fraction of the seam's cost.
-- **Deploy note (a Phase 3 gap):** wake has no external wake-up either, so wake-ups make ANY served agent
-  need a machine kept running — not just one with `schedules/`. `deploy`'s keep-1 trigger (Phase 3) must
-  count self-scheduling, not only static schedules; today that is unenforced.
+- **Deploy keeps the machine running (Phase 3, done):** cron/wake has no external wake-up, so `deploy`'s
+  pre-flight detects TIME triggers — `schedules/` files OR `config.selfSchedule` — and the fly plan forces
+  `min_machines_running=1` (reason-tagged) while the railway runbook forbids App Sleeping.
 
-Roadmap: **Phase 2** — a run audit (`runs.jsonl`, full reply) + `fastagent schedule history`. **Phase 3**
-— `deploy` enforces keep-1-machine when schedules exist. **Phase 4b** — recurring self-scheduling
+Roadmap: **Phase 2** — a run audit (`runs.jsonl`, full reply) + `fastagent schedule history`. **Phase 4b** — recurring self-scheduling
 (`wake({ cron })`) + `unwake`/operator cancel, on the same store with heavier guardrails.
 
 ## 10. Running and deployment (design)
