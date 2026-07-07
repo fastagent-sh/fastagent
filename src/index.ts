@@ -52,6 +52,12 @@ export type { AgentTool } from "@earendil-works/pi-agent-core";
 // Channel discovery: a channels/<name>.ts default-exports a ChannelModule ((ctx) => Routes).
 export { loadChannels, type ChannelCollision } from "./engines/pi/channel.ts";
 
+// Schedule authoring + discovery: a schedules/<name>.ts default-exports defineSchedule({ cron, tz?, prompt }).
+// The scheduler is a time-trigger that fires the agent on each cron; it consumes only the Agent contract.
+export { defineSchedule, type Schedule, type LoadedSchedule } from "./schedule/schedule.ts";
+export { loadSchedules, discoverScheduleFiles } from "./schedule/discover.ts";
+export { createScheduler, scheduleSession, type Scheduler, type SchedulerOptions } from "./schedule/scheduler.ts";
+
 // The command opener `dev` and `start` both drive: point at a definition directory → agent.
 export {
   createPiAgentFromWorkspace,
