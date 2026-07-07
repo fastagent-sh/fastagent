@@ -14,6 +14,7 @@
  */
 import { access, appendFile, lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { WORKSPACE_CONFIG_NAMES } from "../engines/pi/config.ts";
 import { detectRuntime } from "../runtime.ts";
 import { loadRootIgnore } from "../workspace.ts";
 import { baseTemplate, packageJson, toPackageName } from "./templates.ts";
@@ -152,11 +153,11 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
   }
 
   // Guard on the identity files: their presence means "already a workspace". Fail visibly
-  // rather than overwrite authored content.
-  const configNames = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"];
+  // rather than overwrite authored content. Same WORKSPACE_CONFIG_NAMES the CLI's adopt-vs-scaffold
+  // routing reads, so routing and refusal never disagree about whether a config exists.
   const conflicts: string[] = [];
   if (await exists(join(dir, "AGENTS.md"))) conflicts.push("AGENTS.md");
-  for (const name of configNames) if (await exists(join(dir, name))) conflicts.push(name);
+  for (const name of WORKSPACE_CONFIG_NAMES) if (await exists(join(dir, name))) conflicts.push(name);
   if (conflicts.length > 0) {
     throw new Error(`"${dir}" already has ${conflicts.join(", ")} — init refuses to overwrite an existing workspace`);
   }

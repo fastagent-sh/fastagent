@@ -88,6 +88,22 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(docker).not.toContain("npm ci");
   });
 
+  it("markdown path ALWAYS uses node:22-slim (npm i -g), even if runtime is somehow bun (oven/bun has no npm)", () => {
+    const docker = dockerfile(
+      planFlyDeploy({
+        ...base,
+        modelAuth: undefined,
+        channels: [],
+        hasPackageJson: false,
+        runtime: "bun",
+        bunVersion: "1.3.13",
+      }),
+    );
+    expect(docker).toContain("FROM node:22-slim"); // never oven/bun — the global npm i -g needs npm
+    expect(docker).not.toContain("oven/bun");
+    expect(docker).toContain("npm i -g @kid7st/fastagent");
+  });
+
   it("falls back to npm install when a code workspace has no lockfile (npm ci would hard-fail)", () => {
     expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasLockfile: false }))).toMatch(
       /RUN npm install\n/, // no lockfile → npm install; all deps (no --omit=dev — the agent needs its toolchain)

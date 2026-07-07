@@ -51,6 +51,21 @@ function dockerfile(input: ContainerInput): string {
  && rm -rf /var/lib/apt/lists/*
 `
       : "";
+  // No package.json → pure markdown/skills agent: install the pinned CLI GLOBALLY and run `fastagent`
+  // from PATH. That needs npm + a global bin, which live on node:22-slim, NOT on oven/bun — so this path
+  // pins node:22-slim regardless of input.runtime (a stray bun lockfile with no package.json would
+  // otherwise select a bun base here and crash the `npm i -g` build). input.runtime is meaningful only
+  // for a code workspace, so the bun-vs-node base below is scoped to that path.
+  if (!input.hasPackageJson) {
+    return `${GENERATED_DOCKERFILE_MARKER}. The directory IS the agent — no build step.
+# npm-based (a markdown/skills agent installs the pinned CLI globally; node:22-slim has npm).
+FROM node:22-slim
+${apt}WORKDIR /app
+RUN npm i -g @kid7st/fastagent@${input.version}
+COPY . .
+CMD ["fastagent", "start", "/app"]
+`;
+  }
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : "node:22-slim";
   const note = isBun
@@ -61,14 +76,6 @@ ${note}
 FROM ${base}
 ${apt}WORKDIR /app
 `;
-  // No package.json → pure markdown/skills agent: install the CLI globally, PINNED for reproducible
-  // redeploys (a markdown agent has no packageManager, so this is always the Node/npm path).
-  if (!input.hasPackageJson) {
-    return `${head}RUN npm i -g @kid7st/fastagent@${input.version}
-COPY . .
-CMD ["fastagent", "start", "/app"]
-`;
-  }
   // Install ALL deps (no --omit=dev / --production): a repo-as-agent (e.g. an Astro site it operates on)
   // needs its full toolchain — the build/check tools that live in devDependencies — to do its work, and
   // we can't tell a repo-as-agent from a purpose-built workspace, so the safe default keeps everything.

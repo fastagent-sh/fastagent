@@ -63,10 +63,14 @@ function validateStringList(value: unknown, key: string, shape: RegExp, desc: st
   }
 }
 
+/** The config filenames that make a directory a fastagent workspace, in load precedence. ONE source: the
+ *  loader (below), `init`'s adopt-vs-scaffold routing, and `scaffoldWorkspace`'s refuse check all read
+ *  this, so "is there a config?" can't diverge between them when the set changes. */
+export const WORKSPACE_CONFIG_NAMES = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"] as const;
+
 /** Load `<dir>/fastagent.config.ts|.js|.mjs`. No file = zero-config; a wrong-shape file throws. */
 export async function loadConfig(dir: string): Promise<LoadedConfig> {
-  const names = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"];
-  const found = names.map((name) => join(dir, name)).filter((path) => existsSync(path));
+  const found = WORKSPACE_CONFIG_NAMES.map((name) => join(dir, name)).filter((path) => existsSync(path));
   if (found.length === 0) return { config: {} };
   if (found.length > 1) {
     throw new Error(

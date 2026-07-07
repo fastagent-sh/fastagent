@@ -33,6 +33,7 @@ import {
   resolveModelSpec,
   resolveSessionsDirOverride,
   rewriteConfigModel,
+  WORKSPACE_CONFIG_NAMES,
 } from "./engines/pi/config.ts";
 import { formatModelsCommand } from "./cli-models.ts";
 import { fastagentCredentialStore } from "./engines/pi/auth.ts";
@@ -336,8 +337,7 @@ async function runInfo(): Promise<void> {
 async function runInit(): Promise<void> {
   // An existing repo (AGENTS.md) with no fastagent.config → ADOPT it (the B-mode on-ramp), don't refuse:
   // the repo IS the agent, so add the missing config + guide, keeping AGENTS.md/skills/tools untouched.
-  const configNames = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"];
-  const hasConfig = (await Promise.all(configNames.map((n) => exists(join(dir, n))))).some(Boolean);
+  const hasConfig = (await Promise.all(WORKSPACE_CONFIG_NAMES.map((n) => exists(join(dir, n))))).some(Boolean);
   if (!hasConfig && (await exists(join(dir, "AGENTS.md")))) return runAdopt();
 
   const minimal = values.minimal ?? false;
