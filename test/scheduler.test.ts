@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 import { createScheduler, scheduleSession } from "../src/schedule/scheduler.ts";
-import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
+import { MAX_WAKE_ATTEMPTS, addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
 import { readRuns } from "../src/schedule/audit.ts";
 
 /** A fake agent that records each invoke's session + text and yields the scripted terminal. */
@@ -167,6 +167,36 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1));
     expect((await readFires(root)).job).toBe("2026-07-07T12:30:00.000Z"); // claimed even on failure
+    // The audit's FAIL path — the branch the audit exists to answer: outcome failed, the error captured.
+    await vi.waitFor(() => expect(readRuns(root, "job")).toHaveLength(1));
+    expect(readRuns(root, "job")[0]).toMatchObject({ outcome: "failed", error: "boom" });
+    expect(readRuns(root, "job")[0]?.reply).toBeUndefined(); // no reply copy on a failed run
+    s.stop();
+  });
+
+  it("a busy wake dropped at the retry ceiling is audited FAILED (a final silent loss), not deferred", async () => {
+    const root = await freshRoot();
+    // Seed the wake already AT the attempt cap — the next busy defer drops it.
+    mkdirSync(join(root, "schedule"), { recursive: true });
+    writeFileSync(
+      join(root, "schedule", "wakeups.json"),
+      JSON.stringify([
+        { id: "w9", session: "s", prompt: "go", fireAt: "2026-07-07T11:00:00Z", attempts: MAX_WAKE_ATTEMPTS },
+      ]),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { agent, calls } = recordingAgent([
+      { type: "failed", retryable: true, code: "session_busy", details: "busy" },
+    ]);
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
+    s.start();
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    await vi.waitFor(() => expect(readRuns(root, "wake")).toHaveLength(1));
+    expect(readRuns(root, "wake")[0]).toMatchObject({
+      outcome: "failed",
+      error: expect.stringMatching(/dropped after too many/),
+    });
+    expect(listWakeups(root)).toHaveLength(0); // gone — that's exactly why the audit must say failed
     s.stop();
   });
 });

@@ -57,10 +57,10 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
   let stopped = false;
 
   /** Drive ONE turn (a cron fire or a wake-up) and log its outcome. Total — never throws (its callers are
-   *  void-scheduled). Output is the agent's tools' job; this only fires and logs. Returns whether the turn
-   *  failed specifically because the session was BUSY (the turn never started) — the ONLY replay-safe reason
-   *  to re-fire a wake-up; every other outcome (completed, or a failure whose side effects may have run) is
-   *  terminal. */
+   *  void-scheduled). Output is the agent's tools' job; this only fires and logs. Returns the turn's audit
+   *  material — `failed` (details, if it failed), the accumulated `reply` text, `ms` — plus `busy`: whether
+   *  it failed specifically because the session was BUSY (the turn never started) — the ONLY replay-safe
+   *  reason to re-fire a wake-up; every other outcome is terminal (side effects may have run). */
   async function runTurn(
     label: string,
     session: string,

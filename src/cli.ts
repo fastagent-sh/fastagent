@@ -352,6 +352,7 @@ function runScheduleCmd(): void {
     process.exit(2);
   }
   const target = resolve(positionals[3] ?? ".");
+  loadDotEnv(target); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
   const runs = readRuns(resolveStateRoot(target), name);
   if (values.json) {
     console.log(JSON.stringify(runs, null, 2));
