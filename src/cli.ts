@@ -223,7 +223,7 @@ else if (command === "start") await runStart();
 else if (command === "add") await runAdd();
 else if (command === "deploy") await runDeploy();
 else if (command === "fire") await runFire();
-else if (command === "schedule") runScheduleCmd();
+else if (command === "schedule") await runScheduleCmd();
 else if (command === "login") await runLogin();
 else usage(1);
 
@@ -351,9 +351,9 @@ async function runFire(): Promise<void> {
  * time, outcome, duration, reply/error. Read-only (reads `<stateRoot>/schedule/runs.jsonl`); the answer
  * to "did last night's run silently fail?". Text mode previews the reply/error; --json is the full record.
  */
-function runScheduleCmd(): void {
+async function runScheduleCmd(): Promise<void> {
   const sub = positionals[1];
-  if (sub === "list") return void runScheduleList();
+  if (sub === "list") return runScheduleList();
   if (sub === "cancel") return runScheduleCancel();
   const name = positionals[2];
   if (sub !== "history" || !name) {
