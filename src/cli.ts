@@ -303,6 +303,7 @@ async function runInfo(): Promise<void> {
           configPath: configPath ?? null,
           model: modelSpec ?? null,
           instructions: definition.instructions !== undefined,
+          persona: definition.persona !== undefined,
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
           tools: tools.names,
           toolError: tools.error ?? null,
@@ -325,6 +326,7 @@ async function runInfo(): Promise<void> {
   console.log(`config:   ${configPath ?? "(none)"}`);
   console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
   console.log(`agents:   ${definition.instructions ? "AGENTS.md" : "(none)"}`);
+  console.log(`persona:  ${definition.persona ? "persona.md" : "(none)"}`);
   console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
   console.log(`tools:    ${tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)"}`);
   console.log(`channels: ${channels.join(", ") || "(none)"}`);
@@ -901,6 +903,7 @@ type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;
 /** The agents/skills/tools/collisions report lines. */
 function reportAgentsSkillsTools(a: Assembled): void {
   log.info(`[fastagent] agents: ${a.definition.instructions ? "AGENTS.md" : "(none)"}`);
+  if (a.definition.persona) log.info(`[fastagent] persona: persona.md`);
   log.info(`[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (a.toolNames.length > 0) log.info(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
   reportToolCollisions(a.toolCollisions);
@@ -1020,6 +1023,7 @@ async function runStart(): Promise<void> {
   log.info(`[fastagent] model:  ${modelSpec}`);
   await reportAuth(modelSpec, authPath);
   log.info(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
+  if (definition.persona) log.info(`[fastagent] persona: persona.md`);
   log.info(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (toolNames.length > 0) log.info(`[fastagent] tools:  ${toolNames.join(", ")}`);
   reportToolCollisions(toolCollisions);

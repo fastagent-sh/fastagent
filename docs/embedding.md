@@ -113,7 +113,7 @@ The common path is three concrete fields. The engine ports are optional injectio
 ```ts
 createPiAgent({
   model: "openai-codex/gpt-5.5",   // Tier 1: which model (spec string)
-  instructions: "…",               // Tier 1: the persona
+  instructions: "…",               // Tier 1: the system prompt
   tools: [/* defineTool(...) */],  // Tier 1: capabilities
   skills: [/* … */],               // optional: on-demand skill files
 

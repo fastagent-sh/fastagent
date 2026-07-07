@@ -68,8 +68,9 @@ export async function resolveWorkspaceTools(
 
 // ── §2 prompt: four-segment systemPrompt assembly ───────────────────────────
 //
-//   systemPrompt = ① base (engine asset) + ② instructions (<project_instructions>-wrapped)
-//                + ③ skills listing + ④ env context (date/cwd)
+//   systemPrompt = ① base (engine asset; a persona.md persona overrides its identity line)
+//                + ② instructions (AGENTS.md, <project_instructions>-wrapped) + ③ skills listing
+//                + ④ env context (date/cwd)
 //
 // AGENTS.md ≠ system prompt. Pure functions: segment ④ inputs (date/cwd) are caller-provided, so the
 // same inputs always produce the same prompt (testable, reproducible).
@@ -77,13 +78,19 @@ export async function resolveWorkspaceTools(
 /**
  * The pi engine's base prompt (segment ①), mirroring pi-coding-agent's default path with two
  * deviations: the pi-TUI docs section is dropped (those paths don't exist in deployments), and the
- * tool list is generated from the actually-mounted tools (base and toolset must agree).
+ * tool list is generated from the actually-mounted tools (base and toolset must agree). An authored
+ * `persona` (from persona.md) replaces the default identity line, keeping the tools list + guidelines.
  */
-export function piBasePrompt(options: { tools?: AgentTool[] } = {}): string {
+export function piBasePrompt(options: { tools?: AgentTool[]; persona?: string } = {}): string {
   const tools = options.tools ?? [];
   const toolsList =
     tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
-  return `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+  // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line
+  // (the standalone×code-repo cell's persona; core.md §11), keeping the tools list + guidelines below.
+  const identity =
+    options.persona?.trim() ||
+    "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+  return `${identity}
 
 Available tools:
 ${toolsList}
@@ -187,9 +194,9 @@ export interface CreatePiAgentOptions {
   /** Model spec "provider/modelId" (e.g. "openai-codex/gpt-5.5"), resolved against {@link models}. */
   model: string;
   /**
-   * The system prompt — your agent's persona, the code-side equivalent of AGENTS.md. A plain string
+   * The system prompt itself — verbatim, no engine base and no wrapping (unlike the directory path,
+   * which assembles the engine base + AGENTS.md as segment ② + persona.md as segment ①). A plain string
    * or a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
-   * No engine persona is prepended (that is a directory-fidelity concern of createPiAgentFromDefinition).
    */
   instructions?: string | (() => string);
   tools?: AgentTool[];
@@ -237,7 +244,8 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
 export interface CreatePiAgentFromDefinitionOptions {
   /** Model spec "provider/modelId", resolved against {@link models}. */
   model: string;
-  /** Override the engine base prompt (segment ①). Defaults to piBasePrompt({tools}). */
+  /** Override the engine base prompt (segment ①). Defaults to piBasePrompt({ tools, persona }) using the
+   *  live-read persona.md; pass base to fully opt out of persona.md. */
   base?: string;
   /** Override tools. Defaults to piDefaultTools (lock down with a custom list). */
   tools?: AgentTool[];
@@ -278,7 +286,6 @@ export async function createPiAgentFromDefinition(
   // every turn's log. A log-dedup memo, not session state (stateless invoke holds).
   let reportedFindings = findingsSignature(definition);
   const tools = options.tools ?? piDefaultTools(env.cwd);
-  const base = options.base ?? piBasePrompt({ tools });
   const agent = buildPiAgent({
     model: options.model,
     providers: options.providers,
@@ -304,7 +311,9 @@ export async function createPiAgentFromDefinition(
       }
       return {
         systemPrompt: assembleSystemPrompt({
-          base,
+          // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity,
+          // re-read per turn like AGENTS.md so edits go live; options.base still wins for full control.
+          base: options.base ?? piBasePrompt({ tools, persona: def.persona }),
           instructions: def.instructions,
           instructionsPath: def.instructions !== undefined ? join(def.dir, "AGENTS.md") : undefined,
           skills: def.skills,

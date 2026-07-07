@@ -69,6 +69,19 @@ describe("definition: loadAgentDefinition", () => {
     expect(def.skills).toEqual([]);
   });
 
+  it("loads persona.md into persona (segment ①); absent → undefined; AGENTS.md stays the ② field", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-persona-"));
+    await writeFile(join(dir, "AGENTS.md"), "# Repo spec\nProject rules here.\n");
+    let def = await loadAgentDefinition(dir);
+    expect(def.persona).toBeUndefined(); // no persona.md → segment ① falls back to engine identity
+    expect(def.instructions).toContain("Repo spec"); // AGENTS.md is the ② context field, not persona
+
+    await writeFile(join(dir, "persona.md"), "You are the Repo Bot. Reply briefly.\n");
+    def = await loadAgentDefinition(dir);
+    expect(def.persona).toContain("Repo Bot"); // persona.md → persona (①)
+    expect(def.instructions).toContain("Repo spec"); // AGENTS.md unchanged, still ②
+  });
+
   it("skips a skill whose SKILL.md has no description and surfaces it as a diagnostic (not a crash)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-bad-skill-"));
     await mkdir(join(dir, "skills", "bad"), { recursive: true });
@@ -90,6 +103,21 @@ describe("definition: loadAgentDefinition", () => {
     const env = new DeniedEnv({ cwd: fixtureDir });
     await expect(loadAgentDefinition(fixtureDir, { env })).rejects.toThrow(
       /cannot read .*AGENTS\.md.*permission denied/,
+    );
+  });
+
+  it("persona.md read errors other than not_found throw instead of silently dropping the persona", async () => {
+    class DeniedEnv extends NodeExecutionEnv {
+      override async readTextFile(path: string) {
+        if (path.endsWith("persona.md")) {
+          return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
+        }
+        return super.readTextFile(path);
+      }
+    }
+    const env = new DeniedEnv({ cwd: fixtureDir });
+    await expect(loadAgentDefinition(fixtureDir, { env })).rejects.toThrow(
+      /cannot read .*persona\.md.*permission denied/,
     );
   });
 
@@ -171,6 +199,25 @@ describe("create: assembleSystemPrompt (four segments)", () => {
     expect(withTools).toContain("- read:");
     expect(withTools).toContain("- bash:");
     expect(piBasePrompt()).toContain("(none)");
+  });
+
+  it("a persona.md persona overrides the engine identity but keeps the tool list + guidelines", () => {
+    const tools = piDefaultTools(fixtureDir);
+    const persona = piBasePrompt({ tools, persona: "You are the Repo Bot." });
+    expect(persona).toContain("You are the Repo Bot.");
+    expect(persona).not.toContain("operating inside pi"); // default identity replaced
+    expect(persona).toContain("- read:"); // tools list kept
+    expect(persona).toContain("Be concise"); // guidelines kept
+    expect(piBasePrompt({ tools, persona: "   " })).toContain("operating inside pi"); // blank persona → default
+
+    // In a full assembly the persona is ① and AGENTS.md remains ② <project_instructions>.
+    const prompt = assembleSystemPrompt({
+      base: persona,
+      instructions: "PROJECT CONTEXT LINE",
+      instructionsPath: "/x/AGENTS.md",
+    });
+    expect(prompt.indexOf("Repo Bot")).toBeLessThan(prompt.indexOf("<project_instructions"));
+    expect(prompt).toContain("PROJECT CONTEXT LINE");
   });
 });
 
@@ -323,6 +370,36 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     expect(seen[1]).toContain("FINAL-PERSONA");
     expect(seen[1]).not.toContain("DRAFT-PERSONA");
     expect(seen[1]).toContain("late-skill"); // the listing comes from the SAME re-read as the prompt
+  });
+
+  it("a persona.md edit between two invokes reaches the next turn's segment ① — no restart", async () => {
+    // Guards the PR's wiring point: persona must come from the per-turn live() re-read, NOT a boot-time
+    // closure value (the exact regression this PR fixes for `base`). If persona is hoisted out of live(),
+    // seen[1] stays DRAFT-BOT and the last assertion fails.
+    const dir = await mkdtemp(join(tmpdir(), "fa-live-persona-"));
+    await writeFile(join(dir, "persona.md"), "You are DRAFT-BOT.\n");
+    const seen: (string | undefined)[] = [];
+    const { faux } = makeFaux();
+    faux.setResponses([
+      (ctx) => {
+        seen.push(ctx.systemPrompt);
+        return fauxAssistantMessage("one");
+      },
+      (ctx) => {
+        seen.push(ctx.systemPrompt);
+        return fauxAssistantMessage("two");
+      },
+    ]);
+    const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1" });
+
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await writeFile(join(dir, "persona.md"), "You are FINAL-BOT.\n");
+    await collect(agent.invoke({ session: "s" }, { text: "again" }));
+
+    expect(seen[0]).toContain("DRAFT-BOT");
+    expect(seen[0]).not.toContain("operating inside pi"); // persona overrides the default engine identity
+    expect(seen[1]).toContain("FINAL-BOT");
+    expect(seen[1]).not.toContain("DRAFT-BOT"); // live re-read, not the boot-time closure value
   });
 
   it("a bad skill written at runtime is surfaced as a warning on the affected turn, never silently dropped", async () => {

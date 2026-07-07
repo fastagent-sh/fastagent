@@ -92,7 +92,7 @@ export async function buildChatRuntime(
     // base + instructions ONLY — pi appends the skill section and env (date/cwd) itself (including
     // them here would duplicate both).
     const systemPrompt = assembleSystemPrompt({
-      base: piBasePrompt({ tools }),
+      base: piBasePrompt({ tools, persona: definition.persona }),
       instructions: definition.instructions,
       instructionsPath: definition.instructions !== undefined ? join(cwd, "AGENTS.md") : undefined,
     });

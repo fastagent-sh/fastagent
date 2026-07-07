@@ -27,8 +27,14 @@ export interface SkillCollision {
 
 /** Result of loading a definition directory. Produced by {@link loadAgentDefinition}. */
 export interface LoadedDefinition {
-  /** Verbatim AGENTS.md content (feeds prompt segment ②); undefined when the file does not exist. */
+  /** Verbatim AGENTS.md content (feeds prompt segment ② `<project_instructions>` context); undefined when the file does not exist. */
   instructions?: string;
+  /**
+   * Verbatim `persona.md` content — the authored persona that OVERRIDES segment ①'s identity line
+   * (piBasePrompt keeps the tool list + guidelines; NOT a full system-prompt replacement — that is L1
+   * createPiAgent's `instructions`). undefined when absent → segment ① is the default engine identity.
+   */
+  persona?: string;
   skills: Skill[];
   /** Non-fatal per-file skill problems reported by pi's loader. */
   diagnostics: SkillDiagnostic[];
@@ -63,6 +69,15 @@ export async function loadAgentDefinition(
   }
   const instructions = read.ok ? read.value : undefined;
 
+  // persona.md → segment ① persona (overrides the identity line). Same error policy as AGENTS.md:
+  // only not_found means "absent"; any other read error surfaces rather than silently dropping the persona.
+  const personaPath = join(root, "persona.md");
+  const personaRead = await e.readTextFile(personaPath);
+  if (!personaRead.ok && personaRead.error.code !== "not_found") {
+    throw new Error(`cannot read ${personaPath}: ${personaRead.error.message}`);
+  }
+  const persona = personaRead.ok ? personaRead.value : undefined;
+
   // Skills come ONLY from the definition's own skills/ (no external/global mount), so the same
   // definition loads the same skills on every machine.
   const { skills: raw, diagnostics } = await loadSkills(e, [join(root, "skills")]);
@@ -77,7 +92,7 @@ export async function loadAgentDefinition(
     }
   }
 
-  return { instructions, skills: [...byName.values()], diagnostics, collisions, dir: root };
+  return { instructions, persona, skills: [...byName.values()], diagnostics, collisions, dir: root };
 }
 
 /**

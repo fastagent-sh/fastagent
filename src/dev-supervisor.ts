@@ -6,7 +6,7 @@
  *
  * Watch scope is deliberately narrow: only inputs whose changes REQUIRE a new process — imported
  * code (tools/, channels/), fastagent.config.*, package.json, .env. The definition (AGENTS.md,
- * skills/) is re-read per invoke by the directory rung, so its edits go live on the next turn with no
+ * persona.md, skills/) is re-read per invoke by the directory rung, so its edits go live on the next turn with no
  * restart — and, critically, an agent that writes files into its own workspace (its normal work
  * product, including editing its own AGENTS.md) never has its in-flight turn killed by the watcher.
  */
@@ -115,7 +115,7 @@ export function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}
     log.warn(`[fastagent] file watching error (${(error as Error).message}); some edits may need a manual restart`),
   );
   log.info(
-    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/skills edits go live next turn without a restart`,
+    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills edits go live next turn without a restart`,
   );
 
   const shutdown = (): never => {

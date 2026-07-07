@@ -30,7 +30,7 @@ The default scaffold is a **self-iterating agent** — the directory is the agen
 
 ```txt
 my-agent/
-├── AGENTS.md                          # the persona — how to improve yourself
+├── AGENTS.md                          # how to improve yourself
 ├── skills/writing-great-skills/       # the example skill: how to author skills well
 ├── tools/fetch-url.ts                 # an example code tool
 ├── fastagent.config.mjs
