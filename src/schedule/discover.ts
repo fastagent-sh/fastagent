@@ -49,6 +49,10 @@ export async function loadSchedules(
       }
       const err = cronError(s.cron, s.tz);
       if (err) throw new Error(`${label}: invalid cron/tz — ${err}`);
+      // "wake" is reserved: the run audit records self-scheduled wake-ups under that name, so a schedule
+      // named wake would make `schedule history wake` an unreadable mix of two different things.
+      if (name === "wake")
+        throw new Error(`${label}: "wake" is a reserved schedule name (the self-scheduling audit uses it)`);
       if (byName.has(name)) throw new Error(`${label}: duplicate schedule name "${name}" — kept the first`);
       byName.set(name, { name, cron: s.cron, tz: s.tz, prompt: s.prompt });
     } catch (error) {

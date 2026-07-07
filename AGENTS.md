@@ -67,6 +67,7 @@ src/
 │   ├── discover.ts         # schedules/ filesystem discovery (loadSchedules/discoverScheduleFiles), isolates a bad file (G2)
 │   ├── scheduler.ts        # lifecycle + fire algorithm (overdue catch-up ONCE, claim-before-invoke) + stable per-schedule session + wake-up poll
 │   ├── wakeups.ts          # the agent's self-scheduled one-shot wake-ups (2nd producer): engine-neutral store + guardrails (min delay, cap, claim/defer)
+│   ├── audit.ts            # runs.jsonl append-only run audit (full reply) + `schedule history` reader — "did last night's run silently fail?"
 │   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
 └── engines/pi/              # the pi reference implementation
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt

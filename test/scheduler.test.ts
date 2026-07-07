@@ -7,6 +7,7 @@ import type { Agent, AgentEvent } from "../src/agent.ts";
 import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 import { createScheduler, scheduleSession } from "../src/schedule/scheduler.ts";
 import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
+import { readRuns } from "../src/schedule/audit.ts";
 
 /** A fake agent that records each invoke's session + text and yields the scripted terminal. */
 function recordingAgent(events: AgentEvent[] = [{ type: "completed" }]) {
@@ -69,6 +70,9 @@ describe("schedule/scheduler: fire algorithm", () => {
     await vi.waitFor(() => expect(calls.length).toBe(1)); // exactly ONE catch-up, not one per missed slot
     expect(calls[0]).toEqual({ session: scheduleSession("job"), text: "go" });
     expect((await readFires(root)).job).toBe("2026-07-07T12:30:00.000Z"); // claimed = now
+    // The run audit recorded the fire: name, outcome, and the reply's audit copy.
+    await vi.waitFor(() => expect(readRuns(root, "job")).toHaveLength(1));
+    expect(readRuns(root, "job")[0]).toMatchObject({ outcome: "completed", session: scheduleSession("job") });
     s.stop();
   });
 
@@ -122,6 +126,8 @@ describe("schedule/scheduler: fire algorithm", () => {
     // NOT dropped: re-scheduled (deferred) with a bumped attempt count — a one-shot wake must not vanish.
     await vi.waitFor(() => expect(listWakeups(root)).toHaveLength(1));
     expect(listWakeups(root)[0]).toMatchObject({ session: "busy", attempts: 1 });
+    // Audited as deferred (not failed): honest — the wake was re-scheduled, not finally lost.
+    expect(readRuns(root, "wake")[0]).toMatchObject({ outcome: "deferred", session: "busy" });
     s.stop();
   });
 

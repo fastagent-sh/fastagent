@@ -25,6 +25,7 @@ Most commands take an optional workspace directory. When omitted, the current di
 | `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one agent turn and exit. |
 | `fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
+| `schedule history <name> [dir]` | Print the run audit for a schedule (or `wake`). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
 | `add github|telegram [dir]` | Scaffold a first-party channel. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
@@ -158,6 +159,17 @@ session, so you see exactly what the served scheduler would do:
 A `schedules/<name>.ts` file default-exports `defineSchedule({ cron, tz?, prompt })`; the scheduler
 fires the agent on that cron when you `dev`/`start`. Output is the agent's tools' job — the scheduler
 only fires and logs. See the [API reference](./api-reference.md#schedule-authoring).
+
+## `fastagent schedule history`
+
+```bash
+fastagent schedule history <name> [dir] [--json]
+```
+
+Prints the run audit for one schedule — or `wake` for the agent's self-scheduled wake-ups: when each run
+fired, its outcome (`completed` / `failed` / `deferred`), duration, and a preview of the reply or error.
+The answer to "did last night's run silently fail?". Read-only (reads `<state root>/schedule/runs.jsonl`,
+written by the serving scheduler); `--json` prints the full records, including the complete reply text.
 
 ## `fastagent tool`
 

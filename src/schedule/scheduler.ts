@@ -14,6 +14,7 @@
  */
 import { type Agent, SESSION_BUSY_CODE } from "../agent.ts";
 import { log } from "../log.ts";
+import { appendRun } from "./audit.ts";
 import { nextRun } from "./cron.ts";
 import type { LoadedSchedule } from "./schedule.ts";
 import { loadFires, saveFires } from "./state.ts";
@@ -60,13 +61,19 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
    *  failed specifically because the session was BUSY (the turn never started) — the ONLY replay-safe reason
    *  to re-fire a wake-up; every other outcome (completed, or a failure whose side effects may have run) is
    *  terminal. */
-  async function runTurn(label: string, session: string, prompt: string): Promise<{ busy: boolean }> {
+  async function runTurn(
+    label: string,
+    session: string,
+    prompt: string,
+  ): Promise<{ busy: boolean; failed?: string; reply: string; ms: number }> {
     const startedAt = Date.now();
     log.info(`[schedule] ${label} firing (session=${session})`);
     try {
       let failed: string | undefined;
       let busy = false;
+      let reply = "";
       for await (const e of agent.invoke({ session }, { text: prompt })) {
+        if (e.type === "text") reply += e.delta;
         if (e.type === "failed") {
           failed = e.details;
           busy = e.code === SESSION_BUSY_CODE; // structured (SPEC §8), not a details-text match
@@ -74,12 +81,12 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
       }
       if (failed) log.error(`[schedule] ${label} failed (${Date.now() - startedAt}ms): ${failed}`);
       else log.info(`[schedule] ${label} completed (${Date.now() - startedAt}ms)`);
-      return { busy: failed !== undefined && busy };
+      return { busy: failed !== undefined && busy, failed, reply, ms: Date.now() - startedAt };
     } catch (e) {
       // invoke shouldn't throw (SPEC MUST 2 turns failures into events), but stay total regardless. A throw
       // is not the busy case, so don't defer on it.
       log.error(`[schedule] ${label} errored (${Date.now() - startedAt}ms): ${String(e)}`);
-      return { busy: false };
+      return { busy: false, failed: String(e), reply: "", ms: Date.now() - startedAt };
     }
   }
 
@@ -95,7 +102,17 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
       log.error(`[schedule] ${s.name}: cannot persist fire state, skipping this run: ${String(e)}`);
       return;
     }
-    await runTurn(s.name, scheduleSession(s.name), s.prompt);
+    const firedAt = now().toISOString();
+    const r = await runTurn(s.name, scheduleSession(s.name), s.prompt);
+    appendRun(stateRoot, {
+      name: s.name,
+      session: scheduleSession(s.name),
+      firedAt,
+      ms: r.ms,
+      outcome: r.failed ? "failed" : "completed",
+      reply: r.failed ? undefined : r.reply,
+      error: r.failed,
+    });
   }
 
   /**
@@ -112,15 +129,28 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
       const w = takeFirstDueWakeup(stateRoot, now());
       if (!w) break;
       const label = `wake ${w.id.slice(0, 8)}`;
-      const { busy } = await runTurn(label, w.session, w.prompt);
+      const firedAt = now().toISOString();
+      const r = await runTurn(label, w.session, w.prompt);
       // Re-fire ONLY on a busy session (the turn never started — replay-safe). A wake is one-shot, so a
       // busy-skip that just dropped it would lose it forever; defer + bounded retry. Every OTHER outcome is
       // terminal (already claimed/removed) — re-running a turn that DID start risks duplicate side effects.
-      if (busy) {
-        const kept = deferWakeup(stateRoot, w, new Date(now().getTime() + WAKEUP_POLL_MS));
+      let kept = false;
+      if (r.busy) {
+        kept = deferWakeup(stateRoot, w, new Date(now().getTime() + WAKEUP_POLL_MS));
         if (kept) log.info(`[schedule] ${label}: session busy — retrying next poll`);
         else log.error(`[schedule] ${label}: dropped after too many busy retries`);
       }
+      // Audit honesty: `deferred` ONLY when the wake was actually re-scheduled. A busy wake dropped at the
+      // retry ceiling is a FINAL silent loss — exactly what this audit exists to answer — so it is `failed`.
+      appendRun(stateRoot, {
+        name: "wake",
+        session: w.session,
+        firedAt,
+        ms: r.ms,
+        outcome: r.busy ? (kept ? "deferred" : "failed") : r.failed ? "failed" : "completed",
+        reply: r.failed || r.busy ? undefined : r.reply,
+        error: r.busy ? (kept ? undefined : "dropped after too many busy retries") : r.failed,
+      });
     }
   }
 

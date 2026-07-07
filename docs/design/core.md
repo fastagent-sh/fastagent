@@ -338,8 +338,13 @@ the scheduler: the author's `schedules/` files (declarative, guaranteed) and the
   pre-flight detects TIME triggers — `schedules/` files OR `config.selfSchedule` — and the fly plan forces
   `min_machines_running=1` (reason-tagged) while the railway runbook forbids App Sleeping.
 
-Roadmap: **Phase 2** — a run audit (`runs.jsonl`, full reply) + `fastagent schedule history`. **Phase 4b** — recurring self-scheduling
-(`wake({ cron })`) + `unwake`/operator cancel, on the same store with heavier guardrails.
+Every fire is AUDITED: one line per run in `<stateRoot>/schedule/runs.jsonl` (append-only, full reply — an
+immutable per-fire snapshot the rolling session can't give), read by `fastagent schedule history <name>`
+(or `wake`) — the answer to "did last night's run silently fail?". Total: an audit-write failure never
+breaks a fire.
+
+Roadmap: **Phase 4b** — recurring self-scheduling (`wake({ cron })`) + `unwake`/operator cancel, on the
+same store with heavier guardrails.
 
 ## 10. Running and deployment (design)
 

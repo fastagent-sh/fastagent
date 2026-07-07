@@ -73,6 +73,7 @@ import { spawnRunner } from "./deploy/runner.ts";
 import { assembleSecrets } from "./deploy/secrets.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { discoverScheduleFiles, loadSchedules } from "./schedule/discover.ts";
+import { readRuns } from "./schedule/audit.ts";
 import { createScheduler, scheduleSession } from "./schedule/scheduler.ts";
 
 function usage(code: number): never {
@@ -83,6 +84,7 @@ function usage(code: number): never {
   fastagent tool   <name> '<json-args>' [dir]
   fastagent invoke <message> [dir] [--model provider/modelId] [--auth-path file]
   fastagent fire   <name> [dir] [--model provider/modelId] [--auth-path file]
+  fastagent schedule history <name> [dir] [--json]
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
@@ -125,6 +127,9 @@ function usage(code: number): never {
          counterpart of tool, for CI smoke and quick checks. Same model resolution as dev.
   fire   run ONE schedule's turn immediately (authoring loop, like invoke) — fires schedules/<name>.ts
          now without waiting for its cron. Reply→stdout; does NOT advance the schedule's fire state.
+  schedule history <name>  print the run audit for a schedule (or "wake" for self-scheduled wake-ups):
+         when each run fired, completed/failed/deferred, duration, and the reply/error — the answer to
+         "did last night's run silently fail?". --json for the full records (complete reply text).
   start  run the agent in dir (default .) in production posture — the SAME assembly as dev
          (your directory is the agent), just no file-watching. No build step: start reads the
          definition directly; model/http come from fastagent.config.ts (frozen by git).
@@ -211,6 +216,7 @@ else if (command === "start") await runStart();
 else if (command === "add") await runAdd();
 else if (command === "deploy") await runDeploy();
 else if (command === "fire") await runFire();
+else if (command === "schedule") runScheduleCmd();
 else if (command === "login") await runLogin();
 else usage(1);
 
@@ -331,6 +337,42 @@ async function runFire(): Promise<void> {
   );
   process.stdout.write("\n");
   process.exit(exitCode);
+}
+
+/**
+ * `fastagent schedule history <name> [dir]`: print the run audit for one schedule (or "wake") — fired
+ * time, outcome, duration, reply/error. Read-only (reads `<stateRoot>/schedule/runs.jsonl`); the answer
+ * to "did last night's run silently fail?". Text mode previews the reply/error; --json is the full record.
+ */
+function runScheduleCmd(): void {
+  const sub = positionals[1];
+  const name = positionals[2];
+  if (sub !== "history" || !name) {
+    console.error(`usage: fastagent schedule history <name> [dir] [--json]`);
+    process.exit(2);
+  }
+  const target = resolve(positionals[3] ?? ".");
+  const runs = readRuns(resolveStateRoot(target), name);
+  if (values.json) {
+    console.log(JSON.stringify(runs, null, 2));
+    return;
+  }
+  if (runs.length === 0) {
+    console.error(`no recorded runs for "${name}" (state: ${resolveStateRoot(target)})`);
+    return;
+  }
+  // The question is "did LAST NIGHT's run fail?" — so text mode tails the most recent runs (chronological
+  // within the tail); --json above returns the full history.
+  const TAIL = 20;
+  const shown = runs.slice(-TAIL);
+  if (runs.length > shown.length) {
+    console.error(`(showing the last ${shown.length} of ${runs.length} runs — --json for all)`);
+  }
+  for (const r of shown) {
+    const detail = r.error ?? r.reply ?? "";
+    const preview = detail.replace(/\s+/g, " ").slice(0, 100);
+    console.log(`${r.firedAt}  ${r.outcome.padEnd(9)} ${String(r.ms).padStart(6)}ms  ${preview}`);
+  }
 }
 
 /** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. Read-only. */
