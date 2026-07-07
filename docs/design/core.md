@@ -321,12 +321,16 @@ the scheduler: the author's `schedules/` files (declarative, guaranteed) and the
   tools' side effects. The scheduler tells the two apart by the busy event's `code` (`SESSION_BUSY_CODE`, a
   `failed.code` per SPEC §8 failure subdivision — a structured field on the neutral contract, not a text
   match on `details` or an engine import).
-- **The collision is only handled one way (a known Phase 4b gap).** The scheduler invokes DIRECTLY,
-  bypassing a channel's turn-queue (telegram's queue exists precisely to serialize instead of colliding on
-  the lease). So the mirror case is unhandled: while a wake turn holds the lease, a user message on the same
-  session collides and the channel shows its "busy, try again" notice. Both directions of "wake fires while
-  the user is still chatting" are equally likely; only the wake→busy direction defers today. The structural
-  fix — wake turns through the same per-session serial seam as channel turns — is Phase 4b.
+- **Both collision directions are handled for telegram; other channels still fail fast.** The scheduler
+  invokes DIRECTLY, bypassing a channel's turn-queue — so "wake fires while the user is chatting" can
+  collide both ways. Each side now waits on telegram: a wake INTO a busy session is deferred by the
+  scheduler (above), and a USER turn hitting a lease held by an external turn (the wake) busy-WAITS —
+  telegram's `invokeTurn` retries a fail-fast `session_busy` reject (bounded, ~2 min; the user sees the
+  "Thinking…" placeholder, then the answer) instead of showing "try again". Only a FIRST-event busy
+  retries (the turn never started — replay-safe). A github/http turn colliding with a wake still surfaces
+  busy immediately (their sessions rarely mix with wake sessions; add the same wait if it bites). The
+  structural alternative — one shared per-session serial seam — stays deferred: bounded waits cover the
+  real scenario at a fraction of the seam's cost.
 - **Deploy note (a Phase 3 gap):** wake has no external wake-up either, so wake-ups make ANY served agent
   need a machine kept running — not just one with `schedules/`. `deploy`'s keep-1 trigger (Phase 3) must
   count self-scheduling, not only static schedules; today that is unenforced.
