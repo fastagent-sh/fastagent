@@ -24,6 +24,7 @@ Most commands take an optional workspace directory. When omitted, the current di
 | `dev [dir]` | Serve locally with watch/reload. |
 | `chat [dir]` | Open the same assembled agent in pi's interactive TUI. |
 | `invoke <message> [dir]` | Run one agent turn and exit. |
+| `fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
 | `add github|telegram [dir]` | Scaffold a first-party channel. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
@@ -60,6 +61,7 @@ Prints the assembled surface without starting a server:
 - skills and diagnostics,
 - non-default tools and collisions,
 - channel files,
+- schedule files,
 - session directory.
 
 `info` is read-only: it does not create sessions or modify `.fastagent/`.
@@ -134,6 +136,24 @@ Runs one turn through the same workspace assembly and exits:
 - a `failed` terminal event exits non-zero.
 
 Use this for smoke tests and scripts.
+
+## `fastagent fire`
+
+```bash
+fastagent fire <name> [dir] [--model provider/modelId] [--auth-path file]
+```
+
+Runs ONE schedule's turn immediately — the authoring loop for schedules (like `invoke` is for a
+prompt). Fires `schedules/<name>.ts` now, without waiting for its cron, using the schedule's stable
+session, so you see exactly what the served scheduler would do:
+
+- answer text streams to stdout, tool/diagnostic lines to stderr, a `failed` turn exits non-zero (like `invoke`),
+- no name → usage on stderr, exit 2; an unknown schedule name → exit 1 with the available names,
+- it does **not** advance the schedule's fire state — a test run never makes the running scheduler skip the real next run.
+
+A `schedules/<name>.ts` file default-exports `defineSchedule({ cron, tz?, prompt })`; the scheduler
+fires the agent on that cron when you `dev`/`start`. Output is the agent's tools' job — the scheduler
+only fires and logs. See the [API reference](./api-reference.md#schedule-authoring).
 
 ## `fastagent tool`
 

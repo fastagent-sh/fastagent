@@ -42,6 +42,8 @@ FastAgent aims to collapse **N triggers × M agents × K hosts** into additive s
 
 The SPEC directly owns N × M. K portability is enabled by core invariants, but each host still needs real target-adapter work.
 
+The N axis has two forms, both on the SAME `invoke` contract (neither adds a new one): **inbound triggers** — channels, driven by an incoming request (§9) — and the **clock trigger** — the scheduler, driven by time (§9.3).
+
 ## 2. Agent definitions and prompt assembly
 
 FastAgent consumes existing definition artifacts:
@@ -179,7 +181,7 @@ If a second invocation arrives for the same session while one is already running
 
 Core does not queue. Dedupe, retry, user-visible “busy” messages, and steering are channel-level decisions because only the channel understands the trigger semantics.
 
-## 9. Channels
+## 9. Triggers: channels and schedules
 
 ### 9.1 HTTP channel
 
@@ -255,6 +257,43 @@ Durable decisions this architecture encodes:
   of growing the hand-rolled surface — `callApi<M>` is shape-compatible with `bot.api.*`, so the
   policy layer survives that swap. The transport rewrite itself applied gramIO's architecture
   lesson (one generic call function, policy as its wrapper, typed errors) without the dependency.
+
+### 9.3 Schedules (the clock trigger)
+
+The scheduler is the N axis in **clock form**: a time-trigger that fires the agent on a cron. A workspace
+declares one by dropping `schedules/<name>.ts` (`defineSchedule({ cron, tz?, prompt })`), mirroring
+`tools/`/`channels/` filesystem discovery — the FILE producer of scheduled invocations (the author's:
+declarative, git-tracked, deploy-guaranteed). It borrows the existing `agent.invoke` contract and adds
+none; it lives in `src/schedule/` (not `channels/`, because a clock trigger mounts a timer, not a route).
+
+Fire model:
+
+- **Stable per-schedule session**, derived at runtime as `schedule:<name>` (like the telegram channel
+  derives one from `chat.id`) — so a schedule's turns share one continuing conversation persisted by the
+  core session store. A session id is runtime conversational context (K side, §7/§10.1), never an
+  authored field; the definition (`schedules/<name>.ts`) carries only `cron/tz/prompt`.
+- **Output is the agent's tools' job.** The scheduler only fires and logs the outcome — it has no reply
+  target of its own (unlike a channel's chat/PR). A cron turn's prompt says "send X to Telegram"; the
+  agent calls a send tool.
+- **Durability = catch up an overdue run ONCE.** `<stateRoot>/schedule/fires.json` (atomic write) records
+  the last fire; on start, if the next instant after it is already past (the process was down across it),
+  fire once and advance — not once per missed slot. `lastFired` is claimed BEFORE the invoke (at-most-once
+  per slot: a crash mid-turn does not re-fire it — "a digest late once" beats "twice"). Strict
+  at-least-once (a per-turn WAL, like the telegram L1 turn store) is a later tier.
+- **Single-process**, like all state today. Cron has no external wake-up (unlike a webhook), so a
+  deployment with schedules must keep one machine running — `deploy` will enforce that (roadmap below).
+
+The cron arithmetic uses `croner` (zero transitive deps + IANA tz/DST — chosen over `cron-parser`, which
+pulls luxon, per the dependency philosophy); the scheduler owns fire control, borrowing only croner's
+next-instant computation. `fastagent fire <name>` runs one schedule's turn immediately (the authoring
+loop, like `invoke`), without advancing fire state.
+
+Roadmap: **Phase 2** — a run audit (`runs.jsonl`, full reply) + `fastagent schedule history`. **Phase 3**
+— `deploy` enforces keep-1-machine when schedules exist. **Phase 4** — the agent's `wake` tool
+(self-scheduling): the SECOND producer of scheduled invocations (agent-created, one-shot or recurring)
+into a unified store, needing a `ToolContext` session injection so a wake can continue the current
+conversation. The file producer (this section) and the tool producer carry different reliability
+contracts — declarative/guaranteed vs runtime/self-managed — so both stay.
 
 ## 10. Running and deployment (design)
 

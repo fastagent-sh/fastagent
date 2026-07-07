@@ -207,6 +207,49 @@ const textHeaders: { readonly "content-type": "text/plain" };
 
 See [Channel development](channel-development.md).
 
+## Schedule authoring
+
+```ts
+interface Schedule {
+  cron: string; // 5-field cron expression
+  tz?: string; // IANA timezone (default "UTC")
+  prompt: string; // the turn's text = the job's instruction
+}
+function defineSchedule(schedule: Schedule): Schedule;
+function loadSchedules(dir: string): Promise<{ schedules: LoadedSchedule[]; failures: ModuleLoadFailure[] }>;
+function createScheduler(opts: SchedulerOptions): Scheduler; // { start(): void; stop(): void }
+function scheduleSession(name: string): string; // the derived stable session id
+```
+
+A workspace declares time-triggers by dropping `schedules/<name>.ts`, mirroring `tools/`/`channels/`;
+the filename becomes the schedule name. Each file default-exports `defineSchedule({ cron, tz?, prompt })`.
+
+```ts
+// schedules/daily-digest.ts        → schedule "daily-digest"
+import { defineSchedule } from "@kid7st/fastagent";
+
+export default defineSchedule({
+  cron: "0 9 * * *",
+  tz: "America/New_York",
+  prompt: "Generate today's digest and send it to the team Telegram.",
+});
+```
+
+The scheduler is a time-trigger (the N axis, clock form): on each cron instant it invokes the agent
+with `prompt` — borrowing the same `Agent` contract as channels, adding none. It:
+
+- **carries no `session` field** — a session id is runtime conversational context, not a build-time
+  value. It derives a stable per-schedule session (`scheduleSession(name)` = `schedule:<name>`), so a
+  schedule's turns share one continuing conversation persisted by the core session store (zero-touch on
+  storage, like the telegram channel deriving a session from `chat.id`);
+- **delivers nothing** — output is the agent's tools' job; the scheduler only fires and logs the outcome;
+- **catches up an overdue run once** — durable `fires.json` under `<stateRoot>/schedule/` records the
+  last fire; a run missed while the process was down fires once on the next start (not per missed slot),
+  claimed before the invoke (at-most-once per slot).
+
+Single-process (like all state today). `createScheduler({ agent, stateRoot, schedules })` is started by
+the serve path (`dev`/`start`); `fastagent fire <name>` runs one schedule's turn immediately for authoring.
+
 ## Config and models
 
 ```ts
