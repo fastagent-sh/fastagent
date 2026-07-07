@@ -174,5 +174,6 @@ Read [Channels](channels.md) for the channel model, [GitHub channel](github.md) 
 
 - [Embedding](embedding.md) — use FastAgent as a library inside your own app.
 - [Channels](channels.md) — webhook and bot adapters.
+- [Deploy](deploy.md) — ship the directory to Fly, Railway, or any Docker host.
 - [Agent Handler SPEC](SPEC.md) — the event stream contract.
 - [Core design](design/core.md) — maintainer architecture notes.

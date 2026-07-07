@@ -26,6 +26,7 @@ Using a coding agent? Give it the repository's [`ai-start.md`](ai-start.md) for 
 | Configure model, auth, ports, sessions, tools, and channels | [Configuration](configuration.md) |
 | Embed an agent in an existing app or route | [Embedding](embedding.md) |
 | Connect GitHub, Telegram, or another channel | [Channels](channels.md) |
+| Ship the agent to a host | [Deploy](deploy.md) |
 
 ## Channel guides
 

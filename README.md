@@ -78,7 +78,7 @@ npm i -g @kid7st/fastagent   # CLI: fastagent init/dev/start/...
 npm i @kid7st/fastagent      # library API for embedding or code tools
 ```
 
-Requires **Node >= 22.19** — the floor is inherited from the reference engine (`@earendil-works/pi-agent-core`) and `undici`, both of which require it. The npm package ships compiled JavaScript and type declarations.
+Requires **Node >= 22.19** (the floor is inherited from the reference engine `@earendil-works/pi-agent-core` and `undici`), and also runs under **Bun** (verified on Bun 1.3 — its native fetch replaces the undici path). The npm package ships compiled JavaScript and type declarations.
 
 ## Quickstart
 
@@ -148,6 +148,7 @@ const agent = createPiAgent({
 | [docs/cli.md](docs/cli.md) | CLI reference |
 | [docs/embedding.md](docs/embedding.md) | Use FastAgent as a library inside your own app |
 | [docs/channels.md](docs/channels.md) | Add webhook/bot channels |
+| [docs/deploy.md](docs/deploy.md) | Ship the directory to Fly, Railway, or any Docker host |
 | [docs/github.md](docs/github.md) / [docs/telegram.md](docs/telegram.md) | First-party channel guides |
 | [docs/channel-development.md](docs/channel-development.md) | Build custom channel adapters |
 | [docs/api-reference.md](docs/api-reference.md) | Public TypeScript API reference |
