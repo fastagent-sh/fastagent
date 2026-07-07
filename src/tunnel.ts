@@ -10,7 +10,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
-import { loadEnvFile } from "./env.ts";
+import { loadDotEnv } from "./env.ts";
 import { log } from "./log.ts";
 
 export interface Tunnel {
@@ -136,9 +136,14 @@ function channelBasenames(dir: string): string[] {
 export async function announceWebhooks(dir: string, baseUrl: string): Promise<void> {
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
-    loadEnvFile(join(dir, ".env")); // so telegram registration sees the tokens
-  } catch {
-    /* no .env is fine */
+    loadDotEnv(dir); // telegram registration reads tokens from .env
+  } catch (error) {
+    // best-effort boundary: a MISSING .env is already tolerated by loadDotEnv; an unreadable one (EACCES,
+    // or .env is a directory) must NOT crash the long-running dev/start server — announceWebhooks is
+    // void-called with no unhandledRejection handler, so a throw here would terminate the process. Warn
+    // (surface it, rule 8) and continue best-effort; telegram registration then degrades to its manual
+    // instruction if the token is absent. loadDotEnv keeps throwing for the synchronous command callers.
+    log.warn(`[fastagent] could not read ${join(dir, ".env")}: ${(error as Error).message} — continuing without it`);
   }
   const channels = channelBasenames(dir);
   if (channels.length === 0) return;

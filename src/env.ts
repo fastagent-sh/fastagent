@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * Load a `.env` file into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence
@@ -29,5 +30,18 @@ export function loadEnvFile(file: string): void {
   }
   for (const [key, value] of parsed) {
     if (!(key in process.env)) process.env[key] = value; // env-vs-file: a real env var wins
+  }
+}
+
+/**
+ * Load `<dir>/.env` into `process.env` ({@link loadEnvFile}), treating a MISSING file as normal (no .env)
+ * — the workspace-facing entry every command + the tunnel use. Only ENOENT is swallowed; any other read
+ * error (a corrupt/unreadable file) propagates, so a real problem surfaces instead of silently skipping.
+ */
+export function loadDotEnv(dir: string): void {
+  try {
+    loadEnvFile(join(dir, ".env"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }

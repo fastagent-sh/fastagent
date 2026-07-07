@@ -203,6 +203,21 @@ describe("tunnel: announceWebhooks", () => {
     expect(errs.some((e) => /webhook registered/.test(e))).toBe(true);
   });
 
+  it("does not crash the server when .env is unreadable — warns and continues best-effort", async () => {
+    // Regression: loadDotEnv throws on a NON-ENOENT read error (here .env is a directory → EISDIR).
+    // announceWebhooks is void-called with no unhandledRejection handler, so an uncaught throw would
+    // terminate the long-running dev/start server. It must warn (surface the error) and continue.
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
+    const dir = await workspace([]); // no channels → returns right after the .env read
+    await mkdir(join(dir, ".env")); // a directory at the .env path → loadDotEnv throws EISDIR, not ENOENT
+
+    await expect(announceWebhooks(dir, "https://x.trycloudflare.com")).resolves.toBeUndefined(); // no crash
+    expect(errs.some((e) => /could not read/.test(e) && /\.env/.test(e))).toBe(true); // surfaced, not silent
+  });
+
   it("does not retry a permanent setWebhook error; prints the manual URL immediately", async () => {
     const errs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m) => {
