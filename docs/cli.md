@@ -26,6 +26,8 @@ Most commands take an optional workspace directory. When omitted, the current di
 | `invoke <message> [dir]` | Run one agent turn and exit. |
 | `fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
 | `schedule history <name> [dir]` | Print the run audit for a schedule (or `wake`). |
+| `schedule list [dir]` | The agent's pending self-scheduled wake-ups. |
+| `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
 | `add github|telegram [dir]` | Scaffold a first-party channel. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
@@ -170,6 +172,10 @@ Prints the run audit for one schedule — or `wake` for the agent's self-schedul
 fired, its outcome (`completed` / `failed` / `deferred`), duration, and a preview of the reply or error.
 The answer to "did last night's run silently fail?". Read-only (reads `<state root>/schedule/runs.jsonl`,
 written by the serving scheduler); `--json` prints the full records, including the complete reply text.
+
+`fastagent schedule list [dir]` shows the agent's pending self-scheduled wake-ups (id, next fire,
+one-shot/cron, session, prompt); `fastagent schedule cancel <id> [dir]` removes one — the operator's kill
+switch for a runaway recurring wake (the agent's own is the `unwake` tool, which is session-scoped).
 
 ## `fastagent tool`
 

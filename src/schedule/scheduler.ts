@@ -117,11 +117,12 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
 
   /**
    * Fire every due self-scheduled wake-up, ONE at a time (claim → fire → claim next) so a crash loses at
-   * most one. Each fires back into the session it was set in. A wake is one-shot, so unlike a cron slot a
-   * dropped one has no "next time": ONLY when it failed because the session was BUSY (`code: session_busy`
-   * — the turn never started; the very case "wake me in 10 min" hits while the user is still chatting) defer
-   * it to the next poll rather than losing it; a bounded retry then gives up visibly. Any other failure is
-   * terminal (the turn ran — re-running risks duplicate side effects).
+   * most one occurrence. Each fires back into the session it was set in. Busy handling splits by kind: a
+   * ONE-SHOT that failed because the session was BUSY (`code: session_busy` — the turn never started; the
+   * very case "wake me in 10 min" hits while the user is still chatting) is deferred to the next poll,
+   * bounded, because a dropped one-shot has no "next time"; a RECURRING busy occurrence is skipped
+   * immediately (its claim already advanced the entry — the next occurrence comes by definition). Any
+   * other failure is terminal for that occurrence (the turn ran — re-running risks duplicate side effects).
    */
   async function pollWakeups(): Promise<void> {
     for (;;) {
@@ -134,14 +135,21 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
       // Re-fire ONLY on a busy session (the turn never started — replay-safe). A wake is one-shot, so a
       // busy-skip that just dropped it would lose it forever; defer + bounded retry. Every OTHER outcome is
       // terminal (already claimed/removed) — re-running a turn that DID start risks duplicate side effects.
+      // Busy handling differs by kind. ONE-SHOT: defer (bounded) — it has no "next time", dropping it
+      // would lose it forever. RECURRING: the claim already ADVANCED the entry to the next instant (see
+      // takeFirstDueWakeup), so a busy occurrence is simply SKIPPED and audited — the next one comes by
+      // definition, and never touching the stored entry here is what keeps unwake/cancel race-free.
       let kept = false;
-      if (r.busy) {
+      if (r.busy && !w.cron) {
         kept = deferWakeup(stateRoot, w, new Date(now().getTime() + WAKEUP_POLL_MS));
         if (kept) log.info(`[schedule] ${label}: session busy — retrying next poll`);
         else log.error(`[schedule] ${label}: dropped after too many busy retries`);
+      } else if (r.busy && w.cron) {
+        log.error(`[schedule] ${label}: occurrence skipped (session busy); next fires per cron`);
       }
-      // Audit honesty: `deferred` ONLY when the wake was actually re-scheduled. A busy wake dropped at the
-      // retry ceiling is a FINAL silent loss — exactly what this audit exists to answer — so it is `failed`.
+      // Audit honesty: `deferred` ONLY when the same occurrence was actually re-scheduled. A busy one-shot
+      // dropped at the ceiling, and a busy recurring occurrence (skipped — its recurrence survives), are
+      // both FINAL for that occurrence → `failed`.
       appendRun(stateRoot, {
         name: "wake",
         session: w.session,
@@ -149,7 +157,13 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
         ms: r.ms,
         outcome: r.busy ? (kept ? "deferred" : "failed") : r.failed ? "failed" : "completed",
         reply: r.failed || r.busy ? undefined : r.reply,
-        error: r.busy ? (kept ? undefined : "dropped after too many busy retries") : r.failed,
+        error: r.busy
+          ? kept
+            ? undefined
+            : w.cron
+              ? "occurrence skipped (session busy); the recurrence continues"
+              : "dropped after too many busy retries"
+          : r.failed,
       });
     }
   }

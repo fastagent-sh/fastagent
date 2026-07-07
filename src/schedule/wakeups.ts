@@ -1,15 +1,18 @@
 /**
- * The agent's self-scheduled one-shot wake-ups (Phase 4a) — the SECOND producer of scheduled
- * invocations (the first is the author's `schedules/` files). The `wake` tool writes one here; the
- * scheduler polls and fires it back into the SAME session so the agent resumes the conversation it was
- * in. Persisted (`<stateRoot>/schedule/wakeups.json`) so a wake survives a restart.
+ * The agent's self-scheduled wake-ups — the SECOND producer of scheduled invocations (the first is the
+ * author's `schedules/` files). The `wake` tool writes one here; the scheduler polls and fires it back
+ * into the SAME session so the agent resumes the conversation it was in. Persisted
+ * (`<stateRoot>/schedule/wakeups.json`) so a wake survives a restart. ONE-SHOT (`in`) or RECURRING
+ * (`cron` — the entry keeps its id; each fire re-arms `fireAt` to the next cron instant).
  *
- * Guardrails (self-scheduling is a real runaway surface): a minimum delay (no busy-looping) and a cap
- * on pending wake-ups (no unbounded fan-out). A one-shot wake is naturally bounded — it fires once and
- * is removed — so recurring self-scheduling (with heavier guardrails) is deliberately a later phase.
+ * Guardrails (self-scheduling is a real runaway surface): a minimum one-shot delay (no busy-looping), a
+ * minimum RECURRING gap (a high-frequency recurring burns tokens forever — stricter than one-shot), a
+ * per-session pending cap (no fan-out, no cross-session quota DoS; a recurring occupies a slot for its
+ * whole life), and the agent's `unwake` / the operator's `schedule cancel` as the kill switches.
  */
 import { randomUUID } from "node:crypto";
 import { log } from "../log.ts";
+import { cronError, nextRun } from "./cron.ts";
 import { readScheduleFile, scheduleFile, writeScheduleFile } from "./state.ts";
 
 export interface Wakeup {
@@ -18,11 +21,16 @@ export interface Wakeup {
   session: string;
   /** The instruction for the woken turn. */
   prompt: string;
-  /** When to fire (ISO). */
+  /** When to fire next (ISO). For a recurring wake this advances to the next cron instant on each fire. */
   fireAt: string;
-  /** Re-fire attempts so far. A wake into a BUSY session (a channel mid-turn on the same id) fails with
-   *  `code: session_busy` — the turn never started, so it is deferred (only that case; a failure whose turn
-   *  DID run is terminal); after the cap it is dropped rather than retried forever. */
+  /** RECURRING: the cron expression (5-field). Absent = one-shot (fires once, removed). */
+  cron?: string;
+  /** IANA timezone for `cron` (default UTC). */
+  tz?: string;
+  /** CONSECUTIVE busy-defer attempts for the CURRENT occurrence. A wake into a BUSY session (a channel
+   *  mid-turn on the same id) fails with `code: session_busy` — the turn never started, so it is deferred
+   *  (only that case; a failure whose turn DID run is terminal). At the cap a one-shot is dropped; a
+   *  recurring SKIPS the occurrence and re-arms at the next cron instant (attempts reset). */
   attempts?: number;
 }
 
@@ -34,9 +42,11 @@ export const MIN_WAKE_MS = 60_000; // 1 minute
 export const MAX_PENDING_WAKEUPS = 20;
 /** How many times a busy/transient wake is retried (deferred) before being dropped. At the ~30s poll a
  *  wake into an active conversation fires in the first gap between the user's turns; this generous
- *  ceiling (~1h) only gives up on a pathologically stuck session (then logs, operator-visible — an
- *  in-conversation "couldn't resume" notice is Phase 4b). */
+ *  ceiling (~1h) only gives up on a pathologically stuck session (then logs, operator-visible). */
 export const MAX_WAKE_ATTEMPTS = 120;
+/** The minimum gap between two consecutive fires of a RECURRING wake — stricter than the one-shot floor:
+ *  a recurring runs forever, so a tight cron is a permanent token burner, not a one-time mistake. */
+export const MIN_RECURRING_GAP_MS = 10 * 60_000; // 10 minutes
 
 /** A stored entry is a real Wakeup: the fields are present and `fireAt` is a parseable date. A malformed
  *  one (bad/missing fireAt) would compare NaN <= now = false forever — never due, never cleared, but still
@@ -50,7 +60,9 @@ function isWakeup(e: unknown): e is Wakeup {
     typeof w.prompt === "string" &&
     typeof w.fireAt === "string" &&
     !Number.isNaN(Date.parse(w.fireAt)) &&
-    (w.attempts === undefined || typeof w.attempts === "number") // a non-number would make deferWakeup's count NaN
+    (w.attempts === undefined || typeof w.attempts === "number") && // a non-number would make deferWakeup's count NaN
+    (w.cron === undefined || typeof w.cron === "string") &&
+    (w.tz === undefined || typeof w.tz === "string")
   );
 }
 
@@ -82,28 +94,68 @@ export function listWakeups(stateRoot: string): Wakeup[] {
 export type AddWakeupResult = { ok: true; id: string; fireAt: string } | { ok: false; error: string };
 
 /**
- * Add a wake-up, enforcing the guardrails (min delay, pending cap). Returns a MODEL-facing error string
- * on rejection (the `wake` tool passes it back so the model can adjust), never throws for a bad request.
+ * Add a wake-up — one-shot (`fireAt`) or recurring (`cron`/`tz`, `fireAt` = the first instant) —
+ * enforcing the guardrails (min delay / min recurring gap, per-session pending cap). Returns a
+ * MODEL-facing error string on rejection (the `wake` tool passes it back so the model can adjust),
+ * never throws for a bad request.
  */
 export function addWakeup(
   stateRoot: string,
-  input: { session: string; prompt: string; fireAt: Date },
+  input: { session: string; prompt: string; fireAt?: Date; cron?: string; tz?: string },
   now: Date = new Date(),
 ): AddWakeupResult {
-  if (input.fireAt.getTime() < now.getTime() + MIN_WAKE_MS) {
-    return { ok: false, error: `too soon — the minimum wake delay is ${MIN_WAKE_MS / 1000}s.` };
+  let fireAtDate: Date;
+  if (input.cron !== undefined) {
+    const err = cronError(input.cron, input.tz);
+    if (err) return { ok: false, error: `invalid cron/tz: ${err}` };
+    // A recurring wake runs FOREVER — gate its frequency harder than a one-shot: the gap between the next
+    // two instants must be ≥ the recurring floor. (First-pair heuristic; an irregular cron with one tight
+    // pair can slip through — an accepted ceiling, the per-session cap still bounds total load.)
+    const first = nextRun(input.cron, input.tz, now);
+    const second = first && nextRun(input.cron, input.tz, first);
+    if (!first || !second)
+      return { ok: false, error: "this cron never fires (or fires only once) — use `in` for a one-shot." };
+    if (second.getTime() - first.getTime() < MIN_RECURRING_GAP_MS) {
+      return {
+        ok: false,
+        error: `too frequent — a recurring wake must fire at most every ${MIN_RECURRING_GAP_MS / 60_000} minutes.`,
+      };
+    }
+    fireAtDate = first; // DERIVED from the cron — a caller-passed fireAt can't disagree with the schedule
+  } else {
+    if (!input.fireAt) return { ok: false, error: "a one-shot wake needs its fire time (`in`)." };
+    if (input.fireAt.getTime() < now.getTime() + MIN_WAKE_MS) {
+      return { ok: false, error: `too soon — the minimum wake delay is ${MIN_WAKE_MS / 1000}s.` };
+    }
+    fireAtDate = input.fireAt;
   }
   const all = load(stateRoot);
   if (all.filter((w) => w.session === input.session).length >= MAX_PENDING_WAKEUPS) {
     return {
       ok: false,
-      error: `too many pending wake-ups for this conversation (${MAX_PENDING_WAKEUPS}) — wait for some to fire before adding more.`,
+      error: `too many pending wake-ups for this conversation (${MAX_PENDING_WAKEUPS}) — wait for some to fire, or unwake one, before adding more.`,
     };
   }
   const id = randomUUID();
-  const fireAt = input.fireAt.toISOString();
-  save(stateRoot, [...all, { id, session: input.session, prompt: input.prompt, fireAt }]);
+  const fireAt = fireAtDate.toISOString();
+  save(stateRoot, [
+    ...all,
+    { id, session: input.session, prompt: input.prompt, fireAt, cron: input.cron, tz: input.tz },
+  ]);
   return { ok: true, id, fireAt };
+}
+
+/**
+ * Remove a wake-up by id. `session` (when given — the agent's `unwake`) must ALSO match, so a
+ * conversation can only cancel its OWN wake-ups; the operator's `schedule cancel` passes none.
+ * Returns whether anything was removed.
+ */
+export function removeWakeup(stateRoot: string, id: string, session?: string): boolean {
+  const all = load(stateRoot);
+  const kept = all.filter((w) => !(w.id === id && (session === undefined || w.session === session)));
+  if (kept.length === all.length) return false;
+  save(stateRoot, kept);
+  return true;
 }
 
 /**
@@ -118,16 +170,30 @@ export function takeFirstDueWakeup(stateRoot: string, now: Date = new Date()): W
   const all = load(stateRoot);
   const idx = all.findIndex((w) => new Date(w.fireAt).getTime() <= now.getTime());
   if (idx === -1) return undefined;
-  const [w] = all.splice(idx, 1);
+  const w = all[idx] as Wakeup;
+  if (w.cron !== undefined) {
+    // RECURRING claim = ADVANCE IN PLACE: the entry STAYS in the store with fireAt pushed to the next cron
+    // instant (attempts cleared). So (a) `unwake`/`schedule cancel` work at ANY moment — including inside
+    // the woken turn itself, the documented way to stop a done recurring job (a remove+re-add claim would
+    // resurrect what that turn just cancelled); and (b) a crash mid-fire loses at most ONE occurrence,
+    // never the recurrence — matching the static cron schedules' claim semantics.
+    const next = nextRun(w.cron, w.tz, now);
+    if (next) all[idx] = { ...w, fireAt: next.toISOString(), attempts: undefined };
+    else all.splice(idx, 1); // the cron has no next instant — this is its final occurrence
+    save(stateRoot, all);
+    return { ...w }; // THIS occurrence (original fireAt); the store already holds the next
+  }
+  all.splice(idx, 1);
   save(stateRoot, all);
   return w;
 }
 
 /**
- * Re-schedule a wake whose fire failed TRANSIENTLY (its session was busy — a channel is mid-turn on it),
- * deferred to `fireAt`. Returns false (dropped, NOT re-added) once attempts exceed {@link MAX_WAKE_ATTEMPTS}
- * — a wake is one-shot, so a busy-skip that just dropped it would lose it forever (the failure mode a cron
- * slot does not have); this retries it a bounded number of times, then gives up visibly.
+ * Re-schedule a ONE-SHOT wake whose fire failed TRANSIENTLY (its session was busy — a channel is mid-turn
+ * on it), deferred to `fireAt`. Returns false (dropped, NOT re-added) once attempts exceed
+ * {@link MAX_WAKE_ATTEMPTS} — a one-shot has no "next time", so a busy-skip that just dropped it would lose
+ * it forever; bounded retries, then give up visibly. A RECURRING occurrence is never deferred: its claim
+ * already advanced the entry, and its next occurrence comes by definition — a busy one is skipped + audited.
  */
 export function deferWakeup(stateRoot: string, w: Wakeup, fireAt: Date): boolean {
   const attempts = (w.attempts ?? 0) + 1;

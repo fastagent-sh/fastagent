@@ -10,6 +10,7 @@ import {
   addWakeup,
   deferWakeup,
   listWakeups,
+  removeWakeup,
   takeFirstDueWakeup,
 } from "../src/schedule/wakeups.ts";
 import { makeWakeTool, parseDelayMs, withWakeTool } from "../src/engines/pi/wake-tool.ts";
@@ -60,6 +61,54 @@ describe("schedule/wakeups store + guardrails", () => {
     expect(takeFirstDueWakeup(r, when)).toBeUndefined(); // nothing else due
   });
 
+  it("recurring: a valid cron is accepted; too-frequent and never-firing crons are rejected", async () => {
+    const r = await root();
+    const daily = addWakeup(r, { session: "s", prompt: "x", fireAt: at(2 * MIN_WAKE_MS), cron: "0 9 * * *" }, NOW);
+    expect(daily.ok).toBe(true);
+    expect(listWakeups(r)[0]).toMatchObject({ cron: "0 9 * * *" });
+
+    const everyMinute = addWakeup(r, { session: "s", prompt: "x", fireAt: at(0), cron: "* * * * *" }, NOW);
+    expect(everyMinute.ok).toBe(false); // < the 10-min recurring floor — a forever token burner
+    if (!everyMinute.ok) expect(everyMinute.error).toMatch(/too frequent/);
+
+    const bad = addWakeup(r, { session: "s", prompt: "x", fireAt: at(0), cron: "not a cron" }, NOW);
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error).toMatch(/invalid cron/);
+  });
+
+  it("removeWakeup: session-scoped for the agent's unwake; unscoped for the operator", async () => {
+    const r = await root();
+    const res = addWakeup(r, { session: "mine", prompt: "x", fireAt: at(2 * MIN_WAKE_MS) }, NOW);
+    if (!res.ok) throw new Error("setup");
+    expect(removeWakeup(r, res.id, "other-session")).toBe(false); // another conversation can't cancel it
+    expect(removeWakeup(r, res.id, "mine")).toBe(true); // its own can
+    const res2 = addWakeup(r, { session: "mine", prompt: "x", fireAt: at(2 * MIN_WAKE_MS) }, NOW);
+    if (!res2.ok) throw new Error("setup");
+    expect(removeWakeup(r, res2.id)).toBe(true); // the operator (no session) always can
+  });
+
+  it("recurring claim = ADVANCE IN PLACE: the entry stays (next instant), the occurrence is returned", async () => {
+    const r = await root();
+    const res = addWakeup(r, { session: "s", prompt: "x", cron: "0 9 * * *", tz: "UTC" }, NOW); // NOW=12:00 → first 09:00 tomorrow
+    if (!res.ok) throw new Error("setup");
+    const dayAfter = new Date("2026-07-08T09:00:30Z");
+    const occurrence = takeFirstDueWakeup(r, dayAfter);
+    expect(occurrence).toMatchObject({ id: res.id, fireAt: res.fireAt }); // THIS occurrence, original instant
+    // The entry never left the store — unwake/cancel work even mid-fire — and advanced to the next instant.
+    expect(listWakeups(r)).toHaveLength(1);
+    expect(listWakeups(r)[0]).toMatchObject({ id: res.id, fireAt: "2026-07-09T09:00:00.000Z" });
+    // …so the woken turn CAN cancel its own recurrence (the documented unwake flow).
+    expect(removeWakeup(r, res.id, "s")).toBe(true);
+    expect(listWakeups(r)).toHaveLength(0);
+  });
+
+  it("cron fireAt is DERIVED by addWakeup (a caller-passed fireAt cannot disagree with the schedule)", async () => {
+    const r = await root();
+    const res = addWakeup(r, { session: "s", prompt: "x", fireAt: at(1000), cron: "0 9 * * *", tz: "UTC" }, NOW);
+    if (!res.ok) throw new Error("setup");
+    expect(res.fireAt).toBe("2026-07-08T09:00:00.000Z"); // next 9am UTC after NOW(12:00) — not the bogus at(1000)
+  });
+
   it("drops a malformed stored entry (bad fireAt) instead of letting it poison the store", async () => {
     const r = await root();
     vi.spyOn(console, "error").mockImplementation(() => {}); // silence the boundary warn
@@ -93,12 +142,14 @@ describe("schedule/wake-tool", () => {
     expect(parseDelayMs(-5)).toBeUndefined();
   });
 
-  it("withWakeTool: appends wake only when enabled + absent; the workspace's own wake wins", () => {
+  it("withWakeTool: wake+unwake mount as a PAIR; an author's either-name tool suppresses BOTH built-ins", () => {
     const base = [{ name: "read" }] as AgentTool[];
-    expect(withWakeTool(base, "/r", false).map((t) => t.name)).toEqual(["read"]); // disabled (invoke/fire) → no wake
-    expect(withWakeTool(base, "/r", true).map((t) => t.name)).toEqual(["read", "wake"]); // serving → mounted
+    expect(withWakeTool(base, "/r", false).map((t) => t.name)).toEqual(["read"]); // disabled (invoke/fire) → none
+    expect(withWakeTool(base, "/r", true).map((t) => t.name)).toEqual(["read", "wake", "unwake"]); // serving
+    // The pair is ONE concept over one store: an author's wake doesn't write our store, so our unwake
+    // could never cancel what it returns — mixing halves would mislead. Either name → neither built-in.
     const own = [{ name: "read" }, { name: "wake" }] as AgentTool[];
-    expect(withWakeTool(own, "/r", true).map((t) => t.name)).toEqual(["read", "wake"]); // author's wake wins, no dup
+    expect(withWakeTool(own, "/r", true).map((t) => t.name)).toEqual(["read", "wake"]);
   });
 
   it("the wake tool records a wake-up into the CURRENT session", async () => {
