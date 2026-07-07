@@ -431,6 +431,10 @@ export function telegramChannel({
       }
       return new Response(null, { status: 200 });
     };
+    // Test/observability seam: await the fire-and-forget turns this handler enqueues. Inert in production
+    // (nothing reads it; the runtime never drains — see turn-queue), it lets a test await a turn
+    // deterministically instead of polling for side effects to settle.
+    (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () => queue.idle();
     return { "POST /telegram": handler };
   };
 }

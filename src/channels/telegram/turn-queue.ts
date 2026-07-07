@@ -15,6 +15,10 @@ import { log } from "../../log.ts";
 export interface TurnQueue<T> {
   /** Schedule onto the session's serial chain (runs after that session's previous turn). */
   accept(rec: T): void;
+  /** Resolve once no turn is in flight (every per-session chain has drained). A test/observability seam
+   *  — the production runtime does NOT drain on shutdown (SIGTERM exits mid-turn by design; see the module
+   *  header), so this is not a graceful-drain hook; it just lets a caller await the fire-and-forget turns. */
+  idle(): Promise<void>;
 }
 
 export function createTurnQueue<T extends { session: string }>(opts: {
@@ -52,6 +56,12 @@ export function createTurnQueue<T extends { session: string }>(opts: {
       void next.finally(() => {
         if (chains.get(rec.session) === next) chains.delete(rec.session); // drop the entry when drained
       });
+    },
+    async idle() {
+      // Await outstanding chains until none remain — a chain may schedule a follow-up turn, and each
+      // deletes its own map entry on settle, so an emptied map means every turn ran to completion. The
+      // tasks catch their own rejections, but allSettled keeps idle() itself total regardless.
+      while (chains.size > 0) await Promise.allSettled([...chains.values()]);
     },
   };
 }

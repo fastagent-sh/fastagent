@@ -31,6 +31,34 @@ describe("turn-queue", () => {
     expect(ran).toEqual(["p1"]);
   });
 
+  it("idle() resolves only after every in-flight turn has run to completion", async () => {
+    // The deterministic drain the telegram test harness relies on: a gated turn keeps idle() pending;
+    // releasing it lets idle() resolve. Without this, tests fall back to polling side effects (racy).
+    const done: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const queue = makeQueue(async (r) => {
+      await gate;
+      done.push(r.id);
+    });
+    queue.accept(rec("1"));
+    queue.accept(rec("2", "other")); // a different session runs concurrently; both gate on `gate`
+
+    let settled = false;
+    const idle = queue.idle().then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false); // turns are still parked — idle() must NOT have resolved
+
+    release();
+    await idle;
+    expect(settled).toBe(true);
+    expect(done.sort()).toEqual(["1", "2"]); // resolved only once both chains drained
+  });
+
+  it("idle() resolves immediately when the queue is empty", async () => {
+    await expect(makeQueue(async () => {}).idle()).resolves.toBeUndefined();
+  });
+
   it("serializes per session (FIFO) while different sessions run concurrently", async () => {
     const order: string[] = [];
     let releaseFirst!: () => void;

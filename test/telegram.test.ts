@@ -28,7 +28,16 @@ function replyingAgent(reply = "") {
  *  several hops, so rather than couple to a fixed tick count, settle until the Bot API mock goes quiet
  *  (no new fetch for a full tick) — robust to adding/removing an await. (Real-timer tests only; the
  *  fake-timer tests drive their own clock with advanceTimersByTimeAsync.) */
+// Channels built via the test helper register their turn-queue `idle()` here so afterEach can drain a
+// test's fire-and-forget turns BEFORE unstubbing fetch (see afterEach). flush() stays a heuristic: some
+// tests call it to observe a MID-FLIGHT side effect (an "⏳ queued" notice while a turn is parked on a
+// gate), so it must NOT block on full completion.
+const channelIdles = new Set<() => Promise<void>>();
+
 const flush = async () => {
+  // Settle async up to where the fetch-call count stops changing. Intra-test only — the cross-test leak
+  // this used to cause (an early return under load letting a late call land on the next test's mock) is
+  // closed deterministically by the afterEach drain, not by making flush() wait for full completion.
   const f = globalThis.fetch as unknown as { mock?: { calls: unknown[] } };
   let prev = -1;
   for (let i = 0; i < 100 && (f.mock?.calls.length ?? 0) !== prev; i++) {
@@ -71,10 +80,16 @@ function okFetch() {
   });
 }
 
-afterEach(() => {
-  vi.useRealTimers();
+afterEach(async () => {
+  vi.useRealTimers(); // real timers so a turn parked on the preview throttle can fire during the drain
+  // Drain this test's in-flight turns BEFORE unstubbing fetch, so a background turn's late call runs
+  // against THIS test's mock and can't leak onto the next test's (the cross-test contamination that made
+  // the preview tests flaky under CI load). Bounded: a test that deliberately parks a turn without
+  // releasing it must not hang teardown — that is its own leak to fix, not a reason to stall every run.
+  await Promise.race([Promise.all([...channelIdles].map((idle) => idle())), new Promise((r) => setTimeout(r, 2000))]);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  channelIdles.clear();
   for (const d of stateDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -99,7 +114,11 @@ const telegramChannel = (agent: Agent, { stateDir, ...opts }: TelegramChannelOpt
   const home = stateDir ?? freshStateDir();
   const root = rootOfHome.get(home);
   if (!root) throw new Error("test stateDir must come from freshStateDir()");
-  return buildTelegramChannel(opts)({ agent, stateRoot: root })["POST /telegram"]!;
+  const handler = buildTelegramChannel(opts)({ agent, stateRoot: root })["POST /telegram"]!;
+  // Register the turn-queue idle so flush() awaits this channel's fire-and-forget turns deterministically.
+  const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
+  if (idle) channelIdles.add(idle);
+  return handler;
 };
 
 describe("durable group buffer (single-process restarts)", () => {
