@@ -24,6 +24,20 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(json(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }))).not.toContain("FASTAGENT");
   });
 
+  it("kit layout (kitDir): railway.json namespaced + dockerfilePath into the kit + the dashboard config-path step", () => {
+    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [], kitDir: "agent" });
+    expect(p.artifacts.map((a) => a.path).sort()).toEqual([
+      ".dockerignore",
+      "agent/Dockerfile",
+      "agent/Dockerfile.dockerignore",
+      "agent/railway.json",
+    ]);
+    const cfg = JSON.parse(p.artifacts.find((a) => a.path === "agent/railway.json")?.content ?? "{}");
+    expect(cfg.build.dockerfilePath).toBe("agent/Dockerfile"); // relative to the repo-root upload context
+    expect(runbook(p)).toMatch(/Config-as-code/); // the dashboard-only pointer step is stated
+    expect(runbook(p)).toMatch(/Write-back mechanics/);
+  });
+
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
     const artifacts = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }).artifacts;
     expect(artifacts.map((a) => a.path)).toEqual(["railway.json", "Dockerfile", ".dockerignore"]);

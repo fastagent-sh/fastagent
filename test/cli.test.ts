@@ -26,6 +26,27 @@ function run(
 }
 
 describe("cli papercuts", () => {
+  it("deploy (kit layout): the host's root .dockerignore is kept even under --force; kit artifacts written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-kit-"));
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      `export default { agentDir: "./agent", model: "openai-codex/gpt-5.5" };\n`,
+    );
+    await mkdir(join(dir, "agent"), { recursive: true });
+    await writeFile(join(dir, "agent", "package.json"), `{"type":"module"}`);
+    const hostIgnore = "# the HOST product's own rules\n.git\ndist\n";
+    await writeFile(join(dir, ".dockerignore"), hostIgnore);
+
+    const { code, stderr } = await run(["deploy", "fly", dir, "--force"]);
+    expect(code).toBe(0);
+    // The safety boundary docs/deploy.md promises: --force NEVER clobbers the host's file.
+    expect(await readFile(join(dir, ".dockerignore"), "utf8")).toBe(hostIgnore);
+    expect(stderr).toMatch(/kept \.dockerignore/);
+    expect(stderr).toMatch(/excludes \.git/); // and the specific preflight warn fired (not force-gated)
+    // Kit artifacts land namespaced.
+    expect(await readFile(join(dir, "agent", "Dockerfile"), "utf8")).toMatch(/Repo-as-workspace/);
+  });
+
   it("--version / -v prints the version to stdout and exits 0 (no parse crash)", async () => {
     const v = await run(["--version"]);
     expect(v.code).toBe(0);

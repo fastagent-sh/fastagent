@@ -77,6 +77,16 @@ fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries yo
 
 `--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for — the runbook states it as a manual step (Settings → Deploy → Serverless → App Sleeping). Don't enable it with a GitHub channel, for the same no-replay reason as Fly.
 
+## Serving an existing repo (agentDir layout)
+
+When the workspace uses `config.agentDir` (a coding agent living in `./agent` whose cwd is the host repo — see [Configuration](configuration.md)), `deploy` generates a **repo-as-workspace** recipe instead:
+
+- **Artifacts are namespaced under the kit** — `agent/Dockerfile`, `agent/Dockerfile.dockerignore`, and `agent/fly.toml` / `agent/railway.json` — so they never collide with the host repo's own `Dockerfile`/deploy files. **One root-level exception**: a `.dockerignore` is written at the repo root (host context-packers read only that form; it carries recursive `**/node_modules`, `**/.env`… excludes and does *not* exclude `.git`). If the host already has one it is **kept — even under `--force`** (it's the host's file), and the preflight warns specifically when it excludes `.git` (kills baked write-back) or lacks `**/node_modules` (native-binary clobber). The runbook passes explicit flags (`fly deploy . --config agent/fly.toml --dockerfile agent/Dockerfile`); on Railway, point the service at `agent/railway.json` (Settings → Config-as-code — dashboard-only).
+- **The image bakes the whole repo as the agent's cwd.** Only the **kit's** dependencies (`agent/package.json`) are installed — the host repo's own deps are the agent's runtime concern (it can install them in its workspace when a task needs them).
+- **Write-back mechanics ship in the image**: `git` is baked in and the generated ignore files do **not** exclude `.git`; credentials ride `config.deploy.secrets` (e.g. `GH_TOKEN`); the *policy* — push vs PR, identity, which remote — belongs in its `persona.md`. **Caveat:** whether `.git` actually reaches the box is host-CLI-dependent (`railway up` is known to strip it; flyctl packs its own context) — verify `git status` on the box after the first deploy, and fall back to having the agent `git clone` its repo in the workspace (same token).
+- **The workspace is a snapshot.** The image is the repo at deploy time; un-pushed changes on the box do **not** survive a redeploy — durability lives in git, not on the machine.
+- **Status: experimental** — this layout has not been verified end-to-end on a real host yet (the preflight note says so). `--run` is not supported for it (gated); follow the printed runbook.
+
 ## Any Docker host
 
 The generated `Dockerfile` runs the directory on any container platform — the `deploy` targets above just wire the platform specifics around it. Bring your own host by using the `Dockerfile` directly and providing, yourself, what the recipes automate: a persistent volume mounted where `FASTAGENT_STATE_DIR` points, the secrets as env vars, and the channel webhooks.

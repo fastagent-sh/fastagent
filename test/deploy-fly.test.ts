@@ -109,6 +109,64 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(docker).toContain("npm i -g @kid7st/fastagent");
   });
 
+  it("kit layout (kitDir): artifacts namespaced under the kit, kit deps installed, .git shipped, explicit deploy flags", () => {
+    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [], kitDir: "agent" });
+    // Artifacts never collide with the host repo's own deploy files.
+    expect(p.artifacts.map((a) => a.path).sort()).toEqual([
+      ".dockerignore", // ROOT form — the only one host context-packers reliably read (kept if the host has one)
+      "agent/Dockerfile",
+      "agent/Dockerfile.dockerignore",
+      "agent/fly.toml",
+    ]);
+    // Both ignore forms carry the same kit content (recursive patterns, .git not excluded).
+    const rootIgnore = p.artifacts.find((a) => a.path === ".dockerignore")?.content ?? "";
+    expect(rootIgnore).toMatch(/^\*\*\/node_modules$/m);
+    expect(rootIgnore).not.toMatch(/^\.git$/m);
+    const df = p.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
+    expect(df).toContain("COPY agent/package.json agent/package-lock.json* ./agent/"); // kit deps…
+    expect(df).toContain("cd agent && npm ci");
+    expect(df).toContain("COPY . ."); // …then the whole repo as the workspace
+    expect(df).toContain(`"./agent/node_modules/.bin/fastagent", "start", "/app"`); // runs from the kit
+    const ignore = p.artifacts.find((a) => a.path === "agent/Dockerfile.dockerignore")?.content ?? "";
+    expect(ignore).not.toMatch(/^\.git$/m); // write-back needs the repo's .git — NOT excluded
+    // Recursive on purpose: dockerignore is root-anchored, and a bare `node_modules` would let the build
+    // machine's agent/node_modules (macOS binaries) clobber the image's freshly-installed linux deps.
+    expect(ignore).toMatch(/^\*\*\/node_modules$/m);
+    expect(ignore).toMatch(/^\*\*\/\.env$/m);
+    // The runbook deploys from the repo root with explicit, version-proof flags.
+    expect(runbook(p)).toContain("fly deploy . --config agent/fly.toml --dockerfile agent/Dockerfile --app bot");
+    expect(runbook(p)).toMatch(/Write-back mechanics/);
+  });
+
+  it("kit layout: bun kit uses the bun base + cd-install + bunx; markdown-only kit uses the pinned global CLI", () => {
+    const bun = planFlyDeploy({
+      ...base,
+      runtime: "bun",
+      bunVersion: "1.3.13",
+      modelAuth: undefined,
+      channels: [],
+      kitDir: "agent",
+    });
+    const bunDf = bun.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
+    expect(bunDf).toContain("FROM oven/bun:1.3.13");
+    expect(bunDf).toContain("COPY agent/package.json agent/bun.lock* ./agent/");
+    expect(bunDf).toContain("cd agent && bun install --frozen-lockfile");
+    expect(bunDf).toContain(`"sh", "-c", "cd agent && bunx fastagent start /app"`);
+
+    const md = planFlyDeploy({
+      ...base,
+      hasPackageJson: false,
+      modelAuth: undefined,
+      channels: [],
+      kitDir: "agent",
+    });
+    const mdDf = md.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
+    expect(mdDf).toContain("FROM node:22-slim");
+    expect(mdDf).toContain("npm i -g @kid7st/fastagent@9.9.9"); // pinned global — no kit deps to install
+    expect(mdDf).not.toContain("npm ci");
+    expect(mdDf).toContain(`["fastagent", "start", "/app"]`);
+  });
+
   it("falls back to npm install when a code workspace has no lockfile (npm ci would hard-fail)", () => {
     expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasLockfile: false }))).toMatch(
       /RUN npm install\n/, // no lockfile → npm install; all deps (no --omit=dev — the agent needs its toolchain)
