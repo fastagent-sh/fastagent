@@ -136,7 +136,7 @@ describe("cli papercuts", () => {
     expect(code).toBe(0); // an unset model is reported, not fatal
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
-    expect(info.instructions).toBe(true);
+    expect(info.context.length).toBeGreaterThan(0); // the AGENTS.md is loaded as ② project context
     expect(info.skills.map((s: { name: string }) => s.name)).toEqual(["greet"]); // the malformed skill is skipped
     expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // info SURFACES the loader diagnostic to the user
     expect(info.channels).toEqual(["github"]);
@@ -160,7 +160,7 @@ describe("cli papercuts", () => {
     expect(info.tools).toEqual([]); // the broken tool isn't loaded…
     expect(JSON.stringify(info.toolFailures)).toMatch(/broken\.ts/); // …it's surfaced as a per-file load failure
     expect(info.toolError).toBeNull(); // isolated, so NOT a whole-load abort
-    expect(info.instructions).toBe(true); // the rest of the surface still shows
+    expect(info.context.length).toBeGreaterThan(0); // the rest of the surface still shows
     await expect(stat(join(dir, ".fastagent"))).rejects.toThrow(); // still read-only
 
     // text mode: the tools line degrades and the reason goes to stderr as a warning

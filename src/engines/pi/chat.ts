@@ -21,7 +21,7 @@
  * apply here, and `createPiModels()` below is used only to RESOLVE the model descriptor (never for auth).
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSessionRuntime,
@@ -34,7 +34,7 @@ import {
   createAgentSessionServices,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { loadConfig, resolveModel, resolveModelSpec } from "./config.ts";
+import { loadConfig, resolveAgentDir, resolveModel, resolveModelSpec } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
 import { createPiModels } from "./models.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
@@ -69,12 +69,14 @@ export async function buildChatRuntime(
     // services), so authPath is intentionally not threaded in. See the AUTH note in the header.
     const model = resolveModel(createPiModels(), modelSpec);
     const env = new NodeExecutionEnv({ cwd });
-    const definition = await loadAgentDefinition(cwd, { env });
+    // Same agentDir/cwd split as dev/start: persona/skills/tools from agentDir, ② context walked from cwd.
+    const agentDir = resolveAgentDir(cwd, config);
+    const definition = await loadAgentDefinition(agentDir, { cwd, env });
     reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
     // Same tool resolution as the dev opener, then split: defaults go to pi by NAME (rebuilt cwd-bound
     // for rich rendering); customs go through pi's `customTools` path so they survive /new, /resume, fork.
-    const discovered = await loadTools(cwd);
+    const discovered = await loadTools(agentDir);
     const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
     reportToolCollisions([...discovered.collisions, ...crossCollisions]);
     reportModuleLoadFailures(discovered.failures);
@@ -93,8 +95,7 @@ export async function buildChatRuntime(
     // them here would duplicate both).
     const systemPrompt = assembleSystemPrompt({
       base: piBasePrompt({ tools, persona: definition.persona }),
-      instructions: definition.instructions,
-      instructionsPath: definition.instructions !== undefined ? join(cwd, "AGENTS.md") : undefined,
+      contextFiles: definition.contextFiles,
     });
 
     return { model, definition, defaultNames, customTools, customToolDefs, systemPrompt };

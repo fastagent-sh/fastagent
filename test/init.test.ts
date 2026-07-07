@@ -83,7 +83,7 @@ describe("init: scaffoldWorkspace", () => {
     // AGENTS.md + the bundled skill load as a definition offline (loadAgentDefinition does not touch
     // tools/). The skill is a real markdown skill, mounted by the runtime loader.
     const def = await loadAgentDefinition(dir);
-    expect(def.instructions).toBeDefined();
+    expect(def.contextFiles.length).toBeGreaterThan(0);
     expect(def.skills.map((s) => s.name)).toEqual(["writing-great-skills"]);
     expect(def.collisions).toEqual([]);
   });
@@ -224,6 +224,28 @@ describe("init: scaffoldWorkspace", () => {
     await writeFile(join(done, "AGENTS.md"), "# x\n");
     await writeFile(join(done, "fastagent.config.mjs"), "export default {};\n");
     expect(await cliInit(["init"], done)).toMatch(/already has .*refuses to overwrite/);
+  });
+
+  it("createPiAgentFromWorkspace wires config.agentDir end-to-end: persona/tools from agentDir, ② context from cwd", async () => {
+    const root = await mkdtemp(join(tmpdir(), "fa-agentdir-ws-"));
+    await writeFile(join(root, "AGENTS.md"), "# Host repo context\n"); // ② at the run root (cwd)
+    await writeFile(
+      join(root, "fastagent.config.mjs"),
+      `export default { agentDir: "./agent", model: "openai-codex/gpt-5.5" };\n`,
+    );
+    const agentDir = join(root, "agent");
+    await mkdir(join(agentDir, "tools"), { recursive: true });
+    await writeFile(join(agentDir, "persona.md"), "You are the Repo Bot.\n"); // ① in agentDir
+    await writeFile(
+      join(agentDir, "tools", "foo.mjs"),
+      `export default { description: "d", parameters: { type: "object" }, async execute() { return { content: [], details: "" }; } };`,
+    );
+
+    const a = await createPiAgentFromWorkspace(root); // model from config; no invoke, so no auth/network
+    expect(a.agentDir).toBe(agentDir);
+    expect(a.definition.persona).toContain("Repo Bot"); // ① from agentDir
+    expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo context"); // ② walked from cwd
+    expect(a.toolNames).toContain("foo"); // discovered from agentDir, not cwd
   });
 
   it("prints a `cd <dir>` step for a named target so the dev/.env/config steps are correct", async () => {

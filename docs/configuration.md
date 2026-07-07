@@ -37,6 +37,7 @@ Supported keys:
 | Key | Meaning |
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
+| `agentDir` | The agent-definition subdirectory (`persona.md`, `skills/`, `tools/`, `channels/`), relative to the config file. Default: the config directory itself (flat). Set it to e.g. `"./agent"` to serve an existing repo as a coding agent — the config directory stays the run root (`cwd`, whose `AGENTS.md` is read as context), while the agent's own surface lives in the subdir and does not collide with the host's `tools/`/`src/`. |
 | `tools` | Extra programmatic tools appended after default pi tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `deploy.secrets` | Extra secret env-var names the deployed agent needs (e.g. `["GH_TOKEN"]`). `deploy` lists them in the runbook and, under `--run`, carries each value from your local env to the host secret store; a missing value gates the run. |

@@ -49,25 +49,30 @@ The N axis has two forms, both on the SAME `invoke` contract (neither adds a new
 FastAgent consumes existing definition artifacts:
 
 ```txt
-workspace/
-├── AGENTS.md
-├── skills/
-├── fastagent.config.mjs
-└── .fastagent/          # generated machine state, ignored by git
+workspace/                    # flat: the run root (cwd) IS the agent dir
+├── AGENTS.md                 # ② project context (optional)
+├── persona.md                # ① authored identity (optional)
+├── skills/  tools/  channels/
+├── fastagent.config.mjs      # may set `agentDir: "./agent"` to serve an existing repo (below)
+└── .fastagent/               # generated machine state, ignored by git
 ```
 
-`AGENTS.md` is not the full system prompt. The pi reference implementation assembles the final prompt from four segments:
+The two roots are `cwd` (the run root the tools operate on; where config lives) and `agentDir` (the
+agent's own surface — persona.md/skills/tools/channels). They coincide in the flat layout; `config.agentDir`
+decouples them so a coding agent's definition can live in a subdir of a host repo (§11 / scenario grid).
+
+`AGENTS.md` is not the system prompt. The pi reference implementation assembles the final prompt from four segments:
 
 | Segment | Source | Owner |
 |---|---|---|
-| base prompt | pi engine binding (`piBasePrompt`) | engine asset |
-| project instructions | `AGENTS.md`, wrapped in `<project_instructions>` | agent definition |
-| skills listing | loaded skills, formatted for progressive disclosure | agent definition |
-| environment context | date and cwd | runtime assembly |
+| ① base prompt | pi engine binding (`piBasePrompt`); an authored `persona.md` overrides its identity line, keeping the tool list + guidelines | engine asset / definition |
+| ② project context | `AGENTS.md` files via pi's exported `loadProjectContextFiles({ cwd, agentDir })` — the agentDir's own plus every `AGENTS.md` walking `cwd` up to root; each wrapped `<project_instructions>` | project (cwd) + definition |
+| ③ skills listing | loaded skills, formatted for progressive disclosure | agent definition |
+| ④ environment context | date and cwd | runtime assembly |
 
-`assembleSystemPrompt` is pure: callers provide date/cwd. L2 uses a factory so long-running processes re-evaluate time-sensitive context per invocation.
+`assembleSystemPrompt` is pure (mirrors pi's `buildSystemPrompt`): callers provide the resolved `contextFiles` + date/cwd. L2 uses a factory so long-running processes re-read the definition and re-evaluate context per invocation.
 
-This four-segment assembly is the **directory path** (L2/opener): it wraps `AGENTS.md` and prepends the engine base for fidelity with how the author vibed in local pi. **L1 `createPiAgent` is different on purpose**: its `instructions` ARE the system prompt (verbatim, no engine base, no wrapping) — the skills listing is the only thing appended, and only when skills are mounted. So `AGENTS.md ≡ instructions` in *role* (author-written instructions), but the directory path additionally bases/wraps them; a hand-built agent is not forced into the coding persona.
+Why two authored slots: `persona.md` is the agent's **identity** (①), `AGENTS.md` is **project context** (②) — conflating them (AGENTS.md-as-system-prompt) was the earlier mistake. **L1 `createPiAgent` is different on purpose**: its `instructions` ARE the system prompt (verbatim, no engine base, no wrapping) — the skills listing is the only thing appended. So a hand-built agent is not forced into the coding persona.
 
 ## 3. pi reference implementation
 
@@ -151,6 +156,8 @@ Skills are markdown/file assets. Loading is **definition-only, period**: an agen
 The `skills/` format is **Agent Skills** ([agentskills.io](https://agentskills.io)) compatible — a `skills/<name>/SKILL.md` with `name`/`description` frontmatter and progressive disclosure (name+description at startup, the body on activation), as implemented by pi's `loadSkills`. Any standard skill (e.g. from [anthropics/skills](https://github.com/anthropics/skills)) works by **vendoring**: copy the directory into `skills/`, git-tracked, and it Just Works — unsupported optional fields (`license`, `metadata`, `compatibility`) are ignored without error. **There is no registry, and none is needed**: the filesystem is the registry, git is the distribution, and the user owns trust (a vendored skill's `scripts/` is code they audit, like an npm dependency). fastagent is the serving layer, not a skill marketplace.
 
 FastAgent deliberately does not load the machine's global skills (`~/.pi/agent/skills`, `~/.agents/skills`): it would make the agent depend on ambient machine state and recreate the "works on my machine, breaks deployed" trap fastagent exists to kill. The principle is general: **the definition directory is the agent's only source of truth; nothing the code can't see is loaded into its behavior** (credentials and env are deployment config, not behavior — they stay outside the directory by design). To ship a skill, put it in `skills/`.
+
+**One deliberate exception — ② project context.** Following pi (`loadProjectContextFiles`), `AGENTS.md` context is sourced by **walking `cwd`'s ancestors to root** plus the `agentDir`, not from a single hermetic dir. This is safe under the same principle *because `cwd` is the deployed run root* (the mounted/COPY'd unit), so the walk is deterministic within it — but on a dev box the walk can also pick up an ancestor `~/AGENTS.md`, so dev context can exceed deploy context. Two further notes: `loadProjectContextFiles` reads via node `fs` directly (not the `ExecutionEnv` port — a deviation from this module's portable-IO policy, deferred with the sandbox work), and unlike a broken skill/persona (which fail visibly), an unreadable context file is skipped — pi warns to stderr on a read error, but is **fully silent** when the path itself is inaccessible (its `existsSync` probe swallows the permission error), so no signal reaches fastagent's diagnostics. Deferred with the ExecutionEnv work; a broken persona.md still fails the turn.
 
 Definition-local skills win name collisions (the deployable unit is authoritative); collisions are surfaced as diagnostics, not swallowed.
 
@@ -404,7 +411,7 @@ The rest is Railway-command detail: the volume is check-then-act (a `--into-link
 
 ## 11. Current open work
 
-- **The standalone × code-repo cell, *embedded-in-a-host-repo* form** (scenario grid). Serving a project it does **not** own (a Next/TS repo) needs mechanisms the flat path lacks. **Landed:** an authored persona (`persona.md` → prompt segment ①, §2) — segment ① is no longer a fixed engine base; absent `persona.md` it still falls back to it, and `AGENTS.md` stays segment ② context. **Still direction:** (1) a **definition namespace decoupled from cwd** (`agentDir`) — the authored surface (`tools`/`channels`/`skills`/`persona.md`/config) discovered from `agentDir` so it never collides with the host's same-named dirs or is swept into the host's `tsc`/build, while cwd stays the repo root the agent reads/writes (and the host's root `AGENTS.md` becomes context read from cwd); (2) a **repo-as-workspace deploy model** (ship/mount the target repo as cwd; write back via commit/PR). Undecided: whether `agentDir` self-contains its own `package.json`/deps, and the deploy shape (repo baked into the image vs mounted). The five other cells ship today on the flat `definition = cwd` path and must not inherit the namespace/deploy split.
+- **The standalone × code-repo cell, *embedded-in-a-host-repo* form** (scenario grid). Serving a project it does **not** own (a Next/TS repo). **Landed:** (1) an authored persona (`persona.md` → segment ①, §2); (2) the **`agentDir` decoupling** — `config.agentDir` puts the agent's own surface (`persona.md`/`skills`/`tools`/`channels`) in a subdir while `cwd` stays the run root, so it never collides with the host's same-named dirs; (3) **② context follows pi** (`loadProjectContextFiles({ cwd, agentDir })`) — the host repo's `AGENTS.md` is picked up by the cwd-ancestor walk, `agentDir`'s own too. **Still direction:** a **repo-as-workspace deploy model** (ship/mount the target repo as `cwd`; write back via commit/PR) — undecided: the deploy shape (repo baked into the image vs mounted), and whether the host's `tsc`/build should be helped to exclude `agentDir`. `deploy` discovers channels from `agentDir`, but its container facts (`package.json`/lockfile → the Dockerfile `npm ci`) still read the run root, so an agent whose deps live in a self-contained `agentDir` is part of this open shape, not yet handled. Deferred deviations this cell introduced: `loadProjectContextFiles` bypasses the `ExecutionEnv` port and an unreadable context file warns rather than fails (§6). The five other cells ship on the flat `definition = cwd` path.
 - `fastagent dev` / `fastagent start` per §10 are implemented (single-machine tier, the directory is the agent). `fastagent deploy fly` (§10.5) generates the Fly artifacts + runbook and, with `--run`, drives flyctl to completion (idempotent, resumable, credential-carrying). `fastagent deploy railway` is the second host — generate + runbook and, with `--run`, drives the railway CLI to completion (sharing the neutral container/secret modules; the sequence differs per Railway's model). Further hosts extend the same `deploy <host>` seam.
 - Multi-instance (multiple Fly machines sharing state) needs a K-axis backend — the single-machine + single-volume tier is the documented scope; `deploy fly` warns to keep one machine.
 - Multi-instance credential broker for OAuth refresh (§10.4); single-machine/container credential refresh is covered by the file-backed store.

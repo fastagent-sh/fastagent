@@ -10,7 +10,6 @@
  * `start` drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
  * they come from the definition; the openers own model/tools — from config resolution).
  */
-import { join } from "node:path";
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -51,17 +50,20 @@ export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] 
  */
 export async function resolveWorkspaceTools(
   config: FastagentConfig,
-  dir: string,
+  agentDir: string,
+  cwd: string = agentDir,
 ): Promise<{
   tools: AgentTool[];
   toolNames: string[];
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
 }> {
-  const discovered = await loadTools(dir);
-  const { tools, collisions } = mergeDiscoveredTools(resolveTools(config, dir), discovered.tools);
+  // Default coding tools (read/bash/edit/write) are rooted at `cwd` (the run root the agent operates on);
+  // discovered `tools/` come from `agentDir` (the agent's own surface). They coincide in the flat case.
+  const discovered = await loadTools(agentDir);
+  const { tools, collisions } = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
   const toolCollisions = [...discovered.collisions, ...collisions];
-  const defaultNames = new Set(piDefaultTools(dir).map((t) => t.name));
+  const defaultNames = new Set(piDefaultTools(cwd).map((t) => t.name));
   const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));
   return { tools, toolNames, toolCollisions, toolFailures: discovered.failures };
 }
@@ -69,8 +71,8 @@ export async function resolveWorkspaceTools(
 // ── §2 prompt: four-segment systemPrompt assembly ───────────────────────────
 //
 //   systemPrompt = ① base (engine asset; a persona.md persona overrides its identity line)
-//                + ② instructions (AGENTS.md, <project_instructions>-wrapped) + ③ skills listing
-//                + ④ env context (date/cwd)
+//                + ② project context (AGENTS.md files via pi's loadProjectContextFiles, <project_context>-wrapped)
+//                + ③ skills listing + ④ env context (date/cwd)
 //
 // AGENTS.md ≠ system prompt. Pure functions: segment ④ inputs (date/cwd) are caller-provided, so the
 // same inputs always produce the same prompt (testable, reproducible).
@@ -108,10 +110,8 @@ export interface AssembleSystemPromptOptions {
    * "Available tools: (none)" even when tools are mounted. Pass piBasePrompt({ tools }) for pi.
    */
   base: string;
-  /** ② AGENTS.md content (verbatim), injected wrapped — never pasted bare. */
-  instructions?: string;
-  /** Path rendered into the <project_instructions path=…> attribute. */
-  instructionsPath?: string;
+  /** ② project-context files (AGENTS.md et al. from loadProjectContextFiles); each wrapped `<project_instructions path=…>`. */
+  contextFiles?: Array<{ path: string; content: string }>;
   /** ③ Skills for the <available_skills> listing. */
   skills?: Skill[];
   /** ④ Env context, caller-provided (keeps this function pure). Omitted = segment omitted. */
@@ -121,11 +121,14 @@ export interface AssembleSystemPromptOptions {
 
 export function assembleSystemPrompt(options: AssembleSystemPromptOptions): string {
   let prompt = options.base;
-  if (options.instructions) {
-    const pathAttr = options.instructionsPath ? ` path="${options.instructionsPath}"` : "";
-    prompt +=
-      `\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n` +
-      `<project_instructions${pathAttr}>\n${options.instructions}\n</project_instructions>\n\n</project_context>\n`;
+  const contextFiles = options.contextFiles ?? [];
+  if (contextFiles.length > 0) {
+    // Mirrors pi's system-prompt.js: one <project_context> block, one <project_instructions path=…> per file.
+    prompt += `\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n`;
+    for (const { path, content } of contextFiles) {
+      prompt += `<project_instructions path="${path}">\n${content}\n</project_instructions>\n\n`;
+    }
+    prompt += `</project_context>\n`;
   }
   if (options.skills && options.skills.length > 0) {
     prompt += `\n${formatSkillsForSystemPrompt(options.skills)}\n`;
@@ -249,6 +252,13 @@ export interface CreatePiAgentFromDefinitionOptions {
   base?: string;
   /** Override tools. Defaults to piDefaultTools (lock down with a custom list). */
   tools?: AgentTool[];
+  /**
+   * The agent's working directory: where the default tools operate AND whose ancestors are walked for
+   * ② project context (AGENTS.md). Defaults to `dir` (flat: the definition dir is also the run root).
+   * Set it to the enclosing repo so a coding agent whose definition lives in `dir` operates on — and
+   * reads the AGENTS.md of — that repo (core.md scenario grid).
+   */
+  cwd?: string;
   /** Extra providers registered on top of the built-ins (your own gateway / self-hosted endpoint). */
   providers?: Provider[];
   /**
@@ -277,10 +287,13 @@ export async function createPiAgentFromDefinition(
   dir: string,
   options: CreatePiAgentFromDefinitionOptions,
 ): Promise<{ agent: Agent; definition: LoadedDefinition }> {
-  const env = options.env ?? new NodeExecutionEnv({ cwd: dir });
+  // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where
+  // tools operate and whose ancestors are walked for ② context.
+  const cwd = options.cwd ?? dir;
+  const env = options.env ?? new NodeExecutionEnv({ cwd });
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to
   // report (skills/diagnostics/collisions). Serving does NOT close over it — see `live` below.
-  const definition = await loadAgentDefinition(dir, { env });
+  const definition = await loadAgentDefinition(dir, { cwd: env.cwd, env });
   // Findings the caller already reported at boot; `live` re-reports only when the set CHANGES — a
   // runtime-written bad skill surfaces the moment it appears, while a static finding does not spam
   // every turn's log. A log-dedup memo, not session state (stateless invoke holds).
@@ -303,7 +316,7 @@ export async function createPiAgentFromDefinition(
     // not silently vanish from the agent, and a static one must not spam every turn's log. The
     // next good edit heals both.
     live: async () => {
-      const def = await loadAgentDefinition(dir, { env });
+      const def = await loadAgentDefinition(dir, { cwd: env.cwd, env });
       const sig = findingsSignature(def);
       if (sig !== reportedFindings) {
         reportedFindings = sig;
@@ -314,8 +327,8 @@ export async function createPiAgentFromDefinition(
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity,
           // re-read per turn like AGENTS.md so edits go live; options.base still wins for full control.
           base: options.base ?? piBasePrompt({ tools, persona: def.persona }),
-          instructions: def.instructions,
-          instructionsPath: def.instructions !== undefined ? join(def.dir, "AGENTS.md") : undefined,
+          // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
+          contextFiles: def.contextFiles,
           skills: def.skills,
           date: new Date().toISOString().slice(0, 10),
           cwd: env.cwd,

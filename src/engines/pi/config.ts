@@ -8,7 +8,7 @@
  */
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Models } from "@earendil-works/pi-ai";
@@ -18,6 +18,14 @@ import { moduleLoadHint } from "./loader.ts";
 export interface FastagentConfig {
   /** "provider/modelId". Precedence: CLI --model > FASTAGENT_MODEL > config. */
   model?: string;
+  /**
+   * The agent-definition subdirectory (persona.md, skills/, tools/, channels/), relative to the config
+   * file's directory. Default: the config directory itself (flat — today's behaviour). Point it at a
+   * sibling like `"./agent"` to serve an existing repo as a coding agent: the config dir stays the run
+   * root (cwd, whose AGENTS.md the agent reads as ② context), while the agent's own surface lives in the
+   * subdir and does not collide with the host's `tools/`/`src/` (core.md scenario grid).
+   */
+  agentDir?: string;
   /** Extra custom tools, appended after pi defaults — never replaces them. */
   tools?: AgentTool[];
   http?: { port?: number };
@@ -94,12 +102,27 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   // Unknown keys throw: defineConfig only type-protects .ts authors; a typo in a .js/.mjs config
   // (`modle:`) must not silently degrade to zero-config.
   for (const key of Object.keys(c)) {
-    if (key !== "model" && key !== "tools" && key !== "http" && key !== "deploy") {
-      throw new Error(`${path}: unknown key "${key}" (valid keys: model, tools, http, deploy)`);
+    if (key !== "model" && key !== "agentDir" && key !== "tools" && key !== "http" && key !== "deploy") {
+      throw new Error(`${path}: unknown key "${key}" (valid keys: model, agentDir, tools, http, deploy)`);
     }
   }
   if (c.model !== undefined && typeof c.model !== "string") {
     throw new Error(`${path}: "model" must be a "provider/modelId" string`);
+  }
+  if (c.agentDir !== undefined && typeof c.agentDir !== "string") {
+    throw new Error(`${path}: "agentDir" must be a string (a subdirectory relative to the config file)`);
+  }
+  if (typeof c.agentDir === "string") {
+    // Enforce the documented "subdirectory of the config dir" contract: an escaping agentDir (e.g.
+    // "../shared") would still resolve for tool/channel/persona discovery, but `dev`'s chokidar only
+    // watches the config dir subtree — edits outside it would silently never trigger a restart. Reject
+    // it here (fail visibly) rather than let hot-reload break without a signal.
+    const rel = relative(dir, resolve(dir, c.agentDir));
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      throw new Error(
+        `${path}: "agentDir" ("${c.agentDir}") must be a subdirectory of the config directory, not escape it`,
+      );
+    }
   }
   if (c.tools !== undefined && !Array.isArray(c.tools)) {
     throw new Error(`${path}: "tools" must be an array of AgentTool`);
@@ -140,6 +163,16 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   validateStringList(c.deploy?.secrets, "deploy.secrets", /^[A-Z_][A-Z0-9_]*$/, "an UPPER_SNAKE env-var name", path);
   validateStringList(c.deploy?.apt, "deploy.apt", /^[a-z0-9][a-z0-9.+-]*$/, "a Debian package name", path);
   return { config: c, path };
+}
+
+/**
+ * The agent-definition dir from config: `config.agentDir` resolved against `dir`, or `dir` itself when
+ * unset (flat). The ONE place this is computed — every opener (`dev`/`start`/`info`/`tool`/`deploy`/`chat`)
+ * calls it, so the "relative to the config dir, default `.`" rule can never diverge. loadConfig has
+ * already validated that agentDir stays under `dir`.
+ */
+export function resolveAgentDir(dir: string, config: FastagentConfig): string {
+  return resolve(dir, config.agentDir ?? ".");
 }
 
 /** Resolve "provider/modelId" → a pi Model from `models`, so the harness resolves auth from the same collection. */

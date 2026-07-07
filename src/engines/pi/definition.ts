@@ -2,13 +2,16 @@
  * Definition domain: read an agent definition directory (AGENTS.md + skills/) into memory. Produces
  * data; create.ts consumes it.
  *
- * IO policy: the runtime load path (loadAgentDefinition) does IO only through ExecutionEnv (portable
- * across local/sandbox/remote envs); the invoke path never touches disk. config/auth/sessions and
- * this module's Node helpers are composition-root code and may use node fs.
+ * IO policy: persona.md + skills load through ExecutionEnv (portable across local/sandbox/remote); the
+ * invoke path never touches disk. EXCEPTION — ② project context comes from pi's loadProjectContextFiles,
+ * which reads via node fs DIRECTLY (not the injected `env`) and, on failure, at best warns to stderr and
+ * at worst is fully silent (its `existsSync` probe swallows a permission error) — no structured signal. So under a
+ * non-local ExecutionEnv the ② files still resolve against THIS process's filesystem, not the target env
+ * — a known break in the portability contract, deferred with the sandbox work (core.md §6). config/auth/
+ * sessions and this module's Node helpers are composition-root code and may use node fs.
  *
- * Errors: ExecutionEnv returns Result; this module converts a broken definition to a throw (fail
- * loudly at startup), while non-fatal findings (bad skill files, name collisions) are returned as
- * data for the caller to surface.
+ * Errors: a broken persona.md / unresolvable dir throws (fail loudly at startup); non-fatal findings
+ * (bad skill files, name collisions) are returned as data. An unreadable ② context file only warns (pi).
  */
 import { realpathSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -17,6 +20,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 
 /** A same-name skill collision (the discarded side). Surfaced, never swallowed. */
 export interface SkillCollision {
@@ -27,8 +31,12 @@ export interface SkillCollision {
 
 /** Result of loading a definition directory. Produced by {@link loadAgentDefinition}. */
 export interface LoadedDefinition {
-  /** Verbatim AGENTS.md content (feeds prompt segment ② `<project_instructions>` context); undefined when the file does not exist. */
-  instructions?: string;
+  /**
+   * Project-context files feeding segment ② `<project_context>`, sourced via pi's `loadProjectContextFiles`:
+   * the agentDir's own AGENTS.md/CLAUDE.md FIRST, then every AGENTS.md from root down to `cwd` (so the
+   * file nearest `cwd` comes LAST — pi's array order). Empty when none exist. This WALKS cwd's ancestors (pi's coding-agent behaviour) — see core.md §6.
+   */
+  contextFiles: Array<{ path: string; content: string }>;
   /**
    * Verbatim `persona.md` content — the authored persona that OVERRIDES segment ①'s identity line
    * (piBasePrompt keeps the tool list + guidelines; NOT a full system-prompt replacement — that is L1
@@ -40,34 +48,39 @@ export interface LoadedDefinition {
   diagnostics: SkillDiagnostic[];
   /** Same-name conflicts across mounts (first-wins). */
   collisions: SkillCollision[];
-  /** Absolute definition directory path. AGENTS.md, when present, is at join(dir, "AGENTS.md"). */
+  /** Absolute agent-definition directory path (persona.md/skills/ live here). */
   dir: string;
 }
 
 export interface LoadAgentDefinitionOptions {
+  /**
+   * Working directory whose ancestors are walked for context files (segment ②). Default = `agentDir`
+   * (flat: the agent dir is also the run root). The opener passes the run root so a coding agent that
+   * lives in `agentDir` picks up the host repo's AGENTS.md up the tree (core.md scenario grid).
+   */
+  cwd?: string;
   env?: ExecutionEnv;
 }
 
-/** Read a definition directory. env defaults to local Node (cwd=dir); non-local deployments inject their env. */
+/** Read an agent definition. persona.md/skills come from `agentDir`; ② context = pi's loadProjectContextFiles({ cwd, agentDir }). */
 export async function loadAgentDefinition(
-  dir: string,
+  agentDir: string,
   options: LoadAgentDefinitionOptions = {},
 ): Promise<LoadedDefinition> {
-  const e = options.env ?? new NodeExecutionEnv({ cwd: dir });
-  const rootResult = await e.absolutePath(dir);
+  // One resolved default for the working directory (env cwd AND the context-walk start), so they can
+  // never diverge if a caller passes a relative agentDir.
+  const cwd = options.cwd ?? agentDir;
+  const e = options.env ?? new NodeExecutionEnv({ cwd });
+  const rootResult = await e.absolutePath(agentDir);
   if (!rootResult.ok) {
-    throw new Error(`cannot resolve definition dir "${dir}": ${rootResult.error.message}`);
+    throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
   }
   const root = rootResult.value;
 
-  const agentsPath = join(root, "AGENTS.md");
-  const read = await e.readTextFile(agentsPath);
-  // Only not_found means "no AGENTS.md". Anything else (permission, io) must surface, or the agent
-  // silently runs without instructions.
-  if (!read.ok && read.error.code !== "not_found") {
-    throw new Error(`cannot read ${agentsPath}: ${read.error.message}`);
-  }
-  const instructions = read.ok ? read.value : undefined;
+  // ② project context, following pi: the agentDir's own AGENTS.md + every AGENTS.md walking cwd up to
+  // root (loadProjectContextFiles). It reads via node fs directly (mirrors pi), NOT the ExecutionEnv —
+  // a deliberate, deferred deviation from this module's portable-IO policy (revisit with the sandbox; core.md §6).
+  const contextFiles = loadProjectContextFiles({ cwd, agentDir: root });
 
   // persona.md → segment ① persona (overrides the identity line). Same error policy as AGENTS.md:
   // only not_found means "absent"; any other read error surfaces rather than silently dropping the persona.
@@ -92,7 +105,7 @@ export async function loadAgentDefinition(
     }
   }
 
-  return { instructions, persona, skills: [...byName.values()], diagnostics, collisions, dir: root };
+  return { contextFiles, persona, skills: [...byName.values()], diagnostics, collisions, dir: root };
 }
 
 /**

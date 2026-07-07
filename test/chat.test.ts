@@ -93,6 +93,36 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
     }
   });
 
+  it("resolves config.agentDir: persona/tools from agentDir, ② context walked from cwd", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-chat-agentdir-"));
+    try {
+      await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at cwd
+      await writeFile(
+        join(dir, "fastagent.config.mjs"),
+        `export default { agentDir: "./agent", model: "openai-codex/gpt-5.5" };\n`,
+      );
+      const agentDir = join(dir, "agent");
+      await mkdir(join(agentDir, "tools"), { recursive: true });
+      await writeFile(join(agentDir, "persona.md"), "You are PERSONA_MARKER bot.\n"); // ① in agentDir
+      await writeFile(
+        join(agentDir, "tools", "foo.mjs"),
+        `export default { description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: {} }) };`,
+      );
+
+      const rt = await buildChatRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        const sp = rt.session.agent.state.systemPrompt ?? "";
+        expect(sp).toContain("PERSONA_MARKER"); // ① persona from agentDir
+        expect(sp).toContain("HOST_CTX_MARKER"); // ② context walked from cwd (run root)
+        expect(rt.session.agent.state.tools.map((t) => t.name)).toContain("foo"); // tool from agentDir
+      } finally {
+        rt.session.dispose?.();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("suppresses pi's machine-global APPEND_SYSTEM.md so chat matches what dev/start serve", async () => {
     // getAgentDir() honors PI_CODING_AGENT_DIR; point it at a temp agent dir holding an append
     // prompt. dev/start never read that file, so chat must not either, or fidelity breaks.

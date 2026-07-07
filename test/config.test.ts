@@ -8,6 +8,7 @@ import {
   defaultAuthPath,
   defaultSessionsDir,
   loadConfig,
+  resolveAgentDir,
   resolveAuthPathOverride,
   resolveModelSpec,
   resolveSessionsDirOverride,
@@ -26,6 +27,23 @@ describe("config: resolveSessionsDirOverride (start's sessions precedence)", () 
     expect(resolveSessionsDirOverride(undefined, env)).toBe(resolve("envdir")); // env when no flag
     expect(resolveSessionsDirOverride(undefined, {} as NodeJS.ProcessEnv)).toBeUndefined(); // neither → opener default
     expect(resolveSessionsDirOverride("/mnt/vol", {} as NodeJS.ProcessEnv)).toBe("/mnt/vol"); // absolute kept as-is
+  });
+});
+
+describe("config: loadConfig agentDir validation", () => {
+  it("accepts a subdirectory agentDir; rejects one that escapes the config dir (dev watch-scope guard)", async () => {
+    const ok = await mkdtemp(join(tmpdir(), "fa-agentdir-ok-"));
+    await writeFile(join(ok, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
+    expect((await loadConfig(ok)).config.agentDir).toBe("./agent");
+
+    const bad = await mkdtemp(join(tmpdir(), "fa-agentdir-bad-"));
+    await writeFile(join(bad, "fastagent.config.mjs"), `export default { agentDir: "../shared" };\n`);
+    await expect(loadConfig(bad)).rejects.toThrow(/agentDir.*subdirectory.*not escape/);
+  });
+
+  it("resolveAgentDir: config.agentDir relative to dir; = dir when unset (the one shared computation)", () => {
+    expect(resolveAgentDir("/repo", { agentDir: "./agent" })).toBe(resolve("/repo", "agent"));
+    expect(resolveAgentDir("/repo", {})).toBe(resolve("/repo"));
   });
 });
 

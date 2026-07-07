@@ -51,6 +51,9 @@ export type DeployPreflight = { ok: false; gate: string } | ({ ok: true } & Depl
  */
 export async function preflightDeploy(input: {
   target: string;
+  /** The agent-definition dir (config.agentDir resolved against target; = target when unset) — where
+   *  channels are discovered. Container facts (package.json/lockfile) still read `target`, the run root. */
+  agentDir: string;
   config: FastagentConfig;
   modelSpec: string | undefined;
   /** `--run` fully deploys, so a model that won't travel is a GATE (a known crash-loop); else it warns. */
@@ -60,7 +63,7 @@ export async function preflightDeploy(input: {
   /** `--auth-path` / `FASTAGENT_AUTH_PATH`; falls back to the project default `<state root>/auth.json`. */
   authPathOverride: string | undefined;
 }): Promise<DeployPreflight> {
-  const { target, config, modelSpec, run, force, authPathOverride } = input;
+  const { target, agentDir, config, modelSpec, run, force, authPathOverride } = input;
   const messages: DeployMessage[] = [];
 
   // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via
@@ -73,7 +76,7 @@ export async function preflightDeploy(input: {
 
   // Known channel kinds only — a custom channel's secrets/webhook are unknown to us; note and let the
   // author wire them.
-  const discovered = await discoverChannelFiles(target);
+  const discovered = await discoverChannelFiles(agentDir);
   const channels = discovered.filter((c): c is ChannelKind => (CHANNEL_KINDS as string[]).includes(c));
   for (const c of discovered) {
     if (!channels.includes(c as ChannelKind)) {

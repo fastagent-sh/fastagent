@@ -15,6 +15,7 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
 const call = (target: string, config: FastagentConfig, over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
   preflightDeploy({
     target,
+    agentDir: target, // flat by default; a test overrides via `over` to exercise config.agentDir
     config,
     modelSpec: config.model,
     run: false,

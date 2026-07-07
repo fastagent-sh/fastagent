@@ -53,8 +53,8 @@ describe("definition: ensureStateRootSelfIgnored (root-based leak guard)", () =>
 describe("definition: loadAgentDefinition", () => {
   it("loads instructions from AGENTS.md and skills from SKILL.md frontmatter", async () => {
     const def = await loadAgentDefinition(fixtureDir);
-    expect(def.instructions).toContain("Haiku Bot");
-    expect(def.instructions).toContain("5-7-5");
+    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Haiku Bot");
+    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("5-7-5");
     expect(def.dir).toBe(fixtureDir); // AGENTS.md path is derivable: join(dir, "AGENTS.md")
     expect(def.skills).toHaveLength(1);
     expect(def.skills[0]!.name).toBe("season-words");
@@ -65,7 +65,7 @@ describe("definition: loadAgentDefinition", () => {
   it("missing AGENTS.md / skills returns undefined instructions and empty skills without throwing", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-empty-definition-"));
     const def = await loadAgentDefinition(dir);
-    expect(def.instructions).toBeUndefined();
+    expect(def.contextFiles).toEqual([]);
     expect(def.skills).toEqual([]);
   });
 
@@ -74,12 +74,12 @@ describe("definition: loadAgentDefinition", () => {
     await writeFile(join(dir, "AGENTS.md"), "# Repo spec\nProject rules here.\n");
     let def = await loadAgentDefinition(dir);
     expect(def.persona).toBeUndefined(); // no persona.md → segment ① falls back to engine identity
-    expect(def.instructions).toContain("Repo spec"); // AGENTS.md is the ② context field, not persona
+    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Repo spec"); // AGENTS.md → ② context, not persona
 
     await writeFile(join(dir, "persona.md"), "You are the Repo Bot. Reply briefly.\n");
     def = await loadAgentDefinition(dir);
     expect(def.persona).toContain("Repo Bot"); // persona.md → persona (①)
-    expect(def.instructions).toContain("Repo spec"); // AGENTS.md unchanged, still ②
+    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Repo spec"); // AGENTS.md unchanged, still ②
   });
 
   it("skips a skill whose SKILL.md has no description and surfaces it as a diagnostic (not a crash)", async () => {
@@ -91,20 +91,26 @@ describe("definition: loadAgentDefinition", () => {
     expect(JSON.stringify(def.diagnostics)).toMatch(/description/); // and surfaced, not silently dropped
   });
 
-  it("AGENTS.md read errors other than not_found throw instead of silently becoming missing instructions", async () => {
-    class DeniedEnv extends NodeExecutionEnv {
-      override async readTextFile(path: string) {
-        if (path.endsWith("AGENTS.md")) {
-          return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
-        }
-        return super.readTextFile(path);
-      }
-    }
-    const env = new DeniedEnv({ cwd: fixtureDir });
-    await expect(loadAgentDefinition(fixtureDir, { env })).rejects.toThrow(
-      /cannot read .*AGENTS\.md.*permission denied/,
-    );
+  it("agentDir ≠ cwd: persona from agentDir, ② context walked from cwd (the host repo's AGENTS.md) + agentDir's own", async () => {
+    const root = await mkdtemp(join(tmpdir(), "fa-repo-"));
+    await writeFile(join(root, "AGENTS.md"), "# Host repo spec\n"); // the repo's context, at cwd
+    const agentDir = join(root, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "persona.md"), "You are the Repo Bot.\n"); // ① identity, in agentDir
+    await writeFile(join(agentDir, "AGENTS.md"), "# Agent own note\n"); // agentDir's own ② too
+
+    const def = await loadAgentDefinition(agentDir, { cwd: root });
+    expect(def.persona).toContain("Repo Bot"); // ① from agentDir
+    expect(def.dir).toBe(agentDir);
+    const paths = def.contextFiles.map((f) => f.path);
+    expect(paths).toContain(join(agentDir, "AGENTS.md")); // agentDir's own
+    expect(paths).toContain(join(root, "AGENTS.md")); // walked up from cwd (the host repo)
+    expect(def.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo spec");
   });
+
+  // Note: AGENTS.md read errors no longer throw — ② context is sourced via pi's loadProjectContextFiles,
+  // which warns and continues on an unreadable file (a deliberate deviation from fastagent's fail-visibly,
+  // deferred with the ExecutionEnv/sandbox work; core.md §6). persona.md (below) still fails visibly.
 
   it("persona.md read errors other than not_found throw instead of silently dropping the persona", async () => {
     class DeniedEnv extends NodeExecutionEnv {
@@ -151,8 +157,7 @@ describe("definition: loadAgentDefinition", () => {
     // Progressive disclosure: name + description in the startup prompt; the body is deferred.
     const prompt = assembleSystemPrompt({
       base: piBasePrompt(),
-      instructions: def.instructions,
-      instructionsPath: join(dir, "AGENTS.md"),
+      contextFiles: def.contextFiles,
       skills: def.skills,
     });
     expect(prompt).toContain("<name>pdf</name>");
@@ -166,8 +171,7 @@ describe("create: assembleSystemPrompt (four segments)", () => {
     const def = await loadAgentDefinition(fixtureDir);
     const prompt = assembleSystemPrompt({
       base: piBasePrompt(), // required: base and toolset must agree, no silent default
-      instructions: def.instructions,
-      instructionsPath: join(fixtureDir, "AGENTS.md"),
+      contextFiles: def.contextFiles,
       skills: def.skills,
       cwd: "/work",
     });
@@ -213,8 +217,7 @@ describe("create: assembleSystemPrompt (four segments)", () => {
     // In a full assembly the persona is ① and AGENTS.md remains ② <project_instructions>.
     const prompt = assembleSystemPrompt({
       base: persona,
-      instructions: "PROJECT CONTEXT LINE",
-      instructionsPath: "/x/AGENTS.md",
+      contextFiles: [{ path: "/x/AGENTS.md", content: "PROJECT CONTEXT LINE" }],
     });
     expect(prompt.indexOf("Repo Bot")).toBeLessThan(prompt.indexOf("<project_instructions"));
     expect(prompt).toContain("PROJECT CONTEXT LINE");
@@ -436,7 +439,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     class FlakyEnv extends NodeExecutionEnv {
       deny = false;
       override async readTextFile(path: string) {
-        if (this.deny && path.endsWith("AGENTS.md")) {
+        if (this.deny && path.endsWith("persona.md")) {
           return err<string, FileError>(new FileError("permission_denied", "permission denied", path));
         }
         return super.readTextFile(path);
@@ -448,7 +451,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
     const { agent } = await createPiAgentFromDefinition(dir, { providers: [faux.provider], model: "faux/faux-1", env });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
 
-    env.deny = true; // the live re-read now throws (unreadable AGENTS.md)
+    env.deny = true; // the live re-read now throws (unreadable persona.md)
     const events: string[] = [];
     let details = "";
     for await (const e of agent.invoke({ session: "s" }, { text: "again" })) {
@@ -456,7 +459,7 @@ describe("create L2: the directory is LIVE (definition re-read per invoke)", () 
       if (e.type === "failed") details = e.details;
     }
     expect(events).toEqual(["failed"]); // SPEC MUST 2: a failed event, not a thrown iteration error
-    expect(details).toMatch(/AGENTS\.md/);
+    expect(details).toMatch(/persona\.md/);
 
     env.deny = false; // the next good edit heals it — same agent, no restart
     const { text } = await collect(agent.invoke({ session: "s" }, { text: "back" }));

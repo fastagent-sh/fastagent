@@ -29,6 +29,7 @@ import {
   isValidPort,
   listModels,
   loadConfig,
+  resolveAgentDir,
   resolveAuthPathOverride,
   resolveModelSpec,
   resolveSessionsDirOverride,
@@ -218,8 +219,12 @@ async function runTool(): Promise<void> {
   loadDotEnv(toolDir); // a tool may read a key from .env
   const { config } = await loadConfig(toolDir).catch(failStartup);
   // The same tool set dev/start mount (defaults + config.tools + discovered, deduped), so the runner
-  // exercises exactly what gets served — a shadowed tool is surfaced, not silently run.
-  const { tools, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, toolDir).catch(failStartup);
+  // exercises exactly what gets served — a shadowed tool is surfaced, not silently run. Resolve agentDir
+  // like the openers so `fastagent tool` finds the SAME tools/ as dev/start when config.agentDir is set.
+  const agentDir = resolveAgentDir(toolDir, config);
+  const { tools, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, agentDir, toolDir).catch(
+    failStartup,
+  );
   for (const c of toolCollisions) {
     console.error(
       `[fastagent] warn: tool "${c.name}" (${c.source}) is shadowed by a default/config tool — not mounted`,
@@ -319,12 +324,14 @@ async function runInfo(): Promise<void> {
   loadDotEnv(dir); // skills/tools may read env at load time
   const { config, path: configPath } = await loadConfig(dir).catch(failStartup);
   const modelSpec = resolveModelSpec(values.model, config);
-  const definition = await loadAgentDefinition(dir).catch(failStartup);
+  // dir = the run root (cwd, whose AGENTS.md is ② context); the agent's own surface lives in agentDir.
+  const agentDir = resolveAgentDir(dir, config);
+  const definition = await loadAgentDefinition(agentDir, { cwd: dir }).catch(failStartup);
   // A tool that fails to load, for any reason (a missing dep, a top-level throw, or just not being a
   // tool), is isolated the same way everywhere (G2): info, dev, AND start report it and keep going with
   // the tools that loaded. The `error`/`.catch` below only fires for a whole-load fault (an unreadable
   // tools/ dir), not a single bad file.
-  const tools = await resolveWorkspaceTools(config, dir)
+  const tools = await resolveWorkspaceTools(config, agentDir, dir)
     .then((r) => ({
       names: r.toolNames,
       collisions: r.toolCollisions,
@@ -332,8 +339,8 @@ async function runInfo(): Promise<void> {
       error: undefined as string | undefined,
     }))
     .catch((e: unknown) => ({ names: [] as string[], collisions: [], failures: [], error: (e as Error).message }));
-  const channels = await discoverChannelFiles(dir).catch(failStartup);
-  const schedules = await discoverScheduleFiles(dir).catch(failStartup);
+  const channels = await discoverChannelFiles(agentDir).catch(failStartup);
+  const schedules = await discoverScheduleFiles(agentDir).catch(failStartup);
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login
   // create them, info must not).
   const stateRoot = resolveStateRoot(dir);
@@ -345,9 +352,10 @@ async function runInfo(): Promise<void> {
       JSON.stringify(
         {
           dir,
+          agentDir,
           configPath: configPath ?? null,
           model: modelSpec ?? null,
-          instructions: definition.instructions !== undefined,
+          context: definition.contextFiles.map((f) => f.path),
           persona: definition.persona !== undefined,
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
           tools: tools.names,
@@ -369,9 +377,10 @@ async function runInfo(): Promise<void> {
     return;
   }
   console.log(`dir:      ${dir}`);
+  if (agentDir !== dir) console.log(`agent:    ${agentDir}`);
   console.log(`config:   ${configPath ?? "(none)"}`);
   console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
-  console.log(`agents:   ${definition.instructions ? "AGENTS.md" : "(none)"}`);
+  console.log(`context:  ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
   console.log(`persona:  ${definition.persona ? "persona.md" : "(none)"}`);
   console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
   console.log(`tools:    ${tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)"}`);
@@ -543,6 +552,7 @@ async function runDeploy(): Promise<void> {
   // stops on its gate; the host branch below adds only the host-specific artifacts + runbook + run drive.
   const pre = await preflightDeploy({
     target,
+    agentDir: resolveAgentDir(target, config),
     config,
     modelSpec,
     run: !!values.run,
@@ -949,7 +959,7 @@ type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;
 
 /** The agents/skills/tools/collisions report lines. */
 function reportAgentsSkillsTools(a: Assembled): void {
-  log.info(`[fastagent] agents: ${a.definition.instructions ? "AGENTS.md" : "(none)"}`);
+  log.info(`[fastagent] context: ${a.definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
   if (a.definition.persona) log.info(`[fastagent] persona: persona.md`);
   log.info(`[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (a.toolNames.length > 0) log.info(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
@@ -980,7 +990,7 @@ async function runDev(): Promise<void> {
     return;
   }
   parsePort(values.port, "--port"); // flag-shape check before spawning
-  runDevSupervisor(dir, { tunnel: values.tunnel ?? false });
+  await runDevSupervisor(dir, { tunnel: values.tunnel ?? false });
 }
 
 /**
@@ -1024,7 +1034,8 @@ async function serveOnce(): Promise<void> {
     model: values.model,
     authPath: resolveAuthPathOverride(values["auth-path"]),
   }).catch(failStartup);
-  log.info(`[fastagent] dir:    ${a.definition.dir}`);
+  log.info(`[fastagent] dir:    ${dir}`);
+  if (a.agentDir !== dir) log.info(`[fastagent] agent:  ${a.agentDir}`);
   log.info(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
   log.info(`[fastagent] model:  ${a.modelSpec}`);
   await reportAuth(a.modelSpec, a.authPath);
@@ -1032,9 +1043,9 @@ async function serveOnce(): Promise<void> {
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
-  const routes = await routesFor(dir, traced, a.stateRoot).catch(failStartup);
-  await startSchedules(dir, traced, a.stateRoot);
-  serve(routes, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.definition.dir, p));
+  const routes = await routesFor(a.agentDir, traced, a.stateRoot).catch(failStartup);
+  await startSchedules(a.agentDir, traced, a.stateRoot);
+  serve(routes, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.agentDir, p));
 }
 
 async function runStart(): Promise<void> {
@@ -1054,6 +1065,7 @@ async function runStart(): Promise<void> {
   const {
     agent,
     definition,
+    agentDir,
     config,
     modelSpec,
     stateRoot,
@@ -1069,9 +1081,10 @@ async function runStart(): Promise<void> {
   }).catch(failStartup);
 
   log.info(`[fastagent] start:  ${dir}`);
+  if (agentDir !== dir) log.info(`[fastagent] agent:  ${agentDir}`);
   log.info(`[fastagent] model:  ${modelSpec}`);
   await reportAuth(modelSpec, authPath);
-  log.info(`[fastagent] agents: ${definition.instructions ? "AGENTS.md" : "(none)"}`);
+  log.info(`[fastagent] context: ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
   if (definition.persona) log.info(`[fastagent] persona: persona.md`);
   log.info(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (toolNames.length > 0) log.info(`[fastagent] tools:  ${toolNames.join(", ")}`);
@@ -1094,10 +1107,10 @@ async function runStart(): Promise<void> {
 
   // Same debug turn trace as dev; gated out here by the info level (see serveOnce).
   const traced = logAgentLoop(agent);
-  const routes = await routesFor(dir, traced, stateRoot).catch(failStartup);
-  await startSchedules(dir, traced, stateRoot);
+  const routes = await routesFor(agentDir, traced, stateRoot).catch(failStartup);
+  await startSchedules(agentDir, traced, stateRoot);
   serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787, (p) =>
-    maybeTunnel(dir, p),
+    maybeTunnel(agentDir, p),
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
   // in-flight turn is LOST depends on the channel: the Telegram channel persists turn intent pre-ACK

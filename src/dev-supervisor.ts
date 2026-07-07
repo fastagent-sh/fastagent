@@ -13,12 +13,13 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
+import { type FastagentConfig, loadConfig, resolveAgentDir } from "./engines/pi/config.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (workspace-relative): the process-bound code inputs only. */
-export const WATCHED_HINT = "tools/, channels/, fastagent.config.*, package.json, .env";
+export const WATCHED_HINT = "tools/, channels/, package.json (agent dir), fastagent.config.*, .env (run root)";
 
 /**
  * chokidar `ignored` matcher for the narrow watch scope (true = ignore). Ignoring a directory prunes
@@ -27,20 +28,45 @@ export const WATCHED_HINT = "tools/, channels/, fastagent.config.*, package.json
  * Helper code imported from OUTSIDE tools//channels/ is out of scope by design (keep it under
  * tools/, or restart manually) — the startup log names the watched set.
  */
-export function devWatchIgnored(root: string): (path: string) => boolean {
+export function devWatchIgnored(dir: string, agentDir: string): (path: string) => boolean {
   return (path: string): boolean => {
-    const rel = relative(root, path);
-    if (rel === "" || rel === ".") return false; // the root itself must not be pruned
-    const [head] = rel.split(sep);
-    if (head === "tools" || head === "channels") return false; // watched subtrees, fully
-    if (rel === "package.json" || rel === ".env") return false;
+    if (path === dir || path === agentDir) return false; // the roots themselves must not be pruned
+    // Never prune a directory on the path from the watch root down to agentDir, so chokidar can descend
+    // into `agentDir/tools` even when agentDir is a subdir (config.agentDir = "./agent").
+    if (agentDir.startsWith(path + sep)) return false;
+    const rel = relative(dir, path);
+    // Run-root (cwd) inputs: .env + fastagent.config.* live where config lives, not in agentDir.
+    if (rel === ".env") return false;
     if (/^fastagent\.config\.[cm]?[jt]s$/.test(rel)) return false;
+    // Agent code inputs live in agentDir: tools/, channels/, package.json (its own deps). Everything
+    // else under agentDir (skills/, persona.md, AGENTS.md) is live-read — pruned, no restart.
+    const relAgent = relative(agentDir, path);
+    if (!relAgent.startsWith("..")) {
+      const [head] = relAgent.split(sep);
+      if (head === "tools" || head === "channels") return false;
+      if (relAgent === "package.json") return false;
+    }
     return true;
   };
 }
 
 /** Spawn the dev worker and restart it on workspace edits; supervise its lifecycle until the process exits. */
-export function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}): void {
+export async function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}): Promise<void> {
+  // The watch root is `dir` (cwd); tools/channels the restart-watch cares about live in agentDir. On a
+  // config error, default agentDir=dir and let the spawned worker surface the real error (fail-visibly).
+  // agentDir is assumed STATIC for the dev session: the supervisor computes it once here and each spawned
+  // worker recomputes its own from the same config — config validation guarantees it stays under `dir`
+  // (so the watch scope is always right); a config edit that changes agentDir mid-session (rare) is out
+  // of scope for watch-scope re-sync (it triggers a worker restart regardless).
+  // A genuine config error (not just a missing agentDir key) — debug-log it here so the silence is not
+  // total before the spawned worker crash-loops and surfaces the real message; default agentDir=dir.
+  const config = await loadConfig(dir)
+    .then((r) => r.config)
+    .catch((err: unknown) => {
+      log.debug(`[fastagent] dev: config load failed while resolving agentDir (worker will report): ${String(err)}`);
+      return {} as FastagentConfig;
+    });
+  const agentDir = resolveAgentDir(dir, config);
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
@@ -68,7 +94,7 @@ export function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}
         void startCloudflareTunnel(m.port).then((t) => {
           if (t) {
             tunnel = t;
-            void announceWebhooks(dir, t.url);
+            void announceWebhooks(agentDir, t.url);
           }
         });
       }
@@ -105,7 +131,7 @@ export function runDevSupervisor(dir: string, options: { tunnel?: boolean } = {}
   // cannot; devWatchIgnored (above) narrows the scope to the process-bound code inputs.
   const watcher = watchTree(dir, {
     ignoreInitial: true, // the startup scan is not a change
-    ignored: devWatchIgnored(dir),
+    ignored: devWatchIgnored(dir, agentDir),
   });
   watcher.on("all", () => {
     clearTimeout(timer);

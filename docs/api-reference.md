@@ -135,7 +135,9 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load `AGENTS.md` and `skills/` from a directory, assemble the pi prompt, and return an agent.
+Load `persona.md`/`skills/` from `dir` (the agent-definition dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the run/working directory (where tools operate, whose repo `AGENTS.md` is context) from the definition dir.
+
+`LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions.
 
 ### `createPiAgentFromWorkspace`
 

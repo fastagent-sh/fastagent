@@ -4,7 +4,7 @@ import { devWatchIgnored } from "../src/dev-supervisor.ts";
 
 describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
   const root = join("/work", "agent");
-  const ignored = devWatchIgnored(root);
+  const ignored = devWatchIgnored(root, root); // flat: agentDir === cwd
 
   it("watches exactly the process-bound code inputs", () => {
     expect(ignored(root)).toBe(false); // the root itself must not be pruned
@@ -32,5 +32,21 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
   it("root-file names elsewhere do not match (package.json in a subdir is not a code input)", () => {
     expect(ignored(join(root, "out", "package.json"))).toBe(true);
     expect(ignored(join(root, "docs", ".env"))).toBe(true);
+  });
+
+  it("agentDir subdir: the agent's tools/channels are watched; the host repo's own dirs are ignored", () => {
+    const cwd = "/repo";
+    const agentDir = join(cwd, "agent");
+    const ig = devWatchIgnored(cwd, agentDir);
+    expect(ig(agentDir)).toBe(false); // must descend into agentDir to reach its tools/
+    expect(ig(join(agentDir, "tools", "foo.ts"))).toBe(false); // the agent's tool → restart
+    expect(ig(join(agentDir, "channels", "telegram.ts"))).toBe(false);
+    expect(ig(join(agentDir, "package.json"))).toBe(false);
+    expect(ig(join(agentDir, "persona.md"))).toBe(true); // live-read, no restart
+    expect(ig(join(agentDir, "skills", "x", "SKILL.md"))).toBe(true);
+    expect(ig(join(cwd, "tools", "hostonly.ts"))).toBe(true); // the HOST repo's tools/, NOT the agent's
+    expect(ig(join(cwd, "src", "app.tsx"))).toBe(true); // host source ignored
+    expect(ig(join(cwd, ".env"))).toBe(false); // run-root .env still watched
+    expect(ig(join(cwd, "fastagent.config.mjs"))).toBe(false); // run-root config still watched
   });
 });

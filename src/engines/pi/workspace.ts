@@ -16,6 +16,7 @@ import {
   defaultAuthPath,
   defaultSessionsDir,
   loadConfig,
+  resolveAgentDir,
   resolveModelSpec,
   resolveStateRoot,
 } from "./config.ts";
@@ -57,6 +58,8 @@ export async function createPiAgentFromWorkspace(
   configPath?: string;
   /** The resolved "provider/modelId" spec actually in use. */
   modelSpec: string;
+  /** Absolute agent-definition dir in use (config.agentDir resolved against dir; = dir when unset). Channels/tools/persona come from here. */
+  agentDir: string;
   /** Absolute state root in use (FASTAGENT_STATE_DIR > <dir>/.fastagent) — the ChannelContext's stateRoot. */
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
@@ -76,7 +79,10 @@ export async function createPiAgentFromWorkspace(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  const { tools, toolNames, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, dir);
+  // The run root is `dir` (cwd — where config lives, whose AGENTS.md is ② context); the agent's own
+  // surface (persona/skills/tools/channels) lives in `agentDir` (config.agentDir, or `dir` when flat).
+  const agentDir = resolveAgentDir(dir, config);
+  const { tools, toolNames, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, agentDir, dir);
   // The state root: auth/sessions/channel state all derive from it, so FASTAGENT_STATE_DIR moves the
   // whole machine-state home in one knob (a container mounts one volume); the finer overrides below
   // still win for their specific path.
@@ -90,8 +96,9 @@ export async function createPiAgentFromWorkspace(
   // every channel's `channels/<kind>` home), including a custom in-tree `FASTAGENT_STATE_DIR`. A
   // per-path override to an external volume is out-of-tree and correctly left alone.
   await ensureStateRootSelfIgnored(dir, stateRoot);
-  const { agent, definition } = await createPiAgentFromDefinition(dir, {
+  const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
     model: modelSpec,
+    cwd: dir,
     tools,
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
@@ -100,6 +107,7 @@ export async function createPiAgentFromWorkspace(
   return {
     agent,
     definition,
+    agentDir,
     config,
     configPath,
     modelSpec,
