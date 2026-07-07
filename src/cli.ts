@@ -66,6 +66,8 @@ import { authSeedBytes, deployFlyRun } from "./deploy/fly/run.ts";
 import { spawnRunner } from "./deploy/runner.ts";
 import { assembleSecrets } from "./deploy/secrets.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
+import { discoverScheduleFiles, loadSchedules } from "./schedule/discover.ts";
+import { createScheduler, scheduleSession } from "./schedule/scheduler.ts";
 
 function usage(code: number): never {
   console.error(`usage:
@@ -74,6 +76,7 @@ function usage(code: number): never {
   fastagent info   [dir] [--json] [--auth-path file]
   fastagent tool   <name> '<json-args>' [dir]
   fastagent invoke <message> [dir] [--model provider/modelId] [--auth-path file]
+  fastagent fire   <name> [dir] [--model provider/modelId] [--auth-path file]
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
@@ -107,6 +110,8 @@ function usage(code: number): never {
   invoke run ONE turn against the assembled agent and exit — no server, no TUI. The reply streams
          to stdout, tool/diagnostics to stderr, a failed turn exits non-zero. The all-agent
          counterpart of tool, for CI smoke and quick checks. Same model resolution as dev.
+  fire   run ONE schedule's turn immediately (authoring loop, like invoke) — fires schedules/<name>.ts
+         now without waiting for its cron. Reply→stdout; does NOT advance the schedule's fire state.
   start  run the agent in dir (default .) in production posture — the SAME assembly as dev
          (your directory is the agent), just no file-watching. No build step: start reads the
          definition directly; model/http come from fastagent.config.ts (frozen by git).
@@ -190,6 +195,7 @@ else if (command === "chat") await runChat();
 else if (command === "start") await runStart();
 else if (command === "add") await runAdd();
 else if (command === "deploy") await runDeploy();
+else if (command === "fire") await runFire();
 else if (command === "login") await runLogin();
 else usage(1);
 
@@ -270,6 +276,44 @@ async function runInvoke(): Promise<void> {
   process.exit(exitCode);
 }
 
+/**
+ * `fastagent fire <name> [dir]`: run ONE schedule's turn immediately — the authoring loop for schedules
+ * (like `invoke` is for a prompt). Fires `schedules/<name>.ts` now, without waiting for its cron, using
+ * the schedule's stable session (faithful to the served behavior). Does NOT advance the schedule's fire
+ * state — a test run must never make the scheduler skip the real next run.
+ */
+async function runFire(): Promise<void> {
+  const name = positionals[1];
+  if (!name) {
+    console.error(`usage: fastagent fire <name> [dir]`);
+    process.exit(2);
+  }
+  const fireDir = resolve(positionals[2] ?? ".");
+  loadDotEnv(fireDir);
+  installProxyFetch();
+  await resolveFirstRunModel(fireDir);
+  const { schedules, failures } = await loadSchedules(fireDir).catch(failStartup);
+  reportModuleLoadFailures(failures);
+  const schedule = schedules.find((s) => s.name === name);
+  if (!schedule) {
+    console.error(`unknown schedule "${name}". available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`);
+    process.exit(1);
+  }
+  const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(fireDir, {
+    model: values.model,
+    authPath: resolveAuthPathOverride(values["auth-path"]),
+  }).catch(failStartup);
+  console.error(`[fastagent] fire: ${name} (${modelSpec})`);
+  await reportAuth(modelSpec, authPath);
+  const exitCode = await runInvokeStream(
+    agent.invoke({ session: scheduleSession(name) }, { text: schedule.prompt }),
+    (text) => process.stdout.write(text),
+    (line) => console.error(line),
+  );
+  process.stdout.write("\n");
+  process.exit(exitCode);
+}
+
 /** `fastagent info [dir] [--json]`: print what the directory ASSEMBLES into, WITHOUT booting a server. Read-only. */
 async function runInfo(): Promise<void> {
   loadDotEnv(dir); // skills/tools may read env at load time
@@ -289,6 +333,7 @@ async function runInfo(): Promise<void> {
     }))
     .catch((e: unknown) => ({ names: [] as string[], collisions: [], failures: [], error: (e as Error).message }));
   const channels = await discoverChannelFiles(dir).catch(failStartup);
+  const schedules = await discoverScheduleFiles(dir).catch(failStartup);
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login
   // create them, info must not).
   const stateRoot = resolveStateRoot(dir);
@@ -308,6 +353,7 @@ async function runInfo(): Promise<void> {
           tools: tools.names,
           toolError: tools.error ?? null,
           channels,
+          schedules,
           stateRoot,
           sessionsDir,
           authPath,
@@ -330,6 +376,7 @@ async function runInfo(): Promise<void> {
   console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
   console.log(`tools:    ${tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)"}`);
   console.log(`channels: ${channels.join(", ") || "(none)"}`);
+  console.log(`schedules: ${schedules.join(", ") || "(none)"}`);
   console.log(`state:    ${stateRoot}`);
   console.log(`sessions: ${sessionsDir}`);
   console.log(`auth:     ${authPath}`);
@@ -984,7 +1031,9 @@ async function serveOnce(): Promise<void> {
   reportAgentsSkillsTools(a);
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
-  const routes = await routesFor(dir, logAgentLoop(a.agent), a.stateRoot).catch(failStartup);
+  const traced = logAgentLoop(a.agent);
+  const routes = await routesFor(dir, traced, a.stateRoot).catch(failStartup);
+  await startSchedules(dir, traced, a.stateRoot);
   serve(routes, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.definition.dir, p));
 }
 
@@ -1044,7 +1093,9 @@ async function runStart(): Promise<void> {
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 
   // Same debug turn trace as dev; gated out here by the info level (see serveOnce).
-  const routes = await routesFor(dir, logAgentLoop(agent), stateRoot).catch(failStartup);
+  const traced = logAgentLoop(agent);
+  const routes = await routesFor(dir, traced, stateRoot).catch(failStartup);
+  await startSchedules(dir, traced, stateRoot);
   serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787, (p) =>
     maybeTunnel(dir, p),
   );
@@ -1091,6 +1142,24 @@ function serve(routes: Routes, port: number, onListening?: (boundPort: number) =
       process.exit(1);
     },
   );
+}
+
+/**
+ * Load and start the workspace's `schedules/` — a time-trigger firing the agent on each cron. No-op when
+ * there are none. The scheduler shares the SAME (trace-wrapped) agent the routes serve, so a scheduled
+ * turn is observed like any other. Best-effort stop on exit; dev's watch restart re-reads schedules with
+ * the worker (schedules are a code input). Single-process (like all state today).
+ */
+async function startSchedules(workspaceDir: string, agent: Agent, stateRoot: string): Promise<void> {
+  const { schedules, failures } = await loadSchedules(workspaceDir).catch(failStartup);
+  reportModuleLoadFailures(failures);
+  if (schedules.length === 0) return;
+  const scheduler = createScheduler({ agent, stateRoot, schedules });
+  scheduler.start();
+  log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
+  const stop = (): void => scheduler.stop();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
 }
 
 /**

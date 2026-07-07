@@ -50,6 +50,30 @@ describe("cli papercuts", () => {
     expect(stdout).toBe(""); // a failure never pollutes stdout
   });
 
+  it("fire without a name prints usage to stderr and exits 2 (stdout clean)", async () => {
+    const { code, stdout, stderr } = await run(["fire"]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/usage: fastagent fire/);
+    expect(stdout).toBe("");
+  });
+
+  it("fire on an unknown schedule name exits 1 and lists the available schedules", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-fire-"));
+    await mkdir(join(dir, "schedules"), { recursive: true });
+    await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
+    const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
+    await writeFile(
+      join(dir, "schedules", "daily.ts"),
+      `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\nexport default defineSchedule({ cron: "0 9 * * *", prompt: "digest" });\n`,
+    );
+    const env = { ...process.env };
+    delete env.FASTAGENT_MODEL; // unknown-name exits before any model resolution
+    const { code, stderr } = await run(["fire", "nope", dir], undefined, env);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/unknown schedule "nope"/);
+    expect(stderr).toMatch(/available: daily/);
+  });
+
   it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {
     // deploy KEEPS any existing Dockerfile without --force (no silent data loss). A generated one (marker)
     // that drifted from current config is flagged stale; a hand-written one is kept + warned (its apt won't
