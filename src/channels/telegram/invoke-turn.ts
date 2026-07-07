@@ -5,7 +5,7 @@
  * pure) because this half touches the Bot API + disk; split from telegram.ts so the factory keeps only
  * wiring and the per-turn lifecycle.
  */
-import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import { type Agent, type AgentEvent, type ImageRef, SESSION_BUSY_CODE } from "../../agent.ts";
 import { log } from "../../log.ts";
 import type { BufferedRef } from "./context-buffer.ts";
 import { type DownloadedFile, resolveFiles, resolveImages } from "./telegram-api.ts";
@@ -101,6 +101,16 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
   return { images: allImages.length ? allImages : undefined, promptSuffix: `${bufferedNote}${manifest}` };
 }
 
+/** How the busy-wait paces: retry the invoke every `delayMs` while the session's lease is held by an
+ *  EXTERNAL turn (a self-scheduled wake, a concurrent embedder invoke), up to `maxWaitMs` total. The
+ *  channel's own turns never collide (the turn-queue serializes per session), so a busy reject here is
+ *  always an outside holder — wait for it like a queued turn, instead of erroring at the user. */
+export interface BusyRetry {
+  delayMs: number;
+  maxWaitMs: number;
+}
+const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 120_000 };
+
 /**
  * Run one turn: resolve its attachments, then stream agent.invoke. A primary-attachment failure surfaces
  * as a `failed` event (never a silent drop). `onCompleted` (if given) fires on the turn's `completed`
@@ -108,6 +118,13 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
  * so a failure or crash at ANY earlier point leaves the buffer intact for the next summon (a re-folded
  * block beats lost context). The caller uses it to remove the turn intent AND commit the context buffer,
  * in that order (see the call site) so a crash between the two clears cannot replay a context-stripped turn.
+ *
+ * BUSY-WAIT: a `failed{code: session_busy}` FIRST event means an external turn (e.g. a self-scheduled
+ * wake) holds this session's lease and OUR turn never started — replay-safe. Retry (bounded) instead of
+ * yielding it: the user sees the "Thinking…" placeholder while waiting (the mirror of the scheduler
+ * deferring a wake INTO a busy session), and only an exhausted wait surfaces the busy failure. Only a
+ * FIRST-event busy retries — attachments are already resolved, and a fail-fast reject is the only shape
+ * the engine emits it in, so nothing that started is ever re-run.
  */
 export async function* invokeTurn(
   agent: Agent,
@@ -116,6 +133,7 @@ export async function* invokeTurn(
   transport: TurnTransport,
   attachments: TurnAttachments,
   onCompleted?: () => void,
+  busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
 ): AsyncIterable<AgentEvent> {
   let resolved: ResolvedAttachments;
   try {
@@ -124,11 +142,22 @@ export async function* invokeTurn(
     yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
     return;
   }
-  for await (const e of agent.invoke(
-    { session },
-    { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images },
-  )) {
-    if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
-    yield e;
+  const prompt = { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images };
+  const deadline = Date.now() + busyRetry.maxWaitMs;
+  for (;;) {
+    let retryBusy = false;
+    let first = true;
+    for await (const e of agent.invoke({ session }, prompt)) {
+      if (first && e.type === "failed" && e.code === SESSION_BUSY_CODE && Date.now() + busyRetry.delayMs < deadline) {
+        retryBusy = true; // fail-fast reject — the stream ends after this event; wait and re-invoke
+        break;
+      }
+      first = false;
+      if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
+      yield e;
+    }
+    if (!retryBusy) return;
+    log.info(`[telegram] session ${session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`);
+    await new Promise((r) => setTimeout(r, busyRetry.delayMs));
   }
 }
