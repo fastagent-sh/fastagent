@@ -109,7 +109,12 @@ export interface BusyRetry {
   delayMs: number;
   maxWaitMs: number;
 }
-const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 120_000 };
+// Each retry is a lease-check-level reject (tryAcquire runs before harness assembly) — waiting is nearly
+// free, and the loop exits within one delay of the holder finishing. So the cap is sized to outlast a
+// real tool-using wake turn (minutes), not to be short: 10 min. CEILING: a holder that runs longer than
+// this still surfaces the busy error to the user — the bound exists so a stuck lease can't hang a chat
+// turn forever.
+const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_000 };
 
 /**
  * Run one turn: resolve its attachments, then stream agent.invoke. A primary-attachment failure surfaces

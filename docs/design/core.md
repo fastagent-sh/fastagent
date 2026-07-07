@@ -325,9 +325,12 @@ the scheduler: the author's `schedules/` files (declarative, guaranteed) and the
   invokes DIRECTLY, bypassing a channel's turn-queue — so "wake fires while the user is chatting" can
   collide both ways. Each side now waits on telegram: a wake INTO a busy session is deferred by the
   scheduler (above), and a USER turn hitting a lease held by an external turn (the wake) busy-WAITS —
-  telegram's `invokeTurn` retries a fail-fast `session_busy` reject (bounded, ~2 min; the user sees the
-  "Thinking…" placeholder, then the answer) instead of showing "try again". Only a FIRST-event busy
-  retries (the turn never started — replay-safe). A github/http turn colliding with a wake still surfaces
+  telegram's `invokeTurn` retries a fail-fast `session_busy` reject (the user sees the "Thinking…"
+  placeholder, then the answer) instead of showing "try again". Bounded at 10 min — sized to outlast a
+  real wake turn (each retry is a cheap lease-level reject, and the wait ends within seconds of the
+  holder finishing); a holder that outlives the cap still surfaces the busy error (the ceiling exists so
+  a stuck lease can't hang a chat turn forever). Only a FIRST-event busy retries (the turn never started
+  — replay-safe). A github/http turn colliding with a wake still surfaces
   busy immediately (their sessions rarely mix with wake sessions; add the same wait if it bites). The
   structural alternative — one shared per-session serial seam — stays deferred: bounded waits cover the
   real scenario at a fraction of the seam's cost.
