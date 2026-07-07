@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
@@ -207,6 +207,25 @@ describe("nodeListener (standalone server bridge)", () => {
     }
   });
 
+  it("a handler that returns a non-Response (forgot to return) yields 500, not a server crash", async () => {
+    // The handler is typed (req) => Promise<Response>, but loadChannels loads arbitrary user code: a channel
+    // that forgets to return (undefined) makes response.headers undefined — a TypeError in the gap BETWEEN
+    // the old handler-catch and the stream-try. pump is TOTAL, so this fails into a 500, never escaping as
+    // the unhandled rejection that would crash the server (a crash would hang/error this fetch instead).
+    const badHandler = (async () => undefined) as unknown as (req: Request) => Promise<Response>;
+    const server = createServer(nodeListener(badHandler));
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const res = await fetch(`http://localhost:${port}/x`, { method: "POST", body: "{}" });
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe("internal error\n");
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
   it("client disconnect cancels invoke through the node bridge (SPEC MUST 3)", async () => {
     let cancelled = false;
     let resolveCancelled!: () => void;
@@ -258,6 +277,7 @@ describe("nodeListener (standalone server bridge)", () => {
 });
 
 describe("nodeListener backpressure", () => {
+  afterEach(() => vi.restoreAllMocks());
   /** Minimal IncomingMessage: GET (no body) so the bridge needs no request stream. */
   function fakeReq(): IncomingMessage {
     const req = new EventEmitter() as unknown as IncomingMessage & {
@@ -276,13 +296,71 @@ describe("nodeListener backpressure", () => {
     res.destroyed = false;
     (res as { ended: boolean }).ended = false;
     (res as unknown as { headersSent: boolean }).headersSent = false;
-    (res as unknown as { writeHead: () => ServerResponse }).writeHead = () => res;
+    (res as unknown as { writeHead: () => ServerResponse }).writeHead = () => {
+      (res as { headersSent: boolean }).headersSent = true; // real ServerResponse flips this on writeHead
+      return res;
+    };
     (res as unknown as { write: () => boolean }).write = () => false; // always backpressure
     (res as unknown as { end: () => void }).end = () => {
       (res as { ended: boolean }).ended = true;
     };
+    (res as unknown as { destroy: () => void }).destroy = () => {
+      (res as { destroyed: boolean }).destroyed = true;
+    };
     return res as ServerResponse & { ended: boolean; destroyed: boolean };
   }
+
+  it("catch never writes to an already-destroyed res (client disconnect during the handler await)", async () => {
+    // A client that disconnects while pump awaits the handler destroys res (headers not yet sent) and the
+    // handler throws (AbortError). The catch must NOT writeHead/end on the dead socket — Node can throw
+    // ERR_STREAM_DESTROYED there, which would make the catch itself throw → pump rejects → the very crash.
+    // The stub throws if writeHead/end is called on a destroyed res, so a regression re-appears as an
+    // unhandled rejection vitest surfaces.
+    let touchedDeadSocket = false;
+    const res = fakeRes();
+    (res as { destroyed: boolean }).destroyed = true; // client already disconnected
+    const boom = () => {
+      touchedDeadSocket = true;
+      throw new Error("ERR_STREAM_DESTROYED");
+    };
+    (res as unknown as { writeHead: () => ServerResponse }).writeHead = boom as never;
+    (res as unknown as { end: () => void }).end = boom as never;
+    const handler = (async () => {
+      throw new Error("aborted");
+    }) as unknown as (req: Request) => Promise<Response>;
+
+    nodeListener(handler)(fakeReq(), res);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(touchedDeadSocket).toBe(false); // early-returned; never touched the dead socket (so pump didn't reject)
+  });
+
+  it("a body stream that errors mid-flight is handled, not an unhandled rejection that crashes the server", async () => {
+    // pump is TOTAL: a mid-flight reader error must be caught, logged, and end the response — NEVER escape
+    // as an unhandled rejection (pump is void-called; the process has no unhandledRejection handler). If it
+    // escaped, vitest would surface the rejection and fail this test.
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
+    const handler = async (): Promise<Response> => {
+      let n = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (n++ === 0) c.enqueue(new TextEncoder().encode("data: x\n\n"));
+          else throw new Error("stream blew up mid-flight"); // 2nd pull errors the stream
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+    };
+    const req = fakeReq();
+    const res = fakeRes();
+    (res as unknown as { write: () => boolean }).write = () => true; // no backpressure — let pump loop to the 2nd (erroring) pull
+    nodeListener(handler)(req, res);
+
+    await new Promise((r) => setTimeout(r, 30)); // let pump write once, then hit the erroring pull
+    expect(res.destroyed).toBe(true); // destroyed on the stream error
+    expect(errs.some((e) => /request failed/.test(e))).toBe(true); // surfaced (rule 8)
+  });
 
   it("client close during backpressure ends pump (no leak; regression for drain-only wait)", async () => {
     // An endless SSE stream so pump always has more to write and parks on backpressure.
