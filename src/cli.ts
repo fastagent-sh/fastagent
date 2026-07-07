@@ -74,6 +74,7 @@ import { assembleSecrets } from "./deploy/secrets.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { discoverScheduleFiles, loadSchedules } from "./schedule/discover.ts";
 import { readRuns } from "./schedule/audit.ts";
+import { listWakeups, removeWakeup } from "./schedule/wakeups.ts";
 import { createScheduler, scheduleSession } from "./schedule/scheduler.ts";
 
 function usage(code: number): never {
@@ -85,6 +86,8 @@ function usage(code: number): never {
   fastagent invoke <message> [dir] [--model provider/modelId] [--auth-path file]
   fastagent fire   <name> [dir] [--model provider/modelId] [--auth-path file]
   fastagent schedule history <name> [dir] [--json]
+  fastagent schedule list [dir] [--json]
+  fastagent schedule cancel <id> [dir]
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
@@ -130,6 +133,9 @@ function usage(code: number): never {
   schedule history <name>  print the run audit for a schedule (or "wake" for self-scheduled wake-ups):
          when each run fired, completed/failed/deferred, duration, and the reply/error — the answer to
          "did last night's run silently fail?". --json for the full records (complete reply text).
+  schedule list    the agent's pending self-scheduled wake-ups (id, session, next fire, cron, prompt).
+  schedule cancel <id>  remove a pending wake-up — the operator's kill switch for a runaway recurring
+         wake (the agent's own is the \`unwake\` tool).
   start  run the agent in dir (default .) in production posture — the SAME assembly as dev
          (your directory is the agent), just no file-watching. No build step: start reads the
          definition directly; model/http come from fastagent.config.ts (frozen by git).
@@ -346,9 +352,11 @@ async function runFire(): Promise<void> {
  */
 function runScheduleCmd(): void {
   const sub = positionals[1];
+  if (sub === "list") return runScheduleList();
+  if (sub === "cancel") return runScheduleCancel();
   const name = positionals[2];
   if (sub !== "history" || !name) {
-    console.error(`usage: fastagent schedule history <name> [dir] [--json]`);
+    console.error(`usage: fastagent schedule history <name> | list | cancel <id>  [dir] [--json]`);
     process.exit(2);
   }
   const target = resolve(positionals[3] ?? ".");
@@ -373,6 +381,50 @@ function runScheduleCmd(): void {
     const detail = r.error ?? r.reply ?? "";
     const preview = detail.replace(/\s+/g, " ").slice(0, 100);
     console.log(`${r.firedAt}  ${r.outcome.padEnd(9)} ${String(r.ms).padStart(6)}ms  ${preview}`);
+  }
+}
+
+/** `fastagent schedule list [dir]`: the agent's pending self-scheduled wake-ups. Read-only. */
+function runScheduleList(): void {
+  const target = resolve(positionals[2] ?? ".");
+  loadDotEnv(target);
+  const wakeups = listWakeups(resolveStateRoot(target));
+  if (values.json) {
+    console.log(JSON.stringify(wakeups, null, 2));
+    return;
+  }
+  if (wakeups.length === 0) {
+    console.error(`no pending wake-ups (state: ${resolveStateRoot(target)})`);
+    return;
+  }
+  for (const w of wakeups) {
+    const kind = w.cron ? `cron ${w.cron}${w.tz ? ` ${w.tz}` : ""}` : "one-shot";
+    console.log(`${w.id}  ${w.fireAt}  ${kind}  session=${w.session}  ${w.prompt.slice(0, 60)}`);
+  }
+}
+
+/** `fastagent schedule cancel <id> [dir]`: remove a pending wake-up — the operator's kill switch (the
+ *  agent's own is the `unwake` tool). Unlike unwake it is NOT session-scoped: the operator owns the box. */
+function runScheduleCancel(): void {
+  const id = positionals[2];
+  if (!id) {
+    console.error(`usage: fastagent schedule cancel <id> [dir]`);
+    process.exit(2);
+  }
+  const target = resolve(positionals[3] ?? ".");
+  loadDotEnv(target);
+  if (removeWakeup(resolveStateRoot(target), id)) {
+    // ponytail: the store's load→save is lock-free — a serving scheduler's claim-advance can race this
+    // write (window = ms around each fire). Tell the operator to verify; a lockfile/CAS is the upgrade
+    // path if it ever bites.
+    console.error(
+      `[fastagent] cancelled wake-up ${id} — if a server is running, verify with \`fastagent schedule list\``,
+    );
+  } else {
+    console.error(
+      `no pending wake-up ${id} (state: ${resolveStateRoot(target)}) — \`fastagent schedule list\` shows ids`,
+    );
+    process.exit(1);
   }
 }
 

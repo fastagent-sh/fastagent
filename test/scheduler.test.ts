@@ -174,6 +174,60 @@ describe("schedule/scheduler: fire algorithm", () => {
     s.stop();
   });
 
+  it("a RECURRING wake fires and re-arms at the next cron instant (same id, attempts reset)", async () => {
+    const root = await freshRoot();
+    mkdirSync(join(root, "schedule"), { recursive: true });
+    writeFileSync(
+      join(root, "schedule", "wakeups.json"),
+      JSON.stringify([
+        {
+          id: "rec1",
+          session: "s",
+          prompt: "daily check",
+          fireAt: "2026-07-07T09:00:00Z",
+          cron: "0 9 * * *",
+          tz: "UTC",
+        },
+      ]),
+    );
+    const { agent, calls } = recordingAgent();
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T09:00:30Z") });
+    s.start();
+    await vi.waitFor(() => expect(calls.length).toBe(1)); // fired
+    await vi.waitFor(() => expect(listWakeups(root)).toHaveLength(1)); // NOT consumed — re-armed
+    expect(listWakeups(root)[0]).toMatchObject({ id: "rec1", cron: "0 9 * * *" });
+    expect(listWakeups(root)[0]?.fireAt).toBe("2026-07-08T09:00:00.000Z"); // next daily instant
+    s.stop();
+  });
+
+  it("a busy RECURRING occurrence is SKIPPED (audited failed) — the recurrence continues untouched", async () => {
+    const root = await freshRoot();
+    mkdirSync(join(root, "schedule"), { recursive: true });
+    writeFileSync(
+      join(root, "schedule", "wakeups.json"),
+      JSON.stringify([
+        { id: "rec2", session: "s", prompt: "go", fireAt: "2026-07-07T09:00:00Z", cron: "0 9 * * *", tz: "UTC" },
+      ]),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { agent, calls } = recordingAgent([
+      { type: "failed", retryable: true, code: "session_busy", details: "busy" },
+    ]);
+    const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T10:00:00Z") });
+    s.start();
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    // The recurrence survives (the CLAIM advanced it in place); THIS occurrence is audited failed (skipped),
+    // never deferred — a recurring has a next occurrence by definition.
+    expect(listWakeups(root)).toHaveLength(1);
+    expect(listWakeups(root)[0]).toMatchObject({ id: "rec2", fireAt: "2026-07-08T09:00:00.000Z" });
+    await vi.waitFor(() => expect(readRuns(root, "wake")).toHaveLength(1));
+    expect(readRuns(root, "wake")[0]).toMatchObject({
+      outcome: "failed",
+      error: expect.stringMatching(/occurrence skipped/),
+    });
+    s.stop();
+  });
+
   it("a busy wake dropped at the retry ceiling is audited FAILED (a final silent loss), not deferred", async () => {
     const root = await freshRoot();
     // Seed the wake already AT the attempt cap — the next busy defer drops it.

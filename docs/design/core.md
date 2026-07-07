@@ -343,8 +343,13 @@ immutable per-fire snapshot the rolling session can't give), read by `fastagent 
 (or `wake`) — the answer to "did last night's run silently fail?". Total: an audit-write failure never
 breaks a fire.
 
-Roadmap: **Phase 4b** — recurring self-scheduling (`wake({ cron })`) + `unwake`/operator cancel, on the
-same store with heavier guardrails.
+Self-scheduling is one-shot (`wake({ in })`) or RECURRING (`wake({ cron, tz? })` — the entry keeps its id;
+each fire re-arms to the next cron instant). Recurring carries heavier guardrails: a minimum gap between
+fires (a tight cron is a permanent token burner, stricter than the one-shot floor), and a busy occurrence is
+skipped IMMEDIATELY — no defer/retry (that is one-shot-only, which has no "next time"): the next occurrence
+comes by definition, matching static cron semantics; the skipped one is audited `failed`. Kill switches: the agent's `unwake` tool (session-scoped — a conversation
+can only cancel its OWN wake-ups) and the operator's `fastagent schedule cancel <id>` (unscoped; `schedule
+list` shows ids).
 
 ## 10. Running and deployment (design)
 
