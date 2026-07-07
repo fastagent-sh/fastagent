@@ -74,6 +74,7 @@ import { assembleSecrets } from "./deploy/secrets.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { discoverScheduleFiles, loadSchedules } from "./schedule/discover.ts";
 import { readRuns } from "./schedule/audit.ts";
+import { nextRun } from "./schedule/cron.ts";
 import { listWakeups, removeWakeup } from "./schedule/wakeups.ts";
 import { createScheduler, scheduleSession } from "./schedule/scheduler.ts";
 
@@ -352,7 +353,7 @@ async function runFire(): Promise<void> {
  */
 function runScheduleCmd(): void {
   const sub = positionals[1];
-  if (sub === "list") return runScheduleList();
+  if (sub === "list") return void runScheduleList();
   if (sub === "cancel") return runScheduleCancel();
   const name = positionals[2];
   if (sub !== "history" || !name) {
@@ -384,22 +385,40 @@ function runScheduleCmd(): void {
   }
 }
 
-/** `fastagent schedule list [dir]`: the agent's pending self-scheduled wake-ups. Read-only. */
-function runScheduleList(): void {
+/** `fastagent schedule list [dir]`: everything that will fire — BOTH producers: the static `schedules/`
+ *  files (with their next instant) and the agent's pending self-scheduled wake-ups. Read-only. */
+async function runScheduleList(): Promise<void> {
   const target = resolve(positionals[2] ?? ".");
   loadDotEnv(target);
+  const { config } = await loadConfig(target).catch(failStartup);
+  const agentDir = resolveAgentDir(target, config);
+  const { schedules, failures } = await loadSchedules(agentDir).catch(failStartup);
+  reportModuleLoadFailures(failures);
   const wakeups = listWakeups(resolveStateRoot(target));
   if (values.json) {
-    console.log(JSON.stringify(wakeups, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          schedules: schedules.map((s) => ({ ...s, next: nextRun(s.cron, s.tz, new Date())?.toISOString() })),
+          wakeups,
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
-  if (wakeups.length === 0) {
-    console.error(`no pending wake-ups (state: ${resolveStateRoot(target)})`);
+  if (schedules.length === 0 && wakeups.length === 0) {
+    console.error(`nothing scheduled — no schedules/ files, no pending wake-ups (state: ${resolveStateRoot(target)})`);
     return;
+  }
+  for (const s of schedules) {
+    const next = nextRun(s.cron, s.tz, new Date())?.toISOString() ?? "(never)";
+    console.log(`schedule  ${s.name.padEnd(20)} ${next}  cron ${s.cron}${s.tz ? ` ${s.tz}` : ""}`);
   }
   for (const w of wakeups) {
     const kind = w.cron ? `cron ${w.cron}${w.tz ? ` ${w.tz}` : ""}` : "one-shot";
-    console.log(`${w.id}  ${w.fireAt}  ${kind}  session=${w.session}  ${w.prompt.slice(0, 60)}`);
+    console.log(`wake      ${w.id}  ${w.fireAt}  ${kind}  session=${w.session}  ${w.prompt.slice(0, 60)}`);
   }
 }
 
