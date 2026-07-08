@@ -136,9 +136,17 @@ export function addWakeup(
   const all = load(stateRoot);
   const mine = all.filter((w) => w.session === input.session);
   if (mine.length >= MAX_PENDING_WAKEUPS) {
-    // List what's pending: "unwake one" is only actionable if the model HAS the ids (they were returned
-    // when set, but that may be buried far back in the conversation).
-    const pending = mine.map((w) => `${w.id}${w.cron ? ` (recurring "${w.cron}")` : ""} at ${w.fireAt}`).join("; ");
+    // List what's pending WITH a prompt preview: "unwake one" is only actionable if the model has the
+    // ids AND can choose by meaning — both were returned when set, but that may be buried far back in
+    // the conversation.
+    const pending = mine
+      .map(
+        (w) =>
+          `${w.id}${w.cron ? ` (recurring "${w.cron}")` : ""} at ${w.fireAt}: ${
+            w.prompt.length > 60 ? `${w.prompt.slice(0, 60)}…` : w.prompt
+          }`,
+      )
+      .join("; ");
     return {
       ok: false,
       error: `too many pending wake-ups for this conversation (${MAX_PENDING_WAKEUPS}) — wait for some to fire, or unwake one. Pending: ${pending}`,

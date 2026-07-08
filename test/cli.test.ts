@@ -191,6 +191,37 @@ describe("cli papercuts", () => {
     expect(text.stderr).toMatch(/broken\.ts/); // the reason is a warning on stderr
   });
 
+  it("info loads schedules — a broken one is reported (exit 0), a good one carries its next instant", async () => {
+    // Same G2 isolation as tools: a broken schedule file (bad cron) is skipped + reported at info time,
+    // not first at `dev`; the good schedule still shows, with its next fire instant.
+    const dir = await mkdtemp(join(tmpdir(), "fa-info-schedfail-"));
+    await mkdir(join(dir, "schedules"), { recursive: true });
+    await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
+    await writeFile(
+      join(dir, "schedules", "good.mjs"),
+      'export default { cron: "0 9 * * *", tz: "UTC", prompt: "digest" };\n',
+    );
+    await writeFile(join(dir, "schedules", "bad.mjs"), 'export default { cron: "not a cron", prompt: "x" };\n');
+    const env = { ...process.env };
+    delete env.FASTAGENT_MODEL;
+
+    const { code, stdout } = await run(["info", dir, "--json"], undefined, env);
+    expect(code).toBe(0); // reported, not fatal
+    const info = JSON.parse(stdout);
+    expect(info.schedules).toHaveLength(1);
+    expect(info.schedules[0]).toMatchObject({ name: "good", cron: "0 9 * * *" });
+    expect(info.schedules[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
+    expect(JSON.stringify(info.scheduleFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
+    expect(info.selfSchedule).toBe(false); // no config → wake tool won't mount
+
+    // text mode: next instant on the schedules line, the failure as a stderr warning
+    const text = await run(["info", dir], undefined, env);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toMatch(/schedules: good \(next .*T09:00:00\.000Z\)/);
+    expect(text.stdout).toMatch(/selfSchedule: off/);
+    expect(text.stderr).toMatch(/bad\.mjs/);
+  });
+
   it("login self-ignores .fastagent on an adapted dir before it writes the credential file", async () => {
     // login is the command that CREATES the secret, so its self-ignore must fire independently of the
     // opener — and BEFORE the interactive gate below, so the .gitignore is written even though this
