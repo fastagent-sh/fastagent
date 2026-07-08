@@ -11,8 +11,9 @@ import { assertInsideWorkspace } from "../workspace.ts";
 import { cronError } from "./cron.ts";
 import type { LoadedSchedule, Schedule } from "./schedule.ts";
 
-/** Schedule file basenames under `<dir>/schedules/` — the authoring view (`fastagent info`), listed
- *  WITHOUT importing (like {@link import("../engines/pi/channel.ts").discoverChannelFiles}). */
+/** Schedule file basenames under `<dir>/schedules/` — an existence probe listed WITHOUT importing
+ *  (deploy pre-flight's time-trigger detection; `fastagent info` uses {@link loadSchedules} instead,
+ *  since it also reports broken files and next instants). */
 export async function discoverScheduleFiles(dir: string): Promise<string[]> {
   await assertInsideWorkspace(dir, "schedules");
   let names: string[];

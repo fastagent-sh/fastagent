@@ -68,7 +68,8 @@ Prints the assembled surface without starting a server:
 - skills and diagnostics,
 - non-default tools and collisions,
 - channel files,
-- schedule files,
+- schedules (name + next fire instant; a broken schedule file is reported here, not first at `dev`),
+- whether self-scheduling (`selfSchedule`) is on,
 - session directory.
 
 `info` is read-only: it does not create sessions or modify `.fastagent/`.

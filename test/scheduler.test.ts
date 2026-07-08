@@ -127,7 +127,12 @@ describe("schedule/scheduler: fire algorithm", () => {
     const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
     s.start(); // polls wake-ups immediately on start
     await vi.waitFor(() => expect(calls.length).toBe(1));
-    expect(calls[0]).toEqual({ session: "conv-9", text: "resume" }); // fired back into the wake-up's session
+    expect(calls[0]?.session).toBe("conv-9"); // fired back into the wake-up's session
+    // The prompt arrives ENVELOPED (id + "not a user message") so the model can tell its own alarm from
+    // the user speaking; the instruction itself rides along.
+    expect(calls[0]?.text).toMatch(
+      /^\[wake-up [0-9a-f-]+ fired — YOUR self-scheduled turn, not a user message\] resume$/,
+    );
     expect(listWakeups(root)).toHaveLength(0); // claimed + fired, not left pending
     s.stop();
   });
@@ -218,6 +223,10 @@ describe("schedule/scheduler: fire algorithm", () => {
     const s = createScheduler({ agent, stateRoot: root, schedules: [], now: () => new Date("2026-07-07T09:00:30Z") });
     s.start();
     await vi.waitFor(() => expect(calls.length).toBe(1)); // fired
+    // A recurring envelope carries the id AND the unwake instruction — the documented way to stop it is
+    // from inside a woken turn, which otherwise has no way to know its own id.
+    expect(calls[0]?.text).toContain('unwake({ id: "rec1" })');
+    expect(calls[0]?.text).toContain("daily check");
     await vi.waitFor(() => expect(listWakeups(root)).toHaveLength(1)); // NOT consumed — re-armed
     expect(listWakeups(root)[0]).toMatchObject({ id: "rec1", cron: "0 9 * * *" });
     expect(listWakeups(root)[0]?.fireAt).toBe("2026-07-08T09:00:00.000Z"); // next daily instant

@@ -263,7 +263,8 @@ capability, not given to every agent). Then the serving path (`dev`/`start`, whe
 one-shot `invoke`/`fire`) mounts a built-in **`wake`** tool so the agent can schedule itself: `wake({ in: "30m", prompt })`
 records a one-shot wake-up — or `wake({ cron: "0 9 * * *", tz?, prompt })` a RECURRING one — persisted under
 `<stateRoot>/schedule/`, polled by the scheduler and fired back into the SAME session, so the agent resumes
-the conversation. It reads the current session from `ToolContext.session`; guardrails cap the minimum delay,
+the conversation — the woken turn's prompt is enveloped with the wake-up's id and origin ("YOUR
+self-scheduled turn, not a user message"), so the model can tell its own alarm from the user speaking. It reads the current session from `ToolContext.session`; guardrails cap the minimum delay,
 the recurring frequency (≥10 min between fires), and the per-session pending count. The agent cancels its own
 with `unwake({ id })` (session-scoped); the operator with `fastagent schedule cancel <id>` (`schedule list`
 shows ids).

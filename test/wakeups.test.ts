@@ -48,7 +48,12 @@ describe("schedule/wakeups store + guardrails", () => {
     }
     const res = addWakeup(r, { session: "s", prompt: "over", fireAt: at(2 * MIN_WAKE_MS) }, NOW);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toMatch(/too many/);
+    // The rejection lists the pending ids — "unwake one" is only actionable if the model HAS them (the
+    // ids were returned when set, but that can be buried far back in the conversation).
+    if (!res.ok) {
+      expect(res.error).toMatch(/too many/);
+      for (const w of listWakeups(r)) expect(res.error).toContain(w.id);
+    }
   });
 
   it("takeFirstDueWakeup claims ONE due (remove+return), leaves future ones, then undefined", async () => {

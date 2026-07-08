@@ -134,10 +134,14 @@ export function addWakeup(
     fireAtDate = input.fireAt;
   }
   const all = load(stateRoot);
-  if (all.filter((w) => w.session === input.session).length >= MAX_PENDING_WAKEUPS) {
+  const mine = all.filter((w) => w.session === input.session);
+  if (mine.length >= MAX_PENDING_WAKEUPS) {
+    // List what's pending: "unwake one" is only actionable if the model HAS the ids (they were returned
+    // when set, but that may be buried far back in the conversation).
+    const pending = mine.map((w) => `${w.id}${w.cron ? ` (recurring "${w.cron}")` : ""} at ${w.fireAt}`).join("; ");
     return {
       ok: false,
-      error: `too many pending wake-ups for this conversation (${MAX_PENDING_WAKEUPS}) — wait for some to fire, or unwake one, before adding more.`,
+      error: `too many pending wake-ups for this conversation (${MAX_PENDING_WAKEUPS}) — wait for some to fire, or unwake one. Pending: ${pending}`,
     };
   }
   const id = randomUUID();
