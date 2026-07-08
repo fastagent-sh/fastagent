@@ -28,6 +28,7 @@ agent/
 3. **A reference implementation** — pi-based assembly for `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `start`, and channel scaffolding.
 5. **Composable adapters** — GitHub, Telegram, the default local invoke channel, and a small public kit for third-party channels.
+6. **Time triggers** — cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit (`fastagent schedule history`).
 
 ## Design choices
 
@@ -96,6 +97,7 @@ fastagent add telegram
 | Use CLI commands | [CLI reference](cli.md) |
 | Embed in an app | [Embedding](embedding.md) |
 | Add webhooks/bots | [Channels](channels.md) |
+| Run the agent on a cron / let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [CLI reference](cli.md) |
 | Ship to Fly, Railway, or any Docker host | [Deploy](deploy.md) |
 | Use GitHub webhooks | [GitHub channel](github.md) |
 | Use Telegram bots | [Telegram channel](telegram.md) |

@@ -65,6 +65,19 @@ For Telegram:
 - Set TELEGRAM_BOT_TOKEN and TELEGRAM_SECRET_TOKEN.
 - Use fastagent dev --tunnel for local webhook testing.
 
+For schedules (run the agent on a cron — daily digest, periodic checks):
+- Create schedules/<name>.ts: export default defineSchedule({ cron: "0 9 * * *", tz: "America/New_York",
+  prompt: "..." }) — defineSchedule comes from @kid7st/fastagent; the filename is the schedule name.
+- The prompt must SAY where output goes ("…and send it to the team Telegram"): the scheduler only fires
+  the agent — a scheduled turn's plain reply is not delivered anywhere; delivery is a send tool's job.
+- Test with a command that exits: fastagent fire <name> --model provider/id (runs the turn NOW, without
+  touching the real cron state). The cron only fires while `dev`/`start` is serving.
+- Check past runs with: fastagent schedule history <name>; see what will fire with: fastagent schedule list.
+- Self-scheduling (the agent sets its own follow-ups via a built-in `wake` tool) is opt-in:
+  selfSchedule: true in fastagent.config.*.
+- Deploying with schedules or selfSchedule keeps one machine always running (no scale-to-zero — a
+  sleeping box misses the instant); `fastagent deploy` handles this, don't fight it.
+
 For embedding:
 - Use createPiAgentFromDefinition or createPiAgentFromWorkspace.
 - Mount createInvokeHandler(agent) in my app route.

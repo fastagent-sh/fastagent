@@ -172,6 +172,35 @@ fastagent dev --tunnel
 
 Read [Channels](channels.md) for the channel model, [GitHub channel](github.md) for GitHub webhooks, and [Telegram channel](telegram.md) for Telegram bots.
 
+## 8. Run on a clock
+
+Channels react to requests; **schedules** fire the agent on a cron — a daily digest, a periodic check.
+Drop a file in `schedules/` (mirroring `tools/`), named by its filename:
+
+```ts
+// schedules/daily-digest.ts
+import { defineSchedule } from "@kid7st/fastagent";
+
+export default defineSchedule({
+  cron: "0 9 * * *",
+  tz: "America/New_York",
+  prompt: "Summarize yesterday's activity and send it to the team Telegram.",
+});
+```
+
+The prompt must say where output goes — the scheduler only fires the agent; delivery is a send tool's
+job. Test it immediately (without waiting for the cron, and without touching the real fire state):
+
+```bash
+fastagent fire daily-digest
+```
+
+The cron fires while `dev`/`start` is serving; `fastagent schedule history <name>` answers "did last
+night's run silently fail?", and `fastagent schedule list` shows everything that will fire. Agents can
+also schedule **themselves** (a built-in `wake` tool — "check the deploy in 10 minutes") — opt in with
+`selfSchedule: true` in `fastagent.config.*`. See the [CLI reference](cli.md) and
+[API reference](api-reference.md#schedule-authoring).
+
 ## Where next
 
 - [Embedding](embedding.md) — use FastAgent as a library inside your own app.

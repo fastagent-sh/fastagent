@@ -134,7 +134,7 @@ function usage(code: number): never {
   schedule history <name>  print the run audit for a schedule (or "wake" for self-scheduled wake-ups):
          when each run fired, completed/failed/deferred, duration, and the reply/error — the answer to
          "did last night's run silently fail?". --json for the full records (complete reply text).
-  schedule list    the agent's pending self-scheduled wake-ups (id, session, next fire, cron, prompt).
+  schedule list    everything that will fire: static schedules (next instant) + pending wake-ups.
   schedule cancel <id>  remove a pending wake-up — the operator's kill switch for a runaway recurring
          wake (the agent's own is the \`unwake\` tool).
   start  run the agent in dir (default .) in production posture — the SAME assembly as dev

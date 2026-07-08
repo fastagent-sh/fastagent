@@ -52,6 +52,8 @@ fastagent deploy fly --run   # idempotent, resumable; carries your local env sec
 
 Idle behavior defaults to **suspend** (snapshot + fast resume on the next webhook, ~hundreds of ms). Flags: `--stop` (cold-stop instead of suspend), `--no-scale-to-zero` (keep one machine always up), `--force` (overwrite artifacts). A GitHub channel forces one machine to stay up — its fire-and-forget turns have no replay, so scaling the last machine to zero could drop an in-flight review.
 
+**Time triggers keep one machine running.** A cron schedule (`schedules/` files) or self-scheduling (`selfSchedule: true`) has no inbound webhook to wake a scaled-to-zero machine — a sleeping box simply misses the instant. Pre-flight detects time triggers and the generated `fly.toml` forces `min_machines_running = 1` (on Railway, the runbook forbids App Sleeping). If you kept an existing scale-to-zero `fly.toml`, `deploy` warns — and `--run` refuses — until you raise it.
+
 ## Railway
 
 Prereqs: the [Railway CLI](https://docs.railway.com/guides/cli) and `railway login`.
@@ -75,7 +77,7 @@ Or:
 fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries your local env secrets
 ```
 
-`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for — the runbook states it as a manual step (Settings → Deploy → Serverless → App Sleeping). Don't enable it with a GitHub channel, for the same no-replay reason as Fly.
+`--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for — the runbook states it as a manual step (Settings → Deploy → Serverless → App Sleeping). Don't enable it with a GitHub channel (the same no-replay reason as Fly) or with time triggers (`schedules/` files or `selfSchedule` — a sleeping box misses the instant).
 
 ## Serving an existing repo (agentDir layout)
 
