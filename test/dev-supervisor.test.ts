@@ -12,6 +12,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "tools", "word-count.ts"))).toBe(false);
     expect(ignored(join(root, "tools", "lib", "helper.ts"))).toBe(false); // nested under tools/
     expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
+    expect(ignored(join(root, "schedules", "daily.ts"))).toBe(false); // loaded once per worker — restart is the re-read
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, ".env"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.mjs"))).toBe(false);
@@ -41,6 +42,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ig(agentDir)).toBe(false); // must descend into agentDir to reach its tools/
     expect(ig(join(agentDir, "tools", "foo.ts"))).toBe(false); // the agent's tool → restart
     expect(ig(join(agentDir, "channels", "telegram.ts"))).toBe(false);
+    expect(ig(join(agentDir, "schedules", "daily.ts"))).toBe(false);
     expect(ig(join(agentDir, "package.json"))).toBe(false);
     expect(ig(join(agentDir, "persona.md"))).toBe(true); // live-read, no restart
     expect(ig(join(agentDir, "skills", "x", "SKILL.md"))).toBe(true);

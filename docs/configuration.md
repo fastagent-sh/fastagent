@@ -37,7 +37,7 @@ Supported keys:
 | Key | Meaning |
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
-| `agentDir` | The agent-definition subdirectory (`persona.md`, `skills/`, `tools/`, `channels/`), relative to the config file. Default: the config directory itself (flat). Set it to e.g. `"./agent"` to serve an existing repo as a coding agent — the config directory stays the run root (`cwd`, whose `AGENTS.md` is read as context), while the agent's own surface lives in the subdir and does not collide with the host's `tools/`/`src/`. |
+| `agentDir` | The agent-definition subdirectory (`persona.md`, `skills/`, `tools/`, `channels/`), relative to the config file. Default: the config directory itself (flat). Set it to e.g. `"./agent"` to serve an existing repo as a coding agent — the config directory stays the run root (`cwd`, whose `AGENTS.md` is read as context), while the agent's own surface lives in the subdir and does not collide with the host's `tools/`/`src/`. Must exist, stay inside the config directory, and be a real directory — a missing path is refused at load (a typo would otherwise silently serve an empty agent), and so is a symlink (its target can escape the config directory, where `dev`'s watch would never see edits). |
 | `tools` | Extra programmatic tools appended after default pi tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start`, where the scheduler poller runs). |

@@ -38,12 +38,13 @@ export function devWatchIgnored(dir: string, agentDir: string): (path: string) =
     // Run-root (cwd) inputs: .env + fastagent.config.* live where config lives, not in agentDir.
     if (rel === ".env") return false;
     if (/^fastagent\.config\.[cm]?[jt]s$/.test(rel)) return false;
-    // Agent code inputs live in agentDir: tools/, channels/, package.json (its own deps). Everything
-    // else under agentDir (skills/, persona.md, AGENTS.md) is live-read — pruned, no restart.
+    // Agent code inputs live in agentDir: tools/, channels/, schedules/ (loaded once per worker — a
+    // restart is their only re-read), package.json (its own deps). Everything else under agentDir
+    // (skills/, persona.md, AGENTS.md) is live-read — pruned, no restart.
     const relAgent = relative(agentDir, path);
     if (!relAgent.startsWith("..")) {
       const [head] = relAgent.split(sep);
-      if (head === "tools" || head === "channels") return false;
+      if (head === "tools" || head === "channels" || head === "schedules") return false;
       if (relAgent === "package.json") return false;
     }
     return true;

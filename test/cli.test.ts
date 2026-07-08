@@ -95,6 +95,23 @@ describe("cli papercuts", () => {
     expect(stderr).toMatch(/available: daily/);
   });
 
+  it("fire discovers schedules from agentDir (where the scheduler serves them), not the run root", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-fire-kit-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
+    await mkdir(join(dir, "agent", "schedules"), { recursive: true });
+    const scheduleHref = new URL("../src/schedule/schedule.ts", import.meta.url).href;
+    await writeFile(
+      join(dir, "agent", "schedules", "daily.ts"),
+      `import { defineSchedule } from ${JSON.stringify(scheduleHref)};\nexport default defineSchedule({ cron: "0 9 * * *", prompt: "digest" });\n`,
+    );
+    const env = { ...process.env };
+    delete env.FASTAGENT_MODEL;
+    const { code, stderr } = await run(["fire", "nope", dir], undefined, env);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/available: daily/); // found in agent/schedules — the same set dev/start serve
+    expect(stderr).toMatch(/looked in agent\/schedules/); // a misplaced schedule reads as "wrong place", not "broken file"
+  });
+
   it("never clobbers an existing Dockerfile: flags a stale generated one, warns on a hand-written one (G6)", async () => {
     // deploy KEEPS any existing Dockerfile without --force (no silent data loss). A generated one (marker)
     // that drifted from current config is flagged stale; a hand-written one is kept + warned (its apt won't

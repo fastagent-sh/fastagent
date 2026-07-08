@@ -324,11 +324,21 @@ async function runFire(): Promise<void> {
   loadDotEnv(fireDir);
   installProxyFetch();
   await resolveFirstRunModel(fireDir);
-  const { schedules, failures } = await loadSchedules(fireDir).catch(failStartup);
+  // Schedules are agent surface — discover them where dev/start/`schedule list` do (agentDir), not the
+  // run root, so `fire` sees the same set the scheduler serves in the kit layout.
+  const { config: fireConfig } = await loadConfig(fireDir).catch(failStartup);
+  const fireAgentDir = resolveAgentDir(fireDir, fireConfig);
+  const { schedules, failures } = await loadSchedules(fireAgentDir).catch(failStartup);
   reportModuleLoadFailures(failures);
   const schedule = schedules.find((s) => s.name === name);
   if (!schedule) {
-    console.error(`unknown schedule "${name}". available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`);
+    // Name the discovery path in the kit layout: a schedule misplaced at the run root should read as
+    // "wrong place", not "broken file".
+    const looked =
+      fireAgentDir === fireDir ? "" : ` (looked in ${relative(fireDir, fireAgentDir).split(sep).join("/")}/schedules)`;
+    console.error(
+      `unknown schedule "${name}"${looked}. available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,
+    );
     process.exit(1);
   }
   const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(fireDir, {
@@ -547,8 +557,10 @@ async function runInit(): Promise<void> {
   if (values["agent-dir"]) {
     // Same containment contract loadConfig enforces on config.agentDir: an escaping value would write
     // the kit outside the workspace AND produce a config that can never load — refuse up front.
-    const rel = relative(dir, resolve(dir, values["agent-dir"]));
-    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    // POSIX-normalized: this lands verbatim in the generated config (agentDir: "./a/b") and the persona
+    // locator note — a Windows `relative()` would write backslashes into both.
+    const rel = relative(dir, resolve(dir, values["agent-dir"])).split(sep).join("/");
+    if (rel === "" || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) {
       failStartup(new Error(`--agent-dir ("${values["agent-dir"]}") must be a subdirectory of ${dir}`));
     }
     agentDir = `./${rel}`;

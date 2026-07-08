@@ -134,7 +134,13 @@ export async function assertChannelReady(dir: string): Promise<void> {
     raw = await readFile(pkgPath, "utf8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`${dir}: not a fastagent code workspace (no package.json) — run \`fastagent init\` here first`);
+      // `dir` is where the kit lives (agentDir when set) — "run init" is only the right advice when no
+      // workspace exists yet; a kit missing its manifest (e.g. a --minimal init) needs the manifest, not init.
+      throw new Error(
+        `${dir}: no package.json — a channel adapter is code and needs the kit's own manifest. ` +
+          `Run \`fastagent init\` for a fresh workspace, or add a package.json with @kid7st/fastagent there ` +
+          `(a --minimal init has none)`,
+      );
     }
     throw e;
   }

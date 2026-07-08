@@ -6,7 +6,7 @@
  * the agent's identity or behavior (that lives in AGENTS.md + skills). Deleting the config must
  * still leave a runnable zero-config agent (model via --model / FASTAGENT_MODEL).
  */
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -132,6 +132,38 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
       throw new Error(
         `${path}: "agentDir" ("${c.agentDir}") must be a subdirectory of the config directory, not escape it`,
+      );
+    }
+    // An explicitly declared agentDir that doesn't exist is a typo until proven otherwise ("./agnet"):
+    // without this check every opener would assemble an EMPTY agent (no persona, no skills, no tools)
+    // with zero errors — the worst silent failure this config can produce. Deliberately NOT auto-created:
+    // config load is read-only (no implicit operations), and a mkdir would turn the typo into a served
+    // empty agent plus a junk directory.
+    // lstat, not stat: a symlink would pass the literal containment check above while its TARGET lives
+    // outside the config dir — exactly what that check exists to prevent (dev's watch would silently
+    // never see edits). Same rule as init's parent preflight: reject, don't follow.
+    const agentDirAbs = resolve(dir, c.agentDir);
+    const st = lstatSync(agentDirAbs, { throwIfNoEntry: false });
+    if (!st) {
+      throw new Error(`${path}: "agentDir" ("${c.agentDir}") does not exist — create it, or fix the path`);
+    }
+    if (st.isSymbolicLink()) {
+      // Separate message: to its user a symlink LOOKS like a working directory — name the reason and the fix.
+      throw new Error(
+        `${path}: "agentDir" ("${c.agentDir}") is a symlink — not allowed (its target can live outside the ` +
+          `config directory, where dev's watch would never see edits); use a real directory, or point agentDir at the target's real path`,
+      );
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`${path}: "agentDir" ("${c.agentDir}") is not a directory`);
+    }
+    // The leaf lstat can't see a symlinked INTERMEDIATE segment (agentDir "./a/b" with `a` → outside):
+    // realpath equality covers every segment under the config dir in one comparison. dir itself is
+    // realpath'd on both sides, so a symlinked config-dir path (macOS /tmp) stays legal.
+    if (realpathSync(agentDirAbs) !== resolve(realpathSync(dir), relative(dir, agentDirAbs))) {
+      throw new Error(
+        `${path}: "agentDir" ("${c.agentDir}") resolves through a symlink — not allowed (the target can ` +
+          `live outside the config directory, where dev's watch would never see edits); use the real path`,
       );
     }
   }

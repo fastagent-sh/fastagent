@@ -183,6 +183,21 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
     throw new Error(`"${dir}" already has ${conflicts.join(", ")} — already a fastagent workspace`);
   }
 
+  // Never merge the kit into an existing NON-EMPTY directory (a host repo may own an unrelated `agent/`
+  // — common in AI products): wx would keep its files, but persona.md/skills/ landing inside someone
+  // else's code dir is a silent mix. Refuse with the way out. Dotfiles (.DS_Store, .gitkeep) don't
+  // count — same rule as detectHostSignals' occupation check. A SYMLINKED kit path slips past this
+  // readdir (it follows links) — deliberate: the parent preflight below lstat-rejects it before any write.
+  if (options.agentDir) {
+    const occupants = (await readdir(join(dir, kit)).catch(() => [] as string[])).filter((f) => !f.startsWith("."));
+    if (occupants.length > 0) {
+      throw new Error(
+        `"${kit}" already exists and is not empty — if it is unrelated to the agent, pick another name ` +
+          `(--agent-dir <name>) or go flat (--flat); to adopt it as the kit, empty it first`,
+      );
+    }
+  }
+
   // Was the target non-empty BEFORE we wrote anything? (missing dir = empty).
   const intoNonEmpty = (await readdir(dir).catch(() => [] as string[])).length > 0;
 

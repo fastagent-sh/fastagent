@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -33,12 +33,41 @@ describe("config: resolveSessionsDirOverride (start's sessions precedence)", () 
 describe("config: loadConfig agentDir validation", () => {
   it("accepts a subdirectory agentDir; rejects one that escapes the config dir (dev watch-scope guard)", async () => {
     const ok = await mkdtemp(join(tmpdir(), "fa-agentdir-ok-"));
+    await mkdir(join(ok, "agent"));
     await writeFile(join(ok, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
     expect((await loadConfig(ok)).config.agentDir).toBe("./agent");
 
     const bad = await mkdtemp(join(tmpdir(), "fa-agentdir-bad-"));
     await writeFile(join(bad, "fastagent.config.mjs"), `export default { agentDir: "../shared" };\n`);
     await expect(loadConfig(bad)).rejects.toThrow(/agentDir.*subdirectory.*not escape/);
+  });
+
+  it("rejects an agentDir that doesn't exist (a typo would silently serve an EMPTY agent) or is a file", async () => {
+    const typo = await mkdtemp(join(tmpdir(), "fa-agentdir-typo-"));
+    await mkdir(join(typo, "agent"));
+    await writeFile(join(typo, "fastagent.config.mjs"), `export default { agentDir: "./agnet" };\n`);
+    await expect(loadConfig(typo)).rejects.toThrow(/agentDir.*does not exist.*create it, or fix the path/);
+
+    const file = await mkdtemp(join(tmpdir(), "fa-agentdir-file-"));
+    await writeFile(join(file, "agent"), "not a dir");
+    await writeFile(join(file, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
+    await expect(loadConfig(file)).rejects.toThrow(/agentDir.*is not a directory/);
+
+    // A symlink passes the literal containment check while its target may live outside — rejected (lstat).
+    const sym = await mkdtemp(join(tmpdir(), "fa-agentdir-sym-"));
+    const outside = await mkdtemp(join(tmpdir(), "fa-agentdir-out-"));
+    await symlink(outside, join(sym, "agent"));
+    await writeFile(join(sym, "fastagent.config.mjs"), `export default { agentDir: "./agent" };\n`);
+    await expect(loadConfig(sym)).rejects.toThrow(/agentDir.*is a symlink.*real path/);
+
+    // An INTERMEDIATE symlinked segment ("./a/b" with a → outside): the leaf is a real directory, so
+    // only the realpath-equality check catches the escape.
+    const mid = await mkdtemp(join(tmpdir(), "fa-agentdir-mid-"));
+    const outside2 = await mkdtemp(join(tmpdir(), "fa-agentdir-out2-"));
+    await mkdir(join(outside2, "b"));
+    await symlink(outside2, join(mid, "a"));
+    await writeFile(join(mid, "fastagent.config.mjs"), `export default { agentDir: "./a/b" };\n`);
+    await expect(loadConfig(mid)).rejects.toThrow(/agentDir.*resolves through a symlink/);
   });
 
   it("selfSchedule: accepts a boolean (opt-in to the wake tool), rejects a non-boolean", async () => {

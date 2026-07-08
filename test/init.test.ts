@@ -221,6 +221,21 @@ describe("init: scaffoldWorkspace", () => {
     }
   });
 
+  it("refuses a non-empty kit target (a host repo's unrelated agent/); dotfiles alone don't block", async () => {
+    const dir = await freshDir();
+    await mkdir(join(dir, "agent"), { recursive: true });
+    await writeFile(join(dir, "agent", "index.ts"), "// the host's own agent code\n");
+    // Never silently mix the kit into someone else's directory — refuse with the way out.
+    await expect(scaffoldWorkspace(dir, { agentDir: "./agent" })).rejects.toThrow(/not empty.*--agent-dir <name>/s);
+    expect(await exists(join(dir, "fastagent.config.mjs"))).toBe(false); // refusal is side-effect-free
+
+    const dir2 = await freshDir();
+    await mkdir(join(dir2, "agent"), { recursive: true });
+    await writeFile(join(dir2, "agent", ".gitkeep"), "");
+    const { agentDir } = await scaffoldWorkspace(dir2, { agentDir: "./agent" }); // dotfiles ≠ occupied
+    expect(agentDir).toBe("./agent");
+  });
+
   it("agentDir layout: the kit lands in ./agent, config at the root points there, host files untouched", async () => {
     const dir = await freshDir();
     await writeFile(join(dir, "AGENTS.md"), "# Host repo spec\n");
