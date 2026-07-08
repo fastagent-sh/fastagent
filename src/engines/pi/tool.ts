@@ -13,7 +13,7 @@
 import { join } from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
-import { type ModuleLoadFailure, loadModuleDir } from "./loader.ts";
+import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
 import { turnContext } from "./tool-context.ts";
 
 export interface ToolContext {

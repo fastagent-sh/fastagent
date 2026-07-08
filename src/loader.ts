@@ -1,3 +1,8 @@
+/**
+ * Generic ESM module discovery + loading for the workspace's code-input dirs (`tools/`, `channels/`,
+ * `schedules/`, config). Pure node stdlib — engine-neutral, so it lives at the top level: the schedule
+ * discovery (src/schedule/) must not reach into `engines/` for what is plain filesystem/import plumbing.
+ */
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, extname, join } from "node:path";

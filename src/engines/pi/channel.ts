@@ -8,7 +8,7 @@ import { readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { type ChannelContext, type ChannelModule, parseRouteKey, type Routes } from "../../host/node.ts";
 import { assertInsideWorkspace } from "../../workspace.ts";
-import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "./loader.ts";
+import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../../loader.ts";
 
 /** A dropped route: two channels claim the same key. Surfaced, never silent. */
 export interface ChannelCollision {

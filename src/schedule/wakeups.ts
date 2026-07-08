@@ -198,6 +198,11 @@ export function takeFirstDueWakeup(stateRoot: string, now: Date = new Date()): W
  * {@link MAX_WAKE_ATTEMPTS} — a one-shot has no "next time", so a busy-skip that just dropped it would lose
  * it forever; bounded retries, then give up visibly. A RECURRING occurrence is never deferred: its claim
  * already advanced the entry, and its next occurrence comes by definition — a busy one is skipped + audited.
+ *
+ * Known residual: between the claim (removed from the store) and this re-add there is a microtask-scale
+ * window (the busy reject yields before any harness IO) where an `unwake` for this id reports "not found"
+ * and the defer then resurrects it — the one-shot cousin of the recurring resurrection the advance-in-place
+ * claim eliminated. Accepted: closing it needs a claim-lease with expiry, disproportionate to the window.
  */
 export function deferWakeup(stateRoot: string, w: Wakeup, fireAt: Date): boolean {
   const attempts = (w.attempts ?? 0) + 1;

@@ -22,7 +22,7 @@ import {
 } from "./config.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
 import { withWakeTool } from "./wake-tool.ts";
-import type { ModuleLoadFailure } from "./loader.ts";
+import type { ModuleLoadFailure } from "../../loader.ts";
 import { type LoadedDefinition, ensureStateRootSelfIgnored } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";

@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Models } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./harness.ts";
-import { moduleLoadHint } from "./loader.ts";
+import { moduleLoadHint } from "../../loader.ts";
 
 export interface FastagentConfig {
   /** "provider/modelId". Precedence: CLI --model > FASTAGENT_MODEL > config. */

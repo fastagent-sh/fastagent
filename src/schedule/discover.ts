@@ -6,7 +6,7 @@
  */
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../engines/pi/loader.ts";
+import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../loader.ts";
 import { assertInsideWorkspace } from "../workspace.ts";
 import { cronError } from "./cron.ts";
 import type { LoadedSchedule, Schedule } from "./schedule.ts";
