@@ -34,6 +34,7 @@ src/
 ├── proxy.ts                 # HTTPS_PROXY wiring
 ├── env.ts                   # `.env` → process.env loading (missing file is normal; anything else surfaces)
 ├── runtime.ts               # workspace runtime/package-manager detection (node vs bun) + readPackageJson
+├── loader.ts                # neutral ESM module discovery/loading for tools/ channels/ schedules/ config
 ├── workspace.ts, version.ts # neutral helpers (in-workspace guard, ignore files, version)
 ├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
@@ -82,7 +83,7 @@ src/
     ├── definition.ts        # AGENTS.md + skills loading and bundling
     ├── config.ts            # fastagent.config.ts loading + model/precedence
     ├── auth.ts, login.ts    # credential store/resolution (project-level auth.json default) + `login` flow
-    ├── models.ts, loader.ts # Models collection wiring; ESM module loading for tools/channels/config
+    ├── models.ts            # Models collection wiring
     ├── report.ts            # startup report (auth/model/skills/tools surface)
     └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
 test/                        # vitest; faux models by default + reusable SPEC conformance

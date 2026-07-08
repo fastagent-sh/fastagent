@@ -5,7 +5,7 @@
 import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { log } from "../../log.ts";
 import type { SkillCollision } from "./definition.ts";
-import type { ModuleLoadFailure } from "./loader.ts";
+import type { ModuleLoadFailure } from "../../loader.ts";
 import type { ToolCollision } from "./tool.ts";
 
 export function reportDefinitionWarnings(collisions: SkillCollision[], diagnostics: SkillDiagnostic[]): void {

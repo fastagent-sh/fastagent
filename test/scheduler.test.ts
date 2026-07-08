@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,6 +88,30 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(calls).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000); // → 12:00
     expect(calls).toHaveLength(2);
+    s.stop();
+  });
+
+  it("a state-IO fault at fire time skips the run and keeps the schedule armed (no unhandled rejection)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-07T10:30:00Z"));
+    const root = await freshRoot();
+    const { agent, calls } = recordingAgent();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = createScheduler({ agent, stateRoot: root, schedules: [hourly()] });
+    s.start();
+    // Sabotage the fire state AFTER arming: a directory at fires.json makes loadFires throw (EISDIR — the
+    // unreadable-state class state.ts throws on by design). fireThenReArm is void-scheduled from a timer,
+    // so without its totality boundary this would be an unhandled rejection = the whole service down.
+    mkdirSync(join(root, "schedule", "fires.json"), { recursive: true });
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1000); // → 11:00: the fire attempt hits the fault
+    expect(calls).toHaveLength(0); // skipped (no claim persistable), not half-fired
+    expect(errors.mock.calls.some((c) => String(c[0]).includes("fire failed"))).toBe(true);
+    // The skip is AUDITED (runs.jsonl is a different file than the broken fires.json) — `schedule history`
+    // must see it, not only stderr.
+    expect(readRuns(root, "job")[0]).toMatchObject({ outcome: "failed", error: expect.stringMatching(/skipped/) });
+    rmdirSync(join(root, "schedule", "fires.json")); // the operator fixes the state…
+    await vi.advanceTimersByTimeAsync(60 * 60_000); // → 12:00
+    expect(calls).toHaveLength(1); // …and the schedule is STILL armed — the fault cost one run, not the service
     s.stop();
   });
 

@@ -99,7 +99,17 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
       saveFires(stateRoot, fires);
     } catch (e) {
       // Can't persist the claim → skip this fire rather than risk an infinite catch-up loop on restart.
+      // Still audited: `appendRun` is total and writes a DIFFERENT file (runs.jsonl), so a broken
+      // fires.json must not also make the skip invisible to `schedule history`.
       log.error(`[schedule] ${s.name}: cannot persist fire state, skipping this run: ${String(e)}`);
+      appendRun(stateRoot, {
+        name: s.name,
+        session: scheduleSession(s.name),
+        firedAt: now().toISOString(),
+        ms: 0,
+        outcome: "failed",
+        error: `run skipped — cannot persist fire state: ${String(e)}`,
+      });
       return;
     }
     const firedAt = now().toISOString();
@@ -195,9 +205,27 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
   }
 
   /** Fire, then arm the NEXT run computed from now — so a slow fire never double-fires the same slot and
-   *  missed slots collapse to the single catch-up already done. */
+   *  missed slots collapse to the single catch-up already done. TOTAL, like pumpWakeups: this is
+   *  void-scheduled from a timer, so an escaping throw (a state-IO fault — `loadFires` on an unreadable
+   *  fires.json throws by design) would be an unhandled rejection = the WHOLE service crashing over one
+   *  skipped fire. Log it and keep the schedule armed instead; boot-time state faults still fail `start()`
+   *  loudly (an operator fixes those before serving). */
   async function fireThenReArm(s: LoadedSchedule): Promise<void> {
-    await fire(s);
+    try {
+      await fire(s);
+    } catch (e) {
+      // Audited too (appendRun is total, and runs.jsonl ≠ the broken state file) — a skipped fire must
+      // show up in `schedule history`, not only in stderr.
+      log.error(`[schedule] ${s.name}: fire failed (skipping this run, schedule stays armed): ${String(e)}`);
+      appendRun(stateRoot, {
+        name: s.name,
+        session: scheduleSession(s.name),
+        firedAt: now().toISOString(),
+        ms: 0,
+        outcome: "failed",
+        error: `run skipped — fire failed: ${String(e)}`,
+      });
+    }
     const due = nextRun(s.cron, s.tz, now());
     if (due) arm(s, due);
   }

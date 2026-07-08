@@ -341,7 +341,8 @@ the scheduler: the author's `schedules/` files (declarative, guaranteed) and the
 Every fire is AUDITED: one line per run in `<stateRoot>/schedule/runs.jsonl` (append-only, full reply — an
 immutable per-fire snapshot the rolling session can't give), read by `fastagent schedule history <name>`
 (or `wake`) — the answer to "did last night's run silently fail?". Total: an audit-write failure never
-breaks a fire.
+breaks a fire. The file is UNBOUNDED by design (full replies, never rewritten) — fine at cron/recurring
+frequencies for a long time; rotation/truncation is deliberately deferred until it bites.
 
 Self-scheduling is one-shot (`wake({ in })`) or RECURRING (`wake({ cron, tz? })` — the entry keeps its id;
 each fire re-arms to the next cron instant). Recurring carries heavier guardrails: a minimum gap between

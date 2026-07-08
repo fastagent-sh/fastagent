@@ -22,7 +22,7 @@ import { piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
 import { reportDefinitionWarnings } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
-import type { ModuleLoadFailure } from "./loader.ts";
+import type { ModuleLoadFailure } from "../../loader.ts";
 import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
