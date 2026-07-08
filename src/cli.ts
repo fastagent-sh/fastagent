@@ -72,7 +72,7 @@ import { authSeedBytes, deployFlyRun } from "./deploy/fly/run.ts";
 import { spawnRunner } from "./deploy/runner.ts";
 import { assembleSecrets } from "./deploy/secrets.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
-import { discoverScheduleFiles, loadSchedules } from "./schedule/discover.ts";
+import { loadSchedules } from "./schedule/discover.ts";
 import { readRuns } from "./schedule/audit.ts";
 import { nextRun } from "./schedule/cron.ts";
 import { listWakeups, removeWakeup } from "./schedule/wakeups.ts";
@@ -468,7 +468,16 @@ async function runInfo(): Promise<void> {
     }))
     .catch((e: unknown) => ({ names: [] as string[], collisions: [], failures: [], error: (e as Error).message }));
   const channels = await discoverChannelFiles(agentDir).catch(failStartup);
-  const schedules = await discoverScheduleFiles(agentDir).catch(failStartup);
+  // Loaded (imported + validated), not just discovered: info's job is "fix only what it reports", so a
+  // broken schedule file (bad cron/tz, failed import) must show up HERE, not first at dev/start — and
+  // loading is what makes the next fire instant printable. Consistent with tools (info imports those too).
+  const sched = await loadSchedules(agentDir).catch(failStartup);
+  const schedules = sched.schedules.map((s) => ({
+    name: s.name,
+    cron: s.cron,
+    tz: s.tz ?? null,
+    next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
+  }));
   // The default sessions/auth paths WITHOUT creating anything (info is read-only; dev/start mkdir/login
   // create them, info must not).
   const stateRoot = resolveStateRoot(dir);
@@ -490,6 +499,8 @@ async function runInfo(): Promise<void> {
           toolError: tools.error ?? null,
           channels,
           schedules,
+          scheduleFailures: sched.failures,
+          selfSchedule: config.selfSchedule ?? false,
           stateRoot,
           sessionsDir,
           authPath,
@@ -513,12 +524,14 @@ async function runInfo(): Promise<void> {
   console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
   console.log(`tools:    ${tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)"}`);
   console.log(`channels: ${channels.join(", ") || "(none)"}`);
-  console.log(`schedules: ${schedules.join(", ") || "(none)"}`);
+  console.log(`schedules: ${schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)"}`);
+  console.log(`selfSchedule: ${config.selfSchedule ? "on (mounts the wake tool when serving)" : "off"}`);
   console.log(`state:    ${stateRoot}`);
   console.log(`sessions: ${sessionsDir}`);
   console.log(`auth:     ${authPath}`);
   reportToolCollisions(tools.collisions);
   reportModuleLoadFailures(tools.failures);
+  reportModuleLoadFailures(sched.failures);
   if (tools.error) log.warn(`[fastagent] ${tools.error}`);
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);
 }

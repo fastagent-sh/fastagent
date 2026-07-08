@@ -54,8 +54,8 @@ export function makeWakeTool(stateRoot: string, now: () => Date = () => new Date
       'duration string with a unit ("30m", "2h", "1d") or a number of seconds — to resume a task after a ' +
       "delay. RECURRING: pass `cron` (5-field, optional `tz`) to wake repeatedly — use sparingly, and " +
       "`unwake` with the returned id when the job is done. Exactly one of `in`/`cron`. When the time " +
-      "comes, a new turn runs in this same session with `prompt` as its instruction — you keep the full " +
-      "context of this conversation. IMPORTANT: the woken turn's plain reply is NOT delivered to anyone — " +
+      "comes, a new turn runs in this same session with `prompt` as its instruction (tagged with the wake-up's " +
+      "id so you can tell it from a user message) — you keep the full context of this conversation. IMPORTANT: the woken turn's plain reply is NOT delivered to anyone — " +
       "to reach the user it must call a delivery tool (e.g. a channel's send tool), exactly as a scheduled " +
       "job would.",
     input: z.object({
@@ -89,7 +89,7 @@ export function makeWakeTool(stateRoot: string, now: () => Date = () => new Date
       const at = new Date(now().getTime() + ms);
       const r = addWakeup(stateRoot, { session: ctx.session, prompt: input.prompt, fireAt: at }, now());
       if (!r.ok) return r.error; // guardrail message the model can act on
-      return `OK — I'll wake up at ${r.fireAt} (id ${r.id}) to: ${input.prompt}`;
+      return `OK — I'll wake up at ${r.fireAt} (id ${r.id}) to: ${input.prompt}. Use unwake({ id: "${r.id}" }) if it becomes unnecessary.`;
     },
   });
 }

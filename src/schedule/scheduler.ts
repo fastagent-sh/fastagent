@@ -113,6 +113,20 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
   }
 
   /**
+   * The woken turn's prompt arrives ENVELOPED: without it the model sees its own instruction as a bare
+   * user message — in a chat session it may answer a "user" who said nothing — and it has no way to know
+   * the wake-up's id (buried in a long-past tool result), which `unwake` needs. Static cron fires stay raw
+   * on purpose: their prompt is the AUTHOR's instruction in a dedicated `schedule:<name>` session, where
+   * every turn is a fire and an envelope would only dilute it.
+   */
+  function wakeEnvelope(w: { id: string; prompt: string; cron?: string; tz?: string }): string {
+    const tag = w.cron
+      ? `[wake-up ${w.id} fired — YOUR recurring self-scheduled turn (cron "${w.cron}"${w.tz ? ` ${w.tz}` : ""}), not a user message; unwake({ id: "${w.id}" }) stops it]`
+      : `[wake-up ${w.id} fired — YOUR self-scheduled turn, not a user message]`;
+    return `${tag} ${w.prompt}`;
+  }
+
+  /**
    * Fire every due self-scheduled wake-up, ONE at a time (claim → fire → claim next) so a crash loses at
    * most one occurrence. Each fires back into the session it was set in. Busy handling splits by kind: a
    * ONE-SHOT that failed because the session was BUSY (`code: session_busy` — the turn never started; the
@@ -128,7 +142,7 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
       if (!w) break;
       const label = `wake ${w.id.slice(0, 8)}`;
       const firedAt = now().toISOString();
-      const r = await runTurn(label, w.session, w.prompt);
+      const r = await runTurn(label, w.session, wakeEnvelope(w));
       // Busy handling differs by kind (busy = the turn never started — replay-safe; every other outcome is
       // terminal for this occurrence, since a turn that DID start may have run side effects). ONE-SHOT: defer (bounded) — it has no "next time", dropping it
       // would lose it forever. RECURRING: the claim already ADVANCED the entry to the next instant (see

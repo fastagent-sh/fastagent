@@ -312,6 +312,11 @@ the scheduler: the author's `schedules/` files (declarative, guaranteed) and the
   deploy-time ambient via closure — is the general rule for tool context.
 - **Persisted + polled.** A wake-up is written to `<stateRoot>/schedule/wakeups.json` (survives restart);
   the scheduler polls (~30s) and fires each DUE one, claiming it (remove-before-fire) so it is at-most-once.
+- **The woken turn's prompt arrives ENVELOPED** (`[wake-up <id> fired — YOUR self-scheduled turn, not a
+  user message] …`, plus the cron + an `unwake` hint for a recurring): without it the model sees its own
+  instruction as a bare user message — in a chat session it may answer a "user" who said nothing — and has
+  no way to know the wake-up's id (buried in a long-past tool result), which `unwake` needs. Static cron
+  fires stay raw: their prompt is the author's instruction in a dedicated session where every turn is a fire.
 - **Guardrails** (self-scheduling is a real runaway surface): a minimum delay (no busy-loop) and a cap on
   pending wake-ups (no unbounded fan-out); a rejected `wake` returns the reason to the model. One-shot is
   naturally bounded (fires once), so recurring self-scheduling — with heavier guardrails — is Phase 4b.
