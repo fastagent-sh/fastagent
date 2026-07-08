@@ -91,27 +91,14 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
   }
 
   /** Fire one schedule's turn: claim the slot (persist lastFired BEFORE invoking) so a crash mid-turn
-   *  does not re-fire this slot on restart, then run the turn. */
+   *  does not re-fire this slot on restart, then run the turn. A state fault while claiming (loadFires or
+   *  saveFires — both before the invoke, so nothing ran) THROWS to the single skip+audit boundary in
+   *  {@link fireThenReArm}; skipping rather than firing unclaimed also avoids an infinite catch-up loop
+   *  on restart. */
   async function fire(s: LoadedSchedule): Promise<void> {
     const fires = loadFires(stateRoot);
     fires[s.name] = now().toISOString();
-    try {
-      saveFires(stateRoot, fires);
-    } catch (e) {
-      // Can't persist the claim → skip this fire rather than risk an infinite catch-up loop on restart.
-      // Still audited: `appendRun` is total and writes a DIFFERENT file (runs.jsonl), so a broken
-      // fires.json must not also make the skip invisible to `schedule history`.
-      log.error(`[schedule] ${s.name}: cannot persist fire state, skipping this run: ${String(e)}`);
-      appendRun(stateRoot, {
-        name: s.name,
-        session: scheduleSession(s.name),
-        firedAt: now().toISOString(),
-        ms: 0,
-        outcome: "failed",
-        error: `run skipped — cannot persist fire state: ${String(e)}`,
-      });
-      return;
-    }
+    saveFires(stateRoot, fires);
     const firedAt = now().toISOString();
     const r = await runTurn(s.name, scheduleSession(s.name), s.prompt);
     appendRun(stateRoot, {
@@ -206,9 +193,9 @@ export function createScheduler({ agent, stateRoot, schedules, now = () => new D
 
   /** Fire, then arm the NEXT run computed from now — so a slow fire never double-fires the same slot and
    *  missed slots collapse to the single catch-up already done. TOTAL, like pumpWakeups: this is
-   *  void-scheduled from a timer, so an escaping throw (a state-IO fault — `loadFires` on an unreadable
-   *  fires.json throws by design) would be an unhandled rejection = the WHOLE service crashing over one
-   *  skipped fire. Log it and keep the schedule armed instead; boot-time state faults still fail `start()`
+   *  void-scheduled from a timer, so an escaping throw (a state-IO fault while claiming — an unreadable
+   *  fires.json, an unpersistable claim) would be an unhandled rejection = the WHOLE service crashing over
+   *  one skipped fire. Log it and keep the schedule armed instead; boot-time state faults still fail `start()`
    *  loudly (an operator fixes those before serving). */
   async function fireThenReArm(s: LoadedSchedule): Promise<void> {
     try {
