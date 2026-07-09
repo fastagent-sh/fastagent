@@ -9,6 +9,7 @@ import {
   defaultSessionsDir,
   loadConfig,
   resolveAgentDir,
+  resolveAuthPath,
   resolveAuthPathOverride,
   resolveModelSpec,
   resolveSessionsDirOverride,
@@ -127,6 +128,14 @@ describe("config: resolveAuthPathOverride (auth-file precedence)", () => {
     expect(resolveAuthPathOverride(undefined, env)).toBe(resolve("envauth.json")); // env when no flag
     expect(resolveAuthPathOverride(undefined, {} as NodeJS.ProcessEnv)).toBeUndefined(); // neither → opener default
     expect(resolveAuthPathOverride("/abs/auth.json", {} as NodeJS.ProcessEnv)).toBe("/abs/auth.json"); // absolute kept
+  });
+
+  it("resolveAuthPath falls back to the workspace project auth file (not the global default)", () => {
+    expect(resolveAuthPath("/app", undefined, {} as NodeJS.ProcessEnv)).toBe("/app/.fastagent/auth.json");
+    expect(resolveAuthPath("/app", undefined, { FASTAGENT_STATE_DIR: "/data" } as NodeJS.ProcessEnv)).toBe(
+      "/data/auth.json",
+    );
+    expect(resolveAuthPath("/app", "flag-auth.json", {} as NodeJS.ProcessEnv)).toBe(resolve("flag-auth.json"));
   });
 
   it("expands a leading ~ to the home dir (a .env value never gets the shell's expansion)", async () => {
