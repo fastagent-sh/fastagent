@@ -82,6 +82,80 @@ export async function appendChannelEnv(dir: string, kind: ChannelKind): Promise<
   return true;
 }
 
+export interface DotEnvWriteResult {
+  /** Generated secret vars written as active `KEY=value` lines. */
+  written: string[];
+  /** Vars already present with a non-empty active value; left untouched and omitted from next steps. */
+  alreadySet: string[];
+}
+
+function parseEnvValue(line: string, name: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) return undefined;
+  const eq = trimmed.indexOf("=");
+  if (eq < 1) return undefined;
+  const key = trimmed.slice(0, eq).trim();
+  if (key !== name) return undefined;
+  let value = trimmed.slice(eq + 1).trim();
+  const quote = value[0];
+  if ((quote === '"' || quote === "'") && value.at(-1) === quote) value = value.slice(1, -1);
+  return value;
+}
+
+function hasActiveEnvValue(content: string, name: string): boolean {
+  let value: string | undefined;
+  for (const line of content.split("\n")) {
+    const parsed = parseEnvValue(line, name);
+    if (parsed !== undefined) value = parsed; // match loadEnvFile: last active assignment wins
+  }
+  return value !== undefined && value.trim() !== "";
+}
+
+function mentionsEnvName(content: string, name: string): boolean {
+  return content.split("\n").some((line) => new RegExp(`^\\s*#?\\s*${name}\\s*=`).test(line));
+}
+
+/**
+ * Append generated channel secrets to the run-root `.env` (never `.env.example`) after the CLI has
+ * verified that `.env` is gitignored. Existing non-empty values are kept. Manual values (e.g.
+ * TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is ready to
+ * edit while no fake secret is committed to the user's mental model.
+ */
+export async function appendChannelDotEnv(
+  dir: string,
+  kind: ChannelKind,
+  generated: Record<string, string>,
+): Promise<DotEnvWriteResult> {
+  const file = join(dir, ".env");
+  let current = "";
+  try {
+    current = await readFile(file, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+
+  const alreadySet = CHANNEL_SCAFFOLDS[kind].env.filter((e) => hasActiveEnvValue(current, e.name)).map((e) => e.name);
+  const lines: string[] = [];
+  const written: string[] = [];
+  for (const e of CHANNEL_SCAFFOLDS[kind].env) {
+    if (alreadySet.includes(e.name)) continue;
+    const value = generated[e.name];
+    if (value !== undefined) {
+      lines.push(`${e.name}=${value}`);
+      written.push(e.name);
+    } else if (!mentionsEnvName(current, e.name)) {
+      lines.push(`# ${e.name}=   # ${e.hint}`);
+    }
+  }
+  if (lines.length > 0) {
+    const marker = `# --- ${kind} channel ---`;
+    if (!current.includes(marker)) lines.unshift(marker);
+    const prefix = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+    await appendFile(file, `${prefix}${lines.join("\n")}\n`);
+  }
+  return { written, alreadySet };
+}
+
 /** The path `add <kind>` scaffolds to. */
 function channelPath(dir: string, kind: ChannelKind): string {
   return join(dir, "channels", `${kind}.ts`);

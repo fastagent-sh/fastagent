@@ -28,10 +28,15 @@ It also appends the required env vars to `.env.example` when possible.
 
 ## Configure Telegram
 
-Create a bot with [@BotFather](https://t.me/BotFather), then set:
+Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token in the run-root `.env`:
 
 ```bash
 TELEGRAM_BOT_TOKEN=...
+```
+
+`fastagent add telegram` writes a generated `TELEGRAM_SECRET_TOKEN` to `.env` when `.env` is gitignored. If it could not write one, add it yourself:
+
+```bash
 TELEGRAM_SECRET_TOKEN=... # any random string; verifies inbound updates
 ```
 

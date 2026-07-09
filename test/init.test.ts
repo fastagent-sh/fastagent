@@ -451,6 +451,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
 
     const out = await cliInit(["add", "telegram"], dir);
     expect(out).toContain(join("agent", "channels", "telegram.ts")); // reported relative to the run root
+    expect(out).toContain(`edit ${join("agent", "channels", "telegram.ts")}`); // next step uses the real agentDir path
     expect(await exists(join(dir, "agent", "channels", "telegram.ts"))).toBe(true); // in the kit…
     expect(await exists(join(dir, "agent", "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
     expect(await exists(join(dir, "channels"))).toBe(false); // NOT at the run root
@@ -501,15 +502,45 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(out).toContain("--tunnel");
     expect(out).not.toContain("GITHUB_WEBHOOK_SECRET");
 
-    // env vars are injected into .env.example so a copy-to-.env finds them
+    // env vars are injected into .env.example so a copy-to-.env finds them. Because .env is not
+    // gitignored in this workspace, add does NOT materialize the generated secret there.
     const envExample = await readFile(join(dir, ".env.example"), "utf8");
     expect(envExample).toContain("telegram channel");
     expect(envExample).toContain("TELEGRAM_SECRET_TOKEN");
+    expect(await exists(join(dir, ".env"))).toBe(false);
+    expect(out).toMatch(/set TELEGRAM_SECRET_TOKEN=[0-9a-f]{48} in \.env/);
 
     // two channels coexist in one workspace (the discovery/merge mechanism handles many)
     await cliInit(["add", "github"], dir);
     expect(await exists(join(dir, "channels", "github.ts"))).toBe(true);
     expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true);
+  });
+
+  it("writes generated telegram secret to gitignored .env, leaving only the BotFather token as a manual step", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    const out = await cliInit(["add", "telegram"], dir);
+
+    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .env");
+    expect(out).toContain("set TELEGRAM_BOT_TOKEN in .env (gitignored)");
+    expect(out).not.toMatch(/set TELEGRAM_SECRET_TOKEN=/);
+    const envFile = await readFile(join(dir, ".env"), "utf8");
+    expect(envFile).toContain("# --- telegram channel ---");
+    expect(envFile).toContain("# TELEGRAM_BOT_TOKEN=");
+    expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
+  });
+
+  it("keeps an existing non-empty telegram secret in .env", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    await writeFile(join(dir, ".env"), "TELEGRAM_SECRET_TOKEN=keep-me\n");
+    const out = await cliInit(["add", "telegram"], dir);
+
+    expect(out).not.toContain("wrote TELEGRAM_SECRET_TOKEN to .env");
+    expect(out).not.toMatch(/set TELEGRAM_SECRET_TOKEN=/);
+    const envFile = await readFile(join(dir, ".env"), "utf8");
+    expect(envFile.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1);
+    expect(envFile).toContain("TELEGRAM_SECRET_TOKEN=keep-me");
   });
 
   it("never clobbers an author's companion tool when scaffolding the channel", async () => {
