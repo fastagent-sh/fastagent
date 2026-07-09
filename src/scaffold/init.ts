@@ -156,7 +156,7 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
     skill("LICENSE"),
     // Run-root pieces: the config (carrying agentDir when the kit is a subdir), secrets hygiene, env template.
     { rel: "fastagent.config.mjs", content: configTemplate(options.agentDir) },
-    { rel: ".gitignore", content: baseTemplate("gitignore") },
+    { rel: ".gitignore", content: baseTemplate(options.agentDir ? "gitignore.agentdir-root" : "gitignore") },
     { rel: ".env.example", content: baseTemplate("env.example") },
   ];
   if (!minimal) {
@@ -172,6 +172,7 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
           await fastagentVersion(),
         ),
       },
+      ...(options.agentDir ? [{ rel: join(kit, ".gitignore"), content: baseTemplate("gitignore.kit") }] : []),
     );
   }
 
@@ -242,27 +243,40 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
       }
     }
 
-    // A deploy that copies the dir ships secrets unless .gitignore/.fastagentignore exclude them. A kept
-    // (host) .gitignore may not cover them — APPEND the missing excludes (fix, not just warn), using the
-    // same matcher a deploy copy would.
+    // Ignore ownership follows layout jurisdiction. Run-root state/secrets live at `dir`, so the ROOT
+    // .gitignore owns `.env` + `.fastagent`. The kit's npm deps live where the kit lives: flat → root
+    // `node_modules/`; agentDir → `<agentDir>/.gitignore` owns its own `node_modules/`. This avoids
+    // patching a host repo's root ignore with agent-internal dependency paths while still preventing the
+    // post-init 25k-file untracked flood.
+    const coveredBy = (ig: Awaited<ReturnType<typeof loadRootIgnore>> | undefined, p: string) =>
+      (ig?.ignores(p) ?? false) || (ig?.ignores(`${p}/`) ?? false);
     const rootIgnore = await loadRootIgnore(dir);
-    // Query BOTH forms: `.fastagent` is a directory, and a dir-only pattern (`.fastagent/`, as in our
-    // own template) does not match the bare name — without this, a fresh init would "patch" the
-    // .gitignore it just wrote with a duplicate line.
-    const covered = (p: string) => (rootIgnore?.ignores(p) ?? false) || (rootIgnore?.ignores(`${p}/`) ?? false);
-    const need = [".env", ".fastagent"].filter((p) => !covered(p));
-    if (need.length > 0) {
-      await appendFile(join(dir, ".gitignore"), `\n# fastagent\n${need.join("\n")}\n`);
+    const rootRequired = [
+      { path: ".env", pattern: ".env" },
+      { path: ".fastagent", pattern: ".fastagent" },
+      ...(!minimal && !options.agentDir ? [{ path: "node_modules", pattern: "node_modules/" }] : []),
+    ];
+    const rootNeed = rootRequired.filter((e) => !coveredBy(rootIgnore, e.path));
+    if (rootNeed.length > 0) {
+      await appendFile(join(dir, ".gitignore"), `\n# fastagent\n${rootNeed.map((e) => e.pattern).join("\n")}\n`);
       patched.push(".gitignore");
       // A .fastagentignore is applied LAST and can re-include what .gitignore excludes — the append
       // cannot fix that, so re-check and keep it a visible warning instead of false assurance.
       const after = await loadRootIgnore(dir);
-      const stillCovered = (p: string) => (after?.ignores(p) ?? false) || (after?.ignores(`${p}/`) ?? false);
-      const still = need.filter((p) => !stillCovered(p));
+      const still = rootNeed.filter((e) => !coveredBy(after, e.path)).map((e) => e.path);
       if (still.length > 0) {
         warnings.push(
           `your .gitignore/.fastagentignore does not exclude ${still.map((s) => `"${s}"`).join(", ")} — a deploy that copies the directory may ship secrets/state`,
         );
+      }
+    }
+    if (!minimal && options.agentDir) {
+      const kitRel = options.agentDir.replace(/^\.[/\\]/, "").replace(/\\/g, "/");
+      const kitIgnore = await loadRootIgnore(join(dir, kitRel));
+      if (!coveredBy(kitIgnore, "node_modules")) {
+        const rel = join(kitRel, ".gitignore");
+        await appendFile(join(dir, rel), `\n# fastagent\nnode_modules/\n`);
+        patched.push(rel);
       }
     }
     // A kept package.json won't carry the tool's deps — the example tool would not resolve. The install
