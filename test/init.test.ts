@@ -248,9 +248,12 @@ describe("init: scaffoldWorkspace", () => {
         join("agent", "skills", "writing-great-skills", "SKILL.md"),
         join("agent", "tools", "fetch-url.ts"),
         join("agent", "package.json"),
+        join("agent", ".gitignore"),
         "fastagent.config.mjs",
       ]),
     );
+    expect(await readFile(join(dir, ".gitignore"), "utf8")).not.toMatch(/node_modules/); // root owns run-root state, not kit deps
+    expect(await readFile(join(dir, "agent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
     // config at the ROOT carries agentDir, so dev/start/add resolve the kit without flags.
     const config = await readFile(join(dir, "fastagent.config.mjs"), "utf8");
     expect(config).toMatch(/agentDir: "\.\/agent"/);
@@ -262,6 +265,25 @@ describe("init: scaffoldWorkspace", () => {
     expect(a.agentDir).toBe(join(dir, "agent"));
     expect(a.definition.persona).toContain("Persona");
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo spec");
+  });
+
+  it("agentDir layout keeps dependency ignores inside the kit, not the host root", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, ".gitignore"), ".env\n.fastagent\n"); // host root already covers run-root state
+    const { patched } = await scaffoldWorkspace(dir, { agentDir: "./agent" });
+    expect(patched).toEqual([]); // agent/.gitignore was CREATED, not appended; root stayed untouched
+    expect(await readFile(join(dir, ".gitignore"), "utf8")).toBe(".env\n.fastagent\n");
+    expect(await readFile(join(dir, "agent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
+
+    const keptKit = await freshDir();
+    await writeFile(join(keptKit, ".gitignore"), ".env\n.fastagent\n");
+    await mkdir(join(keptKit, "agent"), { recursive: true });
+    await writeFile(join(keptKit, "agent", ".gitignore"), "custom\n"); // dotfile-only kit is adoptable
+    const r = await scaffoldWorkspace(keptKit, { agentDir: "./agent" });
+    expect(r.skipped).toContain(join("agent", ".gitignore"));
+    expect(r.patched).toEqual([join("agent", ".gitignore")]);
+    expect(await readFile(join(keptKit, ".gitignore"), "utf8")).toBe(".env\n.fastagent\n");
+    expect(await readFile(join(keptKit, "agent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
   });
 
   it("`init` decides the layout by jurisdiction signals and prints the reason (no prompt)", async () => {
@@ -342,9 +364,9 @@ describe("init: scaffoldWorkspace", () => {
     expect(cwd).toMatch(/fastagent dev/);
   });
 
-  it("keeps a pre-existing .gitignore's content and APPENDS the missing .env/.fastagent excludes (fix, not warn)", async () => {
+  it("keeps a pre-existing .gitignore's content and APPENDS missing env/state/dependency excludes", async () => {
     const dir = await freshDir();
-    await writeFile(join(dir, ".gitignore"), "custom\n"); // no .env rule
+    await writeFile(join(dir, ".gitignore"), "custom\n"); // no fastagent rules
     const { created, skipped, patched, intoNonEmpty, warnings } = await scaffoldWorkspace(dir);
     expect(skipped).toEqual([".gitignore"]);
     expect(patched).toEqual([".gitignore"]);
@@ -353,19 +375,20 @@ describe("init: scaffoldWorkspace", () => {
     expect(gi).toContain("custom"); // the host's own rules kept
     expect(gi).toMatch(/^\.env$/m); // secrets now excluded
     expect(gi).toMatch(/^\.fastagent$/m);
+    expect(gi).toMatch(/^node_modules\/$/m); // the generated npm install is not a 25k-file git flood
     expect(intoNonEmpty).toBe(true); // the dir already had the .gitignore
     expect(warnings).toEqual([]); // fixed, nothing left to warn about
   });
 
   it("appends only what's missing; a fully-covered .gitignore is left alone", async () => {
     const covered = await freshDir();
-    await writeFile(join(covered, ".gitignore"), ".env\n.fastagent\n");
+    await writeFile(join(covered, ".gitignore"), ".env\n.fastagent\nnode_modules/\n");
     const r = await scaffoldWorkspace(covered);
     expect(r.patched).toEqual([]); // no duplicate lines
     expect((await readFile(join(covered, ".gitignore"), "utf8")).match(/^\.env$/gm)).toHaveLength(1);
 
     const partial = await freshDir();
-    await writeFile(join(partial, ".gitignore"), "node_modules/\n*.env\n"); // covers .env, not .fastagent
+    await writeFile(join(partial, ".gitignore"), "node_modules/\n*.env\n"); // covers .env + deps, not .fastagent
     const r2 = await scaffoldWorkspace(partial);
     expect(r2.patched).toEqual([".gitignore"]);
     const gi = await readFile(join(partial, ".gitignore"), "utf8");
@@ -428,6 +451,8 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
 
     const out = await cliInit(["add", "telegram"], dir);
     expect(out).toContain(join("agent", "channels", "telegram.ts")); // reported relative to the run root
+    expect(out).toContain(`edit ${join("agent", "channels", "telegram.ts")}`); // next step uses the real agentDir path
+    expect(out).toContain("agent/tools/telegram-send.ts"); // …and so does the companion-tool step
     expect(await exists(join(dir, "agent", "channels", "telegram.ts"))).toBe(true); // in the kit…
     expect(await exists(join(dir, "agent", "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
     expect(await exists(join(dir, "channels"))).toBe(false); // NOT at the run root
@@ -471,21 +496,96 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const sendTool = await readFile(join(dir, "tools", "telegram-send.ts"), "utf8");
     expect(sendTool).toContain('from "@kid7st/fastagent"');
     expect(sendTool).toContain("sendDocument");
+    expect(sendTool).toContain("sendMessage"); // text mode too — the delivery path for scheduled/woken turns
     // next steps carry this channel's env vars (with hints), not github's
     expect(out).toContain("TELEGRAM_BOT_TOKEN");
     expect(out).toContain("@BotFather");
     expect(out).toContain("--tunnel");
     expect(out).not.toContain("GITHUB_WEBHOOK_SECRET");
 
-    // env vars are injected into .env.example so a copy-to-.env finds them
+    // env vars are injected into .env.example so a copy-to-.env finds them. Because .env is not
+    // gitignored in this workspace, add does NOT materialize the generated secret there.
     const envExample = await readFile(join(dir, ".env.example"), "utf8");
     expect(envExample).toContain("telegram channel");
     expect(envExample).toContain("TELEGRAM_SECRET_TOKEN");
+    expect(await exists(join(dir, ".env"))).toBe(false);
+    expect(out).toMatch(/set TELEGRAM_SECRET_TOKEN=[0-9a-f]{48} in \.env/);
 
     // two channels coexist in one workspace (the discovery/merge mechanism handles many)
     await cliInit(["add", "github"], dir);
     expect(await exists(join(dir, "channels", "github.ts"))).toBe(true);
     expect(await exists(join(dir, "channels", "telegram.ts"))).toBe(true);
+  });
+
+  it("writes generated telegram secret to gitignored .env, leaving only the BotFather token as a manual step", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    const out = await cliInit(["add", "telegram"], dir);
+
+    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .env");
+    expect(out).toContain("set TELEGRAM_BOT_TOKEN in .env (gitignored)");
+    expect(out).not.toMatch(/set TELEGRAM_SECRET_TOKEN=/);
+    const envFile = await readFile(join(dir, ".env"), "utf8");
+    expect(envFile).toContain("# --- telegram channel ---");
+    expect(envFile).toContain("# TELEGRAM_BOT_TOKEN=");
+    expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
+  });
+
+  it("github's generated webhook secret gets the same treatment (kind-neutral), hint kept visible", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    const out = await cliInit(["add", "github"], dir);
+
+    expect(out).toContain("wrote GITHUB_WEBHOOK_SECRET to .env");
+    // The hint still prints — it carries an ACTION (paste the same value into the GitHub webhook UI),
+    // so a written var is reported, not silently absorbed.
+    expect(out).toMatch(/GITHUB_WEBHOOK_SECRET — generated and written to \.env.*set the same value/);
+    expect(await readFile(join(dir, ".env"), "utf8")).toMatch(/^GITHUB_WEBHOOK_SECRET=[0-9a-f]{48}$/m);
+  });
+
+  it("a .env copied from .env.example (marker present) gets the secret slotted UNDER the marker", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    // What a user gets from `cp .env.example .env` after a previous add appended the block there.
+    await writeFile(
+      join(dir, ".env"),
+      "# mine\nOPENAI_API_KEY=sk-x\n\n# --- telegram channel ---\n# from @BotFather → /newbot\n# TELEGRAM_BOT_TOKEN=\n",
+    );
+    const out = await cliInit(["add", "telegram"], dir);
+    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .env");
+    const envFile = await readFile(join(dir, ".env"), "utf8");
+    // Slotted under the existing marker — not orphaned at the end of the file.
+    expect(envFile).toMatch(/# --- telegram channel ---\nTELEGRAM_SECRET_TOKEN=[0-9a-f]{48}\n/);
+    // The commented BOT_TOKEN placeholder is mentioned already — not duplicated.
+    expect(envFile.match(/TELEGRAM_BOT_TOKEN/g)).toHaveLength(1);
+    expect(envFile).toContain("OPENAI_API_KEY=sk-x"); // untouched
+  });
+
+  it("an ACTIVE but EMPTY assignment is replaced IN PLACE — never shadowed by a line elsewhere (last-wins)", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    // The uncommented-but-unfilled placeholder: marker block present, `KEY=` active and empty, and a
+    // LATER unrelated line — a slot-under-marker write would lose to last-wins here.
+    await writeFile(join(dir, ".env"), "# --- telegram channel ---\nTELEGRAM_SECRET_TOKEN=\nOPENAI_API_KEY=sk-x\n");
+    const out = await cliInit(["add", "telegram"], dir);
+    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .env");
+    const envFile = await readFile(join(dir, ".env"), "utf8");
+    expect(envFile.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1); // replaced, not duplicated
+    expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m); // …with a real value in place
+    expect(envFile).toContain("OPENAI_API_KEY=sk-x");
+  });
+
+  it("keeps an existing non-empty telegram secret in .env", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    await writeFile(join(dir, ".env"), "TELEGRAM_SECRET_TOKEN=keep-me\n");
+    const out = await cliInit(["add", "telegram"], dir);
+
+    expect(out).not.toContain("wrote TELEGRAM_SECRET_TOKEN to .env");
+    expect(out).not.toMatch(/set TELEGRAM_SECRET_TOKEN=/);
+    const envFile = await readFile(join(dir, ".env"), "utf8");
+    expect(envFile.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1);
+    expect(envFile).toContain("TELEGRAM_SECRET_TOKEN=keep-me");
   });
 
   it("never clobbers an author's companion tool when scaffolding the channel", async () => {

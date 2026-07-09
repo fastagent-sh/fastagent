@@ -14,6 +14,11 @@ import { defineConfig } from "vitest/config";
 // `pool: "forks"` is explicit, not left to the default: it is the process isolation these
 // subprocess / process.env tests assume.
 export default defineConfig({
+  // Scaffold templates import the PUBLISHED "@kid7st/fastagent" (they are copied verbatim into user
+  // workspaces — data to tsc, excluded from the program). Tests that EXECUTE a template resolve that
+  // name to the current source instead: truer than dist/ (asserts the template against today's
+  // defineTool), and dist/ doesn't exist on CI anyway.
+  resolve: { alias: { "@kid7st/fastagent": new URL("./src/index.ts", import.meta.url).pathname } },
   test: {
     pool: "forks",
     testTimeout: 30000,

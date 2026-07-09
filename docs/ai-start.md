@@ -70,6 +70,8 @@ For schedules (run the agent on a cron — daily digest, periodic checks):
   prompt: "..." }) — defineSchedule comes from @kid7st/fastagent; the filename is the schedule name.
 - The prompt must SAY where output goes ("…and send it to the team Telegram"): the scheduler only fires
   the agent — a scheduled turn's plain reply is not delivered anywhere; delivery is a send tool's job.
+  fastagent add telegram scaffolds one (tools/telegram-send.ts: message or file). A scheduled turn runs
+  outside any chat, so include the TARGET CHAT ID in the prompt ("…send it to Telegram chat -100123456").
 - Test with a command that exits: fastagent fire <name> --model provider/id (runs the turn NOW, without
   touching the real cron state). The cron only fires while `dev`/`start` is serving.
 - Check past runs with: fastagent schedule history <name>; see what will fire with: fastagent schedule list.

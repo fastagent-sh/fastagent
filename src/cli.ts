@@ -50,6 +50,7 @@ import { resolveWorkspaceTools } from "./engines/pi/create.ts";
 import {
   type ChannelKind,
   CHANNEL_KINDS,
+  appendChannelDotEnv,
   appendChannelEnv,
   assertChannelReady,
   channelExists,
@@ -586,7 +587,7 @@ async function runInit(): Promise<void> {
   );
   if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
   if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
-  if (patched.length > 0) console.error(`  updated: ${patched.join(", ")} (missing secret/state excludes appended)`);
+  if (patched.length > 0) console.error(`  updated: ${patched.join(", ")} (missing fastagent excludes appended)`);
   if (intoNonEmpty && !agentDir) {
     console.error(
       `  note: scaffolded flat into a non-empty directory (nothing claims it — the directory is the agent); use --agent-dir <name> to put the kit in a subdir instead`,
@@ -645,8 +646,10 @@ async function runAdd(): Promise<void> {
   if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
   }
-  // Secret-hygiene check (read-only): warn when .env is not ignored, since a deploy that copies the
-  // directory would ship a secret placed there. Warn, not refuse — on() may read a real env var.
+  // Secret hygiene: a channel's GENERATED secret (a random string the user contributes nothing to) is
+  // written into `.env` — but only when `.env` is already gitignored: the CLI must never materialize a
+  // secret into a committable file. Warn, not refuse, when it is exposed — channel glue may read a real
+  // env var instead.
   const envIgnored = (await loadRootIgnore(target).catch(failStartup))?.ignores(".env") ?? false;
   if (!envIgnored) {
     console.error(
@@ -654,6 +657,15 @@ async function runAdd(): Promise<void> {
     );
   }
   const { env, steps } = channelSetup(channelKind);
+  const generated = Object.fromEntries(
+    env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
+  );
+  // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
+  // the same class of value as telegram's).
+  const dotEnv = envIgnored ? await appendChannelDotEnv(target, channelKind, generated).catch(failStartup) : undefined;
+  if (dotEnv && dotEnv.written.length > 0) {
+    console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .env`);
+  }
   const install =
     detectRuntime(channelHome, await readPackageJson(channelHome)).runtime === "bun" ? "bun install" : "npm install";
   // The kit's manifest lives in channelHome (agentDir when set) — point the install there, not the run root.
@@ -661,10 +673,22 @@ async function runAdd(): Promise<void> {
   console.error(`  next steps:`);
   console.error(`    ${installCmd}                      # if @kid7st/fastagent is not installed yet`);
   for (const e of env) {
-    const value = e.generate ? `=${randomBytes(24).toString("hex")}` : "";
+    if (dotEnv?.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
+    if (dotEnv?.written.includes(e.name)) {
+      // Written, but its hint may still carry an action (github: paste the same value into the webhook
+      // UI) — keep the variable visible instead of silently absorbing it.
+      console.error(`    ${e.name} — generated and written to .env   # ${e.hint}`);
+      continue;
+    }
+    const value = e.generate ? `=${generated[e.name]}` : "";
     console.error(`    set ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
   }
-  for (const s of steps) console.error(`    ${s}`);
+  // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
+  // knowledge) — resolve them to the real workspace-relative locations (agentDir-aware) here.
+  const kitPrefix = channelHome === target ? "" : `${relative(target, channelHome)}/`;
+  for (const s of steps) {
+    console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
+  }
   console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
 }
 

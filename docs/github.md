@@ -43,18 +43,19 @@ export default githubChannel({
 
 ## Configure GitHub
 
-1. Set a webhook secret locally:
+1. Get a webhook secret. `fastagent add github` already generated one and wrote it to the run-root
+   `.env` when `.env` is gitignored; otherwise set one yourself:
 
    ```bash
-   GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 24)
+   GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 24)   # then put it in .env
    ```
 
-2. Put the same value in your workspace `.env`.
-3. In GitHub, create a repository webhook:
+2. In GitHub, create a repository webhook:
    - Payload URL: `https://<host>/webhook`
    - Content type: `application/json`
    - Secret: the value of `GITHUB_WEBHOOK_SECRET`
    - Events: choose the events your `on()` handler routes.
+3. The webhook's Secret and the `.env` value must match — copy it from `.env`.
 
 For local testing, run:
 
