@@ -340,6 +340,11 @@ export function defaultAuthPath(stateRoot: string): string {
   return join(stateRoot, "auth.json");
 }
 
+/** The effective auth file for a workspace: override if present, else the project-level auth.json. */
+export function resolveAuthPath(dir: string, flag: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveAuthPathOverride(flag, env) ?? defaultAuthPath(resolveStateRoot(dir, env));
+}
+
 /** The default sessions dir under a resolved state root ({@link resolveStateRoot}). */
 export function defaultSessionsDir(stateRoot: string): string {
   return join(stateRoot, "sessions");

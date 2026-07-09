@@ -30,6 +30,7 @@ import {
   listModels,
   loadConfig,
   resolveAgentDir,
+  resolveAuthPath,
   resolveAuthPathOverride,
   resolveModelSpec,
   resolveSessionsDirOverride,
@@ -1144,7 +1145,7 @@ async function resolveFirstRunModel(workspaceDir: string): Promise<void> {
   if (resolveModelSpec(values.model, config)) return; // already set (flag > FASTAGENT_MODEL > config)
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
-  const authPath = resolveAuthPathOverride(values["auth-path"]);
+  const authPath = resolveAuthPath(workspaceDir, values["auth-path"]);
   let specs: string[];
   try {
     specs = await configuredModelSpecs(createPiModels({ authPath }));
