@@ -75,7 +75,7 @@
     "@octokit/webhooks-methods": "^6.0.0",
     "@octokit/webhooks-types": "^7.6.1",
     "chokidar": "^5.0.0",
-    "croner": "^9.1.0",
+    "croner": "^10.0.1",
     "giget": "^3.3.0",
     "ignore": "^7.0.5",
     "undici": "^8.6.0",
@@ -83,7 +83,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   }
 }
