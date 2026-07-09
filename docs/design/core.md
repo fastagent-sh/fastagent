@@ -278,7 +278,10 @@ Fire model:
 - **Stable per-schedule session**, derived at runtime as `schedule:<name>` (like the telegram channel
   derives one from `chat.id`) — so a schedule's turns share one continuing conversation persisted by the
   core session store. A session id is runtime conversational context (K side, §7/§10.1), never an
-  authored field; the definition (`schedules/<name>.ts`) carries only `cron/tz/prompt`.
+  authored field; the definition (`schedules/<name>.ts`) carries only `cron/tz/prompt`. Known
+  consideration: a forever-session grows without bound (a daily fire is ~365 turns/year of context);
+  fine for now, and the mitigation when it bites is a session rotation policy or engine-side compaction
+  — not a scheduler concern.
 - **Output is the agent's tools' job.** The scheduler only fires and logs the outcome — it has no reply
   target of its own (unlike a channel's chat/PR). A cron turn's prompt says "send X to Telegram"; the
   agent calls a send tool.

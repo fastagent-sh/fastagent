@@ -21,17 +21,22 @@ This creates:
 
 ```txt
 channels/telegram.ts      # inbound webhook adapter + routing policy
-tools/telegram-send.ts    # optional outbound file-send tool for the agent
+tools/telegram-send.ts    # optional outbound send tool for the agent (message or file)
 ```
 
 It also appends the required env vars to `.env.example` when possible.
 
 ## Configure Telegram
 
-Create a bot with [@BotFather](https://t.me/BotFather), then set:
+Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token in the run-root `.env`:
 
 ```bash
 TELEGRAM_BOT_TOKEN=...
+```
+
+`fastagent add telegram` writes a generated `TELEGRAM_SECRET_TOKEN` to `.env` when `.env` is gitignored. If it could not write one, add it yourself:
+
+```bash
 TELEGRAM_SECRET_TOKEN=... # any random string; verifies inbound updates
 ```
 
@@ -185,9 +190,9 @@ The per-session turn queue is **in-memory** (one turn at a time per session; a s
 
 The state home self-ignores (a nested `.gitignore`), so buffered chat content is never committable. A corrupt `buffers.json` or `turns.json` logs a warning and starts empty — the bot boots, the loss is visible. Single-process semantics: two processes must not share a state dir.
 
-## Sending files back
+## Sending messages and files back (`telegram-send`)
 
-`fastagent add telegram` also scaffolds `tools/telegram-send.ts`. Because tool names come from filenames, the agent can call the `telegram-send` tool with a `chatId` from the `[telegram: chat …]` envelope to send a local file back through the bot.
+`fastagent add telegram` also scaffolds `tools/telegram-send.ts`. Because tool names come from filenames, the agent can call the `telegram-send` tool with a `chatId` from the `[telegram: chat …]` envelope to send a text message or a local file back through the bot. It is also the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up, whose plain reply is not delivered anywhere; those turns have no `[telegram: chat …]` line, so the schedule's prompt (or the wake's) must name the target chat id.
 
 ## Limits
 

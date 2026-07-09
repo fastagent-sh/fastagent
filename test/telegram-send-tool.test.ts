@@ -1,0 +1,101 @@
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// The scaffolded send tool is real shipped code — its mode switch is the delivery path for
+// scheduled/woken turns, so the branches get real executions here. The template stays DATA to tsc
+// (excluded from the program — it imports the published "@kid7st/fastagent", unresolvable in-repo), so
+// it is loaded via a non-literal dynamic import; vitest's alias resolves that name to today's source.
+
+type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
+let execute: (params: unknown) => Promise<{ details: unknown }>;
+beforeAll(async () => {
+  const templatePath = new URL("../src/channels/telegram/scaffold/telegram-send.ts", import.meta.url).pathname;
+  const mod = (await import(templatePath)) as { default: unknown };
+  execute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
+});
+
+function stubBotApi(): { calls: { url: string; form: FormData }[] } {
+  const calls: { url: string; form: FormData }[] = [];
+  vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+    calls.push({ url: String(url), form: init?.body as FormData });
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+  return { calls };
+}
+
+describe("scaffold telegram-send: message-or-file mode switch", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("text → sendMessage with the text in the form", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    const { calls } = stubBotApi();
+    const r = await execute({ chatId: 42, text: "digest ready" });
+    expect(calls[0]?.url).toContain("/bottok/sendMessage");
+    expect(calls[0]?.form.get("chat_id")).toBe("42");
+    expect(calls[0]?.form.get("text")).toBe("digest ready");
+    expect(JSON.stringify(r.details)).toContain("sent message to chat 42");
+  });
+
+  it("path → sendDocument with the file attached (caption rides along)", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    const { calls } = stubBotApi();
+    const dir = await mkdtemp(join(tmpdir(), "fa-send-"));
+    await writeFile(join(dir, "report.txt"), "hi");
+    const r = await execute({ chatId: "7", path: join(dir, "report.txt"), caption: "the report" });
+    expect(calls[0]?.url).toContain("/sendDocument");
+    expect(calls[0]?.form.get("caption")).toBe("the report");
+    expect(calls[0]?.form.get("document")).toBeInstanceOf(Blob);
+    expect(JSON.stringify(r.details)).toContain("sent report.txt to chat 7");
+  });
+
+  it("text AND path — or neither — is rejected before any network call", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    const { calls } = stubBotApi();
+    await expect(execute({ chatId: 1, text: "x", path: "/tmp/y" })).rejects.toThrow(/exactly one/);
+    await expect(execute({ chatId: 1 })).rejects.toThrow(/exactly one/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("file-only params alongside text are a corrective error, not a silent drop", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    const { calls } = stubBotApi();
+    await expect(execute({ chatId: 1, text: "x", caption: "lost?" })).rejects.toThrow(/file-mode only/);
+    await expect(execute({ chatId: 1, text: "x", asPhoto: true })).rejects.toThrow(/file-mode only/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("long text is split by the TOOL (at newlines, ≤4096 each) — counting chars is not the model's job", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    const { calls } = stubBotApi();
+    const line = `${"a".repeat(999)}\n`; // 1000 chars per line → 5000 chars total, newline-splittable
+    const r = await execute({ chatId: 9, text: line.repeat(5).trimEnd() });
+    expect(calls.length).toBe(2); // one send per chunk, sequential
+    const texts = calls.map((c) => String(c.form.get("text")));
+    for (const t of texts) expect(t.length).toBeLessThanOrEqual(4096);
+    expect(texts.join("\n")).toBe(line.repeat(5).trimEnd()); // nothing lost at the seams
+    expect(JSON.stringify(r.details)).toContain("sent 2 messages to chat 9");
+  });
+
+  it("a single overlong line (no newline under the cap) is hard-cut, not an infinite loop", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    const { calls } = stubBotApi();
+    await execute({ chatId: 9, text: "b".repeat(4097) });
+    expect(calls.length).toBe(2);
+    expect(String(calls[0]?.form.get("text"))).toHaveLength(4096);
+    expect(String(calls[1]?.form.get("text"))).toBe("b");
+  });
+
+  it("a Bot API error surfaces as a named tool error (fail-fast, no silent ok)", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    vi.stubGlobal(
+      "fetch",
+      async () => new Response(JSON.stringify({ ok: false, description: "message is too long" }), { status: 400 }),
+    );
+    await expect(execute({ chatId: 1, text: "hello" })).rejects.toThrow(/message is too long/);
+  });
+});
