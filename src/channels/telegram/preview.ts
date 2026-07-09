@@ -108,6 +108,7 @@ export async function streamReply(
   const toolIndexById = new Map<string, number>();
   let thinking = "";
   let answer = "";
+  let answerPreviewSince: number | undefined;
 
   const mark = { running: "…", ok: "✓", error: "✗" } as const;
   const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
@@ -118,8 +119,12 @@ export async function streamReply(
     if (t === "") return "";
     return `💭 ${t.length > THINKING_PREVIEW ? `…${t.slice(t.length - THINKING_PREVIEW + 1)}` : t}`;
   };
+  const answerView = (): string => {
+    if (answer.trim() === "" || answerPreviewSince === undefined) return "";
+    return Date.now() - answerPreviewSince >= EDIT_THROTTLE_MS ? answer : "";
+  };
   const view = (): string => {
-    const v = [thinkingView(), toolView(), answer]
+    const v = [thinkingView(), toolView(), answerView()]
       .filter((s) => s.trim() !== "")
       .join("\n\n")
       .trim();
@@ -219,6 +224,7 @@ export async function streamReply(
     for await (const e of events) {
       if (e.type === "text") {
         answer += e.delta;
+        if (answerPreviewSince === undefined && answer.trim() !== "") answerPreviewSince = Date.now();
         touch();
       } else if (e.type === "thinking") {
         thinking += e.delta;
