@@ -57,12 +57,41 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("file-only params alongside text are a corrective error, not a silent drop", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    const { calls } = stubBotApi();
+    await expect(execute({ chatId: 1, text: "x", caption: "lost?" })).rejects.toThrow(/file-mode only/);
+    await expect(execute({ chatId: 1, text: "x", asPhoto: true })).rejects.toThrow(/file-mode only/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("long text is split by the TOOL (at newlines, ≤4096 each) — counting chars is not the model's job", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    const { calls } = stubBotApi();
+    const line = `${"a".repeat(999)}\n`; // 1000 chars per line → 5000 chars total, newline-splittable
+    const r = await execute({ chatId: 9, text: line.repeat(5).trimEnd() });
+    expect(calls.length).toBe(2); // one send per chunk, sequential
+    const texts = calls.map((c) => String(c.form.get("text")));
+    for (const t of texts) expect(t.length).toBeLessThanOrEqual(4096);
+    expect(texts.join("\n")).toBe(line.repeat(5).trimEnd()); // nothing lost at the seams
+    expect(JSON.stringify(r.details)).toContain("sent 2 messages to chat 9");
+  });
+
+  it("a single overlong line (no newline under the cap) is hard-cut, not an infinite loop", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
+    const { calls } = stubBotApi();
+    await execute({ chatId: 9, text: "b".repeat(4097) });
+    expect(calls.length).toBe(2);
+    expect(String(calls[0]?.form.get("text"))).toHaveLength(4096);
+    expect(String(calls[1]?.form.get("text"))).toBe("b");
+  });
+
   it("a Bot API error surfaces as a named tool error (fail-fast, no silent ok)", async () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "tok");
     vi.stubGlobal(
       "fetch",
       async () => new Response(JSON.stringify({ ok: false, description: "message is too long" }), { status: 400 }),
     );
-    await expect(execute({ chatId: 1, text: "x".repeat(5000) })).rejects.toThrow(/message is too long/);
+    await expect(execute({ chatId: 1, text: "hello" })).rejects.toThrow(/message is too long/);
   });
 });
