@@ -189,7 +189,10 @@ export default defineSchedule({
 ```
 
 The prompt must say where output goes — the scheduler only fires the agent; delivery is a send tool's
-job. Test it immediately (without waiting for the cron, and without touching the real fire state):
+job. `fastagent add telegram` scaffolds one (`tools/telegram-send.ts` sends a message or a file); and
+because a scheduled turn runs outside any chat, the agent has no chat context — **put the target chat
+id in the prompt** ("…send it to Telegram chat -100123456"). Test it immediately (without waiting for
+the cron, and without touching the real fire state):
 
 ```bash
 fastagent fire daily-digest

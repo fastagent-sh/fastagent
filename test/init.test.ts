@@ -471,6 +471,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const sendTool = await readFile(join(dir, "tools", "telegram-send.ts"), "utf8");
     expect(sendTool).toContain('from "@kid7st/fastagent"');
     expect(sendTool).toContain("sendDocument");
+    expect(sendTool).toContain("sendMessage"); // text mode too — the delivery path for scheduled/woken turns
     // next steps carry this channel's env vars (with hints), not github's
     expect(out).toContain("TELEGRAM_BOT_TOKEN");
     expect(out).toContain("@BotFather");

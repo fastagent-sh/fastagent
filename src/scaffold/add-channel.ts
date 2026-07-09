@@ -47,7 +47,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     ],
     steps: [
       "edit channels/telegram.ts — customise routing with route() (optional; the defaults already work)",
-      "the agent can send files back by calling the scaffolded tools/telegram-send.ts tool",
+      "the agent can send messages or files back by calling the scaffolded tools/telegram-send.ts tool",
     ],
   },
 };
