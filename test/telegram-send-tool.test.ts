@@ -1,16 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeFile } from "node:fs/promises";
-import { mkdtemp } from "node:fs/promises";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import sendTool from "../src/channels/telegram/scaffold/telegram-send.ts";
 
-// The scaffolded send tool is real shipped code (a compiled module, not a text template) — its mode
-// switch is the delivery path for scheduled/woken turns, so the branches get real executions here.
+// The scaffolded send tool is real shipped code — its mode switch is the delivery path for
+// scheduled/woken turns, so the branches get real executions here. The template stays DATA to tsc
+// (excluded from the program — it imports the published "@kid7st/fastagent", unresolvable in-repo), so
+// it is loaded via a non-literal dynamic import; vitest's alias resolves that name to today's source.
 
 type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
-const execute = (params: unknown): Promise<{ details: unknown }> =>
-  (sendTool as unknown as { execute: RawExecute }).execute("call-1", params);
+let execute: (params: unknown) => Promise<{ details: unknown }>;
+beforeAll(async () => {
+  const templatePath = new URL("../src/channels/telegram/scaffold/telegram-send.ts", import.meta.url).pathname;
+  const mod = (await import(templatePath)) as { default: unknown };
+  execute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
+});
 
 function stubBotApi(): { calls: { url: string; form: FormData }[] } {
   const calls: { url: string; form: FormData }[] = [];
