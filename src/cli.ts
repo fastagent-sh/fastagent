@@ -585,7 +585,7 @@ async function runInit(): Promise<void> {
   );
   if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
   if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
-  if (patched.length > 0) console.error(`  updated: ${patched.join(", ")} (missing secret/state excludes appended)`);
+  if (patched.length > 0) console.error(`  updated: ${patched.join(", ")} (missing fastagent excludes appended)`);
   if (intoNonEmpty && !agentDir) {
     console.error(
       `  note: scaffolded flat into a non-empty directory (nothing claims it — the directory is the agent); use --agent-dir <name> to put the kit in a subdir instead`,

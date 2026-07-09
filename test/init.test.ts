@@ -248,9 +248,12 @@ describe("init: scaffoldWorkspace", () => {
         join("agent", "skills", "writing-great-skills", "SKILL.md"),
         join("agent", "tools", "fetch-url.ts"),
         join("agent", "package.json"),
+        join("agent", ".gitignore"),
         "fastagent.config.mjs",
       ]),
     );
+    expect(await readFile(join(dir, ".gitignore"), "utf8")).not.toMatch(/node_modules/); // root owns run-root state, not kit deps
+    expect(await readFile(join(dir, "agent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
     // config at the ROOT carries agentDir, so dev/start/add resolve the kit without flags.
     const config = await readFile(join(dir, "fastagent.config.mjs"), "utf8");
     expect(config).toMatch(/agentDir: "\.\/agent"/);
@@ -262,6 +265,25 @@ describe("init: scaffoldWorkspace", () => {
     expect(a.agentDir).toBe(join(dir, "agent"));
     expect(a.definition.persona).toContain("Persona");
     expect(a.definition.contextFiles.map((f) => f.content).join("\n")).toContain("Host repo spec");
+  });
+
+  it("agentDir layout keeps dependency ignores inside the kit, not the host root", async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, ".gitignore"), ".env\n.fastagent\n"); // host root already covers run-root state
+    const { patched } = await scaffoldWorkspace(dir, { agentDir: "./agent" });
+    expect(patched).toEqual([]); // agent/.gitignore was CREATED, not appended; root stayed untouched
+    expect(await readFile(join(dir, ".gitignore"), "utf8")).toBe(".env\n.fastagent\n");
+    expect(await readFile(join(dir, "agent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
+
+    const keptKit = await freshDir();
+    await writeFile(join(keptKit, ".gitignore"), ".env\n.fastagent\n");
+    await mkdir(join(keptKit, "agent"), { recursive: true });
+    await writeFile(join(keptKit, "agent", ".gitignore"), "custom\n"); // dotfile-only kit is adoptable
+    const r = await scaffoldWorkspace(keptKit, { agentDir: "./agent" });
+    expect(r.skipped).toContain(join("agent", ".gitignore"));
+    expect(r.patched).toEqual([join("agent", ".gitignore")]);
+    expect(await readFile(join(keptKit, ".gitignore"), "utf8")).toBe(".env\n.fastagent\n");
+    expect(await readFile(join(keptKit, "agent", ".gitignore"), "utf8")).toMatch(/^node_modules\/$/m);
   });
 
   it("`init` decides the layout by jurisdiction signals and prints the reason (no prompt)", async () => {
@@ -342,9 +364,9 @@ describe("init: scaffoldWorkspace", () => {
     expect(cwd).toMatch(/fastagent dev/);
   });
 
-  it("keeps a pre-existing .gitignore's content and APPENDS the missing .env/.fastagent excludes (fix, not warn)", async () => {
+  it("keeps a pre-existing .gitignore's content and APPENDS missing env/state/dependency excludes", async () => {
     const dir = await freshDir();
-    await writeFile(join(dir, ".gitignore"), "custom\n"); // no .env rule
+    await writeFile(join(dir, ".gitignore"), "custom\n"); // no fastagent rules
     const { created, skipped, patched, intoNonEmpty, warnings } = await scaffoldWorkspace(dir);
     expect(skipped).toEqual([".gitignore"]);
     expect(patched).toEqual([".gitignore"]);
@@ -353,19 +375,20 @@ describe("init: scaffoldWorkspace", () => {
     expect(gi).toContain("custom"); // the host's own rules kept
     expect(gi).toMatch(/^\.env$/m); // secrets now excluded
     expect(gi).toMatch(/^\.fastagent$/m);
+    expect(gi).toMatch(/^node_modules\/$/m); // the generated npm install is not a 25k-file git flood
     expect(intoNonEmpty).toBe(true); // the dir already had the .gitignore
     expect(warnings).toEqual([]); // fixed, nothing left to warn about
   });
 
   it("appends only what's missing; a fully-covered .gitignore is left alone", async () => {
     const covered = await freshDir();
-    await writeFile(join(covered, ".gitignore"), ".env\n.fastagent\n");
+    await writeFile(join(covered, ".gitignore"), ".env\n.fastagent\nnode_modules/\n");
     const r = await scaffoldWorkspace(covered);
     expect(r.patched).toEqual([]); // no duplicate lines
     expect((await readFile(join(covered, ".gitignore"), "utf8")).match(/^\.env$/gm)).toHaveLength(1);
 
     const partial = await freshDir();
-    await writeFile(join(partial, ".gitignore"), "node_modules/\n*.env\n"); // covers .env, not .fastagent
+    await writeFile(join(partial, ".gitignore"), "node_modules/\n*.env\n"); // covers .env + deps, not .fastagent
     const r2 = await scaffoldWorkspace(partial);
     expect(r2.patched).toEqual([".gitignore"]);
     const gi = await readFile(join(partial, ".gitignore"), "utf8");
