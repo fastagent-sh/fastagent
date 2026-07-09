@@ -452,6 +452,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const out = await cliInit(["add", "telegram"], dir);
     expect(out).toContain(join("agent", "channels", "telegram.ts")); // reported relative to the run root
     expect(out).toContain(`edit ${join("agent", "channels", "telegram.ts")}`); // next step uses the real agentDir path
+    expect(out).toContain("agent/tools/telegram-send.ts"); // …and so does the companion-tool step
     expect(await exists(join(dir, "agent", "channels", "telegram.ts"))).toBe(true); // in the kit…
     expect(await exists(join(dir, "agent", "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
     expect(await exists(join(dir, "channels"))).toBe(false); // NOT at the run root
@@ -528,6 +529,36 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(envFile).toContain("# --- telegram channel ---");
     expect(envFile).toContain("# TELEGRAM_BOT_TOKEN=");
     expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m);
+  });
+
+  it("github's generated webhook secret gets the same treatment (kind-neutral), hint kept visible", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    const out = await cliInit(["add", "github"], dir);
+
+    expect(out).toContain("wrote GITHUB_WEBHOOK_SECRET to .env");
+    // The hint still prints — it carries an ACTION (paste the same value into the GitHub webhook UI),
+    // so a written var is reported, not silently absorbed.
+    expect(out).toMatch(/GITHUB_WEBHOOK_SECRET — generated and written to \.env.*set the same value/);
+    expect(await readFile(join(dir, ".env"), "utf8")).toMatch(/^GITHUB_WEBHOOK_SECRET=[0-9a-f]{48}$/m);
+  });
+
+  it("a .env copied from .env.example (marker present) gets the secret slotted UNDER the marker", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    // What a user gets from `cp .env.example .env` after a previous add appended the block there.
+    await writeFile(
+      join(dir, ".env"),
+      "# mine\nOPENAI_API_KEY=sk-x\n\n# --- telegram channel ---\n# from @BotFather → /newbot\n# TELEGRAM_BOT_TOKEN=\n",
+    );
+    const out = await cliInit(["add", "telegram"], dir);
+    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .env");
+    const envFile = await readFile(join(dir, ".env"), "utf8");
+    // Slotted under the existing marker — not orphaned at the end of the file.
+    expect(envFile).toMatch(/# --- telegram channel ---\nTELEGRAM_SECRET_TOKEN=[0-9a-f]{48}\n/);
+    // The commented BOT_TOKEN placeholder is mentioned already — not duplicated.
+    expect(envFile.match(/TELEGRAM_BOT_TOKEN/g)).toHaveLength(1);
+    expect(envFile).toContain("OPENAI_API_KEY=sk-x"); // untouched
   });
 
   it("keeps an existing non-empty telegram secret in .env", async () => {

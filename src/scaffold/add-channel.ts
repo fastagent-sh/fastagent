@@ -10,6 +10,7 @@ import { detectRuntime } from "../runtime.ts";
 import { assertInsideWorkspace } from "../workspace.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
+import { parseEnvContent } from "../env.ts";
 
 export type ChannelKind = "github" | "telegram";
 
@@ -77,7 +78,10 @@ export async function appendChannelEnv(dir: string, kind: ChannelKind): Promise<
   }
   const marker = `# --- ${kind} channel ---`;
   if (current.includes(marker)) return false;
-  const block = `\n${marker}\n${CHANNEL_SCAFFOLDS[kind].env.map((e) => `# ${e.name}=   # ${e.hint}`).join("\n")}\n`;
+  // Hint on its OWN line above the placeholder (like the base env.example template) — never inline
+  // after `=`: loadEnvFile does not strip trailing comments, so an uncommented `KEY=   # hint` (or a
+  // value pasted before the `#`) would carry the hint text into the parsed value.
+  const block = `\n${marker}\n${CHANNEL_SCAFFOLDS[kind].env.map((e) => `# ${e.hint}\n# ${e.name}=`).join("\n")}\n`;
   await appendFile(file, block);
   return true;
 }
@@ -89,26 +93,12 @@ export interface DotEnvWriteResult {
   alreadySet: string[];
 }
 
-function parseEnvValue(line: string, name: string): string | undefined {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith("#")) return undefined;
-  const eq = trimmed.indexOf("=");
-  if (eq < 1) return undefined;
-  const key = trimmed.slice(0, eq).trim();
-  if (key !== name) return undefined;
-  let value = trimmed.slice(eq + 1).trim();
-  const quote = value[0];
-  if ((quote === '"' || quote === "'") && value.at(-1) === quote) value = value.slice(1, -1);
-  return value;
-}
-
+/** Whether `.env` content carries a non-empty ACTIVE value for `name` — decided by THE .env parser
+ *  ({@link parseEnvContent}), not a re-implementation, so this check can never disagree with what
+ *  `loadEnvFile` will actually read (a missed match here would append a second assignment that
+ *  last-wins over the user's working secret). */
 function hasActiveEnvValue(content: string, name: string): boolean {
-  let value: string | undefined;
-  for (const line of content.split("\n")) {
-    const parsed = parseEnvValue(line, name);
-    if (parsed !== undefined) value = parsed; // match loadEnvFile: last active assignment wins
-  }
-  return value !== undefined && value.trim() !== "";
+  return (parseEnvContent(content).get(name)?.trim() ?? "") !== "";
 }
 
 function mentionsEnvName(content: string, name: string): boolean {
@@ -144,14 +134,20 @@ export async function appendChannelDotEnv(
       lines.push(`${e.name}=${value}`);
       written.push(e.name);
     } else if (!mentionsEnvName(current, e.name)) {
-      lines.push(`# ${e.name}=   # ${e.hint}`);
+      // Hint above, never inline after `=` — see appendChannelEnv (this IS the file loadEnvFile reads).
+      lines.push(`# ${e.hint}`, `# ${e.name}=`);
     }
   }
   if (lines.length > 0) {
     const marker = `# --- ${kind} channel ---`;
-    if (!current.includes(marker)) lines.unshift(marker);
-    const prefix = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
-    await appendFile(file, `${prefix}${lines.join("\n")}\n`);
+    if (current.includes(marker)) {
+      // A marker already present (e.g. a .env copied from .env.example) — slot the new lines under it
+      // instead of orphaning them at the end of the file.
+      await writeFile(file, current.replace(marker, `${marker}\n${lines.join("\n")}`));
+    } else {
+      const prefix = current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+      await appendFile(file, `${prefix}${marker}\n${lines.join("\n")}\n`);
+    }
   }
   return { written, alreadySet };
 }

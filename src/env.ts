@@ -15,7 +15,16 @@ import { join } from "node:path";
  * "no .env"; any other read error propagates.
  */
 export function loadEnvFile(file: string): void {
-  const content = readFileSync(file, "utf8");
+  const parsed = parseEnvContent(readFileSync(file, "utf8"));
+  for (const [key, value] of parsed) {
+    if (!(key in process.env)) process.env[key] = value; // env-vs-file: a real env var wins
+  }
+}
+
+/** Parse .env content into key → value (the dialect above; last occurrence of a key wins). THE parser —
+ *  anything else reading/deciding on .env content (e.g. `add`'s secret pre-fill) must use this, never a
+ *  private re-implementation: two parsers of one dialect diverge silently. */
+export function parseEnvContent(content: string): Map<string, string> {
   const parsed = new Map<string, string>();
   for (const raw of content.split("\n")) {
     const line = raw.trim();
@@ -28,9 +37,7 @@ export function loadEnvFile(file: string): void {
     if ((quote === '"' || quote === "'") && value.at(-1) === quote) value = value.slice(1, -1);
     parsed.set(key, value); // in-file: last occurrence wins (Map overwrite)
   }
-  for (const [key, value] of parsed) {
-    if (!(key in process.env)) process.env[key] = value; // env-vs-file: a real env var wins
-  }
+  return parsed;
 }
 
 /**

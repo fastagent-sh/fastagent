@@ -645,9 +645,10 @@ async function runAdd(): Promise<void> {
   if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
   }
-  // Secret-hygiene check: write Telegram's generated webhook secret only when `.env` is already ignored.
-  // Warn, not refuse, when it is exposed — channel glue may read a real env var instead, but the CLI
-  // must not materialize a secret into a committable file.
+  // Secret hygiene: a channel's GENERATED secret (a random string the user contributes nothing to) is
+  // written into `.env` — but only when `.env` is already gitignored: the CLI must never materialize a
+  // secret into a committable file. Warn, not refuse, when it is exposed — channel glue may read a real
+  // env var instead.
   const envIgnored = (await loadRootIgnore(target).catch(failStartup))?.ignores(".env") ?? false;
   if (!envIgnored) {
     console.error(
@@ -658,10 +659,9 @@ async function runAdd(): Promise<void> {
   const generated = Object.fromEntries(
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
-  const dotEnv =
-    envIgnored && channelKind === "telegram"
-      ? await appendChannelDotEnv(target, channelKind, generated).catch(failStartup)
-      : undefined;
+  // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
+  // the same class of value as telegram's).
+  const dotEnv = envIgnored ? await appendChannelDotEnv(target, channelKind, generated).catch(failStartup) : undefined;
   if (dotEnv && dotEnv.written.length > 0) {
     console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .env`);
   }
@@ -672,12 +672,24 @@ async function runAdd(): Promise<void> {
   console.error(`  next steps:`);
   console.error(`    ${installCmd}                      # if @kid7st/fastagent is not installed yet`);
   for (const e of env) {
-    if (dotEnv?.alreadySet.includes(e.name) || dotEnv?.written.includes(e.name)) continue;
+    if (dotEnv?.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
+    if (dotEnv?.written.includes(e.name)) {
+      // Written, but its hint may still carry an action (github: paste the same value into the webhook
+      // UI) — keep the variable visible instead of silently absorbing it.
+      console.error(`    ${e.name} — generated and written to .env   # ${e.hint}`);
+      continue;
+    }
     const value = e.generate ? `=${generated[e.name]}` : "";
     console.error(`    set ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
   }
-  const channelRel = relative(target, file);
-  for (const s of steps) console.error(`    ${s.replace(`channels/${channelKind}.ts`, channelRel)}`);
+  // Steps name workspace-relative paths (the channel file, telegram's companion send tool) — rewrite
+  // them to the real location in the agentDir layout.
+  const kitPrefix = channelHome === target ? "" : `${relative(target, channelHome)}/`;
+  for (const s of steps) {
+    console.error(
+      `    ${s.replace(`channels/${channelKind}.ts`, relative(target, file)).replace("tools/telegram-send.ts", `${kitPrefix}tools/telegram-send.ts`)}`,
+    );
+  }
   console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
 }
 
