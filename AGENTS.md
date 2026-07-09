@@ -26,7 +26,7 @@ src/
 ├── index.ts                 # the public API surface (see README "Public API surface & stability")
 ├── cli.ts                   # command entry points (process side effects live here)
 ├── invoke-stream.ts, cli-models.ts, cli-auth.ts # command rendering layers (`invoke` stream → exit code, `models`/auth-report output)
-├── telegram.ts, github.ts   # subpath-export shims (@kid7st/fastagent/telegram etc. — the supported surface)
+├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
 ├── log.ts                   # leveled logging singleton (dev=debug, start=info)
 ├── observe.ts               # turn-trace logging around an Agent
 ├── tunnel.ts                # `--tunnel`: cloudflared + per-channel webhook dispatch

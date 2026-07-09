@@ -77,9 +77,9 @@ describe("init: scaffoldWorkspace", () => {
         version: string;
       }
     ).version;
-    expect(pkg.dependencies["@kid7st/fastagent"]).toBe(`^${realVersion}`);
+    expect(pkg.dependencies["@fastagent-sh/fastagent"]).toBe(`^${realVersion}`);
     expect(pkg.dependencies.zod).toBeDefined();
-    expect(await readFile(join(dir, "tools", "fetch-url.ts"), "utf8")).toContain('from "@kid7st/fastagent"');
+    expect(await readFile(join(dir, "tools", "fetch-url.ts"), "utf8")).toContain('from "@fastagent-sh/fastagent"');
 
     // persona.md + the bundled skill load as a definition offline (loadAgentDefinition does not touch
     // tools/). No AGENTS.md is scaffolded — a fresh agent has no project context (② empty).
@@ -434,7 +434,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const dir = await freshDir();
     await writeFile(
       join(dir, "package.json"),
-      `${JSON.stringify({ type: "module", dependencies: { "@kid7st/fastagent": "^0.4.0" } }, null, 2)}\n`,
+      `${JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "^0.4.0" } }, null, 2)}\n`,
     );
     return dir;
   }
@@ -446,7 +446,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     await mkdir(join(dir, "agent"), { recursive: true });
     await writeFile(
       join(dir, "agent", "package.json"),
-      `${JSON.stringify({ type: "module", dependencies: { "@kid7st/fastagent": "^0.4.0" } }, null, 2)}\n`,
+      `${JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "^0.4.0" } }, null, 2)}\n`,
     );
 
     const out = await cliInit(["add", "telegram"], dir);
@@ -465,14 +465,14 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(out).toContain("channels/github.ts");
 
     const src = await readFile(join(dir, "channels", "github.ts"), "utf8");
-    expect(src).toContain('from "@kid7st/fastagent/github"'); // the third-party adapter
+    expect(src).toContain('from "@fastagent-sh/fastagent/github"'); // the third-party adapter
     expect(src).toContain("POST /webhook");
     expect(src).toContain("on:"); // the app glue stub the user edits
 
     // add does NOT bootstrap: package.json is untouched and no .npmrc/.gitignore is written.
     expect(JSON.parse(await readFile(join(dir, "package.json"), "utf8"))).toEqual({
       type: "module",
-      dependencies: { "@kid7st/fastagent": "^0.4.0" },
+      dependencies: { "@fastagent-sh/fastagent": "^0.4.0" },
     });
     expect(await exists(join(dir, ".npmrc"))).toBe(false);
 
@@ -488,13 +488,13 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     const out = await cliInit(["add", "telegram"], dir);
     expect(out).toContain("channels/telegram.ts");
     const src = await readFile(join(dir, "channels", "telegram.ts"), "utf8");
-    expect(src).toContain('from "@kid7st/fastagent/telegram"'); // the adapter
+    expect(src).toContain('from "@fastagent-sh/fastagent/telegram"'); // the adapter
     expect(src).toContain("POST /telegram");
     expect(src).toContain("telegramChannel({"); // policy-only glue (agent/stateDir arrive via ctx)
     expect(src).not.toContain("sendDocument"); // the channel file is the channel, NOT the send-tool (no misroute)
     // the companion tool lands in tools/ by the bundle convention (so the agent can send files back)
     const sendTool = await readFile(join(dir, "tools", "telegram-send.ts"), "utf8");
-    expect(sendTool).toContain('from "@kid7st/fastagent"');
+    expect(sendTool).toContain('from "@fastagent-sh/fastagent"');
     expect(sendTool).toContain("sendDocument");
     expect(sendTool).toContain("sendMessage"); // text mode too — the delivery path for scheduled/woken turns
     // next steps carry this channel's env vars (with hints), not github's
@@ -614,7 +614,7 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
           await writeFile(join(d, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
           return d;
         },
-        /@kid7st\/fastagent is not a dependency.*npm install/, // ESM but missing the dep (node → npm hint)
+        /@fastagent-sh\/fastagent is not a dependency.*npm install/, // ESM but missing the dep (node → npm hint)
       ],
     ];
     for (const [make, msg] of cases) {

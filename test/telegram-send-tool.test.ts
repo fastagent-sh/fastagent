@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 // The scaffolded send tool is real shipped code — its mode switch is the delivery path for
 // scheduled/woken turns, so the branches get real executions here. The template stays DATA to tsc
-// (excluded from the program — it imports the published "@kid7st/fastagent", unresolvable in-repo), so
+// (excluded from the program — it imports the published "@fastagent-sh/fastagent", unresolvable in-repo), so
 // it is loaded via a non-literal dynamic import; vitest's alias resolves that name to today's source.
 
 type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;

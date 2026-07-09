@@ -5,7 +5,7 @@ status: current
 
 # API reference
 
-This is a compact reference for the public TypeScript surface exported by `@kid7st/fastagent`.
+This is a compact reference for the public TypeScript surface exported by `@fastagent-sh/fastagent`.
 
 FastAgent is pre-1.0. The Agent Handler contract is the stable design center; implementation-specific APIs may still tighten before 1.0.
 
@@ -170,7 +170,7 @@ function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): AgentTo
 Use the re-exported `z`:
 
 ```ts
-import { defineTool, z } from "@kid7st/fastagent";
+import { defineTool, z } from "@fastagent-sh/fastagent";
 
 export default defineTool({
   description: "Look up an order.",
@@ -234,7 +234,7 @@ the filename becomes the schedule name. Each file default-exports `defineSchedul
 
 ```ts
 // schedules/daily-digest.ts        → schedule "daily-digest"
-import { defineSchedule } from "@kid7st/fastagent";
+import { defineSchedule } from "@fastagent-sh/fastagent";
 
 export default defineSchedule({
   cron: "0 9 * * *",
@@ -314,8 +314,8 @@ The lease is the same-session concurrency floor. A failed acquisition yields a r
 ## Subpath exports
 
 ```ts
-import { githubChannel } from "@kid7st/fastagent/github";
-import { telegramChannel } from "@kid7st/fastagent/telegram";
+import { githubChannel } from "@fastagent-sh/fastagent/github";
+import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
 ```
 
 See [GitHub channel](github.md) and [Telegram channel](telegram.md).

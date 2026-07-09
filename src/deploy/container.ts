@@ -57,7 +57,7 @@ function kitDockerfile(input: ContainerInput, kit: string): string {
     return `${GENERATED_DOCKERFILE_MARKER}. Repo-as-workspace: the whole repo is the agent's cwd; the kit lives in ${kit}/.
 FROM node:22-slim
 ${apt}WORKDIR /app
-RUN npm i -g @kid7st/fastagent@${input.version}
+RUN npm i -g @fastagent-sh/fastagent@${input.version}
 COPY . .
 CMD ["fastagent", "start", "/app"]
 `;
@@ -111,7 +111,7 @@ function dockerfile(input: ContainerInput): string {
 # npm-based (a markdown/skills agent installs the pinned CLI globally; node:22-slim has npm).
 FROM node:22-slim
 ${apt}WORKDIR /app
-RUN npm i -g @kid7st/fastagent@${input.version}
+RUN npm i -g @fastagent-sh/fastagent@${input.version}
 COPY . .
 CMD ["fastagent", "start", "/app"]
 `;

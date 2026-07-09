@@ -19,7 +19,7 @@
  * Threaded Mode (topics in private chats, a @BotFather toggle) is auto-adapted: an update carrying
  * message_thread_id replies into that thread; without one the chat is linear. Same code, both modes.
  *
- * Authored against the public `@kid7st/fastagent` surface only (the contract + the channel-authoring
+ * Authored against the public `@fastagent-sh/fastagent` surface only (the contract + the channel-authoring
  * kit: readBodyCapped / text), so it is exactly what a third-party `fastagent-channel-*` package would write.
  */
 import { timingSafeEqual } from "node:crypto";
@@ -51,7 +51,7 @@ import { type Target, callApi, editMessageText, sendMessage } from "./telegram-a
 import { createTurnQueue } from "./turn-queue.ts";
 import { type StoredTurn, createTurnStore } from "./turn-store.ts";
 
-// Re-export the public surface authored elsewhere, so `@kid7st/fastagent/telegram` keeps one entry point.
+// Re-export the public surface authored elsewhere, so `@fastagent-sh/fastagent/telegram` keeps one entry point.
 export { defaultTelegramRoute, telegramEnvelope };
 export type { TelegramFailure, TelegramMessage, TelegramRoute, TelegramUpdate };
 

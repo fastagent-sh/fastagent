@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
  * Guards the embed/CLI dependency boundary so a future package split stays a packaging change, not a
  * refactor: the public embed entry (index.ts) must never statically pull a CLI-only dependency.
  *
- * "Statically" = what gets eval-loaded when you `import "@kid7st/fastagent"`. We walk the relative
+ * "Statically" = what gets eval-loaded when you `import "@fastagent-sh/fastagent"`. We walk the relative
  * import graph from an entry and collect the bare package specifiers reachable through STATIC
  * `import`/`export … from`. Lazy `await import("pkg")` is intentionally excluded (e.g. giget stays
  * lazy in init.ts) — that is the whole point of keeping it lazy.

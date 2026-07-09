@@ -58,7 +58,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 Use FastAgent as a library, then mount the agent in your own route:
 
 ```ts
-import { createInvokeHandler, createPiAgentFromDefinition } from "@kid7st/fastagent";
+import { createInvokeHandler, createPiAgentFromDefinition } from "@fastagent-sh/fastagent";
 
 const { agent } = await createPiAgentFromDefinition("./agent", {
   model: "openai-codex/gpt-5.5",

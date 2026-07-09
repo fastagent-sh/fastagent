@@ -1,10 +1,10 @@
 name: Publish
 
-# Publish @kid7st/fastagent to npm when a GitHub Release is published, via npm Trusted Publishing
+# Publish @fastagent-sh/fastagent to npm when a GitHub Release is published, via npm Trusted Publishing
 # (OIDC) — no NPM_TOKEN secret. Provenance is NOT attached: npm requires a PUBLIC source repository to
 # verify a provenance bundle (`422 ... Unsupported ... visibility: "private"`), and this repo is private.
 # Re-add `npm publish --provenance` once the repo is public. Requires a trusted publisher
-# configured on npmjs (org/user kid7st, repo fastagent, workflow publish.yml) and npm >= 11.5.1 (Node 26
+# configured on npmjs (org fastagent-sh, repo fastagent, workflow publish.yml) and npm >= 11.5.1 (Node 26
 # ships 11.12.1). The release tag is the manual gate; the job re-verifies (typecheck + test) before
 # publishing so a non-green tag never ships. Version comes from package.json — bump it before
 # tagging (npm rejects re-publishing an existing version).
@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: '26'
           registry-url: 'https://registry.npmjs.org'
-          scope: '@kid7st'
+          scope: '@fastagent-sh'
           cache: npm
           cache-dependency-path: package-lock.json
 

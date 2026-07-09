@@ -20,7 +20,7 @@ Every channel has two layers:
 | Adapter | reusable package or first-party module | verify signature, parse body, ACK/retry rules, SDK calls |
 | Glue | the agent workspace | map an event to a session and prompt |
 
-For first-party channels, the adapter is `@kid7st/fastagent/github` or `@kid7st/fastagent/telegram`, and the glue is the scaffolded `channels/*.ts` file.
+For first-party channels, the adapter is `@fastagent-sh/fastagent/github` or `@fastagent-sh/fastagent/telegram`, and the glue is the scaffolded `channels/*.ts` file.
 
 For a community channel, publish the adapter as a separate package and keep the user's glue in their workspace.
 
@@ -29,7 +29,7 @@ For a community channel, publish the adapter as a separate package and keep the 
 A workspace channel is a module in `channels/` that default-exports a `ChannelModule`:
 
 ```ts
-import type { ChannelModule } from "@kid7st/fastagent";
+import type { ChannelModule } from "@fastagent-sh/fastagent";
 
 const channel: ChannelModule = ({ agent, stateRoot }) => ({
   "POST /slack": async (req) => {
@@ -55,7 +55,7 @@ A path overlap is a collision: `/webhook` conflicts with `POST /webhook`; `GET /
 
 ## Public channel-authoring kit
 
-A channel adapter should depend only on the public `@kid7st/fastagent` surface:
+A channel adapter should depend only on the public `@fastagent-sh/fastagent` surface:
 
 | Export | Use |
 |---|---|
@@ -73,7 +73,7 @@ Do not import from `src/engines/*` or `@earendil-works/*` in a channel package. 
 A reusable adapter is usually shaped like this:
 
 ```ts
-import { AgentFailure, type ChannelModule, collect, readBodyCapped, text } from "@kid7st/fastagent";
+import { AgentFailure, type ChannelModule, collect, readBodyCapped, text } from "@fastagent-sh/fastagent";
 
 export interface AcmeChannelOptions {
   secret: string;
@@ -169,7 +169,7 @@ A channel adapter should:
 - tolerate `failed` terminal events,
 - cancel or stop work when the client disconnects if the protocol supports it,
 - avoid importing engine-specific code,
-- keep provider SDK dependencies out of `@kid7st/fastagent` unless the adapter is first-party and lightweight.
+- keep provider SDK dependencies out of `@fastagent-sh/fastagent` unless the adapter is first-party and lightweight.
 
 ## Sessions and concurrency
 
@@ -195,7 +195,7 @@ A reusable channel package should normally look like:
   "name": "fastagent-channel-acme",
   "type": "module",
   "peerDependencies": {
-    "@kid7st/fastagent": "^0.x"
+    "@fastagent-sh/fastagent": "^0.x"
   },
   "dependencies": {
     "@acme/sdk": "^1.0.0"

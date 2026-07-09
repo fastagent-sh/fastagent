@@ -11,7 +11,7 @@ Use FastAgent as a **library** — the agent is one capability inside a product 
 ## Prerequisites
 
 - **Node ≥ 22.19.** Ships compiled JS + types; no build step for FastAgent itself.
-- **Install as a dependency:** `npm i @kid7st/fastagent`.
+- **Install as a dependency:** `npm i @fastagent-sh/fastagent`.
 - **Model credentials** — `fastagent login` (OAuth, writes the project-level `<cwd>/.fastagent/auth.json`) or a provider API key in the environment (e.g. `OPENAI_API_KEY`). Auth is invisible to your code; see [Auth](#auth) below.
 
 ## The one mental model
@@ -46,7 +46,7 @@ The stream ends with exactly one `completed` / `failed`, or is cancelled by the 
 const { agent } = await createPiAgentFromWorkspace("./agent", { model: "openai-codex/gpt-5.5" });
 
 // B) no directory — Tier 1: three concrete fields
-import { createPiAgent, defineTool, z } from "@kid7st/fastagent";
+import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent";
 
 const lookupOrder = defineTool({
   name: "lookup-order",                       // set the name explicitly when assembling in code
@@ -64,7 +64,7 @@ const agent = createPiAgent({
 });
 ```
 
-Author tool schemas with the `z` re-exported from `@kid7st/fastagent` (as above), not a separately installed `zod` — `defineTool` converts the schema with its own zod, so a single shared copy avoids version-skew surprises. Every type on this surface (`AgentTool`, `Skill`, `Session`, `Model`, …) is re-exported too, so you never import from `@earendil-works/*` (the one exception is a provider's wire-protocol `api`, see §5).
+Author tool schemas with the `z` re-exported from `@fastagent-sh/fastagent` (as above), not a separately installed `zod` — `defineTool` converts the schema with its own zod, so a single shared copy avoids version-skew surprises. Every type on this surface (`AgentTool`, `Skill`, `Session`, `Model`, …) is re-exported too, so you never import from `@earendil-works/*` (the one exception is a provider's wire-protocol `api`, see §5).
 
 `model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. (The directory path assembles `AGENTS.md` differently: it adds the pi engine base + skills + env for fidelity with local pi. See [core design §2](design/core.md).)
 
@@ -77,12 +77,12 @@ for await (const e of agent.invoke({ session: "u1" }, { text: "hi" })) {
 }
 
 // (2) buffered JSON — one question, one answer
-import { collect } from "@kid7st/fastagent";
+import { collect } from "@fastagent-sh/fastagent";
 const { text } = await collect(agent.invoke({ session: "u1" }, { text: "hi" }));
 // `collect` throws AgentFailure on a failed turn, and errors if the stream has no terminal event.
 
 // (3) HTTP/SSE — createInvokeHandler is a Fetch handler: mount it in any host route
-import { createInvokeHandler } from "@kid7st/fastagent";
+import { createInvokeHandler } from "@fastagent-sh/fastagent";
 const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>; POST {session,text} → SSE
 ```
 
@@ -100,7 +100,7 @@ Bun.serve({ port: 8787, fetch: (req) =>
   new URL(req.url).pathname === "/chat" ? handler(req) : new Response("not found", { status: 404 }) });
 
 // Plain Node (no native Fetch routing) — the built-in server
-import { serveNode, router } from "@kid7st/fastagent";
+import { serveNode, router } from "@fastagent-sh/fastagent";
 serveNode(router({ "POST /chat": handler }), { port: 8787 });
 ```
 
@@ -145,7 +145,7 @@ Static keys belong in the login file or the environment, not in code — there i
 When you run your own **gateway** or a **self-hosted / OpenAI-compatible** endpoint, register it as a provider; a `model` spec then selects it by id. This is the one case that touches the engine's provider layer — built-in providers cover everything else.
 
 ```ts
-import { createPiAgent, createProvider } from "@kid7st/fastagent";
+import { createPiAgent, createProvider } from "@fastagent-sh/fastagent";
 // the wire-protocol impl comes from pi-ai's api subpath (reuse, don't reimplement)
 import { /* the matching api impl */ } from "@earendil-works/pi-ai/api/openai-responses";
 

@@ -1,4 +1,4 @@
-import { defineTool, z } from "@kid7st/fastagent";
+import { defineTool, z } from "@fastagent-sh/fastagent";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 

@@ -162,11 +162,11 @@ export async function preflightDeploy(input: {
   }
   // The code-path Dockerfile runs `${runner}`: that resolves the workspace's OWN dependency, so a
   // package.json missing it would make the CONTAINER fetch an unpinned build at runtime (offline-fragile).
-  if (hasPackageJson && !("@kid7st/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies })) {
+  if (hasPackageJson && !("@fastagent-sh/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies })) {
     messages.push({
       level: "warn",
       text:
-        `package.json does not list @kid7st/fastagent — the image's \`${runner}\` would fetch it at runtime ` +
+        `package.json does not list @fastagent-sh/fastagent — the image's \`${runner}\` would fetch it at runtime ` +
         `(offline-fragile, unpinned). Add it to dependencies and re-run \`${install}\`.`,
     });
   }

@@ -1,5 +1,5 @@
 {
-  "name": "@kid7st/fastagent",
+  "name": "@fastagent-sh/fastagent",
   "version": "0.11.0",
   "description": "Vibe first. Then FastAgent: turn a local agent directory into a running service in your app, on GitHub, in Telegram, or behind any channel.",
   "keywords": [
@@ -14,14 +14,14 @@
     "fastagent"
   ],
   "license": "MIT",
-  "author": "the fastagent authors (https://github.com/kid7st/fastagent)",
-  "homepage": "https://github.com/kid7st/fastagent#readme",
+  "author": "the fastagent authors (https://github.com/fastagent-sh/fastagent)",
+  "homepage": "https://github.com/fastagent-sh/fastagent#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kid7st/fastagent.git"
+    "url": "git+https://github.com/fastagent-sh/fastagent.git"
   },
   "bugs": {
-    "url": "https://github.com/kid7st/fastagent/issues"
+    "url": "https://github.com/fastagent-sh/fastagent/issues"
   },
   "type": "module",
   "sideEffects": false,

@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions, ideas & help
-    url: https://github.com/kid7st/fastagent/discussions
+    url: https://github.com/fastagent-sh/fastagent/discussions
     about: Ask a question or discuss an idea in Discussions — issues are for bugs and concrete feature requests.
   - name: Documentation
-    url: https://github.com/kid7st/fastagent/tree/main/docs
+    url: https://github.com/fastagent-sh/fastagent/tree/main/docs
     about: Setup, configuration, channels, embedding, and the API reference.

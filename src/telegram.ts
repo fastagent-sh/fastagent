@@ -1,4 +1,4 @@
-/** `@kid7st/fastagent/telegram` — the Telegram bot channel subpath export, kept off the root surface. */
+/** `@fastagent-sh/fastagent/telegram` — the Telegram bot channel subpath export, kept off the root surface. */
 export {
   telegramChannel,
   defaultTelegramRoute,

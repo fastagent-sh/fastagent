@@ -41,7 +41,7 @@ channels/
 Each file default-exports a `ChannelModule`:
 
 ```ts
-import type { ChannelModule } from "@kid7st/fastagent";
+import type { ChannelModule } from "@fastagent-sh/fastagent";
 
 const channel: ChannelModule = ({ agent, stateRoot }) => ({
   "POST /webhook": async (req) => {
@@ -86,13 +86,13 @@ FastAgent ships lightweight first-party adapters as subpath exports.
 
 | Channel | Package import | Docs | Add command |
 |---|---|---|---|
-| GitHub webhook | `@kid7st/fastagent/github` | [GitHub channel](github.md) | `fastagent add github` |
-| Telegram bot | `@kid7st/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram` |
+| GitHub webhook | `@fastagent-sh/fastagent/github` | [GitHub channel](github.md) | `fastagent add github` |
+| Telegram bot | `@fastagent-sh/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram` |
 
 Example GitHub glue:
 
 ```ts
-import { githubChannel } from "@kid7st/fastagent/github";
+import { githubChannel } from "@fastagent-sh/fastagent/github";
 
 export default githubChannel({
   secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",
@@ -106,7 +106,7 @@ export default githubChannel({
 Example Telegram glue:
 
 ```ts
-import { telegramChannel } from "@kid7st/fastagent/telegram";
+import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
 
 export default telegramChannel({
   secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
@@ -147,12 +147,12 @@ The tunnel is owned by the dev watch supervisor, so the URL survives worker relo
 
 ## Third-party channels
 
-Heavy or long-tail adapters should live outside `@kid7st/fastagent`:
+Heavy or long-tail adapters should live outside `@fastagent-sh/fastagent`:
 
 ```jsonc
 {
   "name": "fastagent-channel-slack",
-  "peerDependencies": { "@kid7st/fastagent": "^0.x" },
+  "peerDependencies": { "@fastagent-sh/fastagent": "^0.x" },
   "dependencies": { "@slack/web-api": "^7" }
 }
 ```
