@@ -21,7 +21,7 @@ This creates:
 
 ```txt
 channels/telegram.ts      # inbound webhook adapter + routing policy
-tools/telegram-send.ts    # optional outbound file-send tool for the agent
+tools/telegram-send.ts    # optional outbound send tool for the agent (message or file)
 ```
 
 It also appends the required env vars to `.env.example` when possible.
@@ -187,7 +187,7 @@ The state home self-ignores (a nested `.gitignore`), so buffered chat content is
 
 ## Sending files back
 
-`fastagent add telegram` also scaffolds `tools/telegram-send.ts`. Because tool names come from filenames, the agent can call the `telegram-send` tool with a `chatId` from the `[telegram: chat …]` envelope to send a local file back through the bot.
+`fastagent add telegram` also scaffolds `tools/telegram-send.ts`. Because tool names come from filenames, the agent can call the `telegram-send` tool with a `chatId` from the `[telegram: chat …]` envelope to send a text message or a local file back through the bot. It is also the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up, whose plain reply is not delivered anywhere; those turns have no `[telegram: chat …]` line, so the schedule's prompt (or the wake's) must name the target chat id.
 
 ## Limits
 
