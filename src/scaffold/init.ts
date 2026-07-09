@@ -55,7 +55,8 @@ export interface ScaffoldResult {
   created: string[];
   /** Files that already existed and were kept untouched (e.g. a pre-existing .gitignore). */
   skipped: string[];
-  /** Files appended to (a kept .gitignore missing the .env/.fastagent excludes). */
+  /** Kept ignore files appended with missing fastagent excludes (root .gitignore: .env/.fastagent, plus
+   *  node_modules/ in the flat layout; kit .gitignore in the agentDir layout: node_modules/). */
   patched: string[];
   /** True if the target already had content before this run (init into an existing/non-empty dir). */
   intoNonEmpty: boolean;
@@ -271,10 +272,13 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
       }
     }
     if (!minimal && options.agentDir) {
-      const kitRel = options.agentDir.replace(/^\.[/\\]/, "").replace(/\\/g, "/");
-      const kitIgnore = await loadRootIgnore(join(dir, kitRel));
+      // Deliberately checks ONLY the kit's own ignore, not the root: the kit is the portable agent
+      // directory, and its dependency ignore must travel WITH it (a fresh kit .gitignore carries
+      // node_modules/ unconditionally for the same reason) — a root-level `node_modules/` that happens
+      // to cover it today doesn't survive the kit being copied out of the host repo.
+      const kitIgnore = await loadRootIgnore(join(dir, kit));
       if (!coveredBy(kitIgnore, "node_modules")) {
-        const rel = join(kitRel, ".gitignore");
+        const rel = join(kit, ".gitignore");
         await appendFile(join(dir, rel), `\n# fastagent\nnode_modules/\n`);
         patched.push(rel);
       }
