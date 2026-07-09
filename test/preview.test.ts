@@ -92,22 +92,112 @@ describe("streamReply single-writer pump (direct)", () => {
     );
     const src = eventSource();
     const turn = streamReply(src.iterable, API, "BOT", { chatId: 1 }, neutral);
+    const first = "ab";
     await vi.advanceTimersByTimeAsync(0); // placeholder sent
     src.push({ type: "text", delta: "a" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(inFlight).toBe(1); // the edit for "a" is held in flight…
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(inFlight).toBe(0); // no timer-driven partial answer flush
     src.push({ type: "text", delta: "b" });
-    src.push({ type: "text", delta: "c" }); // …while newer frames arrive
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inFlight).toBe(1); // the first answer frame is held in flight…
+    src.push({ type: "text", delta: "c" });
+    src.push({ type: "text", delta: "d" }); // …while newer frames arrive
     await vi.advanceTimersByTimeAsync(0);
     expect(maxInFlight).toBe(1); // SINGLE writer: nothing stacked behind the held edit
     releaseFirst();
     await vi.advanceTimersByTimeAsync(1600); // past the throttle → the next frame is the LATEST view
-    expect(edits).toEqual(["a", "abc"]); // coalesced — never an "ab" intermediate, never out of order
+    expect(edits).toEqual([first, `${first}cd`]); // coalesced — never an intermediate, never out of order
     src.push({ type: "completed" });
     src.end();
     await turn;
-    expect(edits.at(-1)).toBe("abc"); // the authoritative final write lands LAST
+    expect(edits.at(-1)).toBe(`${first}cd`); // the authoritative final write lands LAST
     expect(maxInFlight).toBe(1);
+  });
+});
+
+describe("streamReply answer preview (direct)", () => {
+  it("does not stream an answer before one preview interval has elapsed", async () => {
+    const { sends, edits } = recordingFetch();
+    await streamReply(
+      events({ type: "text", delta: "OK." }, { type: "completed" }),
+      API,
+      "BOT",
+      { chatId: 1 },
+      neutral,
+    );
+    expect(sends).toEqual(["💭 Thinking…"]);
+    expect(edits).toEqual(["OK."]);
+  });
+
+  it("starts answer preview on the next content update after one preview interval", async () => {
+    vi.useFakeTimers();
+    const { edits } = recordingFetch();
+    const src = eventSource();
+    const turn = streamReply(src.iterable, API, "BOT", { chatId: 1 }, neutral);
+    await vi.advanceTimersByTimeAsync(0); // placeholder sent
+    src.push({ type: "text", delta: "a" });
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(edits).not.toContain("a");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(edits).not.toContain("a"); // answerView has no timer; it only affects the next preview pass
+    src.push({ type: "text", delta: "bc" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(edits).toContain("abc");
+    src.push({ type: "completed" });
+    src.end();
+    await turn;
+    expect(edits.at(-1)).toBe("abc");
+  });
+
+  it("ages the first answer preview from the text delta, not from a delayed preview pass", async () => {
+    vi.useFakeTimers();
+    const edits: string[] = [];
+    let releaseFirstEdit!: () => void;
+    const firstEditGate = new Promise<void>((r) => {
+      releaseFirstEdit = r;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? (JSON.parse(String(init.body)) as { text?: string }) : {};
+        if (String(url).endsWith("/editMessageText")) {
+          if (edits.length === 0) await firstEditGate;
+          edits.push(body.text ?? "");
+        }
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
+      }),
+    );
+    const src = eventSource();
+    const turn = streamReply(src.iterable, API, "BOT", { chatId: 1 }, neutral);
+    await vi.advanceTimersByTimeAsync(0); // placeholder sent
+    src.push({ type: "thinking", delta: "checking" });
+    await vi.advanceTimersByTimeAsync(0); // first edit is now in flight
+    src.push({ type: "text", delta: "answer" });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseFirstEdit();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(edits).toEqual(["💭 checking", "💭 checking\n\nanswer"]);
+    src.push({ type: "completed" });
+    src.end();
+    await turn;
+    expect(edits.at(-1)).toBe("answer");
+  });
+
+  it("tool previews do not leak pending short answer text", async () => {
+    vi.useFakeTimers();
+    const { edits } = recordingFetch();
+    const src = eventSource();
+    const turn = streamReply(src.iterable, API, "BOT", { chatId: 1 }, neutral);
+    await vi.advanceTimersByTimeAsync(0); // placeholder sent
+    src.push({ type: "text", delta: "a" });
+    await vi.advanceTimersByTimeAsync(0);
+    src.push({ type: "tool_started", id: "t1", name: "read", args: { path: "AGENTS.md" } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(edits).toEqual(["🔧 read AGENTS.md …"]);
+    src.push({ type: "completed" });
+    src.end();
+    await turn;
+    expect(edits.at(-1)).toBe("a");
   });
 });
 

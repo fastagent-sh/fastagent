@@ -1579,8 +1579,9 @@ describe("telegram channel", () => {
     vi.stubGlobal("fetch", fetchMock);
     const agent: Agent = {
       async *invoke(): AsyncIterable<AgentEvent> {
-        yield { type: "text", delta: "final answer" };
-        await new Promise((r) => setTimeout(r, 2000)); // a gap so the pump attempts (and fails) a preview edit
+        yield { type: "text", delta: "final" };
+        await new Promise((r) => setTimeout(r, 2000)); // a gap so the next content update can enter live preview
+        yield { type: "text", delta: " answer" };
         yield { type: "completed" };
       },
     };
