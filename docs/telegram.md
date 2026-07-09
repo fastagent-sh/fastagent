@@ -59,7 +59,7 @@ https://<host>/telegram
 A minimal channel module looks like this:
 
 ```ts
-import { telegramChannel } from "@kid7st/fastagent/telegram";
+import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
 
 export default telegramChannel({
   secretToken: process.env.TELEGRAM_SECRET_TOKEN ?? "",
@@ -95,7 +95,7 @@ A group answers one shared `chat[:thread]` session: everyone talks to the same a
 The buffer needs Telegram **group privacy mode off** (@BotFather → `/setprivacy` → Disable) to receive un-summoned messages at all. The channel resolves the bot's privacy flag once at startup and warns when it is on.
 
 ```ts
-import { defaultTelegramRoute, telegramChannel, telegramEnvelope } from "@kid7st/fastagent/telegram";
+import { defaultTelegramRoute, telegramChannel, telegramEnvelope } from "@fastagent-sh/fastagent/telegram";
 
 const botUsername = "my_bot";
 

@@ -3,7 +3,7 @@
  * workspace, plus the parametric pieces. Base workspace templates live under ./templates/; each
  * channel's bundle lives WITH the channel at ../channels/<kind>/scaffold/ (so a channel owns its
  * starter kit and could ship as its own package). Both trees are excluded from this package's tsc +
- * biome (they import the published @kid7st/fastagent, not this source) and copied into dist/ by the build.
+ * biome (they import the published @fastagent-sh/fastagent, not this source) and copied into dist/ by the build.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
@@ -47,14 +47,14 @@ export const channelBundleFiles = (kind: string): string[] =>
   readdirSync(channelScaffoldDir(kind)).filter((f) => f.endsWith(".ts"));
 
 /** package.json for the complete agent: ESM + the deps a defineTool tool imports. The
- *  @kid7st/fastagent range tracks THIS build's version, so a fresh workspace installs an API-matching version. */
+ *  @fastagent-sh/fastagent range tracks THIS build's version, so a fresh workspace installs an API-matching version. */
 export function packageJson(name: string, version: string): string {
   return `${JSON.stringify(
     {
       name,
       private: true,
       type: "module",
-      dependencies: { "@kid7st/fastagent": `^${version}`, zod: "^4.0.0" },
+      dependencies: { "@fastagent-sh/fastagent": `^${version}`, zod: "^4.0.0" },
     },
     null,
     2,

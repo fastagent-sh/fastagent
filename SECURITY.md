@@ -13,7 +13,7 @@ FastAgent is pre-1.0. Security fixes land on the latest published `0.x` release 
 
 Do not open a public issue for a security report.
 
-Use GitHub's private vulnerability reporting: open the repository's **Security → Report a vulnerability** form (`https://github.com/kid7st/fastagent/security/advisories/new`).
+Use GitHub's private vulnerability reporting: open the repository's **Security → Report a vulnerability** form (`https://github.com/fastagent-sh/fastagent/security/advisories/new`).
 
 Please include:
 
@@ -28,7 +28,7 @@ We aim to acknowledge a report within 5 business days and to provide a remediati
 
 In scope:
 
-- the `@kid7st/fastagent` package (CLI, library API, reference implementation),
+- the `@fastagent-sh/fastagent` package (CLI, library API, reference implementation),
 - the first-party channel adapters (`/github`, `/telegram`),
 - credential handling in the project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`; global `~/.fastagent/auth.json` is opt-in) and the OAuth/env auth resolution path.
 

@@ -52,7 +52,7 @@ For local testing (prefer commands that exit):
 
 For tools:
 - Put tools in tools/<name>.ts.
-- Use defineTool and z from @kid7st/fastagent.
+- Use defineTool and z from @fastagent-sh/fastagent.
 - Test with: fastagent tool <name> '<json>'
 
 For GitHub:
@@ -67,7 +67,7 @@ For Telegram:
 
 For schedules (run the agent on a cron — daily digest, periodic checks):
 - Create schedules/<name>.ts: export default defineSchedule({ cron: "0 9 * * *", tz: "America/New_York",
-  prompt: "..." }) — defineSchedule comes from @kid7st/fastagent; the filename is the schedule name.
+  prompt: "..." }) — defineSchedule comes from @fastagent-sh/fastagent; the filename is the schedule name.
 - The prompt must SAY where output goes ("…and send it to the team Telegram"): the scheduler only fires
   the agent — a scheduled turn's plain reply is not delivered anywhere; delivery is a send tool's job.
   fastagent add telegram scaffolds one (tools/telegram-send.ts: message or file). A scheduled turn runs

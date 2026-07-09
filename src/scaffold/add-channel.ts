@@ -218,7 +218,7 @@ export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<s
 
 /**
  * Verify the workspace is ready to host a channel: an ESM package.json that declares
- * `@kid7st/fastagent` (the channel file imports it). `add` checks and guides, never bootstraps — that
+ * `@fastagent-sh/fastagent` (the channel file imports it). `add` checks and guides, never bootstraps — that
  * is `init`'s job.
  */
 export async function assertChannelReady(dir: string): Promise<void> {
@@ -232,7 +232,7 @@ export async function assertChannelReady(dir: string): Promise<void> {
       // workspace exists yet; a kit missing its manifest (e.g. a --minimal init) needs the manifest, not init.
       throw new Error(
         `${dir}: no package.json — a channel adapter is code and needs the kit's own manifest. ` +
-          `Run \`fastagent init\` for a fresh workspace, or add a package.json with @kid7st/fastagent there ` +
+          `Run \`fastagent init\` for a fresh workspace, or add a package.json with @fastagent-sh/fastagent there ` +
           `(a --minimal init has none)`,
       );
     }
@@ -247,9 +247,9 @@ export async function assertChannelReady(dir: string): Promise<void> {
   if (pkg.type !== "module") {
     throw new Error(`${pkgPath}: fastagent channels are ESM — set "type": "module"`);
   }
-  if (typeof pkg.dependencies?.["@kid7st/fastagent"] !== "string") {
+  if (typeof pkg.dependencies?.["@fastagent-sh/fastagent"] !== "string") {
     const add =
-      detectRuntime(dir, pkg).runtime === "bun" ? "bun add @kid7st/fastagent" : "npm install @kid7st/fastagent";
-    throw new Error(`${pkgPath}: @kid7st/fastagent is not a dependency — run \`${add}\` (the channel file imports it)`);
+      detectRuntime(dir, pkg).runtime === "bun" ? "bun add @fastagent-sh/fastagent" : "npm install @fastagent-sh/fastagent";
+    throw new Error(`${pkgPath}: @fastagent-sh/fastagent is not a dependency — run \`${add}\` (the channel file imports it)`);
   }
 }

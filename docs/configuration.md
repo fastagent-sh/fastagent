@@ -24,7 +24,7 @@ fastagent.config.mjs
 Example:
 
 ```ts
-import { defineConfig } from "@kid7st/fastagent";
+import { defineConfig } from "@fastagent-sh/fastagent";
 
 export default defineConfig({
   model: "openai-codex/gpt-5.5",

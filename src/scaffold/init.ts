@@ -290,7 +290,7 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
       const kitAbs = join(dir, kit);
       const add = detectRuntime(kitAbs, await readPackageJson(kitAbs)).runtime === "bun" ? "bun add" : "npm install";
       warnings.push(
-        `kept the existing ${keptPkg} — run \`${add} @kid7st/fastagent zod\` there so the example tool resolves`,
+        `kept the existing ${keptPkg} — run \`${add} @fastagent-sh/fastagent zod\` there so the example tool resolves`,
       );
     }
   } catch (error) {

@@ -41,6 +41,6 @@
   </g>
 
   <rect x="96" y="556" width="1088" height="1.5" fill="#1e2126"/>
-  <text x="96" y="600" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="26" fill="#d7dbe1">$ npm i -g @kid7st/fastagent</text>
+  <text x="96" y="600" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="26" fill="#d7dbe1">$ npm i -g @fastagent-sh/fastagent</text>
   <text x="1184" y="600" text-anchor="end" font-family="Archivo" font-size="23" font-weight="600" fill="#6a6f77">Built on pi &#183; MIT &#183; Node &#8805; 22.19</text>
 </svg>

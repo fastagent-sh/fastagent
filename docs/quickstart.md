@@ -10,7 +10,7 @@ This guide takes you from an installed CLI to a running local agent service.
 ## Prerequisites
 
 - Node >= 22.19 (`node --version`).
-- FastAgent CLI: `npm i -g @kid7st/fastagent`.
+- FastAgent CLI: `npm i -g @fastagent-sh/fastagent`.
 - Model credentials: run `fastagent login`, or put a provider API key in the workspace `.env`.
 
 List available model specs with:
@@ -120,7 +120,7 @@ Tools are files in `tools/`. The filename is the tool name.
 
 ```ts
 // tools/reverse.ts
-import { defineTool, z } from "@kid7st/fastagent";
+import { defineTool, z } from "@fastagent-sh/fastagent";
 
 export default defineTool({
   description: "Reverse a string.",
@@ -179,7 +179,7 @@ Drop a file in `schedules/` (mirroring `tools/`), named by its filename:
 
 ```ts
 // schedules/daily-digest.ts
-import { defineSchedule } from "@kid7st/fastagent";
+import { defineSchedule } from "@fastagent-sh/fastagent";
 
 export default defineSchedule({
   cron: "0 9 * * *",

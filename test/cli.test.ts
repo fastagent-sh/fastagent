@@ -182,7 +182,7 @@ describe("cli papercuts", () => {
   });
 
   it("info degrades when a tool can't load (missing dep) — reports it, still shows the surface, exits 0", async () => {
-    // The scaffold ships tools/ that import @kid7st/fastagent; before `npm install` the import fails.
+    // The scaffold ships tools/ that import @fastagent-sh/fastagent; before `npm install` the import fails.
     // A broken tool file is ISOLATED (skipped + reported, not thrown) so it can't crash the load — info
     // reports it, and dev/start degrade the SAME way (G2): the agent keeps serving without that one tool.
     const dir = await mkdtemp(join(tmpdir(), "fa-info-toolfail-"));

@@ -89,7 +89,7 @@ describe("deploy/fly: planFlyDeploy", () => {
 
   it("pins the global-install Dockerfile to the current version for a pure markdown agent", () => {
     const docker = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], hasPackageJson: false }));
-    expect(docker).toContain("npm i -g @kid7st/fastagent@9.9.9");
+    expect(docker).toContain("npm i -g @fastagent-sh/fastagent@9.9.9");
     expect(docker).not.toContain("npm ci");
   });
 
@@ -106,7 +106,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     );
     expect(docker).toContain("FROM node:22-slim"); // never oven/bun — the global npm i -g needs npm
     expect(docker).not.toContain("oven/bun");
-    expect(docker).toContain("npm i -g @kid7st/fastagent");
+    expect(docker).toContain("npm i -g @fastagent-sh/fastagent");
   });
 
   it("kit layout (kitDir): artifacts namespaced under the kit, kit deps installed, .git shipped, explicit deploy flags", () => {
@@ -162,7 +162,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     });
     const mdDf = md.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
     expect(mdDf).toContain("FROM node:22-slim");
-    expect(mdDf).toContain("npm i -g @kid7st/fastagent@9.9.9"); // pinned global — no kit deps to install
+    expect(mdDf).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned global — no kit deps to install
     expect(mdDf).not.toContain("npm ci");
     expect(mdDf).toContain(`["fastagent", "start", "/app"]`);
   });

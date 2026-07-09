@@ -1,4 +1,4 @@
-import { defineTool, z } from "@kid7st/fastagent";
+import { defineTool, z } from "@fastagent-sh/fastagent";
 
 // A code tool: filename (fetch-url.ts) is the tool name. tools/ is auto-discovered,
 // so it needs no registration in fastagent.config. Test it without a model:

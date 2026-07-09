@@ -16,6 +16,6 @@
   "include": ["src", "test"],
   // Scaffold payload: real template files copied verbatim into a new workspace (base kit under
   // src/scaffold/templates, per-channel bundles under src/channels/*/scaffold). They import the
-  // published @kid7st/fastagent, not this source, so they are data here, not part of the build.
+  // published @fastagent-sh/fastagent, not this source, so they are data here, not part of the build.
   "exclude": ["src/scaffold/templates", "src/channels/*/scaffold"]
 }

@@ -671,7 +671,7 @@ async function runAdd(): Promise<void> {
   // The kit's manifest lives in channelHome (agentDir when set) — point the install there, not the run root.
   const installCmd = channelHome === target ? install : `(cd ${relative(target, channelHome)} && ${install})`;
   console.error(`  next steps:`);
-  console.error(`    ${installCmd}                      # if @kid7st/fastagent is not installed yet`);
+  console.error(`    ${installCmd}                      # if @fastagent-sh/fastagent is not installed yet`);
   for (const e of env) {
     if (dotEnv?.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
     if (dotEnv?.written.includes(e.name)) {

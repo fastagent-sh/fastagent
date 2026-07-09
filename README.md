@@ -1,11 +1,11 @@
 <p align="center">
-  <a href="https://github.com/kid7st/fastagent"><img src="https://raw.githubusercontent.com/kid7st/fastagent/main/assets/hero.png" alt="FastAgent — Vibe first. Then FastAgent. An agent directory becomes a live service in your app, on GitHub, in Telegram, or any channel." width="860"></a>
+  <a href="https://github.com/fastagent-sh/fastagent"><img src="https://raw.githubusercontent.com/fastagent-sh/fastagent/main/assets/hero.png" alt="FastAgent — Vibe first. Then FastAgent. An agent directory becomes a live service in your app, on GitHub, in Telegram, or any channel." width="860"></a>
 </p>
 
-[![CI](https://github.com/kid7st/fastagent/actions/workflows/ci.yml/badge.svg)](https://github.com/kid7st/fastagent/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/@kid7st/fastagent.svg)](https://www.npmjs.com/package/@kid7st/fastagent)
-[![license](https://img.shields.io/npm/l/@kid7st/fastagent.svg)](LICENSE)
-[![node](https://img.shields.io/node/v/@kid7st/fastagent.svg)](https://nodejs.org)
+[![CI](https://github.com/fastagent-sh/fastagent/actions/workflows/ci.yml/badge.svg)](https://github.com/fastagent-sh/fastagent/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@fastagent-sh/fastagent.svg)](https://www.npmjs.com/package/@fastagent-sh/fastagent)
+[![license](https://img.shields.io/npm/l/@fastagent-sh/fastagent.svg)](LICENSE)
+[![node](https://img.shields.io/node/v/@fastagent-sh/fastagent.svg)](https://nodejs.org)
 [![built with pi](https://img.shields.io/badge/built%20with-pi-0b7285.svg)](https://pi.dev)
 
 <p align="center">
@@ -24,7 +24,7 @@ Leave the terminal. Become a real service.
 FastAgent is not another agent framework. It does not ask you to rewrite your agent in a new DSL or project layout. You bring the agent definition; FastAgent provides the serving layer around it.
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/kid7st/fastagent@main/assets/demo.svg" alt="fastagent dev boots an existing agent directory (AGENTS.md, skills/, tools/, channels/) into a live service; a GitHub pull_request.opened webhook arrives and the agent reviews PR #42 and posts inline comments." width="860">
+  <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="fastagent dev boots an existing agent directory (AGENTS.md, skills/, tools/, channels/) into a live service; a GitHub pull_request.opened webhook arrives and the agent reviews PR #42 and posts inline comments." width="860">
 </p>
 
 ## Why FastAgent
@@ -74,8 +74,8 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 ## Install
 
 ```bash
-npm i -g @kid7st/fastagent   # CLI: fastagent init/dev/start/...
-npm i @kid7st/fastagent      # library API for embedding or code tools
+npm i -g @fastagent-sh/fastagent   # CLI: fastagent init/dev/start/...
+npm i @fastagent-sh/fastagent      # library API for embedding or code tools
 ```
 
 Requires **Node >= 22.19** (the floor is inherited from the reference engine `@earendil-works/pi-agent-core` and `undici`), and also runs under **Bun** (verified on Bun 1.3 — its native fetch replaces the undici path). The npm package ships compiled JavaScript and type declarations.
@@ -107,7 +107,7 @@ There is no FastAgent build step: the directory is the agent.
 ## Embed in an app
 
 ```ts
-import { createInvokeHandler, createPiAgentFromDefinition } from "@kid7st/fastagent";
+import { createInvokeHandler, createPiAgentFromDefinition } from "@fastagent-sh/fastagent";
 
 const { agent } = await createPiAgentFromDefinition("./agent", {
   model: "openai-codex/gpt-5.5",
@@ -119,7 +119,7 @@ export const POST = createInvokeHandler(agent); // Fetch-shaped handler
 No directory? Assemble from typed parts:
 
 ```ts
-import { createPiAgent, defineTool, z } from "@kid7st/fastagent";
+import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent";
 
 const lookupOrder = defineTool({
   name: "lookup-order",
@@ -169,7 +169,7 @@ The root export intentionally contains the supported surface only.
 | Injection ports | `PiSessionStore`, `inMemorySessionStore`, `jsonlSessionStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
 | Not exported | L0 harness adapter, pi harness factory, prompt/config internals | Internal modules; no compatibility promise |
 
-Subpath exports: `@kid7st/fastagent/github` (GitHub webhook channel), `@kid7st/fastagent/telegram`
+Subpath exports: `@fastagent-sh/fastagent/github` (GitHub webhook channel), `@fastagent-sh/fastagent/telegram`
 (Telegram bot channel).
 
 ## Repository layout
@@ -186,7 +186,7 @@ independent dependencies/versioning actually exists.
 
 ## Status
 
-FastAgent is pre-1.0. The stable design center is the Agent Handler contract in `docs/SPEC.md`; the package API may still tighten before 1.0. Notable changes are recorded in the [GitHub Releases](https://github.com/kid7st/fastagent/releases).
+FastAgent is pre-1.0. The stable design center is the Agent Handler contract in `docs/SPEC.md`; the package API may still tighten before 1.0. Notable changes are recorded in the [GitHub Releases](https://github.com/fastagent-sh/fastagent/releases).
 
 ## Project
 

@@ -8,11 +8,11 @@ export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 
 // Channels (N-side; consume only the Agent contract). createInvokeHandler is Fetch-shaped so it
 // mounts in any host route; nodeListener bridges it onto node:http. The GitHub channel is a subpath
-// export: `@kid7st/fastagent/github`.
+// export: `@fastagent-sh/fastagent/github`.
 export { createInvokeHandler, nodeListener } from "./channels/http.ts";
 // Channel-authoring kit: an adapter (built-in, or a third-party `fastagent-channel-*` package) needs
 // these to read a capped request body and build plain responses — so it depends only on
-// @kid7st/fastagent. `collect` (below) drives the turn; `Routes`/`ChannelHandler` (host) type the return.
+// @fastagent-sh/fastagent. `collect` (below) drives the turn; `Routes`/`ChannelHandler` (host) type the return.
 export { readBodyCapped } from "./channels/body.ts";
 export { text, textHeaders } from "./channels/respond.ts";
 

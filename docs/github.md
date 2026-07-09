@@ -20,7 +20,7 @@ fastagent add github
 This creates `channels/github.ts` and appends the required env var to `.env.example` when possible.
 
 ```ts
-import { githubChannel } from "@kid7st/fastagent/github";
+import { githubChannel } from "@fastagent-sh/fastagent/github";
 
 export default githubChannel({
   secret: process.env.GITHUB_WEBHOOK_SECRET ?? "",

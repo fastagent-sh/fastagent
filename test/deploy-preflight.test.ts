@@ -37,7 +37,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const dir = await workspace({ "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n` });
     const agentDir = join(dir, "agent");
     await mkdir(agentDir, { recursive: true });
-    await writeFile(join(agentDir, "package.json"), `{"type":"module","dependencies":{"@kid7st/fastagent":"^1"}}`);
+    await writeFile(join(agentDir, "package.json"), `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`);
 
     // --run: gated with an actionable message (the run drivers don't speak the layout yet).
     const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { agentDir, run: true });
@@ -144,7 +144,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(wake.ok && wake.hasTimeTriggers).toBe(true);
   });
 
-  it("warns a code workspace with no lockfile and no @kid7st/fastagent dep", async () => {
+  it("warns a code workspace with no lockfile and no @fastagent-sh/fastagent dep", async () => {
     const dir = await workspace({ "package.json": JSON.stringify({ name: "a", type: "module" }) });
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
@@ -152,6 +152,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.messages.some((m) => /no package-lock\.json/.test(m.text) || /not reproducible/.test(m.text))).toBe(
       true,
     );
-    expect(pre.messages.some((m) => /does not list @kid7st\/fastagent/.test(m.text))).toBe(true);
+    expect(pre.messages.some((m) => /does not list @fastagent-sh\/fastagent/.test(m.text))).toBe(true);
   });
 });

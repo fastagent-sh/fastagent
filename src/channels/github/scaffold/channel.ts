@@ -1,4 +1,4 @@
-import { githubChannel } from "@kid7st/fastagent/github";
+import { githubChannel } from "@fastagent-sh/fastagent/github";
 
 // A channel = a third-party ADAPTER (githubChannel: verify + parse + ACK) configured with YOUR on() policy.
 // fastagent discovers this file under channels/, mounts POST /webhook, and pipes the agent to the

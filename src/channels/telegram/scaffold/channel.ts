@@ -1,4 +1,4 @@
-import { telegramChannel } from "@kid7st/fastagent/telegram";
+import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
 
 // A channel = a third-party ADAPTER (telegramChannel: verify + run + reply) configured with YOUR policy.
 // fastagent discovers this file under channels/, mounts POST /telegram, and pipes the agent + state
