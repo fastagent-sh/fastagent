@@ -561,6 +561,20 @@ describe("add: fastagent add <channel> (github / telegram)", () => {
     expect(envFile).toContain("OPENAI_API_KEY=sk-x"); // untouched
   });
 
+  it("an ACTIVE but EMPTY assignment is replaced IN PLACE — never shadowed by a line elsewhere (last-wins)", async () => {
+    const dir = await readyWorkspace();
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    // The uncommented-but-unfilled placeholder: marker block present, `KEY=` active and empty, and a
+    // LATER unrelated line — a slot-under-marker write would lose to last-wins here.
+    await writeFile(join(dir, ".env"), "# --- telegram channel ---\nTELEGRAM_SECRET_TOKEN=\nOPENAI_API_KEY=sk-x\n");
+    const out = await cliInit(["add", "telegram"], dir);
+    expect(out).toContain("wrote TELEGRAM_SECRET_TOKEN to .env");
+    const envFile = await readFile(join(dir, ".env"), "utf8");
+    expect(envFile.match(/^TELEGRAM_SECRET_TOKEN=/gm)).toHaveLength(1); // replaced, not duplicated
+    expect(envFile).toMatch(/^TELEGRAM_SECRET_TOKEN=[0-9a-f]{48}$/m); // …with a real value in place
+    expect(envFile).toContain("OPENAI_API_KEY=sk-x");
+  });
+
   it("keeps an existing non-empty telegram secret in .env", async () => {
     const dir = await readyWorkspace();
     await writeFile(join(dir, ".gitignore"), ".env\n");

@@ -36,8 +36,10 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
         generate: true,
       },
     ],
+    // `{channel}` / `{tools}` are path placeholders the CLI resolves to the real workspace-relative
+    // location (agentDir-aware) — the CLI holds no channel-private filenames.
     steps: [
-      "edit channels/github.ts — map events to intents in on()",
+      "edit {channel} — map events to intents in on()",
       "add the webhook in your repo (Settings → Webhooks): Payload URL = <public-url>/webhook, content type application/json",
     ],
   },
@@ -47,8 +49,8 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       { name: "TELEGRAM_SECRET_TOKEN", hint: "any random string; verifies inbound updates", generate: true },
     ],
     steps: [
-      "edit channels/telegram.ts — customise routing with route() (optional; the defaults already work)",
-      "the agent can send messages or files back by calling the scaffolded tools/telegram-send.ts tool",
+      "edit {channel} — customise routing with route() (optional; the defaults already work)",
+      "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
     ],
   },
 };
@@ -127,16 +129,38 @@ export async function appendChannelDotEnv(
   const alreadySet = CHANNEL_SCAFFOLDS[kind].env.filter((e) => hasActiveEnvValue(current, e.name)).map((e) => e.name);
   const lines: string[] = [];
   const written: string[] = [];
+  const contentLines = current.split("\n");
+  let replacedInPlace = false;
   for (const e of CHANNEL_SCAFFOLDS[kind].env) {
     if (alreadySet.includes(e.name)) continue;
     const value = generated[e.name];
     if (value !== undefined) {
-      lines.push(`${e.name}=${value}`);
+      // An ACTIVE but EMPTY assignment already in the file (an uncommented, unfilled placeholder from
+      // `cp .env.example .env`) must be replaced IN PLACE: a new line written anywhere else either loses
+      // to it or wins by position under last-wins — both silently. Replace the LAST occurrence (the one
+      // the parser would honor). Line-level match uses THE parser, never a hand regex.
+      let idx = -1;
+      for (let i = contentLines.length - 1; i >= 0; i--) {
+        if (parseEnvContent(contentLines[i] as string).has(e.name)) {
+          idx = i;
+          break;
+        }
+      }
+      if (idx >= 0) {
+        contentLines[idx] = `${e.name}=${value}`;
+        replacedInPlace = true;
+      } else {
+        lines.push(`${e.name}=${value}`);
+      }
       written.push(e.name);
     } else if (!mentionsEnvName(current, e.name)) {
       // Hint above, never inline after `=` — see appendChannelEnv (this IS the file loadEnvFile reads).
       lines.push(`# ${e.hint}`, `# ${e.name}=`);
     }
+  }
+  if (replacedInPlace) {
+    current = contentLines.join("\n");
+    await writeFile(file, current);
   }
   if (lines.length > 0) {
     const marker = `# --- ${kind} channel ---`;

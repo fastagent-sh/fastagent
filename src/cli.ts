@@ -682,13 +682,11 @@ async function runAdd(): Promise<void> {
     const value = e.generate ? `=${generated[e.name]}` : "";
     console.error(`    set ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
   }
-  // Steps name workspace-relative paths (the channel file, telegram's companion send tool) — rewrite
-  // them to the real location in the agentDir layout.
+  // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
+  // knowledge) — resolve them to the real workspace-relative locations (agentDir-aware) here.
   const kitPrefix = channelHome === target ? "" : `${relative(target, channelHome)}/`;
   for (const s of steps) {
-    console.error(
-      `    ${s.replace(`channels/${channelKind}.ts`, relative(target, file)).replace("tools/telegram-send.ts", `${kitPrefix}tools/telegram-send.ts`)}`,
-    );
+    console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
   }
   console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
 }
