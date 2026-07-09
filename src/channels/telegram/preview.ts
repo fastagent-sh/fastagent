@@ -21,7 +21,9 @@ export function defaultErrorMessage(failed: TelegramFailure): string {
 }
 
 /** How often (ms) to edit the live-preview message; tool events still flush on the next loop. Edits to
- *  one message are rate-limited tighter than sends, so pace them ~1.5s (vs every token). */
+ *  one message are rate-limited tighter than sends, so pace them ~1.5s (vs every token). Doubles as the
+ *  answer-preview aging window (see answerView): partial answer text stays hidden until it has existed
+ *  this long — one knob, same order of magnitude. */
 const EDIT_THROTTLE_MS = 1500;
 
 /** Max length of a tool's arg preview in the live view. */
@@ -119,6 +121,12 @@ export async function streamReply(
     if (t === "") return "";
     return `💭 ${t.length > THINKING_PREVIEW ? `…${t.slice(t.length - THINKING_PREVIEW + 1)}` : t}`;
   };
+  // The answer is hidden until its first delta has aged one EDIT_THROTTLE_MS: the pump's leading-edge
+  // flush would otherwise turn the very first content delta (often a lone character or unbalanced markup)
+  // into its own Telegram edit — the short-reply flicker (placeholder → "O" → "OK."). Aging is anchored
+  // at delta ARRIVAL (set in the event loop, not here) so an in-flight edit can't skew the clock, and
+  // there is deliberately NO timer at the boundary: a young answer surfaces on the next content-driven
+  // preview pass, so a turn completing within the window sends the final answer edit only.
   const answerView = (): string => {
     if (answer.trim() === "" || answerPreviewSince === undefined) return "";
     return Date.now() - answerPreviewSince >= EDIT_THROTTLE_MS ? answer : "";
