@@ -37,7 +37,10 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const dir = await workspace({ "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n` });
     const agentDir = join(dir, "agent");
     await mkdir(agentDir, { recursive: true });
-    await writeFile(join(agentDir, "package.json"), `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`);
+    await writeFile(
+      join(agentDir, "package.json"),
+      `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
+    );
 
     // --run: gated with an actionable message (the run drivers don't speak the layout yet).
     const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { agentDir, run: true });
