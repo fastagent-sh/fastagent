@@ -1,5 +1,8 @@
 node_modules/
 dist/
 .fastagent/
+.env
+.env.*
+!.env.example
 *.log
 .DS_Store
