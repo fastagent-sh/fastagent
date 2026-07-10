@@ -127,7 +127,7 @@ describe("github channel", () => {
     const res = await ch(signed(PR_OPENED.body, PR_OPENED.headers));
     expect(res.status).toBe(202);
     expect(seen).toMatchObject({ event: "pull_request", action: "opened", deliveryId: "d1" });
-    expect((seen?.payload as { repository?: { full_name?: string } }).repository?.full_name).toBe("o/r");
+    expect((seen?.payload as { repository?: { full_name?: string } } | undefined)?.repository?.full_name).toBe("o/r");
 
     await flush(); // the fire-and-forget turn runs (202 returns without awaiting it to completion)
     expect(calls).toEqual([{ session: "pr-o/r#7", text: "Review #7" }]);
