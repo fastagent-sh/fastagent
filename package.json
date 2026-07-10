@@ -15,7 +15,7 @@
   ],
   "license": "MIT",
   "author": "the fastagent authors (https://github.com/fastagent-sh/fastagent)",
-  "homepage": "https://github.com/fastagent-sh/fastagent#readme",
+  "homepage": "https://fastagent.sh",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fastagent-sh/fastagent.git"
