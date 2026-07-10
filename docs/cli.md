@@ -29,7 +29,7 @@ Most commands take an optional workspace directory. When omitted, the current di
 | `schedule list [dir]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
 | `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
-| `add github|telegram|lark [dir]` | Scaffold a first-party channel. |
+| `add github|telegram|lark [dir]` | Scaffold a first-party channel. `lark --create-app` also creates + configures the Feishu/Lark app itself from a scan and writes the credentials to `.env`. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--stop` (stop instead of suspend), `--no-scale-to-zero` (keep one machine up), `--force` (overwrite artifacts). |
 | `deploy railway [dir]` | Generate Railway artifacts (`railway.json` with `healthcheckPath=/health`, plus the shared `Dockerfile`/`.dockerignore`) and print a `railway` runbook: init a project, create a service (`railway add --service`), attach a `/data` volume, set the state root + secrets as variables (`railway variables set`, before the first deploy), `railway up`, then mint a domain (`railway domain`) and register the webhook. Scale-to-zero (App Sleeping) is a dashboard-only step the runbook states. `--run` drives the railway CLI to completion on an UNLINKED dir (auth → init/add/volume → variables → `railway up` → mint domain → telegram webhook; carries your local credential; needs the railway CLI); a dir already linked to a project is refused unless `--into-linked` (provision into it) — a routine redeploy is just `railway up`. `--force` overwrites artifacts. |
@@ -200,6 +200,7 @@ fastagent tool fetch-url '{"url":"https://example.com"}'
 fastagent add github [dir]
 fastagent add telegram [dir]
 fastagent add lark [dir]
+fastagent add lark --create-app [dir]   # also CREATE the Feishu/Lark app (scan-to-create; credentials → .env)
 ```
 
 Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.env.example` when possible. When `.env` is gitignored, the channel's GENERATED secrets (telegram's `TELEGRAM_SECRET_TOKEN`, github's `GITHUB_WEBHOOK_SECRET` — random strings the user contributes nothing to) are also written to the run-root `.env`, leaving only genuinely-manual values (e.g. `TELEGRAM_BOT_TOKEN` from BotFather) as next steps. When `config.agentDir` is set, the channel (and any companion tool) lands under that subdirectory — the same place `dev`/`start` discover channels — while `.env.example` and the secret hygiene stay at the run root, where `.env` is read.

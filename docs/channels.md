@@ -160,8 +160,8 @@ When `cloudflared` is installed, FastAgent opens a Cloudflare quick tunnel, prin
 
 - Telegram: calls `setWebhook` using `.env` values.
 - GitHub: prints the Payload URL to paste into repo settings.
-- Lark/Feishu: prints the event Request URL to paste into the developer console (keep the server
-  running while saving — the console verifies the URL with a challenge).
+- Lark/Feishu: PATCHes the app's event subscription to the tunnel URL via the application-config API
+  (using `.env` credentials; falls back to printing the manual console instruction).
 
 The tunnel is owned by the dev watch supervisor, so the URL survives worker reloads.
 

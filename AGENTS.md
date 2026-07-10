@@ -45,6 +45,7 @@ src/
 │   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + lark)
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
 │   ├── state.ts             # SHARED: atomic state files under <stateRoot>/channels/<kind>/
+│   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
 │   ├── github/              # github channel (+ scaffold/ bundle)
 │   ├── telegram/            # telegram channel — see docs/design/core.md §9.2
 │   │   ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)
@@ -65,6 +66,8 @@ src/
 │       ├── card.ts          # pure card JSON 2.0 builders (streaming entity / settled card / entity content)
 │       ├── seen.ts          # accepted-turn dedup ring on message_id (the platform documents duplicate pushes)
 │       ├── lark-api.ts      # the single Open API pipeline (tenant-token cache, rate-limit retry, code gate, cardkit)
+│       ├── register-app.ts  # `add lark --create-app`: scan-to-create device flow (RFC 8628, hand-rolled on fetch)
+│       ├── register-webhook.ts # --tunnel / deploy --run: event Request URL via application-v7 config PATCH
 │       └── scaffold/        # `add lark` bundle (channel.ts + send tool)
 ├── deploy/                  # `deploy fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §10.5)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/

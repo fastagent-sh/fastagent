@@ -1,7 +1,8 @@
 /**
  * `--tunnel`: expose the local dev server on a public HTTPS URL via a Cloudflare quick tunnel, then
- * auto-register the first-party webhook channels against it (telegram setWebhook; github/lark print
- * the URL to paste into their consoles). This closes the "local dev → public URL" gap webhooks need.
+ * auto-register the first-party webhook channels against it (telegram setWebhook; lark application-
+ * config PATCH; github prints the URL to paste into repo settings). This closes the "local dev →
+ * public URL" gap webhooks need.
  *
  * Process orchestration, not assembly — lives outside the engine, beside dev-supervisor.ts.
  */
@@ -9,6 +10,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { registerLarkWebhook } from "./channels/lark/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { loadDotEnv } from "./env.ts";
 import { log } from "./log.ts";
@@ -156,12 +158,7 @@ export async function announceWebhooks(dir: string, baseUrl: string): Promise<vo
       `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
   }
-  if (channels.includes("lark")) {
-    // No programmatic registration exists (unlike telegram's setWebhook): the console is the only
-    // writer of the event URL, and saving it fires a url_verification challenge — which is why the
-    // instruction stresses that THIS server must be up when the operator clicks save.
-    log.info(
-      `[fastagent] lark: set the event Request URL in the developer console (Events & Callbacks) to ${baseUrl}/lark — keep this server running while you save (the console verifies the URL with a challenge)`,
-    );
-  }
+  // lark registers programmatically too (application-v7 config PATCH — telegram-setWebhook parity);
+  // the registrar owns its own health wait and degrades to the manual console instruction.
+  if (channels.includes("lark")) await registerLarkWebhook(baseUrl);
 }

@@ -59,14 +59,17 @@ function listHasName(stdout: string, name: string): boolean {
 }
 
 /**
- * Run the deploy through `fly`. `log` reports progress; `registerTelegram(baseUrl)` performs the
- * post-deploy webhook step (the CLI passes its telegram registrar). Every gate is fail-visible.
+ * Run the deploy through `fly`. `log` reports progress; `registerTelegram(baseUrl)` /
+ * `registerLark(baseUrl)` perform the post-deploy webhook steps (the CLI passes its registrars;
+ * `registerLark` is optional — absent, the manual console instruction is printed). Every gate is
+ * fail-visible.
  */
 export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
   registerTelegram: (baseUrl: string) => Promise<void>,
+  registerLark?: (baseUrl: string) => Promise<void>,
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -143,9 +146,14 @@ export async function deployFlyRun(
     log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
   }
   if (plan.channels.includes("lark")) {
-    log(
-      `lark: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/lark (the app must be running when you save)`,
-    );
+    if (registerLark) {
+      log("registering lark event URL…");
+      await registerLark(`https://${plan.appName}.fly.dev`);
+    } else {
+      log(
+        `lark: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/lark (the app must be running when you save)`,
+      );
+    }
   }
   return { ok: true };
 }

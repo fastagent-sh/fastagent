@@ -149,6 +149,14 @@ export interface LarkApi {
     chatId: string,
     filesDir: string,
   ): Promise<DownloadedFile>;
+  /** Read the app's own event-security config (the platform-generated verification token / encrypt
+   *  key) — the scan-to-create flow copies these into .env so the operator never opens the console. */
+  getAppConfig(appId: string): Promise<{ verificationToken?: string; encryptionKey?: string }>;
+  /** Update the app's own event subscription (application-v7 config PATCH — tenant token can only
+   *  operate on itself; the request-URL change takes effect immediately, no version publish). The
+   *  platform VERIFIES `requestUrl` with a url_verification challenge during this call, so the server
+   *  behind it must already be answering. */
+  updateEventSubscription(appId: string, cfg: { subscriptionType: "webhook"; requestUrl: string }): Promise<void>;
   /** Create a card entity (card JSON 2.0). Returns its card_id. */
   createCard(cardJson: string): Promise<string>;
   /** Stream-update a card element's text (full-content snapshot + strictly increasing sequence). */
@@ -387,6 +395,26 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
       const dest = join(dir, safe);
       await writeFile(dest, bytes);
       return { path: dest, name: safe, size: bytes.byteLength };
+    },
+    async getAppConfig(appId) {
+      // v6 app detail — the one read surface that returns the event-security material (under data.app).
+      const data = await call<
+        ApiBody & { data?: { app?: { encryption?: { encryption_key?: string; verification_token?: string } } } }
+      >("getAppConfig", "GET", `/open-apis/application/v6/applications/${encodeURIComponent(appId)}?lang=zh_cn`);
+      return {
+        verificationToken: data.data?.app?.encryption?.verification_token,
+        encryptionKey: data.data?.app?.encryption?.encryption_key,
+      };
+    },
+    async updateEventSubscription(appId, cfg) {
+      await call(
+        "updateEventSubscription",
+        "PATCH",
+        `/open-apis/application/v7/applications/${encodeURIComponent(appId)}/config`,
+        {
+          event: { subscription_type: cfg.subscriptionType, request_url: cfg.requestUrl },
+        },
+      );
     },
     async createCard(cardJson) {
       const data = await call<ApiBody & { data?: { card_id?: string } }>(

@@ -464,7 +464,9 @@ describe("turn flow", () => {
     await vi.waitFor(() => {
       const texts = fx
         .calls("receive_id_type=chat_id", "POST")
-        .map((c) => (c.body?.msg_type === "text" ? (JSON.parse(String(c.body?.content)) as { text: string }).text : ""));
+        .map((c) =>
+          c.body?.msg_type === "text" ? (JSON.parse(String(c.body?.content)) as { text: string }).text : "",
+        );
       expect(texts.some((t) => t.includes("⏳ Queued"))).toBe(true);
     });
     release();

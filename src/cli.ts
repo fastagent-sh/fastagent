@@ -73,6 +73,9 @@ import { deployRailwayRun } from "./deploy/railway/run.ts";
 import { authSeedBytes, deployFlyRun } from "./deploy/fly/run.ts";
 import { spawnRunner } from "./deploy/runner.ts";
 import { assembleSecrets } from "./deploy/secrets.ts";
+import { createLarkApi } from "./channels/lark/lark-api.ts";
+import { registerLarkApp } from "./channels/lark/register-app.ts";
+import { registerLarkWebhook } from "./channels/lark/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { readRuns } from "./schedule/audit.ts";
@@ -94,7 +97,7 @@ function usage(code: number): never {
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
-  fastagent add   github | telegram | lark | skill <source> [dir]
+  fastagent add   github | telegram | lark [--create-app] | skill <source> [dir]
   fastagent deploy fly|railway [dir] [--run] [--force] [--stop] [--no-scale-to-zero] [--into-linked]
   fastagent login [provider] [--auth-path file]
   fastagent --version
@@ -105,7 +108,7 @@ function usage(code: number): never {
          disable). Files the agent writes as work product never trigger a restart.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --tunnel  expose it on a public HTTPS URL via a Cloudflare quick tunnel (needs cloudflared)
-                   and auto-register the webhook channels (telegram setWebhook; github/lark print the URL)
+                   and auto-register the webhook channels (telegram, lark; github prints the URL)
   chat   open the SAME assembled agent in pi's interactive TUI (the real harness, not a
          crude REPL) — to try it locally before serving. Same model/tool/skill resolution
          as dev; pi handles login, sessions, and /resume natively.
@@ -155,6 +158,9 @@ function usage(code: number): never {
                    your own box without deploying (the quick-tunnel URL is ephemeral, not for production)
   add    github | telegram | lark: scaffold channels/<kind>.ts — third-party adapter glue with the
          policy to edit (github maps events in on(); telegram/lark route in the optional route()).
+         lark --create-app: create + configure the Feishu/Lark app itself (confirm a link in
+         Feishu/Lark — the platform's "scan to create" flow; no developer console) and write the
+         credentials to .env.
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
@@ -195,6 +201,7 @@ const { positionals, values } = parseArgs({
     "agent-dir": { type: "string" },
     "no-watch": { type: "boolean" },
     tunnel: { type: "boolean" },
+    "create-app": { type: "boolean" },
     update: { type: "boolean" },
     force: { type: "boolean" },
     stop: { type: "boolean" },
@@ -628,6 +635,10 @@ async function runAdd(): Promise<void> {
     process.exit(1);
   }
   const channelKind = kind as ChannelKind;
+  // --create-app preconditions fail BEFORE any write or the (minutes-long) confirmation dance itself.
+  if (values["create-app"] && channelKind !== "lark") {
+    failStartup(new Error("--create-app is lark-only — app creation from the CLI is a Feishu/Lark platform flow"));
+  }
   // The channel (glue + companion tool) is agent surface — it lands in agentDir (config.agentDir, or
   // target when flat), the same place dev/start discover channels/. .env(.example) and the secret
   // hygiene stay at the run root, where .env is actually read.
@@ -657,13 +668,27 @@ async function runAdd(): Promise<void> {
       `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
     );
   }
+  // --create-app: create + pre-configure the app itself via the platform's scan-to-create flow; its
+  // credentials are written to .env exactly like generated secrets (same gitignore guard — the CLI
+  // must never materialize a real credential into a committable file, so it REFUSES there).
+  let created: Record<string, string> | undefined;
+  if (values["create-app"]) {
+    if (!envIgnored) {
+      failStartup(
+        new Error("--create-app writes real app credentials to .env — add .env to .gitignore/.fastagentignore first"),
+      );
+    }
+    created = await createLarkAppFlow().catch(failStartup);
+  }
   const { env, steps } = channelSetup(channelKind);
   const generated = Object.fromEntries(
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
   // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
-  // the same class of value as telegram's).
-  const dotEnv = envIgnored ? await appendChannelDotEnv(target, channelKind, generated).catch(failStartup) : undefined;
+  // the same class of value as telegram's); created-app credentials ride the same write.
+  const dotEnv = envIgnored
+    ? await appendChannelDotEnv(target, channelKind, { ...generated, ...created }).catch(failStartup)
+    : undefined;
   if (dotEnv && dotEnv.written.length > 0) {
     console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .env`);
   }
@@ -691,6 +716,49 @@ async function runAdd(): Promise<void> {
     console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
   }
   console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
+}
+
+/**
+ * `add lark --create-app`: the platform's scan-to-create flow. The device-authorization grant creates
+ * a pre-configured agent app (bot capability, messaging scopes, event subscriptions) when the user
+ * confirms a link in Feishu/Lark, and hands back the credentials; the platform-generated Verification
+ * Token is then read back over the API — so .env ends up complete without the developer console. The
+ * event Request URL is NOT set here: `dev --tunnel` / `deploy --run` register it against the live URL.
+ */
+async function createLarkAppFlow(): Promise<Record<string, string>> {
+  console.error(`[fastagent] creating the Feishu/Lark app (confirm in the app)…`);
+  const app = await registerLarkApp({
+    name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
+    desc: "Served by fastagent",
+    onVerificationUrl: ({ url, expiresInS }) => {
+      console.error(
+        `\n  Open this link in Feishu/Lark (or render it as a QR code) and confirm — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  waiting for confirmation…`,
+      );
+    },
+  });
+  console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);
+  const env: Record<string, string> = { LARK_APP_ID: app.appId, LARK_APP_SECRET: app.appSecret };
+  if (app.tenantBrand === "lark") env.LARK_BASE_URL = "https://open.larksuite.com"; // intl cloud — the channel + tools read this
+  // The webhook channel authenticates plaintext events by the platform-generated Verification Token —
+  // read it back so the operator never opens the console. Failing that is a one-line manual copy, not
+  // a failed scan: the credentials above are already worth keeping.
+  try {
+    const api = createLarkApi({
+      baseUrl: env.LARK_BASE_URL ?? "https://open.feishu.cn",
+      appId: app.appId,
+      appSecret: app.appSecret,
+    });
+    const cfg = await api.getAppConfig(app.appId);
+    if (cfg.verificationToken) env.LARK_VERIFICATION_TOKEN = cfg.verificationToken;
+  } catch (e) {
+    console.error(`[fastagent] warn: could not read the app's Verification Token: ${String(e)}`);
+  }
+  if (!env.LARK_VERIFICATION_TOKEN) {
+    console.error(
+      `[fastagent] copy it manually: developer console → Events & Callbacks → Encryption Strategy → Verification Token → LARK_VERIFICATION_TOKEN in .env`,
+    );
+  }
+  return env;
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */
@@ -951,6 +1019,7 @@ async function runDeployFly(params: {
     fly,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
+    (baseUrl) => registerLarkWebhook(baseUrl),
   );
   if (!outcome.ok) {
     console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
@@ -1002,6 +1071,7 @@ async function runDeployRailway(params: {
     railway,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
+    (baseUrl) => registerLarkWebhook(baseUrl),
   );
   if (!outcome.ok) {
     console.error(`[fastagent] deploy stopped: ${outcome.gate}`);

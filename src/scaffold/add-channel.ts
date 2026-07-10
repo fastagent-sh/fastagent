@@ -54,18 +54,19 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     ],
   },
   lark: {
-    // No `generate` here: every value comes FROM the developer console (generating an Encrypt Key
-    // locally would break inbound events until the user mirrors it in the console — a silent-footgun
-    // default; the hint tells them the direction of travel instead).
+    // No `generate` here: every value comes FROM the platform (generating an Encrypt Key locally
+    // would break inbound events until the user mirrors it in the console — a silent-footgun
+    // default). `add lark --create-app` fills them automatically via the scan-to-create flow.
     env: [
-      { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info" },
-      { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info" },
+      { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info (or `add lark --create-app`)" },
+      { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info (or `add lark --create-app`)" },
       { name: "LARK_VERIFICATION_TOKEN", hint: "console → Events & Callbacks; authenticates inbound events" },
       { name: "LARK_ENCRYPT_KEY", hint: "optional but recommended — set one in the console and copy it here" },
+      { name: "LARK_BASE_URL", hint: "optional — https://open.larksuite.com for Lark international (default: Feishu)" },
     ],
     steps: [
       "edit {channel} — the setup walkthrough (console permissions, event subscription) is in its header",
-      "set the event Request URL to <public-url>/lark with the server RUNNING (the console sends a challenge)",
+      "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run` (manual: console → Events & Callbacks)",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
   },

@@ -170,6 +170,34 @@ describe("card methods", () => {
   });
 });
 
+describe("app config (scan-to-create + webhook registration)", () => {
+  it("getAppConfig reads the platform-generated event-security material from the v6 app detail", async () => {
+    const fx = stubFetch(() =>
+      Response.json({
+        code: 0,
+        msg: "ok",
+        data: { app: { app_id: "cli_a", encryption: { verification_token: "vt-1", encryption_key: "ek-1" } } },
+      }),
+    );
+    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    expect(await api.getAppConfig("cli_a")).toEqual({ verificationToken: "vt-1", encryptionKey: "ek-1" });
+    expect(fx.calls().at(-1)?.url).toContain("/open-apis/application/v6/applications/cli_a?lang=zh_cn");
+  });
+
+  it("updateEventSubscription PATCHes webhook mode + the request URL at the v7 config", async () => {
+    const reqs: { url: string; method?: string; body: Record<string, unknown> }[] = [];
+    stubFetch((url, init) => {
+      reqs.push({ url, method: init.method, body: JSON.parse(String(init.body)) });
+      return okData({});
+    });
+    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    await api.updateEventSubscription("cli_a", { subscriptionType: "webhook", requestUrl: "https://x.dev/lark" });
+    expect(reqs[0]?.url).toContain("/open-apis/application/v7/applications/cli_a/config");
+    expect(reqs[0]?.method).toBe("PATCH");
+    expect(reqs[0]?.body).toEqual({ event: { subscription_type: "webhook", request_url: "https://x.dev/lark" } });
+  });
+});
+
 describe("resources", () => {
   it("fetchImage downloads the message resource and mimes from the content-type (fallback jpeg)", async () => {
     stubFetch(

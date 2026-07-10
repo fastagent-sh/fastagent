@@ -9,17 +9,19 @@ import { larkChannel } from "@fastagent-sh/fastagent/lark";
 //      card scope ("Create and update card" — the live preview streams through a card)
 //   3. Events & Callbacks → subscribe to `im.message.receive_v1`; copy the Verification Token into
 //      .env; RECOMMENDED: set an Encrypt Key there and mirror it in LARK_ENCRYPT_KEY
-//   4. set the event Request URL to https://your.host/lark — the server must be RUNNING when you
-//      save (the console sends a url_verification challenge this channel answers). For local dev,
-//      `fastagent dev --tunnel` prints the public URL to paste.
+//   4. the event Request URL (https://your.host/lark) is registered AUTOMATICALLY by
+//      `fastagent dev --tunnel` and `fastagent deploy … --run`; to set it by hand in the console,
+//      keep the server running while you save (the platform verifies the URL with a challenge)
 //   5. create a version and publish the app (a Feishu admin approves it), then add the bot to a chat
+// Or skip steps 1-3 entirely: `fastagent add lark --create-app` creates + configures the app from a scan.
 export default larkChannel({
   appId: process.env.LARK_APP_ID ?? "", // missing → fails at startup (no replies could be sent)
   appSecret: process.env.LARK_APP_SECRET ?? "",
   verificationToken: process.env.LARK_VERIFICATION_TOKEN ?? "", // authenticates inbound events
   encryptKey: process.env.LARK_ENCRYPT_KEY || undefined, // optional; when set, plaintext events are refused
-  // Lark international (larksuite.com) tenants: uncomment the next line.
-  // baseUrl: "https://open.larksuite.com",
+  // API origin — unset defaults to Feishu (open.feishu.cn); Lark international tenants set
+  // LARK_BASE_URL=https://open.larksuite.com in .env (`add lark --create-app` writes it automatically).
+  baseUrl: process.env.LARK_BASE_URL || undefined,
   // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
   // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
   // full details always go to the server log regardless.

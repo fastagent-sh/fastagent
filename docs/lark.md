@@ -16,7 +16,8 @@ It works with both brands of the platform: Feishu (`open.feishu.cn`, the default
 From an agent workspace:
 
 ```bash
-fastagent add lark
+fastagent add lark --create-app   # recommended: creates + configures the app itself, no developer console
+fastagent add lark          # scaffold only; configure the app by hand (next section)
 ```
 
 This creates:
@@ -28,7 +29,24 @@ tools/lark-send.ts    # optional outbound send tool for the agent (text or markd
 
 It also appends the required env vars to `.env.example` when possible.
 
-## Configure the app (developer console)
+## Create the app from the CLI (`--create-app`)
+
+`fastagent add lark --create-app` runs the platform's **scan-to-create** flow (its official name; an
+OAuth 2.0 device-authorization grant): the CLI prints a one-time link (valid ~10 minutes); open it in
+Feishu or Lark — scan it as a QR code or just click it — and confirm; the platform creates an app from its agent template — bot capability, messaging scopes,
+and event subscriptions pre-configured — and hands the credentials back. fastagent then reads the
+platform-generated Verification Token over the API and writes everything to `.env`:
+
+- `LARK_APP_ID` / `LARK_APP_SECRET` — from the created app,
+- `LARK_VERIFICATION_TOKEN` — read back via the app-config API,
+- `LARK_BASE_URL` — set to `https://open.larksuite.com` automatically when the confirming user is on
+  a Lark (international) tenant.
+
+The scan refuses to run when `.env` is not gitignored (real credentials must never land in a
+committable file). After the scan: `fastagent dev --tunnel` — the event Request URL is registered
+automatically (next section); no console visit at any step.
+
+## Configure the app by hand (developer console)
 
 Create a **custom app** in the [Feishu developer console](https://open.feishu.cn/app) (or the Lark equivalent), then:
 
@@ -49,13 +67,12 @@ LARK_VERIFICATION_TOKEN=...
 LARK_ENCRYPT_KEY=...   # optional but recommended; must match the console exactly
 ```
 
-5. **Set the event Request URL** to `https://<host>/lark`. The server must be **running** when you save — the console sends a `url_verification` challenge that this channel answers. For local development:
-
-```bash
-fastagent dev --tunnel
-```
-
-prints the public URL to paste (there is no programmatic registration like Telegram's `setWebhook`; the console is the only writer of the event URL).
+5. **The event Request URL registers itself**: `fastagent dev --tunnel` (and `fastagent deploy … --run`)
+   call the application-config API to point the app's event subscription at `https://<host>/lark` —
+   webhook mode, applied immediately, no version publish. This needs the
+   `application:application:self_manage` scope (the agent template includes it); without it, the manual
+   fallback is printed: set the URL in the console with the server **running** (the platform verifies
+   the URL with a `url_verification` challenge this channel answers).
 
 6. **Create a version and publish** the app (a tenant admin approves it), then add the bot to a chat.
 
@@ -177,6 +194,8 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 ## Limits
 
 - Webhook (event subscription) mode only. The platform's WebSocket long-connection mode — attractive because it needs no public URL — requires the official SDK and a non-HTTP channel seam; a later tier.
+- `--create-app` creates the app with the platform's agent template, whose event subscription starts in
+  long-connection mode — the first `dev --tunnel` / `deploy --run` flips it to webhook automatically.
 - The un-summoned group context buffer (Telegram parity) is gated on the sensitive `im:message.group_msg` scope; not yet implemented.
 - The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds; the channel persists the turn intent and ACKs immediately, so slow turns are never the webhook's problem.
