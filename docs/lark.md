@@ -67,12 +67,14 @@ LARK_VERIFICATION_TOKEN=...
 LARK_ENCRYPT_KEY=...   # optional but recommended; must match the console exactly
 ```
 
-5. **The event Request URL registers itself**: `fastagent dev --tunnel` (and `fastagent deploy … --run`)
-   call the application-config API to point the app's event subscription at `https://<host>/lark` —
-   webhook mode, applied immediately, no version publish. This needs the
-   `application:application:self_manage` scope (the agent template includes it); without it, the manual
-   fallback is printed: set the URL in the console with the server **running** (the platform verifies
-   the URL with a `url_verification` challenge this channel answers).
+5. **The event Request URL registers itself** (Feishu tenants): `fastagent dev --tunnel` (and
+   `fastagent deploy … --run`) call the application-config API to point the app's event subscription at
+   `https://<host>/lark` — webhook mode, applied immediately, no version publish. This needs the
+   `application:application:self_manage` scope (the agent template includes it). **Lark international
+   lags here**: `open.larksuite.com` does not expose the config API yet, so intl tenants set the URL in
+   the console by hand — with the server **running** (the platform verifies the URL with a
+   `url_verification` challenge this channel answers). The registrar keeps attempting the API and
+   degrades to that instruction, so intl registration starts working the day the platform ships it.
 
 6. **Create a version and publish** the app (a tenant admin approves it), then add the bot to a chat.
 

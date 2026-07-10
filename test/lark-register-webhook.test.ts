@@ -92,6 +92,35 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
     expect(patches).toBe(1); // permanent error — no blind retries
   });
 
+  it("a 404 on the config route (Lark intl cloud lag) names the real cause, once, without blaming scopes", async () => {
+    creds("http://larksuite.test"); // the intl cloud — no v7 config route
+    let patches = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/health")) return new Response(null, { status: 200 });
+        if (url.includes("tenant_access_token")) {
+          return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
+        }
+        if (url.includes("/application/v7/")) {
+          patches++;
+          return new Response("404 page not found", { status: 404, headers: { "content-type": "text/plain" } });
+        }
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const warned: string[] = [];
+    const { log } = await import("../src/log.ts");
+    const spy = vi.spyOn(log, "warn").mockImplementation((m: string) => {
+      warned.push(m);
+    });
+    await registerLarkWebhook("https://x.trycloudflare.com", { readyTimeoutMs: 100, readyIntervalMs: 1, retryMs: 1 });
+    spy.mockRestore();
+    expect(patches).toBe(1); // a missing route never gets blind retries
+    expect(warned.join("\n")).toMatch(/does not expose the app-config API yet/); // the CAUSE, not "check scopes"
+    expect(warned.join("\n")).toMatch(/register by hand/);
+  });
+
   it("missing credentials print the instruction and touch nothing", async () => {
     delete process.env.LARK_APP_ID;
     delete process.env.LARK_APP_SECRET;

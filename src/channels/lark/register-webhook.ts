@@ -10,6 +10,11 @@
  * this waits for `<baseUrl>/health` to serve first (the same readiness race the telegram registrar
  * fixes). Requires the `application:application:self_manage` scope (the platform's agent-app template
  * includes it); without it the PATCH fails visibly and the manual console instruction is printed.
+ *
+ * CLOUD LAG: the application-v7 config API exists on open.feishu.cn but (as of 2026-07) is NOT
+ * deployed on open.larksuite.com — the route 404s there. The registrar still attempts it (the day the
+ * platform ships it, registration starts working with no change here) and names the real cause in the
+ * fallback instead of blaming the app's scopes.
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
@@ -54,6 +59,16 @@ export async function registerLarkWebhook(
       return;
     } catch (e) {
       const error = String(e);
+      // A 404 on the config route is the CLOUD lagging, not this app's configuration: the v7 API is
+      // live on open.feishu.cn but not yet on open.larksuite.com. Name that — "check your scopes"
+      // would send the operator hunting for a problem they cannot fix.
+      if (/failed: 404/.test(error)) {
+        log.warn(
+          `[fastagent] lark: this cloud (${apiBase}) does not expose the app-config API yet (it exists on ` +
+            `open.feishu.cn; Lark international lags behind) — register by hand: ${manual}`,
+        );
+        return;
+      }
       if (!/resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout/i.test(error)) {
         log.error(
           `[fastagent] lark: could not register the event URL (${error}). ` +
