@@ -12,7 +12,7 @@
  * survives for the next answered turn (a whole-bucket delete would lose it).
  */
 import { log } from "../../log.ts";
-import { loadStateFile, saveStateFile } from "./state.ts";
+import { loadStateFile, saveStateFile } from "../state.ts";
 
 /** Char budget for the per-place buffer — bounds the cost of folding it into a prompt; when exceeded
  *  the OLDEST un-summoned messages are dropped (not a time window: a quiet group keeps its

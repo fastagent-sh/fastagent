@@ -3,7 +3,9 @@
  * cross-instance locking; two processes must not share a state dir). Small JSON files, written
  * atomically (tmp + rename), so a crash leaves the previous version on disk, never a torn file.
  * Writes are synchronous: the files are KB-sized and a write that completes BEFORE the webhook 200
- * is what makes the state actually durable (an ACKed update is never redelivered by Telegram).
+ * is what makes the state actually durable (an ACKed webhook delivery is not redelivered).
+ * Channel-neutral: every stateful channel (telegram, lark) derives its home from the ctx state root
+ * and persists through these three primitives.
  *
  * Failure split: a CORRUPT file (bad JSON) degrades visibly — log.warn + start empty — because channel
  * state is recoverable context, not worth refusing to boot over. An unreadable file (permissions, IO)
@@ -12,7 +14,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { log } from "../../log.ts";
+import { log } from "../log.ts";
 
 /** Create the state home and self-ignore it (`.gitignore="*"`): its contents (buffers, downloaded
  *  files) can carry chat content and must never be committable. The workspace opener already protects
@@ -36,14 +38,14 @@ export function loadStateFile(path: string): unknown {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined; // first run — normal
     // Permissions/IO: an environment error — fail the boot loudly rather than run on invisible state.
-    throw new Error(`telegram state file ${path} is unreadable — fix permissions/disk and restart: ${String(e)}`, {
+    throw new Error(`channel state file ${path} is unreadable — fix permissions/disk and restart: ${String(e)}`, {
       cause: e,
     });
   }
   try {
     return JSON.parse(raw);
   } catch (e) {
-    log.warn(`[telegram] corrupt state file ${path} — starting empty: ${String(e)}`);
+    log.warn(`[fastagent] corrupt state file ${path} — starting empty: ${String(e)}`);
     return undefined;
   }
 }
