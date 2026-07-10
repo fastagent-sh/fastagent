@@ -13,7 +13,7 @@ The stable design center is the engine-neutral Agent Handler contract (`docs/SPE
 | `docs/SPEC.md` | The locked v0.1 Agent Handler contract. Do not change its semantics without an explicit decision. |
 | `docs/design/core.md` | The pi reference implementation and current architecture. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
-| `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review tiers). |
+| `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review policy). |
 
 Code truth is `src/`.
 
@@ -119,7 +119,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
 3. **Rebase merge by default** (preserve curated commits); squash only to clean up a WIP branch. Merge commits are disabled. `main` enforces linear history; force-push is forbidden.
-4. **Review tiers.** Docs/refactor/tests self-merge after green CI; SPEC, the `Agent` contract, and public API surface wait for review.
+4. **Review policy.** Maintainer-authored PRs may self-merge after green CI; external-contributor PRs require one maintainer approval and are merged by a maintainer.
 5. **After merge:**
    ```bash
    git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin

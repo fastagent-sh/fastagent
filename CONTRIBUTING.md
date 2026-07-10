@@ -67,18 +67,15 @@ Add or update the smallest relevant tests that prove the change. Reusable SPEC c
 
 Either way, one branch = one focused change. If a branch grows several unrelated changes, split it into multiple PRs rather than squashing them into an opaque blob.
 
-## Review tiers
+## Review policy
 
-This is a small team; review is risk-based, not mandatory on everything.
+A maintainer is a collaborator with write or admin access.
 
-| Change | Review |
-|---|---|
-| Docs, comments, typos | Self-merge after CI |
-| Semantically-equivalent refactor, added tests | Self-merge after CI |
-| `docs/SPEC.md` (the locked contract), the `Agent` interface, public API surface in `src/index.ts` | Wait for review |
-| Anything that deletes a public export or changes error/terminal semantics | Wait for review |
+- A maintainer-authored PR may be self-merged after all required checks pass. A second maintainer review is optional, including for SPEC and public API changes.
+- A PR from an external contributor requires one approving review from a maintainer before a maintainer merges it.
+- `CODEOWNERS` routes changes to the relevant maintainers; it does not impose an additional approval on maintainer-authored PRs.
 
-Force-pushing to `main` is forbidden. Long-lived PRs (> ~3 days) should be rebased on `main`.
+All changes still go through a PR. Force-pushing to `main` is forbidden. Long-lived PRs (> ~3 days) should be rebased on `main`.
 
 ## Commit and PR messages
 
