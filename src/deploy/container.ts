@@ -27,7 +27,7 @@ export interface ContainerInput {
   /** Whether the workspace has a package.json (a code workspace); else a pure markdown/skills agent. */
   hasPackageJson: boolean;
   /** The package manager the generated image targets: `bun` (packageManager: bun / a bun lockfile) gets an
-   *  `oven/bun` base + `bun install` + `bunx fastagent`; otherwise npm on `node:22-slim`. */
+   *  `oven/bun` base + `bun install` + `bun run fastagent`; otherwise npm on `node:22-slim`. */
   runtime: "node" | "bun";
   /** Whether the runtime's lockfile exists (package-lock.json for npm, bun.lock/bun.lockb for bun) — a
    *  frozen/ci install needs it; without it the build resolves versions at build time (not reproducible). */
@@ -75,7 +75,7 @@ ${apt}WORKDIR /app
     return `${head}COPY ${kit}/package.json ${kit}/bun.lock* ./${kit}/
 RUN cd ${kit} && ${install}
 COPY . .
-CMD ["sh", "-c", "cd ${kit} && bunx fastagent start /app"]
+CMD ["sh", "-c", "cd ${kit} && bun run fastagent start /app"]
 `;
   }
   const install = input.hasLockfile ? "npm ci" : "npm install";
@@ -119,7 +119,7 @@ CMD ["fastagent", "start", "/app"]
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : "node:22-slim";
   const note = isBun
-    ? "# Bun-based (packageManager: bun / a bun lockfile detected). fastagent runs under Bun (bunx)."
+    ? "# Bun-based (packageManager: bun / a bun lockfile detected). fastagent runs under Bun (bun run)."
     : "# npm-based — for pnpm/yarn, adapt the install line + the lockfile COPY (corepack enable, etc.).";
   const head = `${GENERATED_DOCKERFILE_MARKER}. The directory IS the agent — no build step.
 ${note}
@@ -132,22 +132,28 @@ ${apt}WORKDIR /app
   if (isBun) {
     // `--frozen-lockfile` needs bun.lock and hard-fails without it; fall back to a plain `bun install`
     // (resolves at build time — not reproducible; the CLI warns to commit the lockfile).
+    // `bun run` executes the LOCAL node_modules/.bin entry only — never the registry. A bare
+    // `bunx fastagent` would fall back to installing the npm package named `fastagent`, which is an
+    // unrelated third-party package (ours is the scoped @fastagent-sh/fastagent).
     const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
     return `${head}COPY package.json bun.lock* ./
 RUN ${install}
 COPY . .
-CMD ["bunx", "fastagent", "start", "/app"]
+CMD ["bun", "run", "fastagent", "start", "/app"]
 `;
   }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` workspace);
   // fall back to `npm install` when there is none so the build never breaks. Caveat: `npm install`
   // resolves caret ranges at build time, so THIS branch is NOT reproducible — unlike the pinned
   // `npm ci` (lockfile) and pinned global (markdown) paths. The CLI warns to commit a lockfile.
+  // The explicit local bin, not `npx fastagent`: npx falls back to fetching the npm package named
+  // `fastagent` when the dep is absent — an unrelated third-party package (ours is scoped). The local
+  // path fails fast and visibly instead.
   const install = input.hasLockfile ? "npm ci" : "npm install";
   return `${head}COPY package.json package-lock.json* ./
 RUN ${install}
 COPY . .
-CMD ["npx", "fastagent", "start", "/app"]
+CMD ["./node_modules/.bin/fastagent", "start", "/app"]
 `;
 }
 
