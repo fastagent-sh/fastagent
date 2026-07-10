@@ -2,9 +2,9 @@
 
 ## What this is
 
-fastagent is "Vibe first. Then FastAgent" for agent directories: it turns an existing agent definition (`AGENTS.md` + `skills/`) into a running agent service inside an app, reviewing GitHub PRs, helping users in Telegram, or running behind a custom channel without rewriting it. Engine-neutral, model-neutral, cloud-neutral.
+fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (`persona.md` identity, `skills/`, tools, and existing `AGENTS.md` project context) into a running service inside an app, on GitHub, in Telegram, or behind a custom channel without a new authoring DSL.
 
-The stable design center is the Agent Handler contract (`docs/SPEC.md`). The reference implementation is built on pi (`@earendil-works/pi-*`).
+The stable design center is the engine-neutral Agent Handler contract (`docs/SPEC.md`); pi (`@earendil-works/pi-*`) is the reference implementation.
 
 ## Source of truth
 
@@ -23,7 +23,8 @@ Code truth is `src/`.
 src/
 ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
 ├── collect.ts               # buffered consumption helper
-├── index.ts                 # the public API surface (see README "Public API surface & stability")
+├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
+├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
 ├── cli.ts                   # command entry points (process side effects live here)
 ├── invoke-stream.ts, cli-models.ts, cli-auth.ts # command rendering layers (`invoke` stream → exit code, `models`/auth-report output)
 ├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
@@ -105,7 +106,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **The contract is engine-neutral.** `src/agent.ts` must not import any engine (`@earendil-works/pi-*` only under `src/engines/`).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. On the invoke path, failures become `failed` events (SPEC MUST 2), never thrown iteration errors.
 - **Stateless invoke.** Each invoke builds a fresh harness and discards it; durable state lives behind `PiSessionStore`. Do not introduce in-process session state.
-- **Public surface is scoped on purpose.** `src/index.ts` exports only the supported surface. pi-coupled internals (L0 `createPiAgentFromHarness`, `piHarnessFactory`, assembly helpers) are intentionally not exported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Public surface is scoped on purpose.** `src/core.ts` is engine-neutral, `src/pi.ts` is the pi reference surface, and `src/index.ts` combines them. Pi-coupled internals (L0 `createPiAgentFromHarness`, `piHarnessFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **The artifact is the truth.** Deployment behavior must come from the bundled definition, not the builder machine's global state.
 
 ## GitHub workflow (summary)

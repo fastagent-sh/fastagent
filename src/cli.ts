@@ -99,8 +99,8 @@ function usage(code: number): never {
   fastagent login [provider] [--auth-path file]
   fastagent --version
 
-  dev    assemble the agent in dir (default .) and serve a local HTTP channel. AGENTS.md/skills
-         are re-read every turn (edits go live next turn); edits to code inputs — tools/,
+  dev    assemble the agent in dir (default .) and serve a local HTTP channel. persona.md/AGENTS.md/
+         skills are re-read every turn (edits go live next turn); edits to code inputs — tools/,
          channels/, fastagent.config.*, package.json, .env — restart the worker (--no-watch to
          disable). Files the agent writes as work product never trigger a restart.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
@@ -1371,6 +1371,12 @@ async function routesFor(workspaceDir: string, agent: Agent, stateRoot: string):
     );
   }
   reportModuleLoadFailures(failures);
+  if (failures.length > 0 || collisions.length > 0) {
+    throw new Error(
+      `channel setup is invalid (${failures.length} load failure(s), ${collisions.length} route collision(s)) — ` +
+        `fix it, or rename an intentionally disabled file to *.disabled`,
+    );
+  }
   const channels = Object.keys(routes).length > 0 ? routes : { "POST /invoke": createInvokeHandler(agent) };
   // Add a default GET /health unless a channel already covers it (overlap, not exact-key: an
   // any-method `/health` also handles GET, so the built-in steps aside).

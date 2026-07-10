@@ -203,6 +203,10 @@ fastagent add telegram [dir]
 
 Creates a `channels/<kind>.ts` file with adapter glue and appends env placeholders to `.env.example` when possible. When `.env` is gitignored, the channel's GENERATED secrets (telegram's `TELEGRAM_SECRET_TOKEN`, github's `GITHUB_WEBHOOK_SECRET` — random strings the user contributes nothing to) are also written to the run-root `.env`, leaving only genuinely-manual values (e.g. `TELEGRAM_BOT_TOKEN` from BotFather) as next steps. When `config.agentDir` is set, the channel (and any companion tool) lands under that subdirectory — the same place `dev`/`start` discover channels — while `.env.example` and the secret hygiene stay at the run root, where `.env` is read.
 
+An enabled `channels/*.ts|*.js|*.mjs` file must load successfully or `dev` / `start` fails. To
+intentionally disable one, rename it to e.g. `channels/telegram.ts.disabled`; channel files, not config,
+are the enable/disable source of truth.
+
 See:
 
 - [GitHub channel](github.md)

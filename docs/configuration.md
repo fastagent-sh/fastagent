@@ -149,13 +149,19 @@ tools/lookup-order.ts  ->  lookup-order
 
 `config.tools` are appended after the default pi tools. Discovered `tools/` are appended after those. Name collisions are surfaced as warnings; existing tools win.
 
-### When the repo already owns `tools/` (or `channels/`)
+### When the repo already owns `tools/` or `channels/`
 
-Turning an existing repo into an agent, those directory names may already hold the repo's OWN scripts, not fastagent tools. That is fine: fastagent imports each file, and any that isn't usable — a failed import, no valid tool/channel export, or (for a channel) a factory that throws when called — is **isolated: reported as a warning and skipped, never crashing `start`**; the agent serves the tools that did load. If you want fastagent tools alongside the repo's `tools/`, declare them with `config.tools` (they don't have to live in the directory).
+Use `config.agentDir` so FastAgent scans the agent kit's directories instead of the host repo's names;
+`fastagent init` chooses this layout automatically when those directories are occupied. Within the agent
+kit, a broken tool is reported and skipped, while a broken declared channel fails serving — an inbound
+endpoint must not silently disappear. If you want programmatic tools outside `agentDir`, declare them
+with `config.tools`.
 
 ## Channels
 
-Channels are not configured in `fastagent.config.*`. A channel needs glue code, so it is always a file under `channels/`.
+Channels are not configured in `fastagent.config.*`. A channel needs glue code, so its file is the
+enable switch: `.ts` / `.js` / `.mjs` files under `channels/` are enabled; rename one to
+`<name>.ts.disabled` to disable it without introducing a second config source.
 
 ```txt
 channels/github.ts
@@ -177,7 +183,7 @@ FASTAGENT_LOG_LEVEL=debug fastagent start
 The following are library API injection points rather than config keys:
 
 - custom session stores,
-- custom execution environments / sandboxes,
+- custom execution environments (a complete sandbox adapter remains future work),
 - distributed leases,
 - custom model providers,
 - base prompt overrides.

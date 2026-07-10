@@ -144,7 +144,7 @@ Telegram Threaded Mode is handled automatically:
 
 Replies are sent back to the same thread unless `route` overrides `threadId`.
 
-Same-session concurrency is still controlled by the engine lease. If two updates map to the same session at the same time, one turn runs and the other fails fast with a retryable `session busy` event.
+Telegram serializes updates per session in FIFO order before they reach the engine lease, so two messages for the same chat wait rather than surfacing `session busy`. Different sessions still run concurrently; a collision with an external turn, such as a self-scheduled wake-up, is retried for a bounded period.
 
 ## Streaming behavior
 

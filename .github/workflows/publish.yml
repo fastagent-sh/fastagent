@@ -1,13 +1,9 @@
 name: Publish
 
-# Publish @fastagent-sh/fastagent to npm when a GitHub Release is published, via npm Trusted Publishing
-# (OIDC) — no NPM_TOKEN secret. Provenance is NOT attached: npm requires a PUBLIC source repository to
-# verify a provenance bundle (`422 ... Unsupported ... visibility: "private"`), and this repo is private.
-# Re-add `npm publish --provenance` once the repo is public. Requires a trusted publisher
-# configured on npmjs (org fastagent-sh, repo fastagent, workflow publish.yml) and npm >= 11.5.1 (Node 26
-# ships 11.12.1). The release tag is the manual gate; the job re-verifies (typecheck + test) before
-# publishing so a non-green tag never ships. Version comes from package.json — bump it before
-# tagging (npm rejects re-publishing an existing version).
+# Publish @fastagent-sh/fastagent to npm from a GitHub Release via Trusted Publishing (OIDC), with
+# provenance and no NPM_TOKEN. The npm trusted publisher must name org fastagent-sh, repo fastagent,
+# workflow publish.yml. The release tag is the manual gate; this job verifies that tag against
+# package.json and reruns the release checks before publishing.
 on:
   release:
     types: [published]
@@ -21,11 +17,13 @@ jobs:
     name: Publish to npm
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - name: Check out release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '26'
           registry-url: 'https://registry.npmjs.org'
@@ -36,14 +34,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify release tag matches package version
+        run: node -e 'const expected = `v${require("./package.json").version}`; if (process.env.GITHUB_REF_NAME !== expected) { console.error(`release tag ${process.env.GITHUB_REF_NAME} does not match ${expected}`); process.exit(1) }'
+
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck
         run: npm run typecheck
 
       - name: Test
         run: npm test
 
-      - name: Publish
-        # Trusted Publishing (OIDC) authenticates from the id-token; access/registry come from publishConfig.
-        # No --provenance: npm rejects a provenance publish from a PRIVATE source repo (it can't be verified
-        # against public source). Add it back when the repo goes public.
-        run: npm publish
+      - name: Publish with provenance
+        run: npm publish --provenance

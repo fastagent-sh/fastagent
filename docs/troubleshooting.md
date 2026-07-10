@@ -90,8 +90,8 @@ For `start`, hosted environments can set `PORT`.
 
 `fastagent dev` separates two change classes:
 
-- **AGENTS.md and `skills/`** are re-read on every turn — edits go live on the next turn with no
-  restart (and no watcher involvement).
+- **persona.md, AGENTS.md, and `skills/`** are re-read on every turn — edits go live on the next turn
+  with no restart (and no watcher involvement).
 - **Code inputs** (`tools/`, `channels/`, `fastagent.config.*`, `package.json`, `.env`) restart the
   dev worker — a new process is the only way to drop the ESM module cache.
 
@@ -131,6 +131,19 @@ Fixes depend on the channel:
 - debounce duplicate webhook events,
 - retry later for chat-style follow-ups,
 - design tools to be idempotent if events can overlap.
+
+## Channel failed to load
+
+A file under `channels/` is an enabled channel declaration. If it cannot import, validate its required
+environment, or return valid routes, `dev` / `start` fails instead of silently dropping that endpoint or
+falling back to `/invoke`.
+
+Fix the reported file and environment. To intentionally disable a channel without deleting it, rename it
+so it no longer ends in `.ts`, `.js`, or `.mjs`, for example:
+
+```bash
+mv channels/telegram.ts channels/telegram.ts.disabled
+```
 
 ## Webhook not receiving events locally
 

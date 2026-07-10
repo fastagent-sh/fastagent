@@ -14,14 +14,14 @@
   <sub>— the agent harness &amp; multi-provider LLM API under the hood</sub>
 </p>
 
-Any directory can become a live agent service. FastAgent takes your local agent directory out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
+A file-defined agent directory can become a live service. FastAgent takes it out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
 
 Leave the terminal. Become a real service.
 
 - **Add it to your app** — one route, your auth, your database, your host.
 - **Run it as a live service** — Telegram support, GitHub PR review, webhook handler, API endpoint, or custom channel.
 
-FastAgent is not another agent framework. It does not ask you to rewrite your agent in a new DSL or project layout. You bring the agent definition; FastAgent provides the serving layer around it.
+FastAgent is not a new agent-authoring DSL. You bring the existing definition and project layout; FastAgent provides the serving runtime and adapters around it.
 
 <p align="center">
   <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="fastagent dev boots an existing agent directory (AGENTS.md, skills/, tools/, channels/) into a live service; a GitHub pull_request.opened webhook arrives and the agent reviews PR #42 and posts inline comments." width="860">
@@ -39,15 +39,7 @@ FastAgent is the missing bridge from local agent directory to real service.
 - **Channels.** Serve the same agent as a GitHub PR reviewer, a Telegram bot, an HTTP/SSE endpoint, or your own adapter — verified webhooks, streaming replies, group-aware.
 - **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` (the filename is the name, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
 - **App embedding — your stack, we plug in.** Like Flask/FastAPI for agents: FastAgent never owns your framework. Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler — your auth, your database, your host.
-- **Deploy anywhere.** Run the directory directly — no build step; `fastagent deploy fly|railway` generates the host config + a runbook and hands off (`--run` drives the deploy to completion). Cloud-neutral: the directory is the deployable unit.
-
-**Designed for more — [help build it](CONTRIBUTING.md).** FastAgent's neutral contract and injection seams are laid out for the capabilities it is growing into. Honest works-in-progress, open to contributors:
-
-- **Durable execution** — accepted turns already replay across a crash or redeploy on Telegram (at-least-once); generalizing to every channel and exactly-once is a backend on the `PiSessionStore` / `Lease` seams.
-- **Sandboxed execution** — tools run behind an `ExecutionEnv` port (local by default); E2B / micro-VM backends drop in.
-- **Observability export** — leveled logs and per-turn traces today; an OpenTelemetry exporter is a clean seam.
-- **More engines & channels** — the Agent Handler contract is engine-neutral (a second engine proves the seams); Slack, Discord, and other adapters plug into the channel kit.
-- **More deploy targets** — `deploy fly` and `deploy railway` ship today, and the container recipe already runs the directory on any Docker host; the host-scoped `deploy <host>` seam is laid out for Cloudflare, Render, and beyond.
+- **Deploy anywhere.** Run the directory directly — no build step; `fastagent deploy fly|railway` generates the host config + a runbook and hands off (`--run` drives the deploy to completion). The generated container also runs on other Docker hosts.
 
 Using a coding agent? Give it [`docs/ai-start.md`](docs/ai-start.md) for an AI-guided setup path.
 
@@ -69,7 +61,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 - **No platform to move to.** No dashboard, no control plane, no runtime you deploy *into* — run it locally, embed it in your app, or ship the directory to any host.
 - **No new format or DSL.** `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE — FastAgent consumes the standards you already use instead of a parallel ecosystem.
 - **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, call `invoke` from your own queue or workflow.
-- **No engine, model, or cloud lock-in.** One neutral `invoke` contract: swap the engine, the model (any provider, OAuth or API key), or the host without touching the agent.
+- **No model or cloud lock-in.** The Agent Handler contract is engine-neutral, with pi as the reference implementation; another engine can implement the same `Agent` contract without changing channels.
 
 ## Install
 
@@ -78,7 +70,7 @@ npm i -g @fastagent-sh/fastagent   # CLI: fastagent init/dev/start/...
 npm i @fastagent-sh/fastagent      # library API for embedding or code tools
 ```
 
-Requires **Node >= 22.19** (the floor is inherited from the reference engine `@earendil-works/pi-agent-core` and `undici`), and also runs under **Bun** (verified on Bun 1.3 — its native fetch replaces the undici path). The npm package ships compiled JavaScript and type declarations.
+Requires **Node >= 22.19** (the floor is inherited from the pi reference engine and `undici`), and also runs under **Bun** (smoke-tested in CI on Bun 1.3; its native fetch replaces the undici path). The npm package ships compiled JavaScript and type declarations.
 
 ## Quickstart
 
@@ -169,8 +161,12 @@ The root export intentionally contains the supported surface only.
 | Injection ports | `PiSessionStore`, `inMemorySessionStore`, `jsonlSessionStore`, `Lease`, `Provider`, `createProvider` | Public because options reference them |
 | Not exported | L0 harness adapter, pi harness factory, prompt/config internals | Internal modules; no compatibility promise |
 
-Subpath exports: `@fastagent-sh/fastagent/github` (GitHub webhook channel), `@fastagent-sh/fastagent/telegram`
-(Telegram bot channel).
+Subpath exports:
+
+- `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel/host kit, schedules;
+- `@fastagent-sh/fastagent/pi` — the pi reference implementation;
+- `@fastagent-sh/fastagent/github` — GitHub webhook channel;
+- `@fastagent-sh/fastagent/telegram` — Telegram bot channel.
 
 ## Repository layout
 
@@ -188,6 +184,18 @@ independent dependencies/versioning actually exists.
 
 FastAgent is pre-1.0. The stable design center is the Agent Handler contract in `docs/SPEC.md`; the package API may still tighten before 1.0. Notable changes are recorded in the [GitHub Releases](https://github.com/fastagent-sh/fastagent/releases).
 
+## Designed for more
+
+The neutral contract leaves room for capabilities that are not complete product features yet:
+
+- **Durable execution** — Telegram accepted turns replay at least once today; general durability and exactly-once execution remain future backend work.
+- **Sandboxed execution** — `ExecutionEnv` is an assembly seam, but the pi coding tools and project-context loader are still local; a complete sandbox adapter is future work.
+- **Observability export** — leveled logs and per-turn traces exist today; an OpenTelemetry exporter does not.
+- **More reference bindings and channels** — pi is the reference implementation; another engine can implement the Agent contract, and community channels can use the channel kit.
+- **More deploy targets** — Fly and Railway ship today; the generated container is the portable path for other hosts.
+
+See [Contributing](CONTRIBUTING.md) if one of these is the problem you want to work on.
+
 ## Project
 
 - [Contributing](CONTRIBUTING.md)
@@ -203,4 +211,4 @@ The scaffolded `writing-great-skills` skill is vendored from [mattpocock/skills]
 
 ## License
 
-[MIT](LICENSE). Every runtime dependency is also MIT-licensed, and FastAgent does not bundle their code — npm installs each separately, so their licenses ship with them and none is redistributed here.
+[MIT](LICENSE). Runtime dependencies use permissive open-source licenses and are installed as separate npm packages; the vendored `writing-great-skills` scaffold includes its own license.

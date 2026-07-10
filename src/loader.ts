@@ -24,10 +24,9 @@ export interface DiscoveredModule {
   mod: { default?: unknown };
 }
 
-/** A `tools/`/`channels/` file that failed to LOAD, for any reason. Surfaced as DATA (like skill
- *  diagnostics), never thrown: one bad file must not crash `start`, so the caller reports it and serves
- *  the rest. loadModuleDir fills it for IMPORT failures; loadTools/loadChannels add the ones they detect
- *  (not a tool / not a channel, a factory that throws when called, malformed routes). */
+/** A workspace module that failed to load, surfaced as data so its caller can report the exact file.
+ *  `loadModuleDir` fills it for import failures; domain loaders add validation failures. The caller owns
+ *  policy: tools/schedules may skip one bad file, while serving treats a broken declared channel as fatal. */
 export interface ModuleLoadFailure {
   /** "tools/foo.ts"-style label. */
   label: string;
@@ -38,9 +37,9 @@ export interface ModuleLoadFailure {
 
 /**
  * Import every module file in `subDir`, sorted by name. Missing dir returns none. A file that fails to
- * IMPORT is ISOLATED — collected into `failures` (with {@link moduleLoadHint}) and skipped, not thrown —
- * so one bad import can't crash the load; the caller (loadTools/loadChannels) isolates its own per-file
- * failures the same way. (A missing DIRECTORY still returns empty; an unreadable directory still throws
+ * IMPORT is collected into `failures` (with {@link moduleLoadHint}) rather than thrown, so the caller can
+ * report every bad file and apply domain policy; `loadTools`/`loadChannels` add validation failures the
+ * same way. (A missing DIRECTORY still returns empty; an unreadable directory still throws
  * — that's not a per-file problem.)
  */
 export async function loadModuleDir(

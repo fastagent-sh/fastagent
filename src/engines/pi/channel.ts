@@ -44,8 +44,10 @@ export async function discoverChannelFiles(dir: string): Promise<string[]> {
  *
  * A channel file broken for ANY reason — a failed import, a factory that throws when called (a missing
  * env var is the common deploy case), or a malformed shape (not a function, not a Routes object, a bad
- * handler/route key) — is ISOLATED into `failures`: skipped + reported, never crash-looping the server
- * (G2). Routes are validated fully before any merge, so a throw mounts no partial routes.
+ * handler/route key) — is collected in `failures` without preventing validation of sibling files. The
+ * serving CLI treats any such failure as fatal: a declared channel must not silently disappear or cause
+ * the default `/invoke` route to mount. Programmatic callers can inspect the returned data themselves.
+ * Routes are validated fully before any merge, so a throw mounts no partial routes.
  */
 export async function loadChannels(
   dir: string,
@@ -63,12 +65,9 @@ export async function loadChannels(
   const routes: Routes = {};
   const collisions: ChannelCollision[] = [];
   for (const { label, file, mod } of modules) {
-    // A channel file broken for ANY reason is isolated: an import failure (from loadModuleDir), a factory
-    // that throws when called (a missing/blank env var — the common deploy failure), OR a malformed shape
-    // (not a function, not a Routes object, a bad handler/route key). All → skipped + reported, never a
-    // crash-loop. We can't (and don't try to) tell an operator's misconfig from an author's bug: both
-    // degrade the same way, in dev and on the box, and the loud warning is the feedback. Routes are
-    // VALIDATED fully before any are merged, so a throw mid-validation mounts NO partial routes.
+    // Collect every per-file failure so the caller can report all broken channels in one pass. The CLI
+    // then fails startup rather than silently dropping a declared route; direct callers own their policy.
+    // Routes are VALIDATED fully before any are merged, so a throw mid-validation mounts NO partial routes.
     try {
       const factory = mod.default;
       if (typeof factory !== "function") {

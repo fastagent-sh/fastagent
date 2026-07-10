@@ -2,11 +2,12 @@
  * `fastagent add skill <source>`: vendor an Agent Skills skill into `<workspace>/skills/<name>/` —
  * copy-in, git-tracked, never a runtime registry. Source is a giget ref (github default), a local
  * path, or a bare name (resolved against the local global skill dirs as an add-time copy source only).
- * Fetch → staging → validate with the runtime loader → atomic replace, so a bad fetch never destroys
- * an existing skill.
+ * Fetch → staging → validate → rollback-protected replace, so a bad fetch never destroys an existing
+ * skill.
  */
-import { cp, mkdir, rename, rm, stat } from "node:fs/promises";
+import { cp, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { type LoadedDefinition, loadAgentDefinition } from "../engines/pi/definition.ts";
@@ -83,8 +84,20 @@ export async function vendorSkill(
   const skillsDir = join(workspaceDir, "skills");
   await assertSkillsDirUsable(workspaceDir);
   const dest = join(skillsDir, name);
-  // Refuse to clobber unless --update; the check is side-effect-free, and a git-tracked overwrite is
-  // safe (review with `git diff`, undo with `git checkout`).
+  // A process can die between moving the old skill aside and installing staging. Never guess that an
+  // arbitrary hidden directory is ours or delete it: stop with the exact backup path for manual restore.
+  const skillEntries = await readdir(skillsDir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  const interrupted = skillEntries.filter((entry) => entry.startsWith(`.${name}.previous-`));
+  if (interrupted.length > 0) {
+    throw new Error(
+      `found an interrupted skill update backup (${interrupted.join(", ")}) — inspect it, then restore it to skills/${name} or remove it before retrying`,
+    );
+  }
+  // Refuse to clobber unless --update; a git-tracked overwrite is safe (review with `git diff`, undo
+  // with `git checkout`).
   const overwritten = existsSync(dest);
   if (overwritten && !options.update) {
     throw new Error(
@@ -132,9 +145,24 @@ export async function vendorSkill(
     await rm(staging, { recursive: true, force: true }); // failed/invalid: drop staging, leave dest intact
     throw error;
   }
-  // Validated. Replace atomically — the old skill survived every failure path above.
-  if (overwritten) await rm(dest, { recursive: true, force: true });
-  await rename(staging, dest);
+  // Install with rollback: move the old skill to a unique backup, then put staging in place. A failed
+  // second rename restores it; a process crash leaves a backup the next invocation reports without
+  // touching it.
+  const previous = join(skillsDir, `.${name}.previous-${randomUUID()}`);
+  if (overwritten) await rename(dest, previous);
+  try {
+    await rename(staging, dest);
+  } catch (error) {
+    if (overwritten) {
+      try {
+        await rename(previous, dest);
+      } catch (restoreError) {
+        throw new AggregateError([error, restoreError], `skill update failed and ${previous} could not be restored`);
+      }
+    }
+    throw error;
+  }
+  if (overwritten) await rm(previous, { recursive: true, force: true });
 
   // Report via the runtime loader, matching THIS skill by EXACT directory (a substring match would
   // prefix-pollute a sibling `<name>-x` and break on Windows path separators).

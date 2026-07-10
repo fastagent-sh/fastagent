@@ -41,7 +41,7 @@ channels/
 Each file default-exports a `ChannelModule`:
 
 ```ts
-import type { ChannelModule } from "@fastagent-sh/fastagent";
+import type { ChannelModule } from "@fastagent-sh/fastagent/core";
 
 const channel: ChannelModule = ({ agent, stateRoot }) => ({
   "POST /webhook": async (req) => {
@@ -56,7 +56,11 @@ export default channel;
 
 `fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`, call each module with the same mount context (the assembled agent + the resolved state root), and merge the returned route tables onto one HTTP server.
 
-With no `channels/` directory, FastAgent mounts the default HTTP/SSE invoke channel at `POST /invoke`.
+With no enabled channel files, FastAgent mounts the default HTTP/SSE invoke channel at `POST /invoke`.
+A channel file is enabled by its importable extension (`.ts`, `.js`, or `.mjs`); rename it to, for
+example, `telegram.ts.disabled` to keep it in the workspace without mounting it. A declared channel that
+fails to load, or overlaps another channel's route, makes `dev` / `start` fail — it never silently
+disappears or triggers the `/invoke` fallback.
 
 ## Routes
 
@@ -172,7 +176,7 @@ Read [Channel development](channel-development.md) for adapter design, packaging
 
 ## Operational notes
 
-- Channels choose the `session` string. Same-session concurrent turns fail fast with a retryable `failed` event.
+- Channels choose the `session` string. Core same-session concurrency fails fast; a channel such as Telegram may queue before invoking.
 - Post-ACK fire-and-forget work is lost if the process exits unless the channel or host persists intents.
 - Public endpoints should verify signatures/secrets and cap request bodies before parsing untrusted payloads.
 - User-facing error messages should avoid leaking provider or infrastructure details; log full diagnostics for operators.

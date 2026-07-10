@@ -18,7 +18,7 @@ The full local loop is fast:
 
 ```bash
 npm install
-npm run lint           # biome check (format + lint, read-only); `npm run format` to fix
+npm run lint           # Biome (format + lint) plus local Markdown link checks; `npm run format` to fix code
 npm run typecheck      # tsc --noEmit (covers src and test)
 npm test               # vitest --run
 ```
@@ -50,7 +50,7 @@ git fetch --prune origin
 
 A PR is mergeable only when:
 
-- `npm run lint` is clean (Biome format + lint; run `npm run format` to auto-fix),
+- `npm run lint` is clean (Biome format/lint plus local Markdown links; run `npm run format` to auto-fix code),
 - `npm run typecheck` is clean (TypeScript with `noUnusedLocals`/`noUnusedParameters`),
 - `npm test` passes,
 - CI (`Core checks`, Node 22.19 / 24 / 26) is green.

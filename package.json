@@ -35,6 +35,14 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    },
+    "./pi": {
+      "types": "./dist/pi.d.ts",
+      "default": "./dist/pi.js"
+    },
     "./github": {
       "types": "./dist/github.d.ts",
       "default": "./dist/github.js"
@@ -63,14 +71,14 @@
     "prepack": "npm run build",
     "test": "vitest --run",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src test",
+    "lint": "biome check src test && node scripts/check-doc-links.mjs",
     "format": "biome check --write src test",
     "postbuild": "node scripts/copy-scaffold-assets.mjs"
   },
   "dependencies": {
     "@clack/prompts": "^1.6.0",
     "@earendil-works/pi-agent-core": "^0.80.3",
-    "@earendil-works/pi-ai": "^0.80.2",
+    "@earendil-works/pi-ai": "^0.80.3",
     "@earendil-works/pi-coding-agent": "^0.80.3",
     "@octokit/webhooks-methods": "^6.0.0",
     "@octokit/webhooks-types": "^7.6.1",

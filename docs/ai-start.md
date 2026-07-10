@@ -58,6 +58,11 @@ For tools:
 - Use defineTool and z from @fastagent-sh/fastagent.
 - Test with: fastagent tool <name> '<json>'
 
+For channels:
+- A `channels/*.ts|*.js|*.mjs` file is enabled by its presence. A declared channel that fails to load
+  makes `dev` / `start` fail; fix it rather than accepting a fallback route. To keep one disabled, rename
+  it to e.g. `channels/telegram.ts.disabled` — do not invent a second config flag.
+
 For GitHub:
 - Run: fastagent add github
 - Edit channels/github.ts so on(event) maps real GitHub events to { session, text } intents.
@@ -87,6 +92,8 @@ For embedding:
 - Use createPiAgentFromDefinition or createPiAgentFromWorkspace.
 - Mount createInvokeHandler(agent) in my app route.
 - Keep my app's auth/database/session ownership in my app.
+- `ExecutionEnv` is an assembly seam, not a complete sandbox today: the pi coding tools and project-
+  context loader are still local. Do not claim that injecting `env` alone isolates a directory agent.
 
 For deploy:
 - Run: fastagent deploy fly (or: fastagent deploy railway). Add --run to drive the host CLI to
@@ -97,6 +104,7 @@ For deploy:
 
 Before finishing:
 - Run fastagent info.
+- If channels are declared, confirm each one loads; do not ignore a channel startup failure.
 - Run the smallest useful smoke test that EXITS: fastagent invoke "hello" --model provider/id (or a
   channel-specific local test). Do not leave `dev`/`start` running in the foreground.
 - Do not commit .env, credentials, sessions, or .fastagent machine state.

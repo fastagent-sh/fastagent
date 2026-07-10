@@ -90,7 +90,7 @@ function save(stateRoot: string, wakeups: Wakeup[]): void {
   writeScheduleFile(scheduleFile(stateRoot, "wakeups"), wakeups);
 }
 
-/** The current pending wake-ups (tests today; a `schedule` inspection command is Phase 2). */
+/** The current pending wake-ups (`fastagent schedule list` uses this). */
 export function listWakeups(stateRoot: string): Wakeup[] {
   return load(stateRoot);
 }

@@ -102,7 +102,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     ``,
     `# Create the service. \`railway init\` makes only a project; the volume/variables below are`,
     `# service-scoped and \`railway up\` deploys THIS service. \`add\` auto-links it to this directory, so`,
-    `# the later commands resolve it without --service (Phase 2 --run must pass --service to stay non-interactive).`,
+    `# the later commands resolve it without --service (--run passes --service to stay non-interactive).`,
     `railway add --service ${serviceName}`,
     ``,
     `# Persistent volume at ${MOUNT} — sessions, auth, channel state. FASTAGENT_STATE_DIR is set to match.`,

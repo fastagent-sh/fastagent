@@ -46,15 +46,15 @@ export const channelTemplate = (kind: string, name: string): string =>
 export const channelBundleFiles = (kind: string): string[] =>
   readdirSync(channelScaffoldDir(kind)).filter((f) => f.endsWith(".ts"));
 
-/** package.json for the complete agent: ESM + the deps a defineTool tool imports. The
- *  @fastagent-sh/fastagent range tracks THIS build's version, so a fresh workspace installs an API-matching version. */
+/** package.json for the complete agent. The @fastagent-sh/fastagent range tracks THIS build's
+ *  version, and tool authors use its `z` re-export rather than installing a second zod copy. */
 export function packageJson(name: string, version: string): string {
   return `${JSON.stringify(
     {
       name,
       private: true,
       type: "module",
-      dependencies: { "@fastagent-sh/fastagent": `^${version}`, zod: "^4.0.0" },
+      dependencies: { "@fastagent-sh/fastagent": `^${version}` },
     },
     null,
     2,

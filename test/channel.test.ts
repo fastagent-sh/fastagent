@@ -24,9 +24,11 @@ describe("loadChannels (filesystem discovery)", () => {
       join(dir, "channels", "stripe.mjs"),
       `export default (agent) => ({ "POST /stripe": () => new Response(null, { status: 202 }) });`,
     );
-    const { routes, collisions } = await loadChannels(dir, fakeCtx);
+    await writeFile(join(dir, "channels", "disabled.mjs.disabled"), `throw new Error("must not import");`);
+    const { routes, collisions, failures } = await loadChannels(dir, fakeCtx);
     expect(Object.keys(routes).sort()).toEqual(["POST /stripe", "POST /webhook"]);
     expect(collisions).toEqual([]);
+    expect(failures).toEqual([]);
   });
 
   it("ISOLATES a channel that throws on import — reports it in failures, still mounts the others (G2)", async () => {
@@ -41,15 +43,14 @@ describe("loadChannels (filesystem discovery)", () => {
       `export default () => ({ "POST /ok": () => new Response(null, { status: 202 }) });`,
     );
     const { routes, failures } = await loadChannels(dir, fakeCtx);
-    expect(Object.keys(routes)).toEqual(["POST /ok"]); // the good channel still mounts — no crash
+    expect(Object.keys(routes)).toEqual(["POST /ok"]); // collect sibling results for one complete report
     expect(failures).toHaveLength(1);
     expect(failures[0]!.label).toBe("channels/boom.mjs");
     expect(failures[0]!.message).toMatch(/bad top-level init/);
   });
 
-  it("ISOLATES a channel whose FACTORY throws at init (missing env) — reports it, mounts the rest (G2)", async () => {
-    // The common deploy failure: a factory reads a required env var / validates config and throws. That
-    // must not crash the server — skip the channel, keep serving the rest.
+  it("collects a channel factory failure (missing env) while validating siblings", async () => {
+    // The loader returns every per-file result; the serving composition reports them and fails startup.
     const dir = await freshDir();
     await mkdir(join(dir, "channels"));
     await writeFile(
@@ -162,8 +163,8 @@ describe("loadChannels (filesystem discovery)", () => {
   });
 
   it("rejects any non-async return that yields no routes (null, primitive, array, Map, {})", async () => {
-    // The invariant is 'a channel file contributes >=1 route'. Each otherwise throws unwrapped or
-    // silently mounts zero routes → falls back to /invoke.
+    // The invariant is 'an enabled channel file contributes >=1 route'. Each invalid shape is reported;
+    // the serving composition treats the resulting failure as fatal.
     for (const [name, body] of [
       ["nullish", `export default () => null;`],
       ["number", `export default () => 42;`],
@@ -211,6 +212,7 @@ describe("discoverChannelFiles (the `fastagent info` authoring view)", () => {
     await mkdir(join(dir, "channels"));
     await writeFile(join(dir, "channels", "telegram.ts"), "export default () => ({});\n");
     await writeFile(join(dir, "channels", "github.ts"), "export default () => ({});\n");
+    await writeFile(join(dir, "channels", "slack.ts.disabled"), "not imported\n");
     expect(await discoverChannelFiles(dir)).toEqual(["github", "telegram"]);
   });
 

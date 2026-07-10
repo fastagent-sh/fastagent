@@ -29,7 +29,7 @@ For a community channel, publish the adapter as a separate package and keep the 
 A workspace channel is a module in `channels/` that default-exports a `ChannelModule`:
 
 ```ts
-import type { ChannelModule } from "@fastagent-sh/fastagent";
+import type { ChannelModule } from "@fastagent-sh/fastagent/core";
 
 const channel: ChannelModule = ({ agent, stateRoot }) => ({
   "POST /slack": async (req) => {
@@ -42,7 +42,7 @@ const channel: ChannelModule = ({ agent, stateRoot }) => ({
 export default channel;
 ```
 
-`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`, call each module with the same assembled agent, and merge the returned route tables. The module factory must be synchronous and return a non-empty `Routes` object; async setup belongs inside the returned request handler.
+`fastagent dev` and `fastagent start` discover every `channels/*.ts|*.js|*.mjs`, call each module with the same assembled agent, and merge the returned route tables. The module factory must be synchronous and return a non-empty `Routes` object; async setup belongs inside the returned request handler. Any enabled channel that fails to load fails serving. Rename a file to `<name>.ts.disabled` when it should remain present but disabled.
 
 Route keys are either:
 
@@ -55,7 +55,7 @@ A path overlap is a collision: `/webhook` conflicts with `POST /webhook`; `GET /
 
 ## Public channel-authoring kit
 
-A channel adapter should depend only on the public `@fastagent-sh/fastagent` surface:
+A channel adapter should depend on the engine-neutral `@fastagent-sh/fastagent/core` subpath:
 
 | Export | Use |
 |---|---|
@@ -66,14 +66,14 @@ A channel adapter should depend only on the public `@fastagent-sh/fastagent` sur
 | `readBodyCapped` | read a request body with a byte cap |
 | `text`, `textHeaders` | build plain status/error responses |
 
-Do not import from `src/engines/*` or `@earendil-works/*` in a channel package. Channels consume the neutral Agent contract.
+Do not import from `src/engines/*`, `@earendil-works/*`, or the pi subpath in a channel package. Channels consume the neutral Agent contract; `/core` also avoids loading the reference runtime.
 
 ## Minimal adapter
 
 A reusable adapter is usually shaped like this:
 
 ```ts
-import { AgentFailure, type ChannelModule, collect, readBodyCapped, text } from "@fastagent-sh/fastagent";
+import { AgentFailure, type ChannelModule, collect, readBodyCapped, text } from "@fastagent-sh/fastagent/core";
 
 export interface AcmeChannelOptions {
   secret: string;

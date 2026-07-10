@@ -5,7 +5,7 @@ status: current
 
 # API reference
 
-This is a compact reference for the public TypeScript surface exported by `@fastagent-sh/fastagent`.
+This is a compact reference for the all-in-one `@fastagent-sh/fastagent` surface. The same exports are grouped into `@fastagent-sh/fastagent/core` (engine-neutral) and `@fastagent-sh/fastagent/pi` (the pi reference implementation).
 
 FastAgent is pre-1.0. The Agent Handler contract is the stable design center; implementation-specific APIs may still tighten before 1.0.
 
@@ -40,7 +40,7 @@ type AgentEvent =
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
   | { type: "completed"; data?: Json }
-  | { type: "failed"; details: string; retryable: boolean };
+  | { type: "failed"; details: string; retryable: boolean; code?: string };
 ```
 
 See [Agent Handler SPEC](SPEC.md) for normative behavior.
@@ -58,6 +58,7 @@ interface CollectResult {
 class AgentFailure extends Error {
   details: string;
   retryable: boolean;
+  code?: string;
 }
 ```
 
@@ -117,12 +118,12 @@ Common options:
 
 | Option | Meaning |
 |---|---|
-| `model` | Required `provider/modelId` spec (an `AnyModel` object is also accepted). |
+| `model` | Required `provider/modelId` spec string. |
 | `instructions` | String or function returning the system prompt. |
 | `tools` | Agent tools. |
 | `skills` | Loaded Agent Skills. |
 | `sessions` | `PiSessionStore`. |
-| `env` | Tool execution environment (`ExecutionEnv`). |
+| `env` | Harness `ExecutionEnv`. This alone does not sandbox the pi coding tools or project-context loader. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 
@@ -144,22 +145,24 @@ Load `persona.md`/`skills/` from `dir` (the agent-definition dir) and assemble t
 ```ts
 function createPiAgentFromWorkspace(
   dir: string,
-  options?: { model?: string; sessionsDir?: string; authPath?: string },
+  options?: { model?: string; sessionsDir?: string; authPath?: string; serving?: boolean },
 ): Promise<{
   agent: Agent;
   definition: LoadedDefinition;
   config: FastagentConfig;
   configPath?: string;
   modelSpec: string;
+  agentDir: string;
   stateRoot: string;
   sessionsDir: string;
   authPath: string;
   toolNames: string[];
   toolCollisions: ToolCollision[];
+  toolFailures: ModuleLoadFailure[];
 }>;
 ```
 
-The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory.
+The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
 
 ## Tool authoring
 
@@ -197,13 +200,18 @@ interface ChannelContext {
   stateRoot: string; // resolved state root (FASTAGENT_STATE_DIR > <dir>/.fastagent), absolute
 }
 type ChannelModule = (ctx: ChannelContext) => Routes;
-function loadChannels(dir: string, ctx: ChannelContext): Promise<{ routes: Routes; collisions: ChannelCollision[] }>;
+function loadChannels(
+  dir: string,
+  ctx: ChannelContext,
+): Promise<{ routes: Routes; collisions: ChannelCollision[]; failures: ModuleLoadFailure[] }>;
 ```
 
 A workspace channel default-exports a `ChannelModule` from `channels/<name>.ts`. Bundled adapters
 (`telegramChannel(opts)`, `githubChannel(opts)`) take policy options and return a `ChannelModule`, so
 the channel file is one expression; a channel persisting durable state derives its home from
-`ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`.
+`ctx.stateRoot` (`<stateRoot>/channels/<kind>`), never `process.cwd()`. Enabled files end in `.ts`,
+`.js`, or `.mjs`; rename one to `<name>.ts.disabled` to disable it. Serving fails if any enabled channel
+cannot load.
 
 Channel adapters can also use:
 
@@ -329,8 +337,12 @@ The lease is the same-session concurrency floor. A failed acquisition yields a r
 ## Subpath exports
 
 ```ts
+import { type Agent, collect, readBodyCapped } from "@fastagent-sh/fastagent/core";
+import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
 import { githubChannel } from "@fastagent-sh/fastagent/github";
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
 ```
 
-See [GitHub channel](github.md) and [Telegram channel](telegram.md).
+`core` avoids loading the pi reference runtime and is the preferred dependency for engine-neutral
+channels. The root entry remains the supported convenience surface. See [GitHub channel](github.md) and
+[Telegram channel](telegram.md).

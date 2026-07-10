@@ -23,9 +23,8 @@ export function reportToolCollisions(collisions: ToolCollision[]): void {
   }
 }
 
-/** A `tools/`/`channels/` file that failed to load, for any reason — skipped, not fatal. Loud so it's
- *  diagnosable: the agent keeps serving without it (e.g. a broken build script sitting in the repo's
- *  tools/, or a channel whose factory threw on a missing env var). */
+/** Report per-file module failures. The caller decides whether they are degradations (tools/schedules)
+ *  or fatal (declared channels on the serving path). */
 export function reportModuleLoadFailures(failures: ModuleLoadFailure[]): void {
   for (const f of failures) {
     log.warn(`[fastagent] ${f.label} failed to load, skipping it — ${f.message}`);

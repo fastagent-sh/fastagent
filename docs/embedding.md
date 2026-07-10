@@ -12,7 +12,7 @@ Use FastAgent as a **library** — the agent is one capability inside a product 
 
 - **Node ≥ 22.19.** Ships compiled JS + types; no build step for FastAgent itself.
 - **Install as a dependency:** `npm i @fastagent-sh/fastagent`.
-- **Model credentials** — `fastagent login` (OAuth, writes the project-level `<cwd>/.fastagent/auth.json`) or a provider API key in the environment (e.g. `OPENAI_API_KEY`). Auth is invisible to your code; see [Auth](#auth) below.
+- **Model credentials** — `fastagent login` (OAuth, writes the project-level `<cwd>/.fastagent/auth.json`) or a provider API key in the environment (e.g. `OPENAI_API_KEY`). Auth is invisible to your code; see [Auth](#4-auth) below.
 
 ## The one mental model
 
@@ -28,7 +28,7 @@ type AgentEvent =
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
   | { type: "completed"; data?: Json }    // terminal: success
-  | { type: "failed"; details: string; retryable: boolean };  // terminal: failure
+  | { type: "failed"; details: string; retryable: boolean; code?: string };  // terminal: failure
 ```
 
 The stream ends with exactly one `completed` / `failed`, or is cancelled by the consumer. `session` is an opaque string you choose; reuse it to continue a conversation.
@@ -66,7 +66,7 @@ const agent = createPiAgent({
 
 Author tool schemas with the `z` re-exported from `@fastagent-sh/fastagent` (as above), not a separately installed `zod` — `defineTool` converts the schema with its own zod, so a single shared copy avoids version-skew surprises. Every type on this surface (`AgentTool`, `Skill`, `Session`, `Model`, …) is re-exported too, so you never import from `@earendil-works/*` (the one exception is a provider's wire-protocol `api`, see §5).
 
-`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. (The directory path assembles `AGENTS.md` differently: it adds the pi engine base + skills + env for fidelity with local pi. See [core design §2](design/core.md).)
+`model` is always a spec string; `fastagent models` (or `listModels`) lists the available ones. `instructions` IS the system prompt — verbatim, no engine persona prepended. The directory path instead assembles the pi base (optionally customized by `persona.md`), `AGENTS.md` project context, skills, and environment context. See [core design §2](design/core.md).
 
 ## 2. Consume the stream (three ways)
 
@@ -119,7 +119,7 @@ createPiAgent({
 
   // ── Tier 2: injectable ports (default values run fine) ──
   sessions,   // PiSessionStore  — persistence (default: in-memory)
-  env,        // ExecutionEnv    — tool execution env (default: local Node cwd)
+  env,        // ExecutionEnv    — harness environment (default: local Node cwd)
   lease,      // Lease           — concurrency floor (default: in-process fail-fast)
   providers,  // Provider[]      — your own model source (see §5)
 });
@@ -128,9 +128,13 @@ createPiAgent({
 | Port | Default | Reach for it when |
 |---|---|---|
 | `sessions` | `inMemorySessionStore()` (lost on restart) | `jsonlSessionStore({ dir })` for restart-surviving continuity, or your own `PiSessionStore` |
-| `env` | local `NodeExecutionEnv` (cwd) | a sandbox / microVM for untrusted execution |
+| `env` | local `NodeExecutionEnv` (cwd) | custom harness filesystem/process IO; not a complete sandbox by itself |
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
+
+The pi coding tools created for a directory and the project-context loader are still cwd/local-fs
+bound. Injecting `env` alone therefore does not isolate a directory agent; a complete sandbox adapter
+must wire those surfaces too. That adapter is future work.
 
 ## 4. Auth
 
@@ -170,7 +174,10 @@ const agent = createPiAgent({ model: "acme/gpt-x", providers: [myGateway] });
 
 ## How embed and CLI relate
 
-`fastagent dev` / `start` are the CLI wrapping of `createPiAgentFromWorkspace` plus process side effects (`.env`, proxy, watch, serve). The agent the CLI serves is the **same** one `createPiAgentFromDefinition` hands you when embedding — single assembly source. What you iterate under `dev`, what `start` serves, and what you embed are identical.
+`fastagent dev` / `start` wrap the pi reference implementation's `createPiAgentFromWorkspace` plus process side effects (`.env`, proxy, watch, serve). The agent the CLI serves is the **same** one `createPiAgentFromDefinition` hands you when embedding — single assembly source. What you iterate under `dev`, what `start` serves, and what you embed are identical.
+
+For contract-only or channel code, import `@fastagent-sh/fastagent/core`; it does not load the pi
+reference runtime. Pi-specific assembly is also available explicitly from `@fastagent-sh/fastagent/pi`.
 
 ## Where next
 

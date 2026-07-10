@@ -2,7 +2,7 @@
  * Schedule discovery (the N axis, clock form): a workspace declares its time-triggers by dropping files
  * in `schedules/`, mirroring `tools/` and `channels/`. Each file default-exports `defineSchedule({...})`,
  * named from its filename. This is the FILE producer of scheduled invocations (the author's, declarative,
- * git-tracked, deploy-guaranteed); the agent's `wake` tool will be the second producer (Phase 4).
+ * git-tracked, deploy-guaranteed); the agent's `wake` tool is the second producer.
  */
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";

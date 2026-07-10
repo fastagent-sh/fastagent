@@ -2,9 +2,9 @@
  * The config subsystem: schema (defineConfig), loading (loadConfig), and value interpretation
  * (resolveModel, resolveModelSpec). One concern: everything about fastagent.config.ts.
  *
- * Red line: config describes "choices for this deployment" (model / extra tools / http port), never
- * the agent's identity or behavior (that lives in AGENTS.md + skills). Deleting the config must
- * still leave a runnable zero-config agent (model via --model / FASTAGENT_MODEL).
+ * Red line: config describes deployment/runtime choices, never authored identity or expertise (those
+ * live in persona.md + skills, with AGENTS.md as project context). Deleting the config still leaves a
+ * zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL.
  */
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";

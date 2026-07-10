@@ -1,7 +1,7 @@
 /**
  * The scheduler: a time-trigger that fires the agent on each schedule's cron. SINGLE-PROCESS (like all
  * fastagent state today) — a deployment with schedules must keep one machine running, since cron has no
- * external wake-up (Phase 3 makes `deploy` enforce that). Started/stopped by the serve path (dev/start).
+ * external wake-up (`deploy` enforces that). Started/stopped by the serve path (dev/start).
  *
  * Fire model:
  *  - **stable session per schedule** (`schedule:<name>`), so a schedule's turns share one continuing

@@ -7,7 +7,7 @@ status: current
 
 FastAgent is shaped by a simple product moment: a directory works locally as an agent, and now it needs to become a real service — inside your app, on GitHub, in Telegram, or behind another channel.
 
-The design center is **point at directory → live agent capability**. FastAgent is not trying to be the place where you author every agent from scratch. It is the serving layer that takes a local agent directory out of the terminal. `AGENTS.md` is the recommended place for identity and standing instructions, not a mandatory rewrite format.
+The design center is **point at directory → live agent capability**. FastAgent is not trying to be the place where you author every agent from scratch. It is the serving layer that takes a local agent directory out of the terminal. `persona.md` is the optional identity slot; `AGENTS.md` remains project context, not a mandatory rewrite format.
 
 The design choices are deliberate:
 
@@ -19,7 +19,7 @@ The design choices are deliberate:
 
 | Principle | What it means in FastAgent |
 |---|---|
-| **Bring your directory** | Start from a local directory; add `AGENTS.md`, `skills/`, `tools/`, and `channels/` as needed. Do not rewrite into a new project shape. |
+| **Bring your directory** | Start from a local directory; add `persona.md`, `skills/`, `tools/`, and `channels/` as needed. Existing `AGENTS.md` files remain project context. |
 | **Concepts before features** | Define the few primitives authors need to understand — definition, invoke, event, tool, skill, channel, session — before adding knobs. |
 | **Small core, clear seams** | The stable center is `invoke(scope, prompt) => AsyncIterable<AgentEvent>`, not a dashboard, cloud, or monolithic runtime. |
 | **App ownership** | Your app keeps auth, users, database, routes, deployment, and policy. FastAgent composes with it. |
@@ -35,7 +35,7 @@ A feature is not real product surface until users can name it and reason about i
 
 | Concept | Meaning |
 |---|---|
-| **Definition** | The directory that describes what the agent is: optional `AGENTS.md`, `skills/`, authored context, optional `tools/`, optional `channels/`, optional config. |
+| **Definition** | The directory that describes the agent: optional `persona.md`, `skills/`, authored context, tools/channels, and config; `AGENTS.md` contributes project context. |
 | **Agent Handler** | The callable contract: `invoke(scope, prompt) => AsyncIterable<AgentEvent>`. |
 | **Event** | The streamed output shape every channel can consume: text, thinking, tool lifecycle, completion, or failure. |
 | **Tool** | A typed action the model can call, validated before execution. |

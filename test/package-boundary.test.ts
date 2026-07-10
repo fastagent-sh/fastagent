@@ -64,11 +64,11 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
   });
 });
 
-describe("engine neutrality: the contract + channel/host spine imports no engine package", () => {
+describe("engine neutrality: the core subpath + channel/host spine import no engine package", () => {
   // The neutral layer (the contract and the N-side that consumes only the contract) must never pull
-  // `@earendil-works/*` — that coupling belongs only under engines/pi. Locks the invariant so a
-  // stray pi import in agent.ts / a channel / the host is caught here, not in review.
+  // `@earendil-works/*` — that coupling belongs only in the pi reference implementation.
   const neutral = [
+    "core.ts",
     "agent.ts",
     "collect.ts",
     "invoke-stream.ts",
@@ -83,4 +83,8 @@ describe("engine neutrality: the contract + channel/host spine imports no engine
       expect(engine).toEqual([]);
     });
   }
+
+  it("pi.ts is the explicit reference-runtime boundary (the guard has teeth)", () => {
+    expect([...staticPackageGraph("pi.ts")].some((p) => p.startsWith("@earendil-works/"))).toBe(true);
+  });
 });

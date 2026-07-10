@@ -71,6 +71,23 @@ describe("cli papercuts", () => {
     expect(stdout).toBe(""); // a failure never pollutes stdout
   });
 
+  it("start fails when a declared channel cannot load instead of exposing the default /invoke route", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-cli-channel-fail-"));
+    await mkdir(join(dir, "channels"), { recursive: true });
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai/gpt-5.5" };\n`);
+    await writeFile(
+      join(dir, "channels", "telegram.mjs"),
+      `export default () => { throw new Error("TELEGRAM_SECRET_TOKEN required"); };\n`,
+    );
+
+    const { code, stderr } = await run(["start", dir, "--port", "0"]);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/telegram\.mjs failed to load/);
+    expect(stderr).toMatch(/channel setup is invalid \(1 load failure\(s\), 0 route collision\(s\)\)/);
+    expect(stderr).toMatch(/\*\.disabled/);
+    expect(stderr).not.toMatch(/routes:.*\/invoke/);
+  });
+
   it("fire without a name prints usage to stderr and exits 2 (stdout clean)", async () => {
     const { code, stdout, stderr } = await run(["fire"]);
     expect(code).toBe(2);

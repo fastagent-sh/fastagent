@@ -51,7 +51,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 - **No platform to move to** — no dashboard, no control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
 - **No new format or DSL** — `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE; FastAgent consumes the standards you already use, not a parallel ecosystem.
 - **No workflow engine** — the agent decides its own steps; for deterministic orchestration, call `invoke` from your own queue or workflow.
-- **No engine, model, or cloud lock-in** — one neutral `invoke` contract; swap the engine, the model, or the host without touching the agent.
+- **Engine-neutral contract; pi reference implementation** — channels depend on `Agent`, while the included assembly uses pi; models and hosts remain replaceable runtime choices.
 
 ## Two main use cases
 
@@ -123,6 +123,6 @@ Implemented today:
 
 Not implemented yet:
 
-- Durable post-ACK execution for webhook turns.
+- General durable post-ACK execution for every webhook channel (Telegram has an at-least-once intent layer; GitHub does not).
 - Multi-instance session/lease/auth backends out of the box (the single-machine tier is the shipped scope).
-- Non-pi engine bindings.
+- Additional engine reference bindings beyond pi.

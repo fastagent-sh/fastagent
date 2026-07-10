@@ -219,7 +219,8 @@ export interface CreatePiAgentOptions {
   authPath?: string;
   /** Session persistence. Defaults to in-memory; inject jsonlSessionStore for restart-surviving continuity. */
   sessions?: PiSessionStore;
-  /** Tool execution environment. Defaults to local NodeExecutionEnv (cwd); production injects a sandbox. */
+  /** Harness filesystem/process environment. Defaults to local NodeExecutionEnv (cwd). This is not yet
+   *  a sandbox boundary for pi's cwd-bound coding tools; a sandbox adapter must wire those tools too. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;
@@ -268,6 +269,8 @@ export interface CreatePiAgentFromDefinitionOptions {
    */
   authPath?: string;
   sessions?: PiSessionStore;
+  /** Harness environment; see {@link CreatePiAgentOptions.env}. The default coding tools and project-
+   *  context loader remain local today, so injecting this alone does not sandbox a directory agent. */
   env?: ExecutionEnv;
   lease?: Lease;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,8 +77,7 @@ describe("init: scaffoldWorkspace", () => {
         version: string;
       }
     ).version;
-    expect(pkg.dependencies["@fastagent-sh/fastagent"]).toBe(`^${realVersion}`);
-    expect(pkg.dependencies.zod).toBeDefined();
+    expect(pkg.dependencies).toEqual({ "@fastagent-sh/fastagent": `^${realVersion}` });
     expect(await readFile(join(dir, "tools", "fetch-url.ts"), "utf8")).toContain('from "@fastagent-sh/fastagent"');
 
     // persona.md + the bundled skill load as a definition offline (loadAgentDefinition does not touch
@@ -767,6 +766,21 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(updated.overwritten).toBe(true);
     expect(updated.description).toContain("v2");
     expect(await readFile(join(ws, "skills", "greeter", "SKILL.md"), "utf8")).toContain("Two.");
+    expect((await readdir(join(ws, "skills"))).some((entry) => entry.startsWith(".greeter.previous-"))).toBe(false);
+  });
+
+  it("stops on an interrupted --update backup without deleting or guessing how to recover it", async () => {
+    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
+    await mkdir(join(srcRoot, "greeter"), { recursive: true });
+    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: old.\n---\nOld.\n");
+    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    await vendorSkill(ws, join(srcRoot, "greeter"));
+    const backup = join(ws, "skills", ".greeter.previous-00000000-0000-4000-8000-000000000000");
+    await rename(join(ws, "skills", "greeter"), backup);
+
+    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/interrupted skill update backup/);
+    expect(await readFile(join(backup, "SKILL.md"), "utf8")).toContain("Old.");
+    expect(await exists(join(ws, "skills", "greeter"))).toBe(false);
   });
 
   it("rejects a skills/ symlink that escapes the workspace (mkdir would follow it and write outside)", async () => {
