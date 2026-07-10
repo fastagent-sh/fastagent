@@ -72,7 +72,7 @@ Either way, one branch = one focused change. If a branch grows several unrelated
 A maintainer is a collaborator with write or admin access.
 
 - A maintainer-authored PR may be self-merged after all required checks pass. A second maintainer review is optional, including for SPEC and public API changes.
-- A PR from an external contributor requires one approving review from a maintainer before a maintainer merges it.
+- A PR from an external contributor must be reviewed and merged by a maintainer; external contributors do not have merge permission.
 - `CODEOWNERS` routes changes to the relevant maintainers; it does not impose an additional approval on maintainer-authored PRs.
 
 All changes still go through a PR. Force-pushing to `main` is forbidden. Long-lived PRs (> ~3 days) should be rebased on `main`.
