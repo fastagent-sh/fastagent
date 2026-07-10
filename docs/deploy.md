@@ -12,6 +12,8 @@ fastagent deploy fly       # generate artifacts + print a flyctl runbook
 fastagent deploy fly --run # drive flyctl to completion
 fastagent deploy railway
 fastagent deploy railway --run
+fastagent deploy k8s --image ghcr.io/acme/bot:v1 --host agent.example.com
+fastagent deploy k8s --image ghcr.io/acme/bot:v1 --host agent.example.com --run
 ```
 
 Two ends only FastAgent can compute are generated for you — the definition-aware artifacts (state root → volume, the exact secret list, autostop tuned to the turn model) and the post-deploy webhook step. The middle (the host CLI) is either a runbook you (or a coding agent) run, or `--run`.
@@ -79,6 +81,32 @@ fastagent deploy railway --run   # drives the CLI on an UNLINKED dir; carries yo
 
 `--run` refuses a dir already linked to a project unless you pass `--into-linked`. Scale-to-zero (App Sleeping) is a **dashboard-only** toggle Railway exposes no CLI/API for — the runbook states it as a manual step (Settings → Deploy → Serverless → App Sleeping). Don't enable it with a GitHub channel (the same no-replay reason as Fly) or with time triggers (`schedules/` files or `selfSchedule` — a sleeping box misses the instant).
 
+## Kubernetes
+
+Prereqs: `kubectl` pointed at the target cluster (`kubectl config current-context`), a registry the cluster can pull from, and — for webhook channels — an ingress controller + TLS on the cluster.
+
+```bash
+fastagent deploy k8s --image ghcr.io/acme/bot:v1 --host agent.example.com
+```
+
+Kubernetes is a control plane, not a host: FastAgent cannot create machines, mint URLs, or build images there. So the plan differs from Fly/Railway in three ways:
+
+- **The image is yours to build + push.** `--image` names the ref; the cluster only pulls it. Without `--image` the manifests carry a `<registry>/<name>:<tag>` placeholder to fill (and `--run` gates).
+- **The constraints are the manifests.** The generated `k8s/` directory expresses the same contract `fly.toml` encodes: `deployment.yaml` (1 replica, `strategy: Recreate`, `FASTAGENT_STATE_DIR=/data`, `/health` probes, secrets via `envFrom`), `pvc.yaml` (`ReadWriteOncePod` at `/data` — change to `ReadWriteOnce` if your storage class rejects it), `namespace.yaml`, `service.yaml`, plus `ingress.yaml` when `--host` names the public host. Apply with `kubectl apply -k k8s/`.
+- **TLS/exposure are cluster-owned.** The Ingress ships with the cert-manager annotation and `tls` block commented — uncomment them, or terminate TLS your cluster's way. Webhooks require public https, so without `--host` the runbook states the exposure step instead of fabricating a URL.
+
+The runbook order: build + push → `kubectl apply -f k8s/namespace.yaml` → `kubectl create secret generic fastagent-secrets …` (values from your local `.env`; secrets are never written into an artifact) → `kubectl apply -k k8s/` → `rollout status` → register webhooks. **A redeploy is: push a new tag, update `image:` in `deployment.yaml`, re-apply.**
+
+Or let the CLI do the middle:
+
+```bash
+fastagent deploy k8s --image ghcr.io/acme/bot:v1 --host agent.example.com --run
+```
+
+`--run` applies against the **current kubectl context** (it refuses an empty one), assumes the image is already pushed (a rollout stuck in `ImagePullBackOff` gates with the push remediation), applies the secret over stdin — carrying your local credential like Fly/Railway (env key, or an OAuth login as `FASTAGENT_AUTH_SEED`) — waits for the rollout, and registers the Telegram webhook when `--host` is set.
+
+Scale policy: Kubernetes has no built-in scale-to-zero, but don't add one (KEDA etc.) with a GitHub channel (no replay) or time triggers (a scaled-down pod sleeps through cron instants). And keep `replicas: 1` — see [Single-machine tier](#single-machine-tier).
+
 ## Serving an existing repo (agentDir layout)
 
 When the workspace uses `config.agentDir` (a coding agent living in `./agent` whose cwd is the host repo — see [Configuration](configuration.md)), `deploy` generates a **repo-as-workspace** recipe instead:
@@ -87,7 +115,7 @@ When the workspace uses `config.agentDir` (a coding agent living in `./agent` wh
 - **The image bakes the whole repo as the agent's cwd.** Only the **kit's** dependencies (`agent/package.json`) are installed — the host repo's own deps are the agent's runtime concern (it can install them in its workspace when a task needs them).
 - **Write-back mechanics ship in the image**: `git` is baked in and the generated ignore files do **not** exclude `.git`; credentials ride `config.deploy.secrets` (e.g. `GH_TOKEN`); the *policy* — push vs PR, identity, which remote — belongs in its `persona.md`. **Caveat:** whether `.git` actually reaches the box is host-CLI-dependent (`railway up` is known to strip it; flyctl packs its own context) — verify `git status` on the box after the first deploy, and fall back to having the agent `git clone` its repo in the workspace (same token).
 - **The workspace is a snapshot.** The image is the repo at deploy time; un-pushed changes on the box do **not** survive a redeploy — durability lives in git, not on the machine.
-- **Status: experimental** — this layout has not been verified end-to-end on a real host yet (the preflight note says so). `--run` is not supported for it (gated); follow the printed runbook.
+- **Status: experimental** — this layout has not been verified end-to-end on a real host yet (the preflight note says so). `--run` is not supported for it (gated); follow the printed runbook. On k8s the manifests are namespaced under the kit too (`agent/k8s/`).
 
 ## Any Docker host
 
