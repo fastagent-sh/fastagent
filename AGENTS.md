@@ -114,7 +114,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
 
 1. **Local-first.** Verify locally before opening a PR; do not push to discover bugs in CI.
    ```bash
-   npm run typecheck && npm test
+   npm run lint && npm run typecheck && npm test
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
 3. **Rebase merge by default** (preserve curated commits); squash only to clean up a WIP branch. Merge commits are disabled. `main` enforces linear history; force-push is forbidden.
