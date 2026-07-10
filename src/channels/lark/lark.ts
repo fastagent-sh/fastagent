@@ -67,6 +67,13 @@ const MAX_TURN_ATTEMPTS = 3;
 /** Event body cap — events are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_EVENT_BYTES = 1 << 20;
 
+/** How long a turn must WAIT in the queue before the "⏳ Queued" notice is sent. On this platform the
+ *  notice cannot morph into the answer (text vs card), so its cleanup is a RECALL — and Lark renders
+ *  that as a visible "recalled a message" line. Delaying the notice makes fast queue turnover leave no
+ *  trace at all; only a genuinely long wait pays the tombstone, where the feedback is worth it.
+ *  (Telegram needs no delay: its notice is edited in place into the live preview — no residue.) */
+const QUEUE_NOTICE_DELAY_MS = 5_000;
+
 /** The persisted turn intent (what the runner needs to re-execute it). `seq` is the channel-assigned
  *  arrival number — lark message_ids (`om_…`) carry no order, so recovery sorts on this instead. */
 interface StoredLarkTurn {
@@ -133,6 +140,9 @@ export interface LarkChannelOptions {
   /** API origin. Default `https://open.feishu.cn` (Feishu); Lark international uses
    *  `https://open.larksuite.com`. */
   baseUrl?: string;
+  /** How long (ms) a turn waits in the queue before the "⏳ Queued" notice is sent (see
+   *  {@link QUEUE_NOTICE_DELAY_MS} for why it is delayed on this platform). 0 = immediately. */
+  queueNoticeDelayMs?: number;
 }
 
 /**
@@ -151,6 +161,7 @@ export function larkChannel({
   route,
   onError,
   baseUrl = "https://open.feishu.cn",
+  queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS,
 }: LarkChannelOptions): ChannelModule {
   // All three are mandatory: without the app credentials no reply can be sent; without the verification
   // token a plaintext-mode endpoint would accept forged events. Fail at construction (startup), not
@@ -204,31 +215,54 @@ export function larkChannel({
       replyInThread: r.replyInThread,
     });
 
-    // In-memory: the in-flight "⏳ queued" notice per turn, awaited at dequeue so the turn reliably
-    // knows the notice id (to delete it) instead of racing it and orphaning a late-arriving notice.
-    const notices = new Map<string, Promise<void>>();
+    // In-memory: the pending "⏳ queued" notice per turn — DELAYED (see QUEUE_NOTICE_DELAY_MS): armed
+    // when the turn queues behind another, sent only if it is still waiting when the timer fires, and
+    // cancelled unsent when its turn starts first. `done` settles either way, awaited at dequeue so the
+    // turn reliably knows the notice id (to delete it) instead of racing a late-arriving send.
+    const notices = new Map<string, { cancel: () => void; done: Promise<void> }>();
     const queue = createTurnQueue<PendingLarkTurn>({
       label: "[lark]",
       // Queue feedback: when this session already has a turn running/queued, a silent wait reads as
-      // "the bot ignored me" once the current turn runs long — tell the asker NOW (reply-quoted, so it
-      // is clear whose ask is queued). Best-effort and post-ACK: a failed notice is a log line, never a
-      // failed event delivery. The preview then deletes this notice once its card mounts.
+      // "the bot ignored me" once the current turn runs long — tell the asker (reply-quoted, so it is
+      // clear whose ask is queued), unless the wait is over before the delay (then no trace at all).
+      // Best-effort and post-ACK: a failed notice is a log line, never a failed event delivery. The
+      // preview then deletes this notice once its card mounts.
       onQueuedBehind: (rec) => {
-        notices.set(
-          rec.id,
-          api.sendText(targetOf(rec), "⏳ Queued — I’ll start once the current task finishes.").then(
-            (id) => {
-              if (id !== undefined) rec.noticeId = id;
-            },
-            (e) => log.warn(`[lark] queue notice failed (the turn still runs): ${String(e)}`),
-          ),
-        );
+        let fired = false;
+        let settle: () => void = () => {};
+        const done = new Promise<void>((resolve) => {
+          settle = resolve;
+        });
+        const timer = setTimeout(() => {
+          fired = true;
+          api
+            .sendText(targetOf(rec), "⏳ Queued — I’ll start once the current task finishes.")
+            .then(
+              (id) => {
+                if (id !== undefined) rec.noticeId = id;
+              },
+              (e) => log.warn(`[lark] queue notice failed (the turn still runs): ${String(e)}`),
+            )
+            .finally(settle);
+        }, queueNoticeDelayMs);
+        notices.set(rec.id, {
+          // Cancel is a no-op once the timer fired — the send is in flight and `done` settles with it.
+          cancel: () => {
+            if (!fired) {
+              clearTimeout(timer);
+              settle();
+            }
+          },
+          done,
+        });
       },
       run: async (rec) => {
-        // Runs at DEQUEUE time (serialized). Settle the queue notice (if any) so rec.noticeId is final —
-        // in the common path it resolved while the previous turn was still running, so this await is
-        // instant. BEFORE the ceiling check so a dropped turn's notice is settled/cleared too.
-        await notices.get(rec.id);
+        // Runs at DEQUEUE time (serialized). The turn's queue wait is over: cancel a not-yet-sent notice
+        // (fast turnover leaves no trace), then settle so rec.noticeId is final — in the common path
+        // this await is instant. BEFORE the ceiling check so a dropped turn's notice is cleared too.
+        const notice = notices.get(rec.id);
+        notice?.cancel();
+        await notice?.done;
         notices.delete(rec.id);
         // Count this execution against the durable record (poison-turn ceiling) before running it again.
         const decision = store.startAttempt(rec.id, MAX_TURN_ATTEMPTS);

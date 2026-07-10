@@ -456,15 +456,32 @@ describe("turn flow", () => {
         yield { type: "completed" };
       },
     };
-    const { handler } = buildChannel();
+    const { handler } = buildChannel({ queueNoticeDelayMs: 0 }); // send the notice immediately (a long wait, compressed)
     await handler(larkRequest(messageEvent({ id: "om_q1", text: "first" })));
     await flush(); // first turn parks on the gate with its preview mounted
     await handler(larkRequest(messageEvent({ id: "om_q2", text: "second" })));
-    await flush();
+    // Even at delay 0 the notice leaves via a timer (one macrotask later than flush() can see) — poll.
+    await vi.waitFor(() => {
+      const texts = fx
+        .calls("receive_id_type=chat_id", "POST")
+        .map((c) => (c.body?.msg_type === "text" ? (JSON.parse(String(c.body?.content)) as { text: string }).text : ""));
+      expect(texts.some((t) => t.includes("⏳ Queued"))).toBe(true);
+    });
+    release();
+  });
+
+  it("a FAST queue turnover never sends the ⏳ notice — no recall tombstone in the chat", async () => {
+    // Lark renders a deleted message as a visible "recalled a message" line, so the notice is DELAYED:
+    // a turn whose wait ends before the delay leaves no trace (default queueNoticeDelayMs ≫ this test).
+    const fx = larkFetch();
+    const { handler, idle } = buildChannel();
+    await handler(larkRequest(messageEvent({ id: "om_f1", text: "first" })));
+    await handler(larkRequest(messageEvent({ id: "om_f2", text: "second" }))); // queues behind, arms the notice
+    await idle(); // both turns complete well inside the notice delay
     const texts = fx
       .calls("receive_id_type=chat_id", "POST")
       .map((c) => (c.body?.msg_type === "text" ? (JSON.parse(String(c.body?.content)) as { text: string }).text : ""));
-    expect(texts.some((t) => t.includes("⏳ Queued"))).toBe(true);
-    release();
+    expect(texts.some((t) => t.includes("⏳ Queued"))).toBe(false); // never sent …
+    expect(fx.calls("/im/v1/messages/", "DELETE")).toHaveLength(0); // … so nothing was recalled
   });
 });

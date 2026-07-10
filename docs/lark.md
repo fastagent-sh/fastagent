@@ -126,7 +126,7 @@ Topic groups are handled automatically:
 - if the message carries a `thread_id` (a topic group), the default session is `chat:thread` and the reply stays inside the topic (`reply_in_thread`),
 - otherwise the default session is `chat`, and group replies quote the summoning message.
 
-A group answers one shared session: turns are serialized per session (FIFO) instead of failing fast as `session busy`; a summon that lands while the session is busy gets an immediate "⏳ Queued" notice, deleted once its turn's live card appears. Different sessions run in parallel.
+A group answers one shared session: turns are serialized per session (FIFO) instead of failing fast as `session busy`. A summon that keeps waiting gets a "⏳ Queued" notice — **delayed** (default 5s, `queueNoticeDelayMs`): the notice cannot morph into the answer (text vs card), so its cleanup is a recall, which Lark renders as a visible "recalled a message" line — a fast turnover therefore sends no notice at all, and only a genuinely long wait pays that tombstone. Different sessions run in parallel.
 
 ## Streaming behavior
 
