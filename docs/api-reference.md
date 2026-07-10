@@ -225,7 +225,8 @@ interface Schedule {
 }
 function defineSchedule(schedule: Schedule): Schedule;
 function loadSchedules(dir: string): Promise<{ schedules: LoadedSchedule[]; failures: ModuleLoadFailure[] }>;
-function discoverScheduleFiles(dir: string): Promise<string[]>; // the schedules/ file paths, without importing
+function discoverScheduleFiles(dir: string): Promise<string[]>; // existence probe: file basenames, no import
+// (deploy preflight's time-trigger detection; prefer loadSchedules to also surface broken files)
 function createScheduler(opts: SchedulerOptions): Scheduler; // { start(): void; stop(): void }
 function scheduleSession(name: string): string; // the derived stable session id
 ```
@@ -289,7 +290,9 @@ function fastagentCredentialStore(authPath?: string, options?: FastagentAuthOpti
 
 `fastagent login` writes the **project-level** `<state root>/auth.json` by default; `GLOBAL_AUTH_PATH`
 is `createPiModels`'s default when no `authPath` is passed, and the explicit one-file share target
-(`FASTAGENT_AUTH_PATH=~/.fastagent/auth.json`).
+(`FASTAGENT_AUTH_PATH=~/.fastagent/auth.json`). Note the two defaults differ: an embedder calling
+`createPiModels()` bare reads the global file, not a project-level `login` — pass `authPath` explicitly
+to read the project's credential (the `createPiAgentFrom*` openers already do).
 
 Provider injection:
 
