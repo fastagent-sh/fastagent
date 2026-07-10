@@ -166,8 +166,8 @@ route collision as fatal. A declared inbound endpoint must not silently disappea
 must never cause the default `/invoke` route to appear. The default HTTP/SSE route is mounted only when there are no
 enabled channel files.
 
-The Node host adds `GET /health`, routes exact method/path keys, and bridges Fetch requests/responses to
-`node:http` with streaming backpressure and disconnect cancellation.
+The serving CLI composition adds `GET /health`. The Node host routes exact method/path keys and bridges
+Fetch requests/responses to `node:http` with streaming backpressure and disconnect cancellation.
 
 ### GitHub
 

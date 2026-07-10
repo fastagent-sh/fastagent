@@ -1,9 +1,9 @@
 name: Publish
 
 # Publish @fastagent-sh/fastagent to npm from a GitHub Release via Trusted Publishing (OIDC), with
-# provenance and no NPM_TOKEN. The npm trusted publisher must name org fastagent-sh, repo fastagent,
-# workflow publish.yml. The release tag is the manual gate; this job verifies that tag against
-# package.json and reruns the release checks before publishing.
+# provenance and no NPM_TOKEN. Publishing requires the public fastagent-sh/fastagent repository; the
+# npm trusted publisher must name org fastagent-sh, repo fastagent, workflow publish.yml. The release
+# tag is the manual gate; this job verifies that tag against package.json and reruns the release checks.
 on:
   release:
     types: [published]
@@ -17,6 +17,16 @@ jobs:
     name: Publish to npm
     runs-on: ubuntu-latest
     steps:
+      - name: Verify public release repository
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          if [[ "$REPOSITORY" != "fastagent-sh/fastagent" || "$VISIBILITY" != "public" ]]; then
+            echo "publishing requires public repository fastagent-sh/fastagent (got $REPOSITORY, $VISIBILITY)" >&2
+            exit 1
+          fi
+
       - name: Check out release tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -35,7 +45,7 @@ jobs:
         run: npm ci
 
       - name: Verify release tag matches package version
-        run: node -e 'const expected = `v${require("./package.json").version}`; if (process.env.GITHUB_REF_NAME !== expected) { console.error(`release tag ${process.env.GITHUB_REF_NAME} does not match ${expected}`); process.exit(1) }'
+        run: node -e 'const expected = "v" + require("./package.json").version; if (process.env.GITHUB_REF_NAME !== expected) { console.error("release tag " + process.env.GITHUB_REF_NAME + " does not match " + expected); process.exit(1) }'
 
       - name: Lint
         run: npm run lint
