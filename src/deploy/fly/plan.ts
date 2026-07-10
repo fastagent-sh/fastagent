@@ -211,6 +211,14 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       `#   Payload URL = https://${appName}.fly.dev/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
   }
+  if (channels.includes("lark")) {
+    post.push(
+      `# After deploy — set the Lark/Feishu event Request URL (developer console → Events & Callbacks).`,
+      `# Path assumes the default route (POST /lark); the app must be RUNNING when you save (the console`,
+      `# verifies the URL with a challenge):`,
+      `#   Request URL = https://${appName}.fly.dev/lark`,
+    );
+  }
   if (post.length > 0) runbook.push(``, ...post);
 
   // Single-machine tier: state lives on ONE volume tied to ONE machine. Scaling to multiple machines

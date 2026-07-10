@@ -1,7 +1,7 @@
 /**
  * `--tunnel`: expose the local dev server on a public HTTPS URL via a Cloudflare quick tunnel, then
- * auto-register the first-party webhook channels against it (telegram setWebhook; github prints the
- * URL to paste into repo settings). This closes the "local dev → public URL" gap webhooks need.
+ * auto-register the first-party webhook channels against it (telegram setWebhook; github/lark print
+ * the URL to paste into their consoles). This closes the "local dev → public URL" gap webhooks need.
  *
  * Process orchestration, not assembly — lives outside the engine, beside dev-supervisor.ts.
  */
@@ -154,6 +154,14 @@ export async function announceWebhooks(dir: string, baseUrl: string): Promise<vo
   if (channels.includes("github")) {
     log.info(
       `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
+    );
+  }
+  if (channels.includes("lark")) {
+    // No programmatic registration exists (unlike telegram's setWebhook): the console is the only
+    // writer of the event URL, and saving it fires a url_verification challenge — which is why the
+    // instruction stresses that THIS server must be up when the operator clicks save.
+    log.info(
+      `[fastagent] lark: set the event Request URL in the developer console (Events & Callbacks) to ${baseUrl}/lark — keep this server running while you save (the console verifies the URL with a challenge)`,
     );
   }
 }

@@ -12,7 +12,7 @@ import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
 import { parseEnvContent } from "../env.ts";
 
-export type ChannelKind = "github" | "telegram";
+export type ChannelKind = "github" | "telegram" | "lark";
 
 /** An env var a scaffolded channel reads. `generate` = a random-string secret the CLI can pre-fill. */
 export interface ChannelEnv {
@@ -51,6 +51,22 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     steps: [
       "edit {channel} — customise routing with route() (optional; the defaults already work)",
       "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
+    ],
+  },
+  lark: {
+    // No `generate` here: every value comes FROM the developer console (generating an Encrypt Key
+    // locally would break inbound events until the user mirrors it in the console — a silent-footgun
+    // default; the hint tells them the direction of travel instead).
+    env: [
+      { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info" },
+      { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info" },
+      { name: "LARK_VERIFICATION_TOKEN", hint: "console → Events & Callbacks; authenticates inbound events" },
+      { name: "LARK_ENCRYPT_KEY", hint: "optional but recommended — set one in the console and copy it here" },
+    ],
+    steps: [
+      "edit {channel} — the setup walkthrough (console permissions, event subscription) is in its header",
+      "set the event Request URL to <public-url>/lark with the server RUNNING (the console sends a challenge)",
+      "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
   },
 };

@@ -141,7 +141,7 @@ const agent = createPiAgent({
 | [docs/embedding.md](docs/embedding.md) | Use FastAgent as a library inside your own app |
 | [docs/channels.md](docs/channels.md) | Add webhook/bot channels |
 | [docs/deploy.md](docs/deploy.md) | Ship the directory to Fly, Railway, or any Docker host |
-| [docs/github.md](docs/github.md) / [docs/telegram.md](docs/telegram.md) | First-party channel guides |
+| [docs/github.md](docs/github.md) / [docs/telegram.md](docs/telegram.md) / [docs/lark.md](docs/lark.md) | First-party channel guides |
 | [docs/channel-development.md](docs/channel-development.md) | Build custom channel adapters |
 | [docs/api-reference.md](docs/api-reference.md) | Public TypeScript API reference |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Common setup/runtime issues |
@@ -166,7 +166,8 @@ Subpath exports:
 - `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel/host kit, schedules;
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/github` — GitHub webhook channel;
-- `@fastagent-sh/fastagent/telegram` — Telegram bot channel.
+- `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
+- `@fastagent-sh/fastagent/lark` — Lark/Feishu bot channel.
 
 ## Repository layout
 

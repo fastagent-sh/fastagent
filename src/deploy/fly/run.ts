@@ -142,5 +142,10 @@ export async function deployFlyRun(
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
   }
+  if (plan.channels.includes("lark")) {
+    log(
+      `lark: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/lark (the app must be running when you save)`,
+    );
+  }
   return { ok: true };
 }

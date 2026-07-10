@@ -183,15 +183,50 @@ Telegram is the stateful channel reference. Its modules separate:
 |---|---|
 | `parse.ts` | pure update/message parsing and summon policy |
 | `invoke-turn.ts` | attachment resolution and one Agent invocation |
-| `turn-queue.ts` | per-session FIFO, different sessions concurrent |
-| `turn-store.ts` | pre-ACK persisted turn intent and crash replay |
+| `../turn-queue.ts` | per-session FIFO, different sessions concurrent (shared with lark) |
+| `turn-store.ts` | telegram's record + ordering over the shared generic `../turn-store.ts` (pre-ACK persisted turn intent, crash replay) |
 | `context-buffer.ts` | durable un-summoned group context |
 | `preview.ts` | live preview and terminal write policy |
 | `telegram-api.ts` | Bot API timeouts/retries and HTML-aware splitting |
-| `state.ts` | atomic small JSON state files |
+| `../state.ts` | atomic small JSON state files (shared with lark) |
 
 Telegram turn replay is at-least-once. A crash can re-run side-effecting tools, and a narrow pre-ACK
 window can run a delivery twice. Exactly-once execution needs a different backend/resume model.
+
+### Lark / Feishu
+
+The second stateful chat channel, shaped as a sibling of Telegram: the shared mechanisms
+(`turn-queue` / generic `turn-store` / `state` / `wait-health`) live one level up in `src/channels/`,
+and the module split mirrors Telegram's (`lark.ts` wiring, `parse.ts` pure decode, `invoke-turn.ts` IO
+assembly, `preview.ts` pump, `lark-api.ts` single transport pipeline with the tenant-token cache,
+`crypto.ts` webhook security math, `card.ts` card builders, `seen.ts` dedup ring, `register-app.ts` /
+`register-webhook.ts` platform automation). No SDK — every wire protocol is plain fetch, with the
+adopt-the-SDK tripwire documented in `lark-api.ts`. What is platform-different:
+
+- **The live preview is a streaming CARD, not an edited message.** The platform caps text edits at 20
+  per message and sends at 5 QPS per chat; cardkit streaming (50 QPS, strictly increasing `sequence`)
+  is its designed AI-output channel. The same card settles into the final Markdown answer. Degrade
+  tiers: card fails → static text placeholder; streaming closed mid-turn → frozen preview, the settle
+  still lands.
+- **Verification is modal and fail-closed.** Encrypt Key set: signature over the raw body → AES
+  decrypt, plaintext refused. Without one: constant-time verification-token match. The
+  `url_verification` challenge is answered in both modes.
+- **Dedup on `message_id` (`seen.ts`).** The platform documents duplicate pushes and recommends this
+  key; without the ring, a late redelivery after a completed turn would re-run it.
+- **Group visibility is scope-gated.** The default scope delivers only @mentions of the bot, so
+  Telegram's context buffer has no counterpart until the sensitive `im:message.group_msg` scope is
+  granted. Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved);
+  non-`user` senders never summon. A reply summon carries only `parent_id` — the referent's content and
+  attachments are fetched as primary input.
+- **Registration and creation are automated over the platform's own APIs.** The event Request URL is
+  written via the application-v7 config PATCH (immediate effect; the platform challenges the URL during
+  the call, so the registrar health-waits first) — used by `--tunnel` and `deploy --run`, with the
+  manual console instruction as the fallback. Cloud lag: the v7 route exists on `open.feishu.cn` but
+  not on `open.larksuite.com` yet; a 404 names that cause. `add lark --create-app` runs the scan-to-
+  create device flow (RFC 8628, hand-rolled; wire format shared by the four official SDKs) and reads
+  the platform-generated verification token back — `.env` completes without the developer console.
+- **Webhook ingress only.** The WS long-connection mode (no public URL) needs the official SDK and a
+  non-HTTP channel seam; deferred.
 
 ## 8. Schedules and self-scheduling
 

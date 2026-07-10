@@ -42,19 +42,30 @@ src/
 ├── channels/
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
+│   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + lark)
+│   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
+│   ├── state.ts             # SHARED: atomic state files under <stateRoot>/channels/<kind>/
 │   ├── github/              # github channel (+ scaffold/ bundle)
-│   └── telegram/            # telegram channel — see docs/design/core.md §9.2
-│       ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)
-│       ├── parse.ts         # pure protocol parsing: field extraction, prompt envelope, summon/route policy (no state/IO)
-│       ├── invoke-turn.ts   # run one turn: assemble inputs (resolve attachments: download/vision) + stream agent.invoke
-│       ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; durability layered by turn-store.ts)
-│       ├── turn-store.ts    # durable turn intent (L1): persist pre-ACK, replay a crash-surviving turn on next start
-│       ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
-│       ├── preview.ts       # live-preview pump + terminal-write policy
-│       ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
-│       ├── state.ts         # atomic state files under .fastagent/channels/telegram/
-│       ├── register-webhook.ts # --tunnel setWebhook registration
-│       └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
+│   ├── telegram/            # telegram channel — see docs/design/core.md §9.2
+│   │   ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)
+│   │   ├── parse.ts         # pure protocol parsing: field extraction, prompt envelope, summon/route policy (no state/IO)
+│   │   ├── invoke-turn.ts   # run one turn: assemble inputs (resolve attachments: download/vision) + stream agent.invoke
+│   │   ├── turn-store.ts    # telegram's record + update_id arrival order over the shared generic store
+│   │   ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
+│   │   ├── preview.ts       # live-preview pump + terminal-write policy
+│   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
+│   │   ├── register-webhook.ts # --tunnel setWebhook registration
+│   │   └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
+│   └── lark/                # lark/feishu channel — see docs/design/core.md §9.3
+│       ├── lark.ts          # Lark wiring: ingress (verify/decrypt/challenge/dedup) + per-turn lifecycle + composition
+│       ├── parse.ts         # pure event parsing: content decode per msg_type, envelope, summon/route policy
+│       ├── crypto.ts        # pure webhook security math: AES event decryption + X-Lark-Signature
+│       ├── invoke-turn.ts   # run one turn: fetch the reply referent + attachments, stream agent.invoke
+│       ├── preview.ts       # live STREAMING-CARD pump (cardkit sequence snapshots) + terminal-write policy + text fallback
+│       ├── card.ts          # pure card JSON 2.0 builders (streaming entity / settled card / entity content)
+│       ├── seen.ts          # accepted-turn dedup ring on message_id (the platform documents duplicate pushes)
+│       ├── lark-api.ts      # the single Open API pipeline (tenant-token cache, rate-limit retry, code gate, cardkit)
+│       └── scaffold/        # `add lark` bundle (channel.ts + send tool)
 ├── deploy/                  # `deploy fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §10.5)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings

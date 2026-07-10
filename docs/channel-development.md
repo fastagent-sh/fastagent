@@ -20,7 +20,7 @@ Every channel has two layers:
 | Adapter | reusable package or first-party module | verify signature, parse body, ACK/retry rules, SDK calls |
 | Glue | the agent workspace | map an event to a session and prompt |
 
-For first-party channels, the adapter is `@fastagent-sh/fastagent/github` or `@fastagent-sh/fastagent/telegram`, and the glue is the scaffolded `channels/*.ts` file.
+For first-party channels, the adapter is `@fastagent-sh/fastagent/github`, `@fastagent-sh/fastagent/telegram`, or `@fastagent-sh/fastagent/lark`, and the glue is the scaffolded `channels/*.ts` file.
 
 For a community channel, publish the adapter as a separate package and keep the user's glue in their workspace.
 

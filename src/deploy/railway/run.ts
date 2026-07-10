@@ -244,5 +244,10 @@ export async function deployRailwayRun(
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → ${url}/webhook`);
   }
+  if (plan.channels.includes("lark")) {
+    log(
+      `lark: set the event Request URL in the developer console (Events & Callbacks) → ${url}/lark (the service must be running when you save)`,
+    );
+  }
   return { ok: true, url };
 }

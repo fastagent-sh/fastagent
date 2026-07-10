@@ -94,7 +94,7 @@ function usage(code: number): never {
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
-  fastagent add   github | telegram | skill <source> [dir]
+  fastagent add   github | telegram | lark | skill <source> [dir]
   fastagent deploy fly|railway [dir] [--run] [--force] [--stop] [--no-scale-to-zero] [--into-linked]
   fastagent login [provider] [--auth-path file]
   fastagent --version
@@ -105,7 +105,7 @@ function usage(code: number): never {
          disable). Files the agent writes as work product never trigger a restart.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --tunnel  expose it on a public HTTPS URL via a Cloudflare quick tunnel (needs cloudflared)
-                   and auto-register the webhook channels (telegram setWebhook; github prints the URL)
+                   and auto-register the webhook channels (telegram setWebhook; github/lark print the URL)
   chat   open the SAME assembled agent in pi's interactive TUI (the real harness, not a
          crude REPL) — to try it locally before serving. Same model/tool/skill resolution
          as dev; pi handles login, sessions, and /resume natively.
@@ -153,8 +153,8 @@ function usage(code: number): never {
                    point it at ~/.fastagent/auth.json to share one credential across projects)
          --tunnel  same as dev: a public HTTPS URL + auto-registered webhooks, for hosting a bot from
                    your own box without deploying (the quick-tunnel URL is ephemeral, not for production)
-  add    github | telegram: scaffold channels/<kind>.ts — third-party adapter glue with the policy
-         to edit (github maps events in on(); telegram routes in the optional route()).
+  add    github | telegram | lark: scaffold channels/<kind>.ts — third-party adapter glue with the
+         policy to edit (github maps events in on(); telegram/lark route in the optional route()).
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
