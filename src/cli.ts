@@ -726,8 +726,24 @@ async function runAdd(): Promise<void> {
  * event Request URL is NOT set here: `dev --tunnel` / `deploy --run` register it against the live URL.
  */
 async function createLarkAppFlow(): Promise<Record<string, string>> {
-  console.error(`[fastagent] creating the Feishu/Lark app (confirm in the app)…`);
+  // The two platform brands have SEPARATE accounts hosts, and each confirm page accepts only its own
+  // app (the Feishu launcher refuses a Lark scan and vice versa) — so the START host must match the
+  // user's account. Honor an existing LARK_BASE_URL, else ask.
+  let intl = (process.env.LARK_BASE_URL ?? "").includes("larksuite");
+  if (!process.env.LARK_BASE_URL) {
+    const r = await select({
+      message: "Which platform is your account on?",
+      options: [
+        { value: "feishu", label: "飞书 (feishu.cn)" },
+        { value: "lark", label: "Lark international (larksuite.com)" },
+      ],
+    });
+    if (isCancel(r)) failStartup(new Error("cancelled"));
+    intl = r === "lark";
+  }
+  console.error(`[fastagent] creating the ${intl ? "Lark" : "Feishu"} app (confirm in the app)…`);
   const app = await registerLarkApp({
+    ...(intl ? { accountsBaseUrl: "https://accounts.larksuite.com" } : {}),
     name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
     desc: "Served by fastagent",
     onVerificationUrl: ({ url, expiresInS }) => {
@@ -738,7 +754,9 @@ async function createLarkAppFlow(): Promise<Record<string, string>> {
   });
   console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);
   const env: Record<string, string> = { LARK_APP_ID: app.appId, LARK_APP_SECRET: app.appSecret };
-  if (app.tenantBrand === "lark") env.LARK_BASE_URL = "https://open.larksuite.com"; // intl cloud — the channel + tools read this
+  // intl cloud — the channel + tools read this. Either signal suffices: the chosen start host, or the
+  // brand the platform reported at confirmation.
+  if (intl || app.tenantBrand === "lark") env.LARK_BASE_URL = "https://open.larksuite.com";
   // The webhook channel authenticates plaintext events by the platform-generated Verification Token —
   // read it back so the operator never opens the console. Failing that is a one-line manual copy, not
   // a failed scan: the credentials above are already worth keeping.

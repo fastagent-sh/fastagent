@@ -32,8 +32,11 @@ It also appends the required env vars to `.env.example` when possible.
 ## Create the app from the CLI (`--create-app`)
 
 `fastagent add lark --create-app` runs the platform's **scan-to-create** flow (its official name; an
-OAuth 2.0 device-authorization grant): the CLI prints a one-time link (valid ~10 minutes); open it in
-Feishu or Lark — scan it as a QR code or just click it — and confirm; the platform creates an app from its agent template — bot capability, messaging scopes,
+OAuth 2.0 device-authorization grant). The CLI first asks which platform your account is on — the two
+brands have separate accounts hosts, and each confirm page accepts only its own app (the Feishu page
+refuses a Lark scan and vice versa); an existing `LARK_BASE_URL` skips the question. It then prints a
+one-time link (valid ~10 minutes); open it in Feishu or Lark — scan it as a QR code or just click it —
+and confirm; the platform creates an app from its agent template — bot capability, messaging scopes,
 and event subscriptions pre-configured — and hands the credentials back. fastagent then reads the
 platform-generated Verification Token over the API and writes everything to `.env`:
 
