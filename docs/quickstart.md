@@ -11,7 +11,9 @@ This guide takes you from an installed CLI to a running local agent service.
 
 - Node >= 22.19 (`node --version`).
 - FastAgent CLI: `npm i -g @fastagent-sh/fastagent`.
-- Model credentials: run `fastagent login`, or put a provider API key in the workspace `.env`.
+- Model credentials: `fastagent login` stores them **per project** (`<cwd>/.fastagent/auth.json`, no
+  global fallback) — run it *inside the workspace* after step 1, or put a provider API key in the
+  workspace `.env`.
 
 List available model specs with:
 
@@ -53,7 +55,7 @@ fastagent info
 
 `info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
-**Initializing inside an existing project?** When the directory is already claimed by a toolchain or deploy setup (a `tsconfig.json`/framework config, a non-JS build manifest like `go.mod`/`pyproject.toml`/`Cargo.toml`, a `Dockerfile`/`fly.toml`/`railway.toml`, or occupied `tools//channels//skills/`), `init` puts the agent kit into `./agent` instead of flat, writes `agentDir: "./agent"` into the config, and prints the reason — the host's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. Override with `--flat` or `--agent-dir <name>`.
+**Initializing inside an existing project?** When the directory is already claimed by a toolchain or deploy setup (a `tsconfig.json`/framework config, a non-JS build manifest like `go.mod`/`pyproject.toml`/`Cargo.toml`, a `Dockerfile`/`fly.toml`/`railway.toml`, or occupied `tools/`, `channels/`, or `skills/`), `init` puts the agent kit into `./agent` instead of flat, writes `agentDir: "./agent"` into the config, and prints the reason — the host's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. Override with `--flat` or `--agent-dir <name>`.
 
 A fresh workspace presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent lists the models of the providers you are logged into (run `fastagent login`
@@ -147,13 +149,13 @@ fastagent start
 
 `start` uses the same assembly as `dev`, but does not watch files. There is no build step: copy the workspace to a host with Node >= 22.19, install dependencies, and run `fastagent start`.
 
-For deployments, put sessions on durable storage:
+For deployments, point the whole machine-state root (auth, sessions, **and** channel state — Telegram's durable turn replay lives there too) at durable storage:
 
 ```bash
-FASTAGENT_SESSIONS_DIR=/data/sessions fastagent start
-# or
-fastagent start --sessions-dir /data/sessions
+FASTAGENT_STATE_DIR=/data/fastagent fastagent start
 ```
+
+(`FASTAGENT_SESSIONS_DIR` / `--sessions-dir` override just the sessions path; they do not move channel state.)
 
 ## 7. Add channels
 

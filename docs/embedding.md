@@ -37,7 +37,7 @@ The stream ends with exactly one `completed` / `failed`, or is cancelled by the 
 
 | You have | Use | Returns |
 |---|---|---|
-| An agent directory (`AGENTS.md` + `skills/` + `tools/` + config) | `createPiAgentFromWorkspace(dir, { model? })` | `{ agent, definition, modelSpec, … }` — auto-discovers everything |
+| An agent directory (`persona.md` + `skills/` + `tools/` + config) | `createPiAgentFromWorkspace(dir, { model? })` | `{ agent, definition, modelSpec, … }` — auto-discovers everything |
 | A definition directory, but you want to control the K ports | `createPiAgentFromDefinition(dir, { model, … })` | `{ agent, definition }` |
 | No directory — assemble from code | `createPiAgent({ model, instructions, tools })` | `agent` |
 

@@ -7,26 +7,28 @@ status: current
 
 **Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, handle GitHub/webhook events, expose it as an API endpoint, or put it behind your own channel.
 
-It does not ask you to rewrite an agent into a framework-specific project. Start with any directory; add `AGENTS.md`, `skills/`, `tools/`, channels, and markdown context as the agent grows. FastAgent gives that directory a running service shape.
+It does not ask you to rewrite an agent into a framework-specific project. Start with any directory; add `persona.md`, `skills/`, `tools/`, channels, and markdown context as the agent grows. FastAgent gives that directory a running service shape.
 
 Coding agents made it cheap to vibe useful agent directories. The next gap is serving: local agents live in terminals, but real services receive webhooks, join Telegram, serve product users, and expose stable APIs. FastAgent connects those directories to real triggers and runtimes.
 
 ```txt
 agent/
-├── AGENTS.md           # optional identity and standing instructions
+├── persona.md          # optional identity and standing instructions
 ├── skills/             # optional reusable markdown expertise
 ├── tools/              # optional code tools
 ├── channels/           # optional webhook/bot adapters
+├── schedules/          # optional cron time triggers
+├── AGENTS.md           # optional project context (yours, or a host repo's)
 ├── reference.md        # optional markdown context (any file layout)
 └── fastagent.config.mjs # optional deployment choices
 ```
 
 ## What FastAgent provides
 
-1. **Your directory is the agent** — `AGENTS.md`, `skills/`, `tools/`, `channels/`, and markdown context stay as files you can inspect, edit, and commit. `AGENTS.md` is recommended for identity, not a rewrite requirement.
+1. **Your directory is the agent** — `persona.md` (identity), `skills/`, `tools/`, `channels/`, and markdown context stay as files you can inspect, edit, and commit. An `AGENTS.md` is *project context* the agent reads (its own, or a host repo's) — not a rewrite requirement.
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
-3. **A reference implementation** — pi-based assembly for `AGENTS.md`, Agent Skills, code tools, sessions, auth, and model selection.
-4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `start`, and channel scaffolding.
+3. **A reference implementation** — pi-based assembly for `persona.md`, `AGENTS.md` context, Agent Skills, code tools, sessions, auth, and model selection.
+4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `fire`, `schedule`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
 5. **Composable adapters** — GitHub, Telegram, the default local invoke channel, and a small public kit for third-party channels.
 6. **Time triggers** — cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit (`fastagent schedule history`).
 
@@ -112,7 +114,7 @@ fastagent add telegram
 Implemented today:
 
 - Agent Handler v0.1 reference implementation over pi.
-- Directory assembly from `AGENTS.md`, `skills/`, discovered `tools/`, and `fastagent.config.*`.
+- Directory assembly from `persona.md`, `AGENTS.md` project context, `skills/`, discovered `tools/`, and `fastagent.config.*`.
 - HTTP/SSE invoke channel.
 - GitHub and Telegram channel adapters.
 - `dev`, `chat`, `invoke`, `tool`, `info`, `start`, and `deploy fly` / `deploy railway` (`--run` drives flyctl / the railway CLI end-to-end).

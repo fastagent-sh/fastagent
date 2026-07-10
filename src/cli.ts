@@ -95,6 +95,7 @@ function usage(code: number): never {
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
   fastagent add   github | telegram | skill <source> [dir]
+  fastagent deploy fly|railway [dir] [--run] [--force] [--stop] [--no-scale-to-zero] [--into-linked]
   fastagent login [provider] [--auth-path file]
   fastagent --version
 
@@ -114,7 +115,7 @@ function usage(code: number): never {
          existing AGENTS.md is kept as project context. Layout: flat by default ("a directory is an
          agent"); when an existing toolchain/deploy claims the directory (tsconfig/framework config,
          a non-JS build manifest like go.mod/pyproject.toml/Cargo.toml, Dockerfile/fly/railway, or
-         occupied tools//channels//skills/), the kit goes into ./agent
+         occupied tools/, channels/, or skills/), the kit goes into ./agent
          and config.agentDir points there — the reason is printed, no prompt.
          --minimal           persona.md + the example skill + config only (no code tool / package.json)
          --no-install        scaffold everything but skip npm install
@@ -734,7 +735,7 @@ async function runAddSkill(): Promise<void> {
  * webhook step), and hands the middle to a coding agent (or human) as a precise, values-resolved
  * runbook. The pre-flight (config/model/channels/container facts) is host-neutral; the host branch adds
  * its config file + runbook. Read-only on the definition; the only writes are the generated artifacts
- * (never clobbered without --force). `--run` (fly today) drives the host CLI instead of printing.
+ * (never clobbered without --force). `--run` drives the host CLI instead of printing.
  */
 async function runDeploy(): Promise<void> {
   const host = positionals[1];

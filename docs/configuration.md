@@ -7,7 +7,7 @@ status: current
 
 FastAgent keeps behavior and deployment choices separate:
 
-- agent behavior lives in `AGENTS.md`, `skills/`, and `tools/`,
+- agent behavior lives in `persona.md` (identity), `skills/`, `tools/`, and `AGENTS.md` project context,
 - deployment choices live in `fastagent.config.*`, CLI flags, and environment variables,
 - secrets live in `.env`, provider env vars, or the project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`).
 
