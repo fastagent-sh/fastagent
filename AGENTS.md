@@ -119,7 +119,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
 3. **Rebase merge by default** (preserve curated commits); squash only to clean up a WIP branch. Merge commits are disabled. `main` enforces linear history; force-push is forbidden.
-4. **Review policy.** Maintainer-authored PRs may self-merge after green CI; external-contributor PRs require one maintainer approval and are merged by a maintainer.
+4. **Review policy.** Maintainer-authored PRs may self-merge after green CI; external-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**
    ```bash
    git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin
