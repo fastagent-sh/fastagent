@@ -117,12 +117,12 @@ Common options:
 
 | Option | Meaning |
 |---|---|
-| `model` | Required `provider/modelId` spec. |
+| `model` | Required `provider/modelId` spec (an `AnyModel` object is also accepted). |
 | `instructions` | String or function returning the system prompt. |
 | `tools` | Agent tools. |
 | `skills` | Loaded Agent Skills. |
 | `sessions` | `PiSessionStore`. |
-| `env` | Tool execution environment. |
+| `env` | Tool execution environment (`ExecutionEnv`). |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 
@@ -137,7 +137,7 @@ function createPiAgentFromDefinition(
 
 Load `persona.md`/`skills/` from `dir` (the agent-definition dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the run/working directory (where tools operate, whose repo `AGENTS.md` is context) from the definition dir.
 
-`LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions.
+`LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
 
 ### `createPiAgentFromWorkspace`
 
@@ -225,6 +225,7 @@ interface Schedule {
 }
 function defineSchedule(schedule: Schedule): Schedule;
 function loadSchedules(dir: string): Promise<{ schedules: LoadedSchedule[]; failures: ModuleLoadFailure[] }>;
+function discoverScheduleFiles(dir: string): Promise<string[]>; // the schedules/ file paths, without importing
 function createScheduler(opts: SchedulerOptions): Scheduler; // { start(): void; stop(): void }
 function scheduleSession(name: string): string; // the derived stable session id
 ```
@@ -278,6 +279,17 @@ function resolveModel(models: Models, spec: string): Model;
 function createPiModels(options?: CreatePiModelsOptions): Models;
 function probeAuthSource(models: Models, spec: string): Promise<string | undefined>;
 ```
+
+Auth:
+
+```ts
+const GLOBAL_AUTH_PATH: string; // ~/.fastagent/auth.json — the cross-project share target
+function fastagentCredentialStore(authPath?: string, options?: FastagentAuthOptions): CredentialStore;
+```
+
+`fastagent login` writes the **project-level** `<state root>/auth.json` by default; `GLOBAL_AUTH_PATH`
+is `createPiModels`'s default when no `authPath` is passed, and the explicit one-file share target
+(`FASTAGENT_AUTH_PATH=~/.fastagent/auth.json`).
 
 Provider injection:
 

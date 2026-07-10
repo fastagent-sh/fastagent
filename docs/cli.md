@@ -43,7 +43,7 @@ fastagent init [dir] [--minimal] [--no-install] [--flat] [--agent-dir <name>]
 
 Creates a self-iterating agent — the directory is the agent, and it can edit its own definition (persona.md and skills are re-read every turn). A fresh workspace has `persona.md` (the agent's identity: how to improve yourself), a `writing-great-skills` example skill (from [mattpocock/skills](https://github.com/mattpocock/skills) — the guide to authoring skills), a `fetch-url` example code tool, config, `.env.example`, and `.gitignore`. No `AGENTS.md` is scaffolded (it is project context, not identity); an existing one is kept untouched. Everything is written offline; by default it also writes `package.json` and runs `npm install`. Ignore files follow the layout: flat workspaces use the root `.gitignore` for `.env`, `.fastagent`, and `node_modules/`; `--agent-dir` workspaces keep root state/secrets in the root `.gitignore` and kit dependencies in `<agentDir>/.gitignore`.
 
-**Layout** — flat by default ("a directory is an agent"). When an existing system already claims the directory — a toolchain/build manifest (`tsconfig.json`, `next|vite|astro|svelte|nuxt|remix|webpack|rollup.config.*`, or a non-JS ecosystem's — `go.mod`, `Cargo.toml`, `pyproject.toml`, `setup.py`, `requirements.txt`, `Gemfile`, `pom.xml`, `build.gradle`, `composer.json`, `CMakeLists.txt`), a deploy manifest (`Dockerfile`, `fly.toml`, `railway.toml`, `vercel.json`, `netlify.toml`), or occupied `tools//channels//skills/` — the agent kit goes into `./agent` with `config.agentDir` pointing there, and the reason is printed (no prompt). The agent kit self-contains its `package.json`, so a host repo's manifest and lockfile are never touched. `init` never overwrites existing files and refuses only a directory that already has a `fastagent.config.*`.
+**Layout** — flat by default ("a directory is an agent"). When an existing system already claims the directory — a toolchain/build manifest (`tsconfig.json`, `next|vite|astro|svelte|nuxt|remix|webpack|rollup.config.*`, or a non-JS ecosystem's — `go.mod`, `Cargo.toml`, `pyproject.toml`, `setup.py`, `requirements.txt`, `Gemfile`, `pom.xml`, `build.gradle`, `composer.json`, `CMakeLists.txt`), a deploy manifest (`Dockerfile`, `fly.toml`, `railway.toml`, `vercel.json`, `netlify.toml`), or occupied `tools/`, `channels/`, or `skills/` — the agent kit goes into `./agent` with `config.agentDir` pointing there, and the reason is printed (no prompt). The agent kit self-contains its `package.json`, so a host repo's manifest and lockfile are never touched. `init` never overwrites existing files and refuses only a directory that already has a `fastagent.config.*`.
 
 Options:
 
@@ -243,10 +243,10 @@ FASTAGENT_STATE_DIR      > <dir>/.fastagent            (the whole machine-state 
 --sessions-dir > FASTAGENT_SESSIONS_DIR > <state root>/sessions
 ```
 
-For deployments, point sessions at durable storage:
+For deployments, point the whole state root (auth, sessions, channel state) at durable storage:
 
 ```bash
-FASTAGENT_SESSIONS_DIR=/data/sessions fastagent start
+FASTAGENT_STATE_DIR=/data/fastagent fastagent start
 ```
 
 ## Global options

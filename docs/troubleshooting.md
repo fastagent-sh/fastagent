@@ -38,10 +38,14 @@ Precedence:
 
 The selected provider has no credentials.
 
+Most common cause: you ran `fastagent login` **from a different directory**. Login is project-level —
+it writes `<cwd>/.fastagent/auth.json`, and there is no fallback to the global file. Run it inside the
+workspace, or point every project at one shared file with `FASTAGENT_AUTH_PATH=~/.fastagent/auth.json`.
+
 Options:
 
 ```bash
-fastagent login
+cd <workspace> && fastagent login
 ```
 
 or set a provider API key in `.env` / environment, for example:
@@ -102,19 +106,20 @@ Use `--no-watch` to serve once without the supervisor.
 
 ## Sessions disappear after redeploy
 
-By default, sessions live under the workspace:
+By default, all machine state (auth, sessions, channel state) lives under the workspace:
 
 ```txt
-<state root>/sessions   # default <workspace>/.fastagent/sessions; root override: FASTAGENT_STATE_DIR
+<state root>   # default <workspace>/.fastagent
 ```
 
-A redeploy that replaces the workspace can wipe them. Point sessions at durable storage:
+A redeploy that replaces the workspace wipes it. Point the whole state root at durable storage:
 
 ```bash
-FASTAGENT_SESSIONS_DIR=/data/sessions fastagent start
-# or
-fastagent start --sessions-dir /data/sessions
+FASTAGENT_STATE_DIR=/data/fastagent fastagent start
 ```
+
+Moving only sessions (`FASTAGENT_SESSIONS_DIR` / `--sessions-dir`) is not enough for channel-backed
+deployments — Telegram's durable turn state also lives under the state root.
 
 ## `session busy`
 

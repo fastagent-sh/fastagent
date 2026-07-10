@@ -16,9 +16,12 @@ FastAgent mental model:
 
 How you run FastAgent commands (you are a non-interactive agent, so this matters):
 - A model must be set EXPLICITLY. With no model, `dev`/`start`/`invoke` fall back to an interactive
-  picker you cannot answer, and fail with `missing model`. So: run `fastagent login` (ask me which
-  provider first), list specs with `fastagent models`, then ALWAYS pass `--model provider/id` (or set
-  FASTAGENT_MODEL, or write `model:` into fastagent.config.*). Never rely on the interactive prompt.
+  picker you cannot answer, and fail with `missing model`. Credentials first: `fastagent login` is
+  ALSO interactive (menus + a browser) and fails fast in a non-TTY — so ask ME to run it in a
+  terminal, INSIDE the workspace (it writes the project-level .fastagent/auth.json; a login run in
+  another directory is invisible here). Or ask me for a provider API key and put it in `.env`. Then
+  list specs with `fastagent models`, and ALWAYS pass `--model provider/id` (or set FASTAGENT_MODEL,
+  or write `model:` into fastagent.config.*). Never rely on an interactive prompt.
 - Some commands EXIT, others BLOCK. `info`, `models`, `invoke`, `tool` return — use these for checks
   and smoke tests. `dev` and `start` are long-running servers: do NOT run them in the foreground (you
   will hang waiting) — background them, or let me run them.
@@ -37,7 +40,7 @@ Set up (run init ONCE per directory — it refuses an already-initialized worksp
   as project context, and refuses a dir that already has a fastagent.config.* (already a workspace).
 - Layout is decided automatically: flat by default; if an existing toolchain/deploy claims the dir
   (tsconfig/framework config, a non-JS build manifest like go.mod/pyproject.toml/Cargo.toml,
-  Dockerfile/fly/railway, occupied tools//channels//skills/), the kit goes
+  Dockerfile/fly/railway, occupied tools/, channels/, or skills/), the kit goes
   into ./agent with config.agentDir pointing there — init prints the reason. Override on the FIRST
   run: --flat / --agent-dir <name> (a re-run is refused once the config exists). To change the layout
   afterwards: move the kit files yourself and update (or remove) config.agentDir to match.
