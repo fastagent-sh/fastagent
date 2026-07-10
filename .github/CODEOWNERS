@@ -1,4 +1,4 @@
-# Sensitive surfaces require approval from a code owner; low-risk paths remain self-mergeable.
+# Ownership map for review routing. Maintainer-authored PRs do not require a second maintainer approval.
 
 # The locked contract and its types.
 /docs/SPEC.md            @kid7st @Sukitly
