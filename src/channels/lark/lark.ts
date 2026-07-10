@@ -331,7 +331,10 @@ export function larkChannel({
           nonce: req.headers.get("x-lark-request-nonce") ?? "",
           signature: req.headers.get("x-lark-signature") ?? "",
         };
-        if (!sig.signature || !verifySignature(encryptKey, sig, body.text)) return text("invalid signature\n", 401);
+        if (!sig.signature || !verifySignature(encryptKey, sig, body.text)) {
+          log.warn("[lark] rejected an event: missing/invalid X-Lark-Signature (encrypt key mismatch, or a forgery)");
+          return text("invalid signature\n", 401);
+        }
         try {
           envelope = JSON.parse(decryptEvent(encryptKey, outer.encrypt)) as Record<string, unknown>;
         } catch {
@@ -353,24 +356,43 @@ export function larkChannel({
         (typeof (envelope.header as Record<string, unknown> | undefined)?.token === "string"
           ? ((envelope.header as Record<string, unknown>).token as string)
           : undefined);
-      if (!token || !timingSafeEqualStr(token, verificationToken)) return text("invalid token\n", 401);
+      if (!token || !timingSafeEqualStr(token, verificationToken)) {
+        // Loud on purpose: the send side gets an opaque 401 and the platform just retries — this line is
+        // the operator's ONLY signal that LARK_VERIFICATION_TOKEN does not match the console.
+        log.warn(
+          "[lark] rejected an event: verification token mismatch (check LARK_VERIFICATION_TOKEN against the console)",
+        );
+        return text("invalid token\n", 401);
+      }
 
       // ── The console's URL-verification challenge (fires when the operator saves the Request URL). ──
       if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
+        // The console fires this when the operator saves the Request URL; without this line a PASSING
+        // handshake is invisible and "did the challenge even arrive?" becomes guesswork.
+        log.info("[lark] answered the console's url_verification challenge");
         return Response.json({ challenge: envelope.challenge });
       }
 
       // ── Events. Only im.message.receive_v1 is consumed; everything else is ACKed and dropped
       // (a non-2xx would just make the platform retry an event this channel will never act on). ──────
       const header = envelope.header as { event_type?: string } | undefined;
-      if (header?.event_type !== "im.message.receive_v1") return new Response(null, { status: 200 });
+      if (header?.event_type !== "im.message.receive_v1") {
+        log.debug(`[lark] ignoring event type ${header?.event_type ?? "(none)"}`);
+        return new Response(null, { status: 200 });
+      }
       const event = (envelope.event ?? {}) as LarkMessageEvent;
       const m = event.message;
       if (!m?.message_id || !m.chat_id) return new Response(null, { status: 200 });
-      if (seen.has(m.message_id)) return new Response(null, { status: 200 }); // duplicate push — already accepted
+      if (seen.has(m.message_id)) {
+        log.debug(`[lark] duplicate push for message ${m.message_id} — already accepted, skipping`);
+        return new Response(null, { status: 200 });
+      }
 
       const r = decide(event);
-      if (!r) return new Response(null, { status: 200 });
+      if (!r) {
+        log.debug(`[lark] not summoned — ignoring message ${m.message_id} (chat ${m.chat_id}, ${m.chat_type})`);
+        return new Response(null, { status: 200 });
+      }
       {
         const session = r.session ?? placeKey(m);
         const chatId = r.chatId ?? m.chat_id;
