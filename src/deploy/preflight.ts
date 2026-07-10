@@ -128,7 +128,7 @@ export async function preflightDeploy(input: {
   const pkg = await readPackageJson(factsDir);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(factsDir, pkg);
   const install = runtime === "bun" ? "bun install" : "npm install";
-  const runner = runtime === "bun" ? "bunx fastagent" : "npx fastagent";
+  const runner = runtime === "bun" ? "bun run fastagent" : "./node_modules/.bin/fastagent";
   const hasOtherLock =
     runtime === "node" &&
     ((await exists(join(factsDir, "pnpm-lock.yaml"))) || (await exists(join(factsDir, "yarn.lock"))));
@@ -160,14 +160,14 @@ export async function preflightDeploy(input: {
           `Run \`${install}\` and commit the lockfile for pinned redeploys.`,
     });
   }
-  // The code-path Dockerfile runs `${runner}`: that resolves the workspace's OWN dependency, so a
-  // package.json missing it would make the CONTAINER fetch an unpinned build at runtime (offline-fragile).
+  // The code-path Dockerfile runs `${runner}` — the workspace's OWN local dependency, never the
+  // registry — so a package.json missing it means the container fails at start (no bin to run).
   if (hasPackageJson && !("@fastagent-sh/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies })) {
     messages.push({
       level: "warn",
       text:
-        `package.json does not list @fastagent-sh/fastagent — the image's \`${runner}\` would fetch it at runtime ` +
-        `(offline-fragile, unpinned). Add it to dependencies and re-run \`${install}\`.`,
+        `package.json does not list @fastagent-sh/fastagent — the image's \`${runner}\` has no local bin to run, ` +
+        `so the container fails at start. Add it to dependencies and re-run \`${install}\`.`,
     });
   }
   // A kept host root .dockerignore silently replaces KIT_DOCKERIGNORE's two protections — read it and

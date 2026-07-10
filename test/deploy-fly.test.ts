@@ -138,7 +138,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(runbook(p)).toMatch(/Write-back mechanics/);
   });
 
-  it("kit layout: bun kit uses the bun base + cd-install + bunx; markdown-only kit uses the pinned global CLI", () => {
+  it("kit layout: bun kit uses the bun base + cd-install + bun run; markdown-only kit uses the pinned global CLI", () => {
     const bun = planFlyDeploy({
       ...base,
       runtime: "bun",
@@ -151,7 +151,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(bunDf).toContain("FROM oven/bun:1.3.13");
     expect(bunDf).toContain("COPY agent/package.json agent/bun.lock* ./agent/");
     expect(bunDf).toContain("cd agent && bun install --frozen-lockfile");
-    expect(bunDf).toContain(`"sh", "-c", "cd agent && bunx fastagent start /app"`);
+    expect(bunDf).toContain(`"sh", "-c", "cd agent && bun run fastagent start /app"`);
 
     const md = planFlyDeploy({
       ...base,
@@ -174,13 +174,20 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }))).toMatch(/RUN npm ci\n/);
   });
 
-  it("generates a Bun Dockerfile for a bun workspace (oven/bun base, bun install, bunx)", () => {
+  it("code-workspace CMD runs the LOCAL bin, never npx/bunx (bare `fastagent` on npm is a third party)", () => {
+    const npm = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    expect(npm).toContain('CMD ["./node_modules/.bin/fastagent", "start", "/app"]');
+    expect(npm).not.toContain("npx");
+  });
+
+  it("generates a Bun Dockerfile for a bun workspace (oven/bun base, bun install, bun run)", () => {
     const bun = dockerfile(
       planFlyDeploy({ ...base, modelAuth: undefined, channels: [], runtime: "bun", bunVersion: "1.3.13" }),
     );
     expect(bun).toContain("FROM oven/bun:1.3.13");
     expect(bun).toContain("bun install --frozen-lockfile"); // base.hasLockfile: true → frozen
-    expect(bun).toContain('CMD ["bunx", "fastagent", "start", "/app"]');
+    // The LOCAL bin, never the registry — the npm package named `fastagent` is an unrelated third party.
+    expect(bun).toContain('CMD ["bun", "run", "fastagent", "start", "/app"]');
     expect(bun).not.toContain("node:22-slim");
     // Unpinned bun (a bun lockfile but no packageManager version) → oven/bun:1; no lockfile → plain install.
     const unpinned = dockerfile(
