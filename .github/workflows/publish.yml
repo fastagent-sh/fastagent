@@ -1,9 +1,9 @@
 name: Publish
 
-# Publish @fastagent-sh/fastagent to npm from a GitHub Release with provenance. Publishing requires
-# the public fastagent-sh/fastagent repository. The 0.12.0 bootstrap uses a temporary NPM_TOKEN because
-# npm cannot configure Trusted Publishing before the package exists; remove it after binding this
-# workflow as the package's trusted publisher. The release tag is the manual gate.
+# Publish @fastagent-sh/fastagent to npm from a GitHub Release via Trusted Publishing (OIDC), with
+# provenance and no NPM_TOKEN. Publishing requires the public fastagent-sh/fastagent repository; the
+# npm trusted publisher must name org fastagent-sh, repo fastagent, workflow publish.yml. The release
+# tag is the manual gate; this job verifies that tag against package.json and reruns the release checks.
 on:
   release:
     types: [published]
@@ -57,6 +57,4 @@ jobs:
         run: npm test
 
       - name: Publish with provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # Bootstrap only; remove after Trusted Publishing is configured.
         run: npm publish --provenance --access public

@@ -124,9 +124,10 @@ Full version: `CONTRIBUTING.md`. The essentials:
    ```bash
    git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin
    ```
-6. **Releases publish via npm Trusted Publishing (OIDC), never a local `npm publish`.** Flow: bump
-   `package.json` in a `chore/release-x.y.z` PR → merge → tag `vX.Y.Z` →
-   create the GitHub Release (its notes are the changelog) — `.github/workflows/publish.yml` re-verifies (typecheck + test) and
+6. **Releases publish via npm Trusted Publishing (OIDC), never a local `npm publish`.** The npm package
+   must keep its `publish` trusted-publisher binding to `fastagent-sh/fastagent` / `publish.yml`. Flow:
+   bump `package.json` in a `chore/release-x.y.z` PR → merge → tag `vX.Y.Z` → create the GitHub Release
+   (its notes are the changelog) — `.github/workflows/publish.yml` re-verifies (typecheck + test) and
    publishes to npm from CI. There is no NPM_TOKEN anywhere; a local `npm publish` fails with 401 by
    design.
 
