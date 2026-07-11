@@ -1,15 +1,25 @@
 ---
-title: Serve an Agent with FastAgent
+title: Build and Serve an Agent with FastAgent
 status: current
 ---
 
-# Skill: Serve an Agent with FastAgent
+# Skill: Build and Serve an Agent with FastAgent
 
-Use this skill to turn an existing agent directory into a deployable agent service without rewriting it.
+Use this skill to build an agent with FastAgent and serve it — starting from nothing, from files that already exist, or inside an existing application.
 
 ## Goal
 
-Inspect the project first, preserve its existing definition, and make the smallest change that lets FastAgent run it locally, embed it in an app, connect it to a channel, or deploy it.
+Inspect the project first, preserve anything that already exists, and make the smallest change that gives the user a running agent: locally, embedded in their app, connected to a channel, or deployed.
+
+## Choose your path
+
+Decide which job this is before touching anything:
+
+1. **New agent, empty directory.** Nothing agent-shaped exists yet. Run `fastagent init <dir>` (or init the current directory), then flesh out `persona.md`, skills, and tools from what the user wants.
+2. **An existing directory becomes the agent.** The project already has `AGENTS.md`, markdown context, skills, or tools — vibed or handwritten. Do not restructure it: run `fastagent init` in place; init never overwrites existing files and adopts them as the definition.
+3. **Embed an agent into an existing application.** The project is an app (framework config, routes, its own toolchain). Initialize — init chooses `./agent` with `config.agentDir` automatically when the root is claimed — then mount the agent in the app's own route with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
+
+All three paths continue with the same steps below: inspect, authenticate, initialize once, test, then connect channels or deploy.
 
 ## Mental model
 
