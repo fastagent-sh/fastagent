@@ -10,9 +10,9 @@ import { larkChannel } from "@fastagent-sh/fastagent/lark";
 //      card scope ("Create and update card" — the live preview streams through a card)
 //   3. Events & Callbacks → subscribe to `im.message.receive_v1`; copy the Verification Token into
 //      .env; RECOMMENDED: set an Encrypt Key there and mirror it in LARK_ENCRYPT_KEY
-//   4. set the event Request URL (https://your.host/lark) BY HAND in the console with the server
-//      running — the platform verifies the URL with a challenge this channel answers. (`dev --tunnel`
-//      attempts auto-registration, but the intl cloud does not expose the config API yet.)
+//   4. run `fastagent dev --tunnel`: it attempts to switch Subscription mode to webhook + register
+//      the URL automatically. If this app returns a config-API 404, do both BY HAND in the console
+//      with the server running (the platform verifies https://your.host/lark with a challenge).
 //   5. create a version and publish the app (a tenant admin approves it), then add the bot to a chat
 export default larkChannel({
   appId: process.env.LARK_APP_ID ?? "", // missing → fails at startup (no replies could be sent)

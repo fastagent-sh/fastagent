@@ -32,6 +32,9 @@ export interface BootstrapTokenOptions {
   /** PATCH attempts × delay — the PATCH is the real readiness probe (see below). */
   patchAttempts?: number;
   patchRetryMs?: number;
+  /** Retry classifier. Default: retry every PATCH failure (Feishu edge warm-up compatibility).
+   * Lark onboarding rejects a definitive config-route 404 immediately so it can fall back by hand. */
+  shouldRetryPatch?: (error: unknown) => boolean;
 }
 
 /**
@@ -94,7 +97,7 @@ export async function bootstrapVerificationToken(options: BootstrapTokenOptions)
         });
         break;
       } catch (e) {
-        if (attempt >= attempts) throw e;
+        if (attempt >= attempts || options.shouldRetryPatch?.(e) === false) throw e;
         await new Promise((resolve) => setTimeout(resolve, options.patchRetryMs ?? 10_000));
       }
     }

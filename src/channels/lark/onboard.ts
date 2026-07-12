@@ -1,9 +1,10 @@
 /**
- * Guided Lark-international onboarding. The intl cloud cannot complete the scan-to-create flow and
- * does not expose the application-config API used by Feishu's Verification-Token bootstrap, so the
- * honest best path is: open the console, collect the two credentials, validate that pair against the
- * tenant-token endpoint, then collect the token the console displays. IO is injected so the workflow
- * is testable without a terminal or browser.
+ * Guided Lark-international onboarding. The intl cloud cannot complete the BOUND scan-to-create flow,
+ * so open its unbound one-click launcher and collect the credentials. Then optimistically run Feishu's
+ * webhook-mode + Verification-Token bootstrap against THIS app: a successful PATCH captures the token
+ * and flips Subscription mode; only a definitive config-route 404 falls back to the token the console
+ * displays + a manual mode switch. IO is injected so the workflow is testable without a terminal or
+ * browser.
  */
 
 export const LARK_CONSOLE_URL = "https://open.larksuite.com/page/launcher?from=backend_oneclick";
@@ -14,10 +15,18 @@ export interface LarkOnboardIO {
   prompt(message: string, opts?: { hidden?: boolean }): Promise<string | undefined>;
 }
 
+export interface LarkBootstrapResult {
+  /** Challenge-captured token: the PATCH also switched Subscription mode to webhook. */
+  token?: string;
+  /** Present only for a definitive config-route 404; tells the user why the manual path is active. */
+  manualReason?: string;
+}
+
 export interface LarkOnboardOptions {
   /** Existing active .env values. A complete credential pair is reused (and still validated). */
   existing?: Readonly<Record<string, string | undefined>>;
   verifyCredentials(appId: string, appSecret: string): Promise<void>;
+  bootstrapWebhook(appId: string, appSecret: string): Promise<LarkBootstrapResult>;
 }
 
 export interface LarkOnboardCredentials extends Record<string, string> {
@@ -56,12 +65,19 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
   );
 
   await opts.verifyCredentials(appId, appSecret);
-  io.note(
-    "App ID / Secret verified. In this app, open Events & Callbacks → Encryption Strategy and copy the Verification Token.",
-  );
+  io.note("App ID / Secret verified. Trying automatic webhook-mode + Verification-Token bootstrap…");
+  const bootstrap = await opts.bootstrapWebhook(appId, appSecret);
+  if (bootstrap.token) {
+    io.note("Verification Token captured; Subscription mode changed to webhook in the app draft.");
+  } else {
+    io.note(
+      `${bootstrap.manualReason ?? "Automatic bootstrap unavailable."} Open Events & Callbacks → Encryption Strategy and copy the Verification Token. You must also switch Subscription mode to webhook when setting the Request URL.`,
+    );
+  }
 
   const verificationToken = required(
-    opts.existing?.LARK_VERIFICATION_TOKEN?.trim() ||
+    bootstrap.token ||
+      opts.existing?.LARK_VERIFICATION_TOKEN?.trim() ||
       (await io.prompt("LARK_VERIFICATION_TOKEN (Events & Callbacks → Encryption Strategy)", { hidden: true })),
     "LARK_VERIFICATION_TOKEN",
   );

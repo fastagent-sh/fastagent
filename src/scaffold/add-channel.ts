@@ -88,8 +88,8 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       { name: "LARK_ENCRYPT_KEY", hint: "optional but recommended — set one in the console and copy it here" },
     ],
     steps: [
-      "finish the console setup: enable Bot, add the permissions + im.message.receive_v1 event listed in {channel}, then create + publish a version",
-      "set the event Request URL by hand (console → Events & Callbacks) with `dev --tunnel` running — the intl cloud does not expose the config API for auto-registration yet (the CLI keeps attempting it for the day it ships)",
+      "finish the console setup: enable Bot and add the permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
+      "run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
   },

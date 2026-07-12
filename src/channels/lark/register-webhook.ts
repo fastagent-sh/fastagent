@@ -44,7 +44,7 @@ export async function registerLarkWebhook(
   const appSecret = process.env[`${envPrefix}_APP_SECRET`];
   const apiBase = opts.apiBase ?? KIND_API_BASE[kind];
   const requestUrl = `${baseUrl}/${kind}`;
-  const manual = `set the event Request URL in the developer console (Events & Callbacks) to ${requestUrl} — keep the server running while you save (the console verifies the URL with a challenge)`;
+  const manual = `switch Subscription mode to webhook and set the event Request URL in the developer console (Events & Callbacks) to ${requestUrl} — keep the server running while you save (the console verifies the URL with a challenge)`;
   if (!appId || !appSecret) {
     log.info(
       `[fastagent] ${kind}: set ${envPrefix}_APP_ID + ${envPrefix}_APP_SECRET in .env, then re-run to auto-register. Or ${manual}`,

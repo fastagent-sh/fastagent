@@ -87,6 +87,12 @@ export function isCardStreamingClosed(e: unknown): boolean {
   return e instanceof LarkApiError && (e.code === 200850 || e.code === 300309);
 }
 
+/** Whether the platform origin has no application-config route at all. Onboarding uses this narrow
+ * signal to fall back to a manual token/mode setup; auth/scope/network failures must remain visible. */
+export function isLarkConfigApiMissing(e: unknown): boolean {
+  return e instanceof LarkApiError && e.status === 404;
+}
+
 /** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers. */
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 

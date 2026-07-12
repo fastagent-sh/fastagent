@@ -49,6 +49,26 @@ describe("bootstrapVerificationToken", () => {
     expect(calls).toBe(3);
   });
 
+  it("can classify a definitive PATCH failure as non-retryable (intl config-route 404)", async () => {
+    const missing = new Error("config route 404");
+    let calls = 0;
+    await expect(
+      bootstrapVerificationToken({
+        appId: "cli_x",
+        startTunnel: loopback,
+        patchRetryMs: 1,
+        shouldRetryPatch: (error) => error !== missing,
+        api: {
+          async updateEventSubscription() {
+            calls++;
+            throw missing;
+          },
+        },
+      }),
+    ).rejects.toBe(missing);
+    expect(calls).toBe(1);
+  });
+
   it("an unreachable-to-US edge does not gate the capture (the platform's path is what matters)", async () => {
     // The "tunnel" advertises a dead URL (our own health probe can never pass), but the platform
     // (fake api) still reaches the local responder — the capture must succeed anyway.

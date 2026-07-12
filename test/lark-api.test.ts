@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chunkLarkText, createLarkApi } from "../src/channels/lark/lark-api.ts";
+import { chunkLarkText, createLarkApi, isLarkConfigApiMissing } from "../src/channels/lark/lark-api.ts";
 
 const BASE = "http://lark.test";
 
@@ -41,6 +41,19 @@ describe("tenant token cache", () => {
     await expect(api.verifyCredentials()).resolves.toBeUndefined();
     expect(fx.tokenFetches()).toBe(1);
     expect(fx.calls()).toHaveLength(1);
+  });
+
+  it("identifies only a route-level 404 as the config-API-missing fallback", async () => {
+    stubFetch(() => new Response("404 page not found", { status: 404 }));
+    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    let caught: unknown;
+    try {
+      await api.updateEventSubscription("a", { subscriptionType: "webhook", requestUrl: "https://x.test/lark" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(isLarkConfigApiMissing(caught)).toBe(true);
+    expect(isLarkConfigApiMissing(new Error("404"))).toBe(false);
   });
 
   it("fetches the token once and reuses it across calls (Authorization carries it)", async () => {

@@ -238,11 +238,13 @@ is exactly the split's payoff: per-kind onboarding without engine forks. What is
   tunnel — `.env` completes without the developer console; skipped when credentials are already set.
   One console click remains (the CLI opens the page): the long-connection→webhook mode flip takes
   effect on version publish, which has no open API — the subscription mode cannot travel on the
-  creation link (the platform excludes sensitive config from addons). The intl cloud can NOT do CLI
-  app creation at all (its confirm page's ack endpoint is broken and the config API is missing), so
-  `add lark` opens the intl one-click launcher (`/page/launcher?from=backend_oneclick`) and runs a
-  guided paste flow: App ID → Secret → credential validation →
-  Verification Token, then writes `.env`; the engine stays cloud-parameterized for the day it ships.
+  creation link (the platform excludes sensitive config from addons). The intl cloud cannot complete
+  the BOUND device flow (its confirm-page ack endpoint is broken), so `add lark` opens the unbound
+  one-click launcher (`/page/launcher?from=backend_oneclick`) and runs: App ID → Secret → credential
+  validation → the SAME temporary-tunnel PATCH/challenge bootstrap. Success switches the draft to
+  webhook mode and captures the token; only a route-level 404 from this actual app falls back to a
+  hidden Token prompt + manual mode/URL setup. This is an optimistic capability probe, not a baked-in
+  cloud assumption; every other failure remains visible.
 - **Webhook ingress only.** The WS long-connection mode (no public URL) needs the official SDK and a
   non-HTTP channel seam; deferred.
 

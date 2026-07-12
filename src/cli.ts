@@ -73,7 +73,7 @@ import { deployRailwayRun } from "./deploy/railway/run.ts";
 import { authSeedBytes, deployFlyRun } from "./deploy/fly/run.ts";
 import { spawnRunner } from "./deploy/runner.ts";
 import { assembleSecrets } from "./deploy/secrets.ts";
-import { createLarkApi } from "./channels/lark/lark-api.ts";
+import { createLarkApi, isLarkConfigApiMissing } from "./channels/lark/lark-api.ts";
 import { bootstrapVerificationToken } from "./channels/lark/bootstrap-token.ts";
 import { registerLarkApp } from "./channels/lark/register-app.ts";
 import { registerLarkWebhook } from "./channels/lark/register-webhook.ts";
@@ -165,8 +165,8 @@ function usage(code: number): never {
          feishu also CREATES + configures the platform app (confirm a link in the app — the
          platform's "scan to create" flow; no developer console) and writes the credentials to
          .env; skipped when FEISHU_APP_ID/SECRET are already set. lark opens the intl developer
-         console and guides the App ID → Secret → Verification Token paste flow, validating the
-         credential pair before writing .env (see docs/lark.md).
+         console, validates App ID/Secret, then tries the same automatic webhook-mode + Token capture;
+         an explicit config-route 404 falls back to a hidden Token prompt + manual mode/URL setup.
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
@@ -726,7 +726,7 @@ async function runAdd(): Promise<void> {
       if (!isInteractive()) {
         failStartup(
           new Error(
-            "`add lark` needs an interactive terminal to open the console and collect App ID, App Secret, and Verification Token — re-run it in a terminal",
+            "`add lark` needs an interactive terminal to open the launcher and onboard the Lark app credentials — re-run it in a terminal",
           ),
         );
       }
@@ -748,6 +748,41 @@ async function runAdd(): Promise<void> {
               appSecret,
             }).verifyCredentials();
             console.error(`[fastagent] Lark App ID / Secret verified`);
+          },
+          bootstrapWebhook: async (appId, appSecret) => {
+            const api = createLarkApi({
+              baseUrl: "https://open.larksuite.com",
+              appId,
+              appSecret,
+            });
+            console.error(`[fastagent] trying Lark's webhook-mode + Verification-Token bootstrap (temporary tunnel)…`);
+            try {
+              const token = await bootstrapVerificationToken({
+                api,
+                appId,
+                startTunnel: (port) => startCloudflareTunnel(port),
+                // A route-level 404 is definitive, not edge weather: fall back immediately. Retry
+                // only actual edge/network weather; scope/auth/config failures remain immediate.
+                shouldRetryPatch: (error) =>
+                  !isLarkConfigApiMissing(error) &&
+                  /resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|210042|request_url/i.test(
+                    String(error),
+                  ),
+              });
+              console.error(`[fastagent] Lark Verification Token captured; Subscription mode changed to webhook`);
+              const versionUrl = `https://open.larksuite.com/app/${appId}/version`;
+              console.error(
+                `[fastagent] publish a version to activate the mode change (one click; no publish API). Opening ${versionUrl}`,
+              );
+              openBrowser(versionUrl);
+              return { token };
+            } catch (error) {
+              if (!isLarkConfigApiMissing(error)) throw error;
+              const manualReason =
+                "This Lark app returned HTTP 404 for the application-config API, so automatic mode/token bootstrap is unavailable.";
+              console.error(`[fastagent] ${manualReason}`);
+              return { manualReason };
+            }
           },
         },
       ).catch(failStartup);
@@ -792,7 +827,9 @@ async function runAdd(): Promise<void> {
   for (const s of steps) {
     console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
   }
-  console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
+  if (channelKind !== "lark") {
+    console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
+  }
   // The app-creation flow leaves keep-alive sockets behind (platform API fetches, the throwaway tunnel's
   // health probes) that would hold the event loop open for a while — the work is done, exit crisply.
   process.exit(0);
@@ -807,9 +844,9 @@ async function runAdd(): Promise<void> {
  * tunnel for long: `dev --tunnel` / `deploy --run` re-register it against the live URL.
  *
  * The kind IS the cloud: the two platform brands have SEPARATE accounts hosts, and each confirm page
- * accepts only its own app (the Feishu launcher refuses a Lark scan and vice versa). Only the feishu
- * kind runs this today — the intl cloud's confirm page and config API are not functional (`add lark`
- * is console-configured by hand) — but the engine stays cloud-parameterized for the day they ship.
+ * accepts only its own app (the Feishu launcher refuses a Lark scan and vice versa). Only feishu runs
+ * this BOUND device flow; lark uses the unbound launcher + guided credentials, then independently
+ * attempts the same token/mode bootstrap.
  */
 async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string, string>> {
   const intl = kind === "lark";

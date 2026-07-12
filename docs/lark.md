@@ -34,13 +34,13 @@ fastagent add lark     # Lark international: scaffolds, opens the console, then 
 
 Onboarding diverges by cloud on purpose: the feishu cloud supports CLI app creation (scan-to-create),
 so `add feishu` just does it — skipped when `FEISHU_APP_ID`/`FEISHU_APP_SECRET` are already set in
-`.env` (it never silently mints a second app). The intl cloud does not (its confirm page's ack
-endpoint is broken and the application-config API is missing there), so `add lark` uses a guided
-console path instead: it opens Lark's one-click launcher (`/page/launcher?from=backend_oneclick`);
-waits for App ID, then App Secret; validates the pair
-against the tenant-token endpoint; then points to Events & Callbacks and waits for the Verification
-Token. All three are written to the gitignored `.env`. The token cannot be read automatically — Lark
-exposes no read API for it and the missing config API prevents the challenge-capture bootstrap.
+`.env` (it never silently mints a second app). The intl cloud cannot complete that bound flow (its
+confirm-page ack endpoint is broken), so `add lark` opens Lark's unbound one-click launcher
+(`/page/launcher?from=backend_oneclick`), then waits for App ID and App Secret and validates the pair.
+It does NOT assume the config API is absent: it starts the same temporary tunnel as Feishu and tries
+the webhook-mode PATCH against this actual app. Success switches the draft's Subscription mode and
+captures the Verification Token from the challenge; only an explicit config-route HTTP 404 falls back
+to a hidden Token prompt plus manual mode/URL setup. All three values land in the gitignored `.env`.
 
 This creates (for the feishu kind; lark mirrors it):
 
@@ -109,11 +109,10 @@ FEISHU_ENCRYPT_KEY=...   # optional but recommended; must match the console exac
    `fastagent deploy … --run`) call the application-config API to point the app's event subscription at
    `https://<host>/feishu` (or `/lark`) — webhook mode. This needs the
    `application:application:patch` scope — `add feishu` requests it at creation; for a hand-made app
-   add it under Permissions in the console. **Lark international
-   lags here**: `open.larksuite.com` does not expose the config API yet, so intl tenants set the URL in
-   the console by hand — with the server **running** (the platform verifies the URL with a
-   `url_verification` challenge this channel answers). The registrar keeps attempting the API and
-   degrades to that instruction, so intl registration starts working the day the platform ships it.
+   add it under Permissions in the console. Lark is probed rather than pre-judged: `add lark` and the
+   registrar both try the same API. If this app receives the previously observed config-route 404,
+   switch **Subscription mode to webhook** and set the URL in the console by hand — with the server
+   **running** (the platform verifies it with a `url_verification` challenge this channel answers).
 
 6. **Create a version and publish** the app (a tenant admin approves it), then add the bot to a chat.
 
@@ -239,9 +238,10 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
   pure URL change applies immediately, a mode change does not). The subscription mode cannot travel on
   the creation link (the platform excludes sensitive config from addons) and version publishing has no
   open API — so this is the one console click, spent right at `add` time (the CLI opens the page).
-- CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every ack
-  renders as "Link expired") and its config API is missing. `add lark` therefore opens the console and
-  runs the guided credential-paste flow until the platform ships both.
+- Bound CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every
+  ack renders as "Link expired"). `add lark` therefore uses the unbound launcher + guided credential
+  paste, then actively probes the config API: automatic mode/token bootstrap on success; manual
+  Token + Subscription mode/URL only on an explicit route-level 404.
 - The un-summoned group context buffer (Telegram parity) is gated on the sensitive `im:message.group_msg` scope; not yet implemented.
 - The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds; the channel persists the turn intent and ACKs immediately, so slow turns are never the webhook's problem.
