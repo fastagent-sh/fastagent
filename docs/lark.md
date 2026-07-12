@@ -72,10 +72,13 @@ CLI never completes. Keep the CLI running until it prints `app created`: the cre
 delivered to the polling CLI, not the browser.
 
 The scan refuses to run when `.env` is not gitignored (real credentials must never land in a
-committable file). After the scan: `fastagent dev --tunnel` — the event Request URL is registered
-automatically (next section). One console click remains: **publish the version the console prompts
-for** — the switch from the template's long-connection mode to webhook takes effect on publish, and
-version publishing has no open API (see Limits).
+committable file). One console click remains, and the CLI opens the page for it at the end of the
+scan: **create + publish a version** (self-approved on your own tenant). The switch from the
+template's long-connection mode to webhook only takes effect on publish; the subscription mode cannot
+be set at creation (the platform excludes it from the creation link — official SDK: "sensitive
+config … cannot travel") and version publishing has no open API (see Limits). It is ONE click ever:
+after it, `fastagent dev --tunnel` / `deploy --run` re-register only the Request URL, which applies
+immediately.
 
 ## Configure the app by hand (developer console)
 

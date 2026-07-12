@@ -805,6 +805,17 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
         startTunnel: (port) => startCloudflareTunnel(port),
       });
       console.error(`[fastagent] Verification Token captured`);
+      // The bootstrap's PATCH also flipped the event mode to webhook — in the DRAFT. The flip only
+      // takes effect once a version is published, and that cannot happen at creation (the platform
+      // excludes subscription config from the creation link — official SDK: "sensitive config …
+      // cannot travel via il") nor via any API. So spend the one unavoidable console click NOW, while
+      // the user is already in the browser: after this publish, later `dev --tunnel`/deploy
+      // re-registrations change only the URL, which applies immediately — never a publish again.
+      const versionUrl = `${intl ? "https://open.larksuite.com" : "https://open.feishu.cn"}/app/${app.appId}/version`;
+      console.error(
+        `[fastagent] one console click remains: CREATE + PUBLISH a version (self-approved) — the switch to webhook mode takes effect on publish. Opening ${versionUrl}`,
+      );
+      openBrowser(versionUrl);
     } catch (e) {
       // Transient tunnel weather is the usual cause. Do NOT suggest re-running --create-app here:
       // that mints ANOTHER app — the manual copy below completes THIS one.
