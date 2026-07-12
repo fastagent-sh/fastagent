@@ -57,35 +57,39 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   // engine — but each cloud is its own channel KIND: its own route path, env namespace, state home,
   // console, and onboarding flow. No `generate` in either: every value comes FROM the platform
   // (generating an Encrypt Key locally would break inbound events until the user mirrors it in the
-  // console — a silent-footgun default). `add <kind> --create-app` fills them automatically.
+  // console — a silent-footgun default). Onboarding diverges by cloud: `add feishu` CREATES the app
+  // (scan-to-create fills the credentials automatically); the intl cloud cannot do that yet, so lark
+  // is console-configured by hand.
   feishu: {
     env: [
-      { name: "FEISHU_APP_ID", hint: "developer console → Credentials & Basic Info (or `add feishu --create-app`)" },
+      {
+        name: "FEISHU_APP_ID",
+        hint: "created + written automatically by `add feishu` (console → Credentials & Basic Info)",
+      },
       {
         name: "FEISHU_APP_SECRET",
-        hint: "developer console → Credentials & Basic Info (or `add feishu --create-app`)",
+        hint: "created + written automatically by `add feishu` (console → Credentials & Basic Info)",
       },
-      { name: "FEISHU_VERIFICATION_TOKEN", hint: "console → Events & Callbacks; authenticates inbound events" },
+      { name: "FEISHU_VERIFICATION_TOKEN", hint: "captured automatically (console → Events & Callbacks)" },
       { name: "FEISHU_ENCRYPT_KEY", hint: "optional but recommended — set one in the console and copy it here" },
     ],
     steps: [
-      "edit {channel} — the setup walkthrough (console permissions, event subscription) is in its header",
-      "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run` (manual: console → Events & Callbacks)",
-      "then PUBLISH A VERSION when the console prompts — the switch to webhook mode takes effect on publish (once; no API for this step)",
+      "PUBLISH the app version on the page the CLI opened — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
+      "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
+      "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run`",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
     ],
   },
   lark: {
     env: [
-      { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info (or `add lark --create-app`)" },
-      { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info (or `add lark --create-app`)" },
+      { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info" },
+      { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info" },
       { name: "LARK_VERIFICATION_TOKEN", hint: "console → Events & Callbacks; authenticates inbound events" },
       { name: "LARK_ENCRYPT_KEY", hint: "optional but recommended — set one in the console and copy it here" },
     ],
     steps: [
-      "edit {channel} — the setup walkthrough (console permissions, event subscription) is in its header",
-      "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run` (manual: console → Events & Callbacks)",
-      "then PUBLISH A VERSION when the console prompts — the switch to webhook mode takes effect on publish (once; no API for this step)",
+      "create + configure the app in the developer console — the walkthrough is in {channel}'s header (docs/lark.md for the long form)",
+      "set the event Request URL by hand (console → Events & Callbacks) with `dev --tunnel` running — the intl cloud does not expose the config API for auto-registration yet (the CLI keeps attempting it for the day it ships)",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
   },
@@ -146,7 +150,7 @@ function mentionsEnvName(content: string, name: string): boolean {
 /**
  * Append generated channel secrets to the run-root `.env` (never `.env.example`) after the CLI has
  * verified that `.env` is gitignored. Existing non-empty values are kept — EXCEPT the names listed in
- * `overwrite`: those are authoritative (e.g. the credentials of an app `--create-app` JUST minted —
+ * `overwrite`: those are authoritative (e.g. the credentials of an app `add feishu` JUST minted —
  * skipping them for a stale value would silently discard a fresh, unrecoverable secret). Manual values
  * (e.g. TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is
  * ready to edit while no fake secret is committed to the user's mental model.

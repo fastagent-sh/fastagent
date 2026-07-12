@@ -3,7 +3,7 @@
  * never returns `encryption`, and the v7 config route only supports PATCH). The platform's only
  * programmatic delivery is the `url_verification` challenge it POSTs to the request URL while an
  * event-subscription PATCH is verified — the challenge body carries `token`, the app's Verification
- * Token. So `add feishu|lark --create-app` finishes the job by: standing up a throwaway local responder,
+ * Token. So `add feishu`'s create flow finishes the job by: standing up a throwaway local responder,
  * exposing it on an ephemeral quick tunnel, PATCHing the app's event subscription at it, capturing
  * the token from the challenge, and tearing everything down. `dev --tunnel` / `deploy … --run`
  * re-PATCH the request URL onto the real server later (the token is app-level and survives that).

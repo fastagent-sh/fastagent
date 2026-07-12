@@ -12,7 +12,7 @@ import { parseArgs } from "node:util";
 import type { Agent } from "./agent.ts";
 import { logAgentLoop } from "./observe.ts";
 import { log, setLogLevel } from "./log.ts";
-import { loadDotEnv } from "./env.ts";
+import { loadDotEnv, parseEnvContent } from "./env.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
@@ -98,7 +98,7 @@ function usage(code: number): never {
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
-  fastagent add   github | telegram | feishu | lark [--create-app] | skill <source> [dir]
+  fastagent add   github | telegram | feishu | lark | skill <source> [dir]
   fastagent deploy fly|railway [dir] [--run] [--force] [--stop] [--no-scale-to-zero] [--into-linked]
   fastagent login [provider] [--auth-path file]
   fastagent --version
@@ -161,9 +161,10 @@ function usage(code: number): never {
          with the policy to edit (github maps events in on(); telegram/feishu/lark route in the
          optional route()). feishu = 飞书 (open.feishu.cn), lark = Lark international
          (open.larksuite.com) — one engine, two clouds, each its own channel.
-         feishu|lark --create-app: create + configure the platform app itself (confirm a link in
-         the app — the platform's "scan to create" flow; no developer console) and write the
-         credentials to .env.
+         feishu also CREATES + configures the platform app (confirm a link in the app — the
+         platform's "scan to create" flow; no developer console) and writes the credentials to
+         .env; skipped when FEISHU_APP_ID/SECRET are already set. lark is console-configured by
+         hand — the intl cloud does not support CLI app creation yet (see docs/lark.md).
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
@@ -638,28 +639,42 @@ async function runAdd(): Promise<void> {
     process.exit(1);
   }
   const channelKind = kind as ChannelKind;
-  // --create-app preconditions fail BEFORE any write or the (minutes-long) confirmation dance itself.
-  if (values["create-app"] && channelKind !== "feishu" && channelKind !== "lark") {
-    failStartup(
-      new Error("--create-app is feishu/lark-only — app creation from the CLI is a Feishu/Lark platform flow"),
-    );
+  // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
+  // and only path there). The retired --create-app spelling gets a pointer, not silence.
+  if (values["create-app"]) {
+    if (channelKind === "feishu") {
+      console.error(`[fastagent] note: --create-app is retired — \`add feishu\` creates the app by default`);
+    } else if (channelKind === "lark") {
+      failStartup(
+        new Error(
+          "app creation from the CLI is not possible on the Lark international cloud (its confirm page and " +
+            "application-config API are not functional there yet) — `add lark` scaffolds the channel; create + " +
+            "configure the app in the developer console (walkthrough: the scaffolded channel header / docs/lark.md)",
+        ),
+      );
+    } else {
+      failStartup(new Error("--create-app is retired — app creation is the default behavior of `add feishu`"));
+    }
   }
   // The channel (glue + companion tool) is agent surface — it lands in agentDir (config.agentDir, or
   // target when flat), the same place dev/start discover channels/. .env(.example) and the secret
   // hygiene stay at the run root, where .env is actually read.
   const { config: addConfig } = await loadConfig(target).catch(failStartup);
   const channelHome = resolveAgentDir(target, addConfig);
-  // Preconditions before the write, so a refusal is side-effect-free.
+  // Preconditions before the write, so a refusal is side-effect-free. feishu is the exception: its
+  // add is scaffold + CREATE THE APP, so an existing scaffold skips the write and continues (a failed
+  // or cancelled scan must be re-runnable without hand-deleting the glue); the file is never touched.
+  const file = join(channelHome, "channels", `${channelKind}.ts`);
   if (await channelExists(channelHome, channelKind).catch(failStartup)) {
-    failStartup(
-      new Error(
-        `${relative(target, join(channelHome, "channels", `${channelKind}.ts`))} already exists — edit it, or remove it to re-scaffold`,
-      ),
-    );
+    if (channelKind !== "feishu") {
+      failStartup(new Error(`${relative(target, file)} already exists — edit it, or remove it to re-scaffold`));
+    }
+    console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
+  } else {
+    await assertChannelReady(channelHome).catch(failStartup);
+    await scaffoldChannel(channelHome, channelKind).catch(failStartup);
+    console.error(`[fastagent] created ${relative(target, file)}`);
   }
-  await assertChannelReady(channelHome).catch(failStartup);
-  const file = await scaffoldChannel(channelHome, channelKind).catch(failStartup);
-  console.error(`[fastagent] created ${relative(target, file)}`);
   if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
   }
@@ -673,17 +688,25 @@ async function runAdd(): Promise<void> {
       `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
     );
   }
-  // --create-app: create + pre-configure the app itself via the platform's scan-to-create flow; its
-  // credentials are written to .env exactly like generated secrets (same gitignore guard — the CLI
-  // must never materialize a real credential into a committable file, so it REFUSES there).
+  // `add feishu` = scaffold + CREATE the app (the platform's scan-to-create flow): its credentials
+  // are written to .env exactly like generated secrets (same gitignore guard — the CLI must never
+  // materialize a real credential into a committable file, so it REFUSES there). Skipped when .env
+  // already carries active credentials: silently minting a SECOND app would be worse than doing
+  // nothing — scaffolding around existing credentials is the wanted behavior then.
   let created: Record<string, string> | undefined;
-  if (values["create-app"]) {
+  if (channelKind === "feishu") {
     if (!envIgnored) {
       failStartup(
-        new Error("--create-app writes real app credentials to .env — add .env to .gitignore/.fastagentignore first"),
+        new Error(
+          "`add feishu` creates an app and writes real credentials to .env — add .env to .gitignore/.fastagentignore first, then re-run",
+        ),
       );
     }
-    created = await createLarkAppFlow(channelKind as "feishu" | "lark").catch(failStartup);
+    if (await hasActiveDotEnvValues(target, ["FEISHU_APP_ID", "FEISHU_APP_SECRET"]).catch(failStartup)) {
+      console.error(`[fastagent] FEISHU_APP_ID/FEISHU_APP_SECRET already set in .env — not creating another app`);
+    } else {
+      created = await createLarkAppFlow("feishu").catch(failStartup);
+    }
   }
   const { env, steps } = channelSetup(channelKind);
   const generated = Object.fromEntries(
@@ -725,13 +748,13 @@ async function runAdd(): Promise<void> {
     console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
   }
   console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
-  // The create-app flow leaves keep-alive sockets behind (platform API fetches, the throwaway tunnel's
+  // The app-creation flow leaves keep-alive sockets behind (platform API fetches, the throwaway tunnel's
   // health probes) that would hold the event loop open for a while — the work is done, exit crisply.
   process.exit(0);
 }
 
 /**
- * `add feishu|lark --create-app`: the platform's scan-to-create flow. The device-authorization grant
+ * The scan-to-create flow `add feishu` runs by default. The device-authorization grant
  * creates a pre-configured agent app (bot capability, messaging scopes, event subscriptions) when the
  * user confirms a link in the app, and hands back the credentials; the platform-generated Verification
  * Token is then captured from the registration challenge (bootstrap-token.ts) — so .env ends up
@@ -739,8 +762,9 @@ async function runAdd(): Promise<void> {
  * tunnel for long: `dev --tunnel` / `deploy --run` re-register it against the live URL.
  *
  * The kind IS the cloud: the two platform brands have SEPARATE accounts hosts, and each confirm page
- * accepts only its own app (the Feishu launcher refuses a Lark scan and vice versa) — `add feishu`
- * starts on accounts.feishu.cn, `add lark` on accounts.larksuite.com; no interactive question.
+ * accepts only its own app (the Feishu launcher refuses a Lark scan and vice versa). Only the feishu
+ * kind runs this today — the intl cloud's confirm page and config API are not functional (`add lark`
+ * is console-configured by hand) — but the engine stays cloud-parameterized for the day they ship.
  */
 async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string, string>> {
   const intl = kind === "lark";
@@ -770,7 +794,7 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
   // namespace and serve the wrong cloud. Fail visibly instead of writing them.
   if (app.tenantBrand && app.tenantBrand !== kind) {
     throw new Error(
-      `the confirming account is a ${app.tenantBrand} tenant, but this is \`add ${kind}\` — re-run \`fastagent add ${app.tenantBrand} --create-app\``,
+      `the confirming account is a ${app.tenantBrand} tenant, but this is \`add ${kind}\` — run \`fastagent add ${app.tenantBrand}\` instead`,
     );
   }
   const env: Record<string, string> = {
@@ -817,8 +841,8 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
       );
       openBrowser(versionUrl);
     } catch (e) {
-      // Transient tunnel weather is the usual cause. Do NOT suggest re-running --create-app here:
-      // that mints ANOTHER app — the manual copy below completes THIS one.
+      // Transient tunnel weather is the usual cause. Do NOT suggest re-running `add feishu` here: that
+      // mints ANOTHER app — the manual copy below completes THIS one.
       console.error(
         `[fastagent] warn: could not capture the Verification Token: ${String(e)} — usually a transient tunnel issue; finish this app with the manual copy below`,
       );
@@ -830,6 +854,20 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
     );
   }
   return env;
+}
+
+/** Whether the run-root `.env` carries a non-empty ACTIVE value for EVERY given name — decided by THE
+ *  .env parser, so the check can never disagree with what `loadEnvFile` reads. */
+async function hasActiveDotEnvValues(dir: string, names: string[]): Promise<boolean> {
+  let content: string;
+  try {
+    content = await readFile(join(dir, ".env"), "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
+  }
+  const parsed = parseEnvContent(content);
+  return names.every((n) => (parsed.get(n)?.trim() ?? "") !== "");
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

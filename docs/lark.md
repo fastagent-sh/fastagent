@@ -28,12 +28,15 @@ Like the Telegram channel, the engine is request/reply: the channel holds the ap
 From an agent workspace:
 
 ```bash
-fastagent add feishu --create-app   # 飞书: creates + configures the app itself, no developer console
-fastagent add feishu                # scaffold only; configure the app by hand (next section)
-
-fastagent add lark --create-app     # Lark international: same flow on the intl cloud
-fastagent add lark                  # scaffold only
+fastagent add feishu   # 飞书: scaffolds AND creates + configures the app itself — no developer console
+fastagent add lark     # Lark international: scaffolds; the app is created + configured in the console
 ```
+
+Onboarding diverges by cloud on purpose: the feishu cloud supports CLI app creation (scan-to-create),
+so `add feishu` just does it — skipped when `FEISHU_APP_ID`/`FEISHU_APP_SECRET` are already set in
+`.env` (it never silently mints a second app). The intl cloud does not (its confirm page's ack
+endpoint is broken and the application-config API is missing there), so `add lark` is honest about
+the manual path instead of pretending.
 
 This creates (for the feishu kind; lark mirrors it):
 
@@ -44,13 +47,10 @@ tools/feishu-send.ts    # optional outbound send tool for the agent (text or mar
 
 It also appends the required env vars to `.env.example` when possible.
 
-## Create the app from the CLI (`--create-app`)
+## How `add feishu` creates the app
 
-`fastagent add feishu --create-app` (or `add lark --create-app`) runs the platform's **scan-to-create**
-flow (its official name; an OAuth 2.0 device-authorization grant). The kind IS the cloud: `add feishu`
-starts on `accounts.feishu.cn`, `add lark` on `accounts.larksuite.com` — the two brands have separate
-accounts hosts, and each confirm page accepts only its own app (the Feishu page refuses a Lark scan
-and vice versa). The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
+`fastagent add feishu` runs the platform's **scan-to-create** flow (its official name; an OAuth 2.0
+device-authorization grant) as its default behavior. The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
 creates an app from its agent template — bot capability, messaging scopes, and event subscriptions
 pre-configured, plus the `application:application:patch` scope and the `im.message.receive_v1` event
@@ -104,7 +104,7 @@ FEISHU_ENCRYPT_KEY=...   # optional but recommended; must match the console exac
 5. **The event Request URL registers itself** (Feishu tenants): `fastagent dev --tunnel` (and
    `fastagent deploy … --run`) call the application-config API to point the app's event subscription at
    `https://<host>/feishu` (or `/lark`) — webhook mode. This needs the
-   `application:application:patch` scope — `--create-app` requests it at creation; for a hand-made app
+   `application:application:patch` scope — `add feishu` requests it at creation; for a hand-made app
    add it under Permissions in the console. **Lark international
    lags here**: `open.larksuite.com` does not expose the config API yet, so intl tenants set the URL in
    the console by hand — with the server **running** (the platform verifies the URL with a
@@ -229,12 +229,15 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 ## Limits
 
 - Webhook (event subscription) mode only. The platform's WebSocket long-connection mode — attractive because it needs no public URL — requires the official SDK and a non-HTTP channel seam; a later tier.
-- `--create-app` creates the app with the platform's agent template, whose event subscription starts in
-  long-connection mode — the first `dev --tunnel` / `deploy --run` flips the config to webhook
-  automatically, but the flip only takes effect once a **version is published** (the dispatcher serves
-  the published snapshot; a pure URL change applies immediately, a mode change does not). The console
-  prompts for the publish — one click, self-approved on your own tenant; version publishing has no open
-  API, so this single step cannot be automated.
+- `add feishu` creates the app from the platform's agent template, whose event subscription starts in
+  long-connection mode — the CLI flips the config to webhook during the token capture, but the flip
+  only takes effect once a **version is published** (the dispatcher serves the published snapshot; a
+  pure URL change applies immediately, a mode change does not). The subscription mode cannot travel on
+  the creation link (the platform excludes sensitive config from addons) and version publishing has no
+  open API — so this is the one console click, spent right at `add` time (the CLI opens the page).
+- CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every ack
+  renders as "Link expired") and its config API is missing — `add lark` is console-configured by hand
+  until the platform ships both.
 - The un-summoned group context buffer (Telegram parity) is gated on the sensitive `im:message.group_msg` scope; not yet implemented.
 - The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds; the channel persists the turn intent and ACKs immediately, so slow turns are never the webhook's problem.

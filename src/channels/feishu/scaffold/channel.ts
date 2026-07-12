@@ -14,7 +14,8 @@ import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
 //      `fastagent dev --tunnel` and `fastagent deploy … --run`; to set it by hand in the console,
 //      keep the server running while you save (the platform verifies the URL with a challenge)
 //   5. create a version and publish the app (a Feishu admin approves it), then add the bot to a chat
-// Or skip steps 1-3 entirely: `fastagent add feishu --create-app` creates + configures the app from a scan.
+// `fastagent add feishu` already did steps 1-3 for you (scan-to-create); this walkthrough is for a
+// hand-made app or for auditing what the scan configured.
 export default feishuChannel({
   appId: process.env.FEISHU_APP_ID ?? "", // missing → fails at startup (no replies could be sent)
   appSecret: process.env.FEISHU_APP_SECRET ?? "",

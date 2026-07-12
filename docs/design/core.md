@@ -232,12 +232,15 @@ is exactly the split's payoff: per-kind onboarding without engine forks. What is
   written via the application-v7 config PATCH (immediate effect; the platform challenges the URL during
   the call, so the registrar health-waits first) — used by `--tunnel` and `deploy --run`, with the
   manual console instruction as the fallback. Cloud lag: the v7 route exists on `open.feishu.cn` but
-  not on `open.larksuite.com` yet; a 404 names that cause. `add feishu|lark --create-app` runs the
-  scan-to-create device flow (RFC 8628, hand-rolled; wire format shared by the four official SDKs; the
-  kind picks the accounts host) and captures the platform-generated verification token from the
-  registration challenge over a throwaway tunnel — `.env` completes without the developer console.
-  One console click remains: the long-connection→webhook mode flip takes effect on version publish,
-  which has no open API.
+  not on `open.larksuite.com` yet; a 404 names that cause. `add feishu` runs the scan-to-create
+  device flow BY DEFAULT (RFC 8628, hand-rolled; wire format shared by the four official SDKs) and
+  captures the platform-generated verification token from the registration challenge over a throwaway
+  tunnel — `.env` completes without the developer console; skipped when credentials are already set.
+  One console click remains (the CLI opens the page): the long-connection→webhook mode flip takes
+  effect on version publish, which has no open API — the subscription mode cannot travel on the
+  creation link (the platform excludes sensitive config from addons). The intl cloud can NOT do CLI
+  app creation at all (its confirm page's ack endpoint is broken and the config API is missing), so
+  `add lark` is console-configured by hand; the engine stays cloud-parameterized for the day it ships.
 - **Webhook ingress only.** The WS long-connection mode (no public URL) needs the official SDK and a
   non-HTTP channel seam; deferred.
 

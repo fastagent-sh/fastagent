@@ -14,7 +14,7 @@ describe("appendChannelDotEnv", () => {
     expect(r.alreadySet).toEqual(expect.arrayContaining(["LARK_APP_ID", "LARK_APP_SECRET"]));
     expect(await readFile(join(dir, ".env"), "utf8")).toContain("LARK_APP_ID=cli_old");
 
-    // Overwrite: `--create-app` just minted these — the stale line loses, in place (no duplicate
+    // Overwrite: `add feishu`'s create flow just minted these — the stale line loses, in place (no duplicate
     // assignment that last-wins would then shadow).
     r = await appendChannelDotEnv(dir, "lark", { LARK_APP_ID: "cli_new", LARK_APP_SECRET: "s2" }, [
       "LARK_APP_ID",

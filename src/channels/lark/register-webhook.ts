@@ -10,7 +10,7 @@
  * publish), and it VERIFIES the URL with a url_verification challenge during the PATCH — which is why
  * this waits for `<baseUrl>/health` to serve first (the same readiness race the telegram registrar
  * fixes). Requires the `application:application:patch` scope (field-tested: `self_manage` does NOT
- * cover this PATCH) — `--create-app` requests it at creation via addons; without it the PATCH fails
+ * cover this PATCH) — `add feishu` requests it at creation via addons; without it the PATCH fails
  * visibly and the manual console instruction is printed.
  *
  * CLOUD LAG: the application-v7 config API exists on open.feishu.cn but (as of 2026-07) is NOT
