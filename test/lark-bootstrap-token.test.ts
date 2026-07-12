@@ -27,12 +27,14 @@ describe("bootstrapVerificationToken", () => {
     expect(challengeEcho).toEqual({ challenge: "chal-1" }); // the platform's verification must SUCCEED
   });
 
-  it("the PATCH is the readiness probe: early failures are retried until the edge warms up", async () => {
+  it("PATCHes immediately as the readiness probe, reporting retries while the edge warms up", async () => {
     let calls = 0;
+    const retries: number[] = [];
     const token = await bootstrapVerificationToken({
       appId: "cli_x",
       startTunnel: loopback,
       patchRetryMs: 1,
+      onPatchRetry: ({ attempt }) => retries.push(attempt),
       api: {
         async updateEventSubscription(_appId, cfg) {
           calls++;
@@ -47,6 +49,7 @@ describe("bootstrapVerificationToken", () => {
     });
     expect(token).toBe("tok-retry");
     expect(calls).toBe(3);
+    expect(retries).toEqual([1, 2]);
   });
 
   it("can classify a definitive PATCH failure as non-retryable (intl config-route 404)", async () => {
@@ -70,12 +73,11 @@ describe("bootstrapVerificationToken", () => {
   });
 
   it("an unreachable-to-US edge does not gate the capture (the platform's path is what matters)", async () => {
-    // The "tunnel" advertises a dead URL (our own health probe can never pass), but the platform
-    // (fake api) still reaches the local responder — the capture must succeed anyway.
+    // The "tunnel" advertises a dead URL, but the fake platform reaches the local responder through
+    // its own path — proving no caller-side health probe gates the authoritative PATCH/challenge.
     let realPort = 0;
     const token = await bootstrapVerificationToken({
       appId: "cli_x",
-      readyTimeoutMs: 10,
       startTunnel: async (port) => {
         realPort = port;
         return { url: "http://127.0.0.1:9", close: () => {} }; // discard port — routable by nobody

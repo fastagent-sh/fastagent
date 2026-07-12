@@ -13,7 +13,6 @@
  * accepted, immediately after our own credential-authenticated PATCH.
  */
 import { createServer } from "node:http";
-import { waitForHealth } from "../wait-health.ts";
 
 /** What the bootstrap needs from the API pipeline (subset of LarkApi; injectable in tests). */
 interface EventSubscriptionPatcher {
@@ -27,14 +26,15 @@ export interface BootstrapTokenOptions {
   startTunnel: (port: number) => Promise<{ url: string; close(): void } | undefined>;
   /** Budget for the whole capture (the challenge normally lands within the PATCH round-trip). */
   timeoutMs?: number;
-  readyTimeoutMs?: number;
-  readyIntervalMs?: number;
-  /** PATCH attempts × delay — the PATCH is the real readiness probe (see below). */
+  /** PATCH attempts × delay — the PATCH is the one and only readiness probe (see below). */
   patchAttempts?: number;
   patchRetryMs?: number;
   /** Retry classifier. Default: retry every PATCH failure (Feishu edge warm-up compatibility).
    * Lark onboarding rejects a definitive config-route 404 immediately so it can fall back by hand. */
   shouldRetryPatch?: (error: unknown) => boolean;
+  /** Progress hooks: production prints the assigned URL/retries; tests keep transport IO injected. */
+  onTunnelReady?: (url: string) => void;
+  onPatchRetry?: (info: { error: unknown; attempt: number; attempts: number; retryMs: number }) => void;
 }
 
 /**
@@ -48,7 +48,7 @@ export async function bootstrapVerificationToken(options: BootstrapTokenOptions)
     capturedToken = resolve;
   });
 
-  // The throwaway responder: answers /health (tunnel readiness) and the url_verification challenge
+  // The throwaway responder: answers /health (diagnostics) and the url_verification challenge
   // (echo `challenge` back), capturing `token` from the FIRST challenge only.
   const server = createServer((req, res) => {
     if (req.method === "GET") {
@@ -82,12 +82,10 @@ export async function bootstrapVerificationToken(options: BootstrapTokenOptions)
   const tunnel = await options.startTunnel(port);
   try {
     if (!tunnel) throw new Error("no tunnel came up (is cloudflared installed?)");
-    // Warm-up only, NON-FATAL: "can WE reach the edge" is the wrong readiness signal — the challenge
-    // travels platform→edge, an independent path (field-tested: local negative-DNS caching kept this
-    // probe failing while the platform's challenge went through fine). The PATCH below is the real
-    // probe: it succeeds only once the platform reached the URL and got the challenge answered — so
-    // it is retried on failure while the edge warms up.
-    await waitForHealth(`${tunnel.url}/health`, options.readyTimeoutMs ?? 45_000, options.readyIntervalMs ?? 2_000);
+    options.onTunnelReady?.(tunnel.url);
+    // Do NOT health-poll the edge here: "can WE reach it" says nothing about platform→edge, the path
+    // the challenge uses (field-tested: local negative-DNS caching failed while that path worked).
+    // PATCH immediately; it is the real probe because success requires the challenge round-trip.
     const attempts = options.patchAttempts ?? 8;
     for (let attempt = 1; ; attempt++) {
       try {
@@ -98,7 +96,9 @@ export async function bootstrapVerificationToken(options: BootstrapTokenOptions)
         break;
       } catch (e) {
         if (attempt >= attempts || options.shouldRetryPatch?.(e) === false) throw e;
-        await new Promise((resolve) => setTimeout(resolve, options.patchRetryMs ?? 10_000));
+        const retryMs = options.patchRetryMs ?? 10_000;
+        options.onPatchRetry?.({ error: e, attempt, attempts, retryMs });
+        await new Promise((resolve) => setTimeout(resolve, retryMs));
       }
     }
     const winner = await Promise.race([

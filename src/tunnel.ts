@@ -9,7 +9,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { registerLarkWebhook } from "./channels/lark/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { loadDotEnv } from "./env.ts";
@@ -31,8 +30,13 @@ export function parseTunnelUrl(chunk: string): string | undefined {
   return chunk.match(TUNNEL_URL_RE)?.[0];
 }
 
+/** Global timer (rather than timers/promises) so timeout/retry behavior is deterministic under fake timers. */
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 const TUNNEL_ATTEMPTS = 3;
 const TUNNEL_RETRY_MS = 2000;
+/** cloudflared can stay alive without ever receiving/printing an assigned quick-tunnel URL. */
+const TUNNEL_START_TIMEOUT_MS = 30_000;
 
 /** How cloudflared is launched; injectable so tests can drive the child without a real process. */
 type SpawnCloudflared = (port: number) => ChildProcess;
@@ -55,9 +59,10 @@ type TunnelSpawn =
 export async function startCloudflareTunnel(
   port: number,
   spawnFn: SpawnCloudflared = spawnCloudflared,
+  attemptTimeoutMs: number = TUNNEL_START_TIMEOUT_MS,
 ): Promise<Tunnel | undefined> {
   for (let attempt = 1; attempt <= TUNNEL_ATTEMPTS; attempt++) {
-    const r = await spawnTunnelOnce(port, spawnFn);
+    const r = await spawnTunnelOnce(port, spawnFn, attemptTimeoutMs);
     if (r.tunnel) return r.tunnel;
     if (r.fatal) {
       log.error(r.message); // missing binary — retrying cannot help
@@ -74,40 +79,42 @@ export async function startCloudflareTunnel(
 }
 
 /** One cloudflared launch: a Tunnel on the first URL, or a failure (missing binary / exit before a URL). */
-function spawnTunnelOnce(port: number, spawnFn: SpawnCloudflared): Promise<TunnelSpawn> {
+function spawnTunnelOnce(port: number, spawnFn: SpawnCloudflared, timeoutMs: number): Promise<TunnelSpawn> {
   return new Promise((resolve) => {
     const child = spawnFn(port);
     let settled = false;
+    let timer: NodeJS.Timeout | undefined;
     let tail = ""; // recent output, surfaced as the failure reason
+    const finish = (result: TunnelSpawn): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(result);
+    };
     const onChunk = (buf: Buffer): void => {
       tail = (tail + String(buf)).slice(-600);
-      if (settled) return;
       const url = parseTunnelUrl(String(buf));
-      if (url) {
-        settled = true;
-        resolve({ tunnel: { url, close: () => child.kill("SIGTERM") } });
-      }
+      if (url) finish({ tunnel: { url, close: () => child.kill("SIGTERM") } });
     };
     child.stdout?.on("data", onChunk);
     child.stderr?.on("data", onChunk); // cloudflared prints the URL (and its errors) on stderr
     child.on("error", (e: NodeJS.ErrnoException) => {
-      if (settled) return;
-      settled = true;
       if (e.code === "ENOENT") {
-        resolve({
+        finish({
           fatal: true,
           message:
             "[fastagent] --tunnel needs cloudflared — install it (e.g. `brew install cloudflared`), then re-run. Serving without a tunnel.",
         });
       } else {
-        resolve({ fatal: false, detail: e.message });
+        finish({ fatal: false, detail: e.message });
       }
     });
-    child.on("exit", () => {
-      if (settled) return;
-      settled = true;
-      resolve({ fatal: false, detail: lastErrorLine(tail) });
-    });
+    child.on("exit", () => finish({ fatal: false, detail: lastErrorLine(tail) }));
+    timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish({ fatal: false, detail: `timed out after ${Math.round(timeoutMs / 1000)}s waiting for a public URL` });
+    }, timeoutMs);
+    timer.unref();
   });
 }
 

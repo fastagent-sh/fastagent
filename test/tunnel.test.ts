@@ -80,6 +80,29 @@ describe("tunnel: startCloudflareTunnel", () => {
     expect(errs.some((e) => /needs cloudflared/.test(e))).toBe(true);
   });
 
+  it("times out a live cloudflared that never prints a URL (no unbounded add/dev hang)", async () => {
+    vi.useFakeTimers();
+    const errs = captureErrors();
+    const children: ChildProcess[] = [];
+    const p = startCloudflareTunnel(
+      8800,
+      () => {
+        const child = fakeCloudflared();
+        children.push(child);
+        return child;
+      },
+      100,
+    );
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await vi.advanceTimersByTimeAsync(100);
+      if (attempt < 3) await vi.advanceTimersByTimeAsync(TUNNEL_RETRY_MS);
+    }
+    expect(await p).toBeUndefined();
+    expect(children).toHaveLength(3);
+    for (const child of children) expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(errs.some((e) => /timed out after/.test(e))).toBe(true);
+  });
+
   it("does not fail silently: an exit-before-URL is logged and retried, then it gives up", async () => {
     vi.useFakeTimers();
     const errs = captureErrors();

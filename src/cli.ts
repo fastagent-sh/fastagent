@@ -761,6 +761,12 @@ async function runAdd(): Promise<void> {
                 api,
                 appId,
                 startTunnel: (port) => startCloudflareTunnel(port),
+                onTunnelReady: (url) =>
+                  console.error(`[fastagent] temporary tunnel ready → ${url}; registering webhook mode now…`),
+                onPatchRetry: ({ error, attempt, attempts, retryMs }) =>
+                  console.error(
+                    `[fastagent] Lark could not validate the fresh tunnel yet (${String(error)}); retrying PATCH ${attempt + 1}/${attempts} in ${Math.round(retryMs / 1000)}s…`,
+                  ),
                 // A route-level 404 is definitive, not edge weather: fall back immediately. Retry
                 // only actual edge/network weather; scope/auth/config failures remain immediate.
                 shouldRetryPatch: (error) =>
