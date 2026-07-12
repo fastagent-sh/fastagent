@@ -213,7 +213,8 @@ diverge operationally (separate consoles/accounts hosts, the intl cloud lags on 
 is exactly the split's payoff: per-kind onboarding without engine forks. What is platform-different:
 
 - **The live preview is a streaming CARD, not an edited message.** The platform caps text edits at 20
-  per message and sends at 5 QPS per chat; cardkit streaming (50 QPS, strictly increasing `sequence`)
+  per message and sends at 5 QPS per chat; cardkit streaming (50 QPS per app / 10 per card, strictly
+  increasing `sequence`)
   is its designed AI-output channel. The same card settles into the final Markdown answer. Degrade
   tiers: card fails → static text placeholder; streaming closed mid-turn → frozen preview, the settle
   still lands.

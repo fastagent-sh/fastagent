@@ -185,7 +185,7 @@ The live preview is ONE **streaming card** (a card entity in streaming mode):
 - tool-call previews + partial answer text, pushed as full-text snapshots (the client renders the typewriter effect),
 - on completion, the same card settles into the final answer as Markdown (streaming off).
 
-Card snapshots ride the cardkit quota (50 QPS, no edit ceiling) — deliberately **not** the 5 QPS per-chat message quota or the 20-edit cap on text messages, which is what makes a live preview viable on this platform at all.
+Card snapshots ride the cardkit quota (50 QPS per app, 10 QPS per card entity, no edit ceiling) — deliberately **not** the 5 QPS per-chat message quota or the 20-edit cap on text messages, which is what makes a live preview viable on this platform at all.
 
 Degrade tiers, all visible in the operator log:
 

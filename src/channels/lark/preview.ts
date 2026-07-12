@@ -3,7 +3,8 @@
  * streaming CARD (create entity → mount it with a reply/send → stream full-text snapshots at its
  * markdown element with a strictly increasing `sequence`; the client renders the typewriter effect);
  * on completion the same card is settled in place with the final answer (streaming off). Streaming
- * updates ride the cardkit quota (50 QPS, no edit ceiling) — NOT the 5 QPS per-chat message quota or
+ * updates ride the cardkit quota (50 QPS per app, 10 QPS per card entity, no edit ceiling) — NOT the
+ * 5 QPS per-chat message quota or
  * the 20-edit cap on text messages, which is why the preview is a card and not an edited text message.
  *
  * Fallback tier (fail visibly, degrade per turn): if the card cannot be created or mounted, the turn
@@ -36,7 +37,8 @@ export function defaultErrorMessage(failed: LarkFailure): string {
 }
 
 /** How often (ms) to push a live-preview snapshot; tool events still flush on the next loop. Cardkit
- *  allows 50 QPS, but one snapshot a second reads smoothly (the client animates between snapshots).
+ *  allows 10 QPS per card entity (50 per app), but one snapshot a second reads smoothly (the client
+ *  animates between snapshots).
  *  Doubles as the answer-preview aging window (see answerView). */
 const STREAM_THROTTLE_MS = 1000;
 
