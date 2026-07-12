@@ -1,5 +1,5 @@
 ---
-title: FastAgent design principles
+title: Design principles
 status: current
 ---
 
@@ -35,12 +35,12 @@ A feature is not real product surface until users can name it and reason about i
 
 | Concept | Meaning |
 |---|---|
-| **Definition** | The directory that describes the agent: optional `persona.md`, `skills/`, authored context, tools/channels, and config; `AGENTS.md` contributes project context. |
+| **Agent Definition** | The directory that describes the agent: optional `persona.md`, `skills/`, authored context, tools/channels, and config; `AGENTS.md` contributes project context. |
 | **Agent Handler** | The callable contract: `invoke(scope, prompt) => AsyncIterable<AgentEvent>`. |
 | **Event** | The streamed output shape every channel can consume: text, thinking, tool lifecycle, completion, or failure. |
 | **Tool** | A typed action the model can call, validated before execution. |
 | **Skill** | Reusable markdown expertise loaded from the definition, not from global machine state. |
-| **Channel** | An adapter that turns an external event into one or more invocations. |
+| **Channel** | An adapter that turns an external event — a webhook, a message, even the clock — into one or more invocations. |
 | **Session** | Runtime conversation state, owned by the host/session store rather than baked into the definition. |
 
 That concept set is intentionally smaller than the implementation. Sandboxes, durable queues, evals, registries, hosted deployment, and multi-instance backends can be added later, but they should not appear as core concepts until the product can support them honestly.

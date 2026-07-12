@@ -1,11 +1,11 @@
 ---
-title: FastAgent documentation
+title: Documentation
 status: current
 ---
 
-# FastAgent documentation
+# Documentation
 
-FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running service: embedded in your app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind your own channel. `persona.md` is recommended for identity (an `AGENTS.md` is project context the agent reads), but the directory is the unit.
+FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and serves it as a live service: embedded in your app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind your own channel. `persona.md` is recommended for identity (an `AGENTS.md` is project context the agent reads), but the directory is the unit.
 
 ## Recommended path
 
