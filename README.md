@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/fastagent-sh/fastagent/actions/workflows/ci.yml/badge.svg)](https://github.com/fastagent-sh/fastagent/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@fastagent-sh/fastagent.svg)](https://www.npmjs.com/package/@fastagent-sh/fastagent)
-[![license](https://img.shields.io/npm/l/@fastagent-sh/fastagent.svg)](LICENSE)
+[![license](https://img.shields.io/npm/l/@fastagent-sh/fastagent.svg)](https://github.com/fastagent-sh/fastagent/blob/main/LICENSE)
 [![node](https://img.shields.io/node/v/@fastagent-sh/fastagent.svg)](https://nodejs.org)
 [![built with pi](https://img.shields.io/badge/built%20with-pi-0b7285.svg)](https://pi.dev)
 
@@ -16,7 +16,7 @@
 
 A file-defined agent directory can become a live service. FastAgent takes it out of the terminal and serves it in your Next/Astro app, Telegram, GitHub/webhook events, an API endpoint, or your own channel.
 
-Leave the terminal. Become a real service.
+Leave the terminal. Become a live service.
 
 - **Add it to your app** — one route, your auth, your database, your host.
 - **Run it as a live service** — Telegram support, GitHub PR review, webhook handler, API endpoint, or custom channel.
@@ -31,7 +31,7 @@ FastAgent is not a new agent-authoring DSL. You bring the existing definition an
 
 Coding agents made it cheap to vibe useful agent directories. The hard part is the next step: local agents live in terminals, but real services receive webhooks, join Telegram, serve product users, and expose stable APIs.
 
-FastAgent is the missing bridge from local agent directory to real service.
+FastAgent is the missing bridge from local agent directory to live service.
 
 ## Features
 
@@ -59,7 +59,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 - **No platform to move to.** No dashboard, no control plane, no runtime you deploy *into* — run it locally, embed it in your app, or ship the directory anywhere.
 - **No new format or DSL.** `AGENTS.md`, Agent Skills, TypeScript tools, HTTP/SSE — FastAgent consumes the standards you already use instead of a parallel ecosystem.
 - **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, call `invoke` from your own queue or workflow.
-- **No model or cloud lock-in.** The Agent Handler contract is harness-neutral (the [SPEC](docs/SPEC.md) says *engine* — same seam), with [pi](https://pi.dev) as the built-in harness; bring your own harness and every channel keeps working unchanged.
+- **No model or cloud lock-in.** The Agent Handler contract is harness-neutral (the [SPEC](https://fastagent.sh/docs/spec/) says *engine* — same seam), with [pi](https://pi.dev) as the built-in harness; bring your own harness and every channel keeps working unchanged.
 
 ## Install
 
@@ -198,12 +198,12 @@ The neutral contract leaves room for capabilities that are not complete product 
 - **More harness bindings and channels** — pi is the built-in harness; another harness can implement the Agent contract, and community channels can use the channel kit.
 - **More deploy targets** — Fly and Railway ship today; the generated container is the portable path for other hosts.
 
-See [Contributing](CONTRIBUTING.md) if one of these is the problem you want to work on.
+See [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md) if one of these is the problem you want to work on.
 
 ## Project
 
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
+- [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md)
+- [Security policy](https://github.com/fastagent-sh/fastagent/blob/main/SECURITY.md)
 
 ## Acknowledgements
 
@@ -215,4 +215,4 @@ The scaffolded `writing-great-skills` skill is vendored from [mattpocock/skills]
 
 ## License
 
-[MIT](LICENSE). Runtime dependencies use permissive open-source licenses and are installed as separate npm packages; the vendored `writing-great-skills` scaffold includes its own license.
+[MIT](https://github.com/fastagent-sh/fastagent/blob/main/LICENSE). Runtime dependencies use permissive open-source licenses and are installed as separate npm packages; the vendored `writing-great-skills` scaffold includes its own license.
