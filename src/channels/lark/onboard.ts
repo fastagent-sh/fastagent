@@ -6,7 +6,7 @@
  * is testable without a terminal or browser.
  */
 
-export const LARK_CONSOLE_URL = "https://open.larksuite.com/app";
+export const LARK_CONSOLE_URL = "https://open.larksuite.com/page/launcher?from=backend_oneclick";
 
 export interface LarkOnboardIO {
   openUrl(url: string): void;
@@ -35,7 +35,7 @@ function required(value: string | undefined, name: string): string {
 /** Open the stable app console and collect everything the runtime needs. Cancellation is a visible
  * failure: the scaffold remains and `add lark` is deliberately re-runnable to resume onboarding. */
 export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions): Promise<LarkOnboardCredentials> {
-  io.note(`Create a Custom App in Lark Developer Console. Opening ${LARK_CONSOLE_URL}`);
+  io.note(`Create the app on Lark's one-click launcher. Opening ${LARK_CONSOLE_URL}`);
   io.openUrl(LARK_CONSOLE_URL);
 
   const existingId = opts.existing?.LARK_APP_ID?.trim();

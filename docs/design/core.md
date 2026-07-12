@@ -240,7 +240,8 @@ is exactly the split's payoff: per-kind onboarding without engine forks. What is
   effect on version publish, which has no open API — the subscription mode cannot travel on the
   creation link (the platform excludes sensitive config from addons). The intl cloud can NOT do CLI
   app creation at all (its confirm page's ack endpoint is broken and the config API is missing), so
-  `add lark` opens the console and runs a guided paste flow: App ID → Secret → credential validation →
+  `add lark` opens the intl one-click launcher (`/page/launcher?from=backend_oneclick`) and runs a
+  guided paste flow: App ID → Secret → credential validation →
   Verification Token, then writes `.env`; the engine stays cloud-parameterized for the day it ships.
 - **Webhook ingress only.** The WS long-connection mode (no public URL) needs the official SDK and a
   non-HTTP channel seam; deferred.

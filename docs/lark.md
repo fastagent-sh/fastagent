@@ -36,7 +36,8 @@ Onboarding diverges by cloud on purpose: the feishu cloud supports CLI app creat
 so `add feishu` just does it — skipped when `FEISHU_APP_ID`/`FEISHU_APP_SECRET` are already set in
 `.env` (it never silently mints a second app). The intl cloud does not (its confirm page's ack
 endpoint is broken and the application-config API is missing there), so `add lark` uses a guided
-console path instead: it opens the app page; waits for App ID, then App Secret; validates the pair
+console path instead: it opens Lark's one-click launcher (`/page/launcher?from=backend_oneclick`);
+waits for App ID, then App Secret; validates the pair
 against the tenant-token endpoint; then points to Events & Callbacks and waits for the Verification
 Token. All three are written to the gitignored `.env`. The token cannot be read automatically — Lark
 exposes no read API for it and the missing config API prevents the challenge-capture bootstrap.

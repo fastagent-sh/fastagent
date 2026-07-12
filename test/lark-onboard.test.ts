@@ -35,6 +35,7 @@ describe("guided Lark app onboarding", () => {
       LARK_APP_SECRET: "secret",
       LARK_VERIFICATION_TOKEN: "verify",
     });
+    expect(LARK_CONSOLE_URL).toBe("https://open.larksuite.com/page/launcher?from=backend_oneclick");
     expect(fx.opened).toEqual([LARK_CONSOLE_URL]);
     expect(fx.prompts.map((p) => p.message)).toEqual([
       expect.stringContaining("LARK_APP_ID"),
