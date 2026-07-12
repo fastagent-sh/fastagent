@@ -64,10 +64,14 @@ export async function registerLarkWebhook(
   }
 
   const api = createLarkApi({ baseUrl: apiBase, appId, appSecret });
-  // Reachable → register. A short retry backstops transient network errors only; a permanent config
-  // error (missing scope, app under review) is reported with the manual path, not retried.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await sleep(opts.retryMs ?? 2000);
+  // Reachable → register. The PATCH is the real probe (same lesson as the token bootstrap): the
+  // platform verifies request_url with a challenge DURING the call, and a fresh tunnel's edge can be
+  // reachable from here while the platform's own path still lags — its 210042 "request_url validation
+  // failed" is therefore retried with backoff, alongside transient network errors. Only a permanent
+  // config error (missing scope, app under review, the intl 404) is reported once with the manual path.
+  const attempts = 8;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await sleep(opts.retryMs ?? 10_000);
     try {
       await api.updateEventSubscription(appId, { subscriptionType: "webhook", requestUrl });
       log.info(`[fastagent] ${kind}: event Request URL registered → ${requestUrl}`);
@@ -90,7 +94,7 @@ export async function registerLarkWebhook(
         );
         return;
       }
-      if (!/resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout/i.test(error)) {
+      if (!/resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|210042|request_url/i.test(error)) {
         log.error(
           `[fastagent] ${kind}: could not register the event URL (${error}). ` +
             `If the app lacks the "application:application:patch" scope (console → Permissions) or is under review, ${manual}`,

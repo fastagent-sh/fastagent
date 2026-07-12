@@ -107,6 +107,34 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
     expect(patches).toHaveLength(0);
   });
 
+  it("210042 request_url validation (the platform's path to a fresh edge lagging) is retried until it lands", async () => {
+    creds();
+    let patches = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/health")) return new Response(null, { status: 200 });
+        if (url.includes("tenant_access_token")) {
+          return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
+        }
+        if (url.includes("/application/v7/")) {
+          // The first two challenges fail (edge not yet routable from the platform), then it heals.
+          return ++patches < 3
+            ? Response.json({ code: 210042, msg: "The validation for event.request_url failed." })
+            : Response.json({ code: 0, msg: "ok", data: {} });
+        }
+        return new Response(null, { status: 404 });
+      }),
+    );
+    await registerLarkWebhook("https://x.trycloudflare.com", "lark", {
+      readyTimeoutMs: 100,
+      readyIntervalMs: 1,
+      retryMs: 1,
+      apiBase: "http://lark.test",
+    });
+    expect(patches).toBe(3); // failed twice, registered on the third
+  });
+
   it("a PERMANENT config reject (missing scope) is reported once with the manual path, not retried", async () => {
     creds();
     let patches = 0;
