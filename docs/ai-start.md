@@ -1,5 +1,6 @@
 ---
 title: Build and Serve an Agent with FastAgent
+description: "An executable setup path for coding agents: build and serve a FastAgent agent starting from nothing, from existing files, or inside an existing application."
 status: current
 ---
 

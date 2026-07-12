@@ -1,5 +1,6 @@
 ---
 title: Channels
+description: "How channels turn external events into agent invocations: workspace discovery, route tables, the first-party GitHub and Telegram adapters, and local webhook tunneling."
 status: current
 ---
 

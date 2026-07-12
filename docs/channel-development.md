@@ -1,5 +1,6 @@
 ---
 title: Channel development
+description: "Build a FastAgent channel adapter: the adapter/glue split, the ChannelModule contract, packaging third-party channels, and testing guidance."
 status: current
 ---
 

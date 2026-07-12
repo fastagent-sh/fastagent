@@ -1,5 +1,6 @@
 ---
 title: Deploy
+description: "Ship the directory: fastagent deploy for Fly.io and Railway, the generated Dockerfile for any Docker host, secrets, persistent state, and scale-to-zero behavior."
 status: current
 ---
 

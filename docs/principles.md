@@ -1,5 +1,6 @@
 ---
 title: Design principles
+description: "The design choices behind FastAgent: a small callable contract, app-owned runtime, typed edges, the public concept set, and the non-goals that keep the serving layer small."
 status: current
 ---
 

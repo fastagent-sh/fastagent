@@ -1,5 +1,6 @@
 ---
 title: Core design
+description: "Architecture of FastAgent's pi reference implementation: the assembly ladder, prompt assembly, event translation, sessions, channels, schedules, and state."
 type: design-doc
 status: current
 updated: 2026-07-10

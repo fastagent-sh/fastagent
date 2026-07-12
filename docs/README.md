@@ -1,5 +1,6 @@
 ---
 title: Documentation
+description: "The FastAgent documentation map: quickstart, configuration, embedding, channels, deployment, and reference for serving agent directories as live services."
 status: current
 ---
 

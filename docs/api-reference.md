@@ -1,5 +1,6 @@
 ---
 title: API reference
+description: "The public TypeScript surface of @fastagent-sh/fastagent: the Agent contract, assembly functions, channel and host kit, typed tools, sessions, and providers."
 status: current
 ---
 
