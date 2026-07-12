@@ -67,6 +67,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     steps: [
       "edit {channel} — the setup walkthrough (console permissions, event subscription) is in its header",
       "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run` (manual: console → Events & Callbacks)",
+      "then PUBLISH A VERSION when the console prompts — the switch to webhook mode takes effect on publish (once; no API for this step)",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
   },
@@ -126,14 +127,17 @@ function mentionsEnvName(content: string, name: string): boolean {
 
 /**
  * Append generated channel secrets to the run-root `.env` (never `.env.example`) after the CLI has
- * verified that `.env` is gitignored. Existing non-empty values are kept. Manual values (e.g.
- * TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is ready to
- * edit while no fake secret is committed to the user's mental model.
+ * verified that `.env` is gitignored. Existing non-empty values are kept — EXCEPT the names listed in
+ * `overwrite`: those are authoritative (e.g. the credentials of an app `--create-app` JUST minted —
+ * skipping them for a stale value would silently discard a fresh, unrecoverable secret). Manual values
+ * (e.g. TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is
+ * ready to edit while no fake secret is committed to the user's mental model.
  */
 export async function appendChannelDotEnv(
   dir: string,
   kind: ChannelKind,
   generated: Record<string, string>,
+  overwrite: readonly string[] = [],
 ): Promise<DotEnvWriteResult> {
   const file = join(dir, ".env");
   let current = "";
@@ -143,7 +147,9 @@ export async function appendChannelDotEnv(
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
-  const alreadySet = CHANNEL_SCAFFOLDS[kind].env.filter((e) => hasActiveEnvValue(current, e.name)).map((e) => e.name);
+  const alreadySet = CHANNEL_SCAFFOLDS[kind].env
+    .filter((e) => !overwrite.includes(e.name) && hasActiveEnvValue(current, e.name))
+    .map((e) => e.name);
   const lines: string[] = [];
   const written: string[] = [];
   const contentLines = current.split("\n");

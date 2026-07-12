@@ -8,8 +8,9 @@
  * telegram-setWebhook parity: the platform applies a request-URL change IMMEDIATELY (no version
  * publish), and it VERIFIES the URL with a url_verification challenge during the PATCH — which is why
  * this waits for `<baseUrl>/health` to serve first (the same readiness race the telegram registrar
- * fixes). Requires the `application:application:self_manage` scope (the platform's agent-app template
- * includes it); without it the PATCH fails visibly and the manual console instruction is printed.
+ * fixes). Requires the `application:application:patch` scope (field-tested: `self_manage` does NOT
+ * cover this PATCH) — `--create-app` requests it at creation via addons; without it the PATCH fails
+ * visibly and the manual console instruction is printed.
  *
  * CLOUD LAG: the application-v7 config API exists on open.feishu.cn but (as of 2026-07) is NOT
  * deployed on open.larksuite.com — the route 404s there. The registrar still attempts it (the day the
@@ -56,6 +57,12 @@ export async function registerLarkWebhook(
     try {
       await api.updateEventSubscription(appId, { subscriptionType: "webhook", requestUrl });
       log.info(`[fastagent] lark: event Request URL registered → ${requestUrl}`);
+      // Field-tested: a URL change applies immediately, but the MODE flip (the template's long
+      // connection → webhook) only takes effect when a version is published — the dispatcher serves
+      // the published snapshot, and version publishing has no open API. One console click, once.
+      log.info(
+        `[fastagent] lark: if messages do not arrive, publish a version (one click, prompted) — the switch to webhook mode takes effect on publish: ${apiBase}/app/${appId}/version`,
+      );
       return;
     } catch (e) {
       const error = String(e);
@@ -72,7 +79,7 @@ export async function registerLarkWebhook(
       if (!/resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout/i.test(error)) {
         log.error(
           `[fastagent] lark: could not register the event URL (${error}). ` +
-            `If the app lacks the "application:application:self_manage" scope or is under review, ${manual}`,
+            `If the app lacks the "application:application:patch" scope (console → Permissions) or is under review, ${manual}`,
         );
         return;
       }

@@ -34,20 +34,34 @@ It also appends the required env vars to `.env.example` when possible.
 `fastagent add lark --create-app` runs the platform's **scan-to-create** flow (its official name; an
 OAuth 2.0 device-authorization grant). The CLI first asks which platform your account is on — the two
 brands have separate accounts hosts, and each confirm page accepts only its own app (the Feishu page
-refuses a Lark scan and vice versa); an existing `LARK_BASE_URL` skips the question. It then prints a
-one-time link (valid ~10 minutes); open it in Feishu or Lark — scan it as a QR code or just click it —
-and confirm; the platform creates an app from its agent template — bot capability, messaging scopes,
-and event subscriptions pre-configured — and hands the credentials back. fastagent then reads the
-platform-generated Verification Token over the API and writes everything to `.env`:
+refuses a Lark scan and vice versa); an existing `LARK_BASE_URL` skips the question. It then opens a
+one-time confirmation link in your browser (valid ~10 minutes) — also printed, so you can open it in
+Feishu or Lark or scan it as a QR code instead — and you confirm; the platform creates an app from its agent template — bot capability, messaging scopes,
+and event subscriptions pre-configured, plus the `application:application:patch` scope and the
+`im.message.receive_v1` event fastagent piggybacks onto the creation link — and hands the credentials
+back. The platform-generated Verification Token has no read API; its only programmatic delivery is
+the `url_verification` challenge sent during webhook registration, so the CLI captures it by running
+a throwaway registration against an ephemeral tunnel (needs `cloudflared`, same as `dev --tunnel`).
+Everything lands in `.env`:
 
 - `LARK_APP_ID` / `LARK_APP_SECRET` — from the created app,
-- `LARK_VERIFICATION_TOKEN` — read back via the app-config API,
+- `LARK_VERIFICATION_TOKEN` — captured from the registration challenge,
 - `LARK_BASE_URL` — set to `https://open.larksuite.com` automatically when the confirming user is on
   a Lark (international) tenant.
 
+Browser quirk: the confirm page may show **"Link expired" on first load** — the page acks the
+code before its session bootstrap finishes, and it renders every ack failure as an expiry. Recover
+by opening the printed link **again** (the second navigation has a warm session and goes through).
+Do **not** just refresh: the page strips the code from the URL on load, so a refresh runs the
+unbound create flow — the app gets created, but its credentials only appear on-page and the waiting
+CLI never completes. Keep the CLI running until it prints `app created`: the credentials are
+delivered to the polling CLI, not the browser.
+
 The scan refuses to run when `.env` is not gitignored (real credentials must never land in a
 committable file). After the scan: `fastagent dev --tunnel` — the event Request URL is registered
-automatically (next section); no console visit at any step.
+automatically (next section). One console click remains: **publish the version the console prompts
+for** — the switch from the template's long-connection mode to webhook takes effect on publish, and
+version publishing has no open API (see Limits).
 
 ## Configure the app by hand (developer console)
 
@@ -73,7 +87,8 @@ LARK_ENCRYPT_KEY=...   # optional but recommended; must match the console exactl
 5. **The event Request URL registers itself** (Feishu tenants): `fastagent dev --tunnel` (and
    `fastagent deploy … --run`) call the application-config API to point the app's event subscription at
    `https://<host>/lark` — webhook mode, applied immediately, no version publish. This needs the
-   `application:application:self_manage` scope (the agent template includes it). **Lark international
+   `application:application:patch` scope — `--create-app` requests it at creation; for a hand-made app
+   add it under Permissions in the console. **Lark international
    lags here**: `open.larksuite.com` does not expose the config API yet, so intl tenants set the URL in
    the console by hand — with the server **running** (the platform verifies the URL with a
    `url_verification` challenge this channel answers). The registrar keeps attempting the API and
@@ -200,7 +215,11 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 
 - Webhook (event subscription) mode only. The platform's WebSocket long-connection mode — attractive because it needs no public URL — requires the official SDK and a non-HTTP channel seam; a later tier.
 - `--create-app` creates the app with the platform's agent template, whose event subscription starts in
-  long-connection mode — the first `dev --tunnel` / `deploy --run` flips it to webhook automatically.
+  long-connection mode — the first `dev --tunnel` / `deploy --run` flips the config to webhook
+  automatically, but the flip only takes effect once a **version is published** (the dispatcher serves
+  the published snapshot; a pure URL change applies immediately, a mode change does not). The console
+  prompts for the publish — one click, self-approved on your own tenant; version publishing has no open
+  API, so this single step cannot be automated.
 - The un-summoned group context buffer (Telegram parity) is gated on the sensitive `im:message.group_msg` scope; not yet implemented.
 - The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds; the channel persists the turn intent and ACKs immediately, so slow turns are never the webhook's problem.

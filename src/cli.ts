@@ -74,6 +74,7 @@ import { authSeedBytes, deployFlyRun } from "./deploy/fly/run.ts";
 import { spawnRunner } from "./deploy/runner.ts";
 import { assembleSecrets } from "./deploy/secrets.ts";
 import { createLarkApi } from "./channels/lark/lark-api.ts";
+import { bootstrapVerificationToken } from "./channels/lark/bootstrap-token.ts";
 import { registerLarkApp } from "./channels/lark/register-app.ts";
 import { registerLarkWebhook } from "./channels/lark/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
@@ -685,9 +686,13 @@ async function runAdd(): Promise<void> {
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
   // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
-  // the same class of value as telegram's); created-app credentials ride the same write.
+  // the same class of value as telegram's); created-app credentials ride the same write — but as
+  // OVERWRITES: the app was just minted, so these values are authoritative and a stale .env line must
+  // lose to them (skipping would silently discard an unrecoverable fresh secret).
   const dotEnv = envIgnored
-    ? await appendChannelDotEnv(target, channelKind, { ...generated, ...created }).catch(failStartup)
+    ? await appendChannelDotEnv(target, channelKind, { ...generated, ...created }, Object.keys(created ?? {})).catch(
+        failStartup,
+      )
     : undefined;
   if (dotEnv && dotEnv.written.length > 0) {
     console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .env`);
@@ -716,14 +721,18 @@ async function runAdd(): Promise<void> {
     console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
   }
   console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
+  // The create-app flow leaves keep-alive sockets behind (platform API fetches, the throwaway tunnel's
+  // health probes) that would hold the event loop open for a while — the work is done, exit crisply.
+  process.exit(0);
 }
 
 /**
  * `add lark --create-app`: the platform's scan-to-create flow. The device-authorization grant creates
  * a pre-configured agent app (bot capability, messaging scopes, event subscriptions) when the user
  * confirms a link in Feishu/Lark, and hands back the credentials; the platform-generated Verification
- * Token is then read back over the API — so .env ends up complete without the developer console. The
- * event Request URL is NOT set here: `dev --tunnel` / `deploy --run` register it against the live URL.
+ * Token is then captured from the registration challenge (bootstrap-token.ts) — so .env ends up
+ * complete without the developer console. The event Request URL is NOT left pointing at the throwaway
+ * tunnel for long: `dev --tunnel` / `deploy --run` re-register it against the live URL.
  */
 async function createLarkAppFlow(): Promise<Record<string, string>> {
   // The two platform brands have SEPARATE accounts hosts, and each confirm page accepts only its own
@@ -746,10 +755,18 @@ async function createLarkAppFlow(): Promise<Record<string, string>> {
     ...(intl ? { accountsBaseUrl: "https://accounts.larksuite.com" } : {}),
     name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
     desc: "Served by fastagent",
+    // The agent template alone is not enough to SERVE: the v7 config PATCH (webhook auto-registration
+    // in `dev --tunnel` / `deploy --run`) demands application:application:patch, and the app must
+    // subscribe the receive event. Addons merge both onto the confirm page — no console visit.
+    addons: {
+      scopes: { tenant: ["application:application:patch"] },
+      events: { items: { tenant: ["im.message.receive_v1"] } },
+    },
     onVerificationUrl: ({ url, expiresInS }) => {
       console.error(
-        `\n  Open this link in Feishu/Lark (or render it as a QR code) and confirm — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  waiting for confirmation…`,
+        `\n  Opening the confirmation link in your browser (or open it in Feishu/Lark / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  If the page says "Link expired" on first load, open the link above AGAIN (do NOT refresh:\n  the page drops the code from the URL, and a refresh creates an app the CLI can't see).\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
       );
+      openBrowser(url); // best-effort, like `login` — the URL above is the fallback
     },
   });
   console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);
@@ -757,19 +774,40 @@ async function createLarkAppFlow(): Promise<Record<string, string>> {
   // intl cloud — the channel + tools read this. Either signal suffices: the chosen start host, or the
   // brand the platform reported at confirmation.
   if (intl || app.tenantBrand === "lark") env.LARK_BASE_URL = "https://open.larksuite.com";
-  // The webhook channel authenticates plaintext events by the platform-generated Verification Token —
-  // read it back so the operator never opens the console. Failing that is a one-line manual copy, not
-  // a failed scan: the credentials above are already worth keeping.
+  // The webhook channel authenticates plaintext events by the platform-generated Verification Token.
+  // Try the cheap read first (the v6 detail MAY someday return `encryption`), then the real path: the
+  // token's only programmatic delivery is the url_verification challenge during registration — capture
+  // it over a throwaway tunnel (bootstrap-token.ts). Failing both is a one-line manual copy, not a
+  // failed scan: the credentials above are already worth keeping.
+  const api = createLarkApi({
+    baseUrl: env.LARK_BASE_URL ?? "https://open.feishu.cn",
+    appId: app.appId,
+    appSecret: app.appSecret,
+  });
   try {
-    const api = createLarkApi({
-      baseUrl: env.LARK_BASE_URL ?? "https://open.feishu.cn",
-      appId: app.appId,
-      appSecret: app.appSecret,
-    });
     const cfg = await api.getAppConfig(app.appId);
     if (cfg.verificationToken) env.LARK_VERIFICATION_TOKEN = cfg.verificationToken;
-  } catch (e) {
-    console.error(`[fastagent] warn: could not read the app's Verification Token: ${String(e)}`);
+  } catch {
+    /* the read surface is best-effort — the bootstrap below is the real path */
+  }
+  if (!env.LARK_VERIFICATION_TOKEN) {
+    console.error(
+      `[fastagent] capturing the Verification Token — a throwaway webhook registration delivers it (spinning up a temporary tunnel; can take a few minutes on a slow edge)…`,
+    );
+    try {
+      env.LARK_VERIFICATION_TOKEN = await bootstrapVerificationToken({
+        api,
+        appId: app.appId,
+        startTunnel: (port) => startCloudflareTunnel(port),
+      });
+      console.error(`[fastagent] Verification Token captured`);
+    } catch (e) {
+      // Transient tunnel weather is the usual cause. Do NOT suggest re-running --create-app here:
+      // that mints ANOTHER app — the manual copy below completes THIS one.
+      console.error(
+        `[fastagent] warn: could not capture the Verification Token: ${String(e)} — usually a transient tunnel issue; finish this app with the manual copy below`,
+      );
+    }
   }
   if (!env.LARK_VERIFICATION_TOKEN) {
     console.error(

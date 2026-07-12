@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerLarkApp } from "../src/channels/lark/register-app.ts";
 
@@ -62,6 +63,27 @@ describe("registerLarkApp (scan-to-create device flow)", () => {
     expect(shown?.expiresInS).toBe(600);
     expect(polls.length).toBe(2);
     expect(polls[0]?.params.get("device_code")).toBe("dev-1");
+  });
+
+  it("addons ride the URL gzip+base64url-encoded (extra scopes/events layered onto the template)", async () => {
+    stubAccounts([{ client_id: "cli_a", client_secret: "s" }]);
+    let shown: { url: string } | undefined;
+    await registerLarkApp({
+      accountsBaseUrl: FEISHU,
+      addons: {
+        scopes: { tenant: ["application:application:patch"] },
+        events: { items: { tenant: ["im.message.receive_v1"] } },
+      },
+      onVerificationUrl: (info) => {
+        shown = info;
+      },
+    });
+    const raw = new URL(shown?.url ?? "").searchParams.get("addons") ?? "";
+    const decoded = JSON.parse(
+      gunzipSync(Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64")).toString("utf8"),
+    ) as { scopes: { tenant: string[] }; events: { items: { tenant: string[] } } };
+    expect(decoded.scopes.tenant).toEqual(["application:application:patch"]);
+    expect(decoded.events.items.tenant).toEqual(["im.message.receive_v1"]);
   });
 
   it("a Lark-tenant confirmation switches polling to the Lark accounts domain (once) and completes there", async () => {

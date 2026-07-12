@@ -16,6 +16,8 @@
  * everything else (API origin) at the right cloud.
  */
 
+import { gzipSync } from "node:zlib";
+
 /** Feishu accounts endpoint (the flow starts here for every user; a Lark-tenant scan switches over). */
 const FEISHU_ACCOUNTS = "https://accounts.feishu.cn";
 const LARK_ACCOUNTS = "https://accounts.larksuite.com";
@@ -24,11 +26,34 @@ const ENDPOINT = "/oauth/v1/app/registration";
 /** Per-attempt timeout for one registration POST — small form/JSON round-trips. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * Additive app config carried on the confirm-page URL (`addons` query param): extra scopes/events
+ * merged ON TOP of the platform's agent template — base permissions can never be removed. Shape and
+ * encoding (JSON → gzip → base64url) follow the official SDKs (provenance: node-sdk
+ * scene/registration); item names unknown to the platform catalog are silently dropped by the page.
+ */
+export interface LarkAppAddons {
+  scopes?: { tenant?: string[]; user?: string[] };
+  events?: { items?: { tenant?: string[]; user?: string[] } };
+  callbacks?: { items?: string[] };
+}
+
+/** JSON → gzip → base64url — the platform's fixed addons encoding. */
+function encodeAddons(addons: LarkAppAddons): string {
+  return gzipSync(Buffer.from(JSON.stringify(addons), "utf8"))
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
 export interface RegisterLarkAppOptions {
   /** Pre-filled app name shown on the confirm page (`{user}` expands to the scanning user's name). */
   name?: string;
   /** Pre-filled app description. */
   desc?: string;
+  /** Extra scopes/events merged onto the agent template at creation (see {@link LarkAppAddons}). */
+  addons?: LarkAppAddons;
   /** Called once the one-time verification URL is ready — print it / render it as a QR code. */
   onVerificationUrl: (info: { url: string; expiresInS: number }) => void;
   /** Cancel the polling. */
@@ -112,6 +137,7 @@ export async function registerLarkApp(options: RegisterLarkAppOptions): Promise<
   url.searchParams.set("source", "fastagent");
   if (options.name !== undefined) url.searchParams.set("name", options.name);
   if (options.desc !== undefined) url.searchParams.set("desc", options.desc);
+  if (options.addons !== undefined) url.searchParams.set("addons", encodeAddons(options.addons));
   const expiresInS = begin.expires_in ?? 600;
   options.onVerificationUrl({ url: url.toString(), expiresInS });
 
