@@ -1,5 +1,6 @@
 ---
 title: Overview
+description: "What FastAgent is: the serving layer that takes a local agent directory out of the terminal and serves it as a live service — in your app, on GitHub, on Telegram, or behind any channel."
 status: current
 ---
 

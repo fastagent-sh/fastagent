@@ -1,5 +1,6 @@
 ---
 title: Quickstart
+description: "From an installed CLI to a live local agent service: scaffold a workspace, run it, add a typed tool, connect channels, and put the agent on a clock."
 status: current
 ---
 

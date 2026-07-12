@@ -1,5 +1,6 @@
 ---
 title: Configuration
+description: "Configure a FastAgent workspace: model selection, auth, ports, sessions, tools, channels, state paths, and deploy options in fastagent.config.*."
 status: current
 ---
 

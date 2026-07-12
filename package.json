@@ -9,6 +9,9 @@
     "agents.md",
     "agent-skills",
     "agent-serving",
+    "telegram",
+    "github",
+    "webhook",
     "sse",
     "pi",
     "fastagent"

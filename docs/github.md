@@ -1,5 +1,6 @@
 ---
 title: GitHub channel
+description: "Connect GitHub webhooks to your agent: setup, signature verification, mapping events to agent turns, and operational notes for PR review bots."
 status: current
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: Agent Handler — Protocol Specification
+description: "Agent Handler protocol v0.1: one invoke function and a small set of MUSTs so any caller can drive any agent without knowing its engine, model, or deployment shape."
 type: spec
 status: locked
 version: 0.1
