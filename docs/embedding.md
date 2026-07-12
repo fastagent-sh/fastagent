@@ -86,7 +86,7 @@ import { createInvokeHandler } from "@fastagent-sh/fastagent";
 const handler = createInvokeHandler(agent);   // (Request) => Promise<Response>; POST {session,text} → SSE
 ```
 
-The Fetch handler mounts wherever your host speaks `(Request) => Response`:
+The Fetch handler mounts wherever your host speaks `(Request) => Response` — and `nodeListener` bridges hosts that speak Node's `(req, res)`:
 
 ```ts
 // Next.js App Router — app/api/chat/route.ts
@@ -94,6 +94,21 @@ export const POST = handler;
 
 // Hono — c.req.raw is a Web Request
 app.post("/chat", (c) => handler(c.req.raw));
+
+// Express — nodeListener bridges (req, res) to the Fetch handler; it reads the raw
+// body stream, so don't put a body parser on this route
+import { nodeListener } from "@fastagent-sh/fastagent";
+app.post("/chat", nodeListener(handler));
+
+// Fastify — same bridge on the raw req/res: keep the body stream unread, hijack the reply
+app.register(async (scope) => {
+  scope.removeAllContentTypeParsers();
+  scope.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
+  scope.post("/chat", (req, reply) => {
+    reply.hijack();
+    nodeListener(handler)(req.raw, reply.raw);
+  });
+});
 
 // Bun
 Bun.serve({ port: 8787, fetch: (req) =>
