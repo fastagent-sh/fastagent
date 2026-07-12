@@ -1,7 +1,14 @@
 /**
- * Lark/Feishu bot channel: verify the webhook (signature/decrypt or token) → answer url_verification →
- * dedup on message_id → decide via `route(event)` → run the turn → stream the agent's reply back as a
- * live card, ACK 200. Reply model A: the channel holds the app credentials and posts the reply itself
+ * Lark/Feishu bot channel ENGINE: verify the webhook (signature/decrypt or token) → answer
+ * url_verification → dedup on message_id → decide via `route(event)` → run the turn → stream the
+ * agent's reply back as a live card, ACK 200.
+ *
+ * ONE engine, TWO channel kinds: Feishu (open.feishu.cn) and Lark international (open.larksuite.com)
+ * are the same protocol on two clouds, but in fastagent's abstraction a channel kind IS the unit of
+ * route path, state home, env namespace, and onboarding — so `feishuChannel` and `larkChannel` are two
+ * kinds bound over this shared engine (mount `POST /feishu` vs `POST /lark`, state under
+ * `channels/feishu/` vs `channels/lark/`, `FEISHU_*` vs `LARK_*`), and one workspace can serve both.
+ * Engine log lines keep the `[lark]` label for both kinds. Reply model A: the channel holds the app credentials and posts the reply itself
  * (chat UX), like the telegram channel. No SDK — inbound is a JSON POST, outbound is a `fetch` pipeline
  * (lark-api.ts; the tripwire for adopting the official SDK is documented there). The developer writes
  * only `route` (policy); the channel owns transport + format (markdown card) + attachments.
@@ -137,41 +144,65 @@ export interface LarkChannelOptions {
    *  log). Return a string to send it, or undefined/"" to stay silent. Default: a neutral message keyed
    *  on `retryable`. A developer's own bot can surface the raw details, e.g. `(f) => `⚠️ ${f.details}``. */
   onError?: (failed: LarkFailure) => string | undefined;
-  /** API origin. Default `https://open.feishu.cn` (Feishu); Lark international uses
-   *  `https://open.larksuite.com`. */
+  /** API origin override (tests / self-hosted gateways). The kind fixes the default —
+   *  `feishuChannel` → `https://open.feishu.cn`, `larkChannel` → `https://open.larksuite.com`. */
   baseUrl?: string;
   /** How long (ms) a turn waits in the queue before the "⏳ Queued" notice is sent (see
    *  {@link QUEUE_NOTICE_DELAY_MS} for why it is delayed on this platform). 0 = immediately. */
   queueNoticeDelayMs?: number;
 }
 
+/** The two clouds this engine serves — each is its own channel kind. */
+export type LarkKind = "feishu" | "lark";
+
+const KIND_DEFAULTS: Record<LarkKind, { factory: string; envPrefix: string; baseUrl: string }> = {
+  feishu: { factory: "feishuChannel", envPrefix: "FEISHU", baseUrl: "https://open.feishu.cn" },
+  lark: { factory: "larkChannel", envPrefix: "LARK", baseUrl: "https://open.larksuite.com" },
+};
+
 /**
- * Build a Lark/Feishu bot channel: policy options in, a {@link ChannelModule} out. The framework (or an
- * embedder) mounts it with the context — `larkChannel(opts)` in `channels/lark.ts` is the whole glue;
- * `agent` and the state root arrive via ctx, never through user code. Mounts `POST /lark` (the path to
- * configure as the console's event Request URL). One lark instance per workspace (single-process): the
- * state home is derived from the channel kind (`<stateRoot>/channels/lark`), so a second instance would
- * share the first's turn store/dedup ring.
+ * Build a Feishu bot channel (open.feishu.cn): policy options in, a {@link ChannelModule} out. Mounts
+ * `POST /feishu` (the path to configure as the console's event Request URL); state lives under
+ * `<stateRoot>/channels/feishu`. Same engine as {@link larkChannel} — the kind picks the cloud.
  */
-export function larkChannel({
-  appId,
-  appSecret,
-  verificationToken,
-  encryptKey,
-  route,
-  onError,
-  baseUrl = "https://open.feishu.cn",
-  queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS,
-}: LarkChannelOptions): ChannelModule {
+export function feishuChannel(opts: LarkChannelOptions): ChannelModule {
+  return buildChannel("feishu", opts);
+}
+
+/**
+ * Build a Lark-international bot channel (open.larksuite.com): policy options in, a
+ * {@link ChannelModule} out. Mounts `POST /lark`; state lives under `<stateRoot>/channels/lark`.
+ * Feishu tenants use {@link feishuChannel}. One instance per KIND per workspace (single-process): the
+ * state home is derived from the kind, so a second instance of the SAME kind would share the first's
+ * turn store/dedup ring — one feishu + one lark instance coexist fine.
+ */
+export function larkChannel(opts: LarkChannelOptions): ChannelModule {
+  return buildChannel("lark", opts);
+}
+
+function buildChannel(
+  kind: LarkKind,
+  {
+    appId,
+    appSecret,
+    verificationToken,
+    encryptKey,
+    route,
+    onError,
+    baseUrl = KIND_DEFAULTS[kind].baseUrl,
+    queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS,
+  }: LarkChannelOptions,
+): ChannelModule {
+  const { factory, envPrefix } = KIND_DEFAULTS[kind];
   // All three are mandatory: without the app credentials no reply can be sent; without the verification
   // token a plaintext-mode endpoint would accept forged events. Fail at construction (startup), not
   // silently at the first event.
   if (!appId || !appSecret) {
-    throw new Error("larkChannel requires appId + appSecret (developer console → Credentials & Basic Info)");
+    throw new Error(`${factory} requires appId + appSecret (developer console → Credentials & Basic Info)`);
   }
   if (!verificationToken) {
     throw new Error(
-      "larkChannel requires a non-empty verificationToken (console → Events & Callbacks; an unset one accepts forged events)",
+      `${factory} requires a non-empty verificationToken (console → Events & Callbacks; an unset one accepts forged events)`,
     );
   }
   return ({ agent, stateRoot }) => {
@@ -190,13 +221,13 @@ export function larkChannel({
     );
     const decide = route ?? ((event: LarkMessageEvent) => defaultLarkRoute(event, { botOpenId }));
 
-    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/lark`
+    // The channel-state convention: this channel's durable home is `<stateRoot>/channels/<kind>`
     // (engine state at the root, channel state under `channels/<kind>/`) — derived, not an option, so
     // the operator's ONE state knob (FASTAGENT_STATE_DIR) can never be silently bypassed by glue.
     if (!isAbsolute(stateRoot)) {
-      throw new Error(`larkChannel requires an absolute ctx.stateRoot, got "${stateRoot}"`);
+      throw new Error(`${factory} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
-    const stateHome = join(stateRoot, "channels", "lark");
+    const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // create + self-ignore — downloaded files may carry chat content
     const store = createTurnStore<StoredLarkTurn>(join(stateHome, "turns.json"), {
       label: "[lark]",
@@ -356,7 +387,9 @@ export function larkChannel({
       let envelope: Record<string, unknown>;
       if (typeof outer.encrypt === "string") {
         if (!encryptKey) {
-          log.error("[lark] received an ENCRYPTED event but no encryptKey is configured — set LARK_ENCRYPT_KEY");
+          log.error(
+            `[lark] received an ENCRYPTED event but no encryptKey is configured — set ${envPrefix}_ENCRYPT_KEY`,
+          );
           return text("encrypt key not configured\n", 400);
         }
         // Signature first (over the RAW body), then decrypt. Both fail closed.
@@ -394,7 +427,7 @@ export function larkChannel({
         // Loud on purpose: the send side gets an opaque 401 and the platform just retries — this line is
         // the operator's ONLY signal that LARK_VERIFICATION_TOKEN does not match the console.
         log.warn(
-          "[lark] rejected an event: verification token mismatch (check LARK_VERIFICATION_TOKEN against the console)",
+          `[lark] rejected an event: verification token mismatch (check ${envPrefix}_VERIFICATION_TOKEN against the console)`,
         );
         return text("invalid token\n", 401);
       }
@@ -436,7 +469,7 @@ export function larkChannel({
         const sameTarget = chatId === m.chat_id;
         const replyTo = m.chat_type !== "p2p" && sameTarget ? m.message_id : undefined;
         const content = parseContent(m);
-        const baseText = r.text ?? larkEnvelope(event);
+        const baseText = r.text ?? larkEnvelope(event, kind);
         if (baseText.trim() !== "" || content.imageKeys.length > 0 || content.fileRefs.length > 0) {
           submit(
             {
@@ -461,6 +494,6 @@ export function larkChannel({
     };
     // Test/observability seam: await the fire-and-forget turns this handler enqueues (see turn-queue).
     (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () => queue.idle();
-    return { "POST /lark": handler };
+    return { [`POST /${kind}`]: handler };
   };
 }

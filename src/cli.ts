@@ -98,7 +98,7 @@ function usage(code: number): never {
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
-  fastagent add   github | telegram | lark [--create-app] | skill <source> [dir]
+  fastagent add   github | telegram | feishu | lark [--create-app] | skill <source> [dir]
   fastagent deploy fly|railway [dir] [--run] [--force] [--stop] [--no-scale-to-zero] [--into-linked]
   fastagent login [provider] [--auth-path file]
   fastagent --version
@@ -109,7 +109,7 @@ function usage(code: number): never {
          disable). Files the agent writes as work product never trigger a restart.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --tunnel  expose it on a public HTTPS URL via a Cloudflare quick tunnel (needs cloudflared)
-                   and auto-register the webhook channels (telegram, lark; github prints the URL)
+                   and auto-register the webhook channels (telegram, feishu, lark; github prints the URL)
   chat   open the SAME assembled agent in pi's interactive TUI (the real harness, not a
          crude REPL) — to try it locally before serving. Same model/tool/skill resolution
          as dev; pi handles login, sessions, and /resume natively.
@@ -157,10 +157,12 @@ function usage(code: number): never {
                    point it at ~/.fastagent/auth.json to share one credential across projects)
          --tunnel  same as dev: a public HTTPS URL + auto-registered webhooks, for hosting a bot from
                    your own box without deploying (the quick-tunnel URL is ephemeral, not for production)
-  add    github | telegram | lark: scaffold channels/<kind>.ts — third-party adapter glue with the
-         policy to edit (github maps events in on(); telegram/lark route in the optional route()).
-         lark --create-app: create + configure the Feishu/Lark app itself (confirm a link in
-         Feishu/Lark — the platform's "scan to create" flow; no developer console) and write the
+  add    github | telegram | feishu | lark: scaffold channels/<kind>.ts — third-party adapter glue
+         with the policy to edit (github maps events in on(); telegram/feishu/lark route in the
+         optional route()). feishu = 飞书 (open.feishu.cn), lark = Lark international
+         (open.larksuite.com) — one engine, two clouds, each its own channel.
+         feishu|lark --create-app: create + configure the platform app itself (confirm a link in
+         the app — the platform's "scan to create" flow; no developer console) and write the
          credentials to .env.
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
@@ -637,8 +639,10 @@ async function runAdd(): Promise<void> {
   }
   const channelKind = kind as ChannelKind;
   // --create-app preconditions fail BEFORE any write or the (minutes-long) confirmation dance itself.
-  if (values["create-app"] && channelKind !== "lark") {
-    failStartup(new Error("--create-app is lark-only — app creation from the CLI is a Feishu/Lark platform flow"));
+  if (values["create-app"] && channelKind !== "feishu" && channelKind !== "lark") {
+    failStartup(
+      new Error("--create-app is feishu/lark-only — app creation from the CLI is a Feishu/Lark platform flow"),
+    );
   }
   // The channel (glue + companion tool) is agent surface — it lands in agentDir (config.agentDir, or
   // target when flat), the same place dev/start discover channels/. .env(.example) and the secret
@@ -679,7 +683,7 @@ async function runAdd(): Promise<void> {
         new Error("--create-app writes real app credentials to .env — add .env to .gitignore/.fastagentignore first"),
       );
     }
-    created = await createLarkAppFlow().catch(failStartup);
+    created = await createLarkAppFlow(channelKind as "feishu" | "lark").catch(failStartup);
   }
   const { env, steps } = channelSetup(channelKind);
   const generated = Object.fromEntries(
@@ -727,29 +731,20 @@ async function runAdd(): Promise<void> {
 }
 
 /**
- * `add lark --create-app`: the platform's scan-to-create flow. The device-authorization grant creates
- * a pre-configured agent app (bot capability, messaging scopes, event subscriptions) when the user
- * confirms a link in Feishu/Lark, and hands back the credentials; the platform-generated Verification
+ * `add feishu|lark --create-app`: the platform's scan-to-create flow. The device-authorization grant
+ * creates a pre-configured agent app (bot capability, messaging scopes, event subscriptions) when the
+ * user confirms a link in the app, and hands back the credentials; the platform-generated Verification
  * Token is then captured from the registration challenge (bootstrap-token.ts) — so .env ends up
  * complete without the developer console. The event Request URL is NOT left pointing at the throwaway
  * tunnel for long: `dev --tunnel` / `deploy --run` re-register it against the live URL.
+ *
+ * The kind IS the cloud: the two platform brands have SEPARATE accounts hosts, and each confirm page
+ * accepts only its own app (the Feishu launcher refuses a Lark scan and vice versa) — `add feishu`
+ * starts on accounts.feishu.cn, `add lark` on accounts.larksuite.com; no interactive question.
  */
-async function createLarkAppFlow(): Promise<Record<string, string>> {
-  // The two platform brands have SEPARATE accounts hosts, and each confirm page accepts only its own
-  // app (the Feishu launcher refuses a Lark scan and vice versa) — so the START host must match the
-  // user's account. Honor an existing LARK_BASE_URL, else ask.
-  let intl = (process.env.LARK_BASE_URL ?? "").includes("larksuite");
-  if (!process.env.LARK_BASE_URL) {
-    const r = await select({
-      message: "Which platform is your account on?",
-      options: [
-        { value: "feishu", label: "飞书 (feishu.cn)" },
-        { value: "lark", label: "Lark international (larksuite.com)" },
-      ],
-    });
-    if (isCancel(r)) failStartup(new Error("cancelled"));
-    intl = r === "lark";
-  }
+async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string, string>> {
+  const intl = kind === "lark";
+  const envPrefix = intl ? "LARK" : "FEISHU";
   console.error(`[fastagent] creating the ${intl ? "Lark" : "Feishu"} app (confirm in the app)…`);
   const app = await registerLarkApp({
     ...(intl ? { accountsBaseUrl: "https://accounts.larksuite.com" } : {}),
@@ -770,32 +765,41 @@ async function createLarkAppFlow(): Promise<Record<string, string>> {
     },
   });
   console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);
-  const env: Record<string, string> = { LARK_APP_ID: app.appId, LARK_APP_SECRET: app.appSecret };
-  // intl cloud — the channel + tools read this. Either signal suffices: the chosen start host, or the
-  // brand the platform reported at confirmation.
-  if (intl || app.tenantBrand === "lark") env.LARK_BASE_URL = "https://open.larksuite.com";
+  // A cross-brand confirmation should be impossible (each confirm page refuses the other brand's
+  // code) — but if the platform ever reports one, the credentials would land in the WRONG kind's env
+  // namespace and serve the wrong cloud. Fail visibly instead of writing them.
+  if (app.tenantBrand && app.tenantBrand !== kind) {
+    throw new Error(
+      `the confirming account is a ${app.tenantBrand} tenant, but this is \`add ${kind}\` — re-run \`fastagent add ${app.tenantBrand} --create-app\``,
+    );
+  }
+  const env: Record<string, string> = {
+    [`${envPrefix}_APP_ID`]: app.appId,
+    [`${envPrefix}_APP_SECRET`]: app.appSecret,
+  };
   // The webhook channel authenticates plaintext events by the platform-generated Verification Token.
   // Try the cheap read first (the v6 detail MAY someday return `encryption`), then the real path: the
   // token's only programmatic delivery is the url_verification challenge during registration — capture
   // it over a throwaway tunnel (bootstrap-token.ts). Failing both is a one-line manual copy, not a
   // failed scan: the credentials above are already worth keeping.
+  const tokenVar = `${envPrefix}_VERIFICATION_TOKEN`;
   const api = createLarkApi({
-    baseUrl: env.LARK_BASE_URL ?? "https://open.feishu.cn",
+    baseUrl: intl ? "https://open.larksuite.com" : "https://open.feishu.cn",
     appId: app.appId,
     appSecret: app.appSecret,
   });
   try {
     const cfg = await api.getAppConfig(app.appId);
-    if (cfg.verificationToken) env.LARK_VERIFICATION_TOKEN = cfg.verificationToken;
+    if (cfg.verificationToken) env[tokenVar] = cfg.verificationToken;
   } catch {
     /* the read surface is best-effort — the bootstrap below is the real path */
   }
-  if (!env.LARK_VERIFICATION_TOKEN) {
+  if (!env[tokenVar]) {
     console.error(
       `[fastagent] capturing the Verification Token — a throwaway webhook registration delivers it (spinning up a temporary tunnel; can take a few minutes on a slow edge)…`,
     );
     try {
-      env.LARK_VERIFICATION_TOKEN = await bootstrapVerificationToken({
+      env[tokenVar] = await bootstrapVerificationToken({
         api,
         appId: app.appId,
         startTunnel: (port) => startCloudflareTunnel(port),
@@ -809,9 +813,9 @@ async function createLarkAppFlow(): Promise<Record<string, string>> {
       );
     }
   }
-  if (!env.LARK_VERIFICATION_TOKEN) {
+  if (!env[tokenVar]) {
     console.error(
-      `[fastagent] copy it manually: developer console → Events & Callbacks → Encryption Strategy → Verification Token → LARK_VERIFICATION_TOKEN in .env`,
+      `[fastagent] copy it manually: developer console → Events & Callbacks → Encryption Strategy → Verification Token → ${tokenVar} in .env`,
     );
   }
   return env;
@@ -1075,7 +1079,7 @@ async function runDeployFly(params: {
     fly,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
-    (baseUrl) => registerLarkWebhook(baseUrl),
+    (baseUrl, kind) => registerLarkWebhook(baseUrl, kind),
   );
   if (!outcome.ok) {
     console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
@@ -1127,7 +1131,7 @@ async function runDeployRailway(params: {
     railway,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
-    (baseUrl) => registerLarkWebhook(baseUrl),
+    (baseUrl, kind) => registerLarkWebhook(baseUrl, kind),
   );
   if (!outcome.ok) {
     console.error(`[fastagent] deploy stopped: ${outcome.gate}`);

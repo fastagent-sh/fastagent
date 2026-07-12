@@ -1,4 +1,5 @@
-/** `@fastagent-sh/fastagent/lark` — the Lark/Feishu bot channel subpath export, kept off the root surface. */
+/** `@fastagent-sh/fastagent/lark` — the Lark-international (open.larksuite.com) bot channel subpath
+ *  export, kept off the root surface. Feishu tenants: `@fastagent-sh/fastagent/feishu`. */
 export {
   larkChannel,
   defaultLarkRoute,

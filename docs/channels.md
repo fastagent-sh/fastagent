@@ -92,7 +92,8 @@ FastAgent ships lightweight first-party adapters as subpath exports.
 |---|---|---|---|
 | GitHub webhook | `@fastagent-sh/fastagent/github` | [GitHub channel](github.md) | `fastagent add github` |
 | Telegram bot | `@fastagent-sh/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram` |
-| Lark / Feishu bot | `@fastagent-sh/fastagent/lark` | [Lark channel](lark.md) | `fastagent add lark` |
+| Feishu bot (飞书) | `@fastagent-sh/fastagent/feishu` | [Feishu / Lark channels](lark.md) | `fastagent add feishu` |
+| Lark bot (international) | `@fastagent-sh/fastagent/lark` | [Feishu / Lark channels](lark.md) | `fastagent add lark` |
 
 Example GitHub glue:
 
@@ -119,23 +120,24 @@ export default telegramChannel({
 });
 ```
 
-Example Lark/Feishu glue:
+Example Feishu glue (Lark international mirrors it: `larkChannel` from `@fastagent-sh/fastagent/lark`,
+`LARK_*` vars — one engine, two clouds, each its own channel kind):
 
 ```ts
-import { larkChannel } from "@fastagent-sh/fastagent/lark";
+import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
 
-export default larkChannel({
-  appId: process.env.LARK_APP_ID ?? "",
-  appSecret: process.env.LARK_APP_SECRET ?? "",
-  verificationToken: process.env.LARK_VERIFICATION_TOKEN ?? "",
-  encryptKey: process.env.LARK_ENCRYPT_KEY || undefined,
+export default feishuChannel({
+  appId: process.env.FEISHU_APP_ID ?? "",
+  appSecret: process.env.FEISHU_APP_SECRET ?? "",
+  verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",
+  encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
 });
 ```
 
 An adapter call returns a `ChannelModule`: the glue holds only policy (secrets from env, `on`/`route`),
 while `agent` and the state root flow from the framework to the adapter without transiting your code.
-The adapter owns its default route (`POST /webhook`, `POST /telegram`, `POST /lark`); wrap it in your
-own `ChannelModule` to remap.
+The adapter owns its default route (`POST /webhook`, `POST /telegram`, `POST /feishu`, `POST /lark`);
+wrap it in your own `ChannelModule` to remap.
 
 ## Adapter + glue
 
@@ -160,8 +162,9 @@ When `cloudflared` is installed, FastAgent opens a Cloudflare quick tunnel, prin
 
 - Telegram: calls `setWebhook` using `.env` values.
 - GitHub: prints the Payload URL to paste into repo settings.
-- Lark/Feishu: PATCHes the app's event subscription to the tunnel URL via the application-config API
-  (using `.env` credentials; falls back to printing the manual console instruction).
+- Feishu / Lark: PATCHes the app's event subscription to the tunnel URL via the application-config API,
+  once per mounted kind (using the kind's `.env` credentials; falls back to printing the manual console
+  instruction).
 
 The tunnel is owned by the dev watch supervisor, so the URL survives worker reloads.
 

@@ -42,7 +42,7 @@ Generates `fly.toml`, `Dockerfile`, `.dockerignore`, then prints a first-deploy 
 2. `fly volumes create data --region <region> --size 1` — one-time; the region **must** match `primary_region` in `fly.toml`.
 3. `fly secrets set …` — the model key + each channel's secrets, with `<value>` placeholders to fill.
 4. `fly deploy` — build and ship. **A redeploy is this step alone.**
-5. Register each channel's webhook at the live URL (`https://<name>.fly.dev/telegram`, `/webhook`, `/lark`).
+5. Register each channel's webhook at the live URL (`https://<name>.fly.dev/telegram`, `/webhook`, `/feishu`, `/lark`).
 
 Or let the CLI do all of it:
 

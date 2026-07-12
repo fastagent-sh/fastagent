@@ -167,7 +167,8 @@ Subpath exports:
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/github` — GitHub webhook channel;
 - `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
-- `@fastagent-sh/fastagent/lark` — Lark/Feishu bot channel.
+- `@fastagent-sh/fastagent/feishu` — Feishu bot channel (飞书, open.feishu.cn);
+- `@fastagent-sh/fastagent/lark` — Lark bot channel (international, open.larksuite.com).
 
 ## Repository layout
 

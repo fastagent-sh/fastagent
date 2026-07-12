@@ -1,53 +1,67 @@
 ---
-title: Lark / Feishu channel
+title: Feishu / Lark channels
 status: current
 ---
 
-# Lark / Feishu channel
+# Feishu / Lark channels
 
-The Lark channel turns a Feishu/Lark event-subscription webhook (`im.message.receive_v1`) into an agent turn and sends the agent's reply back to the chat.
+These channels turn a Feishu/Lark event-subscription webhook (`im.message.receive_v1`) into an agent turn and send the agent's reply back to the chat.
 
-Like the Telegram channel, it is request/reply: the channel holds the app credentials, streams a **live card** while the turn runs, and settles the same card into the final answer. Replies render as **Markdown** (a Feishu interactive card), which is the natural output format for an LLM — code blocks, tables, and links render properly.
+Feishu and Lark international are **one protocol on two clouds** — and in fastagent each cloud is its **own channel kind**, because a kind is the unit of route path, env namespace, state home, and onboarding:
 
-It works with both brands of the platform: Feishu (`open.feishu.cn`, the default) and Lark international (`open.larksuite.com`, via the `baseUrl` option).
+| | `feishu` | `lark` |
+|---|---|---|
+| Cloud / console | `open.feishu.cn` (飞书) | `open.larksuite.com` (Lark international) |
+| Factory / import | `feishuChannel` from `@fastagent-sh/fastagent/feishu` | `larkChannel` from `@fastagent-sh/fastagent/lark` |
+| Webhook route | `POST /feishu` | `POST /lark` |
+| Env vars | `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, `FEISHU_ENCRYPT_KEY` | `LARK_APP_ID`, `LARK_APP_SECRET`, `LARK_VERIFICATION_TOKEN`, `LARK_ENCRYPT_KEY` |
+| State home | `<state root>/channels/feishu/` | `<state root>/channels/lark/` |
+| Prompt envelope tag | `[feishu: chat …]` | `[lark: chat …]` |
+| Send tool | `tools/feishu-send.ts` | `tools/lark-send.ts` |
+
+They share one engine (identical event format, crypto, cards, behavior), so everything below applies to both; examples use one kind and name the difference where it matters. A tenant lives on exactly one cloud — pick the kind that matches your account. One workspace can mount **both** (two apps, two credential sets); they never share state.
+
+Like the Telegram channel, the engine is request/reply: the channel holds the app credentials, streams a **live card** while the turn runs, and settles the same card into the final answer. Replies render as **Markdown** (an interactive card), which is the natural output format for an LLM — code blocks, tables, and links render properly.
 
 ## Add the channel
 
 From an agent workspace:
 
 ```bash
-fastagent add lark --create-app   # recommended: creates + configures the app itself, no developer console
-fastagent add lark          # scaffold only; configure the app by hand (next section)
+fastagent add feishu --create-app   # 飞书: creates + configures the app itself, no developer console
+fastagent add feishu                # scaffold only; configure the app by hand (next section)
+
+fastagent add lark --create-app     # Lark international: same flow on the intl cloud
+fastagent add lark                  # scaffold only
 ```
 
-This creates:
+This creates (for the feishu kind; lark mirrors it):
 
 ```txt
-channels/lark.ts      # inbound event adapter + routing policy
-tools/lark-send.ts    # optional outbound send tool for the agent (text or markdown card)
+channels/feishu.ts      # inbound event adapter + routing policy
+tools/feishu-send.ts    # optional outbound send tool for the agent (text or markdown card)
 ```
 
 It also appends the required env vars to `.env.example` when possible.
 
 ## Create the app from the CLI (`--create-app`)
 
-`fastagent add lark --create-app` runs the platform's **scan-to-create** flow (its official name; an
-OAuth 2.0 device-authorization grant). The CLI first asks which platform your account is on — the two
-brands have separate accounts hosts, and each confirm page accepts only its own app (the Feishu page
-refuses a Lark scan and vice versa); an existing `LARK_BASE_URL` skips the question. It then opens a
-one-time confirmation link in your browser (valid ~10 minutes) — also printed, so you can open it in
-Feishu or Lark or scan it as a QR code instead — and you confirm; the platform creates an app from its agent template — bot capability, messaging scopes,
-and event subscriptions pre-configured, plus the `application:application:patch` scope and the
-`im.message.receive_v1` event fastagent piggybacks onto the creation link — and hands the credentials
-back. The platform-generated Verification Token has no read API; its only programmatic delivery is
-the `url_verification` challenge sent during webhook registration, so the CLI captures it by running
-a throwaway registration against an ephemeral tunnel (needs `cloudflared`, same as `dev --tunnel`).
-Everything lands in `.env`:
+`fastagent add feishu --create-app` (or `add lark --create-app`) runs the platform's **scan-to-create**
+flow (its official name; an OAuth 2.0 device-authorization grant). The kind IS the cloud: `add feishu`
+starts on `accounts.feishu.cn`, `add lark` on `accounts.larksuite.com` — the two brands have separate
+accounts hosts, and each confirm page accepts only its own app (the Feishu page refuses a Lark scan
+and vice versa). The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
+printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
+creates an app from its agent template — bot capability, messaging scopes, and event subscriptions
+pre-configured, plus the `application:application:patch` scope and the `im.message.receive_v1` event
+fastagent piggybacks onto the creation link — and hands the credentials back. The platform-generated
+Verification Token has no read API; its only programmatic delivery is the `url_verification` challenge
+sent during webhook registration, so the CLI captures it by running a throwaway registration against
+an ephemeral tunnel (needs `cloudflared`, same as `dev --tunnel`). Everything lands in `.env`
+(`FEISHU_*` for the feishu kind, `LARK_*` for lark):
 
-- `LARK_APP_ID` / `LARK_APP_SECRET` — from the created app,
-- `LARK_VERIFICATION_TOKEN` — captured from the registration challenge,
-- `LARK_BASE_URL` — set to `https://open.larksuite.com` automatically when the confirming user is on
-  a Lark (international) tenant.
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` — from the created app,
+- `FEISHU_VERIFICATION_TOKEN` — captured from the registration challenge.
 
 Browser quirk: the confirm page may show **"Link expired" on first load** — the page acks the
 code before its session bootstrap finishes, and it renders every ack failure as an expiry. Recover
@@ -65,7 +79,7 @@ version publishing has no open API (see Limits).
 
 ## Configure the app by hand (developer console)
 
-Create a **custom app** in the [Feishu developer console](https://open.feishu.cn/app) (or the Lark equivalent), then:
+Create a **custom app** in the developer console ([open.feishu.cn/app](https://open.feishu.cn/app) or [open.larksuite.com/app](https://open.larksuite.com/app)), then:
 
 1. **Enable the bot capability** (App Features → Bot).
 2. **Permissions** — add:
@@ -75,18 +89,18 @@ Create a **custom app** in the [Feishu developer console](https://open.feishu.cn
    - `im:resource` — download message images/files,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
 3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, copy the **Verification Token**, and (recommended) set an **Encrypt Key**.
-4. Put the credentials in the run-root `.env`:
+4. Put the credentials in the run-root `.env` (the kind's namespace):
 
 ```bash
-LARK_APP_ID=cli_...
-LARK_APP_SECRET=...
-LARK_VERIFICATION_TOKEN=...
-LARK_ENCRYPT_KEY=...   # optional but recommended; must match the console exactly
+FEISHU_APP_ID=cli_...
+FEISHU_APP_SECRET=...
+FEISHU_VERIFICATION_TOKEN=...
+FEISHU_ENCRYPT_KEY=...   # optional but recommended; must match the console exactly
 ```
 
 5. **The event Request URL registers itself** (Feishu tenants): `fastagent dev --tunnel` (and
    `fastagent deploy … --run`) call the application-config API to point the app's event subscription at
-   `https://<host>/lark` — webhook mode, applied immediately, no version publish. This needs the
+   `https://<host>/feishu` (or `/lark`) — webhook mode. This needs the
    `application:application:patch` scope — `--create-app` requests it at creation; for a hand-made app
    add it under Permissions in the console. **Lark international
    lags here**: `open.larksuite.com` does not expose the config API yet, so intl tenants set the URL in
@@ -98,18 +112,16 @@ LARK_ENCRYPT_KEY=...   # optional but recommended; must match the console exactl
 
 ## Scaffolded channel
 
-A minimal channel module looks like this:
+A minimal channel module looks like this (`channels/feishu.ts`; the lark kind mirrors it with `larkChannel` from `@fastagent-sh/fastagent/lark` and `LARK_*` vars):
 
 ```ts
-import { larkChannel } from "@fastagent-sh/fastagent/lark";
+import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
 
-export default larkChannel({
-  appId: process.env.LARK_APP_ID ?? "",
-  appSecret: process.env.LARK_APP_SECRET ?? "",
-  verificationToken: process.env.LARK_VERIFICATION_TOKEN ?? "",
-  encryptKey: process.env.LARK_ENCRYPT_KEY || undefined,
-  // Lark international tenants:
-  // baseUrl: "https://open.larksuite.com",
+export default feishuChannel({
+  appId: process.env.FEISHU_APP_ID ?? "",
+  appSecret: process.env.FEISHU_APP_SECRET ?? "",
+  verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",
+  encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
   onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
 });
 ```
@@ -129,7 +141,7 @@ The `url_verification` challenge is answered in both modes (it arrives encrypted
 
 The channel consumes only `im.message.receive_v1`; every other event type is ACKed and dropped before `route` runs.
 
-By default, `larkChannel` uses `defaultLarkRoute`:
+By default, the channel uses `defaultLarkRoute` (exported by both subpaths):
 
 - **p2p chats always answer**,
 - **groups answer only on an @mention of THIS bot** — matched from the platform's `mentions` array by the bot's `open_id` (resolved once at startup via `bot/v3/info`), never a text scan, so a pasted `@bot` in a code block does not summon,
@@ -145,7 +157,7 @@ type LarkRoute = {
 } | null;
 ```
 
-Return `null` to ignore the event. Omitted fields default from the message. The exported `larkEnvelope(event)` builds the default prompt envelope (chat/sender metadata, group note, reply marker, decoded body) for reuse in a custom route.
+Return `null` to ignore the event. Omitted fields default from the message. The exported `larkEnvelope(event, tag?)` builds the default prompt envelope (chat/sender metadata, group note, reply marker, decoded body) for reuse in a custom route — `tag` labels it `[feishu: …]` or `[lark: …]` (default `lark`; each kind's channel passes its own).
 
 ### Group visibility is scope-gated
 
@@ -163,11 +175,11 @@ Topic groups are handled automatically:
 - if the message carries a `thread_id` (a topic group), the default session is `chat:thread` and the reply stays inside the topic (`reply_in_thread`),
 - otherwise the default session is `chat`, and group replies quote the summoning message.
 
-A group answers one shared session: turns are serialized per session (FIFO) instead of failing fast as `session busy`. A summon that keeps waiting gets a "⏳ Queued" notice — **delayed** (default 5s, `queueNoticeDelayMs`): the notice cannot morph into the answer (text vs card), so its cleanup is a recall, which Lark renders as a visible "recalled a message" line — a fast turnover therefore sends no notice at all, and only a genuinely long wait pays that tombstone. Different sessions run in parallel.
+A group answers one shared session: turns are serialized per session (FIFO) instead of failing fast as `session busy`. A summon that keeps waiting gets a "⏳ Queued" notice — **delayed** (default 5s, `queueNoticeDelayMs`): the notice cannot morph into the answer (text vs card), so its cleanup is a recall, which the client renders as a visible "recalled a message" line — a fast turnover therefore sends no notice at all, and only a genuinely long wait pays that tombstone. Different sessions run in parallel.
 
 ## Streaming behavior
 
-The live preview is ONE **streaming card** (a Feishu card entity in streaming mode):
+The live preview is ONE **streaming card** (a card entity in streaming mode):
 
 - an immediate "💭 Thinking…" card, reply-quoted under the asker in groups,
 - tool-call previews + partial answer text, pushed as full-text snapshots (the client renders the typewriter effect),
@@ -194,12 +206,12 @@ Two audiences, like the Telegram channel:
 Message payloads are resolved by the channel before the agent turn runs — all as **primary** inputs (a load failure becomes a `failed` event, never a silent drop):
 
 - images (`image` messages, or images inside a rich-text `post`) are downloaded and passed as `prompt.images` — the selected model must support vision,
-- files / audio / video are downloaded to `<state root>/channels/lark/files/<chat>/` and listed in the prompt so the agent reads them with its tools,
+- files / audio / video are downloaded to `<state root>/channels/<kind>/files/<chat>/` and listed in the prompt so the agent reads them with its tools,
 - a **reply summon** fetches the replied-to message (its content is not in the event), injects its text into the prompt, and loads its attachments too — "@bot summarize this" as a reply to a file works.
 
 ## State & restarts
 
-The channel persists its state under `<state root>/channels/lark/`:
+The channel persists its state under `<state root>/channels/<kind>/` (`channels/feishu/` or `channels/lark/` — two mounted kinds never share stores):
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — same layering as the Telegram channel, see [design/core.md](design/core.md)),
 - `seen.json` — a bounded dedup ring of accepted `message_id`s: the platform documents duplicate pushes and its own guidance is to dedup on `message_id`; without this, a late redelivery after a completed turn would re-run it,
@@ -207,9 +219,9 @@ The channel persists its state under `<state root>/channels/lark/`:
 
 The state home self-ignores (a nested `.gitignore`). Single-process semantics: two processes must not share a state dir.
 
-## Sending messages back (`lark-send`)
+## Sending messages back (`feishu-send` / `lark-send`)
 
-`fastagent add lark` also scaffolds `tools/lark-send.ts`: the agent can send plain text or a Markdown card to any chat by id. It is the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up; those turns have no `[lark: chat …]` envelope line, so the schedule's prompt must name the target chat id.
+`fastagent add feishu` also scaffolds `tools/feishu-send.ts` (lark: `tools/lark-send.ts`): the agent can send plain text or a Markdown card to any chat by id. It is the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up; those turns have no `[feishu: chat …]` envelope line, so the schedule's prompt must name the target chat id.
 
 ## Limits
 

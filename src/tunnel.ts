@@ -158,7 +158,9 @@ export async function announceWebhooks(dir: string, baseUrl: string): Promise<vo
       `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
   }
-  // lark registers programmatically too (application-v7 config PATCH — telegram-setWebhook parity);
-  // the registrar owns its own health wait and degrades to the manual console instruction.
-  if (channels.includes("lark")) await registerLarkWebhook(baseUrl);
+  // feishu/lark register programmatically too (application-v7 config PATCH — telegram-setWebhook
+  // parity), once per mounted kind (each kind is its own app with its own credentials); the registrar
+  // owns its own health wait and degrades to the manual console instruction.
+  if (channels.includes("feishu")) await registerLarkWebhook(baseUrl, "feishu");
+  if (channels.includes("lark")) await registerLarkWebhook(baseUrl, "lark");
 }

@@ -12,7 +12,7 @@ import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
 import { parseEnvContent } from "../env.ts";
 
-export type ChannelKind = "github" | "telegram" | "lark";
+export type ChannelKind = "github" | "telegram" | "feishu" | "lark";
 
 /** An env var a scaffolded channel reads. `generate` = a random-string secret the CLI can pre-fill. */
 export interface ChannelEnv {
@@ -53,16 +53,34 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
     ],
   },
+  // feishu and lark are one protocol on two clouds (open.feishu.cn / open.larksuite.com) sharing one
+  // engine — but each cloud is its own channel KIND: its own route path, env namespace, state home,
+  // console, and onboarding flow. No `generate` in either: every value comes FROM the platform
+  // (generating an Encrypt Key locally would break inbound events until the user mirrors it in the
+  // console — a silent-footgun default). `add <kind> --create-app` fills them automatically.
+  feishu: {
+    env: [
+      { name: "FEISHU_APP_ID", hint: "developer console → Credentials & Basic Info (or `add feishu --create-app`)" },
+      {
+        name: "FEISHU_APP_SECRET",
+        hint: "developer console → Credentials & Basic Info (or `add feishu --create-app`)",
+      },
+      { name: "FEISHU_VERIFICATION_TOKEN", hint: "console → Events & Callbacks; authenticates inbound events" },
+      { name: "FEISHU_ENCRYPT_KEY", hint: "optional but recommended — set one in the console and copy it here" },
+    ],
+    steps: [
+      "edit {channel} — the setup walkthrough (console permissions, event subscription) is in its header",
+      "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run` (manual: console → Events & Callbacks)",
+      "then PUBLISH A VERSION when the console prompts — the switch to webhook mode takes effect on publish (once; no API for this step)",
+      "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
+    ],
+  },
   lark: {
-    // No `generate` here: every value comes FROM the platform (generating an Encrypt Key locally
-    // would break inbound events until the user mirrors it in the console — a silent-footgun
-    // default). `add lark --create-app` fills them automatically via the scan-to-create flow.
     env: [
       { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info (or `add lark --create-app`)" },
       { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info (or `add lark --create-app`)" },
       { name: "LARK_VERIFICATION_TOKEN", hint: "console → Events & Callbacks; authenticates inbound events" },
       { name: "LARK_ENCRYPT_KEY", hint: "optional but recommended — set one in the console and copy it here" },
-      { name: "LARK_BASE_URL", hint: "optional — https://open.larksuite.com for Lark international (default: Feishu)" },
     ],
     steps: [
       "edit {channel} — the setup walkthrough (console permissions, event subscription) is in its header",

@@ -193,7 +193,7 @@ Telegram is the stateful channel reference. Its modules separate:
 Telegram turn replay is at-least-once. A crash can re-run side-effecting tools, and a narrow pre-ACK
 window can run a delivery twice. Exactly-once execution needs a different backend/resume model.
 
-### Lark / Feishu
+### Feishu / Lark
 
 The second stateful chat channel, shaped as a sibling of Telegram: the shared mechanisms
 (`turn-queue` / generic `turn-store` / `state` / `wait-health`) live one level up in `src/channels/`,
@@ -201,7 +201,16 @@ and the module split mirrors Telegram's (`lark.ts` wiring, `parse.ts` pure decod
 assembly, `preview.ts` pump, `lark-api.ts` single transport pipeline with the tenant-token cache,
 `crypto.ts` webhook security math, `card.ts` card builders, `seen.ts` dedup ring, `register-app.ts` /
 `register-webhook.ts` platform automation). No SDK — every wire protocol is plain fetch, with the
-adopt-the-SDK tripwire documented in `lark-api.ts`. What is platform-different:
+adopt-the-SDK tripwire documented in `lark-api.ts`.
+
+**One engine, two channel KINDS.** Feishu (`open.feishu.cn`) and Lark international
+(`open.larksuite.com`) are one protocol on two clouds — but a channel kind is fastagent's unit of
+route path, env namespace, state home, and onboarding, so they are two kinds bound over this one
+engine (`src/channels/lark/` stays the engine; `src/channels/feishu/` holds only the kind's scaffold
+bundle): `feishuChannel` mounts `POST /feishu`, reads `FEISHU_*`, keeps state under
+`channels/feishu/`; `larkChannel` mirrors with `lark`. One workspace can mount both. The clouds also
+diverge operationally (separate consoles/accounts hosts, the intl cloud lags on the config API), which
+is exactly the split's payoff: per-kind onboarding without engine forks. What is platform-different:
 
 - **The live preview is a streaming CARD, not an edited message.** The platform caps text edits at 20
   per message and sends at 5 QPS per chat; cardkit streaming (50 QPS, strictly increasing `sequence`)
@@ -222,9 +231,12 @@ adopt-the-SDK tripwire documented in `lark-api.ts`. What is platform-different:
   written via the application-v7 config PATCH (immediate effect; the platform challenges the URL during
   the call, so the registrar health-waits first) — used by `--tunnel` and `deploy --run`, with the
   manual console instruction as the fallback. Cloud lag: the v7 route exists on `open.feishu.cn` but
-  not on `open.larksuite.com` yet; a 404 names that cause. `add lark --create-app` runs the scan-to-
-  create device flow (RFC 8628, hand-rolled; wire format shared by the four official SDKs) and reads
-  the platform-generated verification token back — `.env` completes without the developer console.
+  not on `open.larksuite.com` yet; a 404 names that cause. `add feishu|lark --create-app` runs the
+  scan-to-create device flow (RFC 8628, hand-rolled; wire format shared by the four official SDKs; the
+  kind picks the accounts host) and captures the platform-generated verification token from the
+  registration challenge over a throwaway tunnel — `.env` completes without the developer console.
+  One console click remains: the long-connection→webhook mode flip takes effect on version publish,
+  which has no open API.
 - **Webhook ingress only.** The WS long-connection mode (no public URL) needs the official SDK and a
   non-HTTP channel seam; deferred.
 

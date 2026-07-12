@@ -60,16 +60,16 @@ function listHasName(stdout: string, name: string): boolean {
 
 /**
  * Run the deploy through `fly`. `log` reports progress; `registerTelegram(baseUrl)` /
- * `registerLark(baseUrl)` perform the post-deploy webhook steps (the CLI passes its registrars;
- * `registerLark` is optional — absent, the manual console instruction is printed). Every gate is
- * fail-visible.
+ * `registerLark(baseUrl, kind)` perform the post-deploy webhook steps (the CLI passes its registrars;
+ * `registerLark` is optional — absent, the manual console instruction is printed; it serves both the
+ * feishu and lark kinds, called once per mounted kind). Every gate is fail-visible.
  */
 export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
   registerTelegram: (baseUrl: string) => Promise<void>,
-  registerLark?: (baseUrl: string) => Promise<void>,
+  registerLark?: (baseUrl: string, kind: "feishu" | "lark") => Promise<void>,
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -145,13 +145,14 @@ export async function deployFlyRun(
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
   }
-  if (plan.channels.includes("lark")) {
+  for (const kind of ["feishu", "lark"] as const) {
+    if (!plan.channels.includes(kind)) continue;
     if (registerLark) {
-      log("registering lark event URL…");
-      await registerLark(`https://${plan.appName}.fly.dev`);
+      log(`registering ${kind} event URL…`);
+      await registerLark(`https://${plan.appName}.fly.dev`, kind);
     } else {
       log(
-        `lark: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/lark (the app must be running when you save)`,
+        `${kind}: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/${kind} (the app must be running when you save)`,
       );
     }
   }

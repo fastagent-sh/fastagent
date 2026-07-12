@@ -206,9 +206,11 @@ export function placeKey(m: Pick<LarkMessage, "chat_id" | "thread_id">): string 
  * in a shared multi-user session that is how the model tells participants apart and knows it is not a
  * 1:1. A reply carries only `[in reply to msg …]` here: the referent's CONTENT is not in the event, so
  * the channel fetches and appends it in the IO half (invoke-turn.ts), keeping this layer pure. Exported
- * so a custom `route` can reuse it, e.g. `text: `${larkEnvelope(event)}\n\n[extra]``.
+ * so a custom `route` can reuse it, e.g. `text: `${larkEnvelope(event)}\n\n[extra]``. `tag` labels the
+ * envelope with the channel kind (`[feishu: …]` vs `[lark: …]`) — the kind's send tool tells the agent
+ * to read the chat id from that line, so the two must agree.
  */
-export function larkEnvelope(event: LarkMessageEvent): string {
+export function larkEnvelope(event: LarkMessageEvent, tag: "feishu" | "lark" = "lark"): string {
   const m = event.message;
   if (!m) return "";
   const meta = [
@@ -221,7 +223,7 @@ export function larkEnvelope(event: LarkMessageEvent): string {
   const scope =
     m.chat_type === "group" ? "\n[group chat — multiple people; each message is prefixed with its sender]" : "";
   const replyTo = m.parent_id ? `\n[in reply to msg ${m.parent_id}]` : "";
-  return `[lark: ${meta}]${scope}${replyTo}\n${parseContent(m).text}`;
+  return `[${tag}: ${meta}]${scope}${replyTo}\n${parseContent(m).text}`;
 }
 
 /**

@@ -85,4 +85,41 @@ describe("scaffold lark-send: text-or-markdown mode switch", () => {
     });
     await expect(execute({ chatId: "oc_1", text: "hello" })).rejects.toThrow(/no availability/);
   });
+
+  it("the lark template talks to open.larksuite.com (the kind IS the cloud — no base-URL knob)", async () => {
+    creds();
+    const { calls } = stubOpenApi();
+    await execute({ chatId: "oc_1", text: "x" });
+    expect(calls.every((c) => c.url.startsWith("https://open.larksuite.com/"))).toBe(true);
+  });
+});
+
+// The feishu twin is generated from the same engine discipline; what differs — and what a regression
+// would silently break — is the kind surface: the FEISHU_* env namespace and the locked cloud.
+describe("scaffold feishu-send: the feishu kind surface", () => {
+  let feishuExecute: (params: unknown) => Promise<{ details: unknown }>;
+  beforeAll(async () => {
+    const templatePath = new URL("../src/channels/feishu/scaffold/feishu-send.ts", import.meta.url).pathname;
+    const mod = (await import(templatePath)) as { default: unknown };
+    feishuExecute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("reads FEISHU_* credentials and talks to open.feishu.cn", async () => {
+    vi.stubEnv("FEISHU_APP_ID", "cli_x");
+    vi.stubEnv("FEISHU_APP_SECRET", "sec");
+    const { calls } = stubOpenApi();
+    const r = await feishuExecute({ chatId: "oc_9", text: "hi" });
+    expect(calls.every((c) => c.url.startsWith("https://open.feishu.cn/"))).toBe(true);
+    expect(JSON.stringify(r.details)).toContain("sent message to chat oc_9");
+  });
+
+  it("missing credentials fail with the FEISHU env-var names, before any network call", async () => {
+    const { calls } = stubOpenApi();
+    await expect(feishuExecute({ chatId: "oc_1", text: "x" })).rejects.toThrow(/FEISHU_APP_ID/);
+    expect(calls).toHaveLength(0);
+  });
 });

@@ -1,8 +1,8 @@
 import { defineTool, z } from "@fastagent-sh/fastagent";
 
-// Send a message to a Lark chat. In a CHAT turn the channel delivers the reply itself — this
+// Send a message to a Feishu chat. In a CHAT turn the channel delivers the reply itself — this
 // tool is for turns NO channel is carrying: a scheduled turn (schedules/<name>.ts) or a self-scheduled
-// wake-up, whose plain reply is not delivered anywhere. The chatId comes from the [lark: chat …]
+// wake-up, whose plain reply is not delivered anywhere. The chatId comes from the [feishu: chat …]
 // context line in a chat turn; a scheduled turn has no such line, so the schedule's prompt must name
 // the target chat id. tools/ is auto-discovered.
 
@@ -10,7 +10,7 @@ import { defineTool, z } from "@fastagent-sh/fastagent";
 // the tool call (and the turn), named errors, and success gated on the body's own code===0.
 // Deliberately NO rate-limit retry — a tool error goes back to the agent, which can decide to retry;
 // fail-fast beats a silently sleeping tool.
-const BASE = "https://open.larksuite.com";
+const BASE = "https://open.feishu.cn";
 
 async function callApi(path: string, body: unknown, token?: string): Promise<Record<string, unknown>> {
   let res: Response;
@@ -27,7 +27,7 @@ async function callApi(path: string, body: unknown, token?: string): Promise<Rec
     });
     raw = await res.text();
   } catch (e) {
-    throw new Error(`lark ${path}: ${String(e)}`, { cause: e });
+    throw new Error(`feishu ${path}: ${String(e)}`, { cause: e });
   }
   let data: { code?: number; msg?: string; [k: string]: unknown };
   try {
@@ -36,29 +36,29 @@ async function callApi(path: string, body: unknown, token?: string): Promise<Rec
     data = {};
   }
   if (!res.ok || data.code !== 0) {
-    throw new Error(`lark ${path} failed: ${res.status} ${data.msg ?? "response was not the expected JSON"}`);
+    throw new Error(`feishu ${path} failed: ${res.status} ${data.msg ?? "response was not the expected JSON"}`);
   }
   return data;
 }
 
 async function tenantToken(): Promise<string> {
-  const appId = process.env.LARK_APP_ID;
-  const appSecret = process.env.LARK_APP_SECRET;
-  if (!appId || !appSecret) throw new Error("LARK_APP_ID / LARK_APP_SECRET are not set");
+  const appId = process.env.FEISHU_APP_ID;
+  const appSecret = process.env.FEISHU_APP_SECRET;
+  if (!appId || !appSecret) throw new Error("FEISHU_APP_ID / FEISHU_APP_SECRET are not set");
   const data = await callApi("/open-apis/auth/v3/tenant_access_token/internal", {
     app_id: appId,
     app_secret: appSecret,
   });
   const token = data.tenant_access_token;
-  if (typeof token !== "string") throw new Error("lark tenant_access_token: response carried no token");
+  if (typeof token !== "string") throw new Error("feishu tenant_access_token: response carried no token");
   return token;
 }
 
 export default defineTool({
   description:
-    "Send a message to a Lark chat: plain `text`, or `markdown` (rendered as a card — headings, " +
+    "Send a message to a Feishu chat: plain `text`, or `markdown` (rendered as a card — headings, " +
     "bold, code blocks, links). Exactly one of the two. In a chat turn take chatId from the " +
-    "[lark: chat …] context line; in a scheduled/woken turn (no context line) the chat id must come " +
+    "[feishu: chat …] context line; in a scheduled/woken turn (no context line) the chat id must come " +
     "from your instruction.",
   input: z.object({
     chatId: z.string().describe("target chat id (oc_…)"),

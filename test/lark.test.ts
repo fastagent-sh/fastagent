@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 import { type LarkChannelOptions, larkChannel as buildLarkChannel } from "../src/lark.ts";
+import { feishuChannel } from "../src/feishu.ts";
 import { eventSignature } from "../src/channels/lark/crypto.ts";
 
 const TOKEN = "verif-token";
@@ -485,5 +486,34 @@ describe("turn flow", () => {
       .map((c) => (c.body?.msg_type === "text" ? (JSON.parse(String(c.body?.content)) as { text: string }).text : ""));
     expect(texts.some((t) => t.includes("⏳ Queued"))).toBe(false); // never sent …
     expect(fx.calls("/im/v1/messages/", "DELETE")).toHaveLength(0); // … so nothing was recalled
+  });
+});
+
+describe("the feishu kind: same engine, its own route / state home / envelope tag", () => {
+  it("mounts POST /feishu, keeps state under channels/feishu, and tags the prompt [feishu: …]", async () => {
+    larkFetch();
+    const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
+    tempRoots.push(root);
+    const { agent, calls } = replyingAgent("pong");
+    const routes = feishuChannel({ appId: "app", appSecret: "secret", verificationToken: TOKEN, baseUrl: BASE })({
+      agent,
+      stateRoot: root,
+    });
+    expect(routes["POST /lark"]).toBeUndefined(); // the kind IS the mount path — no cross-kind route
+    const handler = routes["POST /feishu"];
+    if (!handler) throw new Error("expected POST /feishu");
+    const maybeIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
+    if (maybeIdle) channelIdles.add(maybeIdle);
+    const res = await handler(larkRequest(messageEvent({ id: "om_fe1", text: "ping" })));
+    expect(res.status).toBe(200);
+    await maybeIdle?.();
+    expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p)"); // the feishu-send tool points here
+    // State home derives from the KIND: a feishu + a lark instance in one workspace never share stores.
+    expect(existsSync(join(root, "channels", "feishu"))).toBe(true);
+    expect(existsSync(join(root, "channels", "lark"))).toBe(false);
+  });
+
+  it("construction failures name feishuChannel, not larkChannel", () => {
+    expect(() => feishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/feishuChannel/);
   });
 });
