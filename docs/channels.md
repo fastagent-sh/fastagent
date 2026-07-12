@@ -5,7 +5,7 @@ status: current
 
 # Channels
 
-A **channel** is an agent's inbound surface: HTTP, GitHub webhooks, Telegram messages, Slack events, scheduled jobs, and so on.
+A **channel** is an agent's inbound surface — it turns an external event into invocations: HTTP, GitHub webhooks, Telegram messages, Slack events, even the clock ([schedules](quickstart.md#8-run-on-a-clock)).
 
 Channels consume only the engine-neutral [Agent contract](SPEC.md). The same channel can drive any conforming agent.
 

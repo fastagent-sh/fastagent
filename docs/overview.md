@@ -1,13 +1,13 @@
 ---
-title: FastAgent overview
+title: Overview
 status: current
 ---
 
-# FastAgent overview
+# Overview
 
 **Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, handle GitHub/webhook events, expose it as an API endpoint, or put it behind your own channel.
 
-It does not ask you to rewrite an agent into a framework-specific project. Start with any directory; add `persona.md`, `skills/`, `tools/`, channels, and markdown context as the agent grows. FastAgent gives that directory a running service shape.
+It does not ask you to rewrite an agent into a framework-specific project. Start with any directory; add `persona.md`, `skills/`, `tools/`, channels, and markdown context as the agent grows. FastAgent serves that directory as a live service.
 
 Coding agents made it cheap to vibe useful agent directories. The next gap is serving: local agents live in terminals, but real services receive webhooks, join Telegram, serve product users, and expose stable APIs. FastAgent connects those directories to real triggers and runtimes.
 
