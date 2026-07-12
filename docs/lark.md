@@ -29,14 +29,17 @@ From an agent workspace:
 
 ```bash
 fastagent add feishu   # 飞书: scaffolds AND creates + configures the app itself — no developer console
-fastagent add lark     # Lark international: scaffolds; the app is created + configured in the console
+fastagent add lark     # Lark international: scaffolds, opens the console, then collects the three credentials
 ```
 
 Onboarding diverges by cloud on purpose: the feishu cloud supports CLI app creation (scan-to-create),
 so `add feishu` just does it — skipped when `FEISHU_APP_ID`/`FEISHU_APP_SECRET` are already set in
 `.env` (it never silently mints a second app). The intl cloud does not (its confirm page's ack
-endpoint is broken and the application-config API is missing there), so `add lark` is honest about
-the manual path instead of pretending.
+endpoint is broken and the application-config API is missing there), so `add lark` uses a guided
+console path instead: it opens the app page; waits for App ID, then App Secret; validates the pair
+against the tenant-token endpoint; then points to Events & Callbacks and waits for the Verification
+Token. All three are written to the gitignored `.env`. The token cannot be read automatically — Lark
+exposes no read API for it and the missing config API prevents the challenge-capture bootstrap.
 
 This creates (for the feishu kind; lark mirrors it):
 
@@ -236,8 +239,8 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
   the creation link (the platform excludes sensitive config from addons) and version publishing has no
   open API — so this is the one console click, spent right at `add` time (the CLI opens the page).
 - CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every ack
-  renders as "Link expired") and its config API is missing — `add lark` is console-configured by hand
-  until the platform ships both.
+  renders as "Link expired") and its config API is missing. `add lark` therefore opens the console and
+  runs the guided credential-paste flow until the platform ships both.
 - The un-summoned group context buffer (Telegram parity) is gated on the sensitive `im:message.group_msg` scope; not yet implemented.
 - The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds; the channel persists the turn intent and ACKs immediately, so slow turns are never the webhook's problem.

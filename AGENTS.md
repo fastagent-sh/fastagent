@@ -66,7 +66,8 @@ src/
 │       ├── card.ts          # pure card JSON 2.0 builders (streaming entity / settled card / entity content)
 │       ├── seen.ts          # accepted-turn dedup ring on message_id (the platform documents duplicate pushes)
 │       ├── lark-api.ts      # the single Open API pipeline (tenant-token cache, rate-limit retry, code gate, cardkit)
-│       ├── register-app.ts  # `add lark --create-app`: scan-to-create device flow (RFC 8628, hand-rolled on fetch)
+│       ├── register-app.ts  # `add feishu`: scan-to-create device flow (RFC 8628, hand-rolled on fetch)
+│       ├── onboard.ts       # `add lark`: open console + guided/validated credential paste (intl fallback)
 │       ├── register-webhook.ts # --tunnel / deploy --run: event Request URL via application-v7 config PATCH
 │       └── scaffold/        # `add lark` bundle (channel.ts + send tool)
 ├── deploy/                  # `deploy fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §10.5)

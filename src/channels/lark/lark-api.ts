@@ -108,6 +108,9 @@ interface ApiBody {
  * single pipeline (module header). Throws {@link LarkApiError} on any failure.
  */
 export interface LarkApi {
+  /** Validate appId/appSecret by acquiring the tenant token through this pipeline. Does not require
+   *  the bot capability (unlike botInfo), so guided onboarding can fail before persisting a typo. */
+  verifyCredentials(): Promise<void>;
   /** GET /bot/v3/info — the bot's own identity (open_id drives @mention summon). */
   botInfo(): Promise<{ openId?: string; appName?: string }>;
   /** Send a message to a chat; returns the new message_id (undefined if the body carried none). */
@@ -286,6 +289,9 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
   };
 
   const api: LarkApi = {
+    async verifyCredentials() {
+      await tenantToken();
+    },
     async botInfo() {
       // bot/v3/info answers at the TOP LEVEL (`bot`), not under `data` — an older API family.
       const data = await call<ApiBody & { bot?: { open_id?: string; app_name?: string } }>(

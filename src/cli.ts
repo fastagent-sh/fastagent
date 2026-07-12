@@ -77,6 +77,7 @@ import { createLarkApi } from "./channels/lark/lark-api.ts";
 import { bootstrapVerificationToken } from "./channels/lark/bootstrap-token.ts";
 import { registerLarkApp } from "./channels/lark/register-app.ts";
 import { registerLarkWebhook } from "./channels/lark/register-webhook.ts";
+import { onboardLarkApp } from "./channels/lark/onboard.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { readRuns } from "./schedule/audit.ts";
@@ -163,8 +164,9 @@ function usage(code: number): never {
          (open.larksuite.com) — one engine, two clouds, each its own channel.
          feishu also CREATES + configures the platform app (confirm a link in the app — the
          platform's "scan to create" flow; no developer console) and writes the credentials to
-         .env; skipped when FEISHU_APP_ID/SECRET are already set. lark is console-configured by
-         hand — the intl cloud does not support CLI app creation yet (see docs/lark.md).
+         .env; skipped when FEISHU_APP_ID/SECRET are already set. lark opens the intl developer
+         console and guides the App ID → Secret → Verification Token paste flow, validating the
+         credential pair before writing .env (see docs/lark.md).
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
@@ -647,9 +649,7 @@ async function runAdd(): Promise<void> {
     } else if (channelKind === "lark") {
       failStartup(
         new Error(
-          "app creation from the CLI is not possible on the Lark international cloud (its confirm page and " +
-            "application-config API are not functional there yet) — `add lark` scaffolds the channel; create + " +
-            "configure the app in the developer console (walkthrough: the scaffolded channel header / docs/lark.md)",
+          "--create-app is retired — `add lark` now opens the developer console and guides credential setup by default",
         ),
       );
     } else {
@@ -661,12 +661,12 @@ async function runAdd(): Promise<void> {
   // hygiene stay at the run root, where .env is actually read.
   const { config: addConfig } = await loadConfig(target).catch(failStartup);
   const channelHome = resolveAgentDir(target, addConfig);
-  // Preconditions before the write, so a refusal is side-effect-free. feishu is the exception: its
-  // add is scaffold + CREATE THE APP, so an existing scaffold skips the write and continues (a failed
-  // or cancelled scan must be re-runnable without hand-deleting the glue); the file is never touched.
+  // Preconditions before the write, so a refusal is side-effect-free. feishu/lark are exceptions:
+  // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
+  // failed or cancelled scan/paste flow must be re-runnable without hand-deleting glue); never touch it.
   const file = join(channelHome, "channels", `${channelKind}.ts`);
   if (await channelExists(channelHome, channelKind).catch(failStartup)) {
-    if (channelKind !== "feishu") {
+    if (channelKind !== "feishu" && channelKind !== "lark") {
       failStartup(new Error(`${relative(target, file)} already exists — edit it, or remove it to re-scaffold`));
     }
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
@@ -707,6 +707,51 @@ async function runAdd(): Promise<void> {
     } else {
       created = await createLarkAppFlow("feishu").catch(failStartup);
     }
+  } else if (channelKind === "lark") {
+    if (!envIgnored) {
+      failStartup(
+        new Error(
+          "`add lark` writes real app credentials to .env — add .env to .gitignore/.fastagentignore first, then re-run",
+        ),
+      );
+    }
+    const existing = await activeDotEnvValues(target, [
+      "LARK_APP_ID",
+      "LARK_APP_SECRET",
+      "LARK_VERIFICATION_TOKEN",
+    ]).catch(failStartup);
+    if (Object.keys(existing).length === 3) {
+      console.error(`[fastagent] LARK_APP_ID/SECRET/VERIFICATION_TOKEN already set in .env — keeping them`);
+    } else {
+      if (!isInteractive()) {
+        failStartup(
+          new Error(
+            "`add lark` needs an interactive terminal to open the console and collect App ID, App Secret, and Verification Token — re-run it in a terminal",
+          ),
+        );
+      }
+      created = await onboardLarkApp(
+        {
+          openUrl: openBrowser,
+          note: (message) => clackLog.info(message),
+          async prompt(message, opts) {
+            const result = opts?.hidden ? await password({ message }) : await clackText({ message });
+            return isCancel(result) ? undefined : (result as string);
+          },
+        },
+        {
+          existing,
+          verifyCredentials: async (appId, appSecret) => {
+            await createLarkApi({
+              baseUrl: "https://open.larksuite.com",
+              appId,
+              appSecret,
+            }).verifyCredentials();
+            console.error(`[fastagent] Lark App ID / Secret verified`);
+          },
+        },
+      ).catch(failStartup);
+    }
   }
   const { env, steps } = channelSetup(channelKind);
   const generated = Object.fromEntries(
@@ -735,7 +780,7 @@ async function runAdd(): Promise<void> {
     if (dotEnv?.written.includes(e.name)) {
       // Written, but its hint may still carry an action (github: paste the same value into the webhook
       // UI) — keep the variable visible instead of silently absorbing it.
-      console.error(`    ${e.name} — generated and written to .env   # ${e.hint}`);
+      console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to .env   # ${e.hint}`);
       continue;
     }
     const value = e.generate ? `=${generated[e.name]}` : "";
@@ -856,18 +901,28 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
   return env;
 }
 
-/** Whether the run-root `.env` carries a non-empty ACTIVE value for EVERY given name — decided by THE
- *  .env parser, so the check can never disagree with what `loadEnvFile` reads. */
-async function hasActiveDotEnvValues(dir: string, names: string[]): Promise<boolean> {
+/** Active run-root `.env` values for the requested names — decided by THE .env parser, so this
+ * check can never disagree with what `loadEnvFile` reads. Empty/commented values are absent. */
+async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<string, string>> {
   let content: string;
   try {
     content = await readFile(join(dir, ".env"), "utf8");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw e;
   }
   const parsed = parseEnvContent(content);
-  return names.every((n) => (parsed.get(n)?.trim() ?? "") !== "");
+  return Object.fromEntries(
+    names.flatMap((name) => {
+      const value = parsed.get(name)?.trim();
+      return value ? [[name, value]] : [];
+    }),
+  );
+}
+
+/** Whether EVERY requested .env value is active. */
+async function hasActiveDotEnvValues(dir: string, names: string[]): Promise<boolean> {
+  return Object.keys(await activeDotEnvValues(dir, names)).length === names.length;
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

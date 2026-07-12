@@ -33,6 +33,16 @@ function stubFetch(route: (url: string, init: RequestInit) => Response | Promise
 const okData = (data: unknown = {}) => Response.json({ code: 0, msg: "success", data });
 
 describe("tenant token cache", () => {
+  it("validates credentials by acquiring a token without requiring the bot capability", async () => {
+    const fx = stubFetch(() => {
+      throw new Error("verifyCredentials must not call a capability API");
+    });
+    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    await expect(api.verifyCredentials()).resolves.toBeUndefined();
+    expect(fx.tokenFetches()).toBe(1);
+    expect(fx.calls()).toHaveLength(1);
+  });
+
   it("fetches the token once and reuses it across calls (Authorization carries it)", async () => {
     const fx = stubFetch(() => okData({ message_id: "om_1" }));
     const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
