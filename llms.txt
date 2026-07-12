@@ -1,6 +1,6 @@
 # FastAgent
 
-> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind a custom channel. Engine-, model-, and host-neutral; the reference implementation is built on the pi engine.
+> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind a custom channel. Harness-, model-, and infra-neutral (the Agent Handler SPEC calls the harness the *engine* — same seam); the built-in harness is pi.
 
 Key facts:
 
