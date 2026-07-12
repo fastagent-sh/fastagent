@@ -11,7 +11,7 @@ The design center is **point at directory → live agent capability**. FastAgent
 
 The design choices are deliberate:
 
-- **Small callable contract** — an internal boundary that decouples callers, agents, engines, and hosts.
+- **Small callable contract** — an internal boundary that decouples callers, agents, engines (the *agent harness*, in ecosystem terms), and hosts.
 - **Application composition** — compose with the user's application instead of owning routes, database, auth, deployment, and project layout.
 - **Typed edges** — typed tools, explicit events, and validation at the places where outside input enters the system.
 
