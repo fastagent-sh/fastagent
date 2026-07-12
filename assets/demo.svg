@@ -1,48 +1,59 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 496" width="860" height="496" font-family="ui-monospace,'SF Mono',Menlo,Consolas,monospace" font-size="14">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 544" width="860" height="544" font-family="ui-monospace,'SF Mono',Menlo,Consolas,monospace" font-size="14">
   <style>
-    .win { fill:#0d0e11; stroke:#26282e; stroke-width:1; }
-    text { white-space:pre; fill:#d7dbe1; }
-    .dim { fill:#6e7681; } .txt { fill:#d7dbe1; } .dir { fill:#58a6ff; }
-    .path { fill:#56d364; } .accent { fill:#39c5cf; } .ok { fill:#56d364; }
-    .tool { fill:#58a6ff; } .reply { fill:#e6edf3; } .purple { fill:#bc8cff; }
-    .title { fill:#6a6f77; } .mark { fill:#e6edf3; font-family:Georgia,'Times New Roman',serif; font-style:italic; font-weight:700; }
+    .win { fill:#080a09; stroke:#1e2522; stroke-width:1; }
+    .bar { fill:#101413; }
+    text { white-space:pre; fill:#d5dcd9; }
+    .dim { fill:#5f6c68; } .txt { fill:#d5dcd9; } .cm { fill:#5f6c68; font-style:italic; }
+    .tp { fill:#2dd4bf; } .ok { fill:#7ecf8a; } .pu { fill:#b795f5; } .bl { fill:#6aa5f8; }
+    .am { fill:#e0bd68; } .dir { fill:#6aa5f8; } .acc { fill:#2dd4bf; }
+    .title { fill:#5f6c68; } .mark { fill:#d5dcd9; font-family:Georgia,'Times New Roman',serif; font-style:italic; font-weight:700; }
     .l { opacity:0; }
-    .l1{animation:a1 21s infinite} .l2{animation:a2 21s infinite} .l3{animation:a3 21s infinite} .l4{animation:a4 21s infinite} .l5{animation:a5 21s infinite} .l6{animation:a6 21s infinite} .l7{animation:a7 21s infinite} .l8{animation:a8 21s infinite} .l9{animation:a9 21s infinite} .l10{animation:a10 21s infinite} .l11{animation:a11 21s infinite} .l12{animation:a12 21s infinite} .l13{animation:a13 21s infinite} .l14{animation:a14 21s infinite}
-    @keyframes a1 {0%,3%{opacity:0} 5%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a2 {0%,6%{opacity:0} 8%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a3 {0%,12%{opacity:0} 14%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a4 {0%,15%{opacity:0} 17%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a5 {0%,18%{opacity:0} 20%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a6 {0%,21%{opacity:0} 23%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a7 {0%,24%{opacity:0} 26%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a8 {0%,27%{opacity:0} 29%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a9 {0%,40%{opacity:0} 42%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a10 {0%,45%{opacity:0} 47%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a11 {0%,50%{opacity:0} 52%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a12 {0%,56%{opacity:0} 58%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a13 {0%,62%{opacity:0} 64%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a14 {0%,68%{opacity:0} 70%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @media (prefers-reduced-motion:reduce){.l{opacity:1!important;animation:none!important}}
+    .a1{animation:k1 28s infinite}.a2{animation:k2 28s infinite}.a3{animation:k3 28s infinite}.a4{animation:k4 28s infinite}.a5{animation:k5 28s infinite}.a6{animation:k6 28s infinite}.a7{animation:k7 28s infinite}.a8{animation:k8 28s infinite}.a9{animation:k9 28s infinite}.a10{animation:k10 28s infinite}.a11{animation:k11 28s infinite}.a12{animation:k12 28s infinite}.a13{animation:k13 28s infinite}.a14{animation:k14 28s infinite}.a15{animation:k15 28s infinite}.a16{animation:k16 28s infinite}
+    @keyframes k1 {0%,2%{opacity:0} 3.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k2 {0%,4%{opacity:0} 5.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k3 {0%,9%{opacity:0} 10.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k4 {0%,14%{opacity:0} 15.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k5 {0%,16%{opacity:0} 17.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k6 {0%,19%{opacity:0} 20.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k7 {0%,21%{opacity:0} 22.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k8 {0%,27%{opacity:0} 28.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k9 {0%,33%{opacity:0} 34.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k10 {0%,42%{opacity:0} 43.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k11 {0%,48%{opacity:0} 49.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k12 {0%,58%{opacity:0} 59.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k13 {0%,63%{opacity:0} 64.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k14 {0%,71%{opacity:0} 72.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k15 {0%,73%{opacity:0} 74.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
+    @keyframes k16 {0%,79%{opacity:0} 80.5%{opacity:1} 93%{opacity:1} 97%,100%{opacity:0}}
   </style>
 
-  <rect class="win" x="1" y="1" width="858" height="494" rx="10"/>
-  <circle cx="24" cy="24" r="6" fill="#ff5f56"/>
-  <circle cx="44" cy="24" r="6" fill="#ffbd2e"/>
-  <circle cx="64" cy="24" r="6" fill="#27c93f"/>
-  <text x="430" y="29" text-anchor="middle" class="title"><tspan class="mark" font-size="16">F</tspan> fastagent — an agent directory, live</text>
-  <line x1="1" y1="46" x2="859" y2="46" stroke="#26282e" stroke-width="1"/>
+  <rect class="win" x="1" y="1" width="858" height="542" rx="10"/>
+  <rect class="bar" x="1" y="1" width="858" height="45" rx="10"/>
+  <rect class="bar" x="1" y="24" width="858" height="22"/>
+  <circle cx="24" cy="24" r="6" fill="#e0604f"/>
+  <circle cx="44" cy="24" r="6" fill="#dfa943"/>
+  <circle cx="64" cy="24" r="6" fill="#4fb96a"/>
+  <text x="430" y="29" text-anchor="middle" class="title"><tspan class="mark" font-size="16">F</tspan> ~/support-agent</text>
+  <line x1="1" y1="46" x2="859" y2="46" stroke="#1e2522" stroke-width="1"/>
 
-  <text class="l l1" x="20" y="80"><tspan class="path">~/pr-reviewer</tspan><tspan class="dim"> $ </tspan><tspan class="txt">ls</tspan></text>
-  <text class="l l2" x="20" y="106"><tspan class="dir">AGENTS.md</tspan><tspan class="txt">   </tspan><tspan class="dir">skills/</tspan><tspan class="txt">   </tspan><tspan class="dir">tools/</tspan><tspan class="txt">   </tspan><tspan class="dir">channels/</tspan></text>
-  <text class="l l3" x="20" y="148"><tspan class="path">~/pr-reviewer</tspan><tspan class="dim"> $ </tspan><tspan class="txt">fastagent dev</tspan></text>
-  <text class="l l4" x="20" y="174"><tspan class="dim">[fastagent] </tspan><tspan class="dim">model:  </tspan><tspan class="txt">anthropic/claude-sonnet-4-5</tspan></text>
-  <text class="l l5" x="20" y="200"><tspan class="dim">[fastagent] </tspan><tspan class="dim">skills: </tspan><tspan class="txt">review-checklist</tspan></text>
-  <text class="l l6" x="20" y="226"><tspan class="dim">[fastagent] </tspan><tspan class="dim">tools:  </tspan><tspan class="txt">read_diff, post_review</tspan></text>
-  <text class="l l7" x="20" y="252"><tspan class="dim">[fastagent] </tspan><tspan class="dim">http channel on </tspan><tspan class="ok">:8787</tspan></text>
-  <text class="l l8" x="20" y="278"><tspan class="dim">[fastagent] </tspan><tspan class="dim">routes: </tspan><tspan class="txt">GET /health, POST /webhook</tspan></text>
-  <text class="l l9" x="20" y="320"><tspan class="dim">[github] </tspan><tspan class="dim">turn start: session=pr-42 event=</tspan><tspan class="purple">pull_request.opened</tspan></text>
-  <text class="l l10" x="20" y="346"><tspan class="dim">[agent] </tspan><tspan class="accent">▶ turn </tspan><tspan class="dim">← </tspan><tspan class="txt">Review PR #42 "Add retry to fetch"</tspan></text>
-  <text class="l l11" x="20" y="372"><tspan class="dim">[agent]   </tspan><tspan class="accent">tool → </tspan><tspan class="tool">post_review</tspan><tspan class="txt">({"pr":42})</tspan></text>
-  <text class="l l12" x="20" y="398"><tspan class="dim">[agent]   </tspan><tspan class="dim">tool </tspan><tspan class="ok">✓ </tspan><tspan class="tool">post_review</tspan><tspan class="dim"> → </tspan><tspan class="txt">2 inline comments posted</tspan></text>
-  <text class="l l13" x="20" y="424"><tspan class="dim">[agent]   </tspan><tspan class="dim">reply: </tspan><tspan class="reply">Solid — flagged an unhandled reject + a missing timeout.</tspan></text>
-  <text class="l l14" x="20" y="450"><tspan class="dim">[github] </tspan><tspan class="dim">turn done: session=pr-42 </tspan><tspan class="ok">(2.4s)</tspan></text>
+  <text class="l a1" x="20" y="80"><tspan class="cm"># vibe first</tspan></text>
+  <text class="l a2" x="20" y="106"><tspan class="tp">❯ </tspan><tspan class="txt">claude </tspan><tspan class="am">"read fastagent.sh/start.md, build a support agent"</tspan></text>
+  <text class="l a3" x="20" y="132"><tspan class="ok">✓ </tspan><tspan class="txt">wrote persona.md · </tspan><tspan class="dir">skills/</tspan><tspan class="txt"> · </tspan><tspan class="dir">tools/</tspan><tspan class="txt"> · </tspan><tspan class="acc">channels/</tspan></text>
+
+  <text class="l a4" x="20" y="170"><tspan class="cm"># then fastagent</tspan></text>
+  <text class="l a5" x="20" y="196"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent dev</tspan></text>
+  <text class="l a6" x="20" y="222"><tspan class="dim">[fastagent] assembled </tspan><tspan class="txt">persona · skills · tools · channels</tspan></text>
+  <text class="l a7" x="20" y="248"><tspan class="dim">[fastagent] </tspan><tspan class="txt">github · telegram · http</tspan><tspan class="dim"> — listening on </tspan><tspan class="ok">:8787</tspan></text>
+
+  <text class="l a8" x="20" y="286"><tspan class="pu">[github]</tspan><tspan class="dim">    ▸ </tspan><tspan class="pu">pull_request.opened</tspan><tspan class="txt">  #128</tspan></text>
+  <text class="l a9" x="20" y="312"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">review posted · 2 inline comments </tspan><tspan class="dim">(2.1s)</tspan></text>
+  <text class="l a10" x="20" y="338"><tspan class="bl">[telegram]</tspan><tspan class="dim">  ▸ </tspan><tspan class="bl">message</tspan><tspan class="txt">  @ops-room </tspan><tspan class="dim">"order #9231?"</tspan></text>
+  <text class="l a11" x="20" y="364"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">replied · refund approved </tspan><tspan class="dim">(1.4s)</tspan></text>
+  <text class="l a12" x="20" y="390"><tspan class="ok">[http]</tspan><tspan class="dim">      ▸ </tspan><tspan class="ok">POST /invoke</tspan><tspan class="txt">  session=s_42</tspan></text>
+  <text class="l a13" x="20" y="416"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">streamed 14 events </tspan><tspan class="dim">(0.9s)</tspan></text>
+
+  <text class="l a14" x="20" y="454"><tspan class="cm"># ships anywhere</tspan></text>
+  <text class="l a15" x="20" y="480"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent deploy fly --run</tspan></text>
+  <text class="l a16" x="20" y="506"><tspan class="ok">✓ </tspan><tspan class="txt">live at </tspan><tspan class="ok">https://support-agent.fly.dev</tspan></text>
 </svg>
