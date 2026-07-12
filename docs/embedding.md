@@ -1,6 +1,6 @@
 ---
 title: Embedding
-description: "Use FastAgent as a library: get an agent, consume its event stream, mount the Fetch handler in Next.js, Hono, Express, Fastify, Bun, or Node, and inject your own session store or providers."
+description: "Use FastAgent as a library: get an agent, consume its event stream, and mount the Fetch handler in Next.js, Hono, Express, Fastify, Bun, or Node."
 type: doc
 status: current
 ---
