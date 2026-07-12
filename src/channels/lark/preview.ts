@@ -14,6 +14,7 @@
  * way, mirroring the telegram preview's terminal-write matrix (completed/failed/abnormal ×
  * settle/delete+send/suppress).
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import type { AgentEvent, Json } from "../../agent.ts";
 import { log } from "../../log.ts";
 import {
@@ -202,10 +203,27 @@ export async function streamLarkReply(
     try {
       const cardId = await api.createCard(streamingCardJson(initial));
       const content = cardEntityContent(cardId);
-      const messageId =
+      const mountOnce = (): Promise<string | undefined> =>
         target.replyTo !== undefined
-          ? await api.replyMessage(target.replyTo, "interactive", content, { replyInThread: target.replyInThread })
-          : await api.sendMessage(target.chatId, "interactive", content);
+          ? api.replyMessage(target.replyTo, "interactive", content, { replyInThread: target.replyInThread })
+          : api.sendMessage(target.chatId, "interactive", content);
+      let messageId: string | undefined;
+      // Field-observed: the mount can reject a JUST-minted card id (code 230099 / "cardid is invalid")
+      // — the entity is not yet visible to the IM side (eventual consistency between cardkit and IM).
+      // That specific rejection gets a short backoff and another try before degrading; anything else
+      // degrades immediately.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          messageId = await mountOnce();
+          break;
+        } catch (e) {
+          if (attempt >= 3 || !/230099|11310|cardid is invalid/i.test(String(e))) throw e;
+          log.warn(
+            `[lark] mount rejected the fresh card (card=${cardId}, attempt ${attempt}) — retrying: ${String(e)}`,
+          );
+          await sleep(attempt * 400);
+        }
+      }
       if (messageId === undefined) throw new Error("interactive send returned ok without a message_id");
       preview = { kind: "card", cardId, messageId };
     } catch (e) {

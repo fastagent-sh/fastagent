@@ -7,6 +7,7 @@ import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
 import { type LarkChannelOptions, larkChannel as buildLarkChannel } from "../src/lark.ts";
 import { feishuChannel } from "../src/feishu.ts";
 import { eventSignature } from "../src/channels/lark/crypto.ts";
+import { cardSummary } from "../src/channels/lark/card.ts";
 
 const TOKEN = "verif-token";
 const BASE = "http://lark.test";
@@ -277,6 +278,31 @@ describe("turn flow", () => {
     const settled = JSON.parse(String((settle?.body?.card as Record<string, unknown>).data));
     expect(settled.config.streaming_mode).toBe(false);
     expect(settled.body.elements[0].content).toBe("**bold** answer");
+    // The settled card carries the answer-derived summary — the chat list / push notification shows
+    // the reply, not a generic "[Card]" placeholder (markdown stripped to plain text).
+    expect(settled.config.summary).toEqual({ content: "bold answer" });
+  });
+
+  it("a mount rejected with 'cardid is invalid' (cardkit→IM propagation) is retried, not degraded", async () => {
+    let interactiveSends = 0;
+    const fx = larkFetch({
+      "receive_id_type=chat_id": (_url, init) => {
+        const body = JSON.parse(String(init.body)) as { msg_type?: string };
+        if (body.msg_type === "interactive" && ++interactiveSends === 1) {
+          // The field-observed rejection of a just-minted card id — heals after a short delay.
+          return Response.json({ code: 230099, msg: "Bot send message to chat failed: cardid is invalid" });
+        }
+        return Response.json({ code: 0, msg: "ok", data: { message_id: "om_mounted" } });
+      },
+    });
+    const { handler, idle } = buildChannel({}, "pong");
+    await handler(larkRequest(messageEvent({ id: "om_retry1", text: "ping" })));
+    await idle();
+    expect(interactiveSends).toBe(2); // rejected once, mounted on the retry
+    // Card tier survived: the SAME card settles — no text-placeholder degrade.
+    expect(fx.calls("/cardkit/v1/cards/c1", "PUT")).toHaveLength(1);
+    const texts = fx.calls("receive_id_type=chat_id", "POST").filter((c) => c.body?.msg_type === "text");
+    expect(texts).toHaveLength(0);
   });
 
   it("group @mention: summons via the resolved bot open_id and mounts the preview as a reply-quote", async () => {
@@ -515,5 +541,20 @@ describe("the feishu kind: same engine, its own route / state home / envelope ta
 
   it("construction failures name feishuChannel, not larkChannel", () => {
     expect(() => feishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/feishuChannel/);
+  });
+});
+
+describe("cardSummary: the settled card's chat-list/notification preview", () => {
+  it("takes the first meaningful line as plain text", () => {
+    expect(cardSummary("# Heading\n\nbody")).toBe("Heading");
+    expect(cardSummary("```js\ncode();\n```\nThe **answer** is [here](https://x)")).toBe("The answer is here");
+    expect(cardSummary("- first bullet\n- second")).toBe("first bullet");
+  });
+
+  it("caps the length and survives empty/whitespace answers", () => {
+    const long = "x".repeat(200);
+    expect(cardSummary(long).length).toBeLessThanOrEqual(60);
+    expect(cardSummary(long).endsWith("…")).toBe(true);
+    expect(cardSummary("   \n  ")).toBe("");
   });
 });
