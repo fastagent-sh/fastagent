@@ -37,8 +37,9 @@ so `add feishu` just does it — skipped when `FEISHU_APP_ID`/`FEISHU_APP_SECRET
 `.env` (it never silently mints a second app). The intl cloud cannot complete that bound flow (its
 confirm-page ack endpoint is broken), so `add lark` opens Lark's unbound one-click launcher
 (`/page/launcher?from=backend_oneclick`), then waits for App ID and App Secret and validates the pair.
-It does NOT assume the config API is absent: it starts the same temporary tunnel as Feishu and tries
-the webhook-mode PATCH against this actual app. Success switches the draft's Subscription mode and
+After validation it opens that app's Events & Callbacks → Security page directly
+(`/app/<id>/event?tab=safe`), then starts the same temporary tunnel as Feishu and tries the webhook-mode
+PATCH against this actual app. Success switches the draft's Subscription mode and
 captures the Verification Token from the challenge; only an explicit config-route HTTP 404 falls back
 to a hidden Token prompt plus manual mode/URL setup. All three values land in the gitignored `.env`.
 

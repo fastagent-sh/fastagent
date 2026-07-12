@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { LARK_CONSOLE_URL, type LarkOnboardIO, onboardLarkApp } from "../src/channels/lark/onboard.ts";
+import {
+  LARK_CONSOLE_URL,
+  type LarkOnboardIO,
+  larkEventSecurityUrl,
+  onboardLarkApp,
+} from "../src/channels/lark/onboard.ts";
 
 function fakeIO(answers: Array<string | undefined>): {
   io: LarkOnboardIO;
@@ -39,7 +44,8 @@ describe("guided Lark app onboarding", () => {
       LARK_VERIFICATION_TOKEN: "captured-token",
     });
     expect(LARK_CONSOLE_URL).toBe("https://open.larksuite.com/page/launcher?from=backend_oneclick");
-    expect(fx.opened).toEqual([LARK_CONSOLE_URL]);
+    expect(larkEventSecurityUrl("cli_app")).toBe("https://open.larksuite.com/app/cli_app/event?tab=safe");
+    expect(fx.opened).toEqual([LARK_CONSOLE_URL, "https://open.larksuite.com/app/cli_app/event?tab=safe"]);
     expect(fx.prompts.map((p) => p.message)).toEqual([
       expect.stringContaining("LARK_APP_ID"),
       expect.stringContaining("LARK_APP_SECRET"),

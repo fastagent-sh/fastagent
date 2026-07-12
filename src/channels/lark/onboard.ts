@@ -9,6 +9,11 @@
 
 export const LARK_CONSOLE_URL = "https://open.larksuite.com/page/launcher?from=backend_oneclick";
 
+/** Directly where the fallback token lives (and where the successful automatic mode change is visible). */
+export function larkEventSecurityUrl(appId: string): string {
+  return `https://open.larksuite.com/app/${encodeURIComponent(appId)}/event?tab=safe`;
+}
+
 export interface LarkOnboardIO {
   openUrl(url: string): void;
   note(message: string): void;
@@ -65,7 +70,10 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
   );
 
   await opts.verifyCredentials(appId, appSecret);
-  io.note("App ID / Secret verified. Trying automatic webhook-mode + Verification-Token bootstrap…");
+  const eventSecurityUrl = larkEventSecurityUrl(appId);
+  io.note(`App ID / Secret verified. Opening Events & Callbacks → Security: ${eventSecurityUrl}`);
+  io.openUrl(eventSecurityUrl);
+  io.note("Trying automatic webhook-mode + Verification-Token bootstrap…");
   const bootstrap = await opts.bootstrapWebhook(appId, appSecret);
   if (bootstrap.token) {
     io.note("Verification Token captured; Subscription mode changed to webhook in the app draft.");

@@ -241,7 +241,8 @@ is exactly the split's payoff: per-kind onboarding without engine forks. What is
   creation link (the platform excludes sensitive config from addons). The intl cloud cannot complete
   the BOUND device flow (its confirm-page ack endpoint is broken), so `add lark` opens the unbound
   one-click launcher (`/page/launcher?from=backend_oneclick`) and runs: App ID → Secret → credential
-  validation → the SAME temporary-tunnel PATCH/challenge bootstrap. Success switches the draft to
+  validation → open this app's `/event?tab=safe` page → the SAME temporary-tunnel PATCH/challenge
+  bootstrap. Success switches the draft to
   webhook mode and captures the token; only a route-level 404 from this actual app falls back to a
   hidden Token prompt + manual mode/URL setup. This is an optimistic capability probe, not a baked-in
   cloud assumption; every other failure remains visible.
