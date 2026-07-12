@@ -42,6 +42,8 @@ FastAgent deliberately keeps the serving layer small and composable:
 - **Typed edges** — tools, events, and request bodies are explicit and validated at boundaries.
 - **Filesystem truth** — the deployable definition is the directory, not ambient machine state.
 
+Terminology: these docs and the [SPEC](SPEC.md) say *engine*; the ecosystem — and [fastagent.sh](https://fastagent.sh) — call the same seam the *agent harness*. One concept, one contract.
+
 See [Design principles](principles.md) for the full rationale and non-goals.
 
 ## What we didn't build
