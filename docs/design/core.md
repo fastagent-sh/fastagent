@@ -218,9 +218,11 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   is its designed AI-output channel. The same card settles into the final Markdown answer. Degrade
   tiers: card fails → static text placeholder; streaming closed mid-turn → frozen preview, the settle
   still lands.
-- **Verification is modal and fail-closed.** Encrypt Key set: signature over the raw body → AES
-  decrypt, plaintext refused. Without one: constant-time verification-token match. The
-  `url_verification` challenge is answered in both modes.
+- **Verification is modal and fail-closed.** Encrypt Key set: ordinary events require a signature over
+  the raw body → AES decrypt, and plaintext is refused. Feishu explicitly excludes Request URL
+  verification from event signatures, so its encrypted `url_verification` challenge takes the narrow
+  decrypt → exact-type → constant-time Token path. Without an Encrypt Key, events use the same
+  constant-time verification-token match in plaintext.
 - **Dedup on `message_id` (`seen.ts`).** The platform documents duplicate pushes and recommends this
   key; without the ring, a late redelivery after a completed turn would re-run it.
 - **Group visibility is scope-gated.** The default scope delivers only @mentions of the bot, so

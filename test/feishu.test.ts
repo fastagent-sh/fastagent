@@ -213,7 +213,7 @@ describe("ingress verification", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("encrypt mode: verifies the signature over the RAW body, decrypts, and REFUSES plaintext", async () => {
+  it("encrypt mode: URL challenge uses decrypt+Token; ordinary events require a raw-body signature", async () => {
     feishuFetch();
     const KEY = "enc-key";
     const { handler } = buildChannel({ encryptKey: KEY });
@@ -223,26 +223,50 @@ describe("ingress verification", () => {
       const cipher = createCipheriv("aes-256-cbc", k, iv);
       return Buffer.concat([iv, cipher.update(plain, "utf8"), cipher.final()]).toString("base64");
     };
-    const body = JSON.stringify({
-      encrypt: encrypt(JSON.stringify({ type: "url_verification", challenge: "c9", token: TOKEN })),
-    });
+    const encryptedBody = (plain: Record<string, unknown>): string =>
+      JSON.stringify({ encrypt: encrypt(JSON.stringify(plain)) });
     const headers = (sig: string) => ({
       "x-lark-request-timestamp": "170",
       "x-lark-request-nonce": "n1",
       "x-lark-signature": sig,
     });
-    const good = await handler(
+
+    // Feishu explicitly excludes Request URL verification from event signature verification: the
+    // encrypted challenge has no signature headers, so decrypt + constant-time Token authenticates it.
+    const challengeBody = encryptedBody({ type: "url_verification", challenge: "c9", token: TOKEN });
+    const challenge = await handler(new Request("http://app/feishu", { method: "POST", body: challengeBody }));
+    expect(challenge.status).toBe(200);
+    expect(await challenge.json()).toEqual({ challenge: "c9" });
+    const badTokenBody = encryptedBody({ type: "url_verification", challenge: "c9", token: "forged" });
+    expect((await handler(new Request("http://app/feishu", { method: "POST", body: badTokenBody }))).status).toBe(401);
+    // A supplied-but-invalid signature cannot downgrade into the unsigned challenge path.
+    expect(
+      (
+        await handler(
+          new Request("http://app/feishu", { method: "POST", body: challengeBody, headers: headers("bad") }),
+        )
+      ).status,
+    ).toBe(401);
+
+    const eventBody = encryptedBody({
+      schema: "2.0",
+      header: { event_type: "im.chat.updated_v1", token: TOKEN },
+      event: {},
+    });
+    const signedEvent = await handler(
       new Request("http://app/feishu", {
         method: "POST",
-        body,
-        headers: headers(eventSignature(KEY, "170", "n1", body)),
+        body: eventBody,
+        headers: headers(eventSignature(KEY, "170", "n1", eventBody)),
       }),
     );
-    expect(good.status).toBe(200);
-    expect(await good.json()).toEqual({ challenge: "c9" });
-    // Tampered signature → 401; a PLAINTEXT event while the key is set → 401 (no bypass around the signature).
-    const forged = await handler(new Request("http://app/feishu", { method: "POST", body, headers: headers("bad") }));
-    expect(forged.status).toBe(401);
+    expect(signedEvent.status).toBe(200);
+    expect(
+      (await handler(new Request("http://app/feishu", { method: "POST", body: eventBody, headers: headers("bad") })))
+        .status,
+    ).toBe(401);
+    expect((await handler(new Request("http://app/feishu", { method: "POST", body: eventBody }))).status).toBe(401);
+    // Encrypt Key mode remains modal: plaintext events are never accepted.
     expect((await handler(feishuRequest(messageEvent({})))).status).toBe(401);
   });
 

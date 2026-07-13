@@ -148,10 +148,16 @@ export default feishuChannel({
 
 Two modes, decided by the console's Encrypt Key setting and mirrored by the `encryptKey` option:
 
-- **Encrypt Key set (recommended):** every event arrives AES-256-CBC encrypted with `X-Lark-Signature` headers. The channel verifies the signature over the raw body, decrypts, and **refuses plaintext events entirely** — accepting both would let a forger skip the stronger check.
+- **Encrypt Key set (recommended):** ordinary events arrive AES-256-CBC encrypted with `X-Lark-Signature` headers. The channel verifies the signature over the raw body, decrypts, and **refuses plaintext events entirely** — accepting both would let a forger skip the stronger check.
 - **No Encrypt Key:** events arrive in plaintext and are authenticated by the Verification Token (constant-time compare).
 
-The `url_verification` challenge is answered in both modes (it arrives encrypted too when a key is set).
+Request URL verification is the platform-documented narrow exception to event signatures. With an
+Encrypt Key, its `url_verification` body is encrypted but carries no event-signature headers: the
+channel decrypts it, admits only that exact type, constant-time checks the Verification Token, and
+returns the challenge. Every ordinary encrypted event still requires a valid signature. See Feishu's
+[webhook setup](https://open.feishu.cn/document/event-subscription-guide/event-subscriptions/event-subscription-configure-/choose-a-subscription-mode/send-notifications-to-developers-server)
+and [event security](https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/encrypt-key-encryption-configuration-case)
+documentation.
 
 ## Routing policy
 

@@ -105,9 +105,11 @@ export interface FeishuChannelOptions {
   appSecret: string;
   /** Verification Token (console → Events & Callbacks) — authenticates PLAINTEXT events. */
   verificationToken: string;
-  /** Encrypt Key (same page, optional there — recommended): when set, events arrive encrypted and
-   *  signed; this channel then REFUSES plaintext events (fail closed — accepting both would let a
-   *  forger skip the stronger check). Must match the console exactly. */
+  /** Encrypt Key (same page, optional there — recommended): when set, ordinary events arrive encrypted
+   *  and signed; this channel then REFUSES plaintext events (fail closed — accepting both would let a
+   *  forger skip the stronger check). Feishu explicitly excludes the encrypted `url_verification`
+   *  handshake from event signature verification; that narrow path is authenticated after decryption
+   *  by the Verification Token. Must match the console exactly. */
   encryptKey?: string;
   /** Policy: whether/where to answer an event (return null to ignore). Defaults to {@link defaultFeishuRoute}. */
   route?: (event: FeishuMessageEvent) => FeishuRoute | null;
@@ -344,20 +346,31 @@ export function buildFeishuChannel(
           );
           return text("encrypt key not configured\n", 400);
         }
-        // Signature first (over the RAW body), then decrypt. Both fail closed.
         const sig = {
           timestamp: req.headers.get("x-lark-request-timestamp") ?? "",
           nonce: req.headers.get("x-lark-request-nonce") ?? "",
           signature: req.headers.get("x-lark-signature") ?? "",
         };
-        if (!sig.signature || !verifySignature(encryptKey, sig, body.text)) {
-          log.warn(`${label} rejected an event: missing/invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
+        // Ordinary encrypted events MUST verify the signature over the raw body before decryption.
+        // Feishu's documented exception is Request URL verification: its encrypted challenge carries
+        // no event-signature headers, so it is decrypted first and admitted ONLY when its type is
+        // url_verification; the common constant-time Token check below then authenticates it.
+        if (sig.signature && !verifySignature(encryptKey, sig, body.text)) {
+          log.warn(`${label} rejected an event: invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
           return text("invalid signature\n", 401);
         }
         try {
           envelope = JSON.parse(decryptEvent(encryptKey, outer.encrypt)) as Record<string, unknown>;
         } catch {
+          if (!sig.signature) {
+            log.warn(`${label} rejected an unsigned encrypted request that could not be decrypted`);
+            return text("invalid encrypted payload\n", 401);
+          }
           return text("invalid encrypted payload\n", 400);
+        }
+        if (!sig.signature && envelope.type !== "url_verification") {
+          log.warn(`${label} rejected an encrypted event: missing X-Lark-Signature`);
+          return text("invalid signature\n", 401);
         }
       } else {
         if (encryptKey) {
@@ -368,8 +381,9 @@ export function buildFeishuChannel(
         }
         envelope = outer;
       }
-      // The verification token authenticates plaintext events; on encrypted ones it is defense in depth
-      // (v2 carries it in header.token, url_verification at the top level). Fail closed when absent.
+      // The Verification Token authenticates plaintext mode and the platform-documented unsigned,
+      // encrypted URL challenge; on signed encrypted events it is defense in depth. V2 events carry it
+      // in header.token, while url_verification carries it at the top level. Fail closed when absent.
       const token =
         (typeof envelope.token === "string" ? envelope.token : undefined) ??
         (typeof (envelope.header as Record<string, unknown> | undefined)?.token === "string"

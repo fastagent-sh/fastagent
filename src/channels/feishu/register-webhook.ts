@@ -39,7 +39,7 @@ export interface RegisterFeishuWebhookOptions {
   readyIntervalMs?: number;
   retryMs?: number;
   apiBase?: string;
-  /** Definitive config-API fallback. Local dev uses this to open the exact app console page. */
+  /** Manual fallback after a definitive config error or exhausted retries. Local dev opens this App. */
   onManualRegistration?: (info: FeishuManualRegistration) => void;
 }
 
@@ -74,6 +74,25 @@ export async function registerFeishuWebhook(
   }
 
   const api = createFeishuApi({ kind, baseUrl: apiBase, appId, appSecret });
+  const consoleUrl = `${apiBase}/app/${encodeURIComponent(appId)}/event`;
+  const versionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/version`;
+  const manualRegistration = (): void => {
+    log.info(`[fastagent] ${kind}: Events & Callbacks:\n  ${consoleUrl}`);
+    log.info(
+      `[fastagent] ${kind}: switch Subscription mode to webhook and copy this Request URL:\n  ${requestUrl}\n` +
+        `  Keep fastagent running while saving — the console verifies the URL immediately.`,
+    );
+    log.info(
+      `[fastagent] ${kind}: if this app's webhook mode has not been published yet, ` +
+        `create + publish a version before testing messages:\n  ${versionUrl}`,
+    );
+    try {
+      opts.onManualRegistration?.({ consoleUrl, requestUrl });
+    } catch (callbackError) {
+      log.warn(`[fastagent] ${kind}: could not open Events & Callbacks: ${String(callbackError)}`);
+    }
+  };
+
   // Reachable → register. The PATCH is the real probe (same lesson as the token bootstrap): the
   // platform verifies request_url with a challenge DURING the call, and a fresh tunnel's edge can be
   // reachable from here while the platform's own path still lags — its 210042 "request_url validation
@@ -89,7 +108,7 @@ export async function registerFeishuWebhook(
       // connection → webhook) only takes effect when a version is published — the dispatcher serves
       // the published snapshot, and version publishing has no open API. One console click, once.
       log.info(
-        `[fastagent] ${kind}: if messages do not arrive, publish a version (one click, prompted) — the switch to webhook mode takes effect on publish: ${apiBase}/app/${appId}/version`,
+        `[fastagent] ${kind}: if messages do not arrive, publish a version (one click, prompted) — the switch to webhook mode takes effect on publish: ${versionUrl}`,
       );
       return;
     } catch (e) {
@@ -98,31 +117,23 @@ export async function registerFeishuWebhook(
       // live on open.feishu.cn but not yet on open.larksuite.com. Name that — "check your scopes"
       // would send the operator hunting for a problem they cannot fix.
       if (/failed: 404/.test(error)) {
-        const consoleUrl = `${apiBase}/app/${encodeURIComponent(appId)}/event`;
         log.warn(
           `[fastagent] ${kind}: this cloud (${apiBase}) returned HTTP 404 for the app-config API — ` +
             `manual registration is required`,
         );
-        log.info(`[fastagent] ${kind}: Events & Callbacks:\n  ${consoleUrl}`);
-        log.info(
-          `[fastagent] ${kind}: switch Subscription mode to webhook and copy this Request URL:\n  ${requestUrl}\n` +
-            `  Keep fastagent running while saving — the console verifies the URL immediately.`,
-        );
-        try {
-          opts.onManualRegistration?.({ consoleUrl, requestUrl });
-        } catch (callbackError) {
-          log.warn(`[fastagent] ${kind}: could not open Events & Callbacks: ${String(callbackError)}`);
-        }
+        manualRegistration();
         return;
       }
       if (!/resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|210042|request_url/i.test(error)) {
         log.error(
           `[fastagent] ${kind}: could not register the event URL (${error}). ` +
-            `If the app lacks the "application:application:patch" scope (console → Permissions) or is under review, ${manual}`,
+            `The app may lack the "application:application:patch" scope (console → Permissions) or be under review; manual registration is available below.`,
         );
+        manualRegistration();
         return;
       }
     }
   }
-  log.warn(`[fastagent] ${kind}: registration still failing after retries. ${manual}`);
+  log.warn(`[fastagent] ${kind}: registration still failing after retries — manual registration is required`);
+  manualRegistration();
 }

@@ -135,6 +135,39 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     expect(patches).toBe(3); // failed twice, registered on the third
   });
 
+  it("opens the exact App after request-URL validation exhausts its bounded retries", async () => {
+    creds();
+    let patches = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/health")) return new Response(null, { status: 200 });
+        if (url.includes("tenant_access_token")) {
+          return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
+        }
+        if (url.includes("/application/v7/")) {
+          patches++;
+          return Response.json({ code: 210042, msg: "The validation for event.request_url failed." });
+        }
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const onManualRegistration = vi.fn();
+    await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
+      readyTimeoutMs: 100,
+      readyIntervalMs: 1,
+      retryMs: 1,
+      apiBase: "http://feishu.test",
+      onManualRegistration,
+    });
+    expect(patches).toBe(8);
+    expect(onManualRegistration).toHaveBeenCalledOnce();
+    expect(onManualRegistration).toHaveBeenCalledWith({
+      consoleUrl: "http://feishu.test/app/cli_app/event",
+      requestUrl: "https://x.trycloudflare.com/feishu",
+    });
+  });
+
   it("a PERMANENT config reject (missing scope) is reported once with the manual path, not retried", async () => {
     creds();
     let patches = 0;
@@ -179,9 +212,13 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       }),
     );
     const warned: string[] = [];
+    const informed: string[] = [];
     const { log } = await import("../src/log.ts");
-    const spy = vi.spyOn(log, "warn").mockImplementation((m: string) => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation((m: string) => {
       warned.push(m);
+    });
+    const infoSpy = vi.spyOn(log, "info").mockImplementation((m: string) => {
+      informed.push(m);
     });
     const onManualRegistration = vi.fn();
     await registerFeishuWebhook("https://x.trycloudflare.com", "lark", {
@@ -191,9 +228,13 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       apiBase: "http://larksuite.test", // the intl cloud — no v7 config route
       onManualRegistration,
     });
-    spy.mockRestore();
+    warnSpy.mockRestore();
+    infoSpy.mockRestore();
     expect(patches).toBe(1); // a missing route never gets blind retries
     expect(warned.join("\n")).toMatch(/HTTP 404.*manual registration/);
+    expect(informed.join("\n")).toMatch(
+      /webhook mode has not been published yet.*create \+ publish a version.*http:\/\/larksuite\.test\/app\/cli_app\/version/s,
+    );
     expect(onManualRegistration).toHaveBeenCalledOnce();
     expect(onManualRegistration).toHaveBeenCalledWith({
       consoleUrl: "http://larksuite.test/app/cli_app/event",
