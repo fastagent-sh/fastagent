@@ -34,10 +34,24 @@ const KIND_API_BASE: Record<LarkKind, string> = {
  * the manual instruction instead of failing. `opts` exist for tests: timeouts + `apiBase` (a fake
  * platform — production derives it from the kind).
  */
+export interface LarkManualRegistration {
+  consoleUrl: string;
+  requestUrl: string;
+}
+
+export interface RegisterLarkWebhookOptions {
+  readyTimeoutMs?: number;
+  readyIntervalMs?: number;
+  retryMs?: number;
+  apiBase?: string;
+  /** Definitive config-API fallback. Local dev uses this to open the exact app console page. */
+  onManualRegistration?: (info: LarkManualRegistration) => void;
+}
+
 export async function registerLarkWebhook(
   baseUrl: string,
   kind: LarkKind,
-  opts: { readyTimeoutMs?: number; readyIntervalMs?: number; retryMs?: number; apiBase?: string } = {},
+  opts: RegisterLarkWebhookOptions = {},
 ): Promise<void> {
   const envPrefix = kind === "feishu" ? "FEISHU" : "LARK";
   const appId = process.env[`${envPrefix}_APP_ID`];
@@ -88,10 +102,21 @@ export async function registerLarkWebhook(
       // live on open.feishu.cn but not yet on open.larksuite.com. Name that — "check your scopes"
       // would send the operator hunting for a problem they cannot fix.
       if (/failed: 404/.test(error)) {
+        const consoleUrl = `${apiBase}/app/${encodeURIComponent(appId)}/event`;
         log.warn(
           `[fastagent] ${kind}: this cloud (${apiBase}) does not expose the app-config API yet (it exists on ` +
-            `open.feishu.cn; Lark international lags behind) — register by hand: ${manual}`,
+            `open.feishu.cn; Lark international lags behind) — manual registration is required`,
         );
+        log.info(`[fastagent] ${kind}: Events & Callbacks:\n  ${consoleUrl}`);
+        log.info(
+          `[fastagent] ${kind}: switch Subscription mode to webhook and copy this Request URL:\n  ${requestUrl}\n` +
+            `  Keep fastagent running while saving — the console verifies the URL immediately.`,
+        );
+        try {
+          opts.onManualRegistration?.({ consoleUrl, requestUrl });
+        } catch (callbackError) {
+          log.warn(`[fastagent] ${kind}: could not open Events & Callbacks: ${String(callbackError)}`);
+        }
         return;
       }
       if (!/resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|210042|request_url/i.test(error)) {

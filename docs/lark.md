@@ -41,7 +41,9 @@ After validation it opens that app's Events & Callbacks → Security page direct
 (`/app/<id>/event?tab=safe`), then starts the same temporary tunnel as Feishu and tries the webhook-mode
 PATCH against this actual app. Success switches the draft's Subscription mode and
 captures the Verification Token from the challenge; only an explicit config-route HTTP 404 falls back
-to a hidden Token prompt plus manual mode/URL setup. All three values land in the gitignored `.env`.
+to a hidden Token prompt plus manual mode/URL setup. During `dev --tunnel`, that fallback opens the
+exact app's Events & Callbacks page and prints the new Request URL on its own line for copying. All
+three values land in the gitignored `.env`.
 
 This creates (for the feishu kind; lark mirrors it):
 
@@ -114,6 +116,8 @@ FEISHU_ENCRYPT_KEY=...   # optional but recommended; must match the console exac
    registrar both try the same API. If this app receives the previously observed config-route 404,
    switch **Subscription mode to webhook** and set the URL in the console by hand — with the server
    **running** (the platform verifies it with a `url_verification` challenge this channel answers).
+   `dev --tunnel` opens this app page automatically on that 404 fallback and prints the Request URL as
+   a standalone copy target.
 
 6. **Create a version and publish** the app (a tenant admin approves it), then add the bot to a chat.
 

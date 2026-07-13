@@ -183,16 +183,22 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
     const spy = vi.spyOn(log, "warn").mockImplementation((m: string) => {
       warned.push(m);
     });
+    const onManualRegistration = vi.fn();
     await registerLarkWebhook("https://x.trycloudflare.com", "lark", {
       readyTimeoutMs: 100,
       readyIntervalMs: 1,
       retryMs: 1,
       apiBase: "http://larksuite.test", // the intl cloud — no v7 config route
+      onManualRegistration,
     });
     spy.mockRestore();
     expect(patches).toBe(1); // a missing route never gets blind retries
     expect(warned.join("\n")).toMatch(/does not expose the app-config API yet/); // the CAUSE, not "check scopes"
-    expect(warned.join("\n")).toMatch(/register by hand/);
+    expect(onManualRegistration).toHaveBeenCalledOnce();
+    expect(onManualRegistration).toHaveBeenCalledWith({
+      consoleUrl: "http://larksuite.test/app/cli_app/event",
+      requestUrl: "https://x.trycloudflare.com/lark",
+    });
   });
 
   it("missing credentials print the instruction and touch nothing", async () => {

@@ -14,6 +14,7 @@ import { logAgentLoop } from "./observe.ts";
 import { log, setLogLevel } from "./log.ts";
 import { loadDotEnv, parseEnvContent } from "./env.ts";
 import { installProxyFetch } from "./proxy.ts";
+import { openExternalUrl } from "./open-url.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
@@ -732,7 +733,7 @@ async function runAdd(): Promise<void> {
       }
       created = await onboardLarkApp(
         {
-          openUrl: openBrowser,
+          openUrl: openExternalUrl,
           note: (message) => clackLog.info(message),
           async prompt(message, opts) {
             const result = opts?.hidden ? await password({ message }) : await clackText({ message });
@@ -780,7 +781,7 @@ async function runAdd(): Promise<void> {
               console.error(
                 `[fastagent] publish a version to activate the mode change (one click; no publish API). Opening ${versionUrl}`,
               );
-              openBrowser(versionUrl);
+              openExternalUrl(versionUrl);
               return { token };
             } catch (error) {
               if (!isLarkConfigApiMissing(error)) throw error;
@@ -873,7 +874,7 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
       console.error(
         `\n  Opening the confirmation link in your browser (or open it in Feishu/Lark / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  If the page says "Link expired" on first load, open the link above AGAIN (do NOT refresh:\n  the page drops the code from the URL, and a refresh creates an app the CLI can't see).\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
       );
-      openBrowser(url); // best-effort, like `login` — the URL above is the fallback
+      openExternalUrl(url); // best-effort, like `login` — the URL above is the fallback
     },
   });
   console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);
@@ -927,7 +928,7 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
       console.error(
         `[fastagent] one console click remains: CREATE + PUBLISH a version (self-approved) — the switch to webhook mode takes effect on publish. Opening ${versionUrl}`,
       );
-      openBrowser(versionUrl);
+      openExternalUrl(versionUrl);
     } catch (e) {
       // Transient tunnel weather is the usual cause. Do NOT suggest re-running `add feishu` here: that
       // mints ANOTHER app — the manual copy below completes THIS one.
@@ -1326,12 +1327,6 @@ async function runLogin(): Promise<void> {
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
 }
 
-/** Best-effort open a URL in the default browser; failure is fine (the URL is always printed too). */
-function openBrowser(url: string): void {
-  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  spawn(cmd, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).on("error", () => {});
-}
-
 /** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. */
 function terminalLoginIO(): LoginIO {
   return {
@@ -1346,7 +1341,7 @@ function terminalLoginIO(): LoginIO {
       return isCancel(r) ? undefined : (r as string);
     },
     note: (message) => clackLog.info(message),
-    openUrl: openBrowser,
+    openUrl: openExternalUrl,
   };
 }
 
@@ -1518,7 +1513,7 @@ function maybeTunnel(workspaceDir: string, boundPort: number): void {
   if (!values.tunnel || process.env.FASTAGENT_DEV_WORKER === "1") return;
   void startCloudflareTunnel(boundPort).then((t) => {
     if (!t) return;
-    void announceWebhooks(workspaceDir, t.url);
+    void announceWebhooks(workspaceDir, t.url, { openUrl: openExternalUrl });
     // Single-process (start / --no-watch): close the tunnel on exit (watch mode's supervisor owns its own).
     const cleanup = (): never => {
       t.close();

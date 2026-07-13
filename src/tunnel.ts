@@ -142,7 +142,11 @@ function channelBasenames(dir: string): string[] {
  * Print the public URL and wire up the first-party webhook channels found under `dir`: telegram is
  * auto-registered via setWebhook (using .env tokens); github prints the URL to add in repo settings.
  */
-export async function announceWebhooks(dir: string, baseUrl: string): Promise<void> {
+export async function announceWebhooks(
+  dir: string,
+  baseUrl: string,
+  opts: { openUrl?: (url: string) => void } = {},
+): Promise<void> {
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
     loadDotEnv(dir); // telegram registration reads tokens from .env
@@ -168,6 +172,9 @@ export async function announceWebhooks(dir: string, baseUrl: string): Promise<vo
   // feishu/lark register programmatically too (application-v7 config PATCH — telegram-setWebhook
   // parity), once per mounted kind (each kind is its own app with its own credentials); the registrar
   // owns its own health wait and degrades to the manual console instruction.
-  if (channels.includes("feishu")) await registerLarkWebhook(baseUrl, "feishu");
-  if (channels.includes("lark")) await registerLarkWebhook(baseUrl, "lark");
+  const larkOptions = {
+    onManualRegistration: ({ consoleUrl }: { consoleUrl: string }) => opts.openUrl?.(consoleUrl),
+  };
+  if (channels.includes("feishu")) await registerLarkWebhook(baseUrl, "feishu", larkOptions);
+  if (channels.includes("lark")) await registerLarkWebhook(baseUrl, "lark", larkOptions);
 }

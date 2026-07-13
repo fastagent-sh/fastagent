@@ -34,6 +34,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.TELEGRAM_BOT_TOKEN;
   delete process.env.TELEGRAM_SECRET_TOKEN;
+  delete process.env.LARK_APP_ID;
+  delete process.env.LARK_APP_SECRET;
 });
 
 /** A fetch stub: /health always serves 200; setWebhook returns each queued response in turn. */
@@ -198,6 +200,30 @@ describe("tunnel: announceWebhooks", () => {
 
     expect(setWebhookCall(fetchMock)).toBeUndefined();
     expect(errs.some((e) => /github:/.test(e) && /x\.trycloudflare\.com\/webhook/.test(e))).toBe(true);
+  });
+
+  it("opens the exact Lark app page when the config API requires manual registration", async () => {
+    captureErrors();
+    process.env.LARK_APP_ID = "cli_app";
+    process.env.LARK_APP_SECRET = "sec";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/health")) return new Response(null, { status: 200 });
+        if (url.includes("tenant_access_token")) {
+          return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
+        }
+        if (url.includes("/application/v7/applications/")) return new Response("not found", { status: 404 });
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const openUrl = vi.fn();
+    const dir = await workspace(["lark"]);
+
+    await announceWebhooks(dir, "https://x.trycloudflare.com", { openUrl });
+
+    expect(openUrl).toHaveBeenCalledOnce();
+    expect(openUrl).toHaveBeenCalledWith("https://open.larksuite.com/app/cli_app/event");
   });
 
   const setWebhookCount = (m: ReturnType<typeof vi.fn>) =>
