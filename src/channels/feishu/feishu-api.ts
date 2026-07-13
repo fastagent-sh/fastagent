@@ -102,6 +102,14 @@ export function isFeishuConfigApiMissing(e: unknown): boolean {
   return e instanceof FeishuApiError && e.status === 404;
 }
 
+/** Whether a registration-PATCH failure is transient weather worth retrying: network/DNS/timeouts, or
+ *  the platform's 210042 "request_url validation failed" while its own path to a fresh tunnel edge
+ *  warms up. Everything else (scope, auth, app under review, the config-route 404 above) is definitive
+ *  — the registrars and the token bootstrap share this one classifier. */
+export function isTransientFeishuRegistrationError(e: unknown): boolean {
+  return /resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|210042|request_url/i.test(String(e));
+}
+
 /** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers. */
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 

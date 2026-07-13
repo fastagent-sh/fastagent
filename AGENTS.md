@@ -26,7 +26,7 @@ src/
 ├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
 ├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
 ├── cli.ts                   # command entry points (process side effects live here)
-├── invoke-stream.ts, cli-models.ts, cli-auth.ts # command rendering layers (`invoke` stream → exit code, `models`/auth-report output)
+├── invoke-stream.ts, cli-models.ts, cli-auth.ts, cli-add-feishu.ts # command rendering layers (`invoke` stream → exit code, `models`/auth-report output, `add feishu|lark` app onboarding)
 ├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
 ├── log.ts                   # leveled logging singleton (dev=debug, start=info)
 ├── observe.ts               # turn-trace logging around an Agent

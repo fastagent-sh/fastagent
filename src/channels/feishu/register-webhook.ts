@@ -22,7 +22,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
 import { waitForHealth } from "../wait-health.ts";
 import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
-import { createFeishuApi } from "./feishu-api.ts";
+import { createFeishuApi, isFeishuConfigApiMissing, isTransientFeishuRegistrationError } from "./feishu-api.ts";
 
 /**
  * Register `<baseUrl>/<kind>` as the app's event Request URL (webhook mode). Missing credentials print
@@ -112,11 +112,10 @@ export async function registerFeishuWebhook(
       );
       return;
     } catch (e) {
-      const error = String(e);
       // A 404 on the config route is the CLOUD lagging, not this app's configuration: the v7 API is
       // live on open.feishu.cn but not yet on open.larksuite.com. Name that — "check your scopes"
       // would send the operator hunting for a problem they cannot fix.
-      if (/failed: 404/.test(error)) {
+      if (isFeishuConfigApiMissing(e)) {
         log.warn(
           `[fastagent] ${kind}: this cloud (${apiBase}) returned HTTP 404 for the app-config API — ` +
             `manual registration is required`,
@@ -124,9 +123,9 @@ export async function registerFeishuWebhook(
         manualRegistration();
         return;
       }
-      if (!/resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|210042|request_url/i.test(error)) {
+      if (!isTransientFeishuRegistrationError(e)) {
         log.error(
-          `[fastagent] ${kind}: could not register the event URL (${error}). ` +
+          `[fastagent] ${kind}: could not register the event URL (${String(e)}). ` +
             `The app may lack the "application:application:patch" scope (console → Permissions) or be under review; manual registration is available below.`,
         );
         manualRegistration();
