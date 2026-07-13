@@ -1,8 +1,8 @@
 /**
  * `--tunnel`: expose the local dev server on a public HTTPS URL via a Cloudflare quick tunnel, then
- * auto-register the first-party webhook channels against it (telegram setWebhook; lark application-
- * config PATCH; github prints the URL to paste into repo settings). This closes the "local dev →
- * public URL" gap webhooks need.
+ * auto-register the first-party webhook channels against it (Telegram setWebhook; Feishu/Lark
+ * application-config PATCH; GitHub prints the URL to paste into repo settings). This closes the
+ * "local dev → public URL" gap webhooks need.
  *
  * Process orchestration, not assembly — lives outside the engine, beside dev-supervisor.ts.
  */
@@ -139,8 +139,8 @@ function channelBasenames(dir: string): string[] {
 }
 
 /**
- * Print the public URL and wire up the first-party webhook channels found under `dir`: telegram is
- * auto-registered via setWebhook (using .env tokens); github prints the URL to add in repo settings.
+ * Print the public URL and wire up the first-party webhook channels found under `dir`: Telegram and
+ * Feishu/Lark auto-register using credentials from .env; GitHub prints the URL to add in repo settings.
  */
 export async function announceWebhooks(
   dir: string,
@@ -149,20 +149,20 @@ export async function announceWebhooks(
 ): Promise<void> {
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
-    loadDotEnv(dir); // telegram registration reads tokens from .env
+    loadDotEnv(dir); // webhook registrars read channel credentials from .env
   } catch (error) {
     // best-effort boundary: a MISSING .env is already tolerated by loadDotEnv; an unreadable one (EACCES,
     // or .env is a directory) must NOT crash the long-running dev/start server — announceWebhooks is
     // void-called with no unhandledRejection handler, so a throw here would terminate the process. Warn
-    // (surface it, rule 8) and continue best-effort; telegram registration then degrades to its manual
-    // instruction if the token is absent. loadDotEnv keeps throwing for the synchronous command callers.
+    // (surface it, rule 8) and continue best-effort; each registrar then surfaces its own
+    // missing-credential guidance. loadDotEnv keeps throwing for the synchronous command callers.
     log.warn(`[fastagent] could not read ${join(dir, ".env")}: ${(error as Error).message} — continuing without it`);
   }
   const channels = channelBasenames(dir);
   if (channels.length === 0) return;
   // Readiness is the registrar's job now: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before
-  // its origin connects, and registerTelegramWebhook polls /health until it serves before setWebhook (the
-  // same wait the deploy runners rely on). github needs no wait — the operator adds that webhook by hand.
+  // its origin connects, and the automatic registrars poll /health before configuring the platform (the
+  // same wait the deploy runners rely on). GitHub needs no wait — the operator adds that webhook by hand.
   if (channels.includes("telegram")) await registerTelegramWebhook(baseUrl);
   if (channels.includes("github")) {
     log.info(
