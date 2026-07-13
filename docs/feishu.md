@@ -80,14 +80,6 @@ lands in `.env` under the `FEISHU_*` namespace:
 If the temporary tunnel/token capture fails, the already-created App ID and Secret are still written;
 the CLI prints the exact console location for manually copying the Verification Token into `.env`.
 
-Browser quirk: the confirm page may show **"Link expired" on first load** — the page acks the
-code before its session bootstrap finishes, and it renders every ack failure as an expiry. Recover
-by opening the printed link **again** (the second navigation has a warm session and goes through).
-Do **not** just refresh: the page strips the code from the URL on load, so a refresh runs the
-unbound create flow — the app gets created, but its credentials only appear on-page and the waiting
-CLI never completes. Keep the CLI running until it prints `app created`: the credentials are
-delivered to the polling CLI, not the browser.
-
 One console action remains, and the CLI opens the page for it at the end of the scan: **create + publish
 a version** (self-approved on your own tenant). The switch from the
 template's long-connection mode to webhook only takes effect on publish; the subscription mode cannot

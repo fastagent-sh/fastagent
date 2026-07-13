@@ -873,7 +873,7 @@ async function createFeishuAppFlow(): Promise<Record<string, string>> {
     },
     onVerificationUrl: ({ url, expiresInS }) => {
       console.error(
-        `\n  Opening the confirmation link in your browser (or open it in Feishu / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  If the page says "Link expired" on first load, open the link above AGAIN (do NOT refresh:\n  the page drops the code from the URL, and a refresh creates an app the CLI can't see).\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
+        `\n  Opening the confirmation link in your browser (or open it in Feishu / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
       );
       openExternalUrl(url); // best-effort, like `login` — the URL above is the fallback
     },
