@@ -5,23 +5,21 @@ import { defaultLarkRoute, larkEnvelope } from "../src/lark.ts";
 
 describe("Feishu-reference cloud profiles", () => {
   it("makes Feishu the full-capability reference", () => {
-    expect(FEISHU_CLOUD).toMatchObject({
+    expect(FEISHU_CLOUD).toEqual({
       kind: "feishu",
-      factory: "feishuChannel",
       envPrefix: "FEISHU",
       apiBase: "https://open.feishu.cn",
-      capabilities: { appCreation: "scan-to-create", eventConfig: "supported" },
+      capabilities: { appCreation: "scan-to-create" },
     });
     expect(cloudFor("feishu")).toBe(FEISHU_CLOUD);
   });
 
   it("models Lark as an explicit degraded compatibility profile", () => {
-    expect(LARK_COMPAT_CLOUD).toMatchObject({
+    expect(LARK_COMPAT_CLOUD).toEqual({
       kind: "lark",
-      factory: "larkChannel",
       envPrefix: "LARK",
       apiBase: "https://open.larksuite.com",
-      capabilities: { appCreation: "guided-console", eventConfig: "probe-with-manual-fallback" },
+      capabilities: { appCreation: "guided-console" },
     });
     expect(cloudFor("lark")).toBe(LARK_COMPAT_CLOUD);
   });

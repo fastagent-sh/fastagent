@@ -211,12 +211,14 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       `#   Payload URL = https://${appName}.fly.dev/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
   }
-  if (channels.includes("lark")) {
+  for (const kind of ["feishu", "lark"] as const) {
+    if (!channels.includes(kind)) continue;
+    const label = kind === "feishu" ? "Feishu" : "Lark";
     post.push(
-      `# After deploy — set the Feishu/Lark event Request URL (developer console → Events & Callbacks).`,
-      `# Path assumes the default route (POST /lark); the app must be RUNNING when you save (the console`,
+      `# After deploy — set the ${label} event Request URL (developer console → Events & Callbacks).`,
+      `# Path assumes the default route (POST /${kind}); the app must be RUNNING when you save (the console`,
       `# verifies the URL with a challenge):`,
-      `#   Request URL = https://${appName}.fly.dev/lark`,
+      `#   Request URL = https://${appName}.fly.dev/${kind}`,
     );
   }
   if (post.length > 0) runbook.push(``, ...post);

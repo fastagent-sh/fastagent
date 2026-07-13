@@ -157,7 +157,8 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev) — ONE mint step, then each
   // channel's webhook uses that domain (mint once even when both channels are present).
-  if (channels.includes("telegram") || channels.includes("github") || channels.includes("lark")) {
+  const hasFeishuCloudChannel = (["feishu", "lark"] as const).some((kind) => channels.includes(kind));
+  if (channels.includes("telegram") || channels.includes("github") || hasFeishuCloudChannel) {
     runbook.push(
       ``,
       `# Public URL — Railway mints a *.up.railway.app domain (NOT deterministic). Generate it, then read`,
@@ -180,11 +181,13 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
       `#   Payload URL = https://<your-domain>/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
   }
-  if (channels.includes("lark")) {
+  for (const kind of ["feishu", "lark"] as const) {
+    if (!channels.includes(kind)) continue;
+    const label = kind === "feishu" ? "Feishu" : "Lark";
     runbook.push(
-      `# Set the Feishu/Lark event Request URL (developer console → Events & Callbacks). Default route`,
-      `# POST /lark; the service must be RUNNING when you save (the console verifies with a challenge):`,
-      `#   Request URL = https://<your-domain>/lark`,
+      `# Set the ${label} event Request URL (developer console → Events & Callbacks). Default route`,
+      `# POST /${kind}; the service must be RUNNING when you save (the console verifies with a challenge):`,
+      `#   Request URL = https://<your-domain>/${kind}`,
     );
   }
 

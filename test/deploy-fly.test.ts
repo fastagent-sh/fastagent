@@ -65,6 +65,17 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(out).toContain("https://bot.fly.dev/telegram");
   });
 
+  it("prints one event Request URL for each mounted Feishu-cloud kind", () => {
+    const feishu = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["feishu"] }));
+    expect(feishu).toContain("POST /feishu");
+    expect(feishu).toContain("https://bot.fly.dev/feishu");
+    expect(feishu).not.toContain("https://bot.fly.dev/lark");
+
+    const both = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["feishu", "lark"] }));
+    expect(both).toContain("https://bot.fly.dev/feishu");
+    expect(both).toContain("https://bot.fly.dev/lark");
+  });
+
   it("bakes config deploy.apt into the generated Dockerfile (G6 — system tools the agent's tools need)", () => {
     const docker = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [], apt: ["git", "ripgrep"] }));
     expect(docker).toMatch(/apt-get install -y --no-install-recommends git ripgrep/);

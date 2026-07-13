@@ -125,7 +125,7 @@ export interface FeishuChannelOptions {
 
 /** Build the canonical Feishu channel. Lark calls the internal profile-bound builder below. */
 export function feishuChannel(opts: FeishuChannelOptions): ChannelModule {
-  return buildFeishuChannel(FEISHU_CLOUD, opts);
+  return buildFeishuChannel(FEISHU_CLOUD, opts, feishuChannel.name);
 }
 
 /** Internal compatibility seam: protocol behavior comes from Feishu; the profile binds cloud edges. */
@@ -141,18 +141,19 @@ export function buildFeishuChannel(
     baseUrl = profile.apiBase,
     queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS,
   }: FeishuChannelOptions,
+  factoryName: string,
 ): ChannelModule {
-  const { kind, factory, envPrefix } = profile;
+  const { kind, envPrefix } = profile;
   const label = `[${kind}]`;
   // All three are mandatory: without the app credentials no reply can be sent; without the verification
   // token a plaintext-mode endpoint would accept forged events. Fail at construction (startup), not
   // silently at the first event.
   if (!appId || !appSecret) {
-    throw new Error(`${factory} requires appId + appSecret (developer console → Credentials & Basic Info)`);
+    throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
   }
   if (!verificationToken) {
     throw new Error(
-      `${factory} requires a non-empty verificationToken (console → Events & Callbacks; an unset one accepts forged events)`,
+      `${factoryName} requires a non-empty verificationToken (console → Events & Callbacks; an unset one accepts forged events)`,
     );
   }
   return ({ agent, stateRoot }) => {
@@ -175,7 +176,7 @@ export function buildFeishuChannel(
     // (engine state at the root, channel state under `channels/<kind>/`) — derived, not an option, so
     // the operator's ONE state knob (FASTAGENT_STATE_DIR) can never be silently bypassed by glue.
     if (!isAbsolute(stateRoot)) {
-      throw new Error(`${factory} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
+      throw new Error(`${factoryName} requires an absolute ctx.stateRoot, got "${stateRoot}"`);
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // create + self-ignore — downloaded files may carry chat content

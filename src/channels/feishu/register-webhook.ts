@@ -99,10 +99,9 @@ export async function registerFeishuWebhook(
       // would send the operator hunting for a problem they cannot fix.
       if (/failed: 404/.test(error)) {
         const consoleUrl = `${apiBase}/app/${encodeURIComponent(appId)}/event`;
-        const capability = profile.capabilities.eventConfig;
         log.warn(
-          `[fastagent] ${kind}: this cloud (${apiBase}) does not expose the app-config API ` +
-            `(profile: ${capability}; Feishu is the reference cloud) — manual registration is required`,
+          `[fastagent] ${kind}: this cloud (${apiBase}) returned HTTP 404 for the app-config API — ` +
+            `manual registration is required`,
         );
         log.info(`[fastagent] ${kind}: Events & Callbacks:\n  ${consoleUrl}`);
         log.info(

@@ -29,5 +29,5 @@ export function larkEnvelope(event: LarkMessageEvent): string {
 }
 
 export function larkChannel(opts: LarkChannelOptions): ChannelModule {
-  return buildFeishuChannel(LARK_COMPAT_CLOUD, opts);
+  return buildFeishuChannel(LARK_COMPAT_CLOUD, opts, larkChannel.name);
 }

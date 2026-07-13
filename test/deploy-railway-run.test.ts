@@ -70,6 +70,49 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     expect(tg).toHaveBeenCalledWith("https://bot-production.up.railway.app");
   });
 
+  it("dispatches Feishu and Lark registration through the per-kind seam", async () => {
+    const { railway } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const registerFeishu = vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark") => {});
+
+    const out = await deployRailwayRun(
+      plan({ channels: ["feishu", "lark"] }),
+      railway,
+      () => {},
+      vi.fn(async () => {}),
+      registerFeishu,
+    );
+
+    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
+    expect(registerFeishu.mock.calls).toEqual([
+      ["https://bot-production.up.railway.app", "feishu"],
+      ["https://bot-production.up.railway.app", "lark"],
+    ]);
+  });
+
+  it("prints each Feishu-cloud Request URL when no registrar is supplied", async () => {
+    const { railway } = fakeRailway((a) => {
+      if (a[0] === "status") return { stdout: "" };
+      if (a[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const logs: string[] = [];
+
+    const out = await deployRailwayRun(
+      plan({ channels: ["feishu", "lark"] }),
+      railway,
+      (message) => logs.push(message),
+      vi.fn(async () => {}),
+    );
+
+    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
+    expect(logs.join("\n")).toContain("https://bot-production.up.railway.app/feishu");
+    expect(logs.join("\n")).toContain("https://bot-production.up.railway.app/lark");
+  });
+
   it("secret values go over stdin (variable set --stdin), never argv", async () => {
     const { railway, calls } = fakeRailway((a) => {
       if (a[0] === "status") return { stdout: "" };

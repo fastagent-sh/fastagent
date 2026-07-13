@@ -193,7 +193,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     });
     spy.mockRestore();
     expect(patches).toBe(1); // a missing route never gets blind retries
-    expect(warned.join("\n")).toMatch(/profile: probe-with-manual-fallback/);
+    expect(warned.join("\n")).toMatch(/HTTP 404.*manual registration/);
     expect(onManualRegistration).toHaveBeenCalledOnce();
     expect(onManualRegistration).toHaveBeenCalledWith({
       consoleUrl: "http://larksuite.test/app/cli_app/event",
