@@ -1,11 +1,12 @@
 ---
-title: FastAgent core design
+title: Core design
+description: "Architecture of FastAgent's pi reference implementation: the assembly ladder, prompt assembly, event translation, sessions, channels, schedules, and state."
 type: design-doc
 status: current
 updated: 2026-07-10
 ---
 
-# FastAgent core design
+# Core design
 
 This document explains the architecture of FastAgent's pi reference implementation. The normative
 protocol is [Agent Handler SPEC v0.1](../SPEC.md); code in `src/` is the implementation source of

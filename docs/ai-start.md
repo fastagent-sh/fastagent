@@ -1,117 +1,220 @@
-# FastAgent AI-guided start
+---
+title: Build and Serve an Agent with FastAgent
+description: "An executable setup path for coding agents: build and serve a FastAgent agent starting from nothing, from existing files, or inside an existing application."
+status: current
+---
 
-Use this prompt with Claude Code, Codex, pi, or another coding agent when you want help creating or wiring a FastAgent workspace.
+# Skill: Build and Serve an Agent with FastAgent
 
-```txt
-You are helping me use FastAgent.
+Use this skill to build an agent with FastAgent and serve it — starting from nothing, from files that already exist, or inside an existing application.
 
-Goal: turn an existing agent directory into a deployable agent without rewriting it.
+## Goal
 
-FastAgent mental model:
-- The directory is the agent: persona.md (its identity) + skills/ + optional tools/ + optional
-  channels/. An AGENTS.md is PROJECT CONTEXT the agent reads (its own, or a host repo's) — having an
-  AGENTS.md does not make a directory a fastagent workspace; a fastagent.config.* does.
-- FastAgent can run it locally, embed it in my app, connect it to channels like GitHub and Telegram, or deploy it to a host.
-- Do not invent a new framework layout unless I ask. Prefer the existing directory.
+Inspect the project first, preserve anything that already exists, and make the smallest change that gives the user a running agent: locally, embedded in their app, connected to a channel, or deployed.
 
-How you run FastAgent commands (you are a non-interactive agent, so this matters):
-- A model must be set EXPLICITLY. With no model, `dev`/`start`/`invoke` fall back to an interactive
-  picker you cannot answer, and fail with `missing model`. Credentials first: `fastagent login` is
-  ALSO interactive (menus + a browser) and fails fast in a non-TTY — so ask ME to run it in a
-  terminal, INSIDE the workspace (it writes the project-level .fastagent/auth.json; a login run in
-  another directory is invisible here). Or ask me for a provider API key and put it in `.env`. Then
-  list specs with `fastagent models`, and ALWAYS pass `--model provider/id` (or set FASTAGENT_MODEL,
-  or write `model:` into fastagent.config.*). Never rely on an interactive prompt.
-- Some commands EXIT, others BLOCK. `info`, `models`, `invoke`, `tool` return — use these for checks
-  and smoke tests. `dev` and `start` are long-running servers: do NOT run them in the foreground (you
-  will hang waiting) — background them, or let me run them.
-- Secrets live in `.env` (copy from `.env.example`) or come from `fastagent login`. Ask me before
-  adding one; never commit `.env`, credentials, sessions, or `.fastagent/` machine state.
+## Choose your path
 
-First inspect my project:
-1. Check whether fastagent.config.* exists (= already a workspace; read its agentDir if set).
-2. Check whether persona.md, AGENTS.md, skills/, tools/, channels/ exist — at the root, or under agentDir.
-3. Check package.json for "type": "module" if code tools are present.
-4. Ask before choosing a model provider or adding secrets.
+Decide which job this is before touching anything:
 
-Set up (run init ONCE per directory — it refuses an already-initialized workspace):
-- Run: fastagent init <dir> (default: current dir). It scaffolds persona.md (the agent's identity),
-  an example skill and tool, and config; it never clobbers existing files, keeps an existing AGENTS.md
-  as project context, and refuses a dir that already has a fastagent.config.* (already a workspace).
-- Layout is decided automatically: flat by default; if an existing toolchain/deploy claims the dir
-  (tsconfig/framework config, a non-JS build manifest like go.mod/pyproject.toml/Cargo.toml,
-  Dockerfile/fly/railway, occupied tools/, channels/, or skills/), the kit goes
-  into ./agent with config.agentDir pointing there — init prints the reason. Override on the FIRST
-  run: --flat / --agent-dir <name> (a re-run is refused once the config exists). To change the layout
-  afterwards: move the kit files yourself and update (or remove) config.agentDir to match.
-- Then run: fastagent info (read-only) — it shows what the directory assembles into (model, persona,
-  context, skills, tools, channels). Fix only what it reports.
+1. **New agent, empty directory.** Nothing agent-shaped exists yet. Run `fastagent init <dir>` (or init the current directory), then flesh out `persona.md`, skills, and tools from what the user wants.
+2. **An existing directory becomes the agent.** The project already has `AGENTS.md`, markdown context, skills, or tools — vibed or handwritten. Do not restructure it: run `fastagent init` in place; init never overwrites existing files and adopts them as the definition.
+3. **Embed an agent into an existing application.** The project is an app (framework config, routes, its own toolchain). Initialize — init chooses `./agent` with `config.agentDir` automatically when the root is claimed — then mount the agent in the app's own route with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
 
-For local testing (prefer commands that exit):
-- Smoke-test one turn: fastagent invoke "hello" --model provider/id
-- Test one tool without a model: fastagent tool <name> '<json>'
-- Only if I want a live server: fastagent dev --model provider/id (long-running — background it or let
-  me run it), then send a turn to POST /invoke.
+All three paths continue with the same steps below: inspect, authenticate, initialize once, test, then connect channels or deploy.
 
-For tools:
-- Put tools in tools/<name>.ts.
-- Use defineTool and z from @fastagent-sh/fastagent.
-- Test with: fastagent tool <name> '<json>'
+## Mental model
 
-For channels:
-- A `channels/*.ts|*.js|*.mjs` file is enabled by its presence. A declared channel that fails to load
-  makes `dev` / `start` fail; fix it rather than accepting a fallback route. To keep one disabled, rename
-  it to e.g. `channels/telegram.ts.disabled` — do not invent a second config flag.
+- The directory is the agent: optional `persona.md` for identity, `skills/`, `tools/`, `channels/`, `schedules/`, markdown context, and `AGENTS.md` for project context.
+- An `AGENTS.md` does not make a directory a FastAgent workspace. A `fastagent.config.*` file does.
+- FastAgent can run the directory locally, embed it in an app, connect it to GitHub or Telegram, expose it over HTTP, or put it behind a custom channel.
+- Do not invent a new project layout unless the user asks. Prefer the existing directory.
 
-For GitHub:
-- Run: fastagent add github
-- Edit channels/github.ts so on(event) maps real GitHub events to { session, text } intents.
-- Use fastagent dev --tunnel for local webhook testing.
+## Inspect before changing anything
 
-For Telegram:
-- Run: fastagent add telegram
-- Set TELEGRAM_BOT_TOKEN and TELEGRAM_SECRET_TOKEN.
-- Use fastagent dev --tunnel for local webhook testing.
+1. Check whether `fastagent.config.*` exists. If it does, the directory is already a workspace; read its `agentDir` when present.
+2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` at the root and under any configured `agentDir`.
+3. If code tools are present, check whether `package.json` sets `"type": "module"`.
+4. Ask before choosing a model provider, adding credentials, or changing the existing layout.
 
-For schedules (run the agent on a cron — daily digest, periodic checks):
-- Create schedules/<name>.ts: export default defineSchedule({ cron: "0 9 * * *", tz: "America/New_York",
-  prompt: "..." }) — defineSchedule comes from @fastagent-sh/fastagent; the filename is the schedule name.
-- The prompt must SAY where output goes ("…and send it to the team Telegram"): the scheduler only fires
-  the agent — a scheduled turn's plain reply is not delivered anywhere; delivery is a send tool's job.
-  fastagent add telegram scaffolds one (tools/telegram-send.ts: message or file). A scheduled turn runs
-  outside any chat, so include the TARGET CHAT ID in the prompt ("…send it to Telegram chat -100123456").
-- Test with a command that exits: fastagent fire <name> --model provider/id (runs the turn NOW, without
-  touching the real cron state). The cron only fires while `dev`/`start` is serving.
-- Check past runs with: fastagent schedule history <name>; see what will fire with: fastagent schedule list.
-- Self-scheduling (the agent sets its own follow-ups via a built-in `wake` tool) is opt-in:
-  selfSchedule: true in fastagent.config.*.
-- Deploying with schedules or selfSchedule keeps one machine always running (no scale-to-zero — a
-  sleeping box misses the instant); `fastagent deploy` handles this, don't fight it.
+## Handle authentication and models explicitly
 
-For embedding:
-- Use createPiAgentFromDefinition or createPiAgentFromWorkspace.
-- Mount createInvokeHandler(agent) in my app route.
-- Keep my app's auth/database/session ownership in my app.
-- `ExecutionEnv` is an assembly seam, not a complete sandbox today: the pi coding tools and project-
-  context loader are still local. Do not claim that injecting `env` alone isolates a directory agent.
+You are non-interactive, so do not rely on prompts you cannot answer.
 
-For deploy:
-- Run: fastagent deploy fly (or: fastagent deploy railway). Add --run to drive the host CLI to
-  completion; without it, follow the printed runbook.
-- The model MUST be in fastagent.config.* — a --model/FASTAGENT_MODEL/.env value is builder-local and
-  won't reach the deployed box (it would crash-loop with `missing model`).
-- Declare any extra host secrets in config.deploy.secrets; register channel webhooks at the live URL.
+- A model must be explicit. Without one, `dev`, `start`, and `invoke` open an interactive picker and fail in a non-TTY with `missing model`.
+- `fastagent login` is also interactive. Ask the user to run it in a terminal inside the workspace; it writes project-level `.fastagent/auth.json`, and credentials written in another directory are not visible here.
+- Alternatively, ask the user for a provider API key and put it in `.env` only with permission.
+- List available specifications with `fastagent models`.
+- Always pass `--model provider/id`, set `FASTAGENT_MODEL`, or write `model` in `fastagent.config.*`.
+- Never commit `.env`, credentials, sessions, or `.fastagent/` machine state.
 
-Before finishing:
-- Run fastagent info.
-- If channels are declared, confirm each one loads; do not ignore a channel startup failure.
-- Run the smallest useful smoke test that EXITS: fastagent invoke "hello" --model provider/id (or a
-  channel-specific local test). Do not leave `dev`/`start` running in the foreground.
-- Do not commit .env, credentials, sessions, or .fastagent machine state.
-- If a command fails, read docs/troubleshooting.md before guessing.
+## Know which commands exit
+
+Use commands that exit for verification:
+
+```bash
+fastagent info
+fastagent models
+fastagent invoke "hello" --model provider/id
+fastagent tool <name> '<json>'
 ```
 
-References:
+`fastagent dev` and `fastagent start` are long-running servers. Do not run them in the foreground and wait indefinitely. Background them with a cleanup path, or ask the user to run them.
+
+## Initialize once
+
+Run:
+
+```bash
+fastagent init <dir>
+```
+
+The default directory is the current directory. `init`:
+
+- scaffolds `persona.md`, an example skill and tool, and config;
+- never overwrites existing files;
+- keeps an existing `AGENTS.md` as project context;
+- refuses a directory that already has `fastagent.config.*`.
+
+FastAgent chooses the layout on the first run:
+
+- flat by default;
+- `./agent` with `config.agentDir` when an existing toolchain or deployment already claims the root, including framework config, `tsconfig`, `go.mod`, `pyproject.toml`, `Cargo.toml`, Docker/Fly/Railway config, or occupied `tools/`, `channels/`, or `skills/` directories.
+
+Override only on the first run with `--flat` or `--agent-dir <name>`. To change it later, move the files and update or remove `config.agentDir`.
+
+Then run:
+
+```bash
+fastagent info
+```
+
+Read what the directory assembles into and fix only reported problems.
+
+## Test locally
+
+Prefer a single turn that exits:
+
+```bash
+fastagent invoke "hello" --model provider/id
+```
+
+Test a tool without a model:
+
+```bash
+fastagent tool <name> '<json>'
+```
+
+Only start a live server when needed:
+
+```bash
+fastagent dev --model provider/id
+```
+
+Background it or ask the user to run it, then send a turn to `POST /invoke`.
+
+## Add tools
+
+Put tools in `tools/<name>.ts`. Use `defineTool` and `z` from `@fastagent-sh/fastagent`, then test the tool directly:
+
+```bash
+fastagent tool <name> '<json>'
+```
+
+## Add channels
+
+A `channels/*.ts`, `*.js`, or `*.mjs` file is enabled by its presence. A declared channel that fails to load must make `dev` or `start` fail; fix it rather than accepting a fallback route.
+
+To disable one, rename it to something like `channels/telegram.ts.disabled`. Do not invent a second config flag.
+
+### GitHub
+
+```bash
+fastagent add github
+```
+
+Edit `channels/github.ts` so `on(event)` maps real GitHub events to `{ session, text }` intents. Use `fastagent dev --tunnel` for local webhook testing.
+
+### Telegram
+
+```bash
+fastagent add telegram
+```
+
+Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_SECRET_TOKEN`. Use `fastagent dev --tunnel` for local webhook testing.
+
+## Add schedules
+
+Create `schedules/<name>.ts`:
+
+```ts
+import { defineSchedule } from "@fastagent-sh/fastagent";
+
+export default defineSchedule({
+  cron: "0 9 * * *",
+  tz: "America/New_York",
+  prompt: "...",
+});
+```
+
+The filename is the schedule name. The prompt must say where output goes: the scheduler fires the agent, but a plain reply is not delivered anywhere. Delivery is a send tool's job. A scheduled turn runs outside any chat, so include the target chat ID in the prompt.
+
+`fastagent add telegram` scaffolds `tools/telegram-send.ts`, which can send a message or file.
+
+Test without changing cron state:
+
+```bash
+fastagent fire <name> --model provider/id
+```
+
+Inspect schedules and prior runs:
+
+```bash
+fastagent schedule list
+fastagent schedule history <name>
+```
+
+Cron schedules run only while `dev` or `start` is serving. Agent self-scheduling through the built-in `wake` tool is opt-in with `selfSchedule: true` in config.
+
+Schedules and self-scheduling require one always-running machine. Do not scale that deployment to zero.
+
+## Embed in an application
+
+Use `createPiAgentFromDefinition` or `createPiAgentFromWorkspace`, then mount `createInvokeHandler(agent)` in the application's route.
+
+Keep authentication, users, database, session ownership, and policy in the host application.
+
+`ExecutionEnv` is an assembly seam, not a complete sandbox. The pi coding tools and project-context loader are still local; do not claim that injecting `env` alone isolates a directory agent.
+
+## Deploy
+
+Generate host artifacts and a runbook:
+
+```bash
+fastagent deploy fly
+fastagent deploy railway
+```
+
+Add `--run` to drive the host CLI to completion.
+
+The model must be in `fastagent.config.*`. A builder-local `--model`, `FASTAGENT_MODEL`, or `.env` value does not reach the deployed machine and otherwise causes a `missing model` crash loop.
+
+Declare additional host secrets in `config.deploy.secrets`, then register channel webhooks at the live URL.
+
+## Verify before finishing
+
+1. Run `fastagent info`.
+2. If channels are declared, confirm every channel loads.
+3. Run the smallest useful command that exits, usually:
+
+   ```bash
+   fastagent invoke "hello" --model provider/id
+   ```
+
+4. Do not leave `dev` or `start` running in the foreground.
+5. Do not commit `.env`, credentials, sessions, or `.fastagent/` state.
+6. If a command fails, read [Troubleshooting](troubleshooting.md) before guessing.
+
+## References
 
 - [Quickstart](quickstart.md)
 - [Configuration](configuration.md)

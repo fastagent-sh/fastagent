@@ -1,5 +1,6 @@
 ---
 title: Troubleshooting
+description: "Fixes for common FastAgent setup and runtime issues: missing model, login and auth, ports, webhooks, sessions, schedules, and deployment."
 status: current
 ---
 

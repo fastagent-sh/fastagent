@@ -1,5 +1,6 @@
 ---
 title: Channel development
+description: "Build a FastAgent channel adapter: the adapter/glue split, the ChannelModule contract, packaging third-party channels, and testing guidance."
 status: current
 ---
 
@@ -9,7 +10,7 @@ This guide is for developers building a new FastAgent channel adapter, either in
 
 A channel is an ingress adapter. It receives an external event, decides whether to invoke the agent, and returns an HTTP response appropriate for that external system.
 
-> This page is the AUTHOR's view — building an adapter. Using the existing channels is covered in [Channels](channels.md); the telegram channel's internal architecture (the reference for a stateful chat channel) is in [design/core.md §9.2](design/core.md).
+> This page is the AUTHOR's view — building an adapter. Using the existing channels is covered in [Channels](channels.md); the telegram channel's internal architecture (the reference for a stateful chat channel) is in [design/core.md §7](design/core.md).
 
 ## The two layers
 

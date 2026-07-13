@@ -1,5 +1,6 @@
 ---
-title: FastAgent design principles
+title: Design principles
+description: "The design choices behind FastAgent: a small callable contract, app-owned runtime, typed edges, and the non-goals that keep the serving layer small."
 status: current
 ---
 
@@ -11,7 +12,7 @@ The design center is **point at directory → live agent capability**. FastAgent
 
 The design choices are deliberate:
 
-- **Small callable contract** — an internal boundary that decouples callers, agents, engines, and hosts.
+- **Small callable contract** — an internal boundary that decouples callers, agents, engines (the *agent harness*, in ecosystem terms), and hosts.
 - **Application composition** — compose with the user's application instead of owning routes, database, auth, deployment, and project layout.
 - **Typed edges** — typed tools, explicit events, and validation at the places where outside input enters the system.
 
@@ -35,12 +36,12 @@ A feature is not real product surface until users can name it and reason about i
 
 | Concept | Meaning |
 |---|---|
-| **Definition** | The directory that describes the agent: optional `persona.md`, `skills/`, authored context, tools/channels, and config; `AGENTS.md` contributes project context. |
+| **Agent Definition** | The directory that describes the agent: optional `persona.md`, `skills/`, authored context, tools/channels, and config; `AGENTS.md` contributes project context. |
 | **Agent Handler** | The callable contract: `invoke(scope, prompt) => AsyncIterable<AgentEvent>`. |
 | **Event** | The streamed output shape every channel can consume: text, thinking, tool lifecycle, completion, or failure. |
 | **Tool** | A typed action the model can call, validated before execution. |
 | **Skill** | Reusable markdown expertise loaded from the definition, not from global machine state. |
-| **Channel** | An adapter that turns an external event into one or more invocations. |
+| **Channel** | An adapter that turns an external event — a webhook, a message, even the clock — into one or more invocations. |
 | **Session** | Runtime conversation state, owned by the host/session store rather than baked into the definition. |
 
 That concept set is intentionally smaller than the implementation. Sandboxes, durable queues, evals, registries, hosted deployment, and multi-instance backends can be added later, but they should not appear as core concepts until the product can support them honestly.

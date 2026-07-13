@@ -2,7 +2,7 @@
 
 ## What this is
 
-fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (`persona.md` identity, `skills/`, tools, and existing `AGENTS.md` project context) into a running service inside an app, on GitHub, in Telegram, or behind a custom channel without a new authoring DSL.
+fastagent is "Vibe first. Then FastAgent" for agent directories: it turns a file-defined agent (`persona.md` identity, `skills/`, tools, and existing `AGENTS.md` project context) into a live service inside an app, on GitHub, in Telegram, or behind a custom channel without a new authoring DSL.
 
 The stable design center is the engine-neutral Agent Handler contract (`docs/SPEC.md`); pi (`@earendil-works/pi-*`) is the reference implementation.
 
@@ -13,7 +13,7 @@ The stable design center is the engine-neutral Agent Handler contract (`docs/SPE
 | `docs/SPEC.md` | The locked v0.1 Agent Handler contract. Do not change its semantics without an explicit decision. |
 | `docs/design/core.md` | The pi reference implementation and current architecture. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
-| `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review tiers). |
+| `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review policy). |
 
 Code truth is `src/`.
 
@@ -134,13 +134,14 @@ Full version: `CONTRIBUTING.md`. The essentials:
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
 3. **Rebase merge by default** (preserve curated commits); squash only to clean up a WIP branch. Merge commits are disabled. `main` enforces linear history; force-push is forbidden.
-4. **Review tiers.** Docs/refactor/tests self-merge after green CI; SPEC, the `Agent` contract, and public API surface wait for review.
+4. **Review policy.** Maintainer-authored PRs may self-merge after green CI; external-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**
    ```bash
    git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin
    ```
 6. **Releases publish via npm Trusted Publishing (OIDC), never a local `npm publish`.** The npm package
-   must keep its `publish` trusted-publisher binding to `fastagent-sh/fastagent` / `publish.yml`. Flow:
+   must keep its `publish` trusted-publisher binding to `fastagent-sh/fastagent` / `publish.yml` /
+   environment `npm`. Flow:
    bump `package.json` in a `chore/release-x.y.z` PR → merge → tag `vX.Y.Z` → create the GitHub Release
    (its notes are the changelog) — `.github/workflows/publish.yml` re-verifies (typecheck + test) and
    publishes to npm from CI. There is no NPM_TOKEN anywhere; a local `npm publish` fails with 401 by

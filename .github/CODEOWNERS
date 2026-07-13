@@ -1,9 +1,20 @@
-# Review ownership. Auto-requests a review on the sensitive surfaces named in
-# CONTRIBUTING.md "Review tiers"; it does not block self-merge for low-risk PRs.
+# Ownership map for review routing. Maintainer-authored PRs do not require a second maintainer approval.
 
 # The locked contract and its types.
-/docs/SPEC.md            @kid7st
-/src/agent.ts            @kid7st
+/docs/SPEC.md            @kid7st @Sukitly
+/src/agent.ts            @kid7st @Sukitly
 
-# The public API surface.
-/src/index.ts            @kid7st
+# Public package boundaries.
+/package.json            @kid7st @Sukitly
+/package-lock.json       @kid7st @Sukitly
+/src/index.ts            @kid7st @Sukitly
+/src/core.ts             @kid7st @Sukitly
+/src/pi.ts               @kid7st @Sukitly
+/src/github.ts           @kid7st @Sukitly
+/src/telegram.ts         @kid7st @Sukitly
+
+# Review and release policy.
+/.github/CODEOWNERS      @kid7st @Sukitly
+/.github/dependabot.yml  @kid7st @Sukitly
+/.github/workflows/      @kid7st @Sukitly
+/SECURITY.md             @kid7st @Sukitly

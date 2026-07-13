@@ -1,11 +1,12 @@
 ---
 title: Quickstart
+description: "From an installed CLI to a live local agent service: scaffold a workspace, run it, add a typed tool, connect channels, and put the agent on a clock."
 status: current
 ---
 
 # Quickstart
 
-This guide takes you from an installed CLI to a running local agent service.
+This guide takes you from an installed CLI to a live local agent service.
 
 ## Prerequisites
 
@@ -178,8 +179,8 @@ Read [Channels](channels.md) for the channel model, [GitHub channel](github.md) 
 
 ## 8. Run on a clock
 
-Channels react to requests; **schedules** fire the agent on a cron — a daily digest, a periodic check.
-Drop a file in `schedules/` (mirroring `tools/`), named by its filename:
+Channels turn external events into invocations; **schedules** do the same for the clock — firing the
+agent on a cron: a daily digest, a periodic check. Drop a file in `schedules/` (mirroring `tools/`), named by its filename:
 
 ```ts
 // schedules/daily-digest.ts

@@ -1,5 +1,6 @@
 ---
 title: Design notes
+description: "What belongs in FastAgent's public design notes, and what is normative: the Agent Handler SPEC, the code, and the user docs."
 status: current
 ---
 

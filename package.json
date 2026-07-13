@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/fastagent",
-  "version": "0.12.0",
-  "description": "Vibe first. Then FastAgent: turn a local agent directory into a running service in your app, on GitHub, in Telegram, or behind any channel.",
+  "version": "0.12.1",
+  "description": "Vibe first. Then FastAgent: turn a local agent directory into a live service in your app, on GitHub, in Telegram, or behind any channel.",
   "keywords": [
     "agent",
     "ai-agent",
@@ -9,13 +9,16 @@
     "agents.md",
     "agent-skills",
     "agent-serving",
+    "telegram",
+    "github",
+    "webhook",
     "sse",
     "pi",
     "fastagent"
   ],
   "license": "MIT",
   "author": "the fastagent authors (https://github.com/fastagent-sh/fastagent)",
-  "homepage": "https://github.com/fastagent-sh/fastagent#readme",
+  "homepage": "https://fastagent.sh",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fastagent-sh/fastagent.git"
@@ -91,7 +94,7 @@
     "@octokit/webhooks-methods": "^6.0.0",
     "@octokit/webhooks-types": "^7.6.1",
     "chokidar": "^5.0.0",
-    "croner": "^9.1.0",
+    "croner": "^10.0.1",
     "giget": "^3.3.0",
     "ignore": "^7.0.5",
     "undici": "^8.6.0",
@@ -99,7 +102,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   }
 }

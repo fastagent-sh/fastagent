@@ -1,5 +1,6 @@
 ---
 title: CLI reference
+description: "The fastagent CLI reference: init, info, dev, chat, invoke, tool, start, login, models, add, fire, schedule, and deploy commands with flags."
 status: current
 ---
 

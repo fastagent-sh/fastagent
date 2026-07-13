@@ -1,5 +1,6 @@
 ---
 title: Telegram channel
+description: "Serve your agent as a Telegram bot: setup, webhook registration, live streamed replies, group-chat behavior, and durable at-least-once turn replay."
 status: current
 ---
 

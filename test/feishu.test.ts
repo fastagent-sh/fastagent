@@ -278,7 +278,7 @@ describe("turn flow", () => {
     expect(JSON.parse(String(mount?.body?.content))).toEqual({ type: "card", data: { card_id: "c1" } });
     // Terminal: the SAME card settles with the final markdown, streaming off.
     const settle = fx.calls("/cardkit/v1/cards/c1", "PUT")[0];
-    const settled = JSON.parse(String((settle?.body?.card as Record<string, unknown>).data));
+    const settled = JSON.parse(String((settle?.body?.card as Record<string, unknown> | undefined)?.data));
     expect(settled.config.streaming_mode).toBe(false);
     expect(settled.body.elements[0].content).toBe("**bold** answer");
     // The settled card carries the answer-derived summary — the chat list / push notification shows
@@ -393,7 +393,7 @@ describe("turn flow", () => {
     await handler(feishuRequest(messageEvent({ id: "om_f1" })));
     await idle();
     const settle = fx.calls("/cardkit/v1/cards/c1", "PUT")[0];
-    const settled = JSON.parse(String((settle?.body?.card as Record<string, unknown>).data));
+    const settled = JSON.parse(String((settle?.body?.card as Record<string, unknown> | undefined)?.data));
     expect(settled.body.elements[0].content).toBe("⚠️ boom: engine exploded");
   });
 

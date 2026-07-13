@@ -2,8 +2,8 @@ name: Publish
 
 # Publish @fastagent-sh/fastagent to npm from a GitHub Release via Trusted Publishing (OIDC), with
 # provenance and no NPM_TOKEN. Publishing requires the public fastagent-sh/fastagent repository; the
-# npm trusted publisher must name org fastagent-sh, repo fastagent, workflow publish.yml. The release
-# tag is the manual gate; this job verifies that tag against package.json and reruns the release checks.
+# npm trusted publisher must name org fastagent-sh, repo fastagent, workflow publish.yml, environment
+# npm. The protected environment is the manual gate; this job also verifies the tag and commit.
 on:
   release:
     types: [published]
@@ -16,6 +16,7 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
+    environment: npm
     steps:
       - name: Verify public release repository
         env:
@@ -31,6 +32,15 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Verify release commit is on main
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "release tag must point to a commit on main" >&2
+            exit 1
+          }
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6

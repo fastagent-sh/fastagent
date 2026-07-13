@@ -82,7 +82,7 @@ describe("tenant token cache", () => {
     expect(await api.sendMessage("oc_1", "text", "{}")).toBe("om_2");
     expect(fx.tokenFetches()).toBe(2); // initial + the one refetch
     const last = fx.calls().at(-1);
-    expect((last?.init.headers as Record<string, string>).authorization).toBe("Bearer T2");
+    expect((last?.init.headers as Record<string, string> | undefined)?.authorization).toBe("Bearer T2");
   });
 
   it("a PERSISTENT auth reject fails after one refetch (no infinite refresh loop)", async () => {
