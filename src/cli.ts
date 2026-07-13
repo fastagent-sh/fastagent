@@ -74,10 +74,11 @@ import { deployRailwayRun } from "./deploy/railway/run.ts";
 import { authSeedBytes, deployFlyRun } from "./deploy/fly/run.ts";
 import { spawnRunner } from "./deploy/runner.ts";
 import { assembleSecrets } from "./deploy/secrets.ts";
-import { createLarkApi, isLarkConfigApiMissing } from "./channels/lark/lark-api.ts";
-import { bootstrapVerificationToken } from "./channels/lark/bootstrap-token.ts";
-import { registerLarkApp } from "./channels/lark/register-app.ts";
-import { registerLarkWebhook } from "./channels/lark/register-webhook.ts";
+import { createFeishuApi, isFeishuConfigApiMissing } from "./channels/feishu/feishu-api.ts";
+import { cloudFor } from "./channels/feishu/cloud.ts";
+import { bootstrapFeishuVerificationToken } from "./channels/feishu/bootstrap-token.ts";
+import { registerFeishuApp } from "./channels/feishu/register-app.ts";
+import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { onboardLarkApp } from "./channels/lark/onboard.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { loadSchedules } from "./schedule/discover.ts";
@@ -161,13 +162,13 @@ function usage(code: number): never {
                    your own box without deploying (the quick-tunnel URL is ephemeral, not for production)
   add    github | telegram | feishu | lark: scaffold channels/<kind>.ts — third-party adapter glue
          with the policy to edit (github maps events in on(); telegram/feishu/lark route in the
-         optional route()). feishu = 飞书 (open.feishu.cn), lark = Lark international
-         (open.larksuite.com) — one engine, two clouds, each its own channel.
-         feishu also CREATES + configures the platform app (confirm a link in the app — the
-         platform's "scan to create" flow; no developer console) and writes the credentials to
-         .env; skipped when FEISHU_APP_ID/SECRET are already set. lark opens the intl developer
-         console, validates App ID/Secret, then tries the same automatic webhook-mode + Token capture;
-         an explicit config-route 404 falls back to a hidden Token prompt + manual mode/URL setup.
+         optional route()). Feishu (open.feishu.cn) is the canonical implementation; Lark international
+         (open.larksuite.com) is its compatibility profile with degraded control-plane setup.
+         feishu also CREATES + configures the platform app (confirm a link in the app — the platform's
+         "scan to create" flow; one version-publish action remains) and writes credentials to .env;
+         skipped when FEISHU_APP_ID/SECRET are already set. lark opens the intl developer console,
+         validates App ID/Secret, then probes Feishu's webhook-mode + Token automation; an explicit
+         config-route 404 falls back to a hidden Token prompt + manual mode/URL setup.
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
@@ -642,6 +643,7 @@ async function runAdd(): Promise<void> {
     process.exit(1);
   }
   const channelKind = kind as ChannelKind;
+  const feishuCloud = channelKind === "feishu" || channelKind === "lark" ? cloudFor(channelKind) : undefined;
   // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
   // and only path there). The retired --create-app spelling gets a pointer, not silence.
   if (values["create-app"]) {
@@ -695,7 +697,7 @@ async function runAdd(): Promise<void> {
   // already carries active credentials: silently minting a SECOND app would be worse than doing
   // nothing — scaffolding around existing credentials is the wanted behavior then.
   let created: Record<string, string> | undefined;
-  if (channelKind === "feishu") {
+  if (feishuCloud?.capabilities.appCreation === "scan-to-create") {
     if (!envIgnored) {
       failStartup(
         new Error(
@@ -706,9 +708,9 @@ async function runAdd(): Promise<void> {
     if (await hasActiveDotEnvValues(target, ["FEISHU_APP_ID", "FEISHU_APP_SECRET"]).catch(failStartup)) {
       console.error(`[fastagent] FEISHU_APP_ID/FEISHU_APP_SECRET already set in .env — not creating another app`);
     } else {
-      created = await createLarkAppFlow("feishu").catch(failStartup);
+      created = await createFeishuAppFlow().catch(failStartup);
     }
-  } else if (channelKind === "lark") {
+  } else if (feishuCloud?.capabilities.appCreation === "guided-console") {
     if (!envIgnored) {
       failStartup(
         new Error(
@@ -743,7 +745,8 @@ async function runAdd(): Promise<void> {
         {
           existing,
           verifyCredentials: async (appId, appSecret) => {
-            await createLarkApi({
+            await createFeishuApi({
+              kind: "lark",
               baseUrl: "https://open.larksuite.com",
               appId,
               appSecret,
@@ -751,16 +754,18 @@ async function runAdd(): Promise<void> {
             console.error(`[fastagent] Lark App ID / Secret verified`);
           },
           bootstrapWebhook: async (appId, appSecret) => {
-            const api = createLarkApi({
+            const api = createFeishuApi({
+              kind: "lark",
               baseUrl: "https://open.larksuite.com",
               appId,
               appSecret,
             });
             console.error(`[fastagent] trying Lark's webhook-mode + Verification-Token bootstrap (temporary tunnel)…`);
             try {
-              const token = await bootstrapVerificationToken({
+              const token = await bootstrapFeishuVerificationToken({
                 api,
                 appId,
+                kind: "lark",
                 startTunnel: (port) => startCloudflareTunnel(port),
                 onTunnelReady: (url) =>
                   console.error(`[fastagent] temporary tunnel ready → ${url}; registering webhook mode now…`),
@@ -771,7 +776,7 @@ async function runAdd(): Promise<void> {
                 // A route-level 404 is definitive, not edge weather: fall back immediately. Retry
                 // only actual edge/network weather; scope/auth/config failures remain immediate.
                 shouldRetryPatch: (error) =>
-                  !isLarkConfigApiMissing(error) &&
+                  !isFeishuConfigApiMissing(error) &&
                   /resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout|210042|request_url/i.test(
                     String(error),
                   ),
@@ -784,7 +789,7 @@ async function runAdd(): Promise<void> {
               openExternalUrl(versionUrl);
               return { token };
             } catch (error) {
-              if (!isLarkConfigApiMissing(error)) throw error;
+              if (!isFeishuConfigApiMissing(error)) throw error;
               const manualReason =
                 "This Lark app returned HTTP 404 for the application-config API, so automatic mode/token bootstrap is unavailable.";
               console.error(`[fastagent] ${manualReason}`);
@@ -846,33 +851,29 @@ async function runAdd(): Promise<void> {
  * The scan-to-create flow `add feishu` runs by default. The device-authorization grant
  * creates a pre-configured agent app (bot capability, messaging scopes, event subscriptions) when the
  * user confirms a link in the app, and hands back the credentials; the platform-generated Verification
- * Token is then captured from the registration challenge (bootstrap-token.ts) — so .env ends up
- * complete without the developer console. The event Request URL is NOT left pointing at the throwaway
+ * Token is then captured from the registration challenge (bootstrap-token.ts), so .env is complete
+ * before the one remaining version-publish action. The event Request URL is NOT left pointing at the throwaway
  * tunnel for long: `dev --tunnel` / `deploy --run` re-register it against the live URL.
  *
- * The kind IS the cloud: the two platform brands have SEPARATE accounts hosts, and each confirm page
- * accepts only its own app (the Feishu launcher refuses a Lark scan and vice versa). Only feishu runs
- * this BOUND device flow; lark uses the unbound launcher + guided credentials, then independently
- * attempts the same token/mode bootstrap.
+ * Feishu is the reference cloud and the only kind that runs this BOUND device flow. Lark is an explicit
+ * compatibility profile: its lagging control plane uses the unbound launcher + guided credentials,
+ * then probes the canonical token/mode bootstrap with a manual fallback.
  */
-async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string, string>> {
-  const intl = kind === "lark";
-  const envPrefix = intl ? "LARK" : "FEISHU";
-  console.error(`[fastagent] creating the ${intl ? "Lark" : "Feishu"} app (confirm in the app)…`);
-  const app = await registerLarkApp({
-    ...(intl ? { accountsBaseUrl: "https://accounts.larksuite.com" } : {}),
+async function createFeishuAppFlow(): Promise<Record<string, string>> {
+  console.error(`[fastagent] creating the Feishu app (confirm in the app)…`);
+  const app = await registerFeishuApp({
     name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
     desc: "Served by fastagent",
     // The agent template alone is not enough to SERVE: the v7 config PATCH (webhook auto-registration
     // in `dev --tunnel` / `deploy --run`) demands application:application:patch, and the app must
-    // subscribe the receive event. Addons merge both onto the confirm page — no console visit.
+    // subscribe the receive event. Addons merge both onto the confirm page — no manual app setup.
     addons: {
       scopes: { tenant: ["application:application:patch"] },
       events: { items: { tenant: ["im.message.receive_v1"] } },
     },
     onVerificationUrl: ({ url, expiresInS }) => {
       console.error(
-        `\n  Opening the confirmation link in your browser (or open it in Feishu/Lark / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  If the page says "Link expired" on first load, open the link above AGAIN (do NOT refresh:\n  the page drops the code from the URL, and a refresh creates an app the CLI can't see).\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
+        `\n  Opening the confirmation link in your browser (or open it in Feishu / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  If the page says "Link expired" on first load, open the link above AGAIN (do NOT refresh:\n  the page drops the code from the URL, and a refresh creates an app the CLI can't see).\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
       );
       openExternalUrl(url); // best-effort, like `login` — the URL above is the fallback
     },
@@ -881,23 +882,23 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
   // A cross-brand confirmation should be impossible (each confirm page refuses the other brand's
   // code) — but if the platform ever reports one, the credentials would land in the WRONG kind's env
   // namespace and serve the wrong cloud. Fail visibly instead of writing them.
-  if (app.tenantBrand && app.tenantBrand !== kind) {
+  if (app.tenantBrand && app.tenantBrand !== "feishu") {
     throw new Error(
-      `the confirming account is a ${app.tenantBrand} tenant, but this is \`add ${kind}\` — run \`fastagent add ${app.tenantBrand}\` instead`,
+      `the confirming account is a ${app.tenantBrand} tenant, but this is \`add feishu\` — run \`fastagent add ${app.tenantBrand}\` instead`,
     );
   }
   const env: Record<string, string> = {
-    [`${envPrefix}_APP_ID`]: app.appId,
-    [`${envPrefix}_APP_SECRET`]: app.appSecret,
+    FEISHU_APP_ID: app.appId,
+    FEISHU_APP_SECRET: app.appSecret,
   };
   // The webhook channel authenticates plaintext events by the platform-generated Verification Token.
   // Try the cheap read first (the v6 detail MAY someday return `encryption`), then the real path: the
   // token's only programmatic delivery is the url_verification challenge during registration — capture
   // it over a throwaway tunnel (bootstrap-token.ts). Failing both is a one-line manual copy, not a
   // failed scan: the credentials above are already worth keeping.
-  const tokenVar = `${envPrefix}_VERIFICATION_TOKEN`;
-  const api = createLarkApi({
-    baseUrl: intl ? "https://open.larksuite.com" : "https://open.feishu.cn",
+  const tokenVar = "FEISHU_VERIFICATION_TOKEN";
+  const api = createFeishuApi({
+    baseUrl: "https://open.feishu.cn",
     appId: app.appId,
     appSecret: app.appSecret,
   });
@@ -912,7 +913,7 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
       `[fastagent] capturing the Verification Token — a throwaway webhook registration delivers it (spinning up a temporary tunnel; can take a few minutes on a slow edge)…`,
     );
     try {
-      env[tokenVar] = await bootstrapVerificationToken({
+      env[tokenVar] = await bootstrapFeishuVerificationToken({
         api,
         appId: app.appId,
         startTunnel: (port) => startCloudflareTunnel(port),
@@ -924,7 +925,7 @@ async function createLarkAppFlow(kind: "feishu" | "lark"): Promise<Record<string
       // cannot travel via il") nor via any API. So spend the one unavoidable console click NOW, while
       // the user is already in the browser: after this publish, later `dev --tunnel`/deploy
       // re-registrations change only the URL, which applies immediately — never a publish again.
-      const versionUrl = `${intl ? "https://open.larksuite.com" : "https://open.feishu.cn"}/app/${app.appId}/version`;
+      const versionUrl = `https://open.feishu.cn/app/${app.appId}/version`;
       console.error(
         `[fastagent] one console click remains: CREATE + PUBLISH a version (self-approved) — the switch to webhook mode takes effect on publish. Opening ${versionUrl}`,
       );
@@ -1227,7 +1228,7 @@ async function runDeployFly(params: {
     fly,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
-    (baseUrl, kind) => registerLarkWebhook(baseUrl, kind),
+    (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
   );
   if (!outcome.ok) {
     console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
@@ -1279,7 +1280,7 @@ async function runDeployRailway(params: {
     railway,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
-    (baseUrl, kind) => registerLarkWebhook(baseUrl, kind),
+    (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
   );
   if (!outcome.ok) {
     console.error(`[fastagent] deploy stopped: ${outcome.gate}`);

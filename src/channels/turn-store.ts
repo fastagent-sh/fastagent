@@ -31,7 +31,7 @@
  *
  * Channel-neutral, generic over the record shape: the channel supplies its own record type (everything
  * its runner needs to re-execute the turn), the shape validator (state files are an IO boundary), the
- * arrival ordering for recovery, and its log label. telegram/turn-store.ts and the lark channel are the
+ * arrival ordering for recovery, and its log label. telegram/turn-store.ts and the Feishu channel are the
  * two consumers.
  *
  * ponytail: at-least-once with a per-turn EXECUTION ceiling. A poison turn that deterministically

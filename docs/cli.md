@@ -29,7 +29,7 @@ Most commands take an optional workspace directory. When omitted, the current di
 | `schedule list [dir]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
 | `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
-| `add github|telegram|feishu|lark [dir]` | Scaffold a first-party channel (feishu = 飞书, lark = Lark international — one engine, two clouds, each its own channel). `add feishu` also creates + configures the platform app itself from a scan and writes the credentials to `.env` (skipped when they are already set); `add lark` opens the intl one-click launcher, validates the pasted App ID/Secret, then tries automatic webhook-mode + Verification-Token bootstrap; an explicit config-route 404 falls back to a hidden Token prompt and manual mode/URL setup. |
+| `add github|telegram|feishu|lark [dir]` | Scaffold a first-party channel. Feishu is the canonical implementation; Lark international is its protocol-compatible, control-plane-degraded profile. `add feishu` scan-creates/configures the app and writes credentials to `.env` (skipped when already set); `add lark` opens the intl launcher, validates App ID/Secret, probes Feishu's webhook/token automation, and falls back to manual mode/URL setup on the known config-route 404. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
 | `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--stop` (stop instead of suspend), `--no-scale-to-zero` (keep one machine up), `--force` (overwrite artifacts). |
 | `deploy railway [dir]` | Generate Railway artifacts (`railway.json` with `healthcheckPath=/health`, plus the shared `Dockerfile`/`.dockerignore`) and print a `railway` runbook: init a project, create a service (`railway add --service`), attach a `/data` volume, set the state root + secrets as variables (`railway variables set`, before the first deploy), `railway up`, then mint a domain (`railway domain`) and register the webhook. Scale-to-zero (App Sleeping) is a dashboard-only step the runbook states. `--run` drives the railway CLI to completion on an UNLINKED dir (auth → init/add/volume → variables → `railway up` → mint domain → telegram webhook; carries your local credential; needs the railway CLI); a dir already linked to a project is refused unless `--into-linked` (provision into it) — a routine redeploy is just `railway up`. `--force` overwrites artifacts. |
@@ -213,7 +213,7 @@ See:
 
 - [GitHub channel](github.md)
 - [Telegram channel](telegram.md)
-- [Feishu / Lark channels](lark.md)
+- [Feishu channel (Lark compatibility)](feishu.md)
 
 ## `fastagent add skill`
 

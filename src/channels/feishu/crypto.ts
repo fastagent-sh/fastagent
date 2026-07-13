@@ -1,8 +1,8 @@
 /**
- * Lark/Feishu webhook security — PURE (no state, no IO): the AES event decryption and the request
+ * Canonical Feishu webhook security (reused by Lark compatibility) — PURE: AES event decryption and request
  * signature, exactly as the open platform defines them. When an Encrypt Key is configured in the
  * developer console, every event arrives as `{"encrypt": "<base64>"}` with signature headers; without
- * one, events arrive in plaintext and carry only the verification token in the body. lark.ts owns the
+ * one, events arrive in plaintext and carry only the verification token in the body. feishu.ts owns the
  * fail-closed policy (which checks run when); this module owns the math.
  *
  *  - Decryption: AES-256-CBC. The key is sha256(encryptKey); the base64 payload is IV (16 bytes) ‖

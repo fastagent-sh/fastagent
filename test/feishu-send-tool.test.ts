@@ -8,7 +8,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
 let execute: (params: unknown) => Promise<{ details: unknown }>;
 beforeAll(async () => {
-  const templatePath = new URL("../src/channels/lark/scaffold/lark-send.ts", import.meta.url).pathname;
+  const templatePath = new URL("../src/channels/feishu/scaffold/feishu-send.ts", import.meta.url).pathname;
   const mod = (await import(templatePath)) as { default: unknown };
   execute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
 });
@@ -27,11 +27,11 @@ function stubOpenApi(): { calls: { url: string; body: Record<string, unknown> }[
 }
 
 const creds = () => {
-  vi.stubEnv("LARK_APP_ID", "cli_x");
-  vi.stubEnv("LARK_APP_SECRET", "sec");
+  vi.stubEnv("FEISHU_APP_ID", "cli_x");
+  vi.stubEnv("FEISHU_APP_SECRET", "sec");
 };
 
-describe("scaffold lark-send: text-or-markdown mode switch", () => {
+describe("canonical scaffold feishu-send: text-or-markdown mode switch", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -71,7 +71,7 @@ describe("scaffold lark-send: text-or-markdown mode switch", () => {
 
   it("missing credentials fail with the env-var names, before any network call", async () => {
     const { calls } = stubOpenApi();
-    await expect(execute({ chatId: "oc_1", text: "x" })).rejects.toThrow(/LARK_APP_ID/);
+    await expect(execute({ chatId: "oc_1", text: "x" })).rejects.toThrow(/FEISHU_APP_ID/);
     expect(calls).toHaveLength(0);
   });
 
@@ -86,40 +86,39 @@ describe("scaffold lark-send: text-or-markdown mode switch", () => {
     await expect(execute({ chatId: "oc_1", text: "hello" })).rejects.toThrow(/no availability/);
   });
 
-  it("the lark template talks to open.larksuite.com (the kind IS the cloud — no base-URL knob)", async () => {
+  it("the Feishu template is locked to the reference cloud", async () => {
     creds();
     const { calls } = stubOpenApi();
     await execute({ chatId: "oc_1", text: "x" });
-    expect(calls.every((c) => c.url.startsWith("https://open.larksuite.com/"))).toBe(true);
+    expect(calls.every((c) => c.url.startsWith("https://open.feishu.cn/"))).toBe(true);
   });
 });
 
-// The feishu twin is generated from the same engine discipline; what differs — and what a regression
-// would silently break — is the kind surface: the FEISHU_* env namespace and the locked cloud.
-describe("scaffold feishu-send: the feishu kind surface", () => {
-  let feishuExecute: (params: unknown) => Promise<{ details: unknown }>;
+// Lark keeps a branded send-tool edge, but it is the compatibility twin of the canonical Feishu tool.
+describe("scaffold lark-send: compatibility cloud binding", () => {
+  let larkExecute: (params: unknown) => Promise<{ details: unknown }>;
   beforeAll(async () => {
-    const templatePath = new URL("../src/channels/feishu/scaffold/feishu-send.ts", import.meta.url).pathname;
+    const templatePath = new URL("../src/channels/lark/scaffold/lark-send.ts", import.meta.url).pathname;
     const mod = (await import(templatePath)) as { default: unknown };
-    feishuExecute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
+    larkExecute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
   });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
 
-  it("reads FEISHU_* credentials and talks to open.feishu.cn", async () => {
-    vi.stubEnv("FEISHU_APP_ID", "cli_x");
-    vi.stubEnv("FEISHU_APP_SECRET", "sec");
+  it("reads LARK_* credentials and talks to open.larksuite.com", async () => {
+    vi.stubEnv("LARK_APP_ID", "cli_x");
+    vi.stubEnv("LARK_APP_SECRET", "sec");
     const { calls } = stubOpenApi();
-    const r = await feishuExecute({ chatId: "oc_9", text: "hi" });
-    expect(calls.every((c) => c.url.startsWith("https://open.feishu.cn/"))).toBe(true);
+    const r = await larkExecute({ chatId: "oc_9", text: "hi" });
+    expect(calls.every((c) => c.url.startsWith("https://open.larksuite.com/"))).toBe(true);
     expect(JSON.stringify(r.details)).toContain("sent message to chat oc_9");
   });
 
-  it("missing credentials fail with the FEISHU env-var names, before any network call", async () => {
+  it("missing credentials fail with the LARK env-var names, before any network call", async () => {
     const { calls } = stubOpenApi();
-    await expect(feishuExecute({ chatId: "oc_1", text: "x" })).rejects.toThrow(/FEISHU_APP_ID/);
+    await expect(larkExecute({ chatId: "oc_1", text: "x" })).rejects.toThrow(/LARK_APP_ID/);
     expect(calls).toHaveLength(0);
   });
 });

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chunkLarkText, createLarkApi, isLarkConfigApiMissing } from "../src/channels/lark/lark-api.ts";
+import { chunkFeishuText, createFeishuApi, isFeishuConfigApiMissing } from "../src/channels/feishu/feishu-api.ts";
 
-const BASE = "http://lark.test";
+const BASE = "http://feishu.test";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -37,7 +37,7 @@ describe("tenant token cache", () => {
     const fx = stubFetch(() => {
       throw new Error("verifyCredentials must not call a capability API");
     });
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await expect(api.verifyCredentials()).resolves.toBeUndefined();
     expect(fx.tokenFetches()).toBe(1);
     expect(fx.calls()).toHaveLength(1);
@@ -45,20 +45,20 @@ describe("tenant token cache", () => {
 
   it("identifies only a route-level 404 as the config-API-missing fallback", async () => {
     stubFetch(() => new Response("404 page not found", { status: 404 }));
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     let caught: unknown;
     try {
-      await api.updateEventSubscription("a", { subscriptionType: "webhook", requestUrl: "https://x.test/lark" });
+      await api.updateEventSubscription("a", { subscriptionType: "webhook", requestUrl: "https://x.test/feishu" });
     } catch (error) {
       caught = error;
     }
-    expect(isLarkConfigApiMissing(caught)).toBe(true);
-    expect(isLarkConfigApiMissing(new Error("404"))).toBe(false);
+    expect(isFeishuConfigApiMissing(caught)).toBe(true);
+    expect(isFeishuConfigApiMissing(new Error("404"))).toBe(false);
   });
 
   it("fetches the token once and reuses it across calls (Authorization carries it)", async () => {
     const fx = stubFetch(() => okData({ message_id: "om_1" }));
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await api.sendMessage("oc_1", "text", '{"text":"x"}');
     await api.sendMessage("oc_1", "text", '{"text":"y"}');
     expect(fx.tokenFetches()).toBe(1);
@@ -78,7 +78,7 @@ describe("tenant token cache", () => {
       }
       return okData({ message_id: "om_2" });
     });
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     expect(await api.sendMessage("oc_1", "text", "{}")).toBe("om_2");
     expect(fx.tokenFetches()).toBe(2); // initial + the one refetch
     const last = fx.calls().at(-1);
@@ -87,22 +87,30 @@ describe("tenant token cache", () => {
 
   it("a PERSISTENT auth reject fails after one refetch (no infinite refresh loop)", async () => {
     stubFetch(() => Response.json({ code: 99991663, msg: "token expired" }));
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await expect(api.sendMessage("oc_1", "text", "{}")).rejects.toThrow(/99991663|token expired/);
   });
 });
 
 describe("pipeline invariants", () => {
+  it("brands diagnostics with the bound cloud profile", async () => {
+    stubFetch(() => Response.json({ code: 1, msg: "denied" }, { status: 403 }));
+    const feishu = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    await expect(feishu.botInfo()).rejects.toThrow(/^feishu botInfo failed:/);
+    const lark = createFeishuApi({ kind: "lark", baseUrl: BASE, appId: "a", appSecret: "s" });
+    await expect(lark.botInfo()).rejects.toThrow(/^lark botInfo failed:/);
+  });
+
   it("success requires the body's own code===0 — an HTTP 200 with an error code is a named failure", async () => {
     stubFetch(() => Response.json({ code: 230002, msg: "the bot can not be outside the group" }));
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await expect(api.sendMessage("oc_1", "text", "{}")).rejects.toThrow(/sendMessage.*230002.*bot can not be outside/);
   });
 
   it("carries a 30s timeout signal on every JSON call (a wedged connection can't hang the turn)", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     stubFetch(() => okData({}));
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await api.editTextMessage("om_1", "hi");
     expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
@@ -114,7 +122,7 @@ describe("pipeline invariants", () => {
       calls++;
       return new Response(JSON.stringify({ code: 99991400, msg: "frequency limit" }), { status: 429 });
     });
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     const p = api.sendMessage("oc_1", "text", "{}").catch((e: Error) => e);
     await vi.advanceTimersByTimeAsync(500);
     expect(calls).toBe(1); // waiting, not hammering
@@ -126,7 +134,7 @@ describe("pipeline invariants", () => {
 
   it("a non-JSON body degrades to a named failure, never a silent success", async () => {
     stubFetch(() => new Response("<html>gateway error</html>", { status: 502 }));
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await expect(api.deleteMessage("om_1")).rejects.toThrow(/deleteMessage failed: 502/);
   });
 });
@@ -138,7 +146,7 @@ describe("message methods", () => {
       bodies.push({ url, body: JSON.parse(String(init.body)) });
       return okData({ message_id: `om_${bodies.length}` });
     });
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     // Two chunks: force the split with a text over the cap (multi-byte safe splitting is covered below).
     const long = `${"a".repeat(90 * 1024)}\n${"b".repeat(60 * 1024)}`;
     const firstId = await api.sendText({ chatId: "oc_1", replyTo: "om_ask" }, long);
@@ -157,7 +165,7 @@ describe("message methods", () => {
       bodies.push({ url, body: JSON.parse(String(init.body)) });
       return okData({ message_id: `om_${bodies.length}` });
     });
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     const long = `${"a".repeat(90 * 1024)}\n${"b".repeat(60 * 1024)}`;
 
     await api.sendText({ chatId: "oc_1", replyTo: "om_topic", replyInThread: true }, long);
@@ -173,7 +181,7 @@ describe("message methods", () => {
       reqs.push({ url, init });
       return okData({});
     });
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await api.editTextMessage("om_9", "final");
     expect(reqs[0]?.url).toContain("/im/v1/messages/om_9");
     expect(reqs[0]?.init.method).toBe("PUT");
@@ -189,7 +197,7 @@ describe("card methods", () => {
       reqs.push(JSON.parse(String(init.body)));
       return okData(give ? { card_id: "c1" } : {});
     });
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     expect(await api.createCard('{"schema":"2.0"}')).toBe("c1");
     expect(reqs[0]).toEqual({ type: "card_json", data: '{"schema":"2.0"}' });
     give = false;
@@ -202,7 +210,7 @@ describe("card methods", () => {
       reqs.push({ url, body: JSON.parse(String(init.body)) });
       return okData({});
     });
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await api.updateCardElement("c1", "answer", "partial…", 7);
     expect(reqs[0]?.url).toContain("/cardkit/v1/cards/c1/elements/answer/content");
     expect(reqs[0]?.body).toEqual({ content: "partial…", sequence: 7 });
@@ -218,7 +226,7 @@ describe("app config (scan-to-create + webhook registration)", () => {
         data: { app: { app_id: "cli_a", encryption: { verification_token: "vt-1", encryption_key: "ek-1" } } },
       }),
     );
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     expect(await api.getAppConfig("cli_a")).toEqual({ verificationToken: "vt-1", encryptionKey: "ek-1" });
     expect(fx.calls().at(-1)?.url).toContain("/open-apis/application/v6/applications/cli_a?lang=zh_cn");
   });
@@ -229,11 +237,11 @@ describe("app config (scan-to-create + webhook registration)", () => {
       reqs.push({ url, method: init.method, body: JSON.parse(String(init.body)) });
       return okData({});
     });
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
-    await api.updateEventSubscription("cli_a", { subscriptionType: "webhook", requestUrl: "https://x.dev/lark" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    await api.updateEventSubscription("cli_a", { subscriptionType: "webhook", requestUrl: "https://x.dev/feishu" });
     expect(reqs[0]?.url).toContain("/open-apis/application/v7/applications/cli_a/config");
     expect(reqs[0]?.method).toBe("PATCH");
-    expect(reqs[0]?.body).toEqual({ event: { subscription_type: "webhook", request_url: "https://x.dev/lark" } });
+    expect(reqs[0]?.body).toEqual({ event: { subscription_type: "webhook", request_url: "https://x.dev/feishu" } });
   });
 });
 
@@ -246,7 +254,7 @@ describe("resources", () => {
           headers: { "content-type": url.includes("img_png") ? "image/png" : "application/octet-stream" },
         }),
     );
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     const png = await api.fetchImage("om_1", "img_png");
     expect(png.mimeType).toBe("image/png");
     expect(Buffer.from(png.data, "base64").toString()).toBe("png-bytes");
@@ -256,23 +264,23 @@ describe("resources", () => {
 
   it("a failed download is a named error carrying the platform's own message", async () => {
     stubFetch(() => new Response(JSON.stringify({ code: 234001, msg: "resource expired" }), { status: 400 }));
-    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await expect(api.fetchImage("om_1", "k")).rejects.toThrow(/downloadResource.*resource expired/);
   });
 });
 
-describe("chunkLarkText", () => {
+describe("chunkFeishuText", () => {
   it("splits at a newline under the BYTE cap (multi-byte safe) and reconstructs losslessly", () => {
-    expect(chunkLarkText("short")).toEqual(["short"]);
+    expect(chunkFeishuText("short")).toEqual(["short"]);
     const cjk = `${"好".repeat(10)}\n${"多".repeat(10)}`; // 3 bytes per char
-    const chunks = chunkLarkText(cjk, 40);
+    const chunks = chunkFeishuText(cjk, 40);
     expect(chunks.length).toBeGreaterThan(1);
     for (const c of chunks) expect(Buffer.byteLength(c, "utf8")).toBeLessThanOrEqual(40);
     expect(chunks.join("\n")).toBe(cjk); // the split point was the newline
   });
 
   it("hard-cuts a single overlong line without splitting a multi-byte character", () => {
-    const chunks = chunkLarkText("好".repeat(30), 32); // no newline anywhere
+    const chunks = chunkFeishuText("好".repeat(30), 32); // no newline anywhere
     for (const c of chunks) {
       expect(Buffer.byteLength(c, "utf8")).toBeLessThanOrEqual(32);
       expect(c).toMatch(/^好+$/); // no torn surrogate/partial char

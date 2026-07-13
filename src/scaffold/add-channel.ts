@@ -53,13 +53,11 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
     ],
   },
-  // feishu and lark are one protocol on two clouds (open.feishu.cn / open.larksuite.com) sharing one
-  // engine — but each cloud is its own channel KIND: its own route path, env namespace, state home,
-  // console, and onboarding flow. No `generate` in either: every value comes FROM the platform
-  // (generating an Encrypt Key locally would break inbound events until the user mirrors it in the
-  // console — a silent-footgun default). Onboarding diverges by cloud: `add feishu` CREATES the app
-  // (scan-to-create fills the credentials automatically); the intl cloud cannot do that, so `add lark`
-  // opens the console and collects/validates the credentials as a guided paste flow.
+  // Feishu is the canonical engine/cloud; Lark international reuses its protocol through a degraded
+  // compatibility profile. Each remains its own channel KIND: route, env, state, console, onboarding.
+  // No `generate` in either: every value comes FROM the platform (a locally generated Encrypt Key
+  // would break inbound events until mirrored in the console). `add feishu` scan-creates the app;
+  // Lark lacks that control-plane capability, so `add lark` guides console credential collection.
   feishu: {
     env: [
       {

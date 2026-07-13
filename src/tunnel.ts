@@ -9,7 +9,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { registerLarkWebhook } from "./channels/lark/register-webhook.ts";
+import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { loadDotEnv } from "./env.ts";
 import { log } from "./log.ts";
@@ -172,9 +172,9 @@ export async function announceWebhooks(
   // feishu/lark register programmatically too (application-v7 config PATCH — telegram-setWebhook
   // parity), once per mounted kind (each kind is its own app with its own credentials); the registrar
   // owns its own health wait and degrades to the manual console instruction.
-  const larkOptions = {
+  const feishuOptions = {
     onManualRegistration: ({ consoleUrl }: { consoleUrl: string }) => opts.openUrl?.(consoleUrl),
   };
-  if (channels.includes("feishu")) await registerLarkWebhook(baseUrl, "feishu", larkOptions);
-  if (channels.includes("lark")) await registerLarkWebhook(baseUrl, "lark", larkOptions);
+  if (channels.includes("feishu")) await registerFeishuWebhook(baseUrl, "feishu", feishuOptions);
+  if (channels.includes("lark")) await registerFeishuWebhook(baseUrl, "lark", feishuOptions);
 }

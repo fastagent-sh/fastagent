@@ -1,12 +1,11 @@
-/** `@fastagent-sh/fastagent/feishu` — the Feishu (open.feishu.cn) bot channel subpath export, kept off
- *  the root surface. Same engine as `@fastagent-sh/fastagent/lark`; the kind picks the cloud. */
+/** `@fastagent-sh/fastagent/feishu` — the canonical Feishu (open.feishu.cn) bot-channel surface. */
 export {
   feishuChannel,
-  defaultLarkRoute,
-  larkEnvelope,
-  type LarkChannelOptions,
-  type LarkMessageEvent,
-  type LarkMessage,
-  type LarkRoute,
-  type LarkFailure,
-} from "./channels/lark/lark.ts";
+  defaultFeishuRoute,
+  feishuEnvelope,
+  type FeishuChannelOptions,
+  type FeishuMessageEvent,
+  type FeishuMessage,
+  type FeishuRoute,
+  type FeishuFailure,
+} from "./channels/feishu/feishu.ts";

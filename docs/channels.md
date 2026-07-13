@@ -92,8 +92,8 @@ FastAgent ships lightweight first-party adapters as subpath exports.
 |---|---|---|---|
 | GitHub webhook | `@fastagent-sh/fastagent/github` | [GitHub channel](github.md) | `fastagent add github` |
 | Telegram bot | `@fastagent-sh/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram` |
-| Feishu bot (飞书) | `@fastagent-sh/fastagent/feishu` | [Feishu / Lark channels](lark.md) | `fastagent add feishu` |
-| Lark bot (international) | `@fastagent-sh/fastagent/lark` | [Feishu / Lark channels](lark.md) | `fastagent add lark` |
+| Feishu bot (飞书) | `@fastagent-sh/fastagent/feishu` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add feishu` |
+| Lark bot (international) | `@fastagent-sh/fastagent/lark` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add lark` |
 
 Example GitHub glue:
 
@@ -120,8 +120,8 @@ export default telegramChannel({
 });
 ```
 
-Example Feishu glue (Lark international mirrors it: `larkChannel` from `@fastagent-sh/fastagent/lark`,
-`LARK_*` vars — one engine, two clouds, each its own channel kind):
+Example canonical Feishu glue (Lark international exposes a branded `larkChannel` compatibility
+adapter over this engine and reads `LARK_*`):
 
 ```ts
 import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
@@ -162,9 +162,9 @@ When `cloudflared` is installed, FastAgent opens a Cloudflare quick tunnel, prin
 
 - Telegram: calls `setWebhook` using `.env` values.
 - GitHub: prints the Payload URL to paste into repo settings.
-- Feishu / Lark: PATCHes the app's event subscription to the tunnel URL via the application-config API,
-  once per mounted kind (using the kind's `.env` credentials; falls back to printing the manual console
-  instruction).
+- Feishu: PATCHes the app's event subscription to the tunnel URL via the reference cloud's config API.
+- Lark compatibility: probes the same Feishu mechanism; its lagging config route currently falls back
+  to opening the app console and printing the Request URL.
 
 The tunnel is owned by the dev watch supervisor, so the URL survives worker reloads.
 

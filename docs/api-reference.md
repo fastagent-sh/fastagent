@@ -347,4 +347,4 @@ import { larkChannel } from "@fastagent-sh/fastagent/lark";
 
 `core` avoids loading the pi reference runtime and is the preferred dependency for engine-neutral
 channels. The root entry remains the supported convenience surface. See [GitHub channel](github.md),
-[Telegram channel](telegram.md), and [Feishu / Lark channels](lark.md).
+[Telegram channel](telegram.md), and the canonical [Feishu channel with Lark compatibility](feishu.md).

@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  type LarkMessage,
-  type LarkMessageEvent,
-  defaultLarkRoute,
-  larkEnvelope,
+  type FeishuMessage,
+  type FeishuMessageEvent,
+  defaultFeishuRoute,
+  feishuEnvelope,
   mentionsBot,
   parseContent,
   placeKey,
   senderLabel,
-} from "../src/channels/lark/parse.ts";
+} from "../src/channels/feishu/parse.ts";
 
-const msg = (over: Partial<LarkMessage> = {}): LarkMessage => ({
+const msg = (over: Partial<FeishuMessage> = {}): FeishuMessage => ({
   message_id: "om_1",
   chat_id: "oc_1",
   chat_type: "group",
@@ -20,9 +20,9 @@ const msg = (over: Partial<LarkMessage> = {}): LarkMessage => ({
 });
 
 const event = (
-  m: Partial<LarkMessage> = {},
-  sender: LarkMessageEvent["sender"] = { sender_type: "user", sender_id: { open_id: "ou_alice" } },
-): LarkMessageEvent => ({
+  m: Partial<FeishuMessage> = {},
+  sender: FeishuMessageEvent["sender"] = { sender_type: "user", sender_id: { open_id: "ou_alice" } },
+): FeishuMessageEvent => ({
   sender,
   message: msg(m),
 });
@@ -109,20 +109,20 @@ describe("summon + route policy", () => {
     expect(mentionsBot(msg(), "ou_bot")).toBe(false); // no mentions array
   });
 
-  it("defaultLarkRoute: p2p answers; a group only on an @mention of THIS bot", () => {
-    expect(defaultLarkRoute(event({ chat_type: "p2p" }), { botOpenId: "ou_bot" })).toEqual({});
-    expect(defaultLarkRoute(event({ chat_type: "group" }), { botOpenId: "ou_bot" })).toBeNull();
+  it("defaultFeishuRoute: p2p answers; a group only on an @mention of THIS bot", () => {
+    expect(defaultFeishuRoute(event({ chat_type: "p2p" }), { botOpenId: "ou_bot" })).toEqual({});
+    expect(defaultFeishuRoute(event({ chat_type: "group" }), { botOpenId: "ou_bot" })).toBeNull();
     expect(
-      defaultLarkRoute(event({ chat_type: "group", mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] }), {
+      defaultFeishuRoute(event({ chat_type: "group", mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] }), {
         botOpenId: "ou_bot",
       }),
     ).toEqual({});
   });
 
-  it("defaultLarkRoute ignores non-user senders (bot↔bot loops) and empty events — fail closed", () => {
-    expect(defaultLarkRoute(event({ chat_type: "p2p" }, { sender_type: "app" }), { botOpenId: "b" })).toBeNull();
-    expect(defaultLarkRoute({ message: msg({ chat_type: "p2p" }) }, { botOpenId: "b" })).toBeNull(); // no sender
-    expect(defaultLarkRoute({ sender: { sender_type: "user" } }, { botOpenId: "b" })).toBeNull(); // no message
+  it("defaultFeishuRoute ignores non-user senders (bot↔bot loops) and empty events — fail closed", () => {
+    expect(defaultFeishuRoute(event({ chat_type: "p2p" }, { sender_type: "app" }), { botOpenId: "b" })).toBeNull();
+    expect(defaultFeishuRoute({ message: msg({ chat_type: "p2p" }) }, { botOpenId: "b" })).toBeNull(); // no sender
+    expect(defaultFeishuRoute({ sender: { sender_type: "user" } }, { botOpenId: "b" })).toBeNull(); // no message
   });
 });
 
@@ -138,14 +138,14 @@ describe("envelope + keys", () => {
     expect(senderLabel(undefined)).toBeUndefined();
   });
 
-  it("larkEnvelope carries meta, the group note, the reply marker, and the decoded body", () => {
+  it("feishuEnvelope carries meta, the group note, the reply marker, and the decoded body", () => {
     const e = event({ parent_id: "om_prev", thread_id: "omt_2", content: '{"text":"summarize"}' });
-    const env = larkEnvelope(e);
-    expect(env).toContain("[lark: chat oc_1 (group), topic omt_2, from user ou_alice]");
+    const env = feishuEnvelope(e);
+    expect(env).toContain("[feishu: chat oc_1 (group), topic omt_2, from user ou_alice]");
     expect(env).toContain("[group chat — multiple people; each message is prefixed with its sender]");
     expect(env).toContain("[in reply to msg om_prev]");
     expect(env).toContain("summarize");
     // p2p: no group note
-    expect(larkEnvelope(event({ chat_type: "p2p" }))).not.toContain("group chat —");
+    expect(feishuEnvelope(event({ chat_type: "p2p" }))).not.toContain("group chat —");
   });
 });

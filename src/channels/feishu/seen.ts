@@ -18,12 +18,12 @@ export interface SeenRing {
   add(id: string): void;
 }
 
-export function createSeenRing(path: string, cap = 2000): SeenRing {
+export function createSeenRing(path: string, label = "[feishu]", cap = 2000): SeenRing {
   const load = (): string[] => {
     const raw = loadStateFile(path);
     if (raw === undefined) return [];
     if (Array.isArray(raw) && raw.every((x) => typeof x === "string")) return raw.slice(-cap);
-    log.warn(`[lark] unexpected shape in ${path} — starting with no seen ids`);
+    log.warn(`${label} unexpected shape in ${path} — starting with no seen ids`);
     return [];
   };
   const order = load();
@@ -41,7 +41,7 @@ export function createSeenRing(path: string, cap = 2000): SeenRing {
       try {
         saveStateFile(path, order);
       } catch (e) {
-        log.warn(`[lark] seen-ring write failed (dedup degrades to the turn-store window): ${String(e)}`);
+        log.warn(`${label} seen-ring write failed (dedup degrades to the turn-store window): ${String(e)}`);
       }
     },
   };

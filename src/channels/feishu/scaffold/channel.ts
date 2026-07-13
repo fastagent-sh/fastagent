@@ -1,8 +1,8 @@
 import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
 
-// A channel = a third-party ADAPTER (feishuChannel: verify + run + reply) configured with YOUR policy.
-// fastagent discovers this file under channels/, mounts POST /feishu, and pipes the agent + state home
-// to the adapter — this file holds only policy. Feishu (open.feishu.cn) only; a Lark-international
+// feishuChannel is fastagent's canonical Feishu adapter (verify + run + reply), configured with YOUR
+// policy. fastagent discovers this file, mounts POST /feishu, and pipes the agent + state home to it.
+// Feishu (open.feishu.cn) only; a Lark-international
 // tenant uses `fastagent add lark` instead. Setup (developer console):
 //   1. create a custom app → enable the BOT capability → copy App ID / App Secret into .env
 //   2. Permissions: add `im:message.p2p_msg:readonly` (direct messages), `im:message.group_at_msg:readonly`
@@ -26,9 +26,9 @@ export default feishuChannel({
   // full details always go to the server log regardless.
   onError: (failed) => `⚠️ ${failed.details}`,
   // The channel owns transport + format (markdown card) + attachments (image→vision, file→disk) +
-  // the live streaming preview. `route` (POLICY) is OPTIONAL — omitted, it uses defaultLarkRoute:
+  // the live streaming preview. `route` (POLICY) is OPTIONAL — omitted, it uses defaultFeishuRoute:
   // p2p chats always answer, groups only on an @mention of this bot (matched by open_id, resolved at
   // startup). Override to customise, reusing the export:
-  //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
-  //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { text: `${larkEnvelope(e)}\n[extra]` },
+  //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
+  //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { text: `${feishuEnvelope(e)}\n[extra]` },
 });

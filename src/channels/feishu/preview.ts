@@ -1,5 +1,5 @@
 /**
- * Live-preview rendering: consume one turn's event stream into a Lark/Feishu chat. The preview is ONE
+ * Canonical Feishu live-preview rendering (also reused by Lark compatibility). The preview is ONE
  * streaming CARD (create entity → mount it with a reply/send → stream full-text snapshots at its
  * markdown element with a strictly increasing `sequence`; the client renders the typewriter effect);
  * on completion the same card is settled in place with the final answer (streaming off). Streaming
@@ -24,16 +24,16 @@ import {
   finalCardJson,
   streamingCardJson,
 } from "./card.ts";
-import { type LarkApi, type LarkTarget, chunkLarkText, isCardStreamingClosed } from "./lark-api.ts";
+import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
 
 /** A terminal failure, as the channel hands it to `onError`. */
-export interface LarkFailure {
+export interface FeishuFailure {
   details: string;
   retryable: boolean;
 }
 
 /** The customer-facing default: neutral, no leaked internals; differentiate only on whether to retry. */
-export function defaultErrorMessage(failed: LarkFailure): string {
+export function defaultErrorMessage(failed: FeishuFailure): string {
   return failed.retryable ? "⚠️ Temporary problem — please try again." : "⚠️ Sorry, something went wrong.";
 }
 
@@ -100,8 +100,8 @@ type Preview =
  * when it doesn't fit). No preview → fresh send. EMPTY text = "say nothing" → just delete the preview.
  */
 async function finalize(
-  api: LarkApi,
-  target: LarkTarget,
+  api: FeishuApi,
+  target: FeishuTarget,
   preview: Preview,
   text: string,
   seq: () => number,
@@ -111,7 +111,7 @@ async function finalize(
     return;
   }
   if (preview.kind === "card") {
-    const [head, ...rest] = chunkLarkText(text, CARD_MARKDOWN_MAX_BYTES);
+    const [head, ...rest] = chunkFeishuText(text, CARD_MARKDOWN_MAX_BYTES);
     try {
       await api.updateCard(preview.cardId, finalCardJson(head ?? ""), seq());
       // Topic continuations must keep reply_in_thread; ordinary group continuations intentionally avoid
@@ -124,7 +124,7 @@ async function finalize(
     }
   }
   if (preview.kind === "text") {
-    if (chunkLarkText(text).length === 1) {
+    if (chunkFeishuText(text).length === 1) {
       try {
         await api.editTextMessage(preview.messageId, text);
         return;
@@ -138,18 +138,19 @@ async function finalize(
 }
 
 /**
- * Consume one turn's event stream into a Lark chat, live (see the module header for the preview
+ * Consume one turn's event stream into a Feishu-compatible chat, live (see the module header for the preview
  * model). Preview updates are best-effort (logged once if they fail); the final write is authoritative
  * and surfaces a real failure (bad credentials, etc.). `noticeId` is the "⏳ queued" text notice sent
  * while this turn waited — it cannot morph into a card, so it is deleted once the preview is mounted
  * (and by the terminal write otherwise), never left pinned above the answer.
  */
-export async function streamLarkReply(
+export async function streamFeishuReply(
   events: AsyncIterable<AgentEvent>,
-  api: LarkApi,
-  target: LarkTarget,
-  formatError: (failed: LarkFailure) => string | undefined,
+  api: FeishuApi,
+  target: FeishuTarget,
+  formatError: (failed: FeishuFailure) => string | undefined,
   noticeId?: string,
+  label = "[feishu]",
 ): Promise<void> {
   const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
   const toolIndexById = new Map<string, number>();
@@ -222,7 +223,7 @@ export async function streamLarkReply(
         } catch (e) {
           if (attempt >= 3 || !/230099|11310|cardid is invalid/i.test(String(e))) throw e;
           log.warn(
-            `[lark] mount rejected the fresh card (card=${cardId}, attempt ${attempt}) — retrying: ${String(e)}`,
+            `${label} mount rejected the fresh card (card=${cardId}, attempt ${attempt}) — retrying: ${String(e)}`,
           );
           await sleep(attempt * 400);
         }
@@ -232,7 +233,7 @@ export async function streamLarkReply(
     } catch (e) {
       // Card tier failed — degrade to a text placeholder with NO live updates (the text tier's 20-edit
       // cap is spent on terminal writes only). Visible: the operator learns why the preview is static.
-      log.warn(`[lark] streaming card unavailable — live preview degrades to a static placeholder: ${String(e)}`);
+      log.warn(`${label} streaming card unavailable — live preview degrades to a static placeholder: ${String(e)}`);
       const messageId =
         target.replyTo !== undefined
           ? await api.replyMessage(target.replyTo, "text", JSON.stringify({ text: THINKING_PLACEHOLDER }), {
@@ -261,7 +262,7 @@ export async function streamLarkReply(
         // The platform closed streaming (idle timeout). Freeze the live view; the settle write replaces
         // the whole entity (streaming off) and still lands.
         streamDead = true;
-        log.warn("[lark] card streaming closed mid-turn — preview frozen; the final answer still lands");
+        log.warn(`${label} card streaming closed mid-turn — preview frozen; the final answer still lands`);
         return;
       }
       throw e;
@@ -291,7 +292,7 @@ export async function streamLarkReply(
           // log once per turn so a never-rendering preview is diagnosable, not silent.
           if (!previewErrLogged) {
             previewErrLogged = true;
-            log.warn(`[lark] live preview failed (final reply still sends): ${String(e)}`);
+            log.warn(`${label} live preview failed (final reply still sends): ${String(e)}`);
           }
         }
         if (dirty && !stopped) {

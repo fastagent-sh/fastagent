@@ -1,36 +1,37 @@
 /**
- * Run one turn (the IO half of Lark→Agent translation): assemble its inputs — resolve the reply
+ * Run one turn (the IO half of canonical Feishu→Agent translation): assemble its inputs — resolve the reply
  * referent (a summon that replies to an earlier message names it only by `parent_id`; the content is
  * NOT in the event, so it is fetched here) and the attachments (vision images inline, files to disk) —
  * and stream `agent.invoke` with the assembled prompt. Split from parse.ts (which is pure) because this
- * half touches the Open API + disk; split from lark.ts so the factory keeps only wiring and the
+ * half touches the Open API + disk; split from feishu.ts so the factory keeps only wiring and the
  * per-turn lifecycle.
  *
  * Everything here is PRIMARY input — the summoning message's own attachments and the message the user
  * explicitly replied to — so any load failure THROWS and the caller sees a `failed` event: the agent
  * never runs on inputs the user pointed at but we failed to load. (The telegram channel's second,
- * degrade-per-attachment tier is its context BUFFER — background material; lark grows that tier only
+ * degrade-per-attachment tier is its context BUFFER — background material; Feishu grows that tier only
  * with the buffer itself, which needs the sensitive all-group-messages scope.)
  */
 import { type Agent, type AgentEvent, type ImageRef, SESSION_BUSY_CODE } from "../../agent.ts";
 import { log } from "../../log.ts";
-import type { DownloadedFile, LarkApi } from "./lark-api.ts";
-import { type LarkMention, parseContent } from "./parse.ts";
+import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
+import { type FeishuMention, parseContent } from "./parse.ts";
 
 /** Appended to the prompt (not the system prompt): the channel renders the reply in a card, and the
  *  card's markdown element is the natural fit for LLM output — steer away from HTML/plain. */
 const MARKDOWN_INSTRUCTION = "\n\n(Format your reply in standard Markdown — it is rendered in a Feishu/Lark card.)";
 
 /** Everything the transport needs to fetch a turn's attachments. */
-export interface LarkTurnTransport {
-  api: LarkApi;
+export interface FeishuTurnTransport {
+  api: FeishuApi;
   chatId: string;
   filesDir: string;
+  label: string;
 }
 
 /** An attachment reference: the resource key inside its CARRYING message (the resource API addresses
  *  bytes by message_id + key, so the pair travels together through the turn record). */
-export interface LarkAttachmentInput {
+export interface FeishuAttachmentInput {
   msg: string;
   key: string;
   name?: string;
@@ -38,9 +39,9 @@ export interface LarkAttachmentInput {
 
 /** A turn's attachment inputs: the summoning message's own resources, plus the message it replied to
  *  (resolved here — content and resources both). */
-export interface LarkTurnAttachments {
-  images: LarkAttachmentInput[];
-  files: LarkAttachmentInput[];
+export interface FeishuTurnAttachments {
+  images: FeishuAttachmentInput[];
+  files: FeishuAttachmentInput[];
   /** The replied-to message's id, when the summon is a reply. */
   parentId?: string;
 }
@@ -56,7 +57,7 @@ interface ResolvedInputs {
  * Resolve a turn's inputs (module header): fetch the reply referent's content, then load every image
  * (vision) and file (disk). Throws on any failure — primary inputs, no silent drops.
  */
-async function resolveTurnInputs(t: LarkTurnTransport, attachments: LarkTurnAttachments): Promise<ResolvedInputs> {
+async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurnAttachments): Promise<ResolvedInputs> {
   const images = [...attachments.images];
   const files = [...attachments.files];
   let referentBlock = "";
@@ -66,7 +67,7 @@ async function resolveTurnInputs(t: LarkTurnTransport, attachments: LarkTurnAtta
     const parsed = parseContent({
       message_type: parent.msg_type ?? "unknown",
       content: parent.body?.content ?? "",
-      mentions: parent.mentions as LarkMention[] | undefined,
+      mentions: parent.mentions as FeishuMention[] | undefined,
     });
     // The referent's own resources join the turn as primary inputs, carried by the PARENT message id.
     for (const key of parsed.imageKeys) images.push({ msg: attachments.parentId, key });
@@ -113,12 +114,12 @@ const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_000 };
  * FIRST-event busy retries — inputs are already resolved, and a fail-fast reject is the only shape the
  * engine emits it in, so nothing that started is ever re-run.
  */
-export async function* invokeLarkTurn(
+export async function* invokeFeishuTurn(
   agent: Agent,
   session: string,
   text: string,
-  transport: LarkTurnTransport,
-  attachments: LarkTurnAttachments,
+  transport: FeishuTurnTransport,
+  attachments: FeishuTurnAttachments,
   onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
 ): AsyncIterable<AgentEvent> {
@@ -144,7 +145,9 @@ export async function* invokeLarkTurn(
       yield e;
     }
     if (!retryBusy) return;
-    log.info(`[lark] session ${session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`);
+    log.info(
+      `${transport.label} session ${session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`,
+    );
     await new Promise((r) => setTimeout(r, busyRetry.delayMs));
   }
 }

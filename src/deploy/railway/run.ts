@@ -114,16 +114,16 @@ export function parseHasVolume(stdout: string, mountPath: string): boolean {
 
 /**
  * Run the deploy through `railway`. `log` reports progress; `registerTelegram(baseUrl)` /
- * `registerLark(baseUrl, kind)` perform the post-deploy webhook steps (the CLI passes its registrars;
- * `registerLark` is optional — absent, the manual console instruction is printed; it serves both the
- * feishu and lark kinds, called once per mounted kind). Every gate is fail-visible.
+ * `registerFeishu(baseUrl, kind)` perform the post-deploy webhook steps (the CLI passes its canonical
+ * Feishu registrar, which also serves the Lark compatibility profile). Absent, the manual console
+ * instruction is printed. Every gate is fail-visible.
  */
 export async function deployRailwayRun(
   plan: RailwayRunPlan,
   railway: CliRunner,
   log: (msg: string) => void,
   registerTelegram: (baseUrl: string) => Promise<void>,
-  registerLark?: (baseUrl: string, kind: "feishu" | "lark") => Promise<void>,
+  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<void>,
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service
@@ -249,9 +249,9 @@ export async function deployRailwayRun(
   }
   for (const kind of ["feishu", "lark"] as const) {
     if (!plan.channels.includes(kind)) continue;
-    if (registerLark) {
+    if (registerFeishu) {
       log(`registering ${kind} event URL…`);
-      await registerLark(url, kind);
+      await registerFeishu(url, kind);
     } else {
       log(
         `${kind}: set the event Request URL in the developer console (Events & Callbacks) → ${url}/${kind} (the service must be running when you save)`,

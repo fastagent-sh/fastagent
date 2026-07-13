@@ -21,42 +21,38 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
 import { waitForHealth } from "../wait-health.ts";
-import { createLarkApi } from "./lark-api.ts";
-import type { LarkKind } from "./lark.ts";
-
-const KIND_API_BASE: Record<LarkKind, string> = {
-  feishu: "https://open.feishu.cn",
-  lark: "https://open.larksuite.com",
-};
+import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
+import { createFeishuApi } from "./feishu-api.ts";
 
 /**
  * Register `<baseUrl>/<kind>` as the app's event Request URL (webhook mode). Missing credentials print
  * the manual instruction instead of failing. `opts` exist for tests: timeouts + `apiBase` (a fake
  * platform — production derives it from the kind).
  */
-export interface LarkManualRegistration {
+export interface FeishuManualRegistration {
   consoleUrl: string;
   requestUrl: string;
 }
 
-export interface RegisterLarkWebhookOptions {
+export interface RegisterFeishuWebhookOptions {
   readyTimeoutMs?: number;
   readyIntervalMs?: number;
   retryMs?: number;
   apiBase?: string;
   /** Definitive config-API fallback. Local dev uses this to open the exact app console page. */
-  onManualRegistration?: (info: LarkManualRegistration) => void;
+  onManualRegistration?: (info: FeishuManualRegistration) => void;
 }
 
-export async function registerLarkWebhook(
+export async function registerFeishuWebhook(
   baseUrl: string,
-  kind: LarkKind,
-  opts: RegisterLarkWebhookOptions = {},
+  kind: FeishuCloudKind,
+  opts: RegisterFeishuWebhookOptions = {},
 ): Promise<void> {
-  const envPrefix = kind === "feishu" ? "FEISHU" : "LARK";
+  const profile = cloudFor(kind);
+  const envPrefix = profile.envPrefix;
   const appId = process.env[`${envPrefix}_APP_ID`];
   const appSecret = process.env[`${envPrefix}_APP_SECRET`];
-  const apiBase = opts.apiBase ?? KIND_API_BASE[kind];
+  const apiBase = opts.apiBase ?? profile.apiBase;
   const requestUrl = `${baseUrl}/${kind}`;
   const manual = `switch Subscription mode to webhook and set the event Request URL in the developer console (Events & Callbacks) to ${requestUrl} — keep the server running while you save (the console verifies the URL with a challenge)`;
   if (!appId || !appSecret) {
@@ -77,7 +73,7 @@ export async function registerLarkWebhook(
     return;
   }
 
-  const api = createLarkApi({ baseUrl: apiBase, appId, appSecret });
+  const api = createFeishuApi({ kind, baseUrl: apiBase, appId, appSecret });
   // Reachable → register. The PATCH is the real probe (same lesson as the token bootstrap): the
   // platform verifies request_url with a challenge DURING the call, and a fresh tunnel's edge can be
   // reachable from here while the platform's own path still lags — its 210042 "request_url validation
@@ -103,9 +99,10 @@ export async function registerLarkWebhook(
       // would send the operator hunting for a problem they cannot fix.
       if (/failed: 404/.test(error)) {
         const consoleUrl = `${apiBase}/app/${encodeURIComponent(appId)}/event`;
+        const capability = profile.capabilities.eventConfig;
         log.warn(
-          `[fastagent] ${kind}: this cloud (${apiBase}) does not expose the app-config API yet (it exists on ` +
-            `open.feishu.cn; Lark international lags behind) — manual registration is required`,
+          `[fastagent] ${kind}: this cloud (${apiBase}) does not expose the app-config API ` +
+            `(profile: ${capability}; Feishu is the reference cloud) — manual registration is required`,
         );
         log.info(`[fastagent] ${kind}: Events & Callbacks:\n  ${consoleUrl}`);
         log.info(

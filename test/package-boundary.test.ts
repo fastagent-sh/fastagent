@@ -77,6 +77,7 @@ describe("engine neutrality: the core subpath + channel/host spine import no eng
     "channels/respond.ts",
     "channels/github/github.ts",
     "channels/telegram/telegram.ts",
+    "channels/feishu/feishu.ts",
     "channels/lark/lark.ts",
     "host/node.ts",
   ];

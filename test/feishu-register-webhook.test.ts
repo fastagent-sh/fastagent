@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerLarkWebhook } from "../src/channels/lark/register-webhook.ts";
+import { registerFeishuWebhook } from "../src/channels/feishu/register-webhook.ts";
 
 // Mirrors the telegram registrar's G5 discipline: the application-v7 config PATCH triggers the
 // platform's url_verification challenge against the new Request URL, so registration must wait until
 // the server actually serves — and a permanent config error degrades to the manual console path.
 // The registrar serves BOTH kinds (feishu/lark): the kind picks the env namespace, API base, and path.
-describe("registerLarkWebhook: waits for /health, then PATCHes the event subscription", () => {
+describe("registerFeishuWebhook: waits for /health, then PATCHes the event subscription", () => {
   const prev = {
     id: process.env.LARK_APP_ID,
     secret: process.env.LARK_APP_SECRET,
@@ -20,7 +20,7 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
     process.env.FEISHU_APP_SECRET = prev.fsecret;
   });
 
-  function creds(prefix: "LARK" | "FEISHU" = "LARK") {
+  function creds(prefix: "LARK" | "FEISHU" = "FEISHU") {
     process.env[`${prefix}_APP_ID`] = "cli_app";
     process.env[`${prefix}_APP_SECRET`] = "sec";
   }
@@ -46,23 +46,23 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
         return new Response(null, { status: 404 });
       }),
     );
-    await registerLarkWebhook("https://x.trycloudflare.com", "lark", {
+    await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
       readyTimeoutMs: 5000,
       readyIntervalMs: 1,
-      apiBase: "http://lark.test",
+      apiBase: "http://feishu.test",
     });
     expect(health).toBeGreaterThanOrEqual(3); // waited for readiness, not a fixed timer
     expect(patches).toHaveLength(1);
-    expect(patches[0]?.url).toContain("http://lark.test/open-apis/application/v7/applications/cli_app/config");
+    expect(patches[0]?.url).toContain("http://feishu.test/open-apis/application/v7/applications/cli_app/config");
     expect(patches[0]?.body).toEqual({
-      event: { subscription_type: "webhook", request_url: "https://x.trycloudflare.com/lark" },
+      event: { subscription_type: "webhook", request_url: "https://x.trycloudflare.com/feishu" },
     });
   });
 
-  it("the feishu kind reads FEISHU_* credentials and registers <baseUrl>/feishu", async () => {
-    delete process.env.LARK_APP_ID; // only the feishu namespace is set — the kind must not read LARK_*
-    delete process.env.LARK_APP_SECRET;
-    creds("FEISHU");
+  it("the Lark compatibility profile reads LARK_* credentials and registers <baseUrl>/lark", async () => {
+    delete process.env.FEISHU_APP_ID;
+    delete process.env.FEISHU_APP_SECRET;
+    creds("LARK");
     const patches: { url: string; body: Record<string, unknown> }[] = [];
     vi.stubGlobal(
       "fetch",
@@ -78,15 +78,15 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
         return new Response(null, { status: 404 });
       }),
     );
-    await registerLarkWebhook("https://x.trycloudflare.com", "feishu", {
+    await registerFeishuWebhook("https://x.trycloudflare.com", "lark", {
       readyTimeoutMs: 100,
       readyIntervalMs: 1,
-      apiBase: "http://feishu.test",
+      apiBase: "http://larksuite.test",
     });
     expect(patches).toHaveLength(1);
-    expect(patches[0]?.url).toContain("http://feishu.test/open-apis/application/v7/applications/cli_app/config");
+    expect(patches[0]?.url).toContain("http://larksuite.test/open-apis/application/v7/applications/cli_app/config");
     expect(patches[0]?.body).toEqual({
-      event: { subscription_type: "webhook", request_url: "https://x.trycloudflare.com/feishu" },
+      event: { subscription_type: "webhook", request_url: "https://x.trycloudflare.com/lark" },
     });
   });
 
@@ -103,7 +103,7 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
         throw new Error("ECONNREFUSED"); // /health never reachable
       }),
     );
-    await registerLarkWebhook("https://dead.example", "lark", { readyTimeoutMs: 20, readyIntervalMs: 5 });
+    await registerFeishuWebhook("https://dead.example", "feishu", { readyTimeoutMs: 20, readyIntervalMs: 5 });
     expect(patches).toHaveLength(0);
   });
 
@@ -126,11 +126,11 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
         return new Response(null, { status: 404 });
       }),
     );
-    await registerLarkWebhook("https://x.trycloudflare.com", "lark", {
+    await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
       readyTimeoutMs: 100,
       readyIntervalMs: 1,
       retryMs: 1,
-      apiBase: "http://lark.test",
+      apiBase: "http://feishu.test",
     });
     expect(patches).toBe(3); // failed twice, registered on the third
   });
@@ -152,17 +152,17 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
         return new Response(null, { status: 404 });
       }),
     );
-    await registerLarkWebhook("https://x.trycloudflare.com", "lark", {
+    await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
       readyTimeoutMs: 100,
       readyIntervalMs: 1,
       retryMs: 1,
-      apiBase: "http://lark.test",
+      apiBase: "http://feishu.test",
     });
     expect(patches).toBe(1); // permanent error — no blind retries
   });
 
-  it("a 404 on the config route (Lark intl cloud lag) names the real cause, once, without blaming scopes", async () => {
-    creds();
+  it("the Lark compatibility profile falls back on its missing config route", async () => {
+    creds("LARK");
     let patches = 0;
     vi.stubGlobal(
       "fetch",
@@ -184,7 +184,7 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
       warned.push(m);
     });
     const onManualRegistration = vi.fn();
-    await registerLarkWebhook("https://x.trycloudflare.com", "lark", {
+    await registerFeishuWebhook("https://x.trycloudflare.com", "lark", {
       readyTimeoutMs: 100,
       readyIntervalMs: 1,
       retryMs: 1,
@@ -193,7 +193,7 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
     });
     spy.mockRestore();
     expect(patches).toBe(1); // a missing route never gets blind retries
-    expect(warned.join("\n")).toMatch(/does not expose the app-config API yet/); // the CAUSE, not "check scopes"
+    expect(warned.join("\n")).toMatch(/profile: probe-with-manual-fallback/);
     expect(onManualRegistration).toHaveBeenCalledOnce();
     expect(onManualRegistration).toHaveBeenCalledWith({
       consoleUrl: "http://larksuite.test/app/cli_app/event",
@@ -206,7 +206,7 @@ describe("registerLarkWebhook: waits for /health, then PATCHes the event subscri
     delete process.env.LARK_APP_SECRET;
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    await registerLarkWebhook("https://x.trycloudflare.com", "lark");
+    await registerFeishuWebhook("https://x.trycloudflare.com", "lark");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

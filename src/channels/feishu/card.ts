@@ -4,7 +4,7 @@
  * the card DSL is data-in → string-out and testable without the pump.
  *
  * The preview is ONE markdown element (`element_id` below) inside a card with `streaming_mode` on:
- * the pump PUTs full-text snapshots at that element (lark-api.ts `updateCardElement`) and the client
+ * the pump PUTs full-text snapshots at that element (feishu-api.ts `updateCardElement`) and the client
  * renders the typewriter effect. Settling replaces the whole entity (`updateCard`) with the same
  * element, `streaming_mode` off — one write flips content and mode together.
  *

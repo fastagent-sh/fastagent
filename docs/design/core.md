@@ -183,34 +183,33 @@ Telegram is the stateful channel reference. Its modules separate:
 |---|---|
 | `parse.ts` | pure update/message parsing and summon policy |
 | `invoke-turn.ts` | attachment resolution and one Agent invocation |
-| `../turn-queue.ts` | per-session FIFO, different sessions concurrent (shared with lark) |
+| `../turn-queue.ts` | per-session FIFO, different sessions concurrent (shared with Feishu) |
 | `turn-store.ts` | telegram's record + ordering over the shared generic `../turn-store.ts` (pre-ACK persisted turn intent, crash replay) |
 | `context-buffer.ts` | durable un-summoned group context |
 | `preview.ts` | live preview and terminal write policy |
 | `telegram-api.ts` | Bot API timeouts/retries and HTML-aware splitting |
-| `../state.ts` | atomic small JSON state files (shared with lark) |
+| `../state.ts` | atomic small JSON state files (shared with Feishu) |
 
 Telegram turn replay is at-least-once. A crash can re-run side-effecting tools, and a narrow pre-ACK
 window can run a delivery twice. Exactly-once execution needs a different backend/resume model.
 
-### Feishu / Lark
+### Feishu (canonical) / Lark (compatibility)
 
-The second stateful chat channel, shaped as a sibling of Telegram: the shared mechanisms
-(`turn-queue` / generic `turn-store` / `state` / `wait-health`) live one level up in `src/channels/`,
-and the module split mirrors Telegram's (`lark.ts` wiring, `parse.ts` pure decode, `invoke-turn.ts` IO
-assembly, `preview.ts` pump, `lark-api.ts` single transport pipeline with the tenant-token cache,
-`crypto.ts` webhook security math, `card.ts` card builders, `seen.ts` dedup ring, `register-app.ts` /
-`register-webhook.ts` platform automation). No SDK — every wire protocol is plain fetch, with the
-adopt-the-SDK tripwire documented in `lark-api.ts`.
+Feishu is the second stateful chat-channel reference, shaped as a sibling of Telegram. Its canonical
+implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure decode,
+`invoke-turn.ts` IO assembly, `preview.ts` pump, `feishu-api.ts` transport/token pipeline, `crypto.ts`
+security math, `card.ts` builders, `seen.ts` dedup, and registration automation. Shared mechanisms
+(`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one level up.
 
-**One engine, two channel KINDS.** Feishu (`open.feishu.cn`) and Lark international
-(`open.larksuite.com`) are one protocol on two clouds — but a channel kind is fastagent's unit of
-route path, env namespace, state home, and onboarding, so they are two kinds bound over this one
-engine (`src/channels/lark/` stays the engine; `src/channels/feishu/` holds only the kind's scaffold
-bundle): `feishuChannel` mounts `POST /feishu`, reads `FEISHU_*`, keeps state under
-`channels/feishu/`; `larkChannel` mirrors with `lark`. One workspace can mount both. The clouds also
-diverge operationally (separate consoles/accounts hosts, the intl cloud lags on the config API), which
-is exactly the split's payoff: per-kind onboarding without engine forks. What is platform-different:
+**Feishu is the design center; Lark is a compatibility profile.** The clouds share event/card/crypto
+wire formats, but Lark international trails Feishu in app creation and application-config APIs.
+`src/channels/lark/lark.ts` is therefore a thin branded adapter over the Feishu engine, while
+`src/channels/lark/onboard.ts` owns Lark's degraded guided/manual onboarding. The explicit profiles in
+`src/channels/feishu/cloud.ts` record those capability differences. A kind still owns route, env,
+state, logs, and onboarding: `feishuChannel` mounts `POST /feishu`, reads `FEISHU_*`, and stores under
+`channels/feishu/`; `larkChannel` mirrors those boundaries without becoming the core. One workspace
+can mount both. No SDK — wire protocols are fetch-based, with the adoption tripwire documented in
+`feishu-api.ts`. What is platform-different:
 
 - **The live preview is a streaming CARD, not an edited message.** The platform caps text edits at 20
   per message and sends at 5 QPS per chat; cardkit streaming (50 QPS per app / 10 per card, strictly
@@ -235,8 +234,8 @@ is exactly the split's payoff: per-kind onboarding without engine forks. What is
   not on `open.larksuite.com` yet; a 404 names that cause. `add feishu` runs the scan-to-create
   device flow BY DEFAULT (RFC 8628, hand-rolled; wire format shared by the four official SDKs) and
   captures the platform-generated verification token from the registration challenge over a throwaway
-  tunnel — `.env` completes without the developer console; skipped when credentials are already set.
-  One console click remains (the CLI opens the page): the long-connection→webhook mode flip takes
+  tunnel — `.env` completes before the remaining publish action; skipped when credentials are already set.
+  One console action remains (the CLI opens the page): the long-connection→webhook mode flip takes
   effect on version publish, which has no open API — the subscription mode cannot travel on the
   creation link (the platform excludes sensitive config from addons). The intl cloud cannot complete
   the BOUND device flow (its confirm-page ack endpoint is broken), so `add lark` opens the unbound

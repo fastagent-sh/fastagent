@@ -1,8 +1,8 @@
 import { larkChannel } from "@fastagent-sh/fastagent/lark";
 
-// A channel = a third-party ADAPTER (larkChannel: verify + run + reply) configured with YOUR policy.
-// fastagent discovers this file under channels/, mounts POST /lark, and pipes the agent + state home
-// to the adapter — this file holds only policy. Lark international (open.larksuite.com) only; a
+// larkChannel is the branded compatibility adapter over fastagent's canonical Feishu engine, configured
+// with YOUR policy. fastagent discovers this file, mounts POST /lark, and pipes the agent + state home
+// to the adapter. Lark international (open.larksuite.com) only; a
 // Feishu tenant uses `fastagent add feishu` instead. Setup (developer console):
 //   1. create a custom app → enable the BOT capability → copy App ID / App Secret into .env
 //   2. Permissions: add `im:message.p2p_msg:readonly` (direct messages), `im:message.group_at_msg:readonly`

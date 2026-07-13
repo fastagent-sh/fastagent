@@ -1,19 +1,16 @@
 /**
- * Lark/Feishu protocol parsing — PURE: event field extraction, message-content decoding, the prompt
- * envelope, and the summon/route policy. The defining invariant is purity: no state, no IO, no open-
- * platform calls — plain data-in → data-out. In lark.ts's pipeline (verify → decide via `route` → run
- * the turn → stream reply), this is the "decide" and prompt-building half; lark.ts wires it in and owns
- * the stateful lifecycle. Kept separate so this layer tests as plain functions.
- *
- * Lark messages carry their payload as a JSON-ENCODED STRING in `content`, shaped by `message_type`
+ * Canonical Feishu protocol parsing — PURE: event field extraction, message-content decoding, prompt
+ * envelope, and summon/route policy. Lark compatibility events reuse these wire shapes. Feishu
+ * messages carry their payload as a JSON-ENCODED STRING in `content`, shaped by `message_type`
  * (text / post / image / file / audio / media / …). {@link parseContent} is the single decoder: it
  * yields the readable text (mention placeholders restored), the vision image keys, and the downloadable
  * file refs — the envelope, the turn record, and the parent-message resolution all read through it.
  */
+import type { FeishuCloudKind } from "./cloud.ts";
 
 /** One entry of a message's `mentions` array: the platform's parsed @-mention (the `key` is the
  *  placeholder in the text content, e.g. `@_user_1`). */
-export interface LarkMention {
+export interface FeishuMention {
   key: string;
   id?: { open_id?: string; user_id?: string; union_id?: string };
   name?: string;
@@ -22,7 +19,7 @@ export interface LarkMention {
 
 /** A received message (the `im.message.receive_v1` event's `message`, common subset; `[k]` keeps the
  *  rest reachable without a types dependency). */
-export interface LarkMessage {
+export interface FeishuMessage {
   message_id: string;
   /** The replied-to message, when this message is a reply. Content is NOT included — the channel
    *  fetches it via the API (the IO half, invoke-turn.ts). */
@@ -35,11 +32,11 @@ export interface LarkMessage {
   message_type: string; // "text" | "post" | "image" | "file" | "audio" | "media" | …
   /** JSON-encoded string, shaped by message_type — decode with {@link parseContent}. */
   content: string;
-  mentions?: LarkMention[];
+  mentions?: FeishuMention[];
   [k: string]: unknown;
 }
 
-export interface LarkSender {
+export interface FeishuSender {
   sender_id?: { open_id?: string; user_id?: string; union_id?: string };
   /** "user" for humans; apps/bots have other values — the default route ignores those (anti-loop). */
   sender_type?: string;
@@ -47,43 +44,43 @@ export interface LarkSender {
 }
 
 /** The `im.message.receive_v1` event body (`event` of the v2.0 envelope). */
-export interface LarkMessageEvent {
-  sender?: LarkSender;
-  message?: LarkMessage;
+export interface FeishuMessageEvent {
+  sender?: FeishuSender;
+  message?: FeishuMessage;
   [k: string]: unknown;
 }
 
 /** What `route` returns: act with these (every field optional — omitted ones default from the message),
  *  or null to ignore. */
-export interface LarkRoute {
+export interface FeishuRoute {
   /** Conversation identity (default: `chat` or `chat:thread`). */
   session?: string;
   /** Reply target chat (default: the message's chat). */
   chatId?: string;
-  /** Base prompt (default: {@link larkEnvelope}); the channel still appends attachments. */
+  /** Base prompt (default: {@link feishuEnvelope}); the channel still appends attachments. */
   text?: string;
 }
 
 /** A downloadable attachment reference: the resource key inside its carrying message (the resource API
  *  addresses a file by message_id + key). */
-export interface LarkAttachmentRef {
+export interface FeishuAttachmentRef {
   key: string;
   name?: string;
 }
 
 /** A message's decoded payload — see the module header. */
-export interface ParsedLarkContent {
+export interface ParsedFeishuContent {
   /** Readable text: the text/post body with mention placeholders restored to `@Name`; marker lines
    *  (`[image]`, `[file: …]`) for non-text payloads, so a media-only message is never blank. */
   text: string;
   /** Vision images: `image_key`s from an image message or a post's inline images. */
   imageKeys: string[];
   /** Files to download to disk (file / audio / media). */
-  fileRefs: LarkAttachmentRef[];
+  fileRefs: FeishuAttachmentRef[];
 }
 
 /** Restore the platform's mention placeholders (`@_user_1`) in a text body to readable `@Name`. */
-function restoreMentions(text: string, mentions: LarkMention[] | undefined): string {
+function restoreMentions(text: string, mentions: FeishuMention[] | undefined): string {
   let out = text;
   for (const m of mentions ?? []) {
     if (!m.key) continue;
@@ -110,7 +107,7 @@ interface PostNode {
  * malformed content degrades to a visible marker (`[sticker message]`), never a throw: the payload is
  * external input, and a message the agent cannot read should still say WHAT it couldn't read.
  */
-export function parseContent(m: Pick<LarkMessage, "message_type" | "content" | "mentions">): ParsedLarkContent {
+export function parseContent(m: Pick<FeishuMessage, "message_type" | "content" | "mentions">): ParsedFeishuContent {
   let c: Record<string, unknown>;
   try {
     c = JSON.parse(m.content) as Record<string, unknown>;
@@ -119,7 +116,7 @@ export function parseContent(m: Pick<LarkMessage, "message_type" | "content" | "
     return { text: `[unreadable ${m.message_type} message]`, imageKeys: [], fileRefs: [] };
   }
   const imageKeys: string[] = [];
-  const fileRefs: LarkAttachmentRef[] = [];
+  const fileRefs: FeishuAttachmentRef[] = [];
   const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
   switch (m.message_type) {
     case "text":
@@ -190,13 +187,13 @@ export function parseContent(m: Pick<LarkMessage, "message_type" | "content" | "
 /** A stable sender label for attribution. The receive event carries only ids (a display name needs a
  *  contacts-API scope), so the label is the open_id — stable across turns, which is what a shared
  *  multi-user session needs to tell participants apart. */
-export function senderLabel(sender: LarkSender | undefined): string | undefined {
+export function senderLabel(sender: FeishuSender | undefined): string | undefined {
   const id = sender?.sender_id?.open_id ?? sender?.sender_id?.user_id ?? sender?.sender_id?.union_id;
   return id ? `user ${id}` : undefined;
 }
 
 /** The place a message lives (chat, or chat:topic in a topic group) — the default session key. */
-export function placeKey(m: Pick<LarkMessage, "chat_id" | "thread_id">): string {
+export function placeKey(m: Pick<FeishuMessage, "chat_id" | "thread_id">): string {
   return m.thread_id ? `${m.chat_id}:${m.thread_id}` : m.chat_id;
 }
 
@@ -206,11 +203,16 @@ export function placeKey(m: Pick<LarkMessage, "chat_id" | "thread_id">): string 
  * in a shared multi-user session that is how the model tells participants apart and knows it is not a
  * 1:1. A reply carries only `[in reply to msg …]` here: the referent's CONTENT is not in the event, so
  * the channel fetches and appends it in the IO half (invoke-turn.ts), keeping this layer pure. Exported
- * so a custom `route` can reuse it, e.g. `text: `${larkEnvelope(event)}\n\n[extra]``. `tag` labels the
- * envelope with the channel kind (`[feishu: …]` vs `[lark: …]`) — the kind's send tool tells the agent
- * to read the chat id from that line, so the two must agree.
+ * so a custom Feishu `route` can reuse it, e.g. `text: `${feishuEnvelope(event)}\n\n[extra]``. The
+ * internal compatibility seam binds the same shape to `[lark: …]`; each kind's send tool reads the
+ * chat id from its own branded line.
  */
-export function larkEnvelope(event: LarkMessageEvent, tag: "feishu" | "lark" = "lark"): string {
+export function feishuEnvelope(event: FeishuMessageEvent): string {
+  return cloudEnvelope(event, "feishu");
+}
+
+/** Internal compatibility seam: bind the canonical envelope shape to one cloud's branded tag. */
+export function cloudEnvelope(event: FeishuMessageEvent, tag: FeishuCloudKind): string {
   const m = event.message;
   if (!m) return "";
   const meta = [
@@ -232,7 +234,7 @@ export function larkEnvelope(event: LarkMessageEvent, tag: "feishu" | "lark" = "
  * bot's open_id (stable identity; names are mutable). No id → fail closed (false): answering "is this
  * mention me?" with "I don't know who I am, so yes" would mis-summon in every multi-bot group.
  */
-export function mentionsBot(m: Pick<LarkMessage, "mentions">, botOpenId: string | undefined): boolean {
+export function mentionsBot(m: Pick<FeishuMessage, "mentions">, botOpenId: string | undefined): boolean {
   if (!botOpenId) return false;
   return (m.mentions ?? []).some((x) => x.id?.open_id === botOpenId);
 }
@@ -241,12 +243,12 @@ export function mentionsBot(m: Pick<LarkMessage, "mentions">, botOpenId: string 
  * The default routing policy (used when `route` is omitted; exported so a custom route can reuse it):
  * answer humans only (a non-`user` sender is another bot/app — two bots answering each other loop
  * forever), p2p chats always, a group only on an @mention of THIS bot (matched by open_id, which
- * larkChannel resolves via bot/v3/info). NOTE the platform side of the same coin: with the default
+ * feishuChannel resolves via bot/v3/info). NOTE the platform side of the same coin: with the default
  * `im:message.group_at_msg` scope, un-mentioned group messages are never even delivered — receiving
  * everything needs the sensitive `im:message.group_msg` scope. Returns `{}` (act; the channel fills
  * session/target/prompt from the message) or `null` (ignore).
  */
-export function defaultLarkRoute(event: LarkMessageEvent, options?: { botOpenId?: string }): LarkRoute | null {
+export function defaultFeishuRoute(event: FeishuMessageEvent, options?: { botOpenId?: string }): FeishuRoute | null {
   const m = event.message;
   if (!m) return null;
   if (event.sender?.sender_type !== "user") return null;

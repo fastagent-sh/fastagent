@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { bootstrapVerificationToken } from "../src/channels/lark/bootstrap-token.ts";
+import { bootstrapFeishuVerificationToken } from "../src/channels/feishu/bootstrap-token.ts";
 
 /** Loopback "tunnel": the public URL IS the local server (tests need no cloudflared). */
 const loopback = async (port: number) => ({ url: `http://127.0.0.1:${port}`, close: () => {} });
 
-describe("bootstrapVerificationToken", () => {
+describe("bootstrapFeishuVerificationToken", () => {
   it("captures the token from the url_verification challenge the PATCH triggers (and answers it)", async () => {
     let challengeEcho: unknown;
-    const token = await bootstrapVerificationToken({
+    const token = await bootstrapFeishuVerificationToken({
       appId: "cli_x",
       startTunnel: loopback,
       api: {
         // The platform, miniature: verifying the PATCH means POSTing the challenge at the request URL.
         async updateEventSubscription(_appId, cfg) {
-          expect(cfg.requestUrl).toMatch(/\/lark$/);
+          expect(cfg.requestUrl).toMatch(/\/feishu$/);
           const res = await fetch(cfg.requestUrl, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -27,10 +27,29 @@ describe("bootstrapVerificationToken", () => {
     expect(challengeEcho).toEqual({ challenge: "chal-1" }); // the platform's verification must SUCCEED
   });
 
+  it("binds the Lark compatibility bootstrap to /lark explicitly", async () => {
+    const token = await bootstrapFeishuVerificationToken({
+      appId: "cli_lark",
+      kind: "lark",
+      startTunnel: loopback,
+      api: {
+        async updateEventSubscription(_appId, cfg) {
+          expect(cfg.requestUrl).toMatch(/\/lark$/);
+          await fetch(cfg.requestUrl, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ type: "url_verification", challenge: "c", token: "tok-lark" }),
+          });
+        },
+      },
+    });
+    expect(token).toBe("tok-lark");
+  });
+
   it("PATCHes immediately as the readiness probe, reporting retries while the edge warms up", async () => {
     let calls = 0;
     const retries: number[] = [];
-    const token = await bootstrapVerificationToken({
+    const token = await bootstrapFeishuVerificationToken({
       appId: "cli_x",
       startTunnel: loopback,
       patchRetryMs: 1,
@@ -56,7 +75,7 @@ describe("bootstrapVerificationToken", () => {
     const missing = new Error("config route 404");
     let calls = 0;
     await expect(
-      bootstrapVerificationToken({
+      bootstrapFeishuVerificationToken({
         appId: "cli_x",
         startTunnel: loopback,
         patchRetryMs: 1,
@@ -76,7 +95,7 @@ describe("bootstrapVerificationToken", () => {
     // The "tunnel" advertises a dead URL, but the fake platform reaches the local responder through
     // its own path — proving no caller-side health probe gates the authoritative PATCH/challenge.
     let realPort = 0;
-    const token = await bootstrapVerificationToken({
+    const token = await bootstrapFeishuVerificationToken({
       appId: "cli_x",
       startTunnel: async (port) => {
         realPort = port;
@@ -84,7 +103,7 @@ describe("bootstrapVerificationToken", () => {
       },
       api: {
         async updateEventSubscription() {
-          await fetch(`http://127.0.0.1:${realPort}/lark`, {
+          await fetch(`http://127.0.0.1:${realPort}/feishu`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ type: "url_verification", challenge: "c", token: "tok-nofetch" }),
@@ -97,7 +116,7 @@ describe("bootstrapVerificationToken", () => {
 
   it("a challenge that never arrives rejects visibly (no hang, no silent empty token)", async () => {
     await expect(
-      bootstrapVerificationToken({
+      bootstrapFeishuVerificationToken({
         appId: "cli_x",
         startTunnel: loopback,
         api: { updateEventSubscription: async () => {} },
@@ -109,7 +128,7 @@ describe("bootstrapVerificationToken", () => {
 
   it("no tunnel rejects visibly (cloudflared missing is an actionable message, not a hang)", async () => {
     await expect(
-      bootstrapVerificationToken({
+      bootstrapFeishuVerificationToken({
         appId: "cli_x",
         startTunnel: async () => undefined,
         api: { updateEventSubscription: async () => {} },

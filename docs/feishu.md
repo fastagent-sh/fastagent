@@ -1,9 +1,9 @@
 ---
-title: Feishu / Lark channels
+title: Feishu channel (Lark compatibility)
 status: current
 ---
 
-# Feishu / Lark channels
+# Feishu channel (Lark compatibility)
 
 These channels turn a Feishu/Lark event-subscription webhook (`im.message.receive_v1`) into an agent turn and send the agent's reply back to the chat.
 
@@ -19,7 +19,11 @@ Feishu and Lark international are **one protocol on two clouds** — and in fast
 | Prompt envelope tag | `[feishu: chat …]` | `[lark: chat …]` |
 | Send tool | `tools/feishu-send.ts` | `tools/lark-send.ts` |
 
-They share one engine (identical event format, crypto, cards, behavior), so everything below applies to both; examples use one kind and name the difference where it matters. A tenant lives on exactly one cloud — pick the kind that matches your account. One workspace can mount **both** (two apps, two credential sets); they never share state.
+**Feishu is the reference implementation.** Lark international reuses Feishu's event format, crypto,
+cards, and turn engine through a compatibility profile, while degrading control-plane capabilities
+that lag behind the primary cloud (currently app creation and application-config/webhook automation).
+A tenant lives on exactly one cloud — pick the matching kind. One workspace can mount **both** (two
+apps, two credential sets); they never share state.
 
 Like the Telegram channel, the engine is request/reply: the channel holds the app credentials, streams a **live card** while the turn runs, and settles the same card into the final answer. Replies render as **Markdown** (an interactive card), which is the natural output format for an LLM — code blocks, tables, and links render properly.
 
@@ -157,7 +161,8 @@ The `url_verification` challenge is answered in both modes (it arrives encrypted
 
 The channel consumes only `im.message.receive_v1`; every other event type is ACKed and dropped before `route` runs.
 
-By default, the channel uses `defaultLarkRoute` (exported by both subpaths):
+By default, Feishu uses the canonical `defaultFeishuRoute`; the Lark subpath exposes the same policy as
+its branded `defaultLarkRoute` compatibility alias:
 
 - **p2p chats always answer**,
 - **groups answer only on an @mention of THIS bot** — matched from the platform's `mentions` array by the bot's `open_id` (resolved once at startup via `bot/v3/info`), never a text scan, so a pasted `@bot` in a code block does not summon,
@@ -166,14 +171,17 @@ By default, the channel uses `defaultLarkRoute` (exported by both subpaths):
 Override `route(event)` to customise; it returns:
 
 ```ts
-type LarkRoute = {
+type FeishuRoute = {
   session?: string;
   chatId?: string;
   text?: string;
 } | null;
 ```
 
-Return `null` to ignore the event. Omitted fields default from the message. The exported `larkEnvelope(event, tag?)` builds the default prompt envelope (chat/sender metadata, group note, reply marker, decoded body) for reuse in a custom route — `tag` labels it `[feishu: …]` or `[lark: …]` (default `lark`; each kind's channel passes its own).
+Return `null` to ignore the event. Omitted fields default from the message. The canonical
+`feishuEnvelope(event)` builds the default prompt envelope (chat/sender metadata, group note, reply
+marker, decoded body) for custom Feishu routes. The Lark subpath exposes `larkEnvelope(event)`, which
+reuses that builder with the `[lark: …]` compatibility tag.
 
 ### Group visibility is scope-gated
 

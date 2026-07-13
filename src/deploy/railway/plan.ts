@@ -182,7 +182,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   }
   if (channels.includes("lark")) {
     runbook.push(
-      `# Set the Lark/Feishu event Request URL (developer console → Events & Callbacks). Default route`,
+      `# Set the Feishu/Lark event Request URL (developer console → Events & Callbacks). Default route`,
       `# POST /lark; the service must be RUNNING when you save (the console verifies with a challenge):`,
       `#   Request URL = https://<your-domain>/lark`,
     );

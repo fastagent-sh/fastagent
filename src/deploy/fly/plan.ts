@@ -213,7 +213,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   }
   if (channels.includes("lark")) {
     post.push(
-      `# After deploy — set the Lark/Feishu event Request URL (developer console → Events & Callbacks).`,
+      `# After deploy — set the Feishu/Lark event Request URL (developer console → Events & Callbacks).`,
       `# Path assumes the default route (POST /lark); the app must be RUNNING when you save (the console`,
       `# verifies the URL with a challenge):`,
       `#   Request URL = https://${appName}.fly.dev/lark`,

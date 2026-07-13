@@ -9,7 +9,7 @@
  * which makes it a de-facto stable surface even though only the SDKs document it. Provenance:
  * larksuite/node-sdk `scene/registration` (registerApp). If the platform ever moves this behind
  * something non-trivial (signed payloads, websockets), adopt the official SDK instead of chasing it —
- * the same tripwire as lark-api.ts.
+ * the same tripwire as feishu-api.ts.
  *
  * The scanning user's tenant decides the brand: a Lark-tenant user flips polling to the Lark accounts
  * domain mid-flow (`tenant_brand: "lark"`), and the result carries the brand so the caller can point
@@ -32,14 +32,14 @@ const REQUEST_TIMEOUT_MS = 30_000;
  * encoding (JSON → gzip → base64url) follow the official SDKs (provenance: node-sdk
  * scene/registration); item names unknown to the platform catalog are silently dropped by the page.
  */
-export interface LarkAppAddons {
+export interface FeishuAppAddons {
   scopes?: { tenant?: string[]; user?: string[] };
   events?: { items?: { tenant?: string[]; user?: string[] } };
   callbacks?: { items?: string[] };
 }
 
 /** JSON → gzip → base64url — the platform's fixed addons encoding. */
-function encodeAddons(addons: LarkAppAddons): string {
+function encodeAddons(addons: FeishuAppAddons): string {
   return gzipSync(Buffer.from(JSON.stringify(addons), "utf8"))
     .toString("base64")
     .replace(/\+/g, "-")
@@ -47,13 +47,13 @@ function encodeAddons(addons: LarkAppAddons): string {
     .replace(/=+$/, "");
 }
 
-export interface RegisterLarkAppOptions {
+export interface RegisterFeishuAppOptions {
   /** Pre-filled app name shown on the confirm page (`{user}` expands to the scanning user's name). */
   name?: string;
   /** Pre-filled app description. */
   desc?: string;
-  /** Extra scopes/events merged onto the agent template at creation (see {@link LarkAppAddons}). */
-  addons?: LarkAppAddons;
+  /** Extra scopes/events merged onto the agent template at creation (see {@link FeishuAppAddons}). */
+  addons?: FeishuAppAddons;
   /** Called once the one-time verification URL is ready — print it / render it as a QR code. */
   onVerificationUrl: (info: { url: string; expiresInS: number }) => void;
   /** Cancel the polling. */
@@ -63,7 +63,7 @@ export interface RegisterLarkAppOptions {
   larkAccountsBaseUrl?: string;
 }
 
-export interface RegisteredLarkApp {
+export interface RegisteredFeishuApp {
   appId: string;
   appSecret: string;
   /** "feishu" | "lark" — which cloud the scanning user's tenant lives on (drives the API origin). */
@@ -98,12 +98,12 @@ async function post(baseUrl: string, params: Record<string, string>): Promise<Re
     });
     raw = await res.text();
   } catch (e) {
-    throw new Error(`lark app registration: ${String(e)}`, { cause: e });
+    throw new Error(`feishu app registration: ${String(e)}`, { cause: e });
   }
   try {
     return JSON.parse(raw) as RegistrationResponse;
   } catch {
-    throw new Error(`lark app registration failed: ${res.status} — response was not the expected JSON`);
+    throw new Error(`feishu app registration failed: ${res.status} — response was not the expected JSON`);
   }
 }
 
@@ -115,7 +115,7 @@ const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(
  * poll until the user confirms. Resolves with the new app's credentials; rejects on denial, expiry,
  * abort, or a transport failure — every rejection is a plain Error whose message says what to do.
  */
-export async function registerLarkApp(options: RegisterLarkAppOptions): Promise<RegisteredLarkApp> {
+export async function registerFeishuApp(options: RegisterFeishuAppOptions): Promise<RegisteredFeishuApp> {
   const feishuBase = options.accountsBaseUrl ?? FEISHU_ACCOUNTS;
   const larkBase = options.larkAccountsBaseUrl ?? LARK_ACCOUNTS;
 
@@ -127,7 +127,7 @@ export async function registerLarkApp(options: RegisterLarkAppOptions): Promise<
   });
   if (!begin.device_code || !begin.verification_uri_complete) {
     throw new Error(
-      `lark app registration: begin returned no device code (${begin.error ?? "unexpected response"}${begin.error_description ? `: ${begin.error_description}` : ""})`,
+      `feishu app registration: begin returned no device code (${begin.error ?? "unexpected response"}${begin.error_description ? `: ${begin.error_description}` : ""})`,
     );
   }
 
@@ -146,10 +146,10 @@ export async function registerLarkApp(options: RegisterLarkAppOptions): Promise<
   let intervalMs = (begin.interval ?? 5) * 1000;
   const deadline = Date.now() + expiresInS * 1000;
   for (;;) {
-    if (options.signal?.aborted) throw new Error("lark app registration was aborted");
+    if (options.signal?.aborted) throw new Error("feishu app registration was aborted");
     if (Date.now() >= deadline) {
       throw new Error(
-        "lark app registration: the verification link expired before anyone confirmed — re-run to get a fresh one",
+        "feishu app registration: the verification link expired before anyone confirmed — re-run to get a fresh one",
       );
     }
     const poll = await post(pollBase, { action: "poll", device_code: begin.device_code });
@@ -175,13 +175,13 @@ export async function registerLarkApp(options: RegisterLarkAppOptions): Promise<
         intervalMs += 5000; // RFC 8628: back off and keep polling
         break;
       case "access_denied":
-        throw new Error("lark app registration: the user declined the authorization");
+        throw new Error("feishu app registration: the user declined the authorization");
       case "expired_token":
-        throw new Error("lark app registration: the verification link expired — re-run to get a fresh one");
+        throw new Error("feishu app registration: the verification link expired — re-run to get a fresh one");
       default:
         if (poll.error) {
           throw new Error(
-            `lark app registration failed: ${poll.error}${poll.error_description ? ` — ${poll.error_description}` : ""}`,
+            `feishu app registration failed: ${poll.error}${poll.error_description ? ` — ${poll.error_description}` : ""}`,
           );
         }
         break; // no error, no credentials — treat as pending

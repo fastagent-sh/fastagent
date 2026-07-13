@@ -13,15 +13,18 @@
  * accepted, immediately after our own credential-authenticated PATCH.
  */
 import { createServer } from "node:http";
+import type { FeishuCloudKind } from "./cloud.ts";
 
-/** What the bootstrap needs from the API pipeline (subset of LarkApi; injectable in tests). */
+/** What the bootstrap needs from the API pipeline (subset of FeishuApi; injectable in tests). */
 interface EventSubscriptionPatcher {
   updateEventSubscription(appId: string, cfg: { subscriptionType: "webhook"; requestUrl: string }): Promise<void>;
 }
 
-export interface BootstrapTokenOptions {
+export interface FeishuBootstrapTokenOptions {
   api: EventSubscriptionPatcher;
   appId: string;
+  /** Canonical Feishu by default; Lark compatibility binds its own route explicitly. */
+  kind?: FeishuCloudKind;
   /** Expose local `port` on a public URL (production: startCloudflareTunnel; tests: loopback). */
   startTunnel: (port: number) => Promise<{ url: string; close(): void } | undefined>;
   /** Budget for the whole capture (the challenge normally lands within the PATCH round-trip). */
@@ -42,7 +45,7 @@ export interface BootstrapTokenOptions {
  * plain, actionable Error (tunnel unavailable, PATCH refused, challenge never arrived) — the caller
  * degrades to the manual console instruction.
  */
-export async function bootstrapVerificationToken(options: BootstrapTokenOptions): Promise<string> {
+export async function bootstrapFeishuVerificationToken(options: FeishuBootstrapTokenOptions): Promise<string> {
   let capturedToken: ((token: string) => void) | undefined;
   const token = new Promise<string>((resolve) => {
     capturedToken = resolve;
@@ -91,7 +94,7 @@ export async function bootstrapVerificationToken(options: BootstrapTokenOptions)
       try {
         await options.api.updateEventSubscription(options.appId, {
           subscriptionType: "webhook",
-          requestUrl: `${tunnel.url}/lark`,
+          requestUrl: `${tunnel.url}/${options.kind ?? "feishu"}`,
         });
         break;
       } catch (e) {

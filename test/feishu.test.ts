@@ -4,13 +4,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
-import { type LarkChannelOptions, larkChannel as buildLarkChannel } from "../src/lark.ts";
-import { feishuChannel } from "../src/feishu.ts";
-import { eventSignature } from "../src/channels/lark/crypto.ts";
-import { cardSummary } from "../src/channels/lark/card.ts";
+import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
+import { larkChannel } from "../src/lark.ts";
+import { eventSignature } from "../src/channels/feishu/crypto.ts";
+import { cardSummary } from "../src/channels/feishu/card.ts";
+import { log } from "../src/log.ts";
 
 const TOKEN = "verif-token";
-const BASE = "http://lark.test";
+const BASE = "http://feishu.test";
 
 /** A faux Agent that records each invocation's scope+prompt and replies with `reply`. */
 function replyingAgent(reply = "") {
@@ -53,7 +54,7 @@ afterEach(async () => {
  * Open-platform fetch mock: token/botInfo/cards/messages/resources all answer; every request is
  * recorded as { url, method, body } for assertions.
  */
-function larkFetch(overrides: Partial<Record<string, (url: string, init: RequestInit) => Response>> = {}) {
+function feishuFetch(overrides: Partial<Record<string, (url: string, init: RequestInit) => Response>> = {}) {
   const seen: { url: string; method: string; body?: Record<string, unknown> }[] = [];
   let msgId = 0;
   let cardId = 0;
@@ -97,23 +98,23 @@ function larkFetch(overrides: Partial<Record<string, (url: string, init: Request
 }
 
 /** Build a channel on a temp state root; returns the handler + the recorded agent + the state home. */
-function buildChannel(opts: Partial<LarkChannelOptions> = {}, agentReply = "the answer") {
-  const root = mkdtempSync(join(tmpdir(), "lark-state-"));
+function buildChannel(opts: Partial<FeishuChannelOptions> = {}, agentReply = "the answer") {
+  const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
   tempRoots.push(root);
   const { agent, calls } = replyingAgent(agentReply);
-  const routes = buildLarkChannel({
+  const routes = buildFeishuChannel({
     appId: "app",
     appSecret: "secret",
     verificationToken: TOKEN,
     baseUrl: BASE,
     ...opts,
   })({ agent: opts2Agent(opts) ?? agent, stateRoot: root });
-  const handler = routes["POST /lark"];
-  if (!handler) throw new Error("expected POST /lark");
+  const handler = routes["POST /feishu"];
+  if (!handler) throw new Error("expected POST /feishu");
   const maybeIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
   if (maybeIdle) channelIdles.add(maybeIdle);
   const idle = maybeIdle ?? (async () => {});
-  return { handler, agent, calls, root, home: join(root, "channels", "lark"), idle };
+  return { handler, agent, calls, root, home: join(root, "channels", "feishu"), idle };
 }
 // buildChannel accepts a custom agent through opts via this side-channel to keep the signature small.
 let injectedAgent: Agent | undefined;
@@ -123,8 +124,8 @@ function opts2Agent(_opts: unknown): Agent | undefined {
   return a;
 }
 
-function larkRequest(payload: unknown, headers: Record<string, string> = {}): Request {
-  return new Request("http://app/lark", {
+function feishuRequest(payload: unknown, headers: Record<string, string> = {}): Request {
+  return new Request("http://app/feishu", {
     method: "POST",
     body: JSON.stringify(payload),
     headers: { "content-type": "application/json", ...headers },
@@ -165,53 +166,55 @@ function messageEvent(over: {
 
 describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken", () => {
-    expect(() => buildLarkChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/appId/);
-    expect(() => buildLarkChannel({ appId: "a", appSecret: "s", verificationToken: "" })).toThrow(/verificationToken/);
+    expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/appId/);
+    expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })).toThrow(
+      /verificationToken/,
+    );
   });
 
   it("rejects a relative ctx.stateRoot (fail visibly, never a silent cwd re-anchor)", () => {
-    larkFetch();
+    feishuFetch();
     const { agent } = replyingAgent();
     expect(() =>
-      buildLarkChannel({ appId: "a", appSecret: "s", verificationToken: "t" })({ agent, stateRoot: "rel" }),
+      buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "t" })({ agent, stateRoot: "rel" }),
     ).toThrow(/stateRoot/);
   });
 });
 
 describe("ingress verification", () => {
   it("405s non-POST, 400s invalid json, 413s an oversized body", async () => {
-    larkFetch();
+    feishuFetch();
     const { handler } = buildChannel();
-    expect((await handler(new Request("http://app/lark", { method: "GET" }))).status).toBe(405);
-    expect((await handler(new Request("http://app/lark", { method: "POST", body: "not json" }))).status).toBe(400);
-    const big = new Request("http://app/lark", { method: "POST", body: `"${"a".repeat((1 << 20) + 10)}"` });
+    expect((await handler(new Request("http://app/feishu", { method: "GET" }))).status).toBe(405);
+    expect((await handler(new Request("http://app/feishu", { method: "POST", body: "not json" }))).status).toBe(400);
+    const big = new Request("http://app/feishu", { method: "POST", body: `"${"a".repeat((1 << 20) + 10)}"` });
     expect((await handler(big)).status).toBe(413);
   });
 
   it("plaintext mode: echoes the url_verification challenge only with the right token", async () => {
-    larkFetch();
+    feishuFetch();
     const { handler } = buildChannel();
-    const ok = await handler(larkRequest({ type: "url_verification", challenge: "ch-42", token: TOKEN }));
+    const ok = await handler(feishuRequest({ type: "url_verification", challenge: "ch-42", token: TOKEN }));
     expect(ok.status).toBe(200);
     expect(await ok.json()).toEqual({ challenge: "ch-42" });
-    const bad = await handler(larkRequest({ type: "url_verification", challenge: "ch-42", token: "forged" }));
+    const bad = await handler(feishuRequest({ type: "url_verification", challenge: "ch-42", token: "forged" }));
     expect(bad.status).toBe(401);
-    const missing = await handler(larkRequest({ type: "url_verification", challenge: "ch-42" }));
+    const missing = await handler(feishuRequest({ type: "url_verification", challenge: "ch-42" }));
     expect(missing.status).toBe(401);
   });
 
   it("plaintext mode: an event with a wrong header token is 401, never routed", async () => {
-    larkFetch();
+    feishuFetch();
     const { handler, calls } = buildChannel();
     const evt = messageEvent({ id: "om_x" });
     (evt.header as { token: string }).token = "forged";
-    expect((await handler(larkRequest(evt))).status).toBe(401);
+    expect((await handler(feishuRequest(evt))).status).toBe(401);
     await flush();
     expect(calls).toHaveLength(0);
   });
 
   it("encrypt mode: verifies the signature over the RAW body, decrypts, and REFUSES plaintext", async () => {
-    larkFetch();
+    feishuFetch();
     const KEY = "enc-key";
     const { handler } = buildChannel({ encryptKey: KEY });
     const encrypt = (plain: string): string => {
@@ -229,7 +232,7 @@ describe("ingress verification", () => {
       "x-lark-signature": sig,
     });
     const good = await handler(
-      new Request("http://app/lark", {
+      new Request("http://app/feishu", {
         method: "POST",
         body,
         headers: headers(eventSignature(KEY, "170", "n1", body)),
@@ -238,16 +241,16 @@ describe("ingress verification", () => {
     expect(good.status).toBe(200);
     expect(await good.json()).toEqual({ challenge: "c9" });
     // Tampered signature → 401; a PLAINTEXT event while the key is set → 401 (no bypass around the signature).
-    const forged = await handler(new Request("http://app/lark", { method: "POST", body, headers: headers("bad") }));
+    const forged = await handler(new Request("http://app/feishu", { method: "POST", body, headers: headers("bad") }));
     expect(forged.status).toBe(401);
-    expect((await handler(larkRequest(messageEvent({})))).status).toBe(401);
+    expect((await handler(feishuRequest(messageEvent({})))).status).toBe(401);
   });
 
   it("ACKs (and drops) event types this channel does not consume", async () => {
-    larkFetch();
+    feishuFetch();
     const { handler, calls } = buildChannel();
     const res = await handler(
-      larkRequest({ schema: "2.0", header: { event_type: "im.chat.updated_v1", token: TOKEN }, event: {} }),
+      feishuRequest({ schema: "2.0", header: { event_type: "im.chat.updated_v1", token: TOKEN }, event: {} }),
     );
     expect(res.status).toBe(200);
     await flush();
@@ -257,14 +260,14 @@ describe("ingress verification", () => {
 
 describe("turn flow", () => {
   it("p2p happy path: streaming card mounted, turn runs with the envelope prompt, card settles with the answer", async () => {
-    const fx = larkFetch();
+    const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel({}, "**bold** answer");
-    expect((await handler(larkRequest(messageEvent({ text: "hello there" })))).status).toBe(200);
+    expect((await handler(feishuRequest(messageEvent({ text: "hello there" })))).status).toBe(200);
     await idle();
     // The agent saw the envelope + markdown steer, on the chat-derived session.
     expect(calls).toHaveLength(1);
     expect(calls[0]?.scope.session).toBe("oc_1");
-    expect(calls[0]?.prompt.text).toContain("[lark: chat oc_1 (p2p), from user ou_alice]");
+    expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice]");
     expect(calls[0]?.prompt.text).toContain("hello there");
     expect(calls[0]?.prompt.text).toContain("standard Markdown");
     // Preview: a card entity was created (streaming mode on) and mounted as an interactive send (p2p → no reply).
@@ -285,7 +288,7 @@ describe("turn flow", () => {
 
   it("a mount rejected with 'cardid is invalid' (cardkit→IM propagation) is retried, not degraded", async () => {
     let interactiveSends = 0;
-    const fx = larkFetch({
+    const fx = feishuFetch({
       "receive_id_type=chat_id": (_url, init) => {
         const body = JSON.parse(String(init.body)) as { msg_type?: string };
         if (body.msg_type === "interactive" && ++interactiveSends === 1) {
@@ -296,7 +299,7 @@ describe("turn flow", () => {
       },
     });
     const { handler, idle } = buildChannel({}, "pong");
-    await handler(larkRequest(messageEvent({ id: "om_retry1", text: "ping" })));
+    await handler(feishuRequest(messageEvent({ id: "om_retry1", text: "ping" })));
     await idle();
     expect(interactiveSends).toBe(2); // rejected once, mounted on the retry
     // Card tier survived: the SAME card settles — no text-placeholder degrade.
@@ -306,7 +309,7 @@ describe("turn flow", () => {
   });
 
   it("group @mention: summons via the resolved bot open_id and mounts the preview as a reply-quote", async () => {
-    const fx = larkFetch();
+    const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel();
     await flush(); // let botInfo resolve (open_id drives the default route)
     const evt = messageEvent({
@@ -315,7 +318,7 @@ describe("turn flow", () => {
       content: JSON.stringify({ text: "@_user_1 status?" }),
       mentions: [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }],
     });
-    expect((await handler(larkRequest(evt))).status).toBe(200);
+    expect((await handler(feishuRequest(evt))).status).toBe(200);
     await idle();
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt.text).toContain("@Bot status?");
@@ -324,7 +327,7 @@ describe("turn flow", () => {
   });
 
   it("keeps an over-card continuation inside a topic", async () => {
-    const fx = larkFetch();
+    const fx = feishuFetch();
     const { handler, idle } = buildChannel({}, "x".repeat(25 * 1024));
     await flush();
     const evt = messageEvent({
@@ -335,7 +338,7 @@ describe("turn flow", () => {
       mentions: [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }],
     });
 
-    await handler(larkRequest(evt));
+    await handler(feishuRequest(evt));
     await idle();
 
     const topicReplies = fx.calls("/im/v1/messages/om_topic/reply", "POST");
@@ -350,44 +353,44 @@ describe("turn flow", () => {
   });
 
   it("group without a mention is ignored (default route, fail closed)", async () => {
-    larkFetch();
+    feishuFetch();
     const { handler, calls } = buildChannel();
     await flush();
-    expect((await handler(larkRequest(messageEvent({ id: "om_g2", chatType: "group" }))))?.status).toBe(200);
+    expect((await handler(feishuRequest(messageEvent({ id: "om_g2", chatType: "group" }))))?.status).toBe(200);
     await flush();
     expect(calls).toHaveLength(0);
   });
 
   it("dedups on message_id: a duplicate push runs ONE turn, and the ring survives restarts", async () => {
-    larkFetch();
+    feishuFetch();
     const first = buildChannel();
-    expect((await first.handler(larkRequest(messageEvent({ id: "om_dup" })))).status).toBe(200);
+    expect((await first.handler(feishuRequest(messageEvent({ id: "om_dup" })))).status).toBe(200);
     await first.idle();
-    expect((await first.handler(larkRequest(messageEvent({ id: "om_dup" })))).status).toBe(200);
+    expect((await first.handler(feishuRequest(messageEvent({ id: "om_dup" })))).status).toBe(200);
     await first.idle();
     expect(first.calls).toHaveLength(1);
     // A NEW channel over the same state root (a restart) still refuses the same message_id.
     injectedAgent = undefined;
-    const again = buildLarkChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, baseUrl: BASE })({
+    const again = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, baseUrl: BASE })({
       agent: replyingAgent().agent,
       stateRoot: first.root,
-    })["POST /lark"];
+    })["POST /feishu"];
     const idle2 = (again as unknown as { turnsIdle?: () => Promise<void> })?.turnsIdle;
     if (idle2) channelIdles.add(idle2);
-    expect((await again?.(larkRequest(messageEvent({ id: "om_dup" }))))?.status).toBe(200);
+    expect((await again?.(feishuRequest(messageEvent({ id: "om_dup" }))))?.status).toBe(200);
     await flush();
     expect(existsSync(join(first.home, "seen.json"))).toBe(true);
   });
 
   it("a failed turn surfaces the onError text through the terminal write (default: neutral)", async () => {
-    const fx = larkFetch();
+    const fx = feishuFetch();
     injectedAgent = {
       async *invoke(): AsyncIterable<AgentEvent> {
         yield { type: "failed", details: "boom: engine exploded", retryable: false };
       },
     };
     const { handler, idle } = buildChannel({ onError: (f) => `⚠️ ${f.details}` });
-    await handler(larkRequest(messageEvent({ id: "om_f1" })));
+    await handler(feishuRequest(messageEvent({ id: "om_f1" })));
     await idle();
     const settle = fx.calls("/cardkit/v1/cards/c1", "PUT")[0];
     const settled = JSON.parse(String((settle?.body?.card as Record<string, unknown>).data));
@@ -395,11 +398,11 @@ describe("turn flow", () => {
   });
 
   it("degrades to a TEXT placeholder when the card tier fails, and settles via ONE edit", async () => {
-    const fx = larkFetch({
+    const fx = feishuFetch({
       "/cardkit/v1/cards": () => Response.json({ code: 200860, msg: "card too big" }),
     });
     const { handler, idle } = buildChannel({}, "plain answer");
-    await handler(larkRequest(messageEvent({ id: "om_t1" })));
+    await handler(feishuRequest(messageEvent({ id: "om_t1" })));
     await idle();
     // Fallback: a text placeholder message, then the final answer lands as an EDIT of it.
     const sends = fx.calls("receive_id_type=chat_id", "POST");
@@ -409,9 +412,9 @@ describe("turn flow", () => {
   });
 
   it("resolves attachments: an image message reaches the agent as a vision image", async () => {
-    const fx = larkFetch();
+    const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel();
-    await handler(larkRequest(messageEvent({ id: "om_img", msgType: "image", content: '{"image_key":"k9"}' })));
+    await handler(feishuRequest(messageEvent({ id: "om_img", msgType: "image", content: '{"image_key":"k9"}' })));
     await idle();
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt.images).toEqual([
@@ -421,7 +424,7 @@ describe("turn flow", () => {
   });
 
   it("resolves a reply summon's referent: fetches the parent, injects its text, downloads its file", async () => {
-    const fx = larkFetch({
+    const fx = feishuFetch({
       "/im/v1/messages/om_parent": (url) =>
         // The needle also matches the parent's RESOURCE download URL — route that to bytes.
         url.includes("/resources/")
@@ -442,7 +445,7 @@ describe("turn flow", () => {
             }),
     });
     const { handler, calls, home, idle } = buildChannel();
-    await handler(larkRequest(messageEvent({ id: "om_r1", text: "summarize this", parentId: "om_parent" })));
+    await handler(feishuRequest(messageEvent({ id: "om_r1", text: "summarize this", parentId: "om_parent" })));
     await idle();
     expect(calls).toHaveLength(1);
     const prompt = calls[0]?.prompt.text ?? "";
@@ -454,18 +457,18 @@ describe("turn flow", () => {
   });
 
   it("a custom route's empty text runs NO turn (nothing to say, nothing to load)", async () => {
-    larkFetch();
+    feishuFetch();
     const { handler, calls, idle } = buildChannel({ route: () => ({ text: "  " }) });
-    await handler(larkRequest(messageEvent({ id: "om_e1" })));
+    await handler(feishuRequest(messageEvent({ id: "om_e1" })));
     await idle();
     expect(calls).toHaveLength(0);
   });
 
   it("recovers a crash-surviving turn from the store on the next start (L1 replay)", async () => {
-    larkFetch();
-    const root = mkdtempSync(join(tmpdir(), "lark-recover-"));
+    feishuFetch();
+    const root = mkdtempSync(join(tmpdir(), "feishu-recover-"));
     tempRoots.push(root);
-    const home = join(root, "channels", "lark");
+    const home = join(root, "channels", "feishu");
     mkdirSync(home, { recursive: true });
     writeFileSync(
       join(home, "turns.json"),
@@ -483,10 +486,10 @@ describe("turn flow", () => {
       }),
     );
     const { agent, calls } = replyingAgent("recovered");
-    const handler = buildLarkChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, baseUrl: BASE })({
+    const handler = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, baseUrl: BASE })({
       agent,
       stateRoot: root,
-    })["POST /lark"];
+    })["POST /feishu"];
     const idle = (handler as unknown as { turnsIdle?: () => Promise<void> })?.turnsIdle;
     if (idle) channelIdles.add(idle);
     await idle?.();
@@ -497,7 +500,7 @@ describe("turn flow", () => {
   });
 
   it("queues a second ask on the SAME session behind the first and tells the asker (⏳ notice)", async () => {
-    const fx = larkFetch();
+    const fx = feishuFetch();
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => {
       release = r;
@@ -510,9 +513,9 @@ describe("turn flow", () => {
       },
     };
     const { handler } = buildChannel({ queueNoticeDelayMs: 0 }); // send the notice immediately (a long wait, compressed)
-    await handler(larkRequest(messageEvent({ id: "om_q1", text: "first" })));
+    await handler(feishuRequest(messageEvent({ id: "om_q1", text: "first" })));
     await flush(); // first turn parks on the gate with its preview mounted
-    await handler(larkRequest(messageEvent({ id: "om_q2", text: "second" })));
+    await handler(feishuRequest(messageEvent({ id: "om_q2", text: "second" })));
     // Even at delay 0 the notice leaves via a timer (one macrotask later than flush() can see) — poll.
     await vi.waitFor(() => {
       const texts = fx
@@ -528,10 +531,10 @@ describe("turn flow", () => {
   it("a FAST queue turnover never sends the ⏳ notice — no recall tombstone in the chat", async () => {
     // Lark renders a deleted message as a visible "recalled a message" line, so the notice is DELAYED:
     // a turn whose wait ends before the delay leaves no trace (default queueNoticeDelayMs ≫ this test).
-    const fx = larkFetch();
+    const fx = feishuFetch();
     const { handler, idle } = buildChannel();
-    await handler(larkRequest(messageEvent({ id: "om_f1", text: "first" })));
-    await handler(larkRequest(messageEvent({ id: "om_f2", text: "second" }))); // queues behind, arms the notice
+    await handler(feishuRequest(messageEvent({ id: "om_f1", text: "first" })));
+    await handler(feishuRequest(messageEvent({ id: "om_f2", text: "second" }))); // queues behind, arms the notice
     await idle(); // both turns complete well inside the notice delay
     const texts = fx
       .calls("receive_id_type=chat_id", "POST")
@@ -541,32 +544,35 @@ describe("turn flow", () => {
   });
 });
 
-describe("the feishu kind: same engine, its own route / state home / envelope tag", () => {
-  it("mounts POST /feishu, keeps state under channels/feishu, and tags the prompt [feishu: …]", async () => {
-    larkFetch();
-    const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
+describe("the Lark compatibility profile", () => {
+  it("reuses the Feishu engine with its own route, state, envelope, and log brand", async () => {
+    feishuFetch();
+    const info: string[] = [];
+    vi.spyOn(log, "info").mockImplementation((message) => info.push(message));
+    const root = mkdtempSync(join(tmpdir(), "lark-state-"));
     tempRoots.push(root);
     const { agent, calls } = replyingAgent("pong");
-    const routes = feishuChannel({ appId: "app", appSecret: "secret", verificationToken: TOKEN, baseUrl: BASE })({
+    const routes = larkChannel({ appId: "app", appSecret: "secret", verificationToken: TOKEN, baseUrl: BASE })({
       agent,
       stateRoot: root,
     });
-    expect(routes["POST /lark"]).toBeUndefined(); // the kind IS the mount path — no cross-kind route
-    const handler = routes["POST /feishu"];
-    if (!handler) throw new Error("expected POST /feishu");
+    expect(routes["POST /feishu"]).toBeUndefined();
+    const handler = routes["POST /lark"];
+    if (!handler) throw new Error("expected POST /lark");
     const maybeIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
     if (maybeIdle) channelIdles.add(maybeIdle);
-    const res = await handler(larkRequest(messageEvent({ id: "om_fe1", text: "ping" })));
+    const res = await handler(feishuRequest(messageEvent({ id: "om_lark1", text: "ping" })));
     expect(res.status).toBe(200);
     await maybeIdle?.();
-    expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p)"); // the feishu-send tool points here
-    // State home derives from the KIND: a feishu + a lark instance in one workspace never share stores.
-    expect(existsSync(join(root, "channels", "feishu"))).toBe(true);
-    expect(existsSync(join(root, "channels", "lark"))).toBe(false);
+    expect(calls[0]?.prompt.text).toContain("[lark: chat oc_1 (p2p)");
+    expect(info.some((line) => line.startsWith("[lark] turn start:"))).toBe(true);
+    expect(existsSync(join(root, "channels", "lark"))).toBe(true);
+    expect(existsSync(join(root, "channels", "feishu"))).toBe(false);
   });
 
-  it("construction failures name feishuChannel, not larkChannel", () => {
-    expect(() => feishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/feishuChannel/);
+  it("construction failures name each public factory", () => {
+    expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/feishuChannel/);
+    expect(() => larkChannel({ appId: "", appSecret: "s", verificationToken: "t" })).toThrow(/larkChannel/);
   });
 });
 

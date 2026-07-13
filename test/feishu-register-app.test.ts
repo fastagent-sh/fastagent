@@ -1,6 +1,6 @@
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerLarkApp } from "../src/channels/lark/register-app.ts";
+import { registerFeishuApp } from "../src/channels/feishu/register-app.ts";
 
 const FEISHU = "http://accounts.feishu.test";
 const LARK = "http://accounts.lark.test";
@@ -39,14 +39,14 @@ function stubAccounts(pollResponses: Record<string, unknown>[], beginOver: Recor
   return { polls };
 }
 
-describe("registerLarkApp (scan-to-create device flow)", () => {
+describe("registerFeishuApp (scan-to-create device flow)", () => {
   it("begins, decorates the verification URL (attribution + presets), polls through pending → credentials", async () => {
     const { polls } = stubAccounts([
       { error: "authorization_pending" },
       { client_id: "cli_new", client_secret: "s3cret", user_info: { open_id: "ou_me", tenant_brand: "feishu" } },
     ]);
     let shown: { url: string; expiresInS: number } | undefined;
-    const app = await registerLarkApp({
+    const app = await registerFeishuApp({
       name: "{user}'s agent",
       desc: "Served by fastagent",
       accountsBaseUrl: FEISHU,
@@ -68,7 +68,7 @@ describe("registerLarkApp (scan-to-create device flow)", () => {
   it("addons ride the URL gzip+base64url-encoded (extra scopes/events layered onto the template)", async () => {
     stubAccounts([{ client_id: "cli_a", client_secret: "s" }]);
     let shown: { url: string } | undefined;
-    await registerLarkApp({
+    await registerFeishuApp({
       accountsBaseUrl: FEISHU,
       addons: {
         scopes: { tenant: ["application:application:patch"] },
@@ -91,7 +91,7 @@ describe("registerLarkApp (scan-to-create device flow)", () => {
       { user_info: { tenant_brand: "lark" } }, // brand signal, no credentials yet
       { client_id: "cli_intl", client_secret: "s", user_info: { tenant_brand: "lark" } },
     ]);
-    const app = await registerLarkApp({
+    const app = await registerFeishuApp({
       accountsBaseUrl: FEISHU,
       larkAccountsBaseUrl: LARK,
       onVerificationUrl: () => {},
@@ -103,7 +103,7 @@ describe("registerLarkApp (scan-to-create device flow)", () => {
 
   it("slow_down backs the polling interval off and still completes", async () => {
     stubAccounts([{ error: "slow_down" }, { client_id: "cli_x", client_secret: "s" }]);
-    const app = await registerLarkApp({
+    const app = await registerFeishuApp({
       accountsBaseUrl: FEISHU,
       onVerificationUrl: () => {},
     });
@@ -112,16 +112,18 @@ describe("registerLarkApp (scan-to-create device flow)", () => {
 
   it("denial and unknown errors reject with self-describing messages", async () => {
     stubAccounts([{ error: "access_denied" }]);
-    await expect(registerLarkApp({ accountsBaseUrl: FEISHU, onVerificationUrl: () => {} })).rejects.toThrow(/declined/);
+    await expect(registerFeishuApp({ accountsBaseUrl: FEISHU, onVerificationUrl: () => {} })).rejects.toThrow(
+      /declined/,
+    );
     stubAccounts([{ error: "invalid_grant", error_description: "device code revoked" }]);
-    await expect(registerLarkApp({ accountsBaseUrl: FEISHU, onVerificationUrl: () => {} })).rejects.toThrow(
+    await expect(registerFeishuApp({ accountsBaseUrl: FEISHU, onVerificationUrl: () => {} })).rejects.toThrow(
       /invalid_grant — device code revoked/,
     );
   });
 
   it("a begin without a device code fails visibly (never a silent undefined URL)", async () => {
     stubAccounts([], { device_code: undefined });
-    await expect(registerLarkApp({ accountsBaseUrl: FEISHU, onVerificationUrl: () => {} })).rejects.toThrow(
+    await expect(registerFeishuApp({ accountsBaseUrl: FEISHU, onVerificationUrl: () => {} })).rejects.toThrow(
       /begin returned no device code/,
     );
   });
@@ -129,7 +131,7 @@ describe("registerLarkApp (scan-to-create device flow)", () => {
   it("an aborted signal stops the polling with a plain error", async () => {
     stubAccounts([{ error: "authorization_pending" }]);
     const ctl = new AbortController();
-    const p = registerLarkApp({ accountsBaseUrl: FEISHU, signal: ctl.signal, onVerificationUrl: () => ctl.abort() });
+    const p = registerFeishuApp({ accountsBaseUrl: FEISHU, signal: ctl.signal, onVerificationUrl: () => ctl.abort() });
     await expect(p).rejects.toThrow(/aborted/);
   });
 });

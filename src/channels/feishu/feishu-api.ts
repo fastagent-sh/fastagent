@@ -1,5 +1,5 @@
 /**
- * Lark/Feishu Open API transport. ONE pipeline (`call`) carries every JSON call — per-method wire code
+ * Feishu Open API transport, reused by the Lark compatibility profile. ONE pipeline (`call`) carries every JSON call — per-method wire code
  * does not exist, so a transport rule can never be missing from one call site. The transport invariants
  * live here and nowhere else:
  *
@@ -11,7 +11,7 @@
  *  3. Only a rate-limit reject is retried (bounded attempts, linear backoff); nothing else — the
  *     request may have been processed, and a retried send would double-deliver.
  *  4. Success requires the body's own `code === 0` — an intermediary's HTTP 200 is not a sent message.
- *  5. Every failure is a {@link LarkApiError} naming the call; self-description is a property of the
+ *  5. Every failure is a {@link FeishuApiError} naming the call; self-description is a property of the
  *     error type, not per-call-site string assembly.
  *
  * On top of the pipeline sit thin typed methods (send/reply/edit/card/resource) — adding one is adding
@@ -22,6 +22,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ImageRef } from "../../agent.ts";
+import type { FeishuCloudKind } from "./cloud.ts";
 
 /** Per-attempt timeout for a JSON API call — small JSON round-trips, so 30s is generous. */
 const API_TIMEOUT_MS = 30_000;
@@ -41,7 +42,7 @@ const AUTH_ERROR_CODES = new Set([99991661, 99991663, 99991664, 99991668]);
 const RATE_LIMIT_CODE = 99991400;
 
 /** Where a reply goes: a chat, optionally quote-replying a message (in-thread in topic groups). */
-export interface LarkTarget {
+export interface FeishuTarget {
   chatId: string;
   /** Message to reply to (the summoning message). Set in groups so the answer threads under the asker. */
   replyTo?: string;
@@ -59,20 +60,27 @@ export interface DownloadedFile {
 /** A named Open API failure. `status` 0 = the transport itself failed (network error / timeout) before
  *  any HTTP status existed; `code` is the platform's own error code (0 when none was readable).
  *  Module-private: no external caller matches on the type; the pipeline's own retry logic reads `code`. */
-class LarkApiError extends Error {
+class FeishuApiError extends Error {
   readonly call: string;
   readonly status: number;
   readonly code: number;
   readonly description: string;
   // No constructor parameter properties: the CLI runs source under Node's strip-only TS mode.
-  constructor(call: string, status: number, code: number, description: string, options?: { cause?: unknown }) {
+  constructor(
+    kind: FeishuCloudKind,
+    call: string,
+    status: number,
+    code: number,
+    description: string,
+    options?: { cause?: unknown },
+  ) {
     super(
       status === 0
-        ? `lark ${call}: ${description}`
-        : `lark ${call} failed: ${status}${code ? ` code ${code}` : ""} ${description}`.trim(),
+        ? `${kind} ${call}: ${description}`
+        : `${kind} ${call} failed: ${status}${code ? ` code ${code}` : ""} ${description}`.trim(),
       options,
     );
-    this.name = "LarkApiError";
+    this.name = "FeishuApiError";
     this.call = call;
     this.status = status;
     this.code = code;
@@ -84,19 +92,21 @@ class LarkApiError extends Error {
  *  streaming once when it sees this. A plain code check on the typed error, exported instead of the
  *  class so no caller can construct/throw one. */
 export function isCardStreamingClosed(e: unknown): boolean {
-  return e instanceof LarkApiError && (e.code === 200850 || e.code === 300309);
+  return e instanceof FeishuApiError && (e.code === 200850 || e.code === 300309);
 }
 
 /** Whether the platform origin has no application-config route at all. Onboarding uses this narrow
  * signal to fall back to a manual token/mode setup; auth/scope/network failures must remain visible. */
-export function isLarkConfigApiMissing(e: unknown): boolean {
-  return e instanceof LarkApiError && e.status === 404;
+export function isFeishuConfigApiMissing(e: unknown): boolean {
+  return e instanceof FeishuApiError && e.status === 404;
 }
 
 /** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers. */
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-export interface LarkApiOptions {
+export interface FeishuApiOptions {
+  /** Branded diagnostics; defaults to the canonical Feishu cloud. */
+  kind?: FeishuCloudKind;
   /** API origin: `https://open.feishu.cn` (Feishu) or `https://open.larksuite.com` (Lark intl). */
   baseUrl: string;
   appId: string;
@@ -110,10 +120,10 @@ interface ApiBody {
 }
 
 /**
- * The Lark Open API client: one instance per channel, holding the token cache. Every method rides the
- * single pipeline (module header). Throws {@link LarkApiError} on any failure.
+ * The Feishu Open API client: one instance per channel, holding the token cache. Every method rides the
+ * single pipeline (module header). Throws {@link FeishuApiError} on any failure.
  */
-export interface LarkApi {
+export interface FeishuApi {
   /** Validate appId/appSecret by acquiring the tenant token through this pipeline. Does not require
    *  the bot capability (unlike botInfo), so guided onboarding can fail before persisting a typo. */
   verifyCredentials(): Promise<void>;
@@ -128,9 +138,9 @@ export interface LarkApi {
     content: string,
     opts?: { replyInThread?: boolean },
   ): Promise<string | undefined>;
-  /** Send `text`, split at the platform's size cap: quote-reply the first chunk when the target asks
-   *  for it, follow-up chunks as plain sends. Returns the FIRST message_id. */
-  sendText(target: LarkTarget, text: string): Promise<string | undefined>;
+  /** Send `text`, split at the platform's size cap: ordinary groups quote only the first chunk; topic
+   *  groups reply_in_thread on every chunk. Returns the FIRST message_id. */
+  sendText(target: FeishuTarget, text: string): Promise<string | undefined>;
   /** Edit a sent text message in place (PUT; the platform caps edits at 20 per message). */
   editTextMessage(messageId: string, text: string): Promise<void>;
   /** Recall (delete) a message the bot sent. */
@@ -176,10 +186,10 @@ export interface LarkApi {
 
 /** The platform caps a text-message request body at 150 KB; stay well under it (the content is a JSON
  *  envelope around the text, and multi-byte characters inflate the byte count). */
-export const LARK_MAX_TEXT_BYTES = 100 * 1024;
+export const FEISHU_MAX_TEXT_BYTES = 100 * 1024;
 
 /** Split text into chunks whose UTF-8 size fits the message cap, preferring a newline boundary. */
-export function chunkLarkText(text: string, maxBytes: number = LARK_MAX_TEXT_BYTES): string[] {
+export function chunkFeishuText(text: string, maxBytes: number = FEISHU_MAX_TEXT_BYTES): string[] {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return [text];
   const chunks: string[] = [];
   let rest = text;
@@ -202,8 +212,8 @@ export function chunkLarkText(text: string, maxBytes: number = LARK_MAX_TEXT_BYT
   return chunks;
 }
 
-export function createLarkApi(opts: LarkApiOptions): LarkApi {
-  const { baseUrl, appId, appSecret } = opts;
+export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
+  const { kind = "feishu", baseUrl, appId, appSecret } = opts;
   let cached: { token: string; expiresAt: number } | undefined;
 
   /** Fetch (or reuse) the tenant_access_token — the one call that carries no Authorization header. */
@@ -221,7 +231,7 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
       });
       raw = await res.text();
     } catch (e) {
-      throw new LarkApiError(label, 0, 0, String(e), { cause: e });
+      throw new FeishuApiError(kind, label, 0, 0, String(e), { cause: e });
     }
     let data: ApiBody & { tenant_access_token?: string; expire?: number };
     try {
@@ -230,7 +240,13 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
       data = {};
     }
     if (!res.ok || data.code !== 0 || typeof data.tenant_access_token !== "string") {
-      throw new LarkApiError(label, res.status, data.code ?? 0, data.msg ?? "response was not the expected JSON");
+      throw new FeishuApiError(
+        kind,
+        label,
+        res.status,
+        data.code ?? 0,
+        data.msg ?? "response was not the expected JSON",
+      );
     }
     const ttlS = Math.max(60, (data.expire ?? 0) - TOKEN_REFRESH_MARGIN_S);
     cached = { token: data.tenant_access_token, expiresAt: Date.now() + ttlS * 1000 };
@@ -261,7 +277,7 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
         });
         raw = await res.text(); // the body read shares the timeout — a mid-body stall is a transport failure too
       } catch (e) {
-        throw new LarkApiError(label, 0, 0, String(e), { cause: e });
+        throw new FeishuApiError(kind, label, 0, 0, String(e), { cause: e });
       }
       let data: T;
       try {
@@ -285,7 +301,8 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
         continue;
       }
       const exhausted = res.status === 429 || code === RATE_LIMIT_CODE ? ` (gave up after ${attempt} retries)` : "";
-      throw new LarkApiError(
+      throw new FeishuApiError(
+        kind,
         label,
         res.status,
         code,
@@ -294,7 +311,7 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
     }
   };
 
-  const api: LarkApi = {
+  const api: FeishuApi = {
     async verifyCredentials() {
       await tenantToken();
     },
@@ -326,7 +343,7 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
       return data.data?.message_id;
     },
     async sendText(target, text) {
-      const chunks = chunkLarkText(text);
+      const chunks = chunkFeishuText(text);
       let firstId: string | undefined;
       let first = true;
       for (const chunk of chunks) {
@@ -359,7 +376,7 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
         "GET",
         `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
       );
-      return data.data?.items?.[0] as Awaited<ReturnType<LarkApi["getMessage"]>>;
+      return data.data?.items?.[0] as Awaited<ReturnType<FeishuApi["getMessage"]>>;
     },
     async downloadResource(messageId, fileKey, type) {
       // The byte download is the one non-JSON call, so it cannot ride the pipeline — same token +
@@ -377,7 +394,7 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
         buf = res.ok ? await res.arrayBuffer() : undefined;
         errBody = res.ok ? undefined : await res.text(); // the error body self-describes (expired key etc.)
       } catch (e) {
-        throw new LarkApiError(label, 0, 0, String(e), { cause: e });
+        throw new FeishuApiError(kind, label, 0, 0, String(e), { cause: e });
       }
       if (!res.ok || buf === undefined) {
         let description: string | undefined;
@@ -389,7 +406,7 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
         } catch {
           /* non-JSON error body — fall through to the generic description */
         }
-        throw new LarkApiError(label, res.status, code, description ?? "response was not the expected bytes");
+        throw new FeishuApiError(kind, label, res.status, code, description ?? "response was not the expected bytes");
       }
       const bytes = Buffer.from(buf);
       if (bytes.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("resource is too large (max 20 MB)");
@@ -441,7 +458,7 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
         },
       );
       const id = data.data?.card_id;
-      if (!id) throw new LarkApiError("createCard", 200, 0, "response carried no card_id");
+      if (!id) throw new FeishuApiError(kind, "createCard", 200, 0, "response carried no card_id");
       return id;
     },
     async updateCardElement(cardId, elementId, content, sequence) {

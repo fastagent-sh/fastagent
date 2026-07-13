@@ -42,7 +42,7 @@ src/
 ├── channels/
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
-│   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + lark)
+│   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + feishu)
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
 │   ├── state.ts             # SHARED: atomic state files under <stateRoot>/channels/<kind>/
 │   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
@@ -57,19 +57,19 @@ src/
 │   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
 │   │   └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
-│   └── lark/                # lark/feishu channel — see docs/design/core.md §9.3
-│       ├── lark.ts          # Lark wiring: ingress (verify/decrypt/challenge/dedup) + per-turn lifecycle + composition
-│       ├── parse.ts         # pure event parsing: content decode per msg_type, envelope, summon/route policy
-│       ├── crypto.ts        # pure webhook security math: AES event decryption + X-Lark-Signature
-│       ├── invoke-turn.ts   # run one turn: fetch the reply referent + attachments, stream agent.invoke
-│       ├── preview.ts       # live STREAMING-CARD pump (cardkit sequence snapshots) + terminal-write policy + text fallback
-│       ├── card.ts          # pure card JSON 2.0 builders (streaming entity / settled card / entity content)
-│       ├── seen.ts          # accepted-turn dedup ring on message_id (the platform documents duplicate pushes)
-│       ├── lark-api.ts      # the single Open API pipeline (tenant-token cache, rate-limit retry, code gate, cardkit)
-│       ├── register-app.ts  # `add feishu`: scan-to-create device flow (RFC 8628, hand-rolled on fetch)
-│       ├── onboard.ts       # `add lark`: unbound launcher + credentials + optimistic mode/token bootstrap
-│       ├── register-webhook.ts # --tunnel / deploy --run: event Request URL via application-v7 config PATCH
-│       └── scaffold/        # `add lark` bundle (channel.ts + send tool)
+│   ├── feishu/              # CANONICAL Feishu channel engine — see docs/design/core.md
+│   │   ├── feishu.ts        # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
+│   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles
+│   │   ├── parse.ts, crypto.ts, card.ts # pure protocol/event/card layers
+│   │   ├── invoke-turn.ts, preview.ts, seen.ts # turn IO, streaming-card delivery, accepted-turn dedup
+│   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)
+│   │   ├── register-app.ts  # `add feishu`: scan-to-create device flow
+│   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation
+│   │   └── scaffold/        # `add feishu` bundle
+│   └── lark/                # Lark compatibility/degraded edges over the Feishu engine
+│       ├── lark.ts          # thin branded adapter bound to LARK_COMPAT_CLOUD
+│       ├── onboard.ts       # unbound launcher + credentials + manual config fallback
+│       └── scaffold/        # `add lark` bundle
 ├── deploy/                  # `deploy fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §10.5)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
