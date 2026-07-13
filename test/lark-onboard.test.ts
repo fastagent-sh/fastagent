@@ -87,6 +87,7 @@ describe("guided Lark app onboarding", () => {
       LARK_VERIFICATION_TOKEN: "new-token",
     });
     expect(fx.prompts).toHaveLength(1);
+    expect(fx.opened).toEqual(["https://open.larksuite.com/app/cli_existing/event?tab=safe"]);
     expect(verifyCredentials).toHaveBeenCalledWith("cli_existing", "kept");
     expect(bootstrapWebhook).toHaveBeenCalledWith("cli_existing", "kept");
   });
@@ -110,19 +111,41 @@ describe("guided Lark app onboarding", () => {
     );
   });
 
-  it("keeps an existing token if the config API still needs the manual mode path", async () => {
-    const fx = fakeIO(["cli_new", "new-secret"]);
+  it("never attaches an orphaned existing token to a newly entered App pair", async () => {
+    const fx = fakeIO(["cli_new", "new-secret", "new-token"]);
     await expect(
       onboardLarkApp(fx.io, {
-        existing: { LARK_VERIFICATION_TOKEN: "kept-token" },
+        existing: { LARK_VERIFICATION_TOKEN: "orphaned-token" },
         verifyCredentials: async () => {},
         bootstrapWebhook: manual404,
       }),
     ).resolves.toEqual({
       LARK_APP_ID: "cli_new",
       LARK_APP_SECRET: "new-secret",
+      LARK_VERIFICATION_TOKEN: "new-token",
+    });
+    expect(fx.prompts).toHaveLength(3);
+    expect(fx.opened).toEqual([LARK_CONSOLE_URL, "https://open.larksuite.com/app/cli_new/event?tab=safe"]);
+  });
+
+  it("reuses a token only with its complete existing App pair", async () => {
+    const fx = fakeIO([]);
+    await expect(
+      onboardLarkApp(fx.io, {
+        existing: {
+          LARK_APP_ID: "cli_existing",
+          LARK_APP_SECRET: "kept-secret",
+          LARK_VERIFICATION_TOKEN: "kept-token",
+        },
+        verifyCredentials: async () => {},
+        bootstrapWebhook: manual404,
+      }),
+    ).resolves.toEqual({
+      LARK_APP_ID: "cli_existing",
+      LARK_APP_SECRET: "kept-secret",
       LARK_VERIFICATION_TOKEN: "kept-token",
     });
-    expect(fx.prompts).toHaveLength(2);
+    expect(fx.prompts).toHaveLength(0);
+    expect(fx.opened).toEqual(["https://open.larksuite.com/app/cli_existing/event?tab=safe"]);
   });
 });

@@ -121,6 +121,31 @@ describe("registerFeishuApp (scan-to-create device flow)", () => {
     );
   });
 
+  it("fails immediately on a non-RFC 5xx JSON poll response with status/body diagnostics", async () => {
+    let polls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit = {}) => {
+        const params = new URLSearchParams(String(init.body));
+        if (params.get("action") === "begin") {
+          return Response.json({
+            device_code: "dev-1",
+            verification_uri_complete: "https://open.feishu.cn/page/launcher?user_code=AB-CD",
+            interval: 1,
+            expires_in: 600,
+          });
+        }
+        polls++;
+        return Response.json({ message: "internal error" }, { status: 500 });
+      }),
+    );
+
+    await expect(registerFeishuApp({ accountsBaseUrl: FEISHU, onVerificationUrl: () => {} })).rejects.toThrow(
+      /HTTP 500.*internal error/,
+    );
+    expect(polls).toBe(1);
+  });
+
   it("a begin without a device code fails visibly (never a silent undefined URL)", async () => {
     stubAccounts([], { device_code: undefined });
     await expect(registerFeishuApp({ accountsBaseUrl: FEISHU, onVerificationUrl: () => {} })).rejects.toThrow(

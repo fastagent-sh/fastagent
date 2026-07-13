@@ -84,6 +84,9 @@ interface RegistrationResponse {
   error_description?: string;
 }
 
+/** RFC 8628 device-flow states whose non-2xx JSON bodies belong to the polling state machine. */
+const DEVICE_FLOW_ERRORS = new Set(["authorization_pending", "slow_down", "access_denied", "expired_token"]);
+
 /** One registration POST (form-encoded). RFC 8628 delivers polling states (authorization_pending,
  *  slow_down, …) as HTTP 400 with a JSON body — those parse as data, not as transport failures. */
 async function post(baseUrl: string, params: Record<string, string>): Promise<RegistrationResponse> {
@@ -100,11 +103,19 @@ async function post(baseUrl: string, params: Record<string, string>): Promise<Re
   } catch (e) {
     throw new Error(`feishu app registration: ${String(e)}`, { cause: e });
   }
+  let data: RegistrationResponse;
   try {
-    return JSON.parse(raw) as RegistrationResponse;
+    data = JSON.parse(raw) as RegistrationResponse;
   } catch {
     throw new Error(`feishu app registration failed: ${res.status} — response was not the expected JSON`);
   }
+  if (!res.ok && !(data.error && DEVICE_FLOW_ERRORS.has(data.error))) {
+    const diagnostic = data.error
+      ? `${data.error}${data.error_description ? ` — ${data.error_description}` : ""}`
+      : raw.trim().slice(0, 500) || "empty response";
+    throw new Error(`feishu app registration failed: HTTP ${res.status} — ${diagnostic}`);
+  }
+  return data;
 }
 
 /** Sleep on the GLOBAL timer (not `node:timers/promises`) so tests can drive it with fake timers. */

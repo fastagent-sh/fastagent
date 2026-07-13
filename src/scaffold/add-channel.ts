@@ -18,6 +18,8 @@ export type ChannelKind = "github" | "telegram" | "feishu" | "lark";
 export interface ChannelEnv {
   name: string;
   hint: string;
+  /** Required for the channel to run. Optional values are deployed when present but never gate deploy. */
+  required: boolean;
   generate?: boolean;
 }
 
@@ -33,6 +35,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       {
         name: "GITHUB_WEBHOOK_SECRET",
         hint: "any random string; set the same value in the GitHub webhook",
+        required: true,
         generate: true,
       },
     ],
@@ -45,8 +48,13 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   },
   telegram: {
     env: [
-      { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot" },
-      { name: "TELEGRAM_SECRET_TOKEN", hint: "any random string; verifies inbound updates", generate: true },
+      { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot", required: true },
+      {
+        name: "TELEGRAM_SECRET_TOKEN",
+        hint: "any random string; verifies inbound updates",
+        required: true,
+        generate: true,
+      },
     ],
     steps: [
       "edit {channel} — customise routing with route() (optional; the defaults already work)",
@@ -63,13 +71,23 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       {
         name: "FEISHU_APP_ID",
         hint: "created + written automatically by `add feishu` (console → Credentials & Basic Info)",
+        required: true,
       },
       {
         name: "FEISHU_APP_SECRET",
         hint: "created + written automatically by `add feishu` (console → Credentials & Basic Info)",
+        required: true,
       },
-      { name: "FEISHU_VERIFICATION_TOKEN", hint: "captured automatically (console → Events & Callbacks)" },
-      { name: "FEISHU_ENCRYPT_KEY", hint: "optional but recommended — set one in the console and copy it here" },
+      {
+        name: "FEISHU_VERIFICATION_TOKEN",
+        hint: "captured automatically (console → Events & Callbacks)",
+        required: true,
+      },
+      {
+        name: "FEISHU_ENCRYPT_KEY",
+        hint: "optional but recommended — set one in the console and copy it here",
+        required: false,
+      },
     ],
     steps: [
       "PUBLISH the app version on the page the CLI opened — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
@@ -80,10 +98,18 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   },
   lark: {
     env: [
-      { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info" },
-      { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info" },
-      { name: "LARK_VERIFICATION_TOKEN", hint: "console → Events & Callbacks; authenticates inbound events" },
-      { name: "LARK_ENCRYPT_KEY", hint: "optional but recommended — set one in the console and copy it here" },
+      { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info", required: true },
+      { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info", required: true },
+      {
+        name: "LARK_VERIFICATION_TOKEN",
+        hint: "console → Events & Callbacks; authenticates inbound events",
+        required: true,
+      },
+      {
+        name: "LARK_ENCRYPT_KEY",
+        hint: "optional but recommended — set one in the console and copy it here",
+        required: false,
+      },
     ],
     steps: [
       "finish the console setup: enable Bot and add the permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",

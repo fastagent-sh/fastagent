@@ -12,6 +12,8 @@
  * well under it; longer answers overflow into follow-up messages (preview.ts owns that policy).
  */
 
+import { truncateCodePointPrefix } from "./text.ts";
+
 /** The one streamed element's id — shared by create (card.ts) and update (preview.ts). */
 export const ANSWER_ELEMENT_ID = "answer";
 
@@ -42,7 +44,7 @@ export function cardSummary(markdown: string): string {
           .trim(),
       )
       .find((l) => l !== "") ?? "";
-  return line.length > SUMMARY_MAX_CHARS ? `${line.slice(0, SUMMARY_MAX_CHARS - 1)}…` : line;
+  return truncateCodePointPrefix(line, SUMMARY_MAX_CHARS);
 }
 
 function cardJson(markdown: string, streaming: boolean, summary?: string): string {

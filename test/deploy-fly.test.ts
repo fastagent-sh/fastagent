@@ -65,6 +65,16 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(out).toContain("https://bot.fly.dev/telegram");
   });
 
+  it("keeps Feishu/Lark Encrypt Keys optional in the runbook instead of deployment prerequisites", () => {
+    const out = runbook(planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["feishu", "lark"] }));
+    const requiredCommand = out.split("\n").find((line) => line.startsWith("fly secrets set")) ?? "";
+    expect(requiredCommand).toContain("FEISHU_APP_ID=<value>");
+    expect(requiredCommand).toContain("LARK_VERIFICATION_TOKEN=<value>");
+    expect(requiredCommand).not.toContain("FEISHU_ENCRYPT_KEY");
+    expect(requiredCommand).not.toContain("LARK_ENCRYPT_KEY");
+    expect(out).toContain("# fly secrets set --app bot FEISHU_ENCRYPT_KEY=<value> LARK_ENCRYPT_KEY=<value>");
+  });
+
   it("prints one event Request URL for each mounted Feishu-cloud kind", () => {
     const feishu = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["feishu"] }));
     expect(feishu).toContain("POST /feishu");

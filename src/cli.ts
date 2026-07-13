@@ -166,8 +166,9 @@ function usage(code: number): never {
          (open.larksuite.com) is its compatibility profile with degraded control-plane setup.
          feishu also CREATES + configures the platform app (confirm a link in the app — the platform's
          "scan to create" flow; one version-publish action remains) and writes credentials to .env;
-         skipped when FEISHU_APP_ID/SECRET are already set. lark opens the intl developer console,
-         validates App ID/Secret, then probes Feishu's webhook-mode + Token automation; an explicit
+         a persisted ID/Secret pair resumes missing-Token setup instead of creating another app. lark
+         opens the intl developer console only for a new/partial pair, validates App ID/Secret, then
+         probes Feishu's webhook-mode + Token automation; an explicit
          config-route 404 falls back to a hidden Token prompt + manual mode/URL setup.
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
@@ -691,11 +692,9 @@ async function runAdd(): Promise<void> {
       `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
     );
   }
-  // `add feishu` = scaffold + CREATE the app (the platform's scan-to-create flow): its credentials
-  // are written to .env exactly like generated secrets (same gitignore guard — the CLI must never
-  // materialize a real credential into a committable file, so it REFUSES there). Skipped when .env
-  // already carries active credentials: silently minting a SECOND app would be worse than doing
-  // nothing — scaffolding around existing credentials is the wanted behavior then.
+  // `add feishu` = scaffold + CREATE OR RESUME the app. The irreversible App ID/Secret boundary is
+  // persisted immediately inside createFeishuAppFlow, before its slower Token bootstrap. A re-run with
+  // that complete pair resumes the SAME app; only a missing pair can enter scan-to-create again.
   let created: Record<string, string> | undefined;
   if (feishuCloud?.capabilities.appCreation === "scan-to-create") {
     if (!envIgnored) {
@@ -705,10 +704,15 @@ async function runAdd(): Promise<void> {
         ),
       );
     }
-    if (await hasActiveDotEnvValues(target, ["FEISHU_APP_ID", "FEISHU_APP_SECRET"]).catch(failStartup)) {
-      console.error(`[fastagent] FEISHU_APP_ID/FEISHU_APP_SECRET already set in .env — not creating another app`);
+    const existing = await activeDotEnvValues(target, [
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "FEISHU_VERIFICATION_TOKEN",
+    ]).catch(failStartup);
+    if (Object.keys(existing).length === 3) {
+      console.error(`[fastagent] FEISHU_APP_ID/SECRET/VERIFICATION_TOKEN already set in .env — keeping them`);
     } else {
-      created = await createFeishuAppFlow().catch(failStartup);
+      await createFeishuAppFlow(target, existing).catch(failStartup);
     }
   } else if (feishuCloud?.capabilities.appCreation === "guided-console") {
     if (!envIgnored) {
@@ -729,7 +733,7 @@ async function runAdd(): Promise<void> {
       if (!isInteractive()) {
         failStartup(
           new Error(
-            "`add lark` needs an interactive terminal to open the launcher and onboard the Lark app credentials — re-run it in a terminal",
+            "`add lark` needs an interactive terminal to onboard the Lark app credentials — re-run it in a terminal",
           ),
         );
       }
@@ -781,12 +785,9 @@ async function runAdd(): Promise<void> {
                     String(error),
                   ),
               });
-              console.error(`[fastagent] Lark Verification Token captured; Subscription mode changed to webhook`);
-              const versionUrl = `https://open.larksuite.com/app/${appId}/version`;
               console.error(
-                `[fastagent] publish a version to activate the mode change (one click; no publish API). Opening ${versionUrl}`,
+                `[fastagent] Lark Verification Token captured; Subscription mode changed to webhook in the app draft`,
               );
-              openExternalUrl(versionUrl);
               return { token };
             } catch (error) {
               if (!isFeishuConfigApiMissing(error)) throw error;
@@ -805,9 +806,8 @@ async function runAdd(): Promise<void> {
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
   // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
-  // the same class of value as telegram's); created-app credentials ride the same write — but as
-  // OVERWRITES: the app was just minted, so these values are authoritative and a stale .env line must
-  // lose to them (skipping would silently discard an unrecoverable fresh secret).
+  // the same class of value as telegram's); guided Lark credentials ride the same write as overwrites.
+  // Feishu's irreversible credentials were already staged inside createFeishuAppFlow before bootstrap.
   const dotEnv = envIgnored
     ? await appendChannelDotEnv(target, channelKind, { ...generated, ...created }, Object.keys(created ?? {})).catch(
         failStartup,
@@ -831,7 +831,8 @@ async function runAdd(): Promise<void> {
       continue;
     }
     const value = e.generate ? `=${generated[e.name]}` : "";
-    console.error(`    set ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
+    const action = e.required ? "set" : "optionally set";
+    console.error(`    ${action} ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
   }
   // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
   // knowledge) — resolve them to the real workspace-relative locations (agentDir-aware) here.
@@ -850,100 +851,124 @@ async function runAdd(): Promise<void> {
 /**
  * The scan-to-create flow `add feishu` runs by default. The device-authorization grant
  * creates a pre-configured agent app (bot capability, messaging scopes, event subscriptions) when the
- * user confirms a link in the app, and hands back the credentials; the platform-generated Verification
- * Token is then captured from the registration challenge (bootstrap-token.ts), so .env is complete
- * before the one remaining version-publish action. The event Request URL is NOT left pointing at the throwaway
+ * user confirms a link in the app, and hands back the credentials; App ID/Secret are persisted at that
+ * irreversible boundary before the platform-generated Verification Token is captured from the
+ * registration challenge (bootstrap-token.ts). The Token is persisted as a second stage, so .env is
+ * complete before the one remaining version-publish action. The event Request URL is NOT left pointing at the throwaway
  * tunnel for long: `dev --tunnel` / `deploy --run` re-register it against the live URL.
  *
  * Feishu is the reference cloud and the only kind that runs this BOUND device flow. Lark is an explicit
  * compatibility profile: its lagging control plane uses the unbound launcher + guided credentials,
  * then probes the canonical token/mode bootstrap with a manual fallback.
  */
-async function createFeishuAppFlow(): Promise<Record<string, string>> {
-  console.error(`[fastagent] creating the Feishu app (confirm in the app)…`);
-  const app = await registerFeishuApp({
-    name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
-    desc: "Served by fastagent",
-    // The agent template alone is not enough to SERVE: the v7 config PATCH (webhook auto-registration
-    // in `dev --tunnel` / `deploy --run`) demands application:application:patch, and the app must
-    // subscribe the receive event. Addons merge both onto the confirm page — no manual app setup.
-    addons: {
-      scopes: { tenant: ["application:application:patch"] },
-      events: { items: { tenant: ["im.message.receive_v1"] } },
-    },
-    onVerificationUrl: ({ url, expiresInS }) => {
-      console.error(
-        `\n  Opening the confirmation link in your browser (or open it in Feishu / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
+async function createFeishuAppFlow(target: string, existing: Readonly<Record<string, string>>): Promise<void> {
+  let appId = existing.FEISHU_APP_ID;
+  let appSecret = existing.FEISHU_APP_SECRET;
+  if (appId && appSecret) {
+    console.error(`[fastagent] resuming Feishu app ${appId} from .env to capture its missing Verification Token`);
+  } else {
+    console.error(`[fastagent] creating the Feishu app (confirm in the app)…`);
+    const app = await registerFeishuApp({
+      name: "{user}'s agent", // the platform expands {user} to the confirming user's name; editable on the page
+      desc: "Served by fastagent",
+      // The agent template alone is not enough to SERVE: the v7 config PATCH (webhook auto-registration
+      // in `dev --tunnel` / `deploy --run`) demands application:application:patch, and the app must
+      // subscribe the receive event. Addons merge both onto the confirm page — no manual app setup.
+      addons: {
+        scopes: { tenant: ["application:application:patch"] },
+        events: { items: { tenant: ["im.message.receive_v1"] } },
+      },
+      onVerificationUrl: ({ url, expiresInS }) => {
+        console.error(
+          `\n  Opening the confirmation link in your browser (or open it in Feishu / render it as a QR code) — valid for ${Math.round(expiresInS / 60)} minutes:\n\n    ${url}\n\n  waiting for confirmation… (keep this running — the credentials are delivered here)`,
+        );
+        openExternalUrl(url); // best-effort, like `login` — the URL above is the fallback
+      },
+    });
+    console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);
+    // A cross-brand confirmation should be impossible (each confirm page refuses the other brand's
+    // code) — but if the platform ever reports one, the credentials would land in the WRONG kind's env
+    // namespace and serve the wrong cloud. Fail visibly instead of writing them.
+    if (app.tenantBrand && app.tenantBrand !== "feishu") {
+      throw new Error(
+        `the confirming account is a ${app.tenantBrand} tenant, but this is \`add feishu\` — run \`fastagent add ${app.tenantBrand}\` instead`,
       );
-      openExternalUrl(url); // best-effort, like `login` — the URL above is the fallback
-    },
-  });
-  console.error(`[fastagent] app created: ${app.appId}${app.tenantBrand ? ` (${app.tenantBrand} tenant)` : ""}`);
-  // A cross-brand confirmation should be impossible (each confirm page refuses the other brand's
-  // code) — but if the platform ever reports one, the credentials would land in the WRONG kind's env
-  // namespace and serve the wrong cloud. Fail visibly instead of writing them.
-  if (app.tenantBrand && app.tenantBrand !== "feishu") {
-    throw new Error(
-      `the confirming account is a ${app.tenantBrand} tenant, but this is \`add feishu\` — run \`fastagent add ${app.tenantBrand}\` instead`,
+    }
+    appId = app.appId;
+    appSecret = app.appSecret;
+
+    // IRREVERSIBLE BOUNDARY: the remote app now exists and its one-time Secret is in memory. Persist
+    // both before any config read, temporary tunnel, or Token bootstrap can be interrupted. Partial old
+    // lines are overwritten because these newly-minted credentials are authoritative as one pair.
+    await appendChannelDotEnv(
+      target,
+      "feishu",
+      {
+        FEISHU_APP_ID: appId,
+        FEISHU_APP_SECRET: appSecret,
+        // A Token from a partial OLD credential set belongs to another App. Clear it at the same
+        // boundary; successful bootstrap below replaces the empty line with this App's Token.
+        FEISHU_VERIFICATION_TOKEN: "",
+      },
+      ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
     );
+    console.error(`[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .env before Token bootstrap`);
   }
-  const env: Record<string, string> = {
-    FEISHU_APP_ID: app.appId,
-    FEISHU_APP_SECRET: app.appSecret,
-  };
+
   // The webhook channel authenticates plaintext events by the platform-generated Verification Token.
   // Try the cheap read first (the v6 detail MAY someday return `encryption`), then the real path: the
   // token's only programmatic delivery is the url_verification challenge during registration — capture
-  // it over a throwaway tunnel (bootstrap-token.ts). Failing both is a one-line manual copy, not a
-  // failed scan: the credentials above are already worth keeping.
+  // it over a throwaway tunnel (bootstrap-token.ts). Failing both is a one-line manual copy; the staged
+  // ID/Secret pair makes a re-run resume this App rather than mint another one.
   const tokenVar = "FEISHU_VERIFICATION_TOKEN";
-  const api = createFeishuApi({
-    baseUrl: "https://open.feishu.cn",
-    appId: app.appId,
-    appSecret: app.appSecret,
-  });
+  const api = createFeishuApi({ baseUrl: "https://open.feishu.cn", appId, appSecret });
+  let token: string | undefined;
+  let webhookModeChanged = false;
   try {
-    const cfg = await api.getAppConfig(app.appId);
-    if (cfg.verificationToken) env[tokenVar] = cfg.verificationToken;
+    const cfg = await api.getAppConfig(appId);
+    token = cfg.verificationToken;
   } catch {
     /* the read surface is best-effort — the bootstrap below is the real path */
   }
-  if (!env[tokenVar]) {
+  if (!token) {
     console.error(
       `[fastagent] capturing the Verification Token — a throwaway webhook registration delivers it (spinning up a temporary tunnel; can take a few minutes on a slow edge)…`,
     );
     try {
-      env[tokenVar] = await bootstrapFeishuVerificationToken({
+      token = await bootstrapFeishuVerificationToken({
         api,
-        appId: app.appId,
+        appId,
         startTunnel: (port) => startCloudflareTunnel(port),
       });
+      webhookModeChanged = true;
       console.error(`[fastagent] Verification Token captured`);
-      // The bootstrap's PATCH also flipped the event mode to webhook — in the DRAFT. The flip only
-      // takes effect once a version is published, and that cannot happen at creation (the platform
-      // excludes subscription config from the creation link — official SDK: "sensitive config …
-      // cannot travel via il") nor via any API. So spend the one unavoidable console click NOW, while
-      // the user is already in the browser: after this publish, later `dev --tunnel`/deploy
-      // re-registrations change only the URL, which applies immediately — never a publish again.
-      const versionUrl = `https://open.feishu.cn/app/${app.appId}/version`;
-      console.error(
-        `[fastagent] one console click remains: CREATE + PUBLISH a version (self-approved) — the switch to webhook mode takes effect on publish. Opening ${versionUrl}`,
-      );
-      openExternalUrl(versionUrl);
     } catch (e) {
-      // Transient tunnel weather is the usual cause. Do NOT suggest re-running `add feishu` here: that
-      // mints ANOTHER app — the manual copy below completes THIS one.
+      // Transient tunnel weather is the usual cause. Do NOT suggest re-running `add feishu` as a new
+      // scan: the staged pair makes the re-run resume THIS app; manual copy completes it too.
       console.error(
         `[fastagent] warn: could not capture the Verification Token: ${String(e)} — usually a transient tunnel issue; finish this app with the manual copy below`,
       );
     }
   }
-  if (!env[tokenVar]) {
+  if (token) {
+    // Persist the second credential stage immediately too — opening the publish page and generic
+    // scaffold finalization happen only after the complete runtime credential set is durable.
+    const staged = await appendChannelDotEnv(target, "feishu", { [tokenVar]: token }, [tokenVar]);
+    console.error(`[fastagent] wrote ${staged.written.join(", ")} to .env`);
+  } else {
     console.error(
       `[fastagent] copy it manually: developer console → Events & Callbacks → Encryption Strategy → Verification Token → ${tokenVar} in .env`,
     );
   }
-  return env;
+  if (webhookModeChanged) {
+    // The bootstrap's PATCH flipped event mode in the DRAFT. It takes effect only after a version
+    // publish, which has no API; later dev/deploy runs change only the Request URL immediately.
+    const versionUrl = `https://open.feishu.cn/app/${appId}/version`;
+    console.error(
+      `[fastagent] one console click remains: CREATE + PUBLISH a version (self-approved) — the switch to webhook mode takes effect on publish. Opening ${versionUrl}`,
+    );
+    openExternalUrl(versionUrl);
+  }
 }
 
 /** Active run-root `.env` values for the requested names — decided by THE .env parser, so this
@@ -963,11 +988,6 @@ async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<
       return value ? [[name, value]] : [];
     }),
   );
-}
-
-/** Whether EVERY requested .env value is active. */
-async function hasActiveDotEnvValues(dir: string, names: string[]): Promise<boolean> {
-  return Object.keys(await activeDotEnvValues(dir, names)).length === names.length;
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */

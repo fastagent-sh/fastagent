@@ -27,4 +27,33 @@ describe("appendChannelDotEnv", () => {
     expect(content).not.toContain("cli_old");
     expect(content.match(/^LARK_APP_ID=/gm)?.length).toBe(1);
   });
+
+  it("persists irreversible Feishu credentials in stages so an interrupted bootstrap can resume", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-env-staged-"));
+    await writeFile(join(dir, ".env"), "FEISHU_VERIFICATION_TOKEN=stale-other-app-token\n");
+
+    await appendChannelDotEnv(
+      dir,
+      "feishu",
+      {
+        FEISHU_APP_ID: "cli_new",
+        FEISHU_APP_SECRET: "one-time-secret",
+        FEISHU_VERIFICATION_TOKEN: "",
+      },
+      ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
+    );
+    const interrupted = await readFile(join(dir, ".env"), "utf8");
+    expect(interrupted).toContain("FEISHU_APP_ID=cli_new");
+    expect(interrupted).toContain("FEISHU_APP_SECRET=one-time-secret");
+    expect(interrupted).not.toContain("stale-other-app-token");
+    expect(interrupted).not.toContain("FEISHU_VERIFICATION_TOKEN=token-1");
+
+    await appendChannelDotEnv(dir, "feishu", { FEISHU_VERIFICATION_TOKEN: "token-1" }, ["FEISHU_VERIFICATION_TOKEN"]);
+    const completed = await readFile(join(dir, ".env"), "utf8");
+    expect(completed).toContain("FEISHU_APP_ID=cli_new");
+    expect(completed).toContain("FEISHU_APP_SECRET=one-time-secret");
+    expect(completed).toContain("FEISHU_VERIFICATION_TOKEN=token-1");
+    expect(completed.match(/^FEISHU_APP_ID=/gm)?.length).toBe(1);
+    expect(completed.match(/^FEISHU_VERIFICATION_TOKEN=/gm)?.length).toBe(1);
+  });
 });

@@ -1,6 +1,7 @@
 /**
  * Guided Lark-international onboarding. The intl cloud cannot complete the BOUND scan-to-create flow,
- * so open its unbound one-click launcher and collect the credentials. Then optimistically run Feishu's
+ * so a new/partial setup opens its unbound one-click launcher and collects one App-scoped credential
+ * set; a complete existing ID/Secret pair resumes that App directly. Then optimistically run Feishu's
  * webhook-mode + Verification-Token bootstrap against THIS app: a successful PATCH captures the token
  * and flips Subscription mode; only a definitive config-route 404 falls back to the token the console
  * displays + a manual mode switch. IO is injected so the workflow is testable without a terminal or
@@ -49,23 +50,24 @@ function required(value: string | undefined, name: string): string {
 /** Open the stable app console and collect everything the runtime needs. Cancellation is a visible
  * failure: the scaffold remains and `add lark` is deliberately re-runnable to resume onboarding. */
 export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions): Promise<LarkOnboardCredentials> {
-  io.note(`Create the app on Lark's one-click launcher. Opening ${LARK_CONSOLE_URL}`);
-  io.openUrl(LARK_CONSOLE_URL);
-
   const existingId = opts.existing?.LARK_APP_ID?.trim();
   const existingSecret = opts.existing?.LARK_APP_SECRET?.trim();
-  // Reuse only a COMPLETE pair. A partial pair is not actionable and asking for both avoids combining
-  // one stale value with one value from the newly-created app.
+  const reuseExistingApp = Boolean(existingId && existingSecret);
+
+  // Credentials are one App-scoped set. Reuse only a COMPLETE ID/Secret pair; a partial pair starts a
+  // fresh launcher/input path, and its unrelated old Token must not be attached to the newly-entered App.
+  if (reuseExistingApp) {
+    io.note(`Reusing Lark app ${existingId}; opening its Events & Callbacks configuration directly.`);
+  } else {
+    io.note(`Create the app on Lark's one-click launcher. Opening ${LARK_CONSOLE_URL}`);
+    io.openUrl(LARK_CONSOLE_URL);
+  }
   const appId = required(
-    existingId && existingSecret
-      ? existingId
-      : await io.prompt("LARK_APP_ID (Credentials & Basic Info)", { hidden: false }),
+    reuseExistingApp ? existingId : await io.prompt("LARK_APP_ID (Credentials & Basic Info)", { hidden: false }),
     "LARK_APP_ID",
   );
   const appSecret = required(
-    existingId && existingSecret
-      ? existingSecret
-      : await io.prompt("LARK_APP_SECRET (Credentials & Basic Info)", { hidden: true }),
+    reuseExistingApp ? existingSecret : await io.prompt("LARK_APP_SECRET (Credentials & Basic Info)", { hidden: true }),
     "LARK_APP_SECRET",
   );
 
@@ -85,7 +87,7 @@ export async function onboardLarkApp(io: LarkOnboardIO, opts: LarkOnboardOptions
 
   const verificationToken = required(
     bootstrap.token ||
-      opts.existing?.LARK_VERIFICATION_TOKEN?.trim() ||
+      (reuseExistingApp ? opts.existing?.LARK_VERIFICATION_TOKEN?.trim() : undefined) ||
       (await io.prompt("LARK_VERIFICATION_TOKEN (Events & Callbacks → Encryption Strategy)", { hidden: true })),
     "LARK_VERIFICATION_TOKEN",
   );

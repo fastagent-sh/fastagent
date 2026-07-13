@@ -38,19 +38,21 @@ fastagent add lark     # Lark international: scaffolds, opens the console, then 
 ```
 
 Onboarding diverges by cloud on purpose: the feishu cloud supports CLI app creation (scan-to-create),
-so `add feishu` just does it — skipped when `FEISHU_APP_ID`/`FEISHU_APP_SECRET` are already set in
-`.env` (it never silently mints a second app). The intl cloud cannot complete that bound flow (its
-confirm-page ack endpoint is broken), so `add lark` opens Lark's unbound one-click launcher
+so `add feishu` creates an app only when no complete `FEISHU_APP_ID` / `FEISHU_APP_SECRET` pair exists.
+A persisted pair with a missing Verification Token resumes Token capture for that same App; a complete
+three-value set is kept. The intl cloud cannot complete that bound flow (its confirm-page ack endpoint
+is broken), so a new/partial `add lark` setup opens Lark's unbound one-click launcher
 (`/page/launcher?from=backend_oneclick`), then waits for App ID and App Secret and validates the pair.
-A complete `LARK_APP_ID` / `LARK_APP_SECRET` / `LARK_VERIFICATION_TOKEN` set already active in `.env`
-is kept as-is without reopening onboarding or revalidating it. After validation of a newly entered or
-partial credential set, the CLI opens that app's Events & Callbacks → Security page directly
-(`/app/<id>/event?tab=safe`), then starts the same temporary tunnel as Feishu and tries the webhook-mode
-PATCH against this actual app. Success switches the draft's Subscription mode and
-captures the Verification Token from the challenge; only an explicit config-route HTTP 404 falls back
-to a hidden Token prompt plus manual mode/URL setup. During `dev --tunnel`, that fallback opens the
-exact app's Events & Callbacks page and prints the new Request URL on its own line for copying. A
-successfully completed onboarding writes all three values to the gitignored `.env`.
+A complete existing ID/Secret pair skips the launcher and opens that App's Events & Callbacks → Security
+page directly (`/app/<id>/event?tab=safe`). Only that complete pair may reuse its existing Verification
+Token; an orphaned Token is never attached to newly entered App credentials. A complete three-value set
+already active in `.env` is kept as-is without reopening onboarding or revalidating it. After validation,
+the CLI starts the same temporary tunnel as Feishu and tries the webhook-mode PATCH against this actual
+app. Success switches the draft's Subscription mode and captures the Verification Token from the
+challenge; only an explicit config-route HTTP 404 falls back to a hidden Token prompt plus manual
+mode/URL setup. During `dev --tunnel`, that fallback opens the exact app's Events & Callbacks page and
+prints the new Request URL on its own line for copying. A successfully completed onboarding writes all
+three values to the gitignored `.env`.
 
 This creates (for the feishu kind; lark mirrors it):
 
@@ -68,17 +70,19 @@ device-authorization grant) as its default behavior. The CLI opens a one-time co
 printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
 creates an app from its agent template — bot capability, messaging scopes, and event subscriptions
 pre-configured, plus the `application:application:patch` scope and the `im.message.receive_v1` event
-fastagent piggybacks onto the creation link — and hands the credentials back. The platform-generated
-Verification Token has no read API; its only programmatic delivery is the `url_verification` challenge
-sent during webhook registration, so the CLI captures it by running a throwaway registration against
-an ephemeral tunnel (needs `cloudflared`, same as `dev --tunnel`). On a successful capture, everything
-lands in `.env` under the `FEISHU_*` namespace:
+fastagent piggybacks onto the creation link — and hands the credentials back. The CLI immediately
+persists App ID/Secret to the gitignored `.env` before starting any later network work. The
+platform-generated Verification Token has no read API; its only programmatic delivery is the
+`url_verification` challenge sent during webhook registration, so the CLI captures it by running a
+throwaway registration against an ephemeral tunnel (needs `cloudflared`, same as `dev --tunnel`) and
+persists it as a second stage. On a successful capture, `.env` contains:
 
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET` — from the created app,
 - `FEISHU_VERIFICATION_TOKEN` — captured from the registration challenge.
 
-If the temporary tunnel/token capture fails, the already-created App ID and Secret are still written;
-the CLI prints the exact console location for manually copying the Verification Token into `.env`.
+If the process is interrupted or the temporary tunnel/token capture fails, the already-created App ID
+and Secret remain durable. Re-running `add feishu` resumes Token capture for that App instead of minting
+a second one; the CLI also prints the exact console location for manually copying the Token into `.env`.
 
 One console action remains, and the CLI opens the page for it at the end of the scan: **create + publish
 a version** (self-approved on your own tenant). The switch from the

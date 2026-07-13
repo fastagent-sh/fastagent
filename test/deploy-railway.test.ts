@@ -58,6 +58,16 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(out).not.toContain("--set"); // deprecated form must be gone everywhere
   });
 
+  it("keeps Feishu/Lark Encrypt Keys optional in the runbook instead of deployment prerequisites", () => {
+    const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["feishu", "lark"] }));
+    const requiredCommand = out.split("\n").find((line) => line.startsWith("railway variables set OPENAI")) ?? "";
+    expect(requiredCommand).toContain("FEISHU_APP_ID=<value>");
+    expect(requiredCommand).toContain("LARK_VERIFICATION_TOKEN=<value>");
+    expect(requiredCommand).not.toContain("FEISHU_ENCRYPT_KEY");
+    expect(requiredCommand).not.toContain("LARK_ENCRYPT_KEY");
+    expect(out).toContain("# railway variables set FEISHU_ENCRYPT_KEY=<value> LARK_ENCRYPT_KEY=<value>");
+  });
+
   it("creates the service, and orders it before the service-scoped volume/variables/up (Railway model)", () => {
     const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
     // railway init makes only a project; the service must exist before volume/variables/up.

@@ -352,6 +352,38 @@ describe("turn flow", () => {
     expect(leaked).toHaveLength(0);
   });
 
+  it("does not delete a settled card or resend the full answer when a later continuation fails", async () => {
+    let textSends = 0;
+    const fx = feishuFetch({
+      "receive_id_type=chat_id": (_url, init) => {
+        const body = JSON.parse(String(init.body)) as { msg_type?: string };
+        if (body.msg_type !== "text") {
+          return Response.json({ code: 0, msg: "ok", data: { message_id: "om_mounted" } });
+        }
+        textSends++;
+        return textSends === 2
+          ? Response.json({ code: 230001, msg: "continuation rejected" })
+          : Response.json({ code: 0, msg: "ok", data: { message_id: `om_text_${textSends}` } });
+      },
+    });
+    const fullAnswer = "x".repeat(70 * 1024);
+    const { handler, idle } = buildChannel({}, fullAnswer);
+
+    await handler(feishuRequest(messageEvent({ id: "om_continuation_failure" })));
+    await idle();
+
+    expect(fx.calls("/cardkit/v1/cards/c1", "PUT")).toHaveLength(1); // settle succeeded
+    const continuations = fx.calls("receive_id_type=chat_id", "POST").filter((c) => c.body?.msg_type === "text");
+    expect(continuations).toHaveLength(2); // first landed, second failed; no full-answer fallback send
+    expect(fx.calls("/im/v1/messages/om_mounted", "DELETE")).toHaveLength(0);
+    expect(
+      continuations.some((c) => {
+        const sent = JSON.parse(String(c.body?.content)) as { text?: string };
+        return sent.text === fullAnswer;
+      }),
+    ).toBe(false);
+  });
+
   it("group without a mention is ignored (default route, fail closed)", async () => {
     feishuFetch();
     const { handler, calls } = buildChannel();
@@ -371,14 +403,16 @@ describe("turn flow", () => {
     expect(first.calls).toHaveLength(1);
     // A NEW channel over the same state root (a restart) still refuses the same message_id.
     injectedAgent = undefined;
+    const restarted = replyingAgent();
     const again = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, baseUrl: BASE })({
-      agent: replyingAgent().agent,
+      agent: restarted.agent,
       stateRoot: first.root,
     })["POST /feishu"];
     const idle2 = (again as unknown as { turnsIdle?: () => Promise<void> })?.turnsIdle;
     if (idle2) channelIdles.add(idle2);
     expect((await again?.(feishuRequest(messageEvent({ id: "om_dup" }))))?.status).toBe(200);
-    await flush();
+    await idle2?.();
+    expect(restarted.calls).toHaveLength(0);
     expect(existsSync(join(first.home, "seen.json"))).toBe(true);
   });
 
@@ -395,6 +429,61 @@ describe("turn flow", () => {
     const settle = fx.calls("/cardkit/v1/cards/c1", "PUT")[0];
     const settled = JSON.parse(String((settle?.body?.card as Record<string, unknown> | undefined)?.data));
     expect(settled.body.elements[0].content).toBe("⚠️ boom: engine exploded");
+  });
+
+  it("logs terminal-notice delivery failures without replacing the Agent/stream failure", async () => {
+    const errors: string[] = [];
+    vi.spyOn(log, "error").mockImplementation((message) => errors.push(message));
+    const scenarios: { id: string; agent: Agent; delivery: string; primary: string }[] = [
+      {
+        id: "om_failed_delivery",
+        agent: {
+          async *invoke(): AsyncIterable<AgentEvent> {
+            yield { type: "failed", details: "engine exploded", retryable: false };
+          },
+        },
+        delivery: "failed to deliver the agent-failure notice",
+        primary: "agent failed: engine exploded",
+      },
+      {
+        id: "om_abnormal_delivery",
+        agent: {
+          invoke(): AsyncIterable<AgentEvent> {
+            return {
+              [Symbol.asyncIterator]() {
+                return {
+                  next: async (): Promise<IteratorResult<AgentEvent>> => {
+                    throw new Error("stream exploded");
+                  },
+                };
+              },
+            };
+          },
+        },
+        delivery: "failed to deliver the abnormal-turn notice",
+        primary: "stream exploded",
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      feishuFetch({
+        "/cardkit/v1/cards/c1": () => Response.json({ code: 200850, msg: "card expired" }),
+        "receive_id_type=chat_id": (_url, init) => {
+          const body = JSON.parse(String(init.body)) as { msg_type?: string };
+          return body.msg_type === "text"
+            ? Response.json({ code: 230001, msg: "terminal send rejected" })
+            : Response.json({ code: 0, msg: "ok", data: { message_id: "om_mounted" } });
+        },
+      });
+      injectedAgent = scenario.agent;
+      const { handler, idle } = buildChannel();
+      await handler(feishuRequest(messageEvent({ id: scenario.id })));
+      await idle();
+      expect(errors.some((line) => line.includes(scenario.delivery) && line.includes("terminal send rejected"))).toBe(
+        true,
+      );
+      expect(errors.some((line) => line.includes(scenario.primary))).toBe(true);
+    }
   });
 
   it("degrades to a TEXT placeholder when the card tier fails, and settles via ONE edit", async () => {
@@ -583,10 +672,14 @@ describe("cardSummary: the settled card's chat-list/notification preview", () =>
     expect(cardSummary("- first bullet\n- second")).toBe("first bullet");
   });
 
-  it("caps the length and survives empty/whitespace answers", () => {
+  it("caps the length by code point and survives empty/whitespace answers", () => {
     const long = "x".repeat(200);
     expect(cardSummary(long).length).toBeLessThanOrEqual(60);
     expect(cardSummary(long).endsWith("…")).toBe(true);
+    const emojiBoundary = cardSummary(`${"a".repeat(58)}😀xy`);
+    expect(Array.from(emojiBoundary)).toHaveLength(60);
+    expect(emojiBoundary).toContain("😀");
+    expect(Buffer.from(emojiBoundary, "utf8").toString("utf8")).toBe(emojiBoundary);
     expect(cardSummary("   \n  ")).toBe("");
   });
 });

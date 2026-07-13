@@ -283,8 +283,20 @@ describe("chunkFeishuText", () => {
     const chunks = chunkFeishuText("好".repeat(30), 32); // no newline anywhere
     for (const c of chunks) {
       expect(Buffer.byteLength(c, "utf8")).toBeLessThanOrEqual(32);
-      expect(c).toMatch(/^好+$/); // no torn surrogate/partial char
+      expect(c).toMatch(/^好+$/);
     }
     expect(chunks.join("")).toBe("好".repeat(30));
+  });
+
+  it("cuts only at code-point boundaries when the byte cap lands inside an emoji surrogate pair", () => {
+    const chunks = chunkFeishuText("a😀b", 4);
+    expect(chunks).toEqual(["a", "😀", "b"]);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(4);
+      // UTF-8 round-trip replaces a lone surrogate, so equality proves each chunk is independently
+      // well-formed — concatenation equality alone could hide two torn halves joining back together.
+      expect(Buffer.from(chunk, "utf8").toString("utf8")).toBe(chunk);
+    }
+    expect(chunks.join("")).toBe("a😀b");
   });
 });

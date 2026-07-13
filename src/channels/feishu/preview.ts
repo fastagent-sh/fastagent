@@ -25,6 +25,7 @@ import {
   streamingCardJson,
 } from "./card.ts";
 import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
+import { truncateCodePointPrefix, truncateCodePointSuffix, truncateUtf8 } from "./text.ts";
 
 /** A terminal failure, as the channel hands it to `onError`. */
 export interface FeishuFailure {
@@ -55,7 +56,7 @@ const THINKING_PLACEHOLDER = "💭 Thinking…";
 /** One-line, truncated: collapse whitespace so a multi-line command/arg stays on one line. */
 function clip(s: string): string {
   const one = s.replace(/\s+/g, " ").trim();
-  return one.length > TOOL_ARG_MAX ? `${one.slice(0, TOOL_ARG_MAX - 1)}…` : one;
+  return truncateCodePointPrefix(one, TOOL_ARG_MAX);
 }
 
 /**
@@ -75,15 +76,7 @@ function summarizeArgs(args: Json): string {
  *  text is a prefix of the new, so an over-budget view freezes at its head rather than sliding a tail
  *  window (which would redraw the whole card every frame). The full answer still lands at settle. */
 function capBytes(s: string, maxBytes: number): string {
-  if (Buffer.byteLength(s, "utf8") <= maxBytes) return s;
-  let lo = 0;
-  let hi = s.length;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (Buffer.byteLength(s.slice(0, mid), "utf8") <= maxBytes - 2) lo = mid;
-    else hi = mid - 1;
-  }
-  return `${s.slice(0, lo)}…`;
+  return truncateUtf8(s, maxBytes);
 }
 
 /** The mounted preview, whichever tier setup reached. */
@@ -112,15 +105,21 @@ async function finalize(
   }
   if (preview.kind === "card") {
     const [head, ...rest] = chunkFeishuText(text, CARD_MARKDOWN_MAX_BYTES);
+    let settled = false;
     try {
       await api.updateCard(preview.cardId, finalCardJson(head ?? ""), seq());
+      settled = true;
+    } catch {
+      // Settle failed (card expired / rejected) — fall through to delete + fresh send below.
+    }
+    if (settled) {
       // Topic continuations must keep reply_in_thread; ordinary group continuations intentionally avoid
       // repeating the quote on every chunk. sendText owns the same distinction for its own chunking.
+      // A continuation failure propagates: the card is already authoritative, so deleting it and sending
+      // the full answer again would deterministically duplicate every continuation that already landed.
       const continuationTarget = target.replyInThread ? target : { chatId: target.chatId };
       for (const chunk of rest) await api.sendText(continuationTarget, chunk);
       return;
-    } catch {
-      // Settle failed (card expired / rejected) — fall through to delete + fresh send below.
     }
   }
   if (preview.kind === "text") {
@@ -165,7 +164,7 @@ export async function streamFeishuReply(
   const thinkingView = (): string => {
     const t = thinking.replace(/\s+/g, " ").trim();
     if (t === "") return "";
-    return `💭 ${t.length > THINKING_PREVIEW ? `…${t.slice(t.length - THINKING_PREVIEW + 1)}` : t}`;
+    return `💭 ${truncateCodePointSuffix(t, THINKING_PREVIEW)}`;
   };
   // The answer is hidden until its first delta has aged one STREAM_THROTTLE_MS: the pump's leading-edge
   // flush would otherwise turn the very first content delta (often a lone character) into its own frame
@@ -372,7 +371,13 @@ export async function streamFeishuReply(
         finalized = true;
         {
           const msg = formatError({ details: e.details, retryable: e.retryable }) ?? "";
-          await settle(msg).catch(() => {});
+          try {
+            await settle(msg);
+          } catch (deliveryError) {
+            // Preserve the Agent failure as the primary error below, but keep the broken final hop in
+            // the operator-visible chain — otherwise the log falsely implies the user saw the notice.
+            log.error(`${label} failed to deliver the agent-failure notice: ${String(deliveryError)}`);
+          }
         }
         throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
       }
@@ -388,7 +393,13 @@ export async function streamFeishuReply(
       // retryable:false — an abnormal end (no terminal / a throw) is of UNKNOWN retryability, so use the
       // neutral "something went wrong" default rather than promising "try again" that may not help.
       const notice = formatError({ details: "the turn ended without completing", retryable: false }) ?? "";
-      await settle(notice).catch(() => {});
+      try {
+        await settle(notice);
+      } catch (deliveryError) {
+        // The stream's original throw remains primary; this explicit line records that the user-facing
+        // terminal notice failed too instead of silently breaking the responsibility chain.
+        log.error(`${label} failed to deliver the abnormal-turn notice: ${String(deliveryError)}`);
+      }
     }
   }
 }

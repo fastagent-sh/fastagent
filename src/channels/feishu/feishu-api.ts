@@ -23,6 +23,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ImageRef } from "../../agent.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
+import { utf8Prefix } from "./text.ts";
 
 /** Per-attempt timeout for a JSON API call — small JSON round-trips, so 30s is generous. */
 const API_TIMEOUT_MS = 30_000;
@@ -190,21 +191,17 @@ export const FEISHU_MAX_TEXT_BYTES = 100 * 1024;
 
 /** Split text into chunks whose UTF-8 size fits the message cap, preferring a newline boundary. */
 export function chunkFeishuText(text: string, maxBytes: number = FEISHU_MAX_TEXT_BYTES): string[] {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new RangeError("maxBytes must be a positive integer");
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return [text];
   const chunks: string[] = [];
   let rest = text;
   while (Buffer.byteLength(rest, "utf8") > maxBytes) {
-    // Binary-search the largest prefix under the cap (byte-accurate, multi-byte safe), then prefer the
-    // last newline inside it.
-    let lo = 1;
-    let hi = rest.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (Buffer.byteLength(rest.slice(0, mid), "utf8") <= maxBytes) lo = mid;
-      else hi = mid - 1;
-    }
-    let cut = rest.lastIndexOf("\n", lo);
-    if (cut <= 0) cut = lo;
+    // Find the largest CODE-POINT-aligned prefix under the cap, then prefer the last newline inside it.
+    // A cap smaller than one code point cannot satisfy both the byte limit and well-formed Unicode.
+    const prefix = utf8Prefix(rest, maxBytes);
+    if (prefix === "") throw new RangeError("maxBytes is too small to contain the next Unicode code point");
+    let cut = prefix.lastIndexOf("\n");
+    if (cut <= 0) cut = prefix.length;
     chunks.push(rest.slice(0, cut));
     rest = rest.slice(cut).replace(/^\n/, "");
   }

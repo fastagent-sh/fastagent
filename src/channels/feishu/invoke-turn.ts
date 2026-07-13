@@ -16,6 +16,7 @@ import { type Agent, type AgentEvent, type ImageRef, SESSION_BUSY_CODE } from ".
 import { log } from "../../log.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
+import { codePointPrefix } from "./text.ts";
 
 /** Appended to the prompt (not the system prompt): the channel renders the reply in a card, and the
  *  card's markdown element is the natural fit for LLM output — steer away from HTML/plain. */
@@ -76,7 +77,7 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
     // sender (`{ sender_id: { open_id } }`), so the label is built here, not via parse.senderLabel.
     const senderId = (parent.sender as { id?: string } | undefined)?.id;
     const from = senderId ? `user ${senderId}` : undefined;
-    referentBlock = `\n\n[replied-to message (msg ${attachments.parentId}${from ? `, from ${from}` : ""}): ${parsed.text.slice(0, 560) || "(empty)"}]`;
+    referentBlock = `\n\n[replied-to message (msg ${attachments.parentId}${from ? `, from ${from}` : ""}): ${codePointPrefix(parsed.text, 560) || "(empty)"}]`;
   }
   const imageRefs: ImageRef[] = [];
   for (const ref of images) imageRefs.push(await t.api.fetchImage(ref.msg, ref.key));

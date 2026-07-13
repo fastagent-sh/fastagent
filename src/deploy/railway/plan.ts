@@ -23,7 +23,7 @@
  */
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
-import { isEnvKey, requiredSecrets } from "../secrets.ts";
+import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
 export interface RailwayPlanInput extends ContainerInput {
   // No `port`: Railway injects PORT and the container CMD/railway.json never name one (unlike Fly's
@@ -33,7 +33,7 @@ export interface RailwayPlanInput extends ContainerInput {
   serviceName: string;
   /** What satisfies model auth locally: an env-var name, an OAuth/stored label, or undefined. */
   modelAuth: string | undefined;
-  /** Channels discovered in the workspace — each contributes its required secrets + webhook step. */
+  /** Channels discovered in the workspace — each contributes its secret metadata + webhook step. */
   channels: ChannelKind[];
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from
   // ContainerInput — ONE source, so the plan and the generated Dockerfile can't drift.
@@ -82,7 +82,9 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     ...containerArtifacts(input),
   ];
 
-  const secrets = requiredSecrets(modelAuth, channels, input.extraSecrets);
+  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets);
+  const requiredSecrets = secrets.filter((secret) => secret.required);
+  const optionalSecrets = secrets.filter((secret) => !secret.required);
 
   // Order matters, not cosmetics: `railway init` creates a PROJECT with no service, but the volume and
   // variables are service-scoped and `railway up` deploys THE service — so the service must exist first
@@ -112,10 +114,18 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `railway variables set FASTAGENT_STATE_DIR=${MOUNT}`,
   ];
 
-  if (secrets.length > 0) {
+  if (requiredSecrets.length > 0) {
     runbook.push(
-      `#   ${secrets.map((s) => `${s.name}: ${s.hint}`).join("\n#   ")}`,
-      `railway variables set ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
+      `# Required secrets:`,
+      `#   ${requiredSecrets.map((s) => `${s.name}: ${s.hint}`).join("\n#   ")}`,
+      `railway variables set ${requiredSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
+    );
+  }
+  if (optionalSecrets.length > 0) {
+    runbook.push(
+      `# Optional secrets — set only when the matching feature is configured:`,
+      `#   ${optionalSecrets.map((s) => `${s.name}: ${s.hint}`).join("\n#   ")}`,
+      `# railway variables set ${optionalSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );
   }
 

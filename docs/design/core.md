@@ -233,16 +233,18 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   the call, so the registrar health-waits first) — used by `--tunnel` and `deploy --run`, with the
   manual console instruction as the fallback. Cloud lag: the v7 route exists on `open.feishu.cn` but
   not on `open.larksuite.com` yet; a 404 names that cause. `add feishu` runs the scan-to-create
-  device flow BY DEFAULT (RFC 8628, hand-rolled; wire format shared by the four official SDKs) and
-  captures the platform-generated verification token from the registration challenge over a throwaway
-  tunnel — `.env` completes before the remaining publish action; skipped when credentials are already set.
+  device flow BY DEFAULT (RFC 8628, hand-rolled; wire format shared by the four official SDKs). It
+  persists the returned App ID/Secret at the irreversible creation boundary, then captures and persists
+  the platform-generated verification token over a throwaway tunnel. A re-run with that pair resumes
+  missing-Token setup instead of creating another App; `.env` completes before the remaining publish action.
   One console action remains (the CLI opens the page): the long-connection→webhook mode flip takes
   effect on version publish, which has no open API — the subscription mode cannot travel on the
   creation link (the platform excludes sensitive config from addons). The intl cloud cannot complete
-  the BOUND device flow (its confirm-page ack endpoint is broken), so `add lark` opens the unbound
-  one-click launcher (`/page/launcher?from=backend_oneclick`) and runs: App ID → Secret → credential
-  validation → open this app's `/event?tab=safe` page → the SAME temporary-tunnel PATCH/challenge
-  bootstrap. Success switches the draft to
+  the BOUND device flow (its confirm-page ack endpoint is broken), so a new/partial `add lark` setup
+  opens the unbound one-click launcher (`/page/launcher?from=backend_oneclick`); a complete existing
+  ID/Secret pair skips it and resumes that App directly. Only that pair may reuse its existing Token.
+  Both paths run credential validation → open this app's `/event?tab=safe` page → the SAME temporary-
+  tunnel PATCH/challenge bootstrap. Success switches the draft to
   webhook mode and captures the token; only a route-level 404 from this actual app falls back to a
   hidden Token prompt + manual mode/URL setup. This is an optimistic capability probe, not a baked-in
   cloud assumption; every other failure remains visible.
