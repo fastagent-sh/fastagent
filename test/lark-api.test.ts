@@ -132,7 +132,7 @@ describe("pipeline invariants", () => {
 });
 
 describe("message methods", () => {
-  it("sendText quote-replies the FIRST chunk (in-thread when asked) and plain-sends the rest", async () => {
+  it("sendText quote-replies only the first chunk in an ordinary group", async () => {
     const bodies: { url: string; body: Record<string, unknown> }[] = [];
     stubFetch((url, init) => {
       bodies.push({ url, body: JSON.parse(String(init.body)) });
@@ -141,14 +141,30 @@ describe("message methods", () => {
     const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     // Two chunks: force the split with a text over the cap (multi-byte safe splitting is covered below).
     const long = `${"a".repeat(90 * 1024)}\n${"b".repeat(60 * 1024)}`;
-    const firstId = await api.sendText({ chatId: "oc_1", replyTo: "om_ask", replyInThread: true }, long);
+    const firstId = await api.sendText({ chatId: "oc_1", replyTo: "om_ask" }, long);
     expect(firstId).toBe("om_1");
     expect(bodies[0]?.url).toContain("/im/v1/messages/om_ask/reply");
-    expect(bodies[0]?.body.reply_in_thread).toBe(true);
+    expect(bodies[0]?.body.reply_in_thread).toBeUndefined();
     expect(bodies[1]?.url).toContain("/im/v1/messages?receive_id_type=chat_id");
     expect(bodies[1]?.body.receive_id).toBe("oc_1");
     const sentText = bodies.map((b) => (JSON.parse(b.body.content as string) as { text: string }).text);
     expect(sentText.join("\n")).toBe(long); // lossless across the split
+  });
+
+  it("sendText keeps every chunk inside a topic", async () => {
+    const bodies: { url: string; body: Record<string, unknown> }[] = [];
+    stubFetch((url, init) => {
+      bodies.push({ url, body: JSON.parse(String(init.body)) });
+      return okData({ message_id: `om_${bodies.length}` });
+    });
+    const api = createLarkApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const long = `${"a".repeat(90 * 1024)}\n${"b".repeat(60 * 1024)}`;
+
+    await api.sendText({ chatId: "oc_1", replyTo: "om_topic", replyInThread: true }, long);
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies.every((b) => b.url.includes("/im/v1/messages/om_topic/reply"))).toBe(true);
+    expect(bodies.every((b) => b.body.reply_in_thread === true)).toBe(true);
   });
 
   it("editTextMessage PUTs the platform's text envelope at the message", async () => {

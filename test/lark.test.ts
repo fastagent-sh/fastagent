@@ -323,6 +323,32 @@ describe("turn flow", () => {
     expect(reply?.body?.msg_type).toBe("interactive");
   });
 
+  it("keeps an over-card continuation inside a topic", async () => {
+    const fx = larkFetch();
+    const { handler, idle } = buildChannel({}, "x".repeat(25 * 1024));
+    await flush();
+    const evt = messageEvent({
+      id: "om_topic",
+      chatType: "group",
+      threadId: "omt_1",
+      content: JSON.stringify({ text: "@_user_1 explain" }),
+      mentions: [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }],
+    });
+
+    await handler(larkRequest(evt));
+    await idle();
+
+    const topicReplies = fx.calls("/im/v1/messages/om_topic/reply", "POST");
+    expect(topicReplies.some((c) => c.body?.msg_type === "interactive")).toBe(true); // mounted preview
+    const continuations = topicReplies.filter((c) => c.body?.msg_type === "text");
+    expect(continuations.length).toBeGreaterThan(0);
+    expect(continuations.every((c) => c.body?.reply_in_thread === true)).toBe(true);
+    const leaked = fx
+      .calls("receive_id_type=chat_id", "POST")
+      .filter((c) => c.body?.msg_type === "text" && c.body.receive_id === "oc_1");
+    expect(leaked).toHaveLength(0);
+  });
+
   it("group without a mention is ignored (default route, fail closed)", async () => {
     larkFetch();
     const { handler, calls } = buildChannel();

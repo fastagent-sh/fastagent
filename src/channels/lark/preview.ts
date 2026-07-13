@@ -114,7 +114,10 @@ async function finalize(
     const [head, ...rest] = chunkLarkText(text, CARD_MARKDOWN_MAX_BYTES);
     try {
       await api.updateCard(preview.cardId, finalCardJson(head ?? ""), seq());
-      for (const chunk of rest) await api.sendText({ chatId: target.chatId }, chunk);
+      // Topic continuations must keep reply_in_thread; ordinary group continuations intentionally avoid
+      // repeating the quote on every chunk. sendText owns the same distinction for its own chunking.
+      const continuationTarget = target.replyInThread ? target : { chatId: target.chatId };
+      for (const chunk of rest) await api.sendText(continuationTarget, chunk);
       return;
     } catch {
       // Settle failed (card expired / rejected) — fall through to delete + fresh send below.

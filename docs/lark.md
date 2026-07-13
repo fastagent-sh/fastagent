@@ -25,10 +25,11 @@ Like the Telegram channel, the engine is request/reply: the channel holds the ap
 
 ## Add the channel
 
-From an agent workspace:
+From an agent workspace, first ensure `.env` is covered by `.gitignore` or `.fastagentignore` — both
+commands refuse to write platform credentials into a committable file:
 
 ```bash
-fastagent add feishu   # 飞书: scaffolds AND creates + configures the app itself — no developer console
+fastagent add feishu   # 飞书: scaffolds + creates/configures the app; one version-publish action remains
 fastagent add lark     # Lark international: scaffolds, opens the console, then collects the three credentials
 ```
 
@@ -37,13 +38,15 @@ so `add feishu` just does it — skipped when `FEISHU_APP_ID`/`FEISHU_APP_SECRET
 `.env` (it never silently mints a second app). The intl cloud cannot complete that bound flow (its
 confirm-page ack endpoint is broken), so `add lark` opens Lark's unbound one-click launcher
 (`/page/launcher?from=backend_oneclick`), then waits for App ID and App Secret and validates the pair.
-After validation it opens that app's Events & Callbacks → Security page directly
+A complete `LARK_APP_ID` / `LARK_APP_SECRET` / `LARK_VERIFICATION_TOKEN` set already active in `.env`
+is kept as-is without reopening onboarding or revalidating it. After validation of a newly entered or
+partial credential set, the CLI opens that app's Events & Callbacks → Security page directly
 (`/app/<id>/event?tab=safe`), then starts the same temporary tunnel as Feishu and tries the webhook-mode
 PATCH against this actual app. Success switches the draft's Subscription mode and
 captures the Verification Token from the challenge; only an explicit config-route HTTP 404 falls back
 to a hidden Token prompt plus manual mode/URL setup. During `dev --tunnel`, that fallback opens the
-exact app's Events & Callbacks page and prints the new Request URL on its own line for copying. All
-three values land in the gitignored `.env`.
+exact app's Events & Callbacks page and prints the new Request URL on its own line for copying. A
+successfully completed onboarding writes all three values to the gitignored `.env`.
 
 This creates (for the feishu kind; lark mirrors it):
 
@@ -64,11 +67,14 @@ pre-configured, plus the `application:application:patch` scope and the `im.messa
 fastagent piggybacks onto the creation link — and hands the credentials back. The platform-generated
 Verification Token has no read API; its only programmatic delivery is the `url_verification` challenge
 sent during webhook registration, so the CLI captures it by running a throwaway registration against
-an ephemeral tunnel (needs `cloudflared`, same as `dev --tunnel`). Everything lands in `.env`
-(`FEISHU_*` for the feishu kind, `LARK_*` for lark):
+an ephemeral tunnel (needs `cloudflared`, same as `dev --tunnel`). On a successful capture, everything
+lands in `.env` under the `FEISHU_*` namespace:
 
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET` — from the created app,
 - `FEISHU_VERIFICATION_TOKEN` — captured from the registration challenge.
+
+If the temporary tunnel/token capture fails, the already-created App ID and Secret are still written;
+the CLI prints the exact console location for manually copying the Verification Token into `.env`.
 
 Browser quirk: the confirm page may show **"Link expired" on first load** — the page acks the
 code before its session bootstrap finishes, and it renders every ack failure as an expiry. Recover
@@ -78,9 +84,8 @@ unbound create flow — the app gets created, but its credentials only appear on
 CLI never completes. Keep the CLI running until it prints `app created`: the credentials are
 delivered to the polling CLI, not the browser.
 
-The scan refuses to run when `.env` is not gitignored (real credentials must never land in a
-committable file). One console click remains, and the CLI opens the page for it at the end of the
-scan: **create + publish a version** (self-approved on your own tenant). The switch from the
+One console action remains, and the CLI opens the page for it at the end of the scan: **create + publish
+a version** (self-approved on your own tenant). The switch from the
 template's long-connection mode to webhook only takes effect on publish; the subscription mode cannot
 be set at creation (the platform excludes it from the creation link — official SDK: "sensitive
 config … cannot travel") and version publishing has no open API (see Limits). It is ONE click ever:

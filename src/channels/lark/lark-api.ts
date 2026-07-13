@@ -331,12 +331,14 @@ export function createLarkApi(opts: LarkApiOptions): LarkApi {
       let first = true;
       for (const chunk of chunks) {
         const content = JSON.stringify({ text: chunk });
-        // Quote-reply the FIRST chunk only (threads the answer under the asker in a group);
-        // continuation chunks post plainly right after — N reply-quotes would be noise.
-        const id =
-          first && target.replyTo !== undefined
-            ? await api.replyMessage(target.replyTo, "text", content, { replyInThread: target.replyInThread })
-            : await api.sendMessage(target.chatId, "text", content);
+        // A normal group quote-replies only the first chunk — N reply-quotes would be noise. A topic
+        // must reply_in_thread on EVERY chunk; a plain chat send would leak continuations to the main group.
+        const reply = target.replyTo !== undefined && (first || target.replyInThread === true);
+        const id = reply
+          ? await api.replyMessage(target.replyTo as string, "text", content, {
+              replyInThread: target.replyInThread,
+            })
+          : await api.sendMessage(target.chatId, "text", content);
         if (first) firstId = id;
         first = false;
       }
