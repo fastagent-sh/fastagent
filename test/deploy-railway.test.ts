@@ -45,6 +45,12 @@ describe("deploy/railway: planRailwayDeploy", () => {
     // comment — that would silently ship the whole repo history into the image.
     const dockerignore = artifacts.find((a) => a.path === ".dockerignore")!.content;
     expect(dockerignore.split("\n")).toContain(".git");
+    // Recursive on purpose: dockerignore patterns are root-anchored, and a repo-as-agent can hold
+    // nested projects — bare `node_modules`/`.env` would bake their build-machine deps and secrets
+    // into the image. `.git` stays root-anchored (asserted above) so nested repos' .git ships.
+    expect(dockerignore).toMatch(/^\*\*\/node_modules$/m);
+    expect(dockerignore).toMatch(/^\*\*\/\.env$/m);
+    expect(dockerignore).not.toMatch(/^\*\*\/\.git$/m);
   });
 
   it("sets the state root as a variable matched to the volume mount, + the secret list", () => {
