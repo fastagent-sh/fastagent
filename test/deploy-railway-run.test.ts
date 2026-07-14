@@ -95,7 +95,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     // Exit 0 here would tell a coding agent "done" while the agent can't receive messages.
     expect(out).toEqual({
       ok: false,
-      gate: expect.stringMatching(/deploy succeeded but webhook registration failed for: telegram/),
+      gate: expect.stringMatching(/webhook registration failed for: telegram/),
     });
     expect(registerFeishu).toHaveBeenCalledWith("https://bot-production.up.railway.app", "feishu"); // one failure doesn't skip the rest
   });

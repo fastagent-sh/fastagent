@@ -274,7 +274,8 @@ export async function deployRailwayRun(
   }
   if (unregistered.length > 0) {
     return gate(
-      `the deploy succeeded but webhook registration failed for: ${unregistered.join(", ")} — see the error above, then re-run with --into-linked to retry registration`,
+      // Composes with cli.ts's "deploy stopped:" prefix — don't say "the deploy succeeded" first.
+      `webhook registration failed for: ${unregistered.join(", ")} — the app itself deployed; fix the error above, then re-run with --into-linked to retry registration`,
     );
   }
   return { ok: true, url };

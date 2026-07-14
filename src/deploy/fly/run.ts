@@ -174,7 +174,8 @@ export async function deployFlyRun(
   }
   if (unregistered.length > 0) {
     return gate(
-      `the deploy succeeded but webhook registration failed for: ${unregistered.join(", ")} — see the error above, then re-run to retry registration (steps already done are skipped)`,
+      // Composes with cli.ts's "deploy stopped:" prefix — don't say "the deploy succeeded" first.
+      `webhook registration failed for: ${unregistered.join(", ")} — the app itself deployed; fix the error above, then re-run to retry registration (steps already done are skipped)`,
     );
   }
   return { ok: true };
