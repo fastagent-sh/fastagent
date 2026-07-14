@@ -10,6 +10,7 @@ describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
   const prevSecret = process.env.TELEGRAM_SECRET_TOKEN;
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     process.env.TELEGRAM_BOT_TOKEN = prevBot;
     process.env.TELEGRAM_SECRET_TOKEN = prevSecret;
   });
@@ -95,6 +96,30 @@ describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
     );
     await registerTelegramWebhook("https://app.up.railway.app", { readyTimeoutMs: 5000, readyIntervalMs: 1 });
     expect(setWebhookCalls).toBe(1); // reported, not retried
+  });
+
+  it("reports the last transient error after exhausting setWebhook retries", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "bt";
+    process.env.TELEGRAM_SECRET_TOKEN = "st";
+    let setWebhookCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/health")) return new Response(null, { status: 200 });
+        setWebhookCalls++;
+        throw new Error(`fetch failed attempt ${setWebhookCalls}`);
+      }),
+    );
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await registerTelegramWebhook("https://app.up.railway.app", {
+      readyTimeoutMs: 5000,
+      readyIntervalMs: 1,
+      retryMs: 1,
+    });
+
+    expect(setWebhookCalls).toBe(3);
+    expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/last error: .*fetch failed attempt 3/));
   });
 
   it("missing tokens → manual instruction, no health poll and no setWebhook", async () => {
