@@ -10,14 +10,30 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Models } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./harness.ts";
 import { moduleLoadHint } from "../../loader.ts";
 
+/** pi's thinking levels (types.d.ts `ThinkingLevel`), as a runtime list for config validation — pi
+ *  exports only the type. A level the selected model does not support is clamped by pi per model. */
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly ThinkingLevel[];
+
 export interface FastagentConfig {
   /** "provider/modelId". Precedence: CLI --model > FASTAGENT_MODEL > config. */
   model?: string;
+  /** Reasoning effort for the model, pi's scale ("off" | "minimal" | "low" | "medium" | "high" |
+   *  "xhigh" | "max"). Unset = pi's default. Authors tune thinking in the pi TUI while vibing — this
+   *  is the serving-side counterpart (fidelity). Levels a model doesn't support are clamped by pi. */
+  thinkingLevel?: ThinkingLevel;
   /**
    * The agent-definition subdirectory (persona.md, skills/, tools/, channels/), relative to the config
    * file's directory. Default: the config directory itself (flat — today's behaviour). Point it at a
@@ -108,17 +124,23 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   for (const key of Object.keys(c)) {
     if (
       key !== "model" &&
+      key !== "thinkingLevel" &&
       key !== "agentDir" &&
       key !== "tools" &&
       key !== "http" &&
       key !== "deploy" &&
       key !== "selfSchedule"
     ) {
-      throw new Error(`${path}: unknown key "${key}" (valid keys: model, agentDir, tools, http, deploy, selfSchedule)`);
+      throw new Error(
+        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, agentDir, tools, http, deploy, selfSchedule)`,
+      );
     }
   }
   if (c.model !== undefined && typeof c.model !== "string") {
     throw new Error(`${path}: "model" must be a "provider/modelId" string`);
+  }
+  if (c.thinkingLevel !== undefined && !(THINKING_LEVELS as readonly string[]).includes(c.thinkingLevel as string)) {
+    throw new Error(`${path}: "thinkingLevel" must be one of ${THINKING_LEVELS.join(", ")}`);
   }
   if (c.agentDir !== undefined && typeof c.agentDir !== "string") {
     throw new Error(`${path}: "agentDir" must be a string (a subdirectory relative to the config file)`);

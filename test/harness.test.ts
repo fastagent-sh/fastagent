@@ -82,3 +82,18 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     expect(restoreActiveToolNames(["ghost"], tools, "s")).toBeUndefined(); // intent unhonorable → default
   });
 });
+
+describe("piHarnessFactory: thinking-level wiring", () => {
+  it("threads thinkingLevel to the harness (config.thinkingLevel is not a silent no-op)", async () => {
+    const { faux, models } = makeFaux();
+    const factory = piHarnessFactory({
+      sessions: inMemorySessionStore(),
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      thinkingLevel: "high",
+      systemPrompt: "test",
+    });
+    expect((await factory("s1")).getThinkingLevel()).toBe("high");
+  });
+});

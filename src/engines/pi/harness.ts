@@ -7,7 +7,7 @@
  * historical entries back into context via buildContext().
  */
 import { AgentHarness } from "@earendil-works/pi-agent-core";
-import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
+import type { AgentTool, ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
@@ -29,6 +29,9 @@ export interface PiHarnessFactoryOptions {
   /** Provider collection for all model requests; {@link model} must belong to it (same provider id). */
   models: Models;
   model: AnyModel;
+  /** Reasoning effort for the model (pi's scale). Unset = pi's default; unsupported levels are clamped
+   *  by pi per model. Applied at harness construction; the session records level changes. */
+  thinkingLevel?: ThinkingLevel;
   tools?: AgentTool[];
   /**
    * Final assembled prompt, or a SYNC factory re-evaluated per invoke (how L1 serves dynamic
@@ -118,6 +121,7 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       session,
       models: options.models,
       model: options.model,
+      thinkingLevel: options.thinkingLevel,
       tools: options.tools,
       activeToolNames: restoreActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId),
       systemPrompt: prompt,
