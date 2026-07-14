@@ -35,7 +35,9 @@ export async function registerTelegramWebhook(
   log.info(`[fastagent] telegram: waiting for ${baseUrl} to be reachable before registering the webhook…`);
   const ready = await waitForHealth(`${baseUrl}/health`, opts.readyTimeoutMs ?? 120_000, opts.readyIntervalMs ?? 3_000);
   if (!ready) {
-    log.warn(
+    // Terminal for this run (registration will not be retried) — error, not warn: the webhook is NOT
+    // registered and the operator must act. Same taxonomy as the permanent setWebhook failure below.
+    log.error(
       `[fastagent] telegram: ${baseUrl}/health did not come up in time — the app may still be starting. ` +
         `Register the webhook manually once it's up: curl "https://api.telegram.org/bot<token>/setWebhook" -d url=${webhookUrl} -d secret_token=<secret>`,
     );
@@ -60,7 +62,9 @@ export async function registerTelegramWebhook(
       lastTransientError = error;
     }
   }
-  log.warn(
+  // Exhausted retries end in the same state as a permanent error (webhook not registered, manual
+  // action required) — report at the same level.
+  log.error(
     `[fastagent] telegram: setWebhook still failing after retries (last error: ${lastTransientError}). ` +
       `Register manually with url=${webhookUrl}`,
   );

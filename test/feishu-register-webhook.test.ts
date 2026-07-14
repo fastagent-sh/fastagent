@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerFeishuWebhook } from "../src/channels/feishu/register-webhook.ts";
+import { log } from "../src/log.ts";
 
 // Mirrors the telegram registrar's G5 discipline: the application-v7 config PATCH triggers the
 // platform's url_verification challenge against the new Request URL, so registration must wait until
@@ -14,6 +15,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
   };
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     process.env.LARK_APP_ID = prev.id;
     process.env.LARK_APP_SECRET = prev.secret;
     process.env.FEISHU_APP_ID = prev.fid;
@@ -152,6 +154,10 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
         return new Response(null, { status: 404 });
       }),
     );
+    const errors: string[] = [];
+    vi.spyOn(log, "error").mockImplementation((m: string) => {
+      errors.push(m);
+    });
     const onManualRegistration = vi.fn();
     await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
       readyTimeoutMs: 100,
@@ -161,6 +167,8 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       onManualRegistration,
     });
     expect(patches).toBe(8);
+    // Exhausted retries are a terminal failure (event URL not registered) — reported at ERROR.
+    expect(errors.join("\n")).toMatch(/still failing after retries/);
     expect(onManualRegistration).toHaveBeenCalledOnce();
     expect(onManualRegistration).toHaveBeenCalledWith({
       consoleUrl: "http://feishu.test/app/cli_app/event",
