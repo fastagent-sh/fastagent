@@ -190,11 +190,12 @@ Keep authentication, users, database, session ownership, and policy in the host 
 Generate host artifacts and a runbook:
 
 ```bash
+fastagent deploy docker   # local Compose; add --tunnel for an ephemeral webhook ingress
 fastagent deploy fly
 fastagent deploy railway
 ```
 
-Add `--run` to drive the host CLI to completion.
+Add `--run` to drive Docker Compose or the host CLI to completion.
 
 The model must be in `fastagent.config.*`. A builder-local `--model`, `FASTAGENT_MODEL`, or `.env` value does not reach the deployed machine and otherwise causes a `missing model` crash loop.
 

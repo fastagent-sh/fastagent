@@ -47,6 +47,65 @@ describe("cli papercuts", () => {
     expect(await readFile(join(dir, "agent", "Dockerfile"), "utf8")).toMatch(/Repo-as-workspace/);
   });
 
+  it("every deploy --run target keeps the experimental agentDir layout gated", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-kit-run-"));
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      `export default { agentDir: "./agent", model: "openai/gpt-4o-mini" };\n`,
+    );
+    await mkdir(join(dir, "agent"), { recursive: true });
+    for (const target of ["docker", "fly", "railway"]) {
+      const result = await run(["deploy", target, dir, "--run"]);
+      expect(result.code, target).toBe(1);
+      expect(result.stderr, target).toMatch(/--run is not yet supported for the agentDir layout/);
+      expect(result.stderr, target).not.toMatch(/not found|Docker daemon|login/);
+    }
+  });
+
+  it("deploy docker generates app-only Compose and keeps user-owned Dockerfile/Compose on re-run", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-docker-"));
+    await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+
+    const first = await run(["deploy", "docker", dir]);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toContain("docker compose -f fastagent.compose.yml up -d --build");
+    const generatedCompose = await readFile(join(dir, "fastagent.compose.yml"), "utf8");
+    expect(generatedCompose).toContain('"127.0.0.1:8787:8787"');
+    expect(generatedCompose).not.toContain("cloudflared");
+
+    const customDockerfile = "FROM node:22-slim\nRUN echo custom\n";
+    const customCompose = `${generatedCompose}\n# custom ingress belongs to me\n`;
+    await writeFile(join(dir, "Dockerfile"), customDockerfile);
+    await writeFile(join(dir, "fastagent.compose.yml"), customCompose);
+
+    const second = await run(["deploy", "docker", dir]);
+    expect(second.code).toBe(0);
+    expect(second.stderr).toContain("kept Dockerfile");
+    expect(second.stderr).toContain("kept fastagent.compose.yml");
+    expect(await readFile(join(dir, "Dockerfile"), "utf8")).toBe(customDockerfile);
+    expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toBe(customCompose);
+  });
+
+  it("deploy docker --tunnel shapes Compose but does not run Docker without --run", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-tunnel-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+    const result = await run(["deploy", "docker", dir, "--tunnel"]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Quick Tunnel");
+    const compose = await readFile(join(dir, "fastagent.compose.yml"), "utf8");
+    expect(compose).toContain("cloudflare/cloudflared:");
+    expect(compose).toContain("http://agent:8787");
+    expect(result.stderr).not.toMatch(/Docker CLI not found|Docker daemon/);
+
+    // The file is now authoritative: a later plain generation/run must not treat omitted --tunnel as
+    // "remove tunnel" (only --force resets generated topology).
+    const second = await run(["deploy", "docker", dir]);
+    expect(second.code).toBe(0);
+    expect(second.stderr).not.toContain("fastagent.compose.yml — it no longer matches");
+    expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toBe(compose);
+  });
+
   it("--version / -v prints the version to stdout and exits 0 (no parse crash)", async () => {
     const v = await run(["--version"]);
     expect(v.code).toBe(0);

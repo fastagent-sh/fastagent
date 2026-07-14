@@ -69,6 +69,14 @@ import {
   toFlyAppName,
 } from "./deploy/fly/plan.ts";
 import { preflightDeploy } from "./deploy/preflight.ts";
+import {
+  composeHasTunnelService,
+  dockerWebhookPaths,
+  isGeneratedCompose,
+  planDockerDeploy,
+  toDockerProjectName,
+} from "./deploy/docker/plan.ts";
+import { deployDockerRun } from "./deploy/docker/run.ts";
 import { planRailwayDeploy } from "./deploy/railway/plan.ts";
 import { deployRailwayRun } from "./deploy/railway/run.ts";
 import { authSeedBytes, deployFlyRun } from "./deploy/fly/run.ts";
@@ -98,7 +106,7 @@ function usage(code: number): never {
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
   fastagent add   github | telegram | feishu | lark | skill <source> [dir]
-  fastagent deploy fly|railway [dir] [--run] [--force] [--stop] [--no-scale-to-zero] [--into-linked]
+  fastagent deploy docker|fly|railway [dir] [--run] [--tunnel] [--force] [--stop] [--no-scale-to-zero] [--into-linked]
   fastagent login [provider] [--auth-path file]
   fastagent --version
 
@@ -168,23 +176,27 @@ function usage(code: number): never {
          config-route 404 falls back to a hidden Token prompt + manual mode/URL setup.
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
-  deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
-         print an ordered deploy runbook + the post-deploy webhook step. Does not run the host CLI — a
-         coding agent (or you) executes the runbook. fly: fly.toml (autostop=suspend, state→volume).
+  deploy docker|fly|railway [dir]: generate Dockerfile/.dockerignore plus the target config and print
+         an ordered runbook. docker: fastagent.compose.yml, loopback port, persistent state volume;
+         --tunnel adds an ephemeral Cloudflare Quick Tunnel service. Durable ingress remains operator-owned.
+         fly: fly.toml (autostop=suspend, state→volume).
          railway: railway.json (healthcheck /health); its volume/variables/App-Sleeping are dashboard/
          CLI steps the runbook states (see the runbook).
-         --run             drive the host CLI to completion: app/service + volume + secrets + deploy +
-                           telegram webhook (railway also mints the public domain). Carries your local
-                           credential (env key or the OAuth auth.json) to the box. Stops at a gate (not
-                           logged in, a missing secret) with one actionable line; needs flyctl / the
-                           railway CLI. Without it: prints the runbook.
+         --run             drive the target CLI to completion. Docker runs \`docker compose up -d --build\`;
+                           with a tunnel service, reads its URL and registers webhooks. Fly/Railway provision
+                           app/service + volume + secrets + deploy + webhook setup.
+                           Carries your local credential (env key or OAuth auth.json). Stops at a gate
+                           (missing CLI/daemon/login/secret) with one actionable line. Without it: prints
+                           the runbook.
+         --tunnel          (docker only) add a Quick Tunnel service to generated Compose; generation-only
+                           unless combined with --run. Existing Compose stays authoritative.
          --into-linked     (railway --run) provision INTO the project this dir is already linked to (skip
                            create). By default --run only creates on an unlinked dir and refuses a
                            pre-existing link (could be unrelated/production) — this is the explicit opt-in.
                            A routine redeploy of an already-provisioned agent is just 'railway up'.
          --stop            (fly only) autostop by stopping (cold start) instead of suspending (fast resume)
          --no-scale-to-zero (fly only) keep one machine running when idle (min_machines_running=1)
-         --force           overwrite existing host config/Dockerfile/.dockerignore (else kept)
+         --force           overwrite existing target config/Dockerfile/.dockerignore (else kept)
   login  authenticate a model provider into the project-level <state root>/auth.json — default
          <cwd>/.fastagent/auth.json (root: FASTAGENT_STATE_DIR; file: --auth-path / FASTAGENT_AUTH_PATH;
          run from $HOME for the global ~/.fastagent/auth.json): pick
@@ -778,29 +790,34 @@ async function runAddSkill(): Promise<void> {
 
 /**
  * `fastagent deploy <host> [dir]`: generate host artifacts from the resolved definition and print an
- * ordered deploy runbook. Host-scoped (`fly` | `railway` — the extension seam). It does NOT run the
- * host CLI: fastagent owns the two ends it uniquely knows (definition-aware artifacts; the post-deploy
- * webhook step), and hands the middle to a coding agent (or human) as a precise, values-resolved
- * runbook. The pre-flight (config/model/channels/container facts) is host-neutral; the host branch adds
- * its config file + runbook. Read-only on the definition; the only writes are the generated artifacts
- * (never clobbered without --force). `--run` drives the host CLI instead of printing.
+ * ordered deploy runbook. Host-scoped (`docker` | `fly` | `railway` — the extension seam). It does NOT
+ * run the host CLI by default: fastagent owns the definition-aware artifacts and precise runbook;
+ * Docker may opt into a generated ephemeral tunnel, while durable ingress stays operator-owned. The pre-flight
+ * (config/model/channels/container facts) is host-neutral; the host branch adds its config + run drive.
+ * Read-only on the definition; the only writes are generated artifacts (never clobbered without
+ * --force). `--run` drives the target CLI instead of printing.
  */
 async function runDeploy(): Promise<void> {
   const host = positionals[1];
   const target = resolve(positionals[2] ?? ".");
-  if (host !== "fly" && host !== "railway") {
-    console.error(`usage: fastagent deploy <fly|railway> [dir]`);
+  if (host !== "docker" && host !== "fly" && host !== "railway") {
+    console.error(`usage: fastagent deploy <docker|fly|railway> [dir]`);
+    process.exit(1);
+  }
+  if (values.tunnel && host !== "docker") {
+    console.error(`[fastagent] deploy stopped: --tunnel is supported only by the local Docker target`);
     process.exit(1);
   }
   loadDotEnv(target); // a custom provider/tool may read a key at config load
   const { config } = await loadConfig(target).catch(failStartup);
+  const agentDir = resolveAgentDir(target, config);
   const modelSpec = resolveModelSpec(values.model, config);
   // The host-neutral pre-flight (model-travel gate, channel discovery, model-auth probe, container facts +
   // their warnings) lives in deploy/preflight.ts — testable in isolation. The CLI prints its messages and
   // stops on its gate; the host branch below adds only the host-specific artifacts + runbook + run drive.
   const pre = await preflightDeploy({
     target,
-    agentDir: resolveAgentDir(target, config),
+    agentDir,
     config,
     modelSpec,
     run: !!values.run,
@@ -813,6 +830,44 @@ async function runDeploy(): Promise<void> {
   }
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
   const { channels, hasTimeTriggers, modelAuth, authPath, container, port, extraSecrets } = pre;
+
+  // Docker: one app service + loopback port + state volume. `--tunnel` shapes the generated topology
+  // with an optional Quick Tunnel service; `--run` alone decides whether Docker receives side effects.
+  if (host === "docker") {
+    if (values.stop || values["no-scale-to-zero"]) {
+      console.error(`[fastagent] warn: --stop/--no-scale-to-zero are Fly-only — local Compose stays running`);
+    }
+    if (values["into-linked"]) {
+      console.error(`[fastagent] warn: --into-linked is Railway-only — ignored for local Docker`);
+    }
+    const projectName = toDockerProjectName(basename(target));
+    const dockerPlan = (tunnel: boolean) =>
+      planDockerDeploy({ projectName, port, modelAuth, channels, tunnel, extraSecrets, ...container });
+    let plan = dockerPlan(!!values.tunnel);
+    // Absence of --tunnel never means "remove it": an existing Compose file is authoritative. Preserve
+    // its generated tunnel shape in the comparison/runbook so a later plain `--run` starts + registers
+    // the topology the operator already chose. `--force` is the explicit reset to a no-tunnel default.
+    const composeFile = join(target, plan.composePath);
+    if (!values.tunnel && !values.force && (await exists(composeFile))) {
+      if (composeHasTunnelService(await readFile(composeFile, "utf8"))) plan = dockerPlan(true);
+    }
+    await writeArtifacts(target, plan.artifacts, { neverForce: container.kitDir ? [".dockerignore"] : [] });
+    if (values.run) {
+      return runDeployDocker({
+        target,
+        agentDir,
+        composeFile: plan.composePath,
+        port,
+        requireTunnel: !!values.tunnel,
+        modelAuth,
+        authPath,
+        channels,
+        extraSecrets,
+      });
+    }
+    console.log(plan.runbook.join("\n"));
+    return;
+  }
 
   // Railway: thin config file, scale-to-zero is a manual dashboard step, the URL is minted (see
   // planRailwayDeploy). --run drives the railway CLI to completion; otherwise print the runbook.
@@ -913,11 +968,10 @@ async function runDeploy(): Promise<void> {
 
 /**
  * Write each generated artifact. An existing file is KEPT unless --force — deploy NEVER clobbers a file
- * without it (no silent data loss). A Dockerfile WE generated is derived from the current config, so a KEPT
- * one that no longer matches what deploy would generate now (a changed deploy.apt, a new lockfile, a bumped
- * version — OR the user's own edits, which we can't tell apart) is flagged stale so the drift is visible;
- * --force regenerates it. A hand-written Dockerfile / a hand-written .dockerignore / fly.toml's app+region
- * state are just kept.
+ * without it (no silent data loss). A Dockerfile/Compose file WE generated is definition-derived, so a
+ * KEPT one that no longer matches what deploy would generate now (config/channel/lockfile/version drift —
+ * OR the user's own edits, which we can't distinguish) is flagged stale; --force regenerates it. A
+ * hand-written Dockerfile/Compose/ignore or fly.toml's app+region state is simply kept.
  */
 async function writeArtifacts(
   target: string,
@@ -937,7 +991,10 @@ async function writeArtifacts(
     }
     if (!values.force && (await exists(abs))) {
       const existing = await readFile(abs, "utf8");
-      if (a.path.endsWith("Dockerfile") && isGeneratedDockerfile(existing) && existing !== a.content) {
+      const generatedDrift =
+        (a.path.endsWith("Dockerfile") && isGeneratedDockerfile(existing)) ||
+        (a.path.endsWith("fastagent.compose.yml") && isGeneratedCompose(existing));
+      if (generatedDrift && existing !== a.content) {
         console.error(
           `[fastagent] kept ${a.path} — it no longer matches what deploy would generate (config changed, or ` +
             `you edited it); pass --force to regenerate.`,
@@ -950,6 +1007,64 @@ async function writeArtifacts(
     await mkdir(dirname(abs), { recursive: true }); // kit-layout artifacts live under agent/
     await writeFile(abs, a.content);
     console.error(`[fastagent] wrote ${a.path}`);
+  }
+}
+
+/**
+ * `deploy docker --run`: carry local credentials into Compose's child environment, then reconcile the
+ * user-owned local topology. Docker owns container/network/volume lifecycle. A Compose tunnel service,
+ * when present, yields an ephemeral URL that reuses the same webhook announcer as `dev --tunnel`.
+ */
+async function runDeployDocker(params: {
+  target: string;
+  agentDir: string;
+  composeFile: string;
+  port: number;
+  requireTunnel: boolean;
+  modelAuth: string | undefined;
+  authPath: string;
+  channels: ChannelKind[];
+  extraSecrets: string[];
+}): Promise<void> {
+  const { target, agentDir, composeFile, port, requireTunnel, modelAuth, authPath, channels, extraSecrets } = params;
+  const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
+    modelAuth,
+    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
+    channels,
+    extraSecrets,
+    env: process.env,
+  });
+  const outcome = await deployDockerRun(
+    { composeFile, port, secrets, missingSecrets, needsModelCredential, requireTunnel },
+    spawnRunner("docker", target),
+    (message) => console.error(`[fastagent] ${message}`),
+  );
+  if (!outcome.ok) {
+    console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
+    process.exit(1);
+  }
+
+  const compose = `docker compose -f ${composeFile}`;
+  console.error(`[fastagent] running${outcome.url ? ` → ${outcome.url}` : ""}`);
+  console.error(`[fastagent] logs: ${compose} logs -f agent`);
+  console.error(`[fastagent] stop: ${compose} down (state volume is kept)`);
+  if (outcome.tunnelUrl) {
+    // Docker Desktop commonly injects a host proxy. The Quick Tunnel hostname may be resolvable only
+    // through it, exactly like provider/channel APIs; use the same Node dispatcher as dev/start/login.
+    installProxyFetch();
+    await announceWebhooks(agentDir, outcome.tunnelUrl, { openUrl: openExternalUrl });
+    console.error(
+      `[fastagent] note: Quick Tunnel URLs are ephemeral — after the tunnel container/Docker daemon ` +
+        `restarts, re-run this deploy so webhooks receive the new URL`,
+    );
+    return;
+  }
+  const paths = dockerWebhookPaths(channels);
+  if (paths.length > 0) {
+    console.error(
+      `[fastagent] note: public ingress is operator-owned — configure your tunnel/proxy, then wire the ` +
+        `default webhook path(s): ${paths.join(", ")} (or your remapped channel routes)`,
+    );
   }
 }
 
@@ -1118,7 +1233,7 @@ function terminalLoginIO(): LoginIO {
 }
 
 /**
- * Materialize `FASTAGENT_AUTH_SEED` (base64 of an auth.json, set by `deploy fly --run`) onto the
+ * Materialize `FASTAGENT_AUTH_SEED` (base64 of an auth.json, set by `deploy --run`) onto the
  * writable state root ONCE — only when the seed is set AND the auth file is absent, so a refreshed
  * volume copy is never clobbered by the stale seed. Lets a deploy carry the operator's local
  * OAuth/API credential so the box runs on the SAME subscription. No-op locally (the seed is unset).
@@ -1339,7 +1454,7 @@ async function runStart(): Promise<void> {
   installProxyFetch();
   await resolveFirstRunModel(dir);
 
-  // A `deploy fly --run` deploy may carry the operator's local credential as FASTAGENT_AUTH_SEED —
+  // A `deploy --run` may carry the operator's local credential as FASTAGENT_AUTH_SEED —
   // materialize it onto the writable state root BEFORE the opener resolves auth (once, absent-only).
   const authPathOverride = resolveAuthPathOverride(values["auth-path"]);
   await maybeSeedAuth(authPathOverride ?? defaultAuthPath(resolveStateRoot(dir)));

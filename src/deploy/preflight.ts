@@ -1,6 +1,6 @@
 /**
  * The host-NEUTRAL deploy pre-flight: everything `fastagent deploy <host>` computes and checks BEFORE
- * the host branch (fly.ts / railway.ts). Model-travel gate, channel discovery, model-auth probe, the
+ * the target branch (Docker / Fly / Railway). Model-travel gate, channel discovery, model-auth probe, the
  * container facts + their warnings, and the hand-written-Dockerfile apt warning are identical on every
  * host — so they live here, out of the CLI dispatcher, testable in isolation (call it against a temp dir
  * and assert the gate / messages / facts). The CLI stays thin: run this, print the messages, branch by host.
@@ -116,8 +116,9 @@ export async function preflightDeploy(input: {
   const kitDir = agentDir === target ? undefined : relative(target, agentDir).split(sep).join("/");
   const factsDir = kitDir ? agentDir : target;
   if (kitDir && run) {
-    // Generate + runbook fully support the layout; the fly/railway --run drivers do not yet (their
-    // command sequences assume root artifacts). Fail at the gate, not mid-drive.
+    // The repo-as-workspace deployment shape remains experimental for every target. Generation +
+    // runbook are supported; automated runners stay gated until an explicit end-to-end smoke validates
+    // context packing, ignore rules, installed deps, state, and write-back for this layout.
     return {
       ok: false,
       gate: `--run is not yet supported for the agentDir layout — run the same deploy without --run and follow the printed runbook`,
