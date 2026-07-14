@@ -135,7 +135,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
    npm run lint && npm run typecheck && npm test
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
-3. **Rebase merge by default** (preserve curated commits); squash only to clean up a WIP branch. Merge commits are disabled. `main` enforces linear history; force-push is forbidden.
+3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. `main` enforces linear history; force-push is forbidden.
 4. **Review policy.** Merging is an explicit maintainer decision — agents never merge. Green CI makes a PR eligible; report "ready to merge" and stop. External-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**
    ```bash

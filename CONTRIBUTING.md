@@ -59,13 +59,11 @@ Add or update the smallest relevant tests that prove the change. Reusable SPEC c
 
 ## Merge strategy
 
-**Rebase merge is the default**, not squash. This is a deliberate divergence from squash-only workflows: commit messages in this repo are a design asset — each commit explains one decision — and `main` already enforces linear history. Curated, individually meaningful commits should reach `main` intact.
+**Squash merge only** — the repository settings enforce it (rebase merges and merge commits are disabled). One PR lands as exactly one commit on `main`, so `main` reads as a sequence of reviewed changes and history stays linear.
 
-- **Rebase merge** (default): keep the branch's curated, individually meaningful commits.
-- **Squash merge**: collapse a messy WIP branch into one commit before it reaches `main`.
-- **Merge commits are disabled** (they break linear history).
+- Curate the PR title and description: they become the squash commit's subject and body — the durable record of the change. Branch commits are working state; the PR is the design asset.
 
-Either way, one branch = one focused change. If a branch grows several unrelated changes, split it into multiple PRs rather than squashing them into an opaque blob.
+One branch = one focused change. If a branch grows several unrelated changes, split it into multiple PRs rather than squashing them into an opaque blob.
 
 ## Review policy
 
