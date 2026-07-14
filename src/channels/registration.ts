@@ -4,9 +4,11 @@
  * "failed", the tunnel (a long-running dev process) ignores the result entirely.
  *
  * - "registered": the platform accepted the webhook / event URL.
- * - "manual": manual setup is the designed path — credentials not configured, or a cloud without the
- *   config API (the Lark cloud-lag 404). Re-running cannot change it, so it must NOT become a
- *   re-run-to-clear gate; the caller surfaces the manual step instead.
+ * - "manual": this run did not fail, but an operator-facing step remains — the caller surfaces it and
+ *   must NOT gate on it. Two sub-states differ on re-runnability: credentials not configured (re-run
+ *   after setting .env DOES auto-register; on the deploy path this is pre-gated by missingSecrets and
+ *   unreachable) and a cloud without the config API (the Lark cloud-lag 404 — no re-run can ever
+ *   register it; the console is the only path).
  * - "failed": this run ends with the webhook NOT registered, and acting + re-running can fix it
  *   (health timeout, a permanent config error, exhausted retries).
  */
