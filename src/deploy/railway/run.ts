@@ -24,6 +24,7 @@
  * `RAILWAY_API_KEY`), not a project token: `init` creates a project that a project token can't predate.
  */
 import type { RegistrationOutcome } from "../../channels/registration.ts";
+import { registrationGate } from "../registration-gate.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import type { CliRunner } from "../runner.ts";
 
@@ -241,19 +242,12 @@ export async function deployRailwayRun(
   if (!url) {
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
   }
-  // 7. Post-deploy webhook — same gate policy as the Fly runner (fly/run.ts step 7): the registrars
-  //    report facts, this run owns the policy. "failed" gates (exit 0 would tell a coding agent "done"
-  //    while the deployed agent cannot receive messages); "manual" does not gate (re-running can never
-  //    change it) but is re-surfaced as the run's LAST line. All channels are attempted first.
-  const unregistered: string[] = [];
-  const manual: string[] = [];
-  const track = (kind: string, outcome: RegistrationOutcome): void => {
-    if (outcome === "failed") unregistered.push(kind);
-    if (outcome === "manual") manual.push(kind);
-  };
+  // 7. Post-deploy webhook — gate policy is the shared registration-gate kernel (registrars report
+  //    facts, it owns the policy); all channels are attempted first.
+  const reg = registrationGate(log, "re-run with --into-linked to retry registration");
   if (plan.channels.includes("telegram")) {
     log("registering telegram webhook…");
-    track("telegram", await registerTelegram(url));
+    reg.track("telegram", await registerTelegram(url));
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → ${url}/webhook`);
@@ -262,21 +256,14 @@ export async function deployRailwayRun(
     if (!plan.channels.includes(kind)) continue;
     if (registerFeishu) {
       log(`registering ${kind} event URL…`);
-      track(kind, await registerFeishu(url, kind));
+      reg.track(kind, await registerFeishu(url, kind));
     } else {
       log(
         `${kind}: set the event Request URL in the developer console (Events & Callbacks) → ${url}/${kind} (the service must be running when you save)`,
       );
     }
   }
-  for (const kind of manual) {
-    log(`${kind}: webhook registration needs a one-time manual step — see the instructions above`);
-  }
-  if (unregistered.length > 0) {
-    return gate(
-      // Composes with cli.ts's "deploy stopped:" prefix — don't say "the deploy succeeded" first.
-      `webhook registration failed for: ${unregistered.join(", ")} — the app itself deployed; fix the error above, then re-run with --into-linked to retry registration`,
-    );
-  }
+  const registrationGateMsg = reg.gate();
+  if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true, url };
 }
