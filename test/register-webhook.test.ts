@@ -39,7 +39,7 @@ describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
       readyTimeoutMs: 5000,
       readyIntervalMs: 1,
     });
-    expect(ok).toBe(true); // registered → no deploy gate
+    expect(ok).toBe("registered");
     expect(health).toBeGreaterThanOrEqual(3); // waited for readiness, not a fixed timer
     expect(setWebhook).toHaveLength(1); // registered once, AFTER /health returned 200
   });
@@ -59,7 +59,7 @@ describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
       }),
     );
     const ok = await registerTelegramWebhook("https://dead.up.railway.app", { readyTimeoutMs: 20, readyIntervalMs: 5 });
-    expect(ok).toBe(false); // terminal for this run → deploy --run gates
+    expect(ok).toBe("failed"); // terminal for this run → deploy --run gates
     expect(setWebhook).toHaveLength(0); // no registration against a URL Telegram couldn't reach either
   });
 
@@ -84,7 +84,7 @@ describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
       readyTimeoutMs: 5000,
       readyIntervalMs: 1,
     });
-    expect(ok).toBe(true);
+    expect(ok).toBe("registered");
     expect(setWebhookCalls).toBe(2); // retried the transient failure, then succeeded
   });
 
@@ -108,7 +108,7 @@ describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
       readyTimeoutMs: 5000,
       readyIntervalMs: 1,
     });
-    expect(ok).toBe(false); // a config error the operator must fix → deploy --run gates
+    expect(ok).toBe("failed"); // a config error the operator must fix → deploy --run gates
     expect(setWebhookCalls).toBe(1); // reported, not retried
   });
 
@@ -157,7 +157,7 @@ describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
       readyIntervalMs: 1,
       retryMs: 1,
     });
-    expect(exhausted).toBe(false);
+    expect(exhausted).toBe("failed");
     expect(errors.join("\n")).toMatch(/still failing after retries.*Register manually/);
 
     // /health never comes up.
@@ -178,7 +178,7 @@ describe("registerTelegramWebhook: waits for /health before setWebhook", () => {
     const fetchSpy = vi.fn(async () => new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
     const ok = await registerTelegramWebhook("https://x.up.railway.app");
-    expect(ok).toBe(true); // not configured is the designed manual path, not a deploy gate
+    expect(ok).toBe("manual"); // not configured is the designed manual path, not a deploy gate
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

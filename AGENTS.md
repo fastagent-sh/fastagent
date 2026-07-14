@@ -46,6 +46,7 @@ src/
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
 │   ├── state.ts             # SHARED: atomic state files under <stateRoot>/channels/<kind>/
 │   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
+│   ├── registration.ts      # SHARED: registrar outcome type (registered|manual|failed) — registrars report facts, deploy owns gate policy
 │   ├── github/              # github channel (+ scaffold/ bundle)
 │   ├── telegram/            # telegram channel — see docs/design/core.md §9.2
 │   │   ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)

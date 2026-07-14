@@ -53,7 +53,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       readyIntervalMs: 1,
       apiBase: "http://feishu.test",
     });
-    expect(ok).toBe(true); // registered → no deploy gate
+    expect(ok).toBe("registered");
     expect(health).toBeGreaterThanOrEqual(3); // waited for readiness, not a fixed timer
     expect(patches).toHaveLength(1);
     expect(patches[0]?.url).toContain("http://feishu.test/open-apis/application/v7/applications/cli_app/config");
@@ -110,7 +110,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       readyTimeoutMs: 20,
       readyIntervalMs: 5,
     });
-    expect(ok).toBe(false); // terminal for this run → deploy --run gates
+    expect(ok).toBe("failed"); // terminal for this run → deploy --run gates
     expect(patches).toHaveLength(0);
   });
 
@@ -171,7 +171,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       apiBase: "http://feishu.test",
       onManualRegistration,
     });
-    expect(ok).toBe(false); // terminal for this run → deploy --run gates
+    expect(ok).toBe("failed"); // terminal for this run → deploy --run gates
     expect(patches).toBe(8);
     // Exhausted retries are a terminal failure (event URL not registered) — reported at ERROR.
     expect(errors.join("\n")).toMatch(/still failing after retries/);
@@ -205,7 +205,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       retryMs: 1,
       apiBase: "http://feishu.test",
     });
-    expect(ok).toBe(false); // a config error the operator must fix → deploy --run gates
+    expect(ok).toBe("failed"); // a config error the operator must fix → deploy --run gates
     expect(patches).toBe(1); // permanent error — no blind retries
   });
 
@@ -243,7 +243,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       apiBase: "http://larksuite.test", // the intl cloud — no v7 config route
       onManualRegistration,
     });
-    expect(ok).toBe(true); // manual is the norm on this cloud — a re-run can never succeed, so no gate
+    expect(ok).toBe("manual"); // the norm on this cloud — a re-run can never succeed, so no re-run gate
     warnSpy.mockRestore();
     infoSpy.mockRestore();
     expect(patches).toBe(1); // a missing route never gets blind retries
@@ -264,7 +264,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "lark");
-    expect(ok).toBe(true); // not configured is the designed manual path, not a deploy gate
+    expect(ok).toBe("manual"); // not configured is the designed manual path, not a deploy gate
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
