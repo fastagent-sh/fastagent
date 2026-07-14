@@ -58,6 +58,16 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(out).not.toContain("--set"); // deprecated form must be gone everywhere
   });
 
+  it("keeps Feishu/Lark Encrypt Keys optional in the runbook instead of deployment prerequisites", () => {
+    const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["feishu", "lark"] }));
+    const requiredCommand = out.split("\n").find((line) => line.startsWith("railway variables set OPENAI")) ?? "";
+    expect(requiredCommand).toContain("FEISHU_APP_ID=<value>");
+    expect(requiredCommand).toContain("LARK_VERIFICATION_TOKEN=<value>");
+    expect(requiredCommand).not.toContain("FEISHU_ENCRYPT_KEY");
+    expect(requiredCommand).not.toContain("LARK_ENCRYPT_KEY");
+    expect(out).toContain("# railway variables set FEISHU_ENCRYPT_KEY=<value> LARK_ENCRYPT_KEY=<value>");
+  });
+
   it("creates the service, and orders it before the service-scoped volume/variables/up (Railway model)", () => {
     const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
     // railway init makes only a project; the service must exist before volume/variables/up.
@@ -78,6 +88,14 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(out).not.toContain(".fly.dev");
   });
 
+  it("mints a domain and prints the Feishu Request URL for a feishu-only agent", () => {
+    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["feishu"] }));
+    expect(out).toContain("railway domain");
+    expect(out).toContain("POST /feishu");
+    expect(out).toContain("https://<your-domain>/feishu");
+    expect(out).not.toContain("https://<your-domain>/lark");
+  });
+
   it("marks the setup one-time and names `railway up` as the whole redeploy (no dup service/volume)", () => {
     const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
     // Re-running the setup silently makes a DUPLICATE service (Railway names aren't unique) + another
@@ -86,9 +104,13 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(out).toMatch(/redeploy is[\s\S]*railway up/i);
   });
 
-  it("mints the domain ONCE even when both webhook channels are present", () => {
-    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["telegram", "github"] }));
+  it("mints the domain ONCE and prints every path when all webhook channels are present", () => {
+    const out = runbook(
+      planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["telegram", "github", "feishu", "lark"] }),
+    );
     expect(out.match(/railway domain/g)).toHaveLength(1); // not once per channel
+    expect(out).toContain("https://<your-domain>/feishu");
+    expect(out).toContain("https://<your-domain>/lark");
   });
 
   it("states App Sleeping as a manual dashboard step; forbids it for github (no replay)", () => {

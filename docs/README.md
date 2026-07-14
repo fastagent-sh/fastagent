@@ -35,6 +35,7 @@ Using a coding agent? Give it the repository's [`ai-start.md`](ai-start.md) for 
 |---|---|
 | Use GitHub webhooks | [GitHub channel](github.md) |
 | Use a Telegram bot | [Telegram channel](telegram.md) |
+| Use Feishu or its Lark compatibility profile | [Feishu channel (Lark compatibility)](feishu.md) |
 | Build a custom channel adapter | [Channel development](channel-development.md) |
 
 ## Reference

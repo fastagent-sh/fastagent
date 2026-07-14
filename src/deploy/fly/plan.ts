@@ -18,7 +18,7 @@
  */
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
-import { isEnvKey, requiredSecrets } from "../secrets.ts";
+import { deploymentSecrets, isEnvKey } from "../secrets.ts";
 
 export interface FlyPlanInput extends ContainerInput {
   // Container facts (hasPackageJson, runtime, hasLockfile, bunVersion, version, apt) come from
@@ -32,7 +32,7 @@ export interface FlyPlanInput extends ContainerInput {
    * `"OAuth"`/`"stored credential"` (a local login the server can't use), or undefined (unconfigured).
    */
   modelAuth: string | undefined;
-  /** Channels discovered in the workspace — each contributes its required secrets + webhook step. */
+  /** Channels discovered in the workspace — each contributes its secret metadata + webhook step. */
   channels: ChannelKind[];
   /** Extra secret env-var names (fastagent.config deploy.secrets) — added to the runbook's secret list. */
   extraSecrets?: string[];
@@ -130,7 +130,9 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   // model key (when local auth is an env key) + every discovered channel's secrets. Names + hints as
   // COMMENT lines (a `#` inside a `\`-continued command would break the shell), then one flat, executable
   // `fly secrets set` the coding agent fills — `<value>` placeholders, never inline comments.
-  const secrets = requiredSecrets(modelAuth, channels, input.extraSecrets);
+  const secrets = deploymentSecrets(modelAuth, channels, input.extraSecrets);
+  const requiredSecrets = secrets.filter((secret) => secret.required);
+  const optionalSecrets = secrets.filter((secret) => !secret.required);
 
   const deployCmd = kitDir
     ? `fly deploy . --config ${kitDir}/fly.toml --dockerfile ${kitDir}/Dockerfile --app ${appName}`
@@ -149,12 +151,20 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     `fly volumes create data --app ${appName} --region <region> --size 1`,
   ];
 
-  if (secrets.length > 0) {
+  if (requiredSecrets.length > 0) {
     runbook.push(
       ``,
-      `# Secrets (replace each <value>):`,
-      ...secrets.map((s) => `#   ${s.name}: ${s.hint}`),
-      `fly secrets set --app ${appName} ${secrets.map((s) => `${s.name}=<value>`).join(" ")}`,
+      `# Required secrets (replace each <value>):`,
+      ...requiredSecrets.map((s) => `#   ${s.name}: ${s.hint}`),
+      `fly secrets set --app ${appName} ${requiredSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
+    );
+  }
+  if (optionalSecrets.length > 0) {
+    runbook.push(
+      ``,
+      `# Optional secrets — set only when the matching feature is configured:`,
+      ...optionalSecrets.map((s) => `#   ${s.name}: ${s.hint}`),
+      `# fly secrets set --app ${appName} ${optionalSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );
   }
   if (kitDir) {
@@ -209,6 +219,16 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       `# After deploy — set the GitHub webhook (repo Settings → Webhooks). Path assumes the default route`,
       `# (POST /webhook); if you remapped it in channels/github.ts, use your path:`,
       `#   Payload URL = https://${appName}.fly.dev/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
+    );
+  }
+  for (const kind of ["feishu", "lark"] as const) {
+    if (!channels.includes(kind)) continue;
+    const label = kind === "feishu" ? "Feishu" : "Lark";
+    post.push(
+      `# After deploy — set the ${label} event Request URL (developer console → Events & Callbacks).`,
+      `# Path assumes the default route (POST /${kind}); the app must be RUNNING when you save (the console`,
+      `# verifies the URL with a challenge):`,
+      `#   Request URL = https://${appName}.fly.dev/${kind}`,
     );
   }
   if (post.length > 0) runbook.push(``, ...post);

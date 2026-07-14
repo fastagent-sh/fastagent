@@ -113,14 +113,17 @@ export function parseHasVolume(stdout: string, mountPath: string): boolean {
 }
 
 /**
- * Run the deploy through `railway`. `log` reports progress; `registerTelegram(baseUrl)` performs the
- * post-deploy webhook step (the CLI passes its telegram registrar). Every gate is fail-visible.
+ * Run the deploy through `railway`. `log` reports progress; `registerTelegram(baseUrl)` /
+ * `registerFeishu(baseUrl, kind)` perform the post-deploy webhook steps (the CLI passes its canonical
+ * Feishu registrar, which also serves the Lark compatibility profile). Absent, the manual console
+ * instruction is printed. Every gate is fail-visible.
  */
 export async function deployRailwayRun(
   plan: RailwayRunPlan,
   railway: CliRunner,
   log: (msg: string) => void,
   registerTelegram: (baseUrl: string) => Promise<void>,
+  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<void>,
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service
@@ -243,6 +246,17 @@ export async function deployRailwayRun(
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → ${url}/webhook`);
+  }
+  for (const kind of ["feishu", "lark"] as const) {
+    if (!plan.channels.includes(kind)) continue;
+    if (registerFeishu) {
+      log(`registering ${kind} event URL…`);
+      await registerFeishu(url, kind);
+    } else {
+      log(
+        `${kind}: set the event Request URL in the developer console (Events & Callbacks) → ${url}/${kind} (the service must be running when you save)`,
+      );
+    }
   }
   return { ok: true, url };
 }

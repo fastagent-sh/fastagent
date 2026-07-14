@@ -1,8 +1,7 @@
 /**
- * The secret set a deployed agent needs, computed from the definition — host-neutral. WHAT secrets are
- * required (the model key when local auth is an env key + every discovered channel's secrets) is the
- * same on every target; only the SET command differs (`fly secrets import` vs `railway variables set`).
- * The runbooks list these NAMES; `--run` (per host) reads their VALUES from the local env.
+ * The secret set a deployed agent needs, computed from the definition — host-neutral. Required values
+ * gate every target; optional channel values travel only when configured. Only the SET command differs
+ * (`fly secrets import` vs `railway variables set`). The runbooks list both classes; `--run` reads local values.
  */
 import { type ChannelKind, channelSetup } from "../scaffold/add-channel.ts";
 
@@ -17,24 +16,25 @@ export function isEnvKey(source: string | undefined): source is string {
 }
 
 /**
- * The required secret NAMES + hints for a runbook: the model key (when local auth is an env key) plus
- * every discovered channel's secrets. An OAuth/stored login has no env key here — it carries as
+ * Secret NAMES + hints for a runbook: the model key (when local auth is an env key), discovered channel
+ * secrets, and config extras. Channel metadata keeps optional values visible without presenting them as
+ * deployment prerequisites. An OAuth/stored login has no env key here — it carries as
  * `FASTAGENT_AUTH_SEED` on the `--run` path (see each host's run module), not as a named runbook secret.
  */
-export function requiredSecrets(
+export function deploymentSecrets(
   modelAuth: string | undefined,
   channels: ChannelKind[],
   extraSecrets: string[] = [],
-): { name: string; hint: string }[] {
-  const secrets: { name: string; hint: string }[] = [];
-  if (isEnvKey(modelAuth)) secrets.push({ name: modelAuth, hint: "your model provider key" });
+): { name: string; hint: string; required: boolean }[] {
+  const secrets: { name: string; hint: string; required: boolean }[] = [];
+  if (isEnvKey(modelAuth)) secrets.push({ name: modelAuth, hint: "your model provider key", required: true });
   for (const kind of channels) {
-    for (const e of channelSetup(kind).env) secrets.push({ name: e.name, hint: e.hint });
+    for (const e of channelSetup(kind).env) secrets.push({ name: e.name, hint: e.hint, required: e.required });
   }
   // Dedup: a name already covered by the model key / a channel secret must not appear twice in the runbook.
   for (const name of extraSecrets) {
     if (!secrets.some((s) => s.name === name)) {
-      secrets.push({ name, hint: "declared in fastagent.config deploy.secrets" });
+      secrets.push({ name, hint: "declared in fastagent.config deploy.secrets", required: true });
     }
   }
   return secrets;
@@ -51,8 +51,8 @@ export function requiredSecrets(
  *
  * Channel secrets come from the local env only — NEVER minted. A random mint would be wrong for a
  * human-shared secret (github's webhook secret must match the value the operator enters in the repo,
- * which a silent mint never surfaces) and would rotate every run (breaking idempotency). Absent →
- * `missingSecrets`, same as the plain runbook's operator-filled placeholders.
+ * which a silent mint never surfaces) and would rotate every run (breaking idempotency). An absent
+ * required value enters `missingSecrets`; an absent optional value is simply omitted.
  */
 export function assembleSecrets(input: {
   modelAuth: string | undefined;
@@ -83,8 +83,11 @@ export function assembleSecrets(input: {
   for (const kind of input.channels) {
     for (const e of channelSetup(kind).env) {
       const v = input.env[e.name];
-      if (v) secrets[e.name] = v;
-      else missingSecrets.push(e.name); // operator-provided (in .env); a human-shared secret can't be minted
+      if (v)
+        secrets[e.name] = v; // optional channel values travel when configured
+      else if (e.required) {
+        missingSecrets.push(e.name); // operator-provided (in .env); a human-shared secret can't be minted
+      }
     }
   }
   for (const name of input.extraSecrets ?? []) {

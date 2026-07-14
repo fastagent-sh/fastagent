@@ -16,6 +16,7 @@ import { watch as watchTree } from "chokidar";
 import { type FastagentConfig, loadConfig, resolveAgentDir } from "./engines/pi/config.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
+import { openExternalUrl } from "./open-url.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (workspace-relative): the process-bound code inputs only. */
@@ -95,7 +96,7 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
         void startCloudflareTunnel(m.port).then((t) => {
           if (t) {
             tunnel = t;
-            void announceWebhooks(agentDir, t.url);
+            void announceWebhooks(agentDir, t.url, { openUrl: openExternalUrl });
           }
         });
       }

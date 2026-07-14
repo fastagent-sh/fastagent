@@ -50,6 +50,41 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(tg).toHaveBeenCalledWith("https://bot.fly.dev"); // telegram end-to-end
   });
 
+  it("dispatches Feishu and Lark registration through the per-kind seam", async () => {
+    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+    const registerFeishu = vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark") => {});
+
+    const out = await deployFlyRun(
+      plan({ channels: ["feishu", "lark"] }),
+      fly,
+      () => {},
+      vi.fn(async () => {}),
+      registerFeishu,
+    );
+
+    expect(out).toEqual({ ok: true });
+    expect(registerFeishu.mock.calls).toEqual([
+      ["https://bot.fly.dev", "feishu"],
+      ["https://bot.fly.dev", "lark"],
+    ]);
+  });
+
+  it("prints each Feishu-cloud Request URL when no registrar is supplied", async () => {
+    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+    const logs: string[] = [];
+
+    const out = await deployFlyRun(
+      plan({ channels: ["feishu", "lark"] }),
+      fly,
+      (message) => logs.push(message),
+      vi.fn(async () => {}),
+    );
+
+    expect(out).toEqual({ ok: true });
+    expect(logs.join("\n")).toContain("https://bot.fly.dev/feishu");
+    expect(logs.join("\n")).toContain("https://bot.fly.dev/lark");
+  });
+
   it("secret values go over stdin (import), never argv", async () => {
     const { fly, calls } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     await run(plan({ secrets: { OPENAI_API_KEY: "sk-x", FASTAGENT_AUTH_SEED: "b64" } }), fly);
@@ -134,7 +169,7 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     expect(r.missingSecrets).toEqual([]);
   });
 
-  it("any absent channel secret — including a scaffold `generate` one — lands in missingSecrets (never minted)", () => {
+  it("any absent required channel secret — including a scaffold `generate` one — lands in missingSecrets", () => {
     // github's webhook secret is human-shared: it MUST be operator-provided, not silently minted.
     const r = assembleSecrets({
       modelAuth: "OPENAI_API_KEY",
@@ -144,6 +179,37 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     });
     expect(r.missingSecrets).toEqual(["GITHUB_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
     expect(r.secrets).toEqual({ OPENAI_API_KEY: "k" }); // no minted values
+  });
+
+  it("Feishu/Lark Encrypt Keys are optional: absent never gates deploy; present values still travel", () => {
+    for (const [kind, prefix] of [
+      ["feishu", "FEISHU"],
+      ["lark", "LARK"],
+    ] as const) {
+      const baseEnv = {
+        OPENAI_API_KEY: "k",
+        [`${prefix}_APP_ID`]: "app",
+        [`${prefix}_APP_SECRET`]: "secret",
+        [`${prefix}_VERIFICATION_TOKEN`]: "token",
+      };
+      const absent = assembleSecrets({
+        modelAuth: "OPENAI_API_KEY",
+        authFile: undefined,
+        channels: [kind],
+        env: baseEnv,
+      });
+      expect(absent.missingSecrets).toEqual([]);
+      expect(absent.secrets[`${prefix}_ENCRYPT_KEY`]).toBeUndefined();
+
+      const present = assembleSecrets({
+        modelAuth: "OPENAI_API_KEY",
+        authFile: undefined,
+        channels: [kind],
+        env: { ...baseEnv, [`${prefix}_ENCRYPT_KEY`]: "encrypt" },
+      });
+      expect(present.missingSecrets).toEqual([]);
+      expect(present.secrets[`${prefix}_ENCRYPT_KEY`]).toBe("encrypt");
+    }
   });
 
   it("config deploy.secrets (extraSecrets) carry from env like channel secrets; absent → missingSecrets (G4)", () => {

@@ -54,6 +54,14 @@
       "types": "./dist/telegram.d.ts",
       "default": "./dist/telegram.js"
     },
+    "./feishu": {
+      "types": "./dist/feishu.d.ts",
+      "default": "./dist/feishu.js"
+    },
+    "./lark": {
+      "types": "./dist/lark.d.ts",
+      "default": "./dist/lark.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {

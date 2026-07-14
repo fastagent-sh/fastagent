@@ -14,6 +14,7 @@ import { logAgentLoop } from "./observe.ts";
 import { log, setLogLevel } from "./log.ts";
 import { loadDotEnv } from "./env.ts";
 import { installProxyFetch } from "./proxy.ts";
+import { openExternalUrl } from "./open-url.ts";
 import { createInvokeHandler } from "./channels/http.ts";
 import { text } from "./channels/respond.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "./host/node.ts";
@@ -73,6 +74,8 @@ import { deployRailwayRun } from "./deploy/railway/run.ts";
 import { authSeedBytes, deployFlyRun } from "./deploy/fly/run.ts";
 import { spawnRunner } from "./deploy/runner.ts";
 import { assembleSecrets } from "./deploy/secrets.ts";
+import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
+import { onboardFeishuCloudApp } from "./cli-add-feishu.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { loadSchedules } from "./schedule/discover.ts";
 import { readRuns } from "./schedule/audit.ts";
@@ -94,7 +97,7 @@ function usage(code: number): never {
   fastagent dev    [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
   fastagent chat   [dir] [--model provider/modelId]
   fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
-  fastagent add   github | telegram | skill <source> [dir]
+  fastagent add   github | telegram | feishu | lark | skill <source> [dir]
   fastagent deploy fly|railway [dir] [--run] [--force] [--stop] [--no-scale-to-zero] [--into-linked]
   fastagent login [provider] [--auth-path file]
   fastagent --version
@@ -105,7 +108,7 @@ function usage(code: number): never {
          disable). Files the agent writes as work product never trigger a restart.
          model precedence: --model > FASTAGENT_MODEL > fastagent.config.ts
          --tunnel  expose it on a public HTTPS URL via a Cloudflare quick tunnel (needs cloudflared)
-                   and auto-register the webhook channels (telegram setWebhook; github prints the URL)
+                   and auto-register the webhook channels (telegram, feishu, lark; github prints the URL)
   chat   open the SAME assembled agent in pi's interactive TUI (the real harness, not a
          crude REPL) — to try it locally before serving. Same model/tool/skill resolution
          as dev; pi handles login, sessions, and /resume natively.
@@ -153,8 +156,16 @@ function usage(code: number): never {
                    point it at ~/.fastagent/auth.json to share one credential across projects)
          --tunnel  same as dev: a public HTTPS URL + auto-registered webhooks, for hosting a bot from
                    your own box without deploying (the quick-tunnel URL is ephemeral, not for production)
-  add    github | telegram: scaffold channels/<kind>.ts — third-party adapter glue with the policy
-         to edit (github maps events in on(); telegram routes in the optional route()).
+  add    github | telegram | feishu | lark: scaffold channels/<kind>.ts — third-party adapter glue
+         with the policy to edit (github maps events in on(); telegram/feishu/lark route in the
+         optional route()). Feishu (open.feishu.cn) is the canonical implementation; Lark international
+         (open.larksuite.com) is its compatibility profile with degraded control-plane setup.
+         feishu also CREATES + configures the platform app (confirm a link in the app — the platform's
+         "scan to create" flow; one version-publish action remains) and writes credentials to .env;
+         a persisted ID/Secret pair resumes missing-Token setup instead of creating another app. lark
+         opens the intl developer console only for a new/partial pair, validates App ID/Secret, then
+         probes Feishu's webhook-mode + Token automation; an explicit
+         config-route 404 falls back to a hidden Token prompt + manual mode/URL setup.
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
   deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
@@ -195,6 +206,7 @@ const { positionals, values } = parseArgs({
     "agent-dir": { type: "string" },
     "no-watch": { type: "boolean" },
     tunnel: { type: "boolean" },
+    "create-app": { type: "boolean" },
     update: { type: "boolean" },
     force: { type: "boolean" },
     stop: { type: "boolean" },
@@ -628,22 +640,40 @@ async function runAdd(): Promise<void> {
     process.exit(1);
   }
   const channelKind = kind as ChannelKind;
+  // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
+  // and only path there). The retired --create-app spelling gets a pointer, not silence.
+  if (values["create-app"]) {
+    if (channelKind === "feishu") {
+      console.error(`[fastagent] note: --create-app is retired — \`add feishu\` creates the app by default`);
+    } else if (channelKind === "lark") {
+      failStartup(
+        new Error(
+          "--create-app is retired — `add lark` now opens the developer console and guides credential setup by default",
+        ),
+      );
+    } else {
+      failStartup(new Error("--create-app is retired — app creation is the default behavior of `add feishu`"));
+    }
+  }
   // The channel (glue + companion tool) is agent surface — it lands in agentDir (config.agentDir, or
   // target when flat), the same place dev/start discover channels/. .env(.example) and the secret
   // hygiene stay at the run root, where .env is actually read.
   const { config: addConfig } = await loadConfig(target).catch(failStartup);
   const channelHome = resolveAgentDir(target, addConfig);
-  // Preconditions before the write, so a refusal is side-effect-free.
+  // Preconditions before the write, so a refusal is side-effect-free. feishu/lark are exceptions:
+  // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
+  // failed or cancelled scan/paste flow must be re-runnable without hand-deleting glue); never touch it.
+  const file = join(channelHome, "channels", `${channelKind}.ts`);
   if (await channelExists(channelHome, channelKind).catch(failStartup)) {
-    failStartup(
-      new Error(
-        `${relative(target, join(channelHome, "channels", `${channelKind}.ts`))} already exists — edit it, or remove it to re-scaffold`,
-      ),
-    );
+    if (channelKind !== "feishu" && channelKind !== "lark") {
+      failStartup(new Error(`${relative(target, file)} already exists — edit it, or remove it to re-scaffold`));
+    }
+    console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
+  } else {
+    await assertChannelReady(channelHome).catch(failStartup);
+    await scaffoldChannel(channelHome, channelKind).catch(failStartup);
+    console.error(`[fastagent] created ${relative(target, file)}`);
   }
-  await assertChannelReady(channelHome).catch(failStartup);
-  const file = await scaffoldChannel(channelHome, channelKind).catch(failStartup);
-  console.error(`[fastagent] created ${relative(target, file)}`);
   if (await appendChannelEnv(target, channelKind).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
   }
@@ -657,13 +687,25 @@ async function runAdd(): Promise<void> {
       `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
     );
   }
+  // `add feishu`/`add lark` = scaffold + CREATE OR RESUME the app (cli-add-feishu.ts): feishu persists
+  // its irreversible App ID/Secret boundary internally; lark returns guided credentials for the
+  // generic .env write below.
+  let created: Record<string, string> | undefined;
+  if (channelKind === "feishu" || channelKind === "lark") {
+    created = await onboardFeishuCloudApp(target, channelKind, envIgnored).catch(failStartup);
+  }
   const { env, steps } = channelSetup(channelKind);
   const generated = Object.fromEntries(
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
   // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
-  // the same class of value as telegram's).
-  const dotEnv = envIgnored ? await appendChannelDotEnv(target, channelKind, generated).catch(failStartup) : undefined;
+  // the same class of value as telegram's); guided Lark credentials ride the same write as overwrites.
+  // Feishu's irreversible credentials were already staged inside cli-add-feishu.ts before bootstrap.
+  const dotEnv = envIgnored
+    ? await appendChannelDotEnv(target, channelKind, { ...generated, ...created }, Object.keys(created ?? {})).catch(
+        failStartup,
+      )
+    : undefined;
   if (dotEnv && dotEnv.written.length > 0) {
     console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .env`);
   }
@@ -678,11 +720,12 @@ async function runAdd(): Promise<void> {
     if (dotEnv?.written.includes(e.name)) {
       // Written, but its hint may still carry an action (github: paste the same value into the webhook
       // UI) — keep the variable visible instead of silently absorbing it.
-      console.error(`    ${e.name} — generated and written to .env   # ${e.hint}`);
+      console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to .env   # ${e.hint}`);
       continue;
     }
     const value = e.generate ? `=${generated[e.name]}` : "";
-    console.error(`    set ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
+    const action = e.required ? "set" : "optionally set";
+    console.error(`    ${action} ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
   }
   // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
   // knowledge) — resolve them to the real workspace-relative locations (agentDir-aware) here.
@@ -690,7 +733,12 @@ async function runAdd(): Promise<void> {
   for (const s of steps) {
     console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
   }
-  console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
+  if (channelKind !== "lark") {
+    console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
+  }
+  // The app-creation flow leaves keep-alive sockets behind (platform API fetches, the throwaway tunnel's
+  // health probes) that would hold the event loop open for a while — the work is done, exit crisply.
+  process.exit(0);
 }
 
 /** `fastagent add skill <source> [dir]`: vendor an Agent Skills skill into <dir>/skills/<name>/. */
@@ -951,6 +999,7 @@ async function runDeployFly(params: {
     fly,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
+    (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
   );
   if (!outcome.ok) {
     console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
@@ -1002,6 +1051,7 @@ async function runDeployRailway(params: {
     railway,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
+    (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
   );
   if (!outcome.ok) {
     console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
@@ -1049,12 +1099,6 @@ async function runLogin(): Promise<void> {
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
 }
 
-/** Best-effort open a URL in the default browser; failure is fine (the URL is always printed too). */
-function openBrowser(url: string): void {
-  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  spawn(cmd, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).on("error", () => {});
-}
-
 /** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. */
 function terminalLoginIO(): LoginIO {
   return {
@@ -1069,7 +1113,7 @@ function terminalLoginIO(): LoginIO {
       return isCancel(r) ? undefined : (r as string);
     },
     note: (message) => clackLog.info(message),
-    openUrl: openBrowser,
+    openUrl: openExternalUrl,
   };
 }
 
@@ -1241,7 +1285,7 @@ function maybeTunnel(workspaceDir: string, boundPort: number): void {
   if (!values.tunnel || process.env.FASTAGENT_DEV_WORKER === "1") return;
   void startCloudflareTunnel(boundPort).then((t) => {
     if (!t) return;
-    void announceWebhooks(workspaceDir, t.url);
+    void announceWebhooks(workspaceDir, t.url, { openUrl: openExternalUrl });
     // Single-process (start / --no-watch): close the tunnel on exit (watch mode's supervisor owns its own).
     const cleanup = (): never => {
       t.close();

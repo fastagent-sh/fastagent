@@ -26,7 +26,7 @@ src/
 ├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
 ├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
 ├── cli.ts                   # command entry points (process side effects live here)
-├── invoke-stream.ts, cli-models.ts, cli-auth.ts # command rendering layers (`invoke` stream → exit code, `models`/auth-report output)
+├── invoke-stream.ts, cli-models.ts, cli-auth.ts, cli-add-feishu.ts # command rendering layers (`invoke` stream → exit code, `models`/auth-report output, `add feishu|lark` app onboarding)
 ├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
 ├── log.ts                   # leveled logging singleton (dev=debug, start=info)
 ├── observe.ts               # turn-trace logging around an Agent
@@ -42,19 +42,34 @@ src/
 ├── channels/
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
+│   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + feishu)
+│   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
+│   ├── state.ts             # SHARED: atomic state files under <stateRoot>/channels/<kind>/
+│   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
 │   ├── github/              # github channel (+ scaffold/ bundle)
-│   └── telegram/            # telegram channel — see docs/design/core.md §9.2
-│       ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)
-│       ├── parse.ts         # pure protocol parsing: field extraction, prompt envelope, summon/route policy (no state/IO)
-│       ├── invoke-turn.ts   # run one turn: assemble inputs (resolve attachments: download/vision) + stream agent.invoke
-│       ├── turn-queue.ts    # in-memory per-session serial turns (FIFO; durability layered by turn-store.ts)
-│       ├── turn-store.ts    # durable turn intent (L1): persist pre-ACK, replay a crash-surviving turn on next start
-│       ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
-│       ├── preview.ts       # live-preview pump + terminal-write policy
-│       ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
-│       ├── state.ts         # atomic state files under .fastagent/channels/telegram/
-│       ├── register-webhook.ts # --tunnel setWebhook registration
-│       └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
+│   ├── telegram/            # telegram channel — see docs/design/core.md §9.2
+│   │   ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)
+│   │   ├── parse.ts         # pure protocol parsing: field extraction, prompt envelope, summon/route policy (no state/IO)
+│   │   ├── invoke-turn.ts   # run one turn: assemble inputs (resolve attachments: download/vision) + stream agent.invoke
+│   │   ├── turn-store.ts    # telegram's record + update_id arrival order over the shared generic store
+│   │   ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
+│   │   ├── preview.ts       # live-preview pump + terminal-write policy
+│   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
+│   │   ├── register-webhook.ts # --tunnel setWebhook registration
+│   │   └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
+│   ├── feishu/              # CANONICAL Feishu channel engine — see docs/design/core.md
+│   │   ├── feishu.ts        # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
+│   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles
+│   │   ├── parse.ts, crypto.ts, card.ts # pure protocol/event/card layers
+│   │   ├── invoke-turn.ts, preview.ts, seen.ts # turn IO, streaming-card delivery, accepted-turn dedup
+│   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)
+│   │   ├── register-app.ts  # `add feishu`: scan-to-create device flow
+│   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation
+│   │   └── scaffold/        # `add feishu` bundle
+│   └── lark/                # Lark compatibility/degraded edges over the Feishu engine
+│       ├── lark.ts          # thin branded adapter bound to LARK_COMPAT_CLOUD
+│       ├── onboard.ts       # unbound launcher + credentials + manual config fallback
+│       └── scaffold/        # `add lark` bundle
 ├── deploy/                  # `deploy fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §10.5)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings

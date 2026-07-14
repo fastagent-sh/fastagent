@@ -34,6 +34,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.TELEGRAM_BOT_TOKEN;
   delete process.env.TELEGRAM_SECRET_TOKEN;
+  delete process.env.LARK_APP_ID;
+  delete process.env.LARK_APP_SECRET;
 });
 
 /** A fetch stub: /health always serves 200; setWebhook returns each queued response in turn. */
@@ -78,6 +80,29 @@ describe("tunnel: startCloudflareTunnel", () => {
     expect(await p).toBeUndefined();
     expect(spawns).toBe(1); // fatal — no retry
     expect(errs.some((e) => /needs cloudflared/.test(e))).toBe(true);
+  });
+
+  it("times out a live cloudflared that never prints a URL (no unbounded add/dev hang)", async () => {
+    vi.useFakeTimers();
+    const errs = captureErrors();
+    const children: ChildProcess[] = [];
+    const p = startCloudflareTunnel(
+      8800,
+      () => {
+        const child = fakeCloudflared();
+        children.push(child);
+        return child;
+      },
+      100,
+    );
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await vi.advanceTimersByTimeAsync(100);
+      if (attempt < 3) await vi.advanceTimersByTimeAsync(TUNNEL_RETRY_MS);
+    }
+    expect(await p).toBeUndefined();
+    expect(children).toHaveLength(3);
+    for (const child of children) expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(errs.some((e) => /timed out after/.test(e))).toBe(true);
   });
 
   it("does not fail silently: an exit-before-URL is logged and retried, then it gives up", async () => {
@@ -175,6 +200,30 @@ describe("tunnel: announceWebhooks", () => {
 
     expect(setWebhookCall(fetchMock)).toBeUndefined();
     expect(errs.some((e) => /github:/.test(e) && /x\.trycloudflare\.com\/webhook/.test(e))).toBe(true);
+  });
+
+  it("opens the exact Lark app page when the config API requires manual registration", async () => {
+    captureErrors();
+    process.env.LARK_APP_ID = "cli_app";
+    process.env.LARK_APP_SECRET = "sec";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/health")) return new Response(null, { status: 200 });
+        if (url.includes("tenant_access_token")) {
+          return Response.json({ code: 0, msg: "ok", tenant_access_token: "T", expire: 7200 });
+        }
+        if (url.includes("/application/v7/applications/")) return new Response("not found", { status: 404 });
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const openUrl = vi.fn();
+    const dir = await workspace(["lark"]);
+
+    await announceWebhooks(dir, "https://x.trycloudflare.com", { openUrl });
+
+    expect(openUrl).toHaveBeenCalledOnce();
+    expect(openUrl).toHaveBeenCalledWith("https://open.larksuite.com/app/cli_app/event");
   });
 
   const setWebhookCount = (m: ReturnType<typeof vi.fn>) =>

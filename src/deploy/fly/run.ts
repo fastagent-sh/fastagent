@@ -59,14 +59,17 @@ function listHasName(stdout: string, name: string): boolean {
 }
 
 /**
- * Run the deploy through `fly`. `log` reports progress; `registerTelegram(baseUrl)` performs the
- * post-deploy webhook step (the CLI passes its telegram registrar). Every gate is fail-visible.
+ * Run the deploy through `fly`. `log` reports progress; `registerTelegram(baseUrl)` /
+ * `registerFeishu(baseUrl, kind)` perform the post-deploy webhook steps (the CLI passes its canonical
+ * Feishu registrar, which also serves the Lark compatibility profile). Absent, the manual console
+ * instruction is printed. Every gate is fail-visible.
  */
 export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
   registerTelegram: (baseUrl: string) => Promise<void>,
+  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<void>,
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -141,6 +144,17 @@ export async function deployFlyRun(
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
+  }
+  for (const kind of ["feishu", "lark"] as const) {
+    if (!plan.channels.includes(kind)) continue;
+    if (registerFeishu) {
+      log(`registering ${kind} event URL…`);
+      await registerFeishu(`https://${plan.appName}.fly.dev`, kind);
+    } else {
+      log(
+        `${kind}: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/${kind} (the app must be running when you save)`,
+      );
+    }
   }
   return { ok: true };
 }

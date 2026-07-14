@@ -85,11 +85,12 @@ fastagent dev
 fastagent start
 ```
 
-Add GitHub or Telegram when the agent should review PRs or help Telegram users:
+Add GitHub, Telegram, Feishu, or Lark when the agent should review PRs or help chat users:
 
 ```bash
 fastagent add github
 fastagent add telegram
+fastagent add feishu   # 飞书; Lark international: fastagent add lark
 ```
 
 ## Documentation map
@@ -106,6 +107,7 @@ fastagent add telegram
 | Ship to Fly, Railway, or any Docker host | [Deploy](deploy.md) |
 | Use GitHub webhooks | [GitHub channel](github.md) |
 | Use Telegram bots | [Telegram channel](telegram.md) |
+| Use Feishu bots / Lark compatibility | [Feishu channel (Lark compatibility)](feishu.md) |
 | Build a channel adapter | [Channel development](channel-development.md) |
 | Look up public TypeScript exports | [API reference](api-reference.md) |
 | Fix common issues | [Troubleshooting](troubleshooting.md) |

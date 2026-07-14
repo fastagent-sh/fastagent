@@ -12,12 +12,14 @@ import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
 import { parseEnvContent } from "../env.ts";
 
-export type ChannelKind = "github" | "telegram";
+export type ChannelKind = "github" | "telegram" | "feishu" | "lark";
 
 /** An env var a scaffolded channel reads. `generate` = a random-string secret the CLI can pre-fill. */
 export interface ChannelEnv {
   name: string;
   hint: string;
+  /** Required for the channel to run. Optional values are deployed when present but never gate deploy. */
+  required: boolean;
   generate?: boolean;
 }
 
@@ -33,6 +35,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       {
         name: "GITHUB_WEBHOOK_SECRET",
         hint: "any random string; set the same value in the GitHub webhook",
+        required: true,
         generate: true,
       },
     ],
@@ -45,12 +48,73 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   },
   telegram: {
     env: [
-      { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot" },
-      { name: "TELEGRAM_SECRET_TOKEN", hint: "any random string; verifies inbound updates", generate: true },
+      { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot", required: true },
+      {
+        name: "TELEGRAM_SECRET_TOKEN",
+        hint: "any random string; verifies inbound updates",
+        required: true,
+        generate: true,
+      },
     ],
     steps: [
       "edit {channel} — customise routing with route() (optional; the defaults already work)",
       "the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool",
+    ],
+  },
+  // Feishu is the canonical engine/cloud; Lark international reuses its protocol through a degraded
+  // compatibility profile. Each remains its own channel KIND: route, env, state, console, onboarding.
+  // No `generate` in either: every value comes FROM the platform (a locally generated Encrypt Key
+  // would break inbound events until mirrored in the console). `add feishu` scan-creates the app;
+  // Lark lacks that control-plane capability, so `add lark` guides console credential collection.
+  feishu: {
+    env: [
+      {
+        name: "FEISHU_APP_ID",
+        hint: "created + written automatically by `add feishu` (console → Credentials & Basic Info)",
+        required: true,
+      },
+      {
+        name: "FEISHU_APP_SECRET",
+        hint: "created + written automatically by `add feishu` (console → Credentials & Basic Info)",
+        required: true,
+      },
+      {
+        name: "FEISHU_VERIFICATION_TOKEN",
+        hint: "captured automatically (console → Events & Callbacks)",
+        required: true,
+      },
+      {
+        name: "FEISHU_ENCRYPT_KEY",
+        hint: "optional but recommended — set one in the console and copy it here",
+        required: false,
+      },
+    ],
+    steps: [
+      "PUBLISH the app version on the page the CLI opened — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
+      "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
+      "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run`",
+      "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
+    ],
+  },
+  lark: {
+    env: [
+      { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info", required: true },
+      { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info", required: true },
+      {
+        name: "LARK_VERIFICATION_TOKEN",
+        hint: "console → Events & Callbacks; authenticates inbound events",
+        required: true,
+      },
+      {
+        name: "LARK_ENCRYPT_KEY",
+        hint: "optional but recommended — set one in the console and copy it here",
+        required: false,
+      },
+    ],
+    steps: [
+      "finish the console setup: enable Bot and add the permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
+      "run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
+      "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
   },
 };
@@ -109,14 +173,17 @@ function mentionsEnvName(content: string, name: string): boolean {
 
 /**
  * Append generated channel secrets to the run-root `.env` (never `.env.example`) after the CLI has
- * verified that `.env` is gitignored. Existing non-empty values are kept. Manual values (e.g.
- * TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is ready to
- * edit while no fake secret is committed to the user's mental model.
+ * verified that `.env` is gitignored. Existing non-empty values are kept — EXCEPT the names listed in
+ * `overwrite`: those are authoritative (e.g. the credentials of an app `add feishu` JUST minted —
+ * skipping them for a stale value would silently discard a fresh, unrecoverable secret). Manual values
+ * (e.g. TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is
+ * ready to edit while no fake secret is committed to the user's mental model.
  */
 export async function appendChannelDotEnv(
   dir: string,
   kind: ChannelKind,
   generated: Record<string, string>,
+  overwrite: readonly string[] = [],
 ): Promise<DotEnvWriteResult> {
   const file = join(dir, ".env");
   let current = "";
@@ -126,7 +193,9 @@ export async function appendChannelDotEnv(
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
-  const alreadySet = CHANNEL_SCAFFOLDS[kind].env.filter((e) => hasActiveEnvValue(current, e.name)).map((e) => e.name);
+  const alreadySet = CHANNEL_SCAFFOLDS[kind].env
+    .filter((e) => !overwrite.includes(e.name) && hasActiveEnvValue(current, e.name))
+    .map((e) => e.name);
   const lines: string[] = [];
   const written: string[] = [];
   const contentLines = current.split("\n");

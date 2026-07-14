@@ -342,8 +342,10 @@ import { type Agent, collect, readBodyCapped } from "@fastagent-sh/fastagent/cor
 import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
 import { githubChannel } from "@fastagent-sh/fastagent/github";
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";
+import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
+import { larkChannel } from "@fastagent-sh/fastagent/lark";
 ```
 
 `core` avoids loading the pi reference runtime and is the preferred dependency for engine-neutral
-channels. The root entry remains the supported convenience surface. See [GitHub channel](github.md) and
-[Telegram channel](telegram.md).
+channels. The root entry remains the supported convenience surface. See [GitHub channel](github.md),
+[Telegram channel](telegram.md), and the canonical [Feishu channel with Lark compatibility](feishu.md).

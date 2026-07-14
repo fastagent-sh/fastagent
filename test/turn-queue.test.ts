@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type TurnQueue, createTurnQueue } from "../src/channels/telegram/turn-queue.ts";
+import { type TurnQueue, createTurnQueue } from "../src/channels/turn-queue.ts";
 import { log } from "../src/log.ts";
 
 /** The consumer-side record for these tests: a `session` key plus caller-domain fields. */

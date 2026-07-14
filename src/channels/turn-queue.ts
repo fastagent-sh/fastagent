@@ -4,13 +4,13 @@
  * is the corruption floor beneath this; this adds the group-UX queue (a second summon waits its turn
  * instead of colliding on the lease and being dropped as "busy").
  *
- * Channel-neutral (records are opaque beyond a `session` key); it lives in the telegram directory
- * because that is its only consumer today. Durability is layered ON TOP by the caller: turn-store.ts
+ * Channel-neutral (records are opaque beyond a `session` key), shared by the stateful chat channels
+ * (telegram, Feishu; Lark reuses Feishu). Durability is layered ON TOP by the caller: turn-store.ts
  * persists an accepted turn's intent pre-ACK and replays a crash-surviving one on the next start (L1,
  * process-crash recovery, at-least-once). Exactly-once / deterministic step-replay (L2) is the K-axis
  * backend — an external queue with distributed locking (SPEC §11) — not this in-memory queue.
  */
-import { log } from "../../log.ts";
+import { log } from "../log.ts";
 
 export interface TurnQueue<T> {
   /** Schedule onto the session's serial chain (runs after that session's previous turn). */

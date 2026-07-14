@@ -145,7 +145,7 @@ const agent = createPiAgent({
 | [Embedding](https://fastagent.sh/docs/embedding/) | Use FastAgent as a library inside your own app |
 | [Channels](https://fastagent.sh/docs/channels/) | Add webhook/bot channels |
 | [Deploy](https://fastagent.sh/docs/deploy/) | Ship the directory to Fly, Railway, or any Docker host |
-| [GitHub](https://fastagent.sh/docs/github/) / [Telegram](https://fastagent.sh/docs/telegram/) | First-party channel guides |
+| [GitHub](https://fastagent.sh/docs/github/) / [Telegram](https://fastagent.sh/docs/telegram/) / [Feishu and Lark](https://fastagent.sh/docs/feishu/) | First-party channel guides |
 | [Channel development](https://fastagent.sh/docs/channel-development/) | Build custom channel adapters |
 | [API reference](https://fastagent.sh/docs/api-reference/) | Public TypeScript API reference |
 | [Troubleshooting](https://fastagent.sh/docs/troubleshooting/) | Common setup/runtime issues |
@@ -170,7 +170,9 @@ Subpath exports:
 - `@fastagent-sh/fastagent/core` — engine-neutral contract, consumption helpers, channel/host kit, schedules;
 - `@fastagent-sh/fastagent/pi` — the pi reference implementation;
 - `@fastagent-sh/fastagent/github` — GitHub webhook channel;
-- `@fastagent-sh/fastagent/telegram` — Telegram bot channel.
+- `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
+- `@fastagent-sh/fastagent/feishu` — canonical Feishu bot channel (飞书, open.feishu.cn);
+- `@fastagent-sh/fastagent/lark` — Lark-international compatibility profile over the Feishu engine.
 
 ## Repository layout
 
