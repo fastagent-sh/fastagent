@@ -73,6 +73,7 @@ src/
 │       └── scaffold/        # `add lark` bundle
 ├── deploy/                  # `deploy fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §10.5)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/
+│   ├── registration-gate.ts # host-NEUTRAL step-7 gate policy: registrars report facts (registered|manual|failed), this owns gate-or-not
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
 │   ├── container.ts         # portable Dockerfile + .dockerignore (host-neutral) + the generated-marker predicate
 │   ├── secrets.ts           # required-secret NAMES (runbook) + assembleSecrets VALUES (--run credential carry)
