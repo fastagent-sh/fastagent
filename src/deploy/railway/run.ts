@@ -122,8 +122,8 @@ export async function deployRailwayRun(
   plan: RailwayRunPlan,
   railway: CliRunner,
   log: (msg: string) => void,
-  registerTelegram: (baseUrl: string) => Promise<void>,
-  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<void>,
+  registerTelegram: (baseUrl: string) => Promise<boolean>,
+  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<boolean>,
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service
@@ -240,9 +240,14 @@ export async function deployRailwayRun(
   if (!url) {
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
   }
+  // 7. Post-deploy webhook — a registration that terminally fails is a gate like any other step: exit 0
+  //    would tell a coding agent "done" while the deployed agent cannot receive messages. All channels
+  //    are attempted first (one failure doesn't skip the rest); the deploy itself succeeded, so a re-run
+  //    (or `--into-linked` re-run) just retries registration.
+  const unregistered: string[] = [];
   if (plan.channels.includes("telegram")) {
     log("registering telegram webhook…");
-    await registerTelegram(url);
+    if (!(await registerTelegram(url))) unregistered.push("telegram");
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → ${url}/webhook`);
@@ -251,12 +256,17 @@ export async function deployRailwayRun(
     if (!plan.channels.includes(kind)) continue;
     if (registerFeishu) {
       log(`registering ${kind} event URL…`);
-      await registerFeishu(url, kind);
+      if (!(await registerFeishu(url, kind))) unregistered.push(kind);
     } else {
       log(
         `${kind}: set the event Request URL in the developer console (Events & Callbacks) → ${url}/${kind} (the service must be running when you save)`,
       );
     }
+  }
+  if (unregistered.length > 0) {
+    return gate(
+      `the deploy succeeded but webhook registration failed for: ${unregistered.join(", ")} — see the error above, then re-run with --into-linked to retry registration`,
+    );
   }
   return { ok: true, url };
 }

@@ -24,13 +24,13 @@ const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   ...over,
 });
 
-const run = (p: FlyRunPlan, fly: CliRunner, tg = vi.fn(async () => {})) => deployFlyRun(p, fly, () => {}, tg);
+const run = (p: FlyRunPlan, fly: CliRunner, tg = vi.fn(async () => true)) => deployFlyRun(p, fly, () => {}, tg);
 
 describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   it("happy path: auth → create app+volume → set secrets → deploy → telegram webhook", async () => {
     // Fresh account: apps/volumes lists are empty, everything succeeds.
     const { fly, cmds } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
-    const tg = vi.fn(async () => {});
+    const tg = vi.fn(async () => true);
     const out = await run(
       plan({ channels: ["telegram"], secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" } }),
       fly,
@@ -52,13 +52,13 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
 
   it("dispatches Feishu and Lark registration through the per-kind seam", async () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
-    const registerFeishu = vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark") => {});
+    const registerFeishu = vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark") => true);
 
     const out = await deployFlyRun(
       plan({ channels: ["feishu", "lark"] }),
       fly,
       () => {},
-      vi.fn(async () => {}),
+      vi.fn(async () => true),
       registerFeishu,
     );
 
@@ -69,6 +69,26 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     ]);
   });
 
+  it("gates when a webhook registration terminally fails — after attempting the remaining channels", async () => {
+    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+    const registerFeishu = vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark") => true);
+
+    const out = await deployFlyRun(
+      plan({ channels: ["telegram", "feishu"] }),
+      fly,
+      () => {},
+      vi.fn(async () => false), // telegram registration ends with the webhook NOT set
+      registerFeishu,
+    );
+
+    // Exit 0 here would tell a coding agent "done" while the agent can't receive messages.
+    expect(out).toEqual({
+      ok: false,
+      gate: expect.stringMatching(/deploy succeeded but webhook registration failed for: telegram/),
+    });
+    expect(registerFeishu).toHaveBeenCalledWith("https://bot.fly.dev", "feishu"); // one failure doesn't skip the rest
+  });
+
   it("prints each Feishu-cloud Request URL when no registrar is supplied", async () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
@@ -77,7 +97,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       plan({ channels: ["feishu", "lark"] }),
       fly,
       (message) => logs.push(message),
-      vi.fn(async () => {}),
+      vi.fn(async () => true),
     );
 
     expect(out).toEqual({ ok: true });

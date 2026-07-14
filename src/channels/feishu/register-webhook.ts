@@ -28,6 +28,12 @@ import { createFeishuApi, isFeishuConfigApiMissing, isTransientFeishuRegistratio
  * Register `<baseUrl>/<kind>` as the app's event Request URL (webhook mode). Missing credentials print
  * the manual instruction instead of failing. `opts` exist for tests: timeouts + `apiBase` (a fake
  * platform — production derives it from the kind).
+ *
+ * Resolves `false` when this run ends with the event URL NOT registered and acting + re-running can fix
+ * it (health timeout, a permanent config error, exhausted retries) — `deploy --run` turns that into a
+ * gate (non-zero exit). Resolves `true` when registered, or when the manual path is the designed norm
+ * (missing credentials; the cloud-lag 404, where no re-run can ever succeed). The tunnel ignores the
+ * result.
  */
 export interface FeishuManualRegistration {
   consoleUrl: string;
@@ -47,7 +53,7 @@ export async function registerFeishuWebhook(
   baseUrl: string,
   kind: FeishuCloudKind,
   opts: RegisterFeishuWebhookOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const profile = cloudFor(kind);
   const envPrefix = profile.envPrefix;
   const appId = process.env[`${envPrefix}_APP_ID`];
@@ -59,7 +65,7 @@ export async function registerFeishuWebhook(
     log.info(
       `[fastagent] ${kind}: set ${envPrefix}_APP_ID + ${envPrefix}_APP_SECRET in .env, then re-run to auto-register. Or ${manual}`,
     );
-    return;
+    return true;
   }
 
   // Align registration with the server actually serving: the PATCH triggers the platform's
@@ -72,7 +78,7 @@ export async function registerFeishuWebhook(
     log.error(
       `[fastagent] ${kind}: ${baseUrl}/health did not come up in time — the app may still be starting. ${manual}`,
     );
-    return;
+    return false;
   }
 
   const api = createFeishuApi({ kind, baseUrl: apiBase, appId, appSecret });
@@ -112,7 +118,7 @@ export async function registerFeishuWebhook(
       log.info(
         `[fastagent] ${kind}: if messages do not arrive, publish a version (one click, prompted) — the switch to webhook mode takes effect on publish: ${versionUrl}`,
       );
-      return;
+      return true;
     } catch (e) {
       // A 404 on the config route is the CLOUD lagging, not this app's configuration: the v7 API is
       // live on open.feishu.cn but not yet on open.larksuite.com. Name that — "check your scopes"
@@ -123,7 +129,7 @@ export async function registerFeishuWebhook(
             `manual registration is required`,
         );
         manualRegistration();
-        return;
+        return true; // that cloud has no config API — manual is the norm there, not a gate
       }
       if (!isTransientFeishuRegistrationError(e)) {
         log.error(
@@ -131,7 +137,7 @@ export async function registerFeishuWebhook(
             `The app may lack the "application:application:patch" scope (console → Permissions) or be under review; manual registration is available below.`,
         );
         manualRegistration();
-        return;
+        return false;
       }
     }
   }
@@ -140,4 +146,5 @@ export async function registerFeishuWebhook(
   // manual path is the known norm, not an exceptional failure.
   log.error(`[fastagent] ${kind}: registration still failing after retries — manual registration is required`);
   manualRegistration();
+  return false;
 }

@@ -3,7 +3,7 @@
  * secrets / deploy) that the plain runbook hands to the operator; `--run` executes it instead, so a
  * coding agent runs ONE command. Idempotent (app/volume check-then-act; channel secrets come from the
  * local env — NOT minted — so a re-run sets the same values) and resumable: it STOPS at a human gate
- * (not logged in, a missing secret value, a taken app name) with one actionable line and a non-zero
+ * (not logged in, a missing secret value, a taken app name, a failed webhook registration) with one actionable line and a non-zero
  * exit, so the agent clears the gate and re-runs. A `generate` channel secret absent from `.env` is a
  * gate too (`missingSecrets`), not a silent mint — fill it in `.env` (use the random string that
  * `add <channel>` prints).
@@ -68,8 +68,8 @@ export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
-  registerTelegram: (baseUrl: string) => Promise<void>,
-  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<void>,
+  registerTelegram: (baseUrl: string) => Promise<boolean>,
+  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<boolean>,
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -137,10 +137,14 @@ export async function deployFlyRun(
   }
 
   // 7. Post-deploy webhook — telegram end-to-end (fastagent has the token + the live URL); github is a
-  //    repo-settings step only a human can do.
+  //    repo-settings step only a human can do. A registration that terminally fails is a gate like any
+  //    other step: exit 0 would tell a coding agent "done" while the deployed agent cannot receive
+  //    messages. All channels are attempted first (one failure doesn't skip the rest); the deploy itself
+  //    succeeded and steps 1-6 are idempotent, so a re-run just retries registration.
+  const unregistered: string[] = [];
   if (plan.channels.includes("telegram")) {
     log("registering telegram webhook…");
-    await registerTelegram(`https://${plan.appName}.fly.dev`);
+    if (!(await registerTelegram(`https://${plan.appName}.fly.dev`))) unregistered.push("telegram");
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
@@ -149,12 +153,17 @@ export async function deployFlyRun(
     if (!plan.channels.includes(kind)) continue;
     if (registerFeishu) {
       log(`registering ${kind} event URL…`);
-      await registerFeishu(`https://${plan.appName}.fly.dev`, kind);
+      if (!(await registerFeishu(`https://${plan.appName}.fly.dev`, kind))) unregistered.push(kind);
     } else {
       log(
         `${kind}: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/${kind} (the app must be running when you save)`,
       );
     }
+  }
+  if (unregistered.length > 0) {
+    return gate(
+      `the deploy succeeded but webhook registration failed for: ${unregistered.join(", ")} — see the error above, then re-run to retry registration (steps already done are skipped)`,
+    );
   }
   return { ok: true };
 }
