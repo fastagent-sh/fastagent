@@ -212,12 +212,14 @@ state, logs, and onboarding: `feishuChannel` mounts `POST /feishu`, reads `FEISH
 can mount both. No SDK — wire protocols are fetch-based, with the adoption tripwire documented in
 `feishu-api.ts`. What is platform-different:
 
-- **The live preview is a streaming CARD, not an edited message.** The platform caps text edits at 20
-  per message and sends at 5 QPS per chat; cardkit streaming (50 QPS per app / 10 per card, strictly
-  increasing `sequence`)
-  is its designed AI-output channel. The same card settles into the final Markdown answer. Degrade
-  tiers: card fails → static text placeholder; streaming closed mid-turn → frozen preview, the settle
-  still lands.
+- **The live preview is a streaming CARD, not an edited text message.** The platform caps text edits at
+  20 per message and sends at 5 QPS per chat; cardkit streaming (50 QPS per app / 10 per card, strictly
+  increasing `sequence`) is its designed AI-output channel. A queued turn mounts that same card early
+  with a reply-quoted `⏳ Queued` state; execution takes the entity over in place and the same card
+  settles into the final Markdown answer, so there is no recall tombstone or ambiguous second reply.
+  Per-session execution remains FIFO; quotes keep independently mounted queue cards attributable.
+  Degrade tiers: card fails → static text placeholder; streaming closed mid-turn → frozen preview, the
+  settle still lands.
 - **Verification is modal and fail-closed.** Encrypt Key set: ordinary events require a signature over
   the raw body → AES decrypt, and plaintext is refused. Feishu explicitly excludes Request URL
   verification from event signatures, so its encrypted `url_verification` challenge takes the narrow

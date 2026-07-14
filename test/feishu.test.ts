@@ -612,48 +612,86 @@ describe("turn flow", () => {
     expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
   });
 
-  it("queues a second ask on the SAME session behind the first and tells the asker (⏳ notice)", async () => {
+  it("keeps queued asks FIFO and takes over each ask's reply-quoted queue card in place", async () => {
     const fx = feishuFetch();
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => {
       release = r;
     });
+    const order: string[] = [];
+    let invocation = 0;
     injectedAgent = {
-      async *invoke(_s: Scope, _p: Prompt): AsyncIterable<AgentEvent> {
-        await gate;
-        yield { type: "text", delta: "done" };
+      async *invoke(_s: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+        const ask = ["first", "second", "third"].find((x) => prompt.text.includes(`\n${x}`)) ?? "unknown";
+        order.push(ask);
+        if (++invocation === 1) await gate;
+        yield { type: "text", delta: `answer ${ask}` };
         yield { type: "completed" };
       },
     };
-    const { handler } = buildChannel({ queueNoticeDelayMs: 0 }); // send the notice immediately (a long wait, compressed)
+    const { handler, idle } = buildChannel(); // queue feedback is immediate by default
     await handler(feishuRequest(messageEvent({ id: "om_q1", text: "first" })));
     await flush(); // first turn parks on the gate with its preview mounted
     await handler(feishuRequest(messageEvent({ id: "om_q2", text: "second" })));
-    // Even at delay 0 the notice leaves via a timer (one macrotask later than flush() can see) — poll.
+    await handler(feishuRequest(messageEvent({ id: "om_q3", text: "third" })));
+
+    // Each queued turn mounts ONE queue-status card as a reply to ITS source message — even in p2p,
+    // where an ordinary immediate answer is intentionally unquoted. The two mounts may finish in either
+    // visual order; the quote is the stable attribution.
+    const queueCardFor = (messageId: string): string | undefined => {
+      const mount = fx
+        .calls(`/im/v1/messages/${messageId}/reply`, "POST")
+        .find((c) => c.body?.msg_type === "interactive");
+      const content = JSON.parse(String(mount?.body?.content)) as { data?: { card_id?: string } };
+      return content.data?.card_id;
+    };
     await vi.waitFor(() => {
-      const texts = fx
-        .calls("receive_id_type=chat_id", "POST")
-        .map((c) =>
-          c.body?.msg_type === "text" ? (JSON.parse(String(c.body?.content)) as { text: string }).text : "",
-        );
-      expect(texts.some((t) => t.includes("⏳ Queued"))).toBe(true);
+      expect(queueCardFor("om_q2")).toBeDefined();
+      expect(queueCardFor("om_q3")).toBeDefined();
     });
+    const secondCard = queueCardFor("om_q2") as string;
+    const thirdCard = queueCardFor("om_q3") as string;
+    expect(secondCard).not.toBe(thirdCard);
+    const queueCreates = fx.calls("/cardkit/v1/cards", "POST").filter((c) => {
+      const card = JSON.parse(String(c.body?.data)) as { body?: { elements?: { content?: string }[] } };
+      return card.body?.elements?.[0]?.content?.includes("⏳ Queued");
+    });
+    expect(queueCreates).toHaveLength(2);
+
     release();
+    await idle();
+
+    // The per-session queue is FIFO, and each final answer settles the SAME card entity that carried
+    // that ask's queue status: no new preview, no recalled-message tombstone.
+    expect(order).toEqual(["first", "second", "third"]);
+    expect(fx.calls("/cardkit/v1/cards", "POST")).toHaveLength(3); // one entity per turn, not queue+answer
+    for (const [cardId, answer] of [
+      [secondCard, "answer second"],
+      [thirdCard, "answer third"],
+    ] as const) {
+      const settle = fx
+        .calls(`/cardkit/v1/cards/${cardId}`, "PUT")
+        .find((c) => c.url.endsWith(`/cardkit/v1/cards/${cardId}`));
+      const card = JSON.parse(String((settle?.body?.card as Record<string, unknown> | undefined)?.data));
+      expect(card.body.elements[0].content).toBe(answer);
+    }
+    expect(fx.calls("/im/v1/messages/", "DELETE")).toHaveLength(0);
   });
 
-  it("a FAST queue turnover never sends the ⏳ notice — no recall tombstone in the chat", async () => {
-    // Lark renders a deleted message as a visible "recalled a message" line, so the notice is DELAYED:
-    // a turn whose wait ends before the delay leaves no trace (default queueNoticeDelayMs ≫ this test).
+  it("an explicitly delayed queue frame may be skipped on FAST turnover without a recall tombstone", async () => {
+    // Immediate is the default; an author may opt into a delay to suppress Queue on very short waits.
+    // If the wait ends inside that configured delay, no status card was mounted and nothing is recalled.
     const fx = feishuFetch();
-    const { handler, idle } = buildChannel();
+    const { handler, idle } = buildChannel({ queueNoticeDelayMs: 5_000 });
     await handler(feishuRequest(messageEvent({ id: "om_f1", text: "first" })));
-    await handler(feishuRequest(messageEvent({ id: "om_f2", text: "second" }))); // queues behind, arms the notice
-    await idle(); // both turns complete well inside the notice delay
-    const texts = fx
-      .calls("receive_id_type=chat_id", "POST")
-      .map((c) => (c.body?.msg_type === "text" ? (JSON.parse(String(c.body?.content)) as { text: string }).text : ""));
-    expect(texts.some((t) => t.includes("⏳ Queued"))).toBe(false); // never sent …
-    expect(fx.calls("/im/v1/messages/", "DELETE")).toHaveLength(0); // … so nothing was recalled
+    await handler(feishuRequest(messageEvent({ id: "om_f2", text: "second" }))); // queues behind, arms the mount
+    await idle(); // both turns complete well inside the queue-status delay
+    const queueCreates = fx.calls("/cardkit/v1/cards", "POST").filter((c) => {
+      const card = JSON.parse(String(c.body?.data)) as { body?: { elements?: { content?: string }[] } };
+      return card.body?.elements?.[0]?.content?.includes("⏳ Queued");
+    });
+    expect(queueCreates).toHaveLength(0);
+    expect(fx.calls("/im/v1/messages/", "DELETE")).toHaveLength(0);
   });
 });
 

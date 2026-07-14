@@ -30,7 +30,14 @@ import {
   parseContent,
   placeKey,
 } from "./parse.ts";
-import { type FeishuFailure, defaultErrorMessage, streamFeishuReply } from "./preview.ts";
+import {
+  type FeishuFailure,
+  type MountedFeishuPreview,
+  defaultErrorMessage,
+  mountFeishuPreview,
+  settleFeishuPreview,
+  streamFeishuReply,
+} from "./preview.ts";
 import { createSeenRing } from "./seen.ts";
 
 // Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.
@@ -45,12 +52,13 @@ const MAX_TURN_ATTEMPTS = 3;
 /** Event body cap — events are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_EVENT_BYTES = 1 << 20;
 
-/** How long a turn must WAIT in the queue before the "⏳ Queued" notice is sent. On this platform the
- *  notice cannot morph into the answer (text vs card), so its cleanup is a RECALL — and the client
- *  renders that as a visible "recalled a message" line. Delaying the notice makes fast queue turnover leave no
- *  trace at all; only a genuinely long wait pays the tombstone, where the feedback is worth it.
- *  (Telegram needs no delay: its notice is edited in place into the live preview — no residue.) */
-const QUEUE_NOTICE_DELAY_MS = 5_000;
+/** Queue feedback is immediate by default: it is the user's acknowledgement that this exact ask was
+ *  accepted behind another turn. The same reply-quoted card becomes the preview/final answer, so there
+ *  is no extra message or recall tombstone to avoid. Authors may still configure a delay explicitly. */
+const QUEUE_NOTICE_DELAY_MS = 0;
+
+const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task finishes.";
+const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll retry automatically.";
 
 /** The persisted turn intent (what the runner needs to re-execute it). `seq` is the channel-assigned
  *  arrival number — Feishu message_ids (`om_…`) carry no order, so recovery sorts on this instead. */
@@ -61,6 +69,9 @@ interface StoredFeishuTurn {
   baseText: string;
   chatId: string;
   replyTo?: string;
+  /** Source message to quote when queue feedback mounts. Unlike `replyTo`, this is also set for a p2p
+   *  turn: each queued card must identify its own ask even though ordinary p2p answers are unquoted. */
+  queueReplyTo?: string;
   replyInThread?: boolean;
   parentId?: string;
   images: { msg: string; key: string }[];
@@ -83,6 +94,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     typeof r.baseText === "string" &&
     typeof r.chatId === "string" &&
     (r.replyTo === undefined || typeof r.replyTo === "string") &&
+    (r.queueReplyTo === undefined || typeof r.queueReplyTo === "string") &&
     (r.replyInThread === undefined || typeof r.replyInThread === "boolean") &&
     (r.parentId === undefined || typeof r.parentId === "string") &&
     refs(r.images) &&
@@ -91,11 +103,11 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
   );
 }
 
-/** One accepted turn: the persisted intent plus live-only fields (never persisted — a restart's queue
- *  notice is gone, so a replayed turn mounts a fresh preview). */
+/** One accepted turn: the persisted intent plus live-only fields. The mounted queue card/text is not
+ *  persisted; a replayed turn mounts a fresh preview because an old card may have expired. */
 interface PendingFeishuTurn extends Omit<StoredFeishuTurn, "attempts"> {
-  /** The "⏳ queued" notice's message_id, when one was sent — deleted once the preview mounts. */
-  noticeId?: string;
+  /** The queue-status card/text, when its delayed mount fired. The turn's preview takes it over. */
+  preview?: MountedFeishuPreview;
 }
 
 export interface FeishuChannelOptions {
@@ -120,8 +132,8 @@ export interface FeishuChannelOptions {
   /** API origin override (tests / self-hosted gateways). The kind fixes the default —
    *  `feishuChannel` → `https://open.feishu.cn`, `larkChannel` → `https://open.larksuite.com`. */
   baseUrl?: string;
-  /** How long (ms) a turn waits in the queue before the "⏳ Queued" notice is sent (see
-   *  {@link QUEUE_NOTICE_DELAY_MS} for why it is delayed on this platform). 0 = immediately. */
+  /** How long (ms) a turn waits before its reply-quoted "⏳ Queued" card mounts. Defaults to 0
+   *  (immediate); the same card is later taken over by the live preview/final answer. */
   queueNoticeDelayMs?: number;
 }
 
@@ -189,7 +201,7 @@ export function buildFeishuChannel(
     });
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
-      const { noticeId: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
+      const { preview: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
       return { ...intent, attempts: 0 };
     };
 
@@ -198,42 +210,48 @@ export function buildFeishuChannel(
       replyTo: r.replyTo,
       replyInThread: r.replyInThread,
     });
+    const queueTargetOf = (r: PendingFeishuTurn): FeishuTarget => ({
+      chatId: r.chatId,
+      replyTo: r.queueReplyTo,
+      replyInThread: r.replyInThread,
+    });
 
-    // In-memory: the pending "⏳ queued" notice per turn — DELAYED (see QUEUE_NOTICE_DELAY_MS): armed
-    // when the turn queues behind another, sent only if it is still waiting when the timer fires, and
-    // cancelled unsent when its turn starts first. `done` settles either way, awaited at dequeue so the
-    // turn reliably knows the notice id (to delete it) instead of racing a late-arriving send.
+    // In-memory: the pending queue-preview mount per turn. Immediate by default; with an explicit delay,
+    // it mounts only if the turn is still waiting when the timer fires and is cancelled unsent otherwise.
+    // `done` settles either way, awaited at dequeue so the runner reliably receives the mounted preview
+    // instead of racing it and double-posting.
     const notices = new Map<string, { cancel: () => void; done: Promise<void> }>();
     const queue = createTurnQueue<PendingFeishuTurn>({
       label,
       // Queue feedback: when this session already has a turn running/queued, a silent wait reads as
-      // "the bot ignored me" once the current turn runs long — tell the asker (reply-quoted, so it is
-      // clear whose ask is queued), unless the wait is over before the delay (then no trace at all).
-      // Best-effort and post-ACK: a failed notice is a log line, never a failed event delivery. The
-      // preview then deletes this notice once its card mounts.
+      // "the bot ignored me" once the current turn runs long — mount that turn's preview early with a
+      // queue status. It reply-quotes the exact source message (including p2p), then the runner mutates
+      // the SAME card/text into Thinking → final answer. Best-effort and post-ACK: a failed mount is a
+      // log line, never a failed event delivery; the turn later mounts its normal preview.
       onQueuedBehind: (rec) => {
         let fired = false;
         let settle: () => void = () => {};
         const done = new Promise<void>((resolve) => {
           settle = resolve;
         });
-        const timer = setTimeout(() => {
+        const mount = (): void => {
           fired = true;
-          api
-            .sendText(targetOf(rec), "⏳ Queued — I’ll start once the current task finishes.")
+          mountFeishuPreview(api, queueTargetOf(rec), QUEUED_PLACEHOLDER, label)
             .then(
-              (id) => {
-                if (id !== undefined) rec.noticeId = id;
+              (preview) => {
+                rec.preview = preview;
               },
-              (e) => log.warn(`${label} queue notice failed (the turn still runs): ${String(e)}`),
+              (e) => log.warn(`${label} queue preview failed (the turn still runs): ${String(e)}`),
             )
             .finally(settle);
-        }, queueNoticeDelayMs);
+        };
+        const timer = queueNoticeDelayMs > 0 ? setTimeout(mount, queueNoticeDelayMs) : undefined;
+        if (timer === undefined) mount();
         notices.set(rec.id, {
-          // Cancel is a no-op once the timer fired — the send is in flight and `done` settles with it.
+          // Cancel is a no-op once mounting started — the send is in flight and `done` settles with it.
           cancel: () => {
             if (!fired) {
-              clearTimeout(timer);
+              if (timer !== undefined) clearTimeout(timer);
               settle();
             }
           },
@@ -241,9 +259,9 @@ export function buildFeishuChannel(
         });
       },
       run: async (rec) => {
-        // Runs at DEQUEUE time (serialized). The turn's queue wait is over: cancel a not-yet-sent notice
-        // (fast turnover leaves no trace), then settle so rec.noticeId is final — in the common path
-        // this await is instant. BEFORE the ceiling check so a dropped turn's notice is cleared too.
+        // Runs at DEQUEUE time (serialized). The turn's queue wait is over: cancel a not-yet-mounted
+        // preview (fast turnover skips the Queued frame), then settle so rec.preview is final — in the
+        // common path this await is instant. BEFORE the ceiling check so drop/defer can take it over too.
         const notice = notices.get(rec.id);
         notice?.cancel();
         await notice?.done;
@@ -255,10 +273,14 @@ export function buildFeishuChannel(
           return;
         }
         if (decision === "defer") {
-          // Couldn't record the attempt (disk failure): skip this cycle; a restart replays it. Its "⏳"
-          // notice (if any) would falsely read "Queued" forever — delete it best-effort (the eventual
-          // replay mounts a fresh preview).
-          if (rec.noticeId !== undefined) void api.deleteMessage(rec.noticeId).catch(() => {});
+          // Couldn't record the attempt (disk failure): skip this cycle; a restart replays it. Do not
+          // recall an existing queue preview (the client exposes a confusing tombstone): settle it in
+          // place to an honest delayed status. The eventual replay mounts a fresh preview.
+          if (rec.preview !== undefined) {
+            void settleFeishuPreview(api, targetOf(rec), rec.preview, DEFERRED_PLACEHOLDER).catch((e) =>
+              log.warn(`${label} could not update a deferred turn's queue preview: ${String(e)}`),
+            );
+          }
           return;
         }
         const startedAt = Date.now();
@@ -277,7 +299,7 @@ export function buildFeishuChannel(
             api,
             targetOf(rec),
             formatError,
-            rec.noticeId,
+            rec.preview,
             label,
           );
           log.info(`${label} turn done: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms)`);
@@ -307,15 +329,13 @@ export function buildFeishuChannel(
     };
 
     // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal,
-    // not just an operator log line. Take over the "⏳ Queued" notice in place if the turn had one (else
-    // send fresh) — leaving it pinned at "Queued" while sending a separate failure would double-post.
+    // not just an operator log line. Take over its queue preview in place if present (else send fresh) —
+    // leaving it pinned at "Queued" while sending a separate failure would double-post.
     const notifyDropped = (r: PendingFeishuTurn): void => {
       const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-      const sent =
-        r.noticeId !== undefined
-          ? api.editTextMessage(r.noticeId, body)
-          : api.sendText(targetOf(r), body).then(() => {});
-      void sent.catch((e) => log.warn(`${label} could not notify a dropped turn (session=${r.session}): ${String(e)}`));
+      void settleFeishuPreview(api, targetOf(r), r.preview, body).catch((e) =>
+        log.warn(`${label} could not notify a dropped turn (session=${r.session}): ${String(e)}`),
+      );
     };
 
     // Re-enqueue turns a prior crash left mid-flight (ACKed but unfinished). Synchronous at construction:
@@ -323,7 +343,7 @@ export function buildFeishuChannel(
     const recovered = store.recover();
     if (recovered.length > 0) log.info(`${label} recovering ${recovered.length} unfinished turn(s) from a prior run`);
     let seqCounter = recovered.reduce((max, r) => Math.max(max, r.seq), 0);
-    for (const { attempts: _a, ...intent } of recovered) submit({ ...intent, noticeId: undefined }, false);
+    for (const { attempts: _a, ...intent } of recovered) submit({ ...intent, preview: undefined }, false);
 
     const handler = async (req: Request): Promise<Response> => {
       if (req.method !== "POST") return text("POST only\n", 405);
@@ -434,6 +454,9 @@ export function buildFeishuChannel(
         // chat: a route that redirects elsewhere must not quote a same-id message in the wrong place.
         const sameTarget = chatId === m.chat_id;
         const replyTo = m.chat_type !== "p2p" && sameTarget ? m.message_id : undefined;
+        // Queue feedback always identifies the exact ask, including p2p. Ordinary p2p answers remain
+        // unquoted unless the turn actually waited long enough for its queue preview to mount.
+        const queueReplyTo = sameTarget ? m.message_id : undefined;
         const content = parseContent(m);
         const baseText = r.text ?? cloudEnvelope(event, kind);
         if (baseText.trim() !== "" || content.imageKeys.length > 0 || content.fileRefs.length > 0) {
@@ -445,6 +468,7 @@ export function buildFeishuChannel(
               baseText,
               chatId,
               replyTo,
+              queueReplyTo,
               replyInThread: replyTo !== undefined && m.thread_id !== undefined ? true : undefined,
               parentId: m.parent_id,
               images: content.imageKeys.map((key) => ({ msg: m.message_id, key })),

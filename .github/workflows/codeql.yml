@@ -1,0 +1,51 @@
+name: CodeQL
+
+# Advanced setup (replaces GitHub's default setup): default setup does not
+# trigger on pull requests from forks, and fork PRs are the norm for this OSS
+# repo. A regular workflow's pull_request event runs for forks too.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * 1' # weekly, Monday 03:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          category: '/language:${{ matrix.language }}'
+
+  # Stable-named aggregate gate (same pattern as CI's "Core checks"): branch
+  # protection requires the "CodeQL" context, independent of the language matrix.
+  codeql-gate:
+    name: CodeQL
+    needs: analyze
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require analysis to pass
+        run: '[ "${{ needs.analyze.result }}" = "success" ]'

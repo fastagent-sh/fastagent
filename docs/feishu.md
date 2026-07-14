@@ -201,13 +201,13 @@ Topic groups are handled automatically:
 - if the message carries a `thread_id` (a topic group), the default session is `chat:thread` and the reply stays inside the topic (`reply_in_thread`),
 - otherwise the default session is `chat`, and group replies quote the summoning message.
 
-A group answers one shared session: turns are serialized per session (FIFO) instead of failing fast as `session busy`. A summon that keeps waiting gets a "⏳ Queued" notice — **delayed** (default 5s, `queueNoticeDelayMs`): the notice cannot morph into the answer (text vs card), so its cleanup is a recall, which the client renders as a visible "recalled a message" line — a fast turnover therefore sends no notice at all, and only a genuinely long wait pays that tombstone. Different sessions run in parallel.
+A group answers one shared session: turns are serialized per session (FIFO) instead of failing fast as `session busy`; different sessions run in parallel. A summon queued behind another turn immediately gets a reply-quoted "⏳ Queued" card (configure `queueNoticeDelayMs` only if an intentional delay is desired). Each queued card quotes its own source message, including in p2p, so concurrent card mounts remain attributable. When that turn starts, its live preview takes over the same card entity and settles the final answer there: no second reply and no visible "recalled a message" tombstone.
 
 ## Streaming behavior
 
 The live preview is ONE **streaming card** (a card entity in streaming mode):
 
-- an immediate "💭 Thinking…" card, reply-quoted under the asker in groups,
+- an immediate "💭 Thinking…" card, reply-quoted under the asker in groups; or, for a queued turn, the already-mounted reply-quoted "⏳ Queued" card updated in place,
 - tool-call previews + partial answer text, pushed as full-text snapshots (the client renders the typewriter effect),
 - on completion, the same card settles into the final answer as Markdown (streaming off).
 

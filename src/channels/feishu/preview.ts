@@ -7,6 +7,11 @@
  * 5 QPS per-chat message quota or
  * the 20-edit cap on text messages, which is why the preview is a card and not an edited text message.
  *
+ * A queued turn mounts this same card early with its queue status, reply-quoted to that turn's source
+ * message; when execution starts the preview takes the entity over in place. This mirrors Telegram's
+ * one-message lifecycle without trying to change a text message into a card (which the platform does
+ * not support), and keeps multiple queued asks attributable even if their card mounts race visually.
+ *
  * Fallback tier (fail visibly, degrade per turn): if the card cannot be created or mounted, the turn
  * runs with a TEXT placeholder and NO live updates (text edits are capped at 20 per message, so the
  * text tier spends them only on terminal writes); if the platform closes streaming mid-turn (idle
@@ -79,11 +84,14 @@ function capBytes(s: string, maxBytes: number): string {
   return truncateUtf8(s, maxBytes);
 }
 
-/** The mounted preview, whichever tier setup reached. */
-type Preview =
+/** A visible preview mounted into the chat. Exported only for the channel wiring: a queued turn mounts
+ * one before execution, then hands the exact entity/message to {@link streamFeishuReply} for takeover. */
+export type MountedFeishuPreview =
   | { kind: "card"; cardId: string; messageId: string }
-  | { kind: "text"; messageId: string }
-  | { kind: "none" }; // nothing mounted (setup failed entirely) — terminal writes send fresh
+  | { kind: "text"; messageId: string };
+
+/** The preview lifecycle also needs a no-message state when setup failed entirely. */
+type Preview = MountedFeishuPreview | { kind: "none" };
 
 /**
  * The terminal-write POLICY: resolve the preview into `text`. One card → settle it in place (final
@@ -137,18 +145,82 @@ async function finalize(
 }
 
 /**
+ * Mount one preview message: preferably a streaming card entity, with a static text message as the
+ * visible fallback. Queue feedback and ordinary turn startup share this constructor so a queued card
+ * has exactly the same shape the stream pump expects to take over later.
+ */
+export async function mountFeishuPreview(
+  api: FeishuApi,
+  target: FeishuTarget,
+  initial: string,
+  label = "[feishu]",
+): Promise<MountedFeishuPreview> {
+  try {
+    const cardId = await api.createCard(streamingCardJson(initial));
+    const content = cardEntityContent(cardId);
+    const mountOnce = (): Promise<string | undefined> =>
+      target.replyTo !== undefined
+        ? api.replyMessage(target.replyTo, "interactive", content, { replyInThread: target.replyInThread })
+        : api.sendMessage(target.chatId, "interactive", content);
+    let messageId: string | undefined;
+    // Field-observed: the mount can reject a JUST-minted card id (code 230099 / "cardid is invalid")
+    // — the entity is not yet visible to the IM side (eventual consistency between cardkit and IM).
+    // That specific rejection gets a short backoff and another try before degrading; anything else
+    // degrades immediately.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        messageId = await mountOnce();
+        break;
+      } catch (e) {
+        if (attempt >= 3 || !/230099|11310|cardid is invalid/i.test(String(e))) throw e;
+        log.warn(
+          `${label} mount rejected the fresh card (card=${cardId}, attempt ${attempt}) — retrying: ${String(e)}`,
+        );
+        await sleep(attempt * 400);
+      }
+    }
+    if (messageId === undefined) throw new Error("interactive send returned ok without a message_id");
+    return { kind: "card", cardId, messageId };
+  } catch (e) {
+    // Card tier failed — degrade to a text placeholder with NO live updates (the text tier's 20-edit
+    // cap is spent on terminal writes only). Visible: the operator learns why the preview is static.
+    log.warn(`${label} streaming card unavailable — live preview degrades to a static placeholder: ${String(e)}`);
+    const messageId =
+      target.replyTo !== undefined
+        ? await api.replyMessage(target.replyTo, "text", JSON.stringify({ text: initial }), {
+            replyInThread: target.replyInThread,
+          })
+        : await api.sendMessage(target.chatId, "text", JSON.stringify({ text: initial }));
+    if (messageId === undefined) throw new Error("text preview send returned ok without a message_id");
+    return { kind: "text", messageId };
+  }
+}
+
+/** Settle an already-mounted queue preview without starting an Agent stream (the poison/defer paths).
+ * Card and text tiers both change in place; only a missing/failed preview sends a fresh message. */
+export async function settleFeishuPreview(
+  api: FeishuApi,
+  target: FeishuTarget,
+  preview: MountedFeishuPreview | undefined,
+  text: string,
+): Promise<void> {
+  let sequence = 0;
+  await finalize(api, target, preview ?? { kind: "none" }, text, () => ++sequence);
+}
+
+/**
  * Consume one turn's event stream into a Feishu-compatible chat, live (see the module header for the preview
  * model). Preview updates are best-effort (logged once if they fail); the final write is authoritative
- * and surfaces a real failure (bad credentials, etc.). `noticeId` is the "⏳ queued" text notice sent
- * while this turn waited — it cannot morph into a card, so it is deleted once the preview is mounted
- * (and by the terminal write otherwise), never left pinned above the answer.
+ * and surfaces a real failure (bad credentials, etc.). `initialPreview`, when present, is the queued
+ * turn's already-mounted card/text message: the pump and terminal write mutate that same message rather
+ * than recalling it and posting another reply.
  */
 export async function streamFeishuReply(
   events: AsyncIterable<AgentEvent>,
   api: FeishuApi,
   target: FeishuTarget,
   formatError: (failed: FeishuFailure) => string | undefined,
-  noticeId?: string,
+  initialPreview?: MountedFeishuPreview,
   label = "[feishu]",
 ): Promise<void> {
   const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
@@ -182,72 +254,23 @@ export async function streamFeishuReply(
     return capBytes(v === "" ? THINKING_PLACEHOLDER : v, CARD_MARKDOWN_MAX_BYTES);
   };
 
-  // The live preview: ONE streaming card, mounted once (setup below), then snapshot-updated in place.
-  // `sequence` must increase strictly per card — the single-writer pump guarantees it by construction.
-  let preview: Preview = { kind: "none" };
-  let setupAttempted = false;
+  // The live preview is ONE message: either the queue card/text handed in by the wiring, or a preview
+  // mounted lazily on this turn's first flush. `sequence` must increase strictly per card — the single-
+  // writer pump guarantees it by construction. A queue card has had no updates yet, so sequence starts
+  // at zero in both paths.
+  let preview: Preview = initialPreview ?? { kind: "none" };
+  let setupAttempted = initialPreview !== undefined;
   let sequence = 0;
   const nextSeq = (): number => ++sequence;
   let streamDead = false; // the platform closed streaming (idle timeout) — freeze the live view
   let finalized = false; // a terminal write (completed/failed) ran — the finally skips its orphan cleanup
   let lastSent = "";
 
-  // The queue notice cannot be taken over (text vs card) — delete it once anything else is visible.
-  let noticePending = noticeId !== undefined;
-  const clearNotice = (): void => {
-    if (!noticePending) return;
-    noticePending = false;
-    if (noticeId !== undefined) void api.deleteMessage(noticeId).catch(() => {});
-  };
-
-  /** Mount the preview ONCE: streaming card, or the text placeholder when the card tier fails. */
-  const mountPreview = async (initial: string): Promise<void> => {
-    setupAttempted = true;
-    try {
-      const cardId = await api.createCard(streamingCardJson(initial));
-      const content = cardEntityContent(cardId);
-      const mountOnce = (): Promise<string | undefined> =>
-        target.replyTo !== undefined
-          ? api.replyMessage(target.replyTo, "interactive", content, { replyInThread: target.replyInThread })
-          : api.sendMessage(target.chatId, "interactive", content);
-      let messageId: string | undefined;
-      // Field-observed: the mount can reject a JUST-minted card id (code 230099 / "cardid is invalid")
-      // — the entity is not yet visible to the IM side (eventual consistency between cardkit and IM).
-      // That specific rejection gets a short backoff and another try before degrading; anything else
-      // degrades immediately.
-      for (let attempt = 1; ; attempt++) {
-        try {
-          messageId = await mountOnce();
-          break;
-        } catch (e) {
-          if (attempt >= 3 || !/230099|11310|cardid is invalid/i.test(String(e))) throw e;
-          log.warn(
-            `${label} mount rejected the fresh card (card=${cardId}, attempt ${attempt}) — retrying: ${String(e)}`,
-          );
-          await sleep(attempt * 400);
-        }
-      }
-      if (messageId === undefined) throw new Error("interactive send returned ok without a message_id");
-      preview = { kind: "card", cardId, messageId };
-    } catch (e) {
-      // Card tier failed — degrade to a text placeholder with NO live updates (the text tier's 20-edit
-      // cap is spent on terminal writes only). Visible: the operator learns why the preview is static.
-      log.warn(`${label} streaming card unavailable — live preview degrades to a static placeholder: ${String(e)}`);
-      const messageId =
-        target.replyTo !== undefined
-          ? await api.replyMessage(target.replyTo, "text", JSON.stringify({ text: THINKING_PLACEHOLDER }), {
-              replyInThread: target.replyInThread,
-            })
-          : await api.sendMessage(target.chatId, "text", JSON.stringify({ text: THINKING_PLACEHOLDER }));
-      preview = messageId !== undefined ? { kind: "text", messageId } : { kind: "none" };
-    }
-    clearNotice();
-  };
-
   const flushPreview = async (): Promise<void> => {
     const text = view();
     if (!setupAttempted) {
-      await mountPreview(text);
+      setupAttempted = true;
+      preview = await mountFeishuPreview(api, target, text, label);
       lastSent = text;
       return;
     }
@@ -328,9 +351,8 @@ export async function streamFeishuReply(
     await pumpDone?.catch(() => {});
   };
 
-  /** Terminal write + notice cleanup (whatever tier the preview reached). */
+  /** Terminal write, whatever tier the preview reached. */
   const settle = async (text: string): Promise<void> => {
-    clearNotice();
     await finalize(api, target, preview, text, nextSeq);
   };
 
