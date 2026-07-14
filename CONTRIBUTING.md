@@ -69,11 +69,12 @@ Either way, one branch = one focused change. If a branch grows several unrelated
 
 ## Review policy
 
-A maintainer is a collaborator with write or admin access.
+A maintainer is a collaborator with write or admin access. The project is open source: every change lands through a reviewed PR, without exception.
 
-- A maintainer-authored PR may be self-merged after all required checks pass. A second maintainer review is optional, including for SPEC and public API changes.
+- **Merging is an explicit maintainer decision.** Green CI makes a PR *eligible*; a maintainer *lands* it. Nothing merges automatically — not CI, and not coding agents: an agent may open a PR, respond to review, and report "CI green, ready to merge", but the merge itself is always issued by a human maintainer.
+- Maintainer-authored PRs require green CI before merging. Review by a second maintainer is recommended for SPEC and public API changes.
 - A PR from an external contributor must be reviewed and merged by a maintainer; external contributors do not have merge permission.
-- `CODEOWNERS` routes changes to the relevant maintainers; it does not impose an additional approval on maintainer-authored PRs.
+- `CODEOWNERS` routes changes to the relevant maintainers.
 
 All changes still go through a PR. Force-pushing to `main` is forbidden. Long-lived PRs (> ~3 days) should be rebased on `main`.
 
