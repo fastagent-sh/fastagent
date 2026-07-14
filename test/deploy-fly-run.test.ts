@@ -112,6 +112,25 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(logs.at(-1)).toMatch(/lark: webhook registration needs a one-time manual step/);
   });
 
+  it("mixed outcomes: manual notices are logged AND the failed channels still gate", async () => {
+    const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
+    const logs: string[] = [];
+
+    const out = await deployFlyRun(
+      plan({ channels: ["telegram", "lark"] }),
+      fly,
+      (m) => logs.push(m),
+      vi.fn(async (): Promise<RegistrationOutcome> => "failed"),
+      vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "manual"),
+    );
+
+    expect(logs.at(-1)).toMatch(/lark: webhook registration needs a one-time manual step/);
+    expect(out).toEqual({
+      ok: false,
+      gate: expect.stringMatching(/webhook registration failed for: telegram/),
+    });
+  });
+
   it("prints each Feishu-cloud Request URL when no registrar is supplied", async () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
