@@ -70,7 +70,7 @@ The pi reference prompt has four segments:
 | ① engine base + identity | `piBasePrompt`; `persona.md` replaces its default identity line |
 | ② project context | `AGENTS.md` files loaded by pi from `agentDir` and the cwd ancestor walk |
 | ③ skills listing | definition-local Agent Skills |
-| ④ runtime context | current date and cwd |
+| ④ runtime context | cwd only — no date, deliberately: a date line would invalidate the provider prefix cache at every day boundary (mirrors pi ≥0.80.7) |
 
 `persona.md` and `AGENTS.md` are deliberately different slots: persona is authored identity;
 `AGENTS.md` is project context. The definition is re-read for every invocation, so persona/context/

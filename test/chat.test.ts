@@ -66,9 +66,10 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
         expect(sp).toContain("MAGIC_CHAT_MARKER_91");
         expect(sp).toMatch(/greet/);
         expect(st.model).toBeDefined(); // the config model resolved (fastagent's, not pi's default)
-        // Duplication guard: pi appends the skill section + env (date/cwd); the override must carry
-        // only base+instructions, or chat drifts from served and wastes context.
-        expect((sp.match(/Current date/g) ?? []).length).toBe(1);
+        // Duplication guard: pi appends the skill section + env (cwd; pi ≥0.80.7 dropped the date from
+        // its default prompt for cache stability); the override must carry only base+instructions, or
+        // chat drifts from served and wastes context.
+        expect((sp.match(/Current date/g) ?? []).length).toBe(0);
         expect((sp.match(/Current working directory/g) ?? []).length).toBe(1);
         expect((sp.match(/<available_skills>/g) ?? []).length).toBe(1);
 

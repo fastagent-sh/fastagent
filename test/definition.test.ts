@@ -183,8 +183,10 @@ describe("create: assembleSystemPrompt (four segments)", () => {
     // ③ skills listing
     expect(prompt).toContain("<available_skills>");
     expect(prompt).toContain("season-words");
-    // ④ env context
+    // ④ env context — cwd only; no date, by design: a date line would invalidate the provider prompt
+    // cache (a prefix cache) for every session at each day boundary (mirrors pi ≥0.80.7).
     expect(prompt).toContain("Current working directory: /work");
+    expect(prompt).not.toContain("Current date");
     // order: base before instructions, instructions before skills
     expect(prompt.indexOf("operating inside pi")).toBeLessThan(prompt.indexOf("<project_instructions"));
     expect(prompt.indexOf("</project_context>")).toBeLessThan(prompt.indexOf("<available_skills>"));

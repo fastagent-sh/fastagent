@@ -7,7 +7,7 @@
  * AGENTS.md up to the repo root and discover skills from pi's own global dirs). So fastagent's
  * assembly is INJECTED into pi's session:
  *   - prompt  → systemPromptOverride = base + instructions ONLY; pi appends the skill section and env
- *               (date/cwd) itself (including them here would duplicate both).
+ *               (cwd) itself (including it here would duplicate it).
  *   - skills  → skillsOverride (fastagent's skills, for the section + invocation).
  *   - tools   → default coding tools by NAME (pi rebuilds them cwd-bound for rich rendering) +
  *               fastagent's custom tools via pi's customTools path (so they survive /new, /resume, fork).
@@ -91,8 +91,8 @@ export async function buildChatRuntime(
       execute: (id: string, params: unknown, signal: AbortSignal | undefined) => t.execute(id, params, signal),
     })) as unknown as ToolDefinition[];
 
-    // base + instructions ONLY — pi appends the skill section and env (date/cwd) itself (including
-    // them here would duplicate both).
+    // base + instructions ONLY — pi appends the skill section and env (cwd) itself (including
+    // them here would duplicate them).
     const systemPrompt = assembleSystemPrompt({
       base: piBasePrompt({ tools, persona: definition.persona }),
       contextFiles: definition.contextFiles,

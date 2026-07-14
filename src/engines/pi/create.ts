@@ -72,10 +72,14 @@ export async function resolveWorkspaceTools(
 //
 //   systemPrompt = ① base (engine asset; a persona.md persona overrides its identity line)
 //                + ② project context (AGENTS.md files via pi's loadProjectContextFiles, <project_context>-wrapped)
-//                + ③ skills listing + ④ env context (date/cwd)
+//                + ③ skills listing + ④ env context (cwd)
 //
-// AGENTS.md ≠ system prompt. Pure functions: segment ④ inputs (date/cwd) are caller-provided, so the
-// same inputs always produce the same prompt (testable, reproducible).
+// AGENTS.md ≠ system prompt. Pure functions: segment ④ input (cwd) is caller-provided, so the
+// same inputs always produce the same prompt (testable, reproducible). No date: a date line would
+// invalidate the provider prompt cache (a prefix cache) for every session at each day boundary —
+// channel sessions routinely live for weeks (pi ≥0.80.7 dropped it from its default prompt for the
+// same reason). The model gets the date when it needs it: `bash date`, and the wake tool takes
+// relative delays ("30m") / cron — never an absolute now-derived instant.
 
 /**
  * The pi engine's base prompt (segment ①), mirroring pi-coding-agent's default path with two
@@ -115,7 +119,6 @@ export interface AssembleSystemPromptOptions {
   /** ③ Skills for the <available_skills> listing. */
   skills?: Skill[];
   /** ④ Env context, caller-provided (keeps this function pure). Omitted = segment omitted. */
-  date?: string;
   cwd?: string;
 }
 
@@ -133,7 +136,6 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
   if (options.skills && options.skills.length > 0) {
     prompt += `\n${formatSkillsForSystemPrompt(options.skills)}\n`;
   }
-  if (options.date) prompt += `\nCurrent date: ${options.date}`;
   if (options.cwd) prompt += `\nCurrent working directory: ${options.cwd}`;
   return prompt;
 }
@@ -311,7 +313,7 @@ export async function createPiAgentFromDefinition(
     // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills
     // edits (the author's, or the agent's own self-modification) take effect on the next turn with
     // no process restart — restarts are reserved for code (tools/channels/config, module cache).
-    // One read yields prompt AND skills (they can never diverge), `date` is the turn's date, and the
+    // One read yields prompt AND skills (they can never diverge), and the
     // fs cost is a few reads against a model call. Broken edits stay visible: a throw-class problem
     // (unreadable AGENTS.md) fails that turn's invoke, and the loader's NON-fatal findings (bad
     // SKILL.md frontmatter, name collisions — returned as data, not thrown) are warned the moment
@@ -333,7 +335,6 @@ export async function createPiAgentFromDefinition(
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
           skills: def.skills,
-          date: new Date().toISOString().slice(0, 10),
           cwd: env.cwd,
         }),
         skills: def.skills,
