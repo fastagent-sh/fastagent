@@ -44,6 +44,7 @@ export async function registerTelegramWebhook(
 
   // Reachable → register. A short retry backstops Telegram's resolver lagging /health by a moment; only
   // network-transient errors retry (a permanent "bad webhook" config error is reported, not retried).
+  let lastTransientError = "unknown transport error";
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await sleep(opts.retryMs ?? 2000);
     try {
@@ -56,7 +57,11 @@ export async function registerTelegramWebhook(
         log.error(`[fastagent] telegram: setWebhook failed (${error}). Register manually with url=${webhookUrl}`);
         return;
       }
+      lastTransientError = error;
     }
   }
-  log.warn(`[fastagent] telegram: setWebhook still failing after retries. Register manually with url=${webhookUrl}`);
+  log.warn(
+    `[fastagent] telegram: setWebhook still failing after retries (last error: ${lastTransientError}). ` +
+      `Register manually with url=${webhookUrl}`,
+  );
 }

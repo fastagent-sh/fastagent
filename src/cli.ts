@@ -793,6 +793,7 @@ async function runDeploy(): Promise<void> {
     process.exit(1);
   }
   loadDotEnv(target); // a custom provider/tool may read a key at config load
+  installProxyFetch(); // post-deploy channel API calls must honor HTTP(S)_PROXY under Node
   const { config } = await loadConfig(target).catch(failStartup);
   const modelSpec = resolveModelSpec(values.model, config);
   // The host-neutral pre-flight (model-travel gate, channel discovery, model-auth probe, container facts +
