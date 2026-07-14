@@ -67,7 +67,9 @@ export async function registerFeishuWebhook(
   log.info(`[fastagent] ${kind}: waiting for ${baseUrl} to be reachable before registering the event URL…`);
   const ready = await waitForHealth(`${baseUrl}/health`, opts.readyTimeoutMs ?? 120_000, opts.readyIntervalMs ?? 3_000);
   if (!ready) {
-    log.warn(
+    // Terminal for this run (registration will not be retried) — error, not warn: the event URL is NOT
+    // registered and the operator must act. Same taxonomy as the permanent PATCH failure below.
+    log.error(
       `[fastagent] ${kind}: ${baseUrl}/health did not come up in time — the app may still be starting. ${manual}`,
     );
     return;
@@ -133,6 +135,9 @@ export async function registerFeishuWebhook(
       }
     }
   }
-  log.warn(`[fastagent] ${kind}: registration still failing after retries — manual registration is required`);
+  // Exhausted retries end in the same state as a permanent error (event URL not registered, manual
+  // action required) — report at the same level. The cloud-lag 404 above stays warn: on that cloud the
+  // manual path is the known norm, not an exceptional failure.
+  log.error(`[fastagent] ${kind}: registration still failing after retries — manual registration is required`);
   manualRegistration();
 }
