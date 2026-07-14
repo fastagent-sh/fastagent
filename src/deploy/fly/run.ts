@@ -148,6 +148,7 @@ export async function deployFlyRun(
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
+    reg.track("github", "manual"); // always a human step — re-surface it after the registrar output
   }
   for (const kind of ["feishu", "lark"] as const) {
     if (!plan.channels.includes(kind)) continue;
@@ -158,6 +159,7 @@ export async function deployFlyRun(
       log(
         `${kind}: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/${kind} (the app must be running when you save)`,
       );
+      reg.track(kind, "manual"); // no registrar wired — the console step above is the operator's
     }
   }
   const registrationGateMsg = reg.gate();
