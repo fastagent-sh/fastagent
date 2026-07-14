@@ -23,6 +23,7 @@
  * no bulk stdin import like Fly's `secrets import`). Auth needs an ACCOUNT credential (login or
  * `RAILWAY_API_KEY`), not a project token: `init` creates a project that a project token can't predate.
  */
+import type { RegistrationOutcome } from "../../channels/registration.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import type { CliRunner } from "../runner.ts";
 
@@ -122,8 +123,8 @@ export async function deployRailwayRun(
   plan: RailwayRunPlan,
   railway: CliRunner,
   log: (msg: string) => void,
-  registerTelegram: (baseUrl: string) => Promise<boolean>,
-  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<boolean>,
+  registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
+  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service
@@ -240,14 +241,19 @@ export async function deployRailwayRun(
   if (!url) {
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
   }
-  // 7. Post-deploy webhook — a registration that terminally fails is a gate like any other step: exit 0
-  //    would tell a coding agent "done" while the deployed agent cannot receive messages. All channels
-  //    are attempted first (one failure doesn't skip the rest); the deploy itself succeeded, so a re-run
-  //    (or `--into-linked` re-run) just retries registration.
+  // 7. Post-deploy webhook — same gate policy as the Fly runner (fly/run.ts step 7): the registrars
+  //    report facts, this run owns the policy. "failed" gates (exit 0 would tell a coding agent "done"
+  //    while the deployed agent cannot receive messages); "manual" does not gate (re-running can never
+  //    change it) but is re-surfaced as the run's LAST line. All channels are attempted first.
   const unregistered: string[] = [];
+  const manual: string[] = [];
+  const track = (kind: string, outcome: RegistrationOutcome): void => {
+    if (outcome === "failed") unregistered.push(kind);
+    if (outcome === "manual") manual.push(kind);
+  };
   if (plan.channels.includes("telegram")) {
     log("registering telegram webhook…");
-    if (!(await registerTelegram(url))) unregistered.push("telegram");
+    track("telegram", await registerTelegram(url));
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → ${url}/webhook`);
@@ -256,12 +262,15 @@ export async function deployRailwayRun(
     if (!plan.channels.includes(kind)) continue;
     if (registerFeishu) {
       log(`registering ${kind} event URL…`);
-      if (!(await registerFeishu(url, kind))) unregistered.push(kind);
+      track(kind, await registerFeishu(url, kind));
     } else {
       log(
         `${kind}: set the event Request URL in the developer console (Events & Callbacks) → ${url}/${kind} (the service must be running when you save)`,
       );
     }
+  }
+  for (const kind of manual) {
+    log(`${kind}: webhook registration needs a one-time manual step — see the instructions above`);
   }
   if (unregistered.length > 0) {
     return gate(

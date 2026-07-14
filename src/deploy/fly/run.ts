@@ -17,6 +17,7 @@
  * (one machine, the single-machine tier). Secrets go in via `secrets import` over stdin, so values
  * never land in argv/process listings.
  */
+import type { RegistrationOutcome } from "../../channels/registration.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import type { CliRunner } from "../runner.ts";
 
@@ -68,8 +69,8 @@ export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
-  registerTelegram: (baseUrl: string) => Promise<boolean>,
-  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<boolean>,
+  registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
+  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -137,14 +138,22 @@ export async function deployFlyRun(
   }
 
   // 7. Post-deploy webhook — telegram end-to-end (fastagent has the token + the live URL); github is a
-  //    repo-settings step only a human can do. A registration that terminally fails is a gate like any
-  //    other step: exit 0 would tell a coding agent "done" while the deployed agent cannot receive
-  //    messages. All channels are attempted first (one failure doesn't skip the rest); the deploy itself
-  //    succeeded and steps 1-6 are idempotent, so a re-run just retries registration.
+  //    repo-settings step only a human can do. GATE POLICY (the registrars report facts, this run owns
+  //    the policy): "failed" gates — exit 0 would tell a coding agent "done" while the deployed agent
+  //    cannot receive messages, and steps 1-6 are idempotent so a re-run just retries registration.
+  //    "manual" does NOT gate — re-running can never change it (that would be an unclearable gate
+  //    spinning an agent forever) — but is re-surfaced as the run's LAST line so the operator cannot
+  //    miss it under the registrar's earlier log lines. All channels are attempted first (one failure
+  //    doesn't skip the rest).
   const unregistered: string[] = [];
+  const manual: string[] = [];
+  const track = (kind: string, outcome: RegistrationOutcome): void => {
+    if (outcome === "failed") unregistered.push(kind);
+    if (outcome === "manual") manual.push(kind);
+  };
   if (plan.channels.includes("telegram")) {
     log("registering telegram webhook…");
-    if (!(await registerTelegram(`https://${plan.appName}.fly.dev`))) unregistered.push("telegram");
+    track("telegram", await registerTelegram(`https://${plan.appName}.fly.dev`));
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
@@ -153,12 +162,15 @@ export async function deployFlyRun(
     if (!plan.channels.includes(kind)) continue;
     if (registerFeishu) {
       log(`registering ${kind} event URL…`);
-      if (!(await registerFeishu(`https://${plan.appName}.fly.dev`, kind))) unregistered.push(kind);
+      track(kind, await registerFeishu(`https://${plan.appName}.fly.dev`, kind));
     } else {
       log(
         `${kind}: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/${kind} (the app must be running when you save)`,
       );
     }
+  }
+  for (const kind of manual) {
+    log(`${kind}: webhook registration needs a one-time manual step — see the instructions above`);
   }
   if (unregistered.length > 0) {
     return gate(

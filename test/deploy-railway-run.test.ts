@@ -7,6 +7,7 @@ import {
   parseDomainUrl,
   parseHasVolume,
 } from "../src/deploy/railway/run.ts";
+import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
 
 /** A fake railway CLI: records every call, returns per-command scripted results (default code 0, empty). */
@@ -36,8 +37,11 @@ const LINKED = JSON.stringify({ name: "bot", id: "proj-1" });
 // A minted domain, as `railway domain --json` would return it (field name unknown → parser scans values).
 const DOMAIN_JSON = JSON.stringify({ domain: "bot-production.up.railway.app" });
 
-const run = (p: RailwayRunPlan, railway: CliRunner, tg = vi.fn(async () => true)) =>
-  deployRailwayRun(p, railway, () => {}, tg);
+const run = (
+  p: RailwayRunPlan,
+  railway: CliRunner,
+  tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+) => deployRailwayRun(p, railway, () => {}, tg);
 
 describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () => {
   it("fresh (unlinked): auth → init+add+volume → variables → up → domain → telegram webhook", async () => {
@@ -46,7 +50,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
-    const tg = vi.fn(async () => true);
+    const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
       plan({ channels: ["telegram"], secrets: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_SECRET_TOKEN: "s" } }),
       railway,
@@ -76,13 +80,15 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
-    const registerFeishu = vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark") => true);
+    const registerFeishu = vi.fn(
+      async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
+    );
 
     const out = await deployRailwayRun(
       plan({ channels: ["telegram", "feishu"] }),
       railway,
       () => {},
-      vi.fn(async () => false), // telegram registration ends with the webhook NOT set
+      vi.fn(async (): Promise<RegistrationOutcome> => "failed"), // telegram registration ends with the webhook NOT set
       registerFeishu,
     );
 
@@ -100,13 +106,15 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       if (a[0] === "domain") return { stdout: DOMAIN_JSON };
       return {};
     });
-    const registerFeishu = vi.fn(async (_baseUrl: string, _kind: "feishu" | "lark") => true);
+    const registerFeishu = vi.fn(
+      async (_baseUrl: string, _kind: "feishu" | "lark"): Promise<RegistrationOutcome> => "registered",
+    );
 
     const out = await deployRailwayRun(
       plan({ channels: ["feishu", "lark"] }),
       railway,
       () => {},
-      vi.fn(async () => true),
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
       registerFeishu,
     );
 
@@ -129,7 +137,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       plan({ channels: ["feishu", "lark"] }),
       railway,
       (message) => logs.push(message),
-      vi.fn(async () => true),
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
     );
 
     expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
@@ -214,7 +222,7 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
       plan({ intoLinked: true }),
       railway,
       (m) => logs.push(m),
-      vi.fn(async () => true),
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
     );
     expect(logs.join("\n")).toMatch(/--into-linked.*isn't linked|creating a fresh/i);
   });

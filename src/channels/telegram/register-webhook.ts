@@ -5,6 +5,7 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "../../log.ts";
+import type { RegistrationOutcome } from "../registration.ts";
 import { waitForHealth } from "../wait-health.ts";
 import { callApi } from "./telegram-api.ts";
 
@@ -16,15 +17,12 @@ import { callApi } from "./telegram-api.ts";
  * fixes the race that made the first real deploy need a manual `setWebhook`. Missing tokens print the
  * manual instruction instead of failing. `opts` (timeouts) exist for tests; production uses the defaults.
  *
- * Resolves `false` when this run ends with the webhook NOT registered and acting + re-running can fix
- * it (health timeout, a permanent config error, exhausted retries) — `deploy --run` turns that into a
- * gate (non-zero exit). Resolves `true` when registered, or when the manual path is the designed norm
- * (missing tokens). The tunnel (a long-running dev process) ignores the result.
+ * Reports its outcome as a {@link RegistrationOutcome} fact; gating policy belongs to the caller.
  */
 export async function registerTelegramWebhook(
   baseUrl: string,
   opts: { readyTimeoutMs?: number; readyIntervalMs?: number; retryMs?: number } = {},
-): Promise<boolean> {
+): Promise<RegistrationOutcome> {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const secret = process.env.TELEGRAM_SECRET_TOKEN;
   const webhookUrl = `${baseUrl}/telegram`;
@@ -32,7 +30,7 @@ export async function registerTelegramWebhook(
     log.info(
       `[fastagent] telegram: set TELEGRAM_BOT_TOKEN + TELEGRAM_SECRET_TOKEN in .env, then re-run to auto-register. Webhook URL: ${webhookUrl}`,
     );
-    return true;
+    return "manual";
   }
 
   // Align registration with the server actually serving. Don't setWebhook against a URL Telegram can't
@@ -46,7 +44,7 @@ export async function registerTelegramWebhook(
       `[fastagent] telegram: ${baseUrl}/health did not come up in time — the app may still be starting. ` +
         `Register the webhook manually once it's up: curl "https://api.telegram.org/bot<token>/setWebhook" -d url=${webhookUrl} -d secret_token=<secret>`,
     );
-    return false;
+    return "failed";
   }
 
   // Reachable → register. A short retry backstops Telegram's resolver lagging /health by a moment; only
@@ -57,12 +55,12 @@ export async function registerTelegramWebhook(
     try {
       await callApi("https://api.telegram.org", botToken, "setWebhook", { url: webhookUrl, secret_token: secret });
       log.info(`[fastagent] telegram: webhook registered → ${webhookUrl}`);
-      return true;
+      return "registered";
     } catch (e) {
       const error = String(e);
       if (!/resolve host|getaddrinfo|ENOTFOUND|fetch failed|ECONNRESET|timeout/i.test(error)) {
         log.error(`[fastagent] telegram: setWebhook failed (${error}). Register manually with url=${webhookUrl}`);
-        return false;
+        return "failed";
       }
       lastTransientError = error;
     }
@@ -73,5 +71,5 @@ export async function registerTelegramWebhook(
     `[fastagent] telegram: setWebhook still failing after retries (last error: ${lastTransientError}). ` +
       `Register manually with url=${webhookUrl}`,
   );
-  return false;
+  return "failed";
 }
