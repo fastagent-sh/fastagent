@@ -20,6 +20,8 @@ import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import { decryptEvent, timingSafeEqualStr, verifySignature } from "./crypto.ts";
 import { invokeFeishuTurn } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
+import type { FeishuEventHeader } from "./model.ts";
+import { normalizeFeishuMessage } from "./normalize.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -27,7 +29,6 @@ import {
   cloudEnvelope,
   defaultFeishuRoute,
   feishuEnvelope,
-  parseContent,
   placeKey,
 } from "./parse.ts";
 import {
@@ -428,7 +429,7 @@ export function buildFeishuChannel(
 
       // ── Events. Only im.message.receive_v1 is consumed; everything else is ACKed and dropped
       // (a non-2xx would just make the platform retry an event this channel will never act on). ──────
-      const header = envelope.header as { event_type?: string } | undefined;
+      const header = envelope.header as FeishuEventHeader | undefined;
       if (header?.event_type !== "im.message.receive_v1") {
         log.debug(`${label} ignoring event type ${header?.event_type ?? "(none)"}`);
         return new Response(null, { status: 200 });
@@ -447,6 +448,8 @@ export function buildFeishuChannel(
         return new Response(null, { status: 200 });
       }
       {
+        const normalized = normalizeFeishuMessage(event, { cloud: kind, appId, header, botOpenId });
+        if (!normalized) return new Response(null, { status: 200 });
         const session = r.session ?? placeKey(m);
         const chatId = r.chatId ?? m.chat_id;
         // Reply to the summoning message in groups (threads the answer under the asker; stays inside a
@@ -457,9 +460,15 @@ export function buildFeishuChannel(
         // Queue feedback always identifies the exact ask, including p2p. Ordinary p2p answers remain
         // unquoted unless the turn actually waited long enough for its queue preview to mount.
         const queueReplyTo = sameTarget ? m.message_id : undefined;
-        const content = parseContent(m);
+        const resources = normalized.content.resources;
+        const images = resources
+          .filter((resource) => resource.kind === "image")
+          .map((resource) => ({ msg: resource.messageId, key: resource.key }));
+        const files = resources
+          .filter((resource) => resource.kind === "file" || resource.kind === "audio" || resource.kind === "video")
+          .map((resource) => ({ msg: resource.messageId, key: resource.key, name: resource.name }));
         const baseText = r.text ?? cloudEnvelope(event, kind);
-        if (baseText.trim() !== "" || content.imageKeys.length > 0 || content.fileRefs.length > 0) {
+        if (baseText.trim() !== "" || images.length > 0 || files.length > 0) {
           submit(
             {
               id: m.message_id,
@@ -471,8 +480,8 @@ export function buildFeishuChannel(
               queueReplyTo,
               replyInThread: replyTo !== undefined && m.thread_id !== undefined ? true : undefined,
               parentId: m.parent_id,
-              images: content.imageKeys.map((key) => ({ msg: m.message_id, key })),
-              files: content.fileRefs.map((f) => ({ msg: m.message_id, key: f.key, name: f.name })),
+              images,
+              files,
             },
             true,
           );

@@ -1,0 +1,42 @@
+{
+  "schema": "2.0",
+  "header": {
+    "event_id": "ev_feishu_message_1",
+    "event_type": "im.message.receive_v1",
+    "create_time": "1710000000123",
+    "token": "fixture-token",
+    "app_id": "cli_feishu_fixture",
+    "tenant_key": "tenant_feishu_fixture"
+  },
+  "event": {
+    "sender": {
+      "sender_id": {
+        "open_id": "ou_alice",
+        "user_id": "u_alice",
+        "union_id": "on_alice"
+      },
+      "sender_type": "user",
+      "tenant_key": "tenant_feishu_fixture"
+    },
+    "message": {
+      "message_id": "om_feishu_message_1",
+      "root_id": "om_topic_root",
+      "parent_id": "om_parent",
+      "create_time": "1710000000000",
+      "update_time": "1710000000000",
+      "chat_id": "oc_feishu_chat",
+      "thread_id": "omt_feishu_topic",
+      "chat_type": "group",
+      "message_type": "text",
+      "content": "{\"text\":\"@_user_1 review this\"}",
+      "mentions": [
+        {
+          "key": "@_user_1",
+          "id": { "open_id": "ou_bot" },
+          "name": "FastAgent",
+          "tenant_key": "tenant_feishu_fixture"
+        }
+      ]
+    }
+  }
+}

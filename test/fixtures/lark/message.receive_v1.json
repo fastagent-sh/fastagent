@@ -1,0 +1,31 @@
+{
+  "schema": "2.0",
+  "header": {
+    "event_id": "ev_lark_message_1",
+    "event_type": "im.message.receive_v1",
+    "create_time": "1710000100123",
+    "token": "fixture-token",
+    "app_id": "cli_lark_fixture",
+    "tenant_key": "tenant_lark_fixture"
+  },
+  "event": {
+    "sender": {
+      "sender_id": {
+        "open_id": "ou_bob",
+        "user_id": "u_bob",
+        "union_id": "on_bob"
+      },
+      "sender_type": "user",
+      "tenant_key": "tenant_lark_fixture"
+    },
+    "message": {
+      "message_id": "om_lark_message_1",
+      "create_time": "1710000100000",
+      "update_time": "1710000100000",
+      "chat_id": "oc_lark_chat",
+      "chat_type": "p2p",
+      "message_type": "post",
+      "content": "{\"title\":\"Project update\",\"content\":[[{\"tag\":\"text\",\"text\":\"Please inspect \"},{\"tag\":\"a\",\"text\":\"the spec\",\"href\":\"https://example.test/spec\"}],[{\"tag\":\"img\",\"image_key\":\"img_lark_1\"}],[{\"tag\":\"media\",\"file_key\":\"file_lark_1\",\"file_name\":\"demo.mp4\"}]]}"
+    }
+  }
+}
