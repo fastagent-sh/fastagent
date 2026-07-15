@@ -417,29 +417,6 @@ describe("turn flow", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("dedups on message_id: a duplicate push runs ONE turn, and the ring survives restarts", async () => {
-    feishuFetch();
-    const first = buildChannel();
-    expect((await first.handler(feishuRequest(messageEvent({ id: "om_dup" })))).status).toBe(200);
-    await first.idle();
-    expect((await first.handler(feishuRequest(messageEvent({ id: "om_dup" })))).status).toBe(200);
-    await first.idle();
-    expect(first.calls).toHaveLength(1);
-    // A NEW channel over the same state root (a restart) still refuses the same message_id.
-    injectedAgent = undefined;
-    const restarted = replyingAgent();
-    const again = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, baseUrl: BASE })({
-      agent: restarted.agent,
-      stateRoot: first.root,
-    })["POST /feishu"];
-    const idle2 = (again as unknown as { turnsIdle?: () => Promise<void> })?.turnsIdle;
-    if (idle2) channelIdles.add(idle2);
-    expect((await again?.(feishuRequest(messageEvent({ id: "om_dup" }))))?.status).toBe(200);
-    await idle2?.();
-    expect(restarted.calls).toHaveLength(0);
-    expect(existsSync(join(first.home, "seen.json"))).toBe(true);
-  });
-
   it("a failed turn surfaces the onError text through the terminal write (default: neutral)", async () => {
     const fx = feishuFetch();
     injectedAgent = {

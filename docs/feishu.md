@@ -239,9 +239,12 @@ Message payloads are resolved by the channel before the agent turn runs — all 
 
 The channel persists its state under `<state root>/channels/<kind>/` (`channels/feishu/` or `channels/lark/` — two mounted kinds never share stores):
 
-- `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — same layering as the Telegram channel, see [design/core.md](design/core.md)),
-- `seen.json` — a bounded dedup ring of accepted `message_id`s: the platform documents duplicate pushes and its own guidance is to dedup on `message_id`; without this, a late redelivery after a completed turn would re-run it,
+- `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `files/<chat>/` — downloaded inbound files.
+
+Like Telegram, this L1 layer has no completed-delivery ledger. Feishu/Lark document that duplicate
+pushes can occur, so a duplicate arriving after its turn was removed can run again. The channel keeps
+that at-least-once limitation shared rather than adding a platform-specific reliability mechanism.
 
 The state home self-ignores (a nested `.gitignore`). Single-process semantics: two processes must not share a state dir.
 

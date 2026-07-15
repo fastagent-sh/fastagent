@@ -197,10 +197,11 @@ window can run a delivery twice. Exactly-once execution needs a different backen
 ### Feishu (canonical) / Lark (compatibility)
 
 Feishu is the second stateful chat-channel reference, shaped as a sibling of Telegram. Its canonical
-implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure decode,
-`invoke-turn.ts` IO assembly, `preview.ts` pump, `feishu-api.ts` transport/token pipeline, `crypto.ts`
-security math, `card.ts` builders, `seen.ts` dedup, and registration automation. Shared mechanisms
-(`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one level up.
+implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
+`model.ts` / `normalize.ts` protocol normalization, `invoke-turn.ts` IO assembly, `preview.ts` pump,
+`feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
+automation. Shared mechanisms (`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one
+level up.
 
 **Feishu is the design center; Lark is a compatibility profile.** The clouds share event/card/crypto
 wire formats, but Lark international trails Feishu in app creation and application-config APIs.
@@ -225,8 +226,10 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   verification from event signatures, so its encrypted `url_verification` challenge takes the narrow
   decrypt → exact-type → constant-time Token path. Without an Encrypt Key, events use the same
   constant-time verification-token match in plaintext.
-- **Dedup on `message_id` (`seen.ts`).** The platform documents duplicate pushes and recommends this
-  key; without the ring, a late redelivery after a completed turn would re-run it.
+- **Turn identity is `message_id`; recovery order is an explicit `seq`.** Feishu ids carry no arrival
+  order, unlike Telegram's numeric `update_id`. The lifecycle semantics are otherwise shared: the
+  generic turn store tracks unfinished work only, with no channel-specific completed-delivery ledger.
+  A documented duplicate push arriving after removal can therefore run again (at-least-once).
 - **Group visibility is scope-gated.** The default scope delivers only @mentions of the bot, so
   Telegram's context buffer has no counterpart until the sensitive `im:message.group_msg` scope is
   granted. Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved);
