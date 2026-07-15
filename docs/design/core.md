@@ -94,7 +94,11 @@ sessions, and state paths. `dev`, `start`, `invoke`, and `fire` share this assem
 parallel implementations.
 
 Each invocation builds a fresh harness for its session and discards it after the turn. Conversation
-continuity comes from `PiSessionStore`, not a resident harness.
+continuity comes from `PiSessionStore`, not a resident harness. Reopening is faithful to the whole
+record, not just the messages: pi's harness writes active-tool changes to the session but never reads
+them back (its own TUI harness is resident), so `piHarnessFactory` restores the recorded active-tool
+set itself — filtered to the mounted tools, since a recorded-but-removed tool would fail construction
+(`harness.ts` `restoreActiveToolNames`).
 
 ## 4. Event translation and terminal discipline
 
