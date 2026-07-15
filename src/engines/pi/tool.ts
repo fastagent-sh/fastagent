@@ -25,7 +25,9 @@ export interface ToolContext {
    *  fires a later turn back into this same session.) */
   session?: string;
   /** Tool activation for the current turn (a loader tool activates {@link DefineToolOptions.deferred}
-   *  tools with it — the built-in `search_tools` is one consumer). Undefined outside a turn. */
+   *  tools with it — the built-in `search_tools` is one consumer). Undefined outside a serving turn:
+   *  a bare `fastagent tool` run, and `fastagent chat` (pi's own TUI runtime — everything is active
+   *  there, nothing to activate). */
   tools?: ToolActivation;
 }
 
@@ -49,6 +51,14 @@ export interface DefineToolOptions<I extends z.ZodType> {
  *  AgentTool object — pi ignores it; config.tools authors can set it on a raw tool too). */
 export function isDeferredTool(tool: AgentTool): boolean {
   return (tool as { deferred?: unknown }).deferred === true;
+}
+
+/** The same tool without the deferred marker — for surfaces that mount everything active (chat) and
+ *  for a loader that must stay active. */
+export function stripDeferredMarker(tool: AgentTool): AgentTool {
+  if (!isDeferredTool(tool)) return tool;
+  const { deferred: _drop, ...active } = tool as AgentTool & { deferred?: boolean };
+  return active as AgentTool;
 }
 
 /** Wrap a plain return value into pi's tool-result shape; pass a full result through unchanged. */

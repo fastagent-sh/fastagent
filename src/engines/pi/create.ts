@@ -70,7 +70,10 @@ export async function resolveWorkspaceTools(
   // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; a
   // workspace-defined search_tools wins).
   const tools = withSearchTool(merged.tools);
-  const builtinLoaderMounted = tools !== merged.tools; // withSearchTool returns the input untouched otherwise
+  // Builtin = a search_tools that was ABSENT before withSearchTool (a reference compare would misfire
+  // on the deferred-authored-loader case, where withSearchTool returns a new array without adding one).
+  const builtinLoaderMounted =
+    !merged.tools.some((t) => t.name === "search_tools") && tools.some((t) => t.name === "search_tools");
   const toolCollisions = [...discovered.collisions, ...merged.collisions];
   // `toolNames` is the AUTHOR's active-by-default surface (config.tools + tools/): exclude pi
   // defaults, the builtin loader (like wake, a builtin gets its own report line, not an anonymous

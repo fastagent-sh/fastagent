@@ -32,7 +32,9 @@ export interface ToolActivation {
 export interface TurnContext {
   /** The session id of the current turn. */
   session: string;
-  /** Tool activation for the current turn's harness. Absent outside a turn (`fastagent tool`). */
+  /** Tool activation for the current turn's harness. Absent outside a SERVING turn — a bare
+   *  `fastagent tool` run, and also `fastagent chat` (which drives pi's own TUI runtime, not
+   *  invoke.ts; chat mounts every tool active, so there is nothing to activate there). */
   tools?: ToolActivation;
 }
 

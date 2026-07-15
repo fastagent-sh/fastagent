@@ -7,12 +7,23 @@
  */
 import { z } from "zod";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { defineTool, isDeferredTool } from "./tool.ts";
+import { log } from "../../log.ts";
+import { defineTool, isDeferredTool, stripDeferredMarker } from "./tool.ts";
 
 /** Mount the built-in loader iff any mounted tool is deferred and the author didn't define their own. */
 export function withSearchTool(tools: AgentTool[]): AgentTool[] {
   if (!tools.some(isDeferredTool)) return tools;
-  if (tools.some((t) => t.name === "search_tools")) return tools;
+  const authored = tools.find((t) => t.name === "search_tools");
+  if (authored) {
+    if (!isDeferredTool(authored)) return tools;
+    // A deferred LOADER is a contradiction — it is the only entry point to the deferred tools, so
+    // nothing could ever activate it (or, through it, them): every deferred tool would be silently
+    // unreachable. Ignore the marker and keep the loader active (fail visibly, keep the capability).
+    log.warn(
+      "[fastagent] search_tools is marked deferred — ignoring the marker: the loader must stay active, or no deferred tool could ever be activated",
+    );
+    return tools.map((t) => (t === authored ? stripDeferredMarker(t) : t));
+  }
   return [...tools, makeSearchToolsTool()];
 }
 

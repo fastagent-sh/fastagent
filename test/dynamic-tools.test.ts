@@ -51,6 +51,22 @@ describe("deferred tools: marker + mounting + prompt", () => {
     expect(kept.find((t) => t.name === "search_tools")?.description).toBe("my own loader");
   });
 
+  it("an authored search_tools marked deferred keeps the loader ACTIVE (a deferred loader would strand every deferred tool)", () => {
+    // The loader is the only entry point to the deferred tools — deferring it means nothing could ever
+    // activate anything: silent, permanent capability loss. The marker is ignored (and warned about).
+    const deferredLoader = defineTool({
+      name: "search_tools",
+      description: "my own loader",
+      input: z.object({}),
+      deferred: true,
+      execute: () => "mine",
+    });
+    const mounted = withSearchTool([weather(), deferredLoader]);
+    const loader = mounted.find((t) => t.name === "search_tools");
+    expect(loader?.description).toBe("my own loader"); // still the author's — no builtin swapped in
+    expect(loader && isDeferredTool(loader)).toBe(false); // marker stripped → in the initial active set
+  });
+
   it("piBasePrompt lists only non-deferred tools + a discovery note, so activation never changes the prompt", () => {
     const tools = withSearchTool([echo(), weather()]);
     const prompt = piBasePrompt({ tools });

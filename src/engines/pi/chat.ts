@@ -22,7 +22,6 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSessionRuntime,
@@ -39,7 +38,7 @@ import { loadConfig, resolveAgentDir, resolveModel, resolveModelSpec } from "./c
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
 import { createPiModels } from "./models.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
-import { isDeferredTool, loadTools, mergeDiscoveredTools } from "./tool.ts";
+import { loadTools, mergeDiscoveredTools, stripDeferredMarker } from "./tool.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 
 export interface RunPiChatOptions {
@@ -84,11 +83,7 @@ export async function buildChatRuntime(
     // ACTIVE. Strip the marker before the prompt assembly below: piBasePrompt would otherwise hide
     // the deferred tools and advertise a search_tools loader that is not mounted here — a prompt
     // that lies about the tool surface.
-    const tools = merged.tools.map((t) => {
-      if (!isDeferredTool(t)) return t;
-      const { deferred: _drop, ...active } = t as AgentTool & { deferred?: boolean };
-      return active as AgentTool;
-    });
+    const tools = merged.tools.map(stripDeferredMarker);
     const crossCollisions = merged.collisions;
     reportToolCollisions([...discovered.collisions, ...crossCollisions]);
     reportModuleLoadFailures(discovered.failures);

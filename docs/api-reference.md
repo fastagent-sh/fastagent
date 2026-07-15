@@ -212,9 +212,11 @@ Costs and behavior to know:
   restriction of its own.
 - `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the activation bridge a custom
   loader can use; `activate` is additive and ignores unknown names.
-- **`fastagent chat` does not emulate deferral**: in the local TUI every tool mounts active and
-  `search_tools` is not present — deferral is a serving-cost optimization and takes effect on the
-  serving path (`dev`/`start`/`invoke`). Verify discovery behavior with `fastagent dev`, not chat.
+- **`fastagent chat` does not emulate deferral**: in the local TUI every tool mounts active and the
+  built-in loader is not mounted (an authored `search_tools` mounts as a normal tool, but
+  `ToolContext.tools` is undefined there — chat drives pi's own TUI runtime, not fastagent's invoke
+  path). Deferral takes effect on the serving path (`dev`/`start`/`invoke`); verify discovery
+  behavior with `fastagent dev`, not chat.
 
 ## Channel authoring
 
