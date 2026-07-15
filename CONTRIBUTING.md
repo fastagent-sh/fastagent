@@ -42,9 +42,13 @@ Tests use faux models by default, so they validate serving mechanics without net
 ```bash
 git checkout main
 git pull --ff-only
-git branch -d <merged-branch>
+git branch -D <merged-branch>
 git fetch --prune origin
 ```
+
+`-D`, not `-d`: after a squash merge the branch tip is never an ancestor of `main`, so `-d` always
+refuses with "not fully merged". Verify the PR actually merged first (`gh pr view <n> --json state`) —
+`-D` skips git's own safety check.
 
 ## Validation before merge
 

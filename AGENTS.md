@@ -139,8 +139,11 @@ Full version: `CONTRIBUTING.md`. The essentials:
 4. **Review policy.** Merging is an explicit maintainer decision — agents never merge. Green CI makes a PR eligible; report "ready to merge" and stop. External-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**
    ```bash
-   git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin
+   git checkout main && git pull --ff-only && git branch -D <branch> && git fetch --prune origin
    ```
+   `-D`, not `-d`: after a squash merge the branch tip is never an ancestor of `main`, so `-d` always
+   refuses with "not fully merged". Verify the PR actually merged first (`gh pr view <n> --json state`)
+   — `-D` skips git's own safety check.
 6. **Releases publish via npm Trusted Publishing (OIDC), never a local `npm publish`.** The npm package
    must keep its `publish` trusted-publisher binding to `fastagent-sh/fastagent` / `publish.yml` /
    environment `npm`. Flow:
