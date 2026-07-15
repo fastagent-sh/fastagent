@@ -108,6 +108,7 @@ export async function createPiAgentFromWorkspace(
   await ensureStateRootSelfIgnored(dir, stateRoot);
   const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
     model: modelSpec,
+    thinkingLevel: config.thinkingLevel,
     cwd: dir,
     tools: mountedTools,
     authPath,

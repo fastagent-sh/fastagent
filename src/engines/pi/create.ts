@@ -11,7 +11,7 @@
  * they come from the definition; the openers own model/tools — from config resolution).
  */
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
-import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
+import type { AgentTool, ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
@@ -149,6 +149,7 @@ export function assembleSystemPrompt(options: AssembleSystemPromptOptions): stri
  */
 function buildPiAgent(opts: {
   model: string;
+  thinkingLevel?: ThinkingLevel;
   providers?: Provider[];
   authPath?: string;
   systemPrompt?: string | (() => string);
@@ -168,6 +169,7 @@ function buildPiAgent(opts: {
       env: opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() }),
       models,
       model: resolveModel(models, opts.model),
+      thinkingLevel: opts.thinkingLevel,
       systemPrompt: opts.systemPrompt,
       tools: opts.tools,
       skills: opts.skills,
@@ -198,6 +200,8 @@ function instructionsPrompt(
 export interface CreatePiAgentOptions {
   /** Model spec "provider/modelId" (e.g. "openai-codex/gpt-5.5"), resolved against {@link models}. */
   model: string;
+  /** Reasoning effort (pi's scale). Unset = pi's default; unsupported levels are clamped per model. */
+  thinkingLevel?: ThinkingLevel;
   /**
    * The system prompt itself — verbatim, no engine base and no wrapping (unlike the directory path,
    * which assembles the engine base + AGENTS.md as segment ② + persona.md as segment ①). A plain string
@@ -232,6 +236,7 @@ export interface CreatePiAgentOptions {
 export function createPiAgent(options: CreatePiAgentOptions): Agent {
   return buildPiAgent({
     model: options.model,
+    thinkingLevel: options.thinkingLevel,
     providers: options.providers,
     authPath: options.authPath,
     systemPrompt: instructionsPrompt(options.instructions, options.skills),
@@ -250,6 +255,8 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
 export interface CreatePiAgentFromDefinitionOptions {
   /** Model spec "provider/modelId", resolved against {@link models}. */
   model: string;
+  /** Reasoning effort (pi's scale). Unset = pi's default; unsupported levels are clamped per model. */
+  thinkingLevel?: ThinkingLevel;
   /** Override the engine base prompt (segment ①). Defaults to piBasePrompt({ tools, persona }) using the
    *  live-read persona.md; pass base to fully opt out of persona.md. */
   base?: string;
@@ -306,6 +313,7 @@ export async function createPiAgentFromDefinition(
   const tools = options.tools ?? piDefaultTools(env.cwd);
   const agent = buildPiAgent({
     model: options.model,
+    thinkingLevel: options.thinkingLevel,
     providers: options.providers,
     // Dir-aware default: the same state-root-derived file the opener uses for this dir (the opener
     // passes an explicit authPath, so this only affects direct L2 callers).

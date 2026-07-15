@@ -517,6 +517,7 @@ async function runInfo(): Promise<void> {
           agentDir,
           configPath: configPath ?? null,
           model: modelSpec ?? null,
+          thinkingLevel: config.thinkingLevel ?? null,
           context: definition.contextFiles.map((f) => f.path),
           persona: definition.persona !== undefined,
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
@@ -544,6 +545,7 @@ async function runInfo(): Promise<void> {
   if (agentDir !== dir) console.log(`agent:    ${agentDir}`);
   console.log(`config:   ${configPath ?? "(none)"}`);
   console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
+  if (config.thinkingLevel) console.log(`thinking: ${config.thinkingLevel}`);
   console.log(`context:  ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
   console.log(`persona:  ${definition.persona ? "persona.md" : "(none)"}`);
   console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
@@ -1322,7 +1324,9 @@ async function serveOnce(): Promise<void> {
   log.info(`[fastagent] dir:    ${dir}`);
   if (a.agentDir !== dir) log.info(`[fastagent] agent:  ${a.agentDir}`);
   log.info(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
-  log.info(`[fastagent] model:  ${a.modelSpec}`);
+  log.info(
+    `[fastagent] model:  ${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`,
+  );
   await reportAuth(a.modelSpec, a.authPath);
   reportAgentsSkillsTools(a);
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
@@ -1368,7 +1372,7 @@ async function runStart(): Promise<void> {
 
   log.info(`[fastagent] start:  ${dir}`);
   if (agentDir !== dir) log.info(`[fastagent] agent:  ${agentDir}`);
-  log.info(`[fastagent] model:  ${modelSpec}`);
+  log.info(`[fastagent] model:  ${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(modelSpec, authPath);
   log.info(`[fastagent] context: ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
   if (definition.persona) log.info(`[fastagent] persona: persona.md`);
