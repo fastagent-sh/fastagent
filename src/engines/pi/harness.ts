@@ -9,6 +9,7 @@
 import { AgentHarness } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
+import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
 
 /**
@@ -61,10 +62,53 @@ export interface PiHarnessFactoryOptions {
  */
 const PROVIDER_MAX_RETRIES = 2;
 
+/**
+ * Restore the session's recorded active-tool set for a fresh harness. pi's harness WRITES active-tool
+ * changes to the session (`setActiveTools` → `active_tools_change`) but its constructor never reads
+ * them back — pi's long-lived TUI harness keeps the set in memory, while fastagent builds a FRESH
+ * harness per invoke, which would silently reset the session's active set to "all tools" every turn.
+ * `null` (never changed) → undefined → pi's default (all mounted tools active).
+ *
+ * Names are filtered to the currently-mounted tools: the constructor THROWS on unknown names, so a
+ * recorded tool that was since removed from the workspace would otherwise brick every future invoke
+ * of that session. An intact EMPTY set is restored as-is (pi allows `setActiveTools([])`; that is a
+ * deliberate recorded state, not a degradation). Only a NON-empty set that filters down to empty
+ * falls back to the default — the recorded intent cannot be honored, and honoring its empty shadow
+ * would be a silent capability loss. Both filter degradations are logged (fail visibly) — ONCE per
+ * session+missing set: a fresh harness is built per invoke and channel sessions live for weeks, so an
+ * un-deduped warn would repeat every turn and dilute its own signal. A log-dedup memo (like L2's
+ * findings memo), not session state — the restore itself stays derived from the session every time.
+ */
+const warnedRestores = new Set<string>();
+export function restoreActiveToolNames(
+  recorded: string[] | null,
+  tools: AgentTool[],
+  sessionId: string,
+): string[] | undefined {
+  if (recorded === null) return undefined;
+  const mounted = new Set(tools.map((t) => t.name));
+  const known = recorded.filter((name) => mounted.has(name));
+  if (known.length === recorded.length) return known; // intact, including a deliberate []
+  const missing = recorded.filter((name) => !mounted.has(name));
+  const emit = warnedRestores.has(`${sessionId}\u0000${missing.join(",")}`) ? log.debug : log.warn;
+  warnedRestores.add(`${sessionId}\u0000${missing.join(",")}`);
+  if (known.length === 0) {
+    emit(
+      `[fastagent] session ${sessionId}: none of its recorded active tools (${missing.join(", ")}) are mounted — falling back to all mounted tools`,
+    );
+    return undefined;
+  }
+  emit(`[fastagent] session ${sessionId}: dropping recorded active tool(s) no longer mounted: ${missing.join(", ")}`);
+  return known;
+}
+
 /** Open-or-create the session per invoke: existing → open (history via buildContext); missing → create. */
 export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFactory {
   return async (sessionId) => {
     const session = await options.sessions.openOrCreate(sessionId);
+    // One extra entry walk per invoke to read the recorded active-tool set (buildContext is the only
+    // accessor) — negligible against the model call, same trade as L2's per-invoke definition re-read.
+    const context = await session.buildContext();
     const fresh = options.live ? await options.live() : undefined;
     const { systemPrompt } = options;
     const prompt = fresh ? fresh.systemPrompt : typeof systemPrompt === "function" ? systemPrompt() : systemPrompt;
@@ -75,6 +119,7 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       models: options.models,
       model: options.model,
       tools: options.tools,
+      activeToolNames: restoreActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId),
       systemPrompt: prompt,
       resources: skills ? { skills } : undefined,
       streamOptions: { maxRetries: PROVIDER_MAX_RETRIES },
