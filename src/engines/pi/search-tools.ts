@@ -27,6 +27,12 @@ export function withSearchTool(tools: AgentTool[]): AgentTool[] {
   return [...tools, makeSearchToolsTool()];
 }
 
+/** Activation cap per search: activation is additive, session-persisted, and has NO deactivate path —
+ *  without a cap, one broad token ("get", "file") would permanently activate half the catalog and
+ *  silently spend the entire deferral benefit for the rest of the conversation. Over the cap nothing
+ *  activates; the model gets the candidates and narrows the query. */
+const MAX_ACTIVATIONS_PER_SEARCH = 5;
+
 /** Build the `search_tools` loader. Keyword search over the inactive tools' name+description. */
 export function makeSearchToolsTool(): AgentTool {
   return defineTool({
@@ -44,7 +50,8 @@ export function makeSearchToolsTool(): AgentTool {
       const inactive = ctx.tools.registered().filter((t) => !active.has(t.name));
       if (inactive.length === 0) return "All tools are already active — nothing to discover.";
       // ponytail: naive keyword match (any query token as a case-insensitive substring of
-      // name+description); swap in scoring/embeddings if catalogs outgrow it.
+      // name+description) with a hard per-search activation cap above — the two named ceilings are
+      // relevance and irreversibility; swap in scoring/embeddings if catalogs outgrow this.
       const tokens = input.query
         .toLowerCase()
         .split(/[^a-z0-9]+/)
@@ -55,6 +62,11 @@ export function makeSearchToolsTool(): AgentTool {
       });
       if (matches.length === 0) {
         return `No tools matched "${input.query}". Inactive tools: ${inactive
+          .map((t) => `${t.name} — ${t.description.split("\n")[0]}`)
+          .join("; ")}`;
+      }
+      if (matches.length > MAX_ACTIVATIONS_PER_SEARCH) {
+        return `${matches.length} tools matched "${input.query}" — too many to activate at once (activation is permanent for this conversation). Narrow the query. Matches: ${matches
           .map((t) => `${t.name} — ${t.description.split("\n")[0]}`)
           .join("; ")}`;
       }

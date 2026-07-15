@@ -180,6 +180,39 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     expect((await factory("s2")).getActiveTools().map((t) => t.name)).toEqual(["echo", "search_tools"]);
   });
 
+  it("a broad query over the activation cap activates NOTHING and asks for a narrower query", async () => {
+    // Activation is additive, session-persisted, and has no deactivate path — one broad token must
+    // not permanently activate the catalog.
+    const many = Array.from({ length: 6 }, (_, i) =>
+      defineTool({
+        name: `fetch_${i}`,
+        description: `Fetch resource kind ${i}`,
+        input: z.object({}),
+        deferred: true,
+        execute: () => "ok",
+      }),
+    );
+    const { faux, models } = makeFaux();
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch" }, { id: "c1" })),
+      fauxAssistantMessage("ok"),
+    ]);
+    const factory = piHarnessFactory({
+      sessions: inMemorySessionStore(),
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      tools: withSearchTool(many),
+      systemPrompt: "test",
+    });
+    const agent = createPiAgentFromHarness({ harnessFactory: factory });
+    const events: AgentEvent[] = [];
+    for await (const e of agent.invoke({ session: "s4" }, { text: "go" })) events.push(e);
+    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
+    expect(JSON.stringify(ended.content)).toMatch(/too many to activate at once/);
+    expect((await factory("s4")).getActiveTools().map((t) => t.name)).toEqual(["search_tools"]); // nothing activated
+  });
+
   it("search_tools outside a turn (bare `fastagent tool` run) degrades with a clear message", async () => {
     const tool = makeSearchToolsTool() as unknown as {
       execute: (id: string, params: unknown) => Promise<{ content: Array<{ text?: string }> }>;
