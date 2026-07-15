@@ -14,7 +14,7 @@ import { join } from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
-import { turnContext } from "./tool-context.ts";
+import { type ToolActivation, turnContext } from "./tool-context.ts";
 
 export interface ToolContext {
   /** Abort signal for the current turn — honor it to cancel in-flight work on cancellation. */
@@ -24,6 +24,9 @@ export interface ToolContext {
    *  `fastagent tool` run, or any call with no session). (The built-in `wake` tool is one consumer — it
    *  fires a later turn back into this same session.) */
   session?: string;
+  /** Tool activation for the current turn (a loader tool activates {@link DefineToolOptions.deferred}
+   *  tools with it — the built-in `search_tools` is one consumer). Undefined outside a turn. */
+  tools?: ToolActivation;
 }
 
 export interface DefineToolOptions<I extends z.ZodType> {
@@ -31,7 +34,21 @@ export interface DefineToolOptions<I extends z.ZodType> {
   name?: string;
   description: string;
   input: I;
+  /**
+   * Registered but NOT initially active: the tool's schema stays out of every request (and the model's
+   *  sight) until a loader — the built-in `search_tools`, mounted automatically when any deferred tool
+   *  exists — activates it mid-turn. For tool-heavy agents: fewer schemas per turn, and on providers
+   *  with native deferred loading the activation preserves the prompt-cache prefix. The trade-off:
+   *  discovery rides entirely on this description — write it for the search. Default: false.
+   */
+  deferred?: boolean;
   execute: (input: z.infer<I>, ctx: ToolContext) => unknown | Promise<unknown>;
+}
+
+/** Read the {@link DefineToolOptions.deferred} marker off a mounted tool (extra property on the
+ *  AgentTool object — pi ignores it; config.tools authors can set it on a raw tool too). */
+export function isDeferredTool(tool: AgentTool): boolean {
+  return (tool as { deferred?: unknown }).deferred === true;
 }
 
 /** Wrap a plain return value into pi's tool-result shape; pass a full result through unchanged. */
@@ -49,6 +66,7 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
     name: options.name ?? "",
     description: options.description,
     parameters,
+    ...(options.deferred ? { deferred: true } : {}),
     async execute(_toolCallId: string, rawParams: unknown, signal?: AbortSignal): Promise<AgentToolResult<unknown>> {
       const parsed = options.input.safeParse(rawParams);
       if (!parsed.success) {
@@ -56,7 +74,25 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
         const detail = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
         return { content: [{ type: "text", text: `Invalid arguments: ${detail}` }], details: { error: detail } };
       }
-      return wrapResult(await options.execute(parsed.data, { signal, session: turnContext.getStore()?.session }));
+      const store = turnContext.getStore();
+      const before = store?.tools?.active();
+      const result = wrapResult(
+        await options.execute(parsed.data, { signal, session: store?.session, tools: store?.tools }),
+      );
+      // Stamp tools newly activated DURING this execute on the result — the load point that lets native
+      // deferred-loading providers add the definitions at this transcript position without invalidating
+      // the cached prompt prefix (mirrors pi's extension wrapper). Only a purely-ADDITIVE change is
+      // stamped; a removal in the same turn falls back to pi's full-list path.
+      if (store?.tools && before) {
+        const after = store.tools.active();
+        if (before.every((name) => after.includes(name))) {
+          const added = after.filter((name) => !before.includes(name));
+          if (added.length > 0) {
+            result.addedToolNames = [...new Set([...(result.addedToolNames ?? []), ...added])];
+          }
+        }
+      }
+      return result;
     },
   };
   return tool as unknown as AgentTool;

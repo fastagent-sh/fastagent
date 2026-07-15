@@ -11,9 +11,29 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
+/**
+ * The turn's tool-activation bridge — narrow closures over the CURRENT harness (invoke.ts builds it
+ * per turn), so a loader tool can activate deferred tools mid-turn without tool.ts importing the
+ * harness. pi records the change in the session (`active_tools_change`) and the per-invoke restore
+ * (harness.ts) carries it into later turns; defineTool's wrapper stamps the newly-activated names on
+ * the tool result (`addedToolNames`) — the load point native deferred-loading providers preserve the
+ * prompt-cache prefix with.
+ */
+export interface ToolActivation {
+  /** Names of the currently ACTIVE tools. */
+  active(): string[];
+  /** Every registered tool (active or not) — the discovery corpus for a loader like `search_tools`. */
+  registered(): Array<{ name: string; description: string }>;
+  /** ADDITIVE activation. Unknown names are ignored (pi's own contract); resolves the names actually
+   *  newly activated (already-active names don't repeat). */
+  activate(names: string[]): Promise<string[]>;
+}
+
 export interface TurnContext {
   /** The session id of the current turn. */
   session: string;
+  /** Tool activation for the current turn's harness. Absent outside a turn (`fastagent tool`). */
+  tools?: ToolActivation;
 }
 
 export const turnContext = new AsyncLocalStorage<TurnContext>();

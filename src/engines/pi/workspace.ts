@@ -75,6 +75,8 @@ export async function createPiAgentFromWorkspace(
   authPath: string;
   /** Non-default tool names in effect: config.tools + discovered tools/. */
   toolNames: string[];
+  /** Tools registered but not initially active (deferred) — activated via search_tools. */
+  deferredToolNames: string[];
   toolCollisions: ToolCollision[];
   /** `tools/` files that failed to import — skipped, reported by the caller, never fatal. */
   toolFailures: ModuleLoadFailure[];
@@ -89,7 +91,11 @@ export async function createPiAgentFromWorkspace(
   // The run root is `dir` (cwd — where config lives, whose AGENTS.md is ② context); the agent's own
   // surface (persona/skills/tools/channels) lives in `agentDir` (config.agentDir, or `dir` when flat).
   const agentDir = resolveAgentDir(dir, config);
-  const { tools, toolNames, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, agentDir, dir);
+  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures } = await resolveWorkspaceTools(
+    config,
+    agentDir,
+    dir,
+  );
   // The state root: auth/sessions/channel state all derive from it, so FASTAGENT_STATE_DIR moves the
   // whole machine-state home in one knob (a container mounts one volume); the finer overrides below
   // still win for their specific path.
@@ -126,6 +132,7 @@ export async function createPiAgentFromWorkspace(
     sessionsDir,
     authPath,
     toolNames,
+    deferredToolNames,
     toolCollisions,
     toolFailures,
   };

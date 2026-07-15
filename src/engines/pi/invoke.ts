@@ -17,7 +17,7 @@ import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { type Agent, type AgentEvent, type Json, type Prompt, type Scope, SESSION_BUSY_CODE } from "../../agent.ts";
 import { log } from "../../log.ts";
 import type { PiHarnessFactory } from "./harness.ts";
-import { turnContext } from "./tool-context.ts";
+import { type ToolActivation, turnContext } from "./tool-context.ts";
 
 // ── §1 Lease: single-writer concurrency floor ───────────────────────────────
 //
@@ -166,6 +166,26 @@ export function errorToTerminal(error: unknown): AgentEvent {
 type PiHarness = Awaited<ReturnType<PiHarnessFactory>>;
 
 /**
+ * The turn's {@link ToolActivation} over the live harness. `activate` is additive and filters to the
+ * registered names first — pi's `setActiveTools` THROWS on unknown names, and a loader must get a
+ * usable "nothing new" answer, not an exception. pi persists the change in the session, so the
+ * per-invoke restore (harness.ts) carries it into later turns.
+ */
+function toolActivation(harness: PiHarness): ToolActivation {
+  return {
+    active: () => harness.getActiveTools().map((t) => t.name),
+    registered: () => harness.getTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
+    async activate(names) {
+      const registered = new Set(harness.getTools().map((t) => t.name));
+      const current = harness.getActiveTools().map((t) => t.name);
+      const added = [...new Set(names)].filter((n) => registered.has(n) && !current.includes(n));
+      if (added.length > 0) await harness.setActiveTools([...current, ...added]);
+      return added;
+    },
+  };
+}
+
+/**
  * After a successful turn, compact the session if its context has grown past pi's threshold — a long
  * shared (group) or 1:1 conversation otherwise overflows the model's window. pi owns the mechanism
  * (`harness.compact()` writes a summary entry into the session, so the next reopen is compacted); the
@@ -292,7 +312,9 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         // (turnContext / ToolContext.session). prompt() starts the async work synchronously here, so the
         // store propagates to the tool calls awaited within it.
         const opts = await toPiPromptOptions(prompt);
-        const run = turnContext.run({ session: scope.session }, () => harness.prompt(prompt.text, opts));
+        const run = turnContext.run({ session: scope.session, tools: toolActivation(harness) }, () =>
+          harness.prompt(prompt.text, opts),
+        );
         yield* queue.drainUntil(run);
         let terminal: AgentEvent;
         try {

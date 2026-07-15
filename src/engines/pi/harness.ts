@@ -11,6 +11,7 @@ import type { AgentTool, ExecutionEnv, Skill, ThinkingLevel } from "@earendil-wo
 import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
+import { isDeferredTool } from "./tool.ts";
 
 /**
  * pi's Model with the API-shape generic erased — fastagent only passes models through to the
@@ -74,6 +75,13 @@ const PROVIDER_MAX_RETRIES = 2;
  */
 const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
+/** The initial active set for a session with NO recorded active-tool state: everything not marked
+ *  deferred. undefined when nothing is deferred — pi's default (all active) applies, and today's
+ *  behavior is untouched for tool-sets that don't use deferral. */
+function initialActiveToolNames(tools: AgentTool[]): string[] | undefined {
+  return tools.some(isDeferredTool) ? tools.filter((t) => !isDeferredTool(t)).map((t) => t.name) : undefined;
+}
+
 /**
  * Restore the session's recorded active-tool set for a fresh harness. pi's harness WRITES active-tool
  * changes to the session (`setActiveTools` → `active_tools_change`) but its constructor never reads
@@ -132,7 +140,9 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       model: options.model,
       thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
       tools: options.tools,
-      activeToolNames: restoreActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId),
+      activeToolNames:
+        restoreActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId) ??
+        initialActiveToolNames(options.tools ?? []),
       systemPrompt: prompt,
       resources: skills ? { skills } : undefined,
       streamOptions: { maxRetries: PROVIDER_MAX_RETRIES },

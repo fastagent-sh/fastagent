@@ -187,11 +187,30 @@ export default defineTool({
 
 `tools/<name>.ts` files are discovered with `loadTools(dir)`, and the filename becomes the tool name.
 
-The second `execute` argument is a `ToolContext`: `{ signal?, session? }`. `session` is the id of the
-current turn's conversation (undefined outside a turn, e.g. a bare `fastagent tool` run) — a per-turn
+The second `execute` argument is a `ToolContext`: `{ signal?, session?, tools? }`. `session` is the id of
+the current turn's conversation (undefined outside a turn, e.g. a bare `fastagent tool` run) — a per-turn
 value carried via `AsyncLocalStorage`, not a closure (a tool is built once and reused across sessions).
 The built-in **`wake`** tool uses it to self-schedule: `wake({ in, prompt })` records a one-shot wake-up
 that the scheduler fires back into THIS session after the delay (see [Schedule authoring](#schedule-authoring)).
+
+### Deferred tools
+
+For tool-heavy agents, `defineTool({ ..., deferred: true })` registers a tool without activating it:
+its schema stays out of every request (and the model's sight) until discovered. When any deferred tool
+is mounted, fastagent automatically mounts the built-in **`search_tools`** loader (a workspace tool
+named `search_tools` wins — the author owns the concept then): the model searches by keywords, matching
+tools are activated mid-turn, and the activation is recorded in the session, so it survives fastagent's
+per-invoke harness rebuild for the rest of that conversation.
+
+Costs and behavior to know:
+
+- **Discovery rides on the `description`** — a deferred tool the model never searches for effectively
+  does not exist. Write descriptions with the search in mind.
+- On providers with native deferred loading (Anthropic Sonnet/Opus/Fable ≥4.5, OpenAI gpt-5.4+), an
+  activation preserves the provider's prompt-cache prefix; other providers still work but may pay a
+  cache miss on activation.
+- `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the activation bridge a custom
+  loader can use; `activate` is additive and ignores unknown names.
 
 ## Channel authoring
 
