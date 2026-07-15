@@ -24,8 +24,8 @@ export interface ToolActivation {
   active(): string[];
   /** Every registered tool (active or not) — the discovery corpus for a loader like `search_tools`. */
   registered(): Array<{ name: string; description: string }>;
-  /** ADDITIVE activation. Unknown names are ignored (pi's own contract); resolves the names actually
-   *  newly activated (already-active names don't repeat). */
+  /** ADDITIVE activation. Unknown names are filtered out before reaching pi (whose `setActiveTools`
+   *  THROWS on them); resolves the names actually newly activated (already-active names don't repeat). */
   activate(names: string[]): Promise<string[]>;
 }
 

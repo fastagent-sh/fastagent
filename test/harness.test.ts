@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { inMemorySessionStore } from "../src/index.ts";
-import { piHarnessFactory, restoreActiveToolNames } from "../src/engines/pi/harness.ts";
+import { piHarnessFactory, resolveHarnessActiveToolNames } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 
 const fakeTool = (name: string): AgentTool =>
@@ -74,12 +74,19 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     expect(second.getActiveTools().map((t) => t.name)).toEqual(["beta"]);
   });
 
-  it("restoreActiveToolNames: null → default; intact [] restored as-is; filter-to-empty → default", () => {
+  it("resolveHarnessActiveToolNames: null → default; intact [] restored as-is; filter-to-empty → default", () => {
     const tools = [fakeTool("alpha")];
-    expect(restoreActiveToolNames(null, tools, "s")).toBeUndefined(); // never changed → pi's default
-    expect(restoreActiveToolNames(["alpha"], tools, "s")).toEqual(["alpha"]);
-    expect(restoreActiveToolNames([], tools, "s")).toEqual([]); // deliberate empty set → faithful
-    expect(restoreActiveToolNames(["ghost"], tools, "s")).toBeUndefined(); // intent unhonorable → default
+    expect(resolveHarnessActiveToolNames(null, tools, "s")).toBeUndefined(); // never changed → pi's default
+    expect(resolveHarnessActiveToolNames(["alpha"], tools, "s")).toEqual(["alpha"]);
+    expect(resolveHarnessActiveToolNames([], tools, "s")).toEqual([]); // deliberate empty set → faithful
+    expect(resolveHarnessActiveToolNames(["ghost"], tools, "s")).toBeUndefined(); // intent unhonorable → default
+
+    // With a deferred tool mounted, both fallbacks resolve to the INITIAL set (non-deferred only) —
+    // never "all mounted", which would silently activate the deferred tool.
+    const deferredTool = Object.assign(fakeTool("lazy"), { deferred: true });
+    const withDeferred = [fakeTool("alpha"), deferredTool];
+    expect(resolveHarnessActiveToolNames(null, withDeferred, "s")).toEqual(["alpha"]);
+    expect(resolveHarnessActiveToolNames(["ghost"], withDeferred, "s2")).toEqual(["alpha"]);
   });
 });
 

@@ -75,22 +75,27 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
         return { content: [{ type: "text", text: `Invalid arguments: ${detail}` }], details: { error: detail } };
       }
       const store = turnContext.getStore();
-      const before = store?.tools?.active();
-      const result = wrapResult(
-        await options.execute(parsed.data, { signal, session: store?.session, tools: store?.tools }),
-      );
-      // Stamp tools newly activated DURING this execute on the result — the load point that lets native
-      // deferred-loading providers add the definitions at this transcript position without invalidating
-      // the cached prompt prefix (mirrors pi's extension wrapper). Only a purely-ADDITIVE change is
-      // stamped; a removal in the same turn falls back to pi's full-list path.
-      if (store?.tools && before) {
-        const after = store.tools.active();
-        if (before.every((name) => after.includes(name))) {
-          const added = after.filter((name) => !before.includes(name));
-          if (added.length > 0) {
-            result.addedToolNames = [...new Set([...(result.addedToolNames ?? []), ...added])];
+      // Stamp tools THIS execute activates on its result — the load point that lets native
+      // deferred-loading providers add the definitions at this transcript position without
+      // invalidating the cached prompt prefix. The names come from this execute's OWN activate()
+      // calls (accumulated below), NOT from an active-set before/after diff: pi runs tool calls of a
+      // batch in parallel, and a snapshot diff would stamp a sibling's activation onto the wrong tool
+      // result, drifting the load point.
+      const added: string[] = [];
+      const tools = store?.tools
+        ? {
+            ...store.tools,
+            activate: async (names: string[]) => {
+              // biome-ignore lint/style/noNonNullAssertion: guarded by the ternary above
+              const activated = await store.tools!.activate(names);
+              added.push(...activated);
+              return activated;
+            },
           }
-        }
+        : undefined;
+      const result = wrapResult(await options.execute(parsed.data, { signal, session: store?.session, tools }));
+      if (added.length > 0) {
+        result.addedToolNames = [...new Set([...(result.addedToolNames ?? []), ...added])];
       }
       return result;
     },

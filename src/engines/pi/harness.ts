@@ -75,37 +75,35 @@ const PROVIDER_MAX_RETRIES = 2;
  */
 const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
-/** The initial active set for a session with NO recorded active-tool state: everything not marked
- *  deferred. undefined when nothing is deferred — pi's default (all active) applies, and today's
- *  behavior is untouched for tool-sets that don't use deferral. */
-function initialActiveToolNames(tools: AgentTool[]): string[] | undefined {
-  return tools.some(isDeferredTool) ? tools.filter((t) => !isDeferredTool(t)).map((t) => t.name) : undefined;
-}
-
 /**
- * Restore the session's recorded active-tool set for a fresh harness. pi's harness WRITES active-tool
- * changes to the session (`setActiveTools` → `active_tools_change`) but its constructor never reads
- * them back — pi's long-lived TUI harness keeps the set in memory, while fastagent builds a FRESH
- * harness per invoke, which would silently reset the session's active set to "all tools" every turn.
- * `null` (never changed) → undefined → pi's default (all mounted tools active).
+ * Resolve the active-tool set for a fresh harness — the ONE place both fallbacks live. pi's harness
+ * WRITES active-tool changes to the session (`setActiveTools` → `active_tools_change`) but its
+ * constructor never reads them back — pi's long-lived TUI harness keeps the set in memory, while
+ * fastagent builds a FRESH harness per invoke, which would silently reset the session's active set
+ * every turn.
  *
- * Names are filtered to the currently-mounted tools: the constructor THROWS on unknown names, so a
- * recorded tool that was since removed from the workspace would otherwise brick every future invoke
- * of that session. An intact EMPTY set is restored as-is (pi allows `setActiveTools([])`; that is a
+ * No record (`null`) → the INITIAL set: every non-deferred tool; undefined when nothing is deferred
+ * (pi's default — all active — applies, and no session entry is ever written; tool-sets without
+ * deferral behave exactly as before deferral existed).
+ *
+ * A recorded set is filtered to the currently-mounted tools: the constructor THROWS on unknown names,
+ * so a recorded tool that was since removed from the workspace would otherwise brick every future
+ * invoke of that session. An intact EMPTY set is restored as-is (pi allows `setActiveTools([])`; a
  * deliberate recorded state, not a degradation). Only a NON-empty set that filters down to empty
- * falls back to the default — the recorded intent cannot be honored, and honoring its empty shadow
- * would be a silent capability loss. Both filter degradations are logged (fail visibly) — ONCE per
- * session+missing set: a fresh harness is built per invoke and channel sessions live for weeks, so an
- * un-deduped warn would repeat every turn and dilute its own signal. A log-dedup memo (like L2's
- * findings memo), not session state — the restore itself stays derived from the session every time.
+ * falls back to the initial set — the recorded intent cannot be honored, and honoring its empty
+ * shadow would be a silent capability loss. Both filter degradations are logged (fail visibly) —
+ * ONCE per session+missing set: a fresh harness is built per invoke and channel sessions live for
+ * weeks, so an un-deduped warn would repeat every turn and dilute its own signal. A log-dedup memo
+ * (like L2's findings memo), not session state — the resolve stays derived from the session.
  */
 const warnedRestores = new Set<string>();
-export function restoreActiveToolNames(
+export function resolveHarnessActiveToolNames(
   recorded: string[] | null,
   tools: AgentTool[],
   sessionId: string,
 ): string[] | undefined {
-  if (recorded === null) return undefined;
+  const initial = tools.some(isDeferredTool) ? tools.filter((t) => !isDeferredTool(t)).map((t) => t.name) : undefined;
+  if (recorded === null) return initial;
   const mounted = new Set(tools.map((t) => t.name));
   const known = recorded.filter((name) => mounted.has(name));
   if (known.length === recorded.length) return known; // intact, including a deliberate []
@@ -114,9 +112,9 @@ export function restoreActiveToolNames(
   warnedRestores.add(`${sessionId}\u0000${missing.join(",")}`);
   if (known.length === 0) {
     emit(
-      `[fastagent] session ${sessionId}: none of its recorded active tools (${missing.join(", ")}) are mounted — falling back to all mounted tools`,
+      `[fastagent] session ${sessionId}: none of its recorded active tools (${missing.join(", ")}) are mounted — falling back to the initial active set (every non-deferred tool)`,
     );
-    return undefined;
+    return initial;
   }
   emit(`[fastagent] session ${sessionId}: dropping recorded active tool(s) no longer mounted: ${missing.join(", ")}`);
   return known;
@@ -140,9 +138,7 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       model: options.model,
       thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
       tools: options.tools,
-      activeToolNames:
-        restoreActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId) ??
-        initialActiveToolNames(options.tools ?? []),
+      activeToolNames: resolveHarnessActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId),
       systemPrompt: prompt,
       resources: skills ? { skills } : undefined,
       streamOptions: { maxRetries: PROVIDER_MAX_RETRIES },
