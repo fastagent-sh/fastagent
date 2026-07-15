@@ -209,6 +209,20 @@ describe("config: loadConfig", () => {
     await expect(loadConfig(dir)).rejects.toThrow(/"http\.port" must be an integer/);
   });
 
+  it("thinkingLevel: a valid pi level loads; an invalid value throws (fail visibly, not a silent default)", async () => {
+    const load = async (body: string) => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      return loadConfig(dir);
+    };
+    const { config } = await load(`export default { thinkingLevel: "high" };`);
+    expect(config.thinkingLevel).toBe("high");
+    await expect(load(`export default { thinkingLevel: "hgih" };`)).rejects.toThrow(
+      /"thinkingLevel" must be one of off, minimal, low, medium, high, xhigh, max/,
+    );
+    await expect(load(`export default { thinkingLevel: 3 };`)).rejects.toThrow(/"thinkingLevel" must be one of/);
+  });
+
   it("unknown top-level keys throw instead of silently degrading to zero-config", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { modle: "openai-codex/gpt-5.5" };`);

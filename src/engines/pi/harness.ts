@@ -7,7 +7,7 @@
  * historical entries back into context via buildContext().
  */
 import { AgentHarness } from "@earendil-works/pi-agent-core";
-import type { AgentTool, ExecutionEnv, Skill } from "@earendil-works/pi-agent-core";
+import type { AgentTool, ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
@@ -29,6 +29,9 @@ export interface PiHarnessFactoryOptions {
   /** Provider collection for all model requests; {@link model} must belong to it (same provider id). */
   models: Models;
   model: AnyModel;
+  /** Reasoning effort for the model (pi's scale). Unset = fastagent's pinned default ("medium", pi
+   *  TUI parity — see {@link DEFAULT_THINKING_LEVEL}); unsupported levels are clamped by pi per model. */
+  thinkingLevel?: ThinkingLevel;
   tools?: AgentTool[];
   /**
    * Final assembled prompt, or a SYNC factory re-evaluated per invoke (how L1 serves dynamic
@@ -61,6 +64,15 @@ export interface PiHarnessFactoryOptions {
  * so a mid-stream failure surfaces as a `failed` event.
  */
 const PROVIDER_MAX_RETRIES = 2;
+
+/**
+ * The serving default for reasoning effort, pinned to what pi's TUI defaults to (its
+ * DEFAULT_THINKING_LEVEL) — NOT inherited from the bare harness, whose own fallback is "off": an
+ * author vibes at "medium" in pi and must get "medium" when served (fidelity), and pinning the value
+ * here means an upstream default change in either place cannot silently alter deployments. Models
+ * that don't support a level are clamped by pi per model.
+ */
+const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 /**
  * Restore the session's recorded active-tool set for a fresh harness. pi's harness WRITES active-tool
@@ -118,6 +130,7 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       session,
       models: options.models,
       model: options.model,
+      thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
       tools: options.tools,
       activeToolNames: restoreActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId),
       systemPrompt: prompt,
