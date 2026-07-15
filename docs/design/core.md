@@ -234,13 +234,14 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   order, unlike Telegram's numeric `update_id`. The lifecycle semantics are otherwise shared: the
   generic turn store tracks unfinished work only, with no channel-specific completed-delivery ledger.
   A documented duplicate push arriving after removal can therefore run again (at-least-once).
-- **Session partitioning is policy, not transport inference.** Groups use `chat_id` or
-  `chat_id:thread_id`. P2p defaults to `directMessageSession: "threaded"`: every top-level DM owns a
-  new `<kind>:message_id` session, creates its platform thread with `reply_in_thread`, and maps
-  continuations back through `<kind>:root_id`. The kind prefix isolates Feishu/Lark while keeping pi's
-  provider-facing cache key below its 64-character ceiling. One root remains FIFO while different roots
-  run concurrently. `directMessageSession: "continuous"` is the explicit compatibility opt-out. Thread
-  continuations do not rehydrate `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
+- **Session partitioning is policy, not transport inference.** P2p and groups default to threaded root
+  sessions: every top-level DM or summoned group message owns a new `<kind>:message_id` session, creates
+  its platform thread with `reply_in_thread`, and maps continuations back through `<kind>:root_id`. The
+  kind prefix isolates Feishu/Lark while keeping pi's provider-facing cache key below its 64-character
+  ceiling. One root remains FIFO while different roots run concurrently. `directMessageSession:
+  "continuous"` and `groupMessageSession: "continuous"` are explicit compatibility opt-outs; the latter
+  restores legacy `chat_id` / `chat_id:thread_id` group sessions. Thread continuations do not rehydrate
+  `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
   but owns a new root session.
 - **Group visibility is scope-gated.** The default scope delivers only @mentions of the bot, so
   Telegram's context buffer has no counterpart until the sensitive `im:message.group_msg` scope is

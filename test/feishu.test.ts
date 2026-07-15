@@ -180,6 +180,14 @@ describe("construction fails closed", () => {
         directMessageSession: "invalid" as "threaded",
       }),
     ).toThrow(/directMessageSession/);
+    expect(() =>
+      buildFeishuChannel({
+        appId: "a",
+        appSecret: "s",
+        verificationToken: "t",
+        groupMessageSession: "invalid" as "threaded",
+      }),
+    ).toThrow(/groupMessageSession/);
   });
 
   it("rejects a relative ctx.stateRoot (fail visibly, never a silent cwd re-anchor)", () => {
@@ -464,7 +472,7 @@ describe("turn flow", () => {
     expect(texts).toHaveLength(0);
   });
 
-  it("group @mention: summons via the resolved bot open_id and mounts the preview as a reply-quote", async () => {
+  it("group @mention defaults to its own root session and creates a platform thread", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel();
     await flush(); // let botInfo resolve (open_id drives the default route)
@@ -477,9 +485,72 @@ describe("turn flow", () => {
     expect((await handler(feishuRequest(evt))).status).toBe(200);
     await idle();
     expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("feishu:om_g1");
     expect(calls[0]?.prompt.text).toContain("@Bot status?");
     const reply = fx.calls("/im/v1/messages/om_g1/reply", "POST")[0];
     expect(reply?.body?.msg_type).toBe("interactive");
+    expect(reply?.body?.reply_in_thread).toBe(true);
+  });
+
+  it("threaded group: a continuation returns to the root session without reloading its parent", async () => {
+    const fx = feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const evt = messageEvent({
+      id: "om_group_followup",
+      chatType: "group",
+      rootId: "om_group_root",
+      parentId: "om_group_parent",
+      threadId: "omt_group",
+      content: JSON.stringify({ text: "@_user_1 continue" }),
+      mentions: [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }],
+    });
+
+    await handler(feishuRequest(evt));
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("feishu:om_group_root");
+    expect(fx.calls("/im/v1/messages/om_group_parent", "GET")).toHaveLength(0);
+    const reply = fx.calls("/im/v1/messages/om_group_followup/reply", "POST")[0];
+    expect(reply?.body?.reply_in_thread).toBe(true);
+  });
+
+  it("continuous group mode preserves chat/topic sessions and does not create a top-level thread", async () => {
+    const fx = feishuFetch();
+    const { handler, calls, idle } = buildChannel({ groupMessageSession: "continuous" });
+    await flush();
+    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_group_continuous",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 top level" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_group_topic",
+          chatType: "group",
+          rootId: "om_group_old_root",
+          threadId: "omt_existing",
+          content: JSON.stringify({ text: "@_user_1 existing topic" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls.map((call) => call.scope.session)).toEqual(["oc_1", "oc_1:omt_existing"]);
+    const topReply = fx.calls("/im/v1/messages/om_group_continuous/reply", "POST")[0];
+    expect(topReply?.body?.reply_in_thread).toBeUndefined();
+    const topicReply = fx.calls("/im/v1/messages/om_group_topic/reply", "POST")[0];
+    expect(topicReply?.body?.reply_in_thread).toBe(true);
   });
 
   it("keeps an over-card continuation inside a topic", async () => {

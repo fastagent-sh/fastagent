@@ -127,6 +127,10 @@ export interface FeishuChannelOptions {
    * its own session, creates a platform thread for the answer, and routes later thread messages back
    * by root message id. `continuous` keeps one session per p2p chat and sends ordinary unquoted replies. */
   directMessageSession?: "continuous" | "threaded";
+  /** Group-message context + delivery policy. `threaded` (default) gives every top-level summoned
+   * message its own session and platform thread; later messages in that thread return to the root
+   * session. `continuous` preserves the legacy chat/topic sessions (`chat_id` / `chat_id:thread_id`). */
+  groupMessageSession?: "continuous" | "threaded";
   /** Policy: whether/where to answer an event (return null to ignore). Defaults to {@link defaultFeishuRoute}. */
   route?: (event: FeishuMessageEvent) => FeishuRoute | null;
   /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
@@ -155,6 +159,7 @@ export function buildFeishuChannel(
     verificationToken,
     encryptKey,
     directMessageSession = "threaded",
+    groupMessageSession = "threaded",
     route,
     onError,
     baseUrl = profile.apiBase,
@@ -177,6 +182,9 @@ export function buildFeishuChannel(
   }
   if (directMessageSession !== "continuous" && directMessageSession !== "threaded") {
     throw new Error(`${factoryName} directMessageSession must be "continuous" or "threaded"`);
+  }
+  if (groupMessageSession !== "continuous" && groupMessageSession !== "threaded") {
+    throw new Error(`${factoryName} groupMessageSession must be "continuous" or "threaded"`);
   }
   return ({ agent, stateRoot }) => {
     const formatError = onError ?? defaultErrorMessage;
@@ -450,28 +458,33 @@ export function buildFeishuChannel(
         const normalized = normalizeFeishuMessage(event, { cloud: kind, appId, header, botOpenId });
         if (!normalized) return new Response(null, { status: 200 });
         const threadedP2p = directMessageSession === "threaded" && m.chat_type === "p2p";
-        // A top-level p2p message has no thread_id yet. Its tenant-unique message_id is therefore the
-        // only identity available both before and after the first reply creates the thread. Continuations
-        // carry that same value as root_id (field-verified on Feishu). Prefix with the channel kind to
-        // isolate Feishu/Lark while keeping pi's provider-facing session/cache key under 64 characters.
-        if (threadedP2p && m.thread_id !== undefined && m.root_id === undefined) {
+        const threadedGroup = groupMessageSession === "threaded" && m.chat_type === "group";
+        const threadedConversation = threadedP2p || threadedGroup;
+        // A top-level threaded message has no thread_id yet. Its tenant-unique message_id is therefore
+        // the only identity available both before and after the first reply creates the thread.
+        // Continuations carry that same value as root_id (field-verified on Feishu p2p; shared protocol
+        // shape for groups/Lark). Prefix with the channel kind to isolate Feishu/Lark while keeping pi's
+        // provider-facing session/cache key under 64 characters.
+        if (threadedConversation && m.thread_id !== undefined && m.root_id === undefined) {
           log.warn(
-            `${label} threaded p2p message ${m.message_id} has thread_id ${m.thread_id} but no root_id — session continuity cannot be guaranteed`,
+            `${label} threaded ${m.chat_type} message ${m.message_id} has thread_id ${m.thread_id} but no root_id — session continuity cannot be guaranteed`,
           );
         }
-        const defaultSession = threadedP2p
+        const defaultSession = threadedConversation
           ? `${kind}:${m.thread_id === undefined ? m.message_id : (m.root_id ?? `missing-root:${m.thread_id}`)}`
           : placeKey(m);
         const session = r.session ?? defaultSession;
         const chatId = r.chatId ?? m.chat_id;
-        // Groups always quote the summon. Opt-in threaded p2p does too: reply_in_thread on a top-level
-        // message creates the thread, and on a continuation keeps the answer inside it. Only quote when
-        // the resolved target is the source chat — a custom redirect cannot reuse a message id there.
+        // Groups always quote the summon. Threaded groups and p2p add reply_in_thread: on a top-level
+        // message that creates the thread, and on a continuation it keeps the answer inside it. Only
+        // quote when the resolved target is the source chat — a custom redirect cannot reuse a message
+        // id there. A continuous group still keeps replies inside an already-existing platform topic.
         const sameTarget = chatId === m.chat_id;
-        const replyTo = sameTarget && (m.chat_type !== "p2p" || threadedP2p) ? m.message_id : undefined;
-        const replyInThread = replyTo !== undefined && (threadedP2p || m.thread_id !== undefined) ? true : undefined;
-        // Queue feedback always identifies the exact ask, including continuous p2p. In threaded mode it
-        // inherits replyInThread, so an ask queued inside a root cannot leak a status card to main chat.
+        const replyTo = sameTarget && (m.chat_type === "group" || threadedP2p) ? m.message_id : undefined;
+        const replyInThread =
+          replyTo !== undefined && (threadedConversation || m.thread_id !== undefined) ? true : undefined;
+        // Queue feedback always identifies the exact ask, including continuous modes. In threaded mode
+        // it inherits replyInThread, so an ask queued inside a root cannot leak a status card to main chat.
         const queueReplyTo = sameTarget ? m.message_id : undefined;
         const resources = normalized.content.resources;
         const images = resources
@@ -492,10 +505,10 @@ export function buildFeishuChannel(
               replyTo,
               queueReplyTo,
               replyInThread,
-              // Inside a threaded p2p session the root conversation history already contains the
-              // previous turns. Reloading parent_id would duplicate that input (and its attachments).
-              // A top-level quoted reply has no thread_id, starts a new root, and still hydrates parent.
-              parentId: threadedP2p && m.thread_id !== undefined ? undefined : m.parent_id,
+              // Inside a threaded session the root conversation history already contains the previous
+              // turns. Reloading parent_id would duplicate that input (and its attachments). A top-level
+              // quoted reply has no thread_id, starts a new root, and still hydrates its referent.
+              parentId: threadedConversation && m.thread_id !== undefined ? undefined : m.parent_id,
               images,
               files,
             },
