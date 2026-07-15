@@ -96,4 +96,19 @@ describe("piHarnessFactory: thinking-level wiring", () => {
     });
     expect((await factory("s1")).getThinkingLevel()).toBe("high");
   });
+
+  it('unset → fastagent\'s pinned default "medium" (pi TUI parity), not the bare harness\'s "off"', async () => {
+    // The bare harness falls back to "off", but authors vibe in the pi TUI whose default is "medium" —
+    // serving must match what they iterated with, and the pin means an upstream default change in
+    // either place cannot silently alter deployments.
+    const { faux, models } = makeFaux();
+    const factory = piHarnessFactory({
+      sessions: inMemorySessionStore(),
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      systemPrompt: "test",
+    });
+    expect((await factory("s1")).getThinkingLevel()).toBe("medium");
+  });
 });

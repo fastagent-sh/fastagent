@@ -7,7 +7,7 @@
 // you have access to (`fastagent models` lists them).
 export default {
   // model: "openai-codex/gpt-5.5",
-  // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); unset = the engine default
+  // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
   http: { port: 8787 },
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
   //                     // ("check the deploy in 10 min"). Cron jobs need no opt-in — drop a schedules/<name>.ts.

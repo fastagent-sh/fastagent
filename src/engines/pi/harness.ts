@@ -29,8 +29,8 @@ export interface PiHarnessFactoryOptions {
   /** Provider collection for all model requests; {@link model} must belong to it (same provider id). */
   models: Models;
   model: AnyModel;
-  /** Reasoning effort for the model (pi's scale). Unset = pi's default; unsupported levels are clamped
-   *  by pi per model. Applied at harness construction; the session records level changes. */
+  /** Reasoning effort for the model (pi's scale). Unset = fastagent's pinned default ("medium", pi
+   *  TUI parity — see {@link DEFAULT_THINKING_LEVEL}); unsupported levels are clamped by pi per model. */
   thinkingLevel?: ThinkingLevel;
   tools?: AgentTool[];
   /**
@@ -64,6 +64,15 @@ export interface PiHarnessFactoryOptions {
  * so a mid-stream failure surfaces as a `failed` event.
  */
 const PROVIDER_MAX_RETRIES = 2;
+
+/**
+ * The serving default for reasoning effort, pinned to what pi's TUI defaults to (its
+ * DEFAULT_THINKING_LEVEL) — NOT inherited from the bare harness, whose own fallback is "off": an
+ * author vibes at "medium" in pi and must get "medium" when served (fidelity), and pinning the value
+ * here means an upstream default change in either place cannot silently alter deployments. Models
+ * that don't support a level are clamped by pi per model.
+ */
+const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 /**
  * Restore the session's recorded active-tool set for a fresh harness. pi's harness WRITES active-tool
@@ -121,7 +130,7 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       session,
       models: options.models,
       model: options.model,
-      thinkingLevel: options.thinkingLevel,
+      thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
       tools: options.tools,
       activeToolNames: restoreActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId),
       systemPrompt: prompt,
