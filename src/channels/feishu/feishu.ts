@@ -1,5 +1,5 @@
 /**
- * Canonical Feishu bot-channel engine: verify webhook → answer url_verification → dedup → route → run
+ * Canonical Feishu bot-channel engine: verify webhook → answer url_verification → route → persist → run
  * the turn → stream a live card → ACK 200. Feishu (open.feishu.cn) is the reference cloud. Lark
  * international binds this engine through an explicit compatibility profile because its control plane
  * trails Feishu; protocol reuse does not make Lark the design center.
@@ -39,7 +39,6 @@ import {
   settleFeishuPreview,
   streamFeishuReply,
 } from "./preview.ts";
-import { createSeenRing } from "./seen.ts";
 
 // Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.
 export { defaultFeishuRoute, feishuEnvelope };
@@ -64,7 +63,7 @@ const DEFERRED_PLACEHOLDER = "⏳ Delayed by a temporary system issue — I’ll
 /** The persisted turn intent (what the runner needs to re-execute it). `seq` is the channel-assigned
  *  arrival number — Feishu message_ids (`om_…`) carry no order, so recovery sorts on this instead. */
 interface StoredFeishuTurn {
-  id: string; // message_id (the dedup key the platform itself recommends)
+  id: string; // message_id (the platform delivery identity; seq below carries arrival order)
   seq: number;
   session: string;
   baseText: string;
@@ -200,7 +199,6 @@ export function buildFeishuChannel(
       isRecord: isStoredFeishuTurn,
       order: (a, b) => a.seq - b.seq,
     });
-    const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
       const { preview: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
       return { ...intent, attempts: 0 };
@@ -318,14 +316,11 @@ export function buildFeishuChannel(
       },
     });
 
-    // Accept a turn: persist its intent (pre-ACK; a failed write throws → webhook 500 → redeliver),
-    // record its id in the dedup ring (post-decision insurance, best-effort), enqueue it. Recovery
-    // re-enqueues a crash-surviving turn WITHOUT re-persisting.
+    // Accept a turn: persist its intent before the ACK, then enqueue it. This deliberately shares
+    // Telegram's L1 semantics: turns.json tracks unfinished work but there is no channel-specific
+    // completed-delivery ledger. Recovery re-enqueues a crash survivor without re-persisting it.
     const submit = (rec: PendingFeishuTurn, persist: boolean): void => {
-      if (persist) {
-        store.add(toStored(rec));
-        seen.add(rec.id);
-      }
+      if (persist) store.add(toStored(rec)); // failed write → webhook 500 → platform redelivery
       queue.accept(rec);
     };
 
@@ -437,10 +432,6 @@ export function buildFeishuChannel(
       const event = (envelope.event ?? {}) as FeishuMessageEvent;
       const m = event.message;
       if (!m?.message_id || !m.chat_id) return new Response(null, { status: 200 });
-      if (seen.has(m.message_id)) {
-        log.debug(`${label} duplicate push for message ${m.message_id} — already accepted, skipping`);
-        return new Response(null, { status: 200 });
-      }
 
       const r = decide(event);
       if (!r) {
