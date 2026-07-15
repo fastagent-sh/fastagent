@@ -116,6 +116,41 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     ]);
   });
 
+  it("parallel batch: two search_tools calls — addedToolNames lands on the activating call only, the other reports already-active", async () => {
+    // pi executes a batch's tool calls in parallel; the stamp must come from each execute's OWN
+    // activate() calls, not an active-set snapshot diff (which would stamp a sibling's activation).
+    const sessions = inMemorySessionStore();
+    const { agent } = makeAgent(
+      [
+        fauxAssistantMessage([
+          fauxToolCall("search_tools", { query: "weather" }, { id: "c1" }),
+          fauxToolCall("search_tools", { query: "forecast" }, { id: "c2" }),
+        ]),
+        fauxAssistantMessage("done"),
+      ],
+      sessions,
+    );
+
+    const events: AgentEvent[] = [];
+    for await (const e of agent.invoke({ session: "s3" }, { text: "weather?" })) events.push(e);
+    expect(events.at(-1)?.type).toBe("completed");
+
+    const { messages } = await (await sessions.openOrCreate("s3")).buildContext();
+    const results = messages.filter((m) => (m as { role?: string }).role === "toolResult") as Array<{
+      addedToolNames?: string[];
+      content: Array<{ text?: string }>;
+    }>;
+    expect(results).toHaveLength(2);
+    // Exactly ONE result carries the stamp — the call that actually activated the tool.
+    const stamped = results.filter((r) => r.addedToolNames !== undefined);
+    expect(stamped).toHaveLength(1);
+    expect(stamped[0]?.addedToolNames).toEqual(["lookup_weather"]);
+    // The other reports the truth (already active), never an empty "Activated: ." claim.
+    const texts = results.map((r) => r.content[0]?.text ?? "");
+    expect(texts.some((t) => /already active/.test(t))).toBe(true);
+    expect(texts.some((t) => /Activated: \./.test(t))).toBe(false);
+  });
+
   it("no keyword match → reports the inactive catalog instead of activating anything", async () => {
     const { agent, factory } = makeAgent([
       fauxAssistantMessage(fauxToolCall("search_tools", { query: "quantum chess" }, { id: "c1" })),

@@ -206,9 +206,10 @@ Costs and behavior to know:
 
 - **Discovery rides on the `description`** — a deferred tool the model never searches for effectively
   does not exist. Write descriptions with the search in mind.
-- On providers with native deferred loading (Anthropic Sonnet/Opus/Fable ≥4.5, OpenAI gpt-5.4+), an
-  activation preserves the provider's prompt-cache prefix; other providers still work but may pay a
-  cache miss on activation.
+- On models with native deferred tool loading, an activation preserves the provider's prompt-cache
+  prefix; everywhere else activation still works but may pay a cache miss. The supported-model matrix
+  is pi's (see its Dynamic Tool Loading docs) and evolves with pi releases — fastagent adds no
+  restriction of its own.
 - `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the activation bridge a custom
   loader can use; `activate` is additive and ignores unknown names.
 

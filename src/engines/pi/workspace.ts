@@ -73,7 +73,8 @@ export async function createPiAgentFromWorkspace(
   sessionsDir: string;
   /** Absolute credentials file in use (for the startup report). */
   authPath: string;
-  /** Non-default tool names in effect: config.tools + discovered tools/. */
+  /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. Each name
+   *  lives in exactly one report slot — deferred names are in {@link deferredToolNames} instead. */
   toolNames: string[];
   /** Tools registered but not initially active (deferred) — activated via search_tools. */
   deferredToolNames: string[];

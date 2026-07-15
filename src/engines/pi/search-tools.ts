@@ -48,10 +48,18 @@ export function makeSearchToolsTool(): AgentTool {
           .join("; ")}`;
       }
       const activated = await ctx.tools.activate(matches.map((t) => t.name));
+      // Report what actually happened, not what was attempted: a parallel sibling call may have
+      // activated the same matches first, leaving nothing new here — an empty "Activated:" would lie.
+      if (activated.length === 0) {
+        return `Matched ${matches.map((t) => t.name).join(", ")} — already active (possibly activated by a concurrent call). Call them directly.`;
+      }
+      const alreadyActive = matches.filter((t) => !activated.includes(t.name));
       return `Activated: ${matches
         .filter((t) => activated.includes(t.name))
         .map((t) => `${t.name} — ${t.description.split("\n")[0]}`)
-        .join("; ")}. These tools are callable now.`;
+        .join(
+          "; ",
+        )}.${alreadyActive.length > 0 ? ` Already active: ${alreadyActive.map((t) => t.name).join(", ")}.` : ""} These tools are callable now.`;
     },
   });
 }

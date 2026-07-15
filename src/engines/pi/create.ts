@@ -72,13 +72,16 @@ export async function resolveWorkspaceTools(
   const tools = withSearchTool(merged.tools);
   const builtinLoaderMounted = tools !== merged.tools; // withSearchTool returns the input untouched otherwise
   const toolCollisions = [...discovered.collisions, ...merged.collisions];
-  // `toolNames` is the AUTHOR's surface (config.tools + tools/): exclude pi defaults AND the builtin
-  // loader — like the wake pair, a builtin gets its own report line (`deferred: … via search_tools`),
-  // not an anonymous slot in the author's list. An author-DEFINED search_tools still shows.
+  // `toolNames` is the AUTHOR's active-by-default surface (config.tools + tools/): exclude pi
+  // defaults, the builtin loader (like wake, a builtin gets its own report line, not an anonymous
+  // slot in the author's list — an author-DEFINED search_tools still shows), and deferred tools —
+  // each name lives in exactly ONE report slot, and deferred names live in `deferredToolNames`.
   const defaultNames = new Set(piDefaultTools(cwd).map((t) => t.name));
   const toolNames = tools
-    .map((t) => t.name)
-    .filter((n) => !defaultNames.has(n) && !(builtinLoaderMounted && n === "search_tools"));
+    .filter(
+      (t) => !defaultNames.has(t.name) && !isDeferredTool(t) && !(builtinLoaderMounted && t.name === "search_tools"),
+    )
+    .map((t) => t.name);
   return {
     tools,
     toolNames,
