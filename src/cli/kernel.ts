@@ -11,7 +11,7 @@
  * examples in help, "did you mean" suggestions (never auto-run), and one exit-code policy — 0 success,
  * 1 runtime failure (owned by the command bodies), 2 usage error (anything the parser itself rejects).
  */
-import { Argument, Command, InvalidArgumentError, Option } from "commander";
+import { Argument, Command, Help, InvalidArgumentError, Option } from "commander";
 import { errorPrefix } from "./fail.ts";
 
 /** One positional argument, in commander syntax: `<name>` required, `[dir]` optional. */
@@ -64,8 +64,10 @@ export interface CommandSpec {
 export interface ProgramOptions {
   /** Printed by `-v`/`--version`. */
   version?: string;
-  /** Appended after the top-level help (program examples, docs link). */
-  helpTail?: string;
+  /** Top-level Examples — rendered by the same Help pipeline as every command's. */
+  examples?: ExampleSpec[];
+  /** Top-level closing prose (the docs link) — reflowed like any notes. */
+  notes?: string;
   /**
    * Fixed help width — a TEST seam. Production omits it: commander then adapts to the terminal
    * (and falls back to 80 when piped), the modern behavior. Our verbatim Examples/notes text is
@@ -102,12 +104,12 @@ export function optionKey(flags: string): string {
 
 // Help styling (clig: formatting with intention): section headings are BOLD, nothing in help is
 // colored — the only color in the whole CLI is the red error prefix. The style is always embedded;
-// commander strips every SGR code (generated sections and verbatim addHelpText content alike)
-// whenever the target stream has no colors (non-TTY pipe, NO_COLOR, TERM=dumb).
+// commander strips every SGR code from the assembled help whenever the target stream has no colors
+// (non-TTY pipe, NO_COLOR, TERM=dumb).
 const title = (s: string): string => `\x1b[1m${s}\x1b[0m`; // bold — section headings
 
-/** Style a heading in verbatim help text exactly like a generated section title (Examples:, a help tail). */
-export const helpTitle = title;
+/** The spec behind each registered command — how the Help renderer reaches Examples/notes. */
+const specOf = new WeakMap<Command, CommandSpec>();
 
 /** Build the commander program for `specs`. The CLI entry parses with it; tests inject the IO seams. */
 export function buildProgram(specs: readonly CommandSpec[], options: ProgramOptions = {}): Command {
@@ -121,6 +123,10 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   program.configureHelp({
     ...(options.helpWidth !== undefined ? { helpWidth: options.helpWidth } : {}),
     styleTitle: title,
+    // ONE renderer for the whole page: commander's standard sections, then our Examples/notes —
+    // rendered with the SAME helper (helpWidth, styleTitle), so custom sections wrap and style
+    // exactly like native ones on any terminal.
+    formatHelp: (cmd, helper) => Help.prototype.formatHelp.call(helper, cmd, helper) + extraSections(cmd, helper),
   });
   program.configureOutput({
     ...(options.out ? { writeOut: options.out } : {}),
@@ -136,7 +142,9 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   program.showSuggestionAfterError(); // "did you mean models?" — suggest only, never run it (clig on DWIM)
   program.showHelpAfterError("(run with --help for usage)");
   if (options.version) program.version(options.version, "-v, --version", "print the fastagent version");
-  if (options.helpTail) program.addHelpText("after", options.helpTail);
+  if (options.examples || options.notes) {
+    specOf.set(program, { name: "fastagent", summary: "", examples: options.examples, notes: options.notes });
+  }
   // Subcommands inherit exitOverride/output/suggestion settings at .command() time — register last.
   for (const spec of specs) register(program, spec);
   return program;
@@ -155,6 +163,7 @@ function register(parent: Command, spec: CommandSpec): void {
     }
   }
   const cmd = parent.command(spec.name);
+  specOf.set(cmd, spec);
   cmd.summary(spec.summary);
   cmd.description(spec.description ?? spec.summary);
   for (const a of spec.args ?? []) {
@@ -178,8 +187,6 @@ function register(parent: Command, spec: CommandSpec): void {
     if (f.conflicts) opt.conflicts(f.conflicts);
     cmd.addOption(opt);
   }
-  const extra = extraHelp(spec);
-  if (extra) cmd.addHelpText("after", extra);
   for (const sub of spec.subcommands ?? []) register(cmd, sub);
   const run = spec.run;
   if (run) {
@@ -191,18 +198,58 @@ function register(parent: Command, spec: CommandSpec): void {
   }
 }
 
-/** The Examples/notes tail of a command's help. Plain text, terminal-independent (clig on formatting). */
-function extraHelp(spec: CommandSpec): string {
+/**
+ * The Examples/notes sections a spec appends after commander's standard ones. Examples are
+ * preformatted (column-aligned `$ cmd   # note` lines); notes are logical prose the renderer
+ * reflows to `helper.helpWidth` — the exact width the sections above were wrapped to.
+ */
+function extraSections(cmd: Command, helper: Help): string {
+  const spec = specOf.get(cmd);
+  if (!spec || ((spec.examples?.length ?? 0) === 0 && !spec.notes)) return "";
+  const width = helper.helpWidth ?? 80;
   const lines: string[] = [];
   if (spec.examples && spec.examples.length > 0) {
-    lines.push("", title("Examples:"));
+    lines.push(helper.styleTitle("Examples:"));
     // Inline, column-aligned notes (`$ cmd   # note`) — a note on its own line reads as a stray
     // fragment when neighboring examples have none.
-    const width = Math.max(...spec.examples.map((e) => e.cmd.length));
+    const w = Math.max(...spec.examples.map((e) => e.cmd.length));
     for (const e of spec.examples) {
-      lines.push(e.note ? `  $ ${e.cmd.padEnd(width)}   # ${e.note}` : `  $ ${e.cmd}`);
+      lines.push(e.note ? `  $ ${e.cmd.padEnd(w)}   # ${e.note}` : `  $ ${e.cmd}`);
+    }
+    lines.push("");
+  }
+  if (spec.notes) {
+    lines.push(...reflow(spec.notes, width, helper));
+    lines.push("");
+  }
+  return `\n${lines.join("\n")}`;
+}
+
+/**
+ * Reflow notes to the help width: plain lines are prose (joined and wrapped via the helper's own
+ * `boxWrap`); indented lines are preformatted (aligned tables like start's precedence chains) and
+ * pass through verbatim; blank lines separate paragraphs.
+ */
+function reflow(text: string, width: number, helper: Help): string[] {
+  const out: string[] = [];
+  let prose: string[] = [];
+  const flush = (): void => {
+    if (prose.length > 0) {
+      out.push(...helper.boxWrap(prose.join(" "), width).split("\n"));
+      prose = [];
+    }
+  };
+  for (const line of text.split("\n")) {
+    if (/^\s/.test(line)) {
+      flush();
+      out.push(line);
+    } else if (line === "") {
+      flush();
+      out.push("");
+    } else {
+      prose.push(line);
     }
   }
-  if (spec.notes) lines.push("", spec.notes);
-  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+  flush();
+  return out;
 }
