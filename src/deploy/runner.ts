@@ -13,8 +13,13 @@ export interface RunResult {
 }
 
 /** Run `bin args`: `capture` collects stdout (for `--json` queries), else the command streams to the
- *  terminal (create/deploy) and stdout is empty; `input` is fed to stdin (secrets over stdin, never argv). */
-export type CliRunner = (args: string[], opts?: { capture?: boolean; input?: string }) => Promise<RunResult>;
+ *  terminal (create/deploy) and stdout is empty; `input` is fed to stdin (secrets over stdin, never argv).
+ *  `env` adds child-only environment values — Docker Compose interpolates secrets from it without putting
+ *  values in argv or mutating the long-lived CLI process. */
+export type CliRunner = (
+  args: string[],
+  opts?: { capture?: boolean; input?: string; env?: NodeJS.ProcessEnv },
+) => Promise<RunResult>;
 
 /**
  * Production {@link CliRunner}: spawn `bin` in `cwd` (the workspace, so a build/upload context is the
@@ -26,6 +31,7 @@ export function spawnRunner(bin: string, cwd: string): CliRunner {
     new Promise((res) => {
       const child = spawn(bin, args, {
         cwd,
+        env: opts?.env ? { ...process.env, ...opts.env } : process.env,
         stdio: [opts?.input ? "pipe" : "inherit", opts?.capture ? "pipe" : "inherit", "inherit"],
       });
       let out = "";

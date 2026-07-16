@@ -122,7 +122,7 @@ Implemented today:
 - Directory assembly from `persona.md`, `AGENTS.md` project context, `skills/`, discovered `tools/`, and `fastagent.config.*`.
 - HTTP/SSE invoke channel.
 - GitHub and Telegram channel adapters.
-- `dev`, `chat`, `invoke`, `tool`, `info`, `start`, and `deploy fly` / `deploy railway` (`--run` drives flyctl / the railway CLI end-to-end).
+- `dev`, `chat`, `invoke`, `tool`, `info`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
 - CLI login backed by a project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`; override: `--auth-path` / `FASTAGENT_AUTH_PATH`, root: `FASTAGENT_STATE_DIR`).
 
