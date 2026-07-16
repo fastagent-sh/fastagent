@@ -172,18 +172,27 @@ type PiHarness = Awaited<ReturnType<PiHarnessFactory>>;
  * per-invoke restore (harness.ts) carries it into later turns.
  */
 function toolActivation(harness: PiHarness): ToolActivation {
+  // Serialize activations per turn: "who activated first" must be decided HERE, not by whether pi's
+  // setActiveTools happens to mutate before its first await — parallel tool calls in one batch race
+  // their activate() calls, and the addedToolNames load points must not double-stamp.
+  let chain: Promise<string[]> = Promise.resolve([]);
   return {
     active: () => harness.getActiveTools().map((t) => t.name),
     registered: () => harness.getTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
-    async activate(names) {
-      const current = harness.getActiveTools().map((t) => t.name);
-      const added = additiveActivation(
-        harness.getTools().map((t) => t.name),
-        current,
-        names,
-      );
-      if (added.length > 0) await harness.setActiveTools([...current, ...added]);
-      return added;
+    activate(names) {
+      const run = async (): Promise<string[]> => {
+        const current = harness.getActiveTools().map((t) => t.name);
+        const added = additiveActivation(
+          harness.getTools().map((t) => t.name),
+          current,
+          names,
+        );
+        if (added.length > 0) await harness.setActiveTools([...current, ...added]);
+        return added;
+      };
+      const result = chain.then(run, run); // run after the predecessor settles, success or failure
+      chain = result.catch(() => []); // the caller sees a rejection on `result`; the chain stays usable
+      return result;
     },
   };
 }

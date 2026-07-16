@@ -39,16 +39,17 @@ export function makeSearchToolsTool(): AgentTool {
     name: "search_tools",
     description:
       "Discover and activate additional tools. Part of this agent's toolset is inactive until needed: " +
-      "search by keywords (e.g. what you are trying to do), and matching tools are activated and become " +
-      "callable from that point on. ALWAYS search here before concluding a capability is missing.",
+      "search by keywords (e.g. what you are trying to do), and matching inactive tools are activated and " +
+      "become callable from that point on (if too many match, you get the candidates back — narrow the " +
+      "query). ALWAYS search here before concluding a capability is missing.",
     input: z.object({
       query: z.string().min(1).describe("keywords describing the capability you need (e.g. 'weather forecast')"),
     }),
     async execute(input, ctx) {
       if (!ctx.tools) return "tool activation is unavailable outside a conversation turn.";
-      const active = new Set(ctx.tools.active());
-      const inactive = ctx.tools.registered().filter((t) => !active.has(t.name));
-      if (inactive.length === 0) return "All tools are already active — nothing to discover.";
+      // Search the WHOLE registered catalog: the loader is the only discovery surface, and in a long
+      // conversation the model does not remember what it activated — a "No tools matched" answer for
+      // an ALREADY-ACTIVE tool would push it toward the exact wrong conclusion (capability missing).
       // ponytail: naive keyword match (any query token as a case-insensitive substring of
       // name+description) with a hard per-search activation cap above — the two named ceilings are
       // relevance and irreversibility; swap in scoring/embeddings if catalogs outgrow this.
@@ -56,33 +57,41 @@ export function makeSearchToolsTool(): AgentTool {
         .toLowerCase()
         .split(/[^a-z0-9]+/)
         .filter(Boolean);
-      const matches = inactive.filter((t) => {
+      const matchesQuery = (t: { name: string; description: string }) => {
         const haystack = `${t.name} ${t.description}`.toLowerCase();
         return tokens.some((token) => haystack.includes(token));
-      });
-      if (matches.length === 0) {
-        return `No tools matched "${input.query}". Inactive tools: ${inactive
-          .map((t) => `${t.name} — ${t.description.split("\n")[0]}`)
-          .join("; ")}`;
+      };
+      const describe = (t: { name: string; description: string }) => `${t.name} — ${t.description.split("\n")[0]}`;
+      const active = new Set(ctx.tools.active());
+      const registered = ctx.tools.registered();
+      const activeMatches = registered.filter((t) => active.has(t.name) && matchesQuery(t));
+      const inactiveMatches = registered.filter((t) => !active.has(t.name) && matchesQuery(t));
+      const activeNote =
+        activeMatches.length > 0 ? `Already active (call directly): ${activeMatches.map(describe).join("; ")}.` : "";
+      if (inactiveMatches.length === 0) {
+        if (activeNote) return activeNote;
+        const inactive = registered.filter((t) => !active.has(t.name));
+        if (inactive.length === 0) return "All tools are already active — nothing to discover.";
+        return `No tools matched "${input.query}". Inactive tools: ${inactive.map(describe).join("; ")}`;
       }
-      if (matches.length > MAX_ACTIVATIONS_PER_SEARCH) {
-        return `${matches.length} tools matched "${input.query}" — too many to activate at once (activation is permanent for this conversation). Narrow the query. Matches: ${matches
-          .map((t) => `${t.name} — ${t.description.split("\n")[0]}`)
-          .join("; ")}`;
+      if (inactiveMatches.length > MAX_ACTIVATIONS_PER_SEARCH) {
+        return `${inactiveMatches.length} inactive tools matched "${input.query}" — too many to activate at once (activation is permanent for this conversation). Narrow the query. Matches: ${inactiveMatches
+          .map(describe)
+          .join("; ")}${activeNote ? ` ${activeNote}` : ""}`;
       }
-      const activated = await ctx.tools.activate(matches.map((t) => t.name));
+      const activated = await ctx.tools.activate(inactiveMatches.map((t) => t.name));
       // Report what actually happened, not what was attempted: a parallel sibling call may have
       // activated the same matches first, leaving nothing new here — an empty "Activated:" would lie.
       if (activated.length === 0) {
-        return `Matched ${matches.map((t) => t.name).join(", ")} — already active (possibly activated by a concurrent call). Call them directly.`;
+        return `Matched ${inactiveMatches.map((t) => t.name).join(", ")} — already active (possibly activated by a concurrent call). Call them directly.${activeNote ? ` ${activeNote}` : ""}`;
       }
-      const alreadyActive = matches.filter((t) => !activated.includes(t.name));
-      return `Activated: ${matches
+      const raced = inactiveMatches.filter((t) => !activated.includes(t.name));
+      return `Activated: ${inactiveMatches
         .filter((t) => activated.includes(t.name))
-        .map((t) => `${t.name} — ${t.description.split("\n")[0]}`)
+        .map(describe)
         .join(
           "; ",
-        )}.${alreadyActive.length > 0 ? ` Already active: ${alreadyActive.map((t) => t.name).join(", ")}.` : ""} These tools are callable now.`;
+        )}.${raced.length > 0 ? ` Already active: ${raced.map((t) => t.name).join(", ")}.` : ""}${activeNote ? ` ${activeNote}` : ""} These tools are callable now.`;
     },
   });
 }

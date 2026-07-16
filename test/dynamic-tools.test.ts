@@ -213,6 +213,59 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     expect((await factory("s4")).getActiveTools().map((t) => t.name)).toEqual(["search_tools"]); // nothing activated
   });
 
+  it("a query matching an ALREADY-ACTIVE tool says so — never 'No tools matched' (capability-missing trap)", async () => {
+    // Long conversations forget what they activated; the loader is the only discovery surface, so it
+    // must answer for the whole catalog, not only the inactive slice.
+    const sessions = inMemorySessionStore();
+    const { agent } = makeAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("search_tools", { query: "echo" }, { id: "c1" })), // echo is ACTIVE
+        fauxAssistantMessage("ok"),
+      ],
+      sessions,
+    );
+    const events: AgentEvent[] = [];
+    for await (const e of agent.invoke({ session: "s5" }, { text: "go" })) events.push(e);
+    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
+    const text = JSON.stringify(ended.content);
+    expect(text).toMatch(/Already active \(call directly\): echo/);
+    expect(text).not.toMatch(/No tools matched/);
+  });
+
+  it("stamping copies the result — an author's frozen result object survives an activating call", async () => {
+    const frozen = Object.freeze({ content: [{ type: "text", text: "done" }], details: {} });
+    const loader = defineTool({
+      name: "my_loader",
+      description: "activates the weather tool",
+      input: z.object({}),
+      async execute(_input, ctx) {
+        await ctx.tools?.activate(["lookup_weather"]);
+        return frozen; // shared/frozen result — legal per the defineTool contract
+      },
+    });
+    const { faux, models } = makeFaux();
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("my_loader", {}, { id: "c1" })), fauxAssistantMessage("ok")]);
+    const sessions = inMemorySessionStore();
+    const factory = piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      tools: [loader, weather()],
+      systemPrompt: "test",
+    });
+    const agent = createPiAgentFromHarness({ harnessFactory: factory });
+    const events: AgentEvent[] = [];
+    for await (const e of agent.invoke({ session: "s6" }, { text: "go" })) events.push(e);
+    expect(events.at(-1)?.type).toBe("completed"); // no throw on the frozen object
+    expect((frozen as { addedToolNames?: string[] }).addedToolNames).toBeUndefined(); // untouched
+    const { messages } = await (await sessions.openOrCreate("s6")).buildContext();
+    const toolResult = messages.find((m) => (m as { role?: string }).role === "toolResult") as {
+      addedToolNames?: string[];
+    };
+    expect(toolResult.addedToolNames).toEqual(["lookup_weather"]); // the stamped COPY reached the session
+  });
+
   it("search_tools outside a turn (bare `fastagent tool` run) degrades with a clear message", async () => {
     const tool = makeSearchToolsTool() as unknown as {
       execute: (id: string, params: unknown) => Promise<{ content: Array<{ text?: string }> }>;

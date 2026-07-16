@@ -207,17 +207,15 @@ export async function buildChatRuntime(
       customTools: customToolDefs,
     });
     sessionRef.current = result.session;
-    // Deferral emulation: pi's TUI session starts with everything active — narrow it to the initial
-    // active set (non-deferred), like a fresh served session. Only when the session still has the
-    // all-active default: a /resume of a session where the loader already activated tools keeps its
-    // narrower recorded set (the corner where a resumed session had ALL tools deliberately active is
-    // re-deferred — chat-local, and search_tools re-activates in one call).
+    // Deferral emulation: pi's TUI session starts with everything active — narrow a FRESH session by
+    // SUBTRACTING the deferred names from whatever is active (robust to pi mounting tools of its own;
+    // an exact-set-equality gate would silently stop narrowing the day pi adds one). A resumed session
+    // (has messages) keeps its recorded set — the loader's earlier activations survive, like serving.
     const deferredNames = customTools.filter(isDeferredTool).map((t) => t.name);
-    if (deferredNames.length > 0) {
-      const allNames = [...defaultNames, ...customTools.map((t) => t.name)];
+    if (deferredNames.length > 0 && result.session.messages.length === 0) {
       const active = result.session.getActiveToolNames();
-      if (active.length === allNames.length && allNames.every((n) => active.includes(n))) {
-        result.session.setActiveToolsByName(allNames.filter((n) => !deferredNames.includes(n)));
+      if (deferredNames.some((n) => active.includes(n))) {
+        result.session.setActiveToolsByName(active.filter((n) => !deferredNames.includes(n)));
       }
     }
     return { ...result, services, diagnostics: services.diagnostics };

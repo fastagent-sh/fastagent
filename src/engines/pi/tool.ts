@@ -105,7 +105,10 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
         : undefined;
       const result = wrapResult(await options.execute(parsed.data, { signal, session: store?.session, tools }));
       if (added.length > 0) {
-        result.addedToolNames = [...new Set([...(result.addedToolNames ?? []), ...added])];
+        // A copy, not a mutation: wrapResult passes a full AgentToolResult through by REFERENCE, and an
+        // author may legally return a shared/frozen result object — stamping in place would corrupt it
+        // across calls (or throw on frozen), only on the rare activating path.
+        return { ...result, addedToolNames: [...new Set([...(result.addedToolNames ?? []), ...added])] };
       }
       return result;
     },
