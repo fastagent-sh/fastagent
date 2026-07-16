@@ -45,6 +45,10 @@ export interface DefineToolOptions<I extends z.ZodType> {
    *  discovery rides entirely on this description — write it for the search. Default: false.
    */
   deferred?: boolean;
+  /** pi's per-tool execution mode: "sequential" makes pi run any batch containing this tool serially.
+   *  REQUIRED for a tool that activates others (a loader): pi's own diff around SDK tools (chat)
+   *  would attribute one activation to two parallel calls otherwise. */
+  executionMode?: "sequential" | "parallel";
   execute: (input: z.infer<I>, ctx: ToolContext) => unknown | Promise<unknown>;
 }
 
@@ -83,6 +87,7 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
     description: options.description,
     parameters,
     ...(options.deferred ? { deferred: true } : {}),
+    ...(options.executionMode ? { executionMode: options.executionMode } : {}),
     async execute(_toolCallId: string, rawParams: unknown, signal?: AbortSignal): Promise<AgentToolResult<unknown>> {
       const parsed = options.input.safeParse(rawParams);
       if (!parsed.success) {

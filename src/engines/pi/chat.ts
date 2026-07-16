@@ -135,7 +135,7 @@ export async function buildChatRuntime(
       parameters: t.parameters,
       // Propagate the execution mode — an activating tool (the builtin loader) declares "sequential"
       // so pi serializes its batch; without this, pi's outer active-set diff double-stamps parallels.
-      executionMode: (t as { executionMode?: "sequential" | "parallel" }).executionMode,
+      executionMode: t.executionMode,
       execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
         const bound = sessionRef.current;
         // Unreachable by construction (createRuntime sets sessionRef before any turn can run a tool).

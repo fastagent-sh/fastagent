@@ -52,9 +52,9 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
 
         // Attribution regression (review): pi wraps SDK customTools in its own before/after active-set
         // diff, so two PARALLEL loader calls would both get stamped with the same activation. The
-        // production guard is pi's batch serialization, triggered by the loader's executionMode —
-        // assert the contract (marker present on the REGISTERED tool) and the serial behavior (second
-        // call reports already-active, exactly one stamp).
+        // production guard is pi's batch serialization, triggered by the loader's executionMode — the
+        // marker assertion IS the parallel protection (these two awaited calls are serial either way;
+        // they pin the message/stamp behavior UNDER the serialization pi guarantees).
         await rt.newSession();
         const reSession = rt.session;
         const loader2 = rt.session.agent.state.tools.find((t) => t.name === "search_tools") as unknown as {

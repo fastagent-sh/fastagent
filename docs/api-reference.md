@@ -212,8 +212,9 @@ Costs and behavior to know:
   restriction of its own.
 - `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the activation bridge a custom
   loader can use; `activate` is additive and ignores unknown names. A custom loader must also declare
-  `executionMode: "sequential"` on its tool (pi then serializes the batch — in chat, pi's own
-  before/after diff around SDK tools would otherwise attribute one activation to two parallel calls).
+  `executionMode: "sequential"` (a `defineTool` option; pi then serializes the batch — in chat, pi's
+  own before/after diff around SDK tools would otherwise attribute one activation to two parallel
+  calls). A workspace `search_tools` missing the mode gets it forced, with a warning.
   Both types are exported: `ToolActivation`, and `FastagentTool` (`AgentTool` + the `deferred` marker —
   the type `config.tools` and the L1/L2 `tools` options accept, so a raw object literal with
   `deferred: true` type-checks).

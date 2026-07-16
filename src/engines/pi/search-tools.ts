@@ -14,17 +14,26 @@ import { defineTool, isDeferredTool, stripDeferredMarker } from "./tool.ts";
 export function withSearchTool(tools: AgentTool[]): AgentTool[] {
   if (!tools.some(isDeferredTool)) return tools;
   const authored = tools.find((t) => t.name === "search_tools");
-  if (authored) {
-    if (!isDeferredTool(authored)) return tools;
+  if (!authored) return [...tools, makeSearchToolsTool()];
+  let fixed = authored;
+  if (isDeferredTool(fixed)) {
     // A deferred LOADER is a contradiction — it is the only entry point to the deferred tools, so
     // nothing could ever activate it (or, through it, them): every deferred tool would be silently
     // unreachable. Ignore the marker and keep the loader active (fail visibly, keep the capability).
     log.warn(
       "[fastagent] search_tools is marked deferred — ignoring the marker: the loader must stay active, or no deferred tool could ever be activated",
     );
-    return tools.map((t) => (t === authored ? stripDeferredMarker(t) : t));
+    fixed = stripDeferredMarker(fixed);
   }
-  return [...tools, makeSearchToolsTool()];
+  if ((fixed as { executionMode?: string }).executionMode !== "sequential") {
+    // A non-sequential loader silently revives the parallel double-attribution (pi's diff around SDK
+    // tools in chat) — enforce the mode rather than hope the author read the docs; warn so they know.
+    log.warn(
+      '[fastagent] search_tools lacks executionMode: "sequential" — forcing it: parallel loader calls would misattribute activations',
+    );
+    fixed = { ...fixed, executionMode: "sequential" } as AgentTool;
+  }
+  return fixed === authored ? tools : tools.map((t) => (t === authored ? fixed : t));
 }
 
 /** Activation cap per search: activation is additive, session-persisted, and has NO deactivate path —
@@ -44,12 +53,9 @@ const MAX_MISS_LISTING = 10;
  * (the chat path) in a before/after diff, and two parallel loader calls would both snapshot the
  * pre-activation set and get stamped with the same activation. Custom loader authors must set it too. */
 export function makeSearchToolsTool(): AgentTool {
-  return Object.assign(searchToolsDefinition(), { executionMode: "sequential" as const });
-}
-
-function searchToolsDefinition(): AgentTool {
   return defineTool({
     name: "search_tools",
+    executionMode: "sequential",
     description:
       // First line short on purpose: the base prompt's tools list truncates at the first newline, and
       // the discovery guidance below would otherwise flood it (and duplicate its deferred note).
@@ -83,13 +89,18 @@ function searchToolsDefinition(): AgentTool {
       const describe = (t: { name: string; description: string }) => `${t.name} — ${t.description.split("\n")[0]}`;
       const active = new Set(ctx.tools.active());
       const registered = ctx.tools.registered();
-      // Exact-name shortcut: the guaranteed escape hatch from the cap — a query that IS a registered
-      // tool name addresses that one tool, no keyword scoring in the way.
+      // A query with no searchable tokens (all punctuation/symbols) must not match: `every` over an
+      // empty token list is vacuously true, and a noise query would otherwise activate the catalog.
+      if (tokens.length === 0)
+        return `"${input.query}" contains no searchable keywords — describe the capability you need.`;
+      // Exact-name shortcut: the guaranteed escape hatch from the cap — a query that IS an INACTIVE
+      // registered tool's name addresses that one tool, no keyword scoring in the way. An exact match
+      // on an ACTIVE tool falls through to keyword matching: it must not swallow the discovery of
+      // other, still-inactive keyword matches.
       const exact = registered.find((t) => t.name.toLowerCase() === input.query.trim().toLowerCase());
       const activeMatches = registered.filter((t) => active.has(t.name) && (t === exact || matchesQuery(t)));
-      const inactiveMatches = exact
-        ? [exact].filter((t) => !active.has(t.name))
-        : registered.filter((t) => !active.has(t.name) && matchesQuery(t));
+      const inactiveMatches =
+        exact && !active.has(exact.name) ? [exact] : registered.filter((t) => !active.has(t.name) && matchesQuery(t));
       // Same listing cap as every other branch — a wide token can match most of the ACTIVE set too
       // (in chat that includes pi's default tools), and no answer may pour a catalog into the context.
       const listedActive = activeMatches.slice(0, MAX_MISS_LISTING);

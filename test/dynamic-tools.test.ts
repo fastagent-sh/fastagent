@@ -299,6 +299,18 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     expect(toolResult.addedToolNames).toEqual(["lookup_weather"]); // the stamped COPY reached the session
   });
 
+  it("a noise query (no searchable tokens) activates nothing — vacuous every() must not match the catalog", async () => {
+    const { agent, factory } = makeAgent([
+      fauxAssistantMessage(fauxToolCall("search_tools", { query: "???" }, { id: "c1" })),
+      fauxAssistantMessage("ok"),
+    ]);
+    const events: AgentEvent[] = [];
+    for await (const e of agent.invoke({ session: "s8" }, { text: "go" })) events.push(e);
+    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
+    expect(JSON.stringify(ended.content)).toMatch(/no searchable keywords/);
+    expect((await factory("s8")).getActiveTools().map((t) => t.name)).toEqual(["echo", "search_tools"]);
+  });
+
   it("search_tools outside a turn (bare `fastagent tool` run) degrades with a clear message", async () => {
     const tool = makeSearchToolsTool() as unknown as {
       execute: (id: string, params: unknown) => Promise<{ content: Array<{ text?: string }> }>;
