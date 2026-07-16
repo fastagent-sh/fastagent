@@ -94,9 +94,13 @@ export function makeSearchToolsTool(): AgentTool {
         return `No tools matched "${input.query}". Inactive tools: ${listed.map(describe).join("; ")}${more > 0 ? ` … and ${more} more — search with different keywords.` : ""}`;
       }
       if (inactiveMatches.length > MAX_ACTIVATIONS_PER_SEARCH) {
-        return `${inactiveMatches.length} inactive tools matched "${input.query}" — too many to activate at once (activation is permanent for this conversation). Narrow the query. Matches: ${inactiveMatches
-          .map(describe)
-          .join("; ")}${activeNote ? ` ${activeNote}` : ""}`;
+        // Same listing cap as the miss path — an over-cap answer must not pour the catalog into the
+        // context either. Names alone suffice: the exact-name escape only needs a name to query.
+        const listed = inactiveMatches.slice(0, MAX_MISS_LISTING);
+        const more = inactiveMatches.length - listed.length;
+        return `${inactiveMatches.length} inactive tools matched "${input.query}" — too many to activate at once (activation is permanent for this conversation). Narrow the query (or query an exact name). Matches: ${listed
+          .map((t) => t.name)
+          .join(", ")}${more > 0 ? ` … and ${more} more` : ""}.${activeNote ? ` ${activeNote}` : ""}`;
       }
       const activated = await ctx.tools.activate(inactiveMatches.map((t) => t.name));
       // Report what actually happened, not what was attempted: a parallel sibling call may have
