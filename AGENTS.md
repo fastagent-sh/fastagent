@@ -79,7 +79,8 @@ src/
 │   ├── secrets.ts           # required-secret NAMES (runbook) + assembleSecrets VALUES (--run credential carry)
 │   ├── runner.ts            # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
 │   ├── fly/     { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
-│   └── railway/ { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
+│   ├── railway/ { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
+│   └── k8s/     { plan.ts, run.ts }  # Kubernetes: same two roles — a control plane, not a host (operator-pushed image, manifests ARE the constraints, cluster-owned TLS/URL)
 ├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron (schedules/<name>.ts)
 │   ├── schedule.ts         # defineSchedule({ cron, tz?, prompt }) authoring surface + types (no session field — it's runtime-derived)
 │   ├── cron.ts             # the one place touching `croner` (zero-dep, IANA tz/DST): nextRun + cronError

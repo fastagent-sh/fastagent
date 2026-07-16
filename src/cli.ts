@@ -68,6 +68,8 @@ import {
   planFlyDeploy,
   toFlyAppName,
 } from "./deploy/fly/plan.ts";
+import { planK8sDeploy, toK8sName } from "./deploy/k8s/plan.ts";
+import { deployK8sRun } from "./deploy/k8s/run.ts";
 import { preflightDeploy } from "./deploy/preflight.ts";
 import { planRailwayDeploy } from "./deploy/railway/plan.ts";
 import { deployRailwayRun } from "./deploy/railway/run.ts";
@@ -168,16 +170,22 @@ function usage(code: number): never {
          config-route 404 falls back to a hidden Token prompt + manual mode/URL setup.
          skill <source>: vendor an Agent Skills skill into skills/<name>/ (git ref owner/repo/path, a
          local path, or a bare name from ~/.agents/skills; --update re-fetches, review with git diff)
-  deploy fly|railway [dir]: generate host config + Dockerfile/.dockerignore from the definition and
+  deploy fly|railway|k8s [dir]: generate host config + Dockerfile/.dockerignore from the definition and
          print an ordered deploy runbook + the post-deploy webhook step. Does not run the host CLI — a
          coding agent (or you) executes the runbook. fly: fly.toml (autostop=suspend, state→volume).
          railway: railway.json (healthcheck /health); its volume/variables/App-Sleeping are dashboard/
-         CLI steps the runbook states (see the runbook).
+         CLI steps the runbook states (see the runbook). k8s: k8s/ manifests (single replica + Recreate,
+         PVC at /data, /health probes; Ingress with --host) — the image is yours to build+push.
          --run             drive the host CLI to completion: app/service + volume + secrets + deploy +
                            telegram webhook (railway also mints the public domain). Carries your local
                            credential (env key or the OAuth auth.json) to the box. Stops at a gate (not
                            logged in, a missing secret) with one actionable line; needs flyctl / the
-                           railway CLI. Without it: prints the runbook.
+                           railway / kubectl CLI. Without it: prints the runbook. k8s --run applies the
+                           manifests to the CURRENT kubectl context and assumes the image is pushed.
+         --image <ref>     (k8s) the container image ref the Deployment runs (required with --run;
+                           without it the manifests carry a <registry>/<name>:<tag> placeholder)
+         --host <domain>   (k8s) the public https host: generates the Ingress and makes the webhook
+                           steps concrete (TLS stays cluster-owned — see the runbook)
          --into-linked     (railway --run) provision INTO the project this dir is already linked to (skip
                            create). By default --run only creates on an unlinked dir and refuses a
                            pre-existing link (could be unrelated/production) — this is the explicit opt-in.
@@ -213,6 +221,8 @@ const { positionals, values } = parseArgs({
     "no-scale-to-zero": { type: "boolean" },
     run: { type: "boolean" },
     "into-linked": { type: "boolean" },
+    image: { type: "string" },
+    host: { type: "string" },
     json: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     version: { type: "boolean", short: "v" },
@@ -790,8 +800,8 @@ async function runAddSkill(): Promise<void> {
 async function runDeploy(): Promise<void> {
   const host = positionals[1];
   const target = resolve(positionals[2] ?? ".");
-  if (host !== "fly" && host !== "railway") {
-    console.error(`usage: fastagent deploy <fly|railway> [dir]`);
+  if (host !== "fly" && host !== "railway" && host !== "k8s") {
+    console.error(`usage: fastagent deploy <fly|railway|k8s> [dir]`);
     process.exit(1);
   }
   loadDotEnv(target); // a custom provider/tool may read a key at config load
@@ -835,6 +845,49 @@ async function runDeploy(): Promise<void> {
     const plan = planRailwayDeploy({ serviceName, modelAuth, channels, extraSecrets, hasTimeTriggers, ...container });
     await writeArtifacts(target, plan.artifacts, { neverForce: container.kitDir ? [".dockerignore"] : [] });
     if (values.run) return runDeployRailway({ target, name: serviceName, modelAuth, authPath, channels, extraSecrets });
+    console.log(plan.runbook.join("\n"));
+    return;
+  }
+
+  // Kubernetes: manifests express the single-machine contract (replicas 1 + Recreate + a RWOP PVC at
+  // /data); the image is the operator's to build+push (a cluster only pulls). --run applies with kubectl
+  // against the current context; otherwise print the runbook.
+  if (host === "k8s") {
+    if (values.stop || values["no-scale-to-zero"]) {
+      console.error(
+        `[fastagent] warn: --stop/--no-scale-to-zero are Fly-only — Kubernetes has no built-in scale-to-zero ` +
+          `(the runbook states the scale policy).`,
+      );
+    }
+    if (values["into-linked"]) {
+      console.error(`[fastagent] warn: --into-linked is railway-only — the k8s target is the current kubectl context`);
+    }
+    const name = toK8sName(basename(target));
+    const plan = planK8sDeploy({
+      name,
+      image: values.image,
+      host: values.host,
+      port,
+      modelAuth,
+      channels,
+      extraSecrets,
+      hasTimeTriggers,
+      ...container,
+    });
+    await writeArtifacts(target, plan.artifacts, { neverForce: container.kitDir ? [".dockerignore"] : [] });
+    if (values.run) {
+      return runDeployK8s({
+        target,
+        name,
+        image: values.image,
+        publicHost: values.host,
+        manifestsDir: container.kitDir ? `${container.kitDir}/k8s` : "k8s",
+        modelAuth,
+        authPath,
+        channels,
+        extraSecrets,
+      });
+    }
     console.log(plan.runbook.join("\n"));
     return;
   }
@@ -1061,6 +1114,60 @@ async function runDeployRailway(params: {
     process.exit(1);
   }
   console.error(`[fastagent] deployed → ${outcome.url}`);
+}
+
+/**
+ * `deploy k8s --run`: drive kubectl to completion against the CURRENT context. Mirrors
+ * {@link runDeployFly} — same credential carry (env key OR the OAuth auth.json as `FASTAGENT_AUTH_SEED`)
+ * via {@link assembleSecrets}, same runner seam (spawned `kubectl`, cwd = the workspace). The
+ * k8s-specific sequence (context check → namespace → secret over stdin → apply -k → rollout status →
+ * webhook) lives in {@link deployK8sRun}; see there for why Kubernetes differs from Fly/Railway.
+ */
+async function runDeployK8s(params: {
+  target: string;
+  name: string;
+  image: string | undefined;
+  publicHost: string | undefined;
+  manifestsDir: string;
+  modelAuth: string | undefined;
+  authPath: string;
+  channels: ChannelKind[];
+  extraSecrets: string[];
+}): Promise<void> {
+  const { target, name, image, publicHost, manifestsDir, modelAuth, authPath, channels, extraSecrets } = params;
+  const kubectl = spawnRunner("kubectl", target);
+  // Fail fast if kubectl is absent (spawn ENOENT → 127), with the install link.
+  if ((await kubectl(["version", "--client"], { capture: true })).code === 127) {
+    console.error(`[fastagent] kubectl not found — install it: https://kubernetes.io/docs/tasks/tools/, then re-run`);
+    process.exit(1);
+  }
+
+  const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
+    modelAuth,
+    authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
+    channels,
+    extraSecrets,
+    env: process.env,
+  });
+  // Model credential has its OWN remediation (login), distinct from a missing secret's (.env).
+  if (needsModelCredential) {
+    console.error(
+      `[fastagent] deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
+    );
+    process.exit(1);
+  }
+
+  const outcome = await deployK8sRun(
+    { name, manifestsDir, image, host: publicHost, secrets, missingSecrets, channels },
+    kubectl,
+    (m) => console.error(`[fastagent] ${m}`),
+    (baseUrl) => registerTelegramWebhook(baseUrl),
+  );
+  if (!outcome.ok) {
+    console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
+    process.exit(1);
+  }
+  console.error(`[fastagent] deployed → ${outcome.url ?? `deployment/${name} (namespace ${name})`}`);
 }
 
 /**

@@ -1,0 +1,43 @@
+# e2e for `fastagent deploy k8s`: the real journey (docker build -> kind cluster ->
+# `deploy k8s --run` -> serving/state assertions) via scripts/e2e-k8s.sh — zero secrets
+# (a dummy model key; the failed turn IS the assertion). Path-filtered: it costs minutes
+# and Docker, so it runs only when the deploy/serving surface (or itself) changes; the
+# fast faux-model suite in ci.yml stays the every-PR gate. Deliberately NOT a required
+# check yet — promote it once it has run flake-free for a while.
+name: e2e-k8s
+
+on:
+  pull_request:
+    paths:
+      - "src/deploy/**"
+      - "src/cli.ts"
+      - "src/host/**"
+      - "src/channels/http.ts"
+      - "scripts/e2e-k8s.sh"
+      - ".github/workflows/e2e-k8s.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-k8s:
+    name: e2e (kind)
+    runs-on: ubuntu-latest # docker + kubectl preinstalled; the script downloads kind
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the kind e2e
+        run: ./scripts/e2e-k8s.sh

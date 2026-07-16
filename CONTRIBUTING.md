@@ -25,6 +25,12 @@ npm test               # vitest --run
 
 Tests use faux models by default, so they validate serving mechanics without network or credentials. A live-model smoke test against a real provider is optional and manual; use a temporary agent from `fastagent init`, and authenticate with `fastagent login` or provider API keys. Behind a proxy, set a working `HTTPS_PROXY`.
 
+When touching the deploy/serving surface (`src/deploy/**`, `src/cli.ts`, `src/host/**`), also run the Kubernetes e2e — it drives `deploy k8s --run` against a throwaway [kind](https://kind.sigs.k8s.io) cluster with zero credentials and cleans up after itself (needs docker + kubectl; CI runs it path-filtered via `.github/workflows/e2e-k8s.yml`):
+
+```bash
+./scripts/e2e-k8s.sh
+```
+
 ## Pull request loop
 
 ```text
