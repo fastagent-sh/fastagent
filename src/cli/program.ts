@@ -29,7 +29,8 @@ const TUNNEL: FlagSpec = {
   flags: "--tunnel",
   description:
     "expose a public HTTPS URL via a Cloudflare quick tunnel (needs cloudflared) and auto-register " +
-    "webhook channels (telegram, feishu, lark; github prints the URL)",
+    "webhook channels (telegram, feishu, lark; github prints the URL) — for hosting a bot from your " +
+    "own box without deploying (the quick-tunnel URL is ephemeral, not for production)",
 };
 
 const init: CommandSpec = {
@@ -216,7 +217,10 @@ const start: CommandSpec = {
     TUNNEL,
     NO_INPUT,
   ],
-  examples: [{ cmd: "fastagent start" }, { cmd: "fastagent start --tunnel", note: "host a bot from your own box" }],
+  examples: [
+    { cmd: "fastagent start" },
+    { cmd: "fastagent start --tunnel", note: "host a bot from your own box, no deploy" },
+  ],
   notes:
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
@@ -225,7 +229,9 @@ const start: CommandSpec = {
     "            it at a mounted volume so a redeploy that replaces the\n" +
     "            directory never wipes state\n" +
     "  sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <state>/sessions\n" +
-    "  auth:     --auth-path > FASTAGENT_AUTH_PATH > <state>/auth.json",
+    "  auth:     --auth-path > FASTAGENT_AUTH_PATH > <state>/auth.json\n" +
+    "            (project-level; point it at ~/.fastagent/auth.json to share one\n" +
+    "            credential across projects)",
   run: async (args, f) =>
     (await import("./commands/start.ts")).runStart(args[0] as string, {
       port: f.port as string | undefined,
@@ -335,23 +341,30 @@ const deploy: CommandSpec = {
     "Generate Dockerfile/.dockerignore plus the target config and print an ordered runbook. " +
     "docker: fastagent.compose.yml, loopback port, persistent state volume. fly: fly.toml " +
     "(autostop=suspend, state→volume). railway: railway.json (healthcheck /health); its " +
-    "volume/variables/App-Sleeping are dashboard/CLI steps the runbook states.",
+    "volume/variables/App-Sleeping are dashboard/CLI steps the runbook states. Durable ingress " +
+    "remains operator-owned.",
   args: [{ name: "<host>", description: "deploy target", choices: ["docker", "fly", "railway"] }, DIR_ARG],
   flags: [
     {
       flags: "--run",
       description:
-        "drive the target CLI to completion (docker compose up / fly / railway), carrying your local " +
-        "credential (env key or OAuth auth.json); stops at a gate with one actionable line",
+        "drive the target CLI to completion. Docker runs `docker compose up -d --build`; with a tunnel " +
+        "service, reads its URL and registers webhooks. Fly/Railway provision app/service + volume + " +
+        "secrets + deploy + webhook setup. Carries your local credential (env key or OAuth auth.json). " +
+        "Stops at a gate (missing CLI/daemon/login/secret) with one actionable line. Without it: prints " +
+        "the runbook",
     },
     {
       flags: "--tunnel",
       description:
         "(docker only) add a Quick Tunnel service to generated Compose; generation-only unless combined " +
-        "with --run",
+        "with --run. Existing Compose stays authoritative",
     },
     { flags: "--force", description: "overwrite existing target config/Dockerfile/.dockerignore (else kept)" },
-    { flags: "--stop", description: "(fly only) autostop by stopping (cold start) instead of suspending" },
+    {
+      flags: "--stop",
+      description: "(fly only) autostop by stopping (cold start) instead of suspending (fast resume)",
+    },
     {
       flags: "--no-scale-to-zero",
       description: "(fly only) keep one machine running when idle (min_machines_running=1)",

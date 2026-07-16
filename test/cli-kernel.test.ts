@@ -71,6 +71,43 @@ describe("cli kernel: spec conformance", () => {
     }
   });
 
+  it("the original usage wall's load-bearing content survives in the per-command help (no silent loss)", async () => {
+    // The commander refactor RELOCATED the old usage wall (overview → per-command help); it must not
+    // compress it away. Each entry: a phrase from the original wall + the command help that owns it now.
+    const carried: [string[], string][] = [
+      [["dev"], "work product never trigger a restart"],
+      [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
+      [["init"], "Never overwrites existing files"],
+      [["init"], "the kit goes into ./agent"],
+      [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
+      [["fire"], "does NOT advance the schedule's fire state"],
+      [["schedule", "history"], "did last night's run silently fail"],
+      [["schedule", "cancel"], "the agent's own is the `unwake` tool"],
+      [["start"], "--port > PORT env > fastagent.config.ts http.port > 8787"],
+      [["start"], "share one credential across projects"],
+      [["start"], "frozen by git"],
+      [["add", "feishu"], "one version-publish action remains"],
+      [["add", "lark"], "config-route 404"],
+      [["add", "skill"], "review with git diff"],
+      [["deploy"], "Durable ingress remains operator-owned"],
+      [["deploy"], "docker compose up -d --build"],
+      [["deploy"], "provision app/service + volume + secrets + deploy + webhook setup"],
+      [["deploy"], "missing CLI/daemon/login/secret"],
+      [["deploy"], "Existing Compose stays authoritative"],
+      [["deploy"], "routine redeploy of an already-provisioned agent"],
+      [["login"], "run from $HOME for the global ~/.fastagent/auth.json"],
+    ];
+    const rendered = new Map<string, string>();
+    for (const [path, phrase] of carried) {
+      const key = path.join(" ");
+      if (!rendered.has(key)) {
+        const r = await parse([...path, "--help"]);
+        rendered.set(key, r.out.replace(/\s+/g, " ")); // commander wraps at 80 — compare flattened
+      }
+      expect(rendered.get(key), `${key} --help must carry: "${phrase}"`).toContain(phrase);
+    }
+  });
+
   it("every spec has a one-line summary; every runnable spec has at least one example", () => {
     for (const { path, spec } of walk(specs)) {
       expect(spec.summary, path).toBeTruthy();
