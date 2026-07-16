@@ -338,10 +338,12 @@ The shipped file-backed implementations are single-process. Multiple instances r
 lease, credential, and channel-state backends; sharing one local state directory between processes is
 unsupported.
 
-`fastagent deploy fly|railway` generates a Dockerfile, host config, persistent-volume wiring, required
-secret names, and a runbook. `--run` drives the host CLI for flat workspaces. The `agentDir`
-repo-as-workspace deployment recipe is experimental and its `--run` path remains gated pending real-host
-verification.
+`fastagent deploy docker|fly|railway` generates a Dockerfile, target config, persistent-volume wiring,
+required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one app
+service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
+operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
+Quick Tunnel URL and registers webhooks. The `agentDir` repo-as-workspace recipe remains experimental;
+`--run` stays gated for every target pending explicit end-to-end validation of that layout.
 
 ## 10. Current boundaries
 

@@ -33,7 +33,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (!pre.ok) expect(pre.gate).toMatch(/fastagent\.config/);
   });
 
-  it("agentDir layout: container facts come from the KIT, git is auto-baked, --run is gated (runbook path works)", async () => {
+  it("agentDir layout: container facts come from the KIT, git is auto-baked, --run stays gated", async () => {
     const dir = await workspace({ "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n` });
     const agentDir = join(dir, "agent");
     await mkdir(agentDir, { recursive: true });
@@ -42,12 +42,12 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
     );
 
-    // --run: gated with an actionable message (the run drivers don't speak the layout yet).
+    // The whole repo-as-workspace shape is experimental for every automated runner, including Docker.
     const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { agentDir, run: true });
     expect(gated.ok).toBe(false);
     if (!gated.ok) expect(gated.gate).toMatch(/--run is not yet supported for the agentDir layout/);
 
-    // Generate mode: supported — kit facts drive the container, git rides in apt (write-back mechanics).
+    // Generate mode remains supported: kit facts drive the image, git rides in apt, and the runbook is explicit.
     const ok = await call(dir, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } }, { agentDir });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
