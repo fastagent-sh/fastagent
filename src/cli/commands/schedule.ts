@@ -94,9 +94,10 @@ export function runScheduleCancel(id: string, dirArg: string): void {
       `[fastagent] cancelled wake-up ${id} — if a server is running, verify with \`fastagent schedule list\``,
     );
   } else {
-    console.error(
-      `no pending wake-up ${id} (state: ${resolveStateRoot(target)}) — \`fastagent schedule list\` shows ids`,
+    failStartup(
+      new Error(
+        `no pending wake-up ${id} (state: ${resolveStateRoot(target)}) — \`fastagent schedule list\` shows ids`,
+      ),
     );
-    process.exit(1);
   }
 }

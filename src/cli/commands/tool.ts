@@ -25,8 +25,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   reportModuleLoadFailures(toolFailures);
   const tool = tools.find((t) => t.name === name);
   if (!tool) {
-    console.error(`unknown tool "${name}". available: ${tools.map((t) => t.name).join(", ") || "(none)"}`);
-    process.exit(1);
+    failStartup(new Error(`unknown tool "${name}". available: ${tools.map((t) => t.name).join(", ") || "(none)"}`));
   }
   let args: unknown;
   try {

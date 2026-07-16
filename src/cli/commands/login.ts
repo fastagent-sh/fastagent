@@ -43,10 +43,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // of stalling on an unanswerable prompt. (After the secret-hygiene self-ignore above, which is cheap
   // prep, so a later terminal login is safe.)
   if (opts.input === false || !isInteractive()) {
-    console.error(
-      `[fastagent] login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`,
+    failStartup(
+      new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
     );
-    process.exit(1);
   }
   const io = terminalLoginIO();
   const result = await loginFlow(io, { provider, authPath }).catch(failStartup);

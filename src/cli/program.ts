@@ -5,13 +5,9 @@
  * render from these specs (no hand-maintained usage text).
  */
 import { fastagentVersion } from "../version.ts";
-import { buildProgram, type CommandSpec, type FlagSpec, helpTitle } from "./kernel.ts";
+import { buildProgram, type CommandSpec, type FlagSpec, helpTitle, type ProgramOptions } from "./kernel.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
-const AUTHOR = "Author (the iteration loop):";
-const VERIFY = "Verify (no server needed):";
-const SHIP = "Serve & ship:";
-const OPERATE = "Operate:";
 
 // Shared flags — same name, same meaning, on every command that supports them (clig: consistency).
 const DIR_ARG = { name: "[dir]", description: "workspace directory", default: "." };
@@ -38,7 +34,6 @@ const TUNNEL: FlagSpec = {
 
 const init: CommandSpec = {
   name: "init",
-  group: AUTHOR,
   summary: "scaffold a runnable agent and install its dependencies",
   description:
     "Scaffold a runnable agent in dir (default .) and run npm install. Default is a self-iterating " +
@@ -73,7 +68,6 @@ const init: CommandSpec = {
 
 const dev: CommandSpec = {
   name: "dev",
-  group: AUTHOR,
   summary: "serve the agent locally, restarting on code edits",
   description:
     "Assemble the agent in dir (default .) and serve a local HTTP channel. persona.md/AGENTS.md/skills " +
@@ -106,7 +100,6 @@ const dev: CommandSpec = {
 
 const chat: CommandSpec = {
   name: "chat",
-  group: AUTHOR,
   summary: "open the SAME assembled agent in pi's interactive TUI",
   description:
     "Open the SAME assembled agent in pi's interactive TUI (the real harness, not a crude REPL) — to " +
@@ -121,7 +114,6 @@ const chat: CommandSpec = {
 
 const info: CommandSpec = {
   name: "info",
-  group: VERIFY,
   summary: "print what the directory assembles into, without serving",
   description:
     "Print what dir (default .) ASSEMBLES into — model, persona, context files (AGENTS.md), skills, " +
@@ -142,7 +134,6 @@ const info: CommandSpec = {
 
 const tool: CommandSpec = {
   name: "tool",
-  group: VERIFY,
   summary: "run one tool directly with JSON args — no model, no server, no tokens",
   description:
     "Run one tool (from tools/ or config.tools) directly with JSON args — no model, no server, no " +
@@ -163,7 +154,6 @@ const tool: CommandSpec = {
 
 const invoke: CommandSpec = {
   name: "invoke",
-  group: VERIFY,
   summary: "run ONE turn against the assembled agent and exit",
   description:
     "Run ONE turn against the assembled agent and exit — no server, no TUI. The reply streams to " +
@@ -182,7 +172,6 @@ const invoke: CommandSpec = {
 
 const fire: CommandSpec = {
   name: "fire",
-  group: VERIFY,
   summary: "run ONE schedule's turn immediately, without waiting for its cron",
   description:
     "Run ONE schedule's turn immediately (authoring loop, like invoke) — fires schedules/<name>.ts now " +
@@ -200,7 +189,6 @@ const fire: CommandSpec = {
 
 const models: CommandSpec = {
   name: "models",
-  group: VERIFY,
   summary: 'list the available "provider/modelId" model specs',
   description:
     'List every registered "provider/modelId" spec — use one with --model or as `model` in fastagent.config.ts.',
@@ -214,7 +202,6 @@ const models: CommandSpec = {
 
 const start: CommandSpec = {
   name: "start",
-  group: SHIP,
   summary: "run the agent in production posture (same assembly as dev, no watching)",
   description:
     "Run the agent in dir (default .) in production posture — the SAME assembly as dev (your directory " +
@@ -272,7 +259,6 @@ const channelSub = (
 
 const add: CommandSpec = {
   name: "add",
-  group: SHIP,
   summary: "connect a channel (github, telegram, feishu, lark) or vendor a skill",
   description:
     "Scaffold channels/<kind>.ts — third-party adapter glue with the policy to edit (github maps " +
@@ -344,7 +330,6 @@ const add: CommandSpec = {
 
 const deploy: CommandSpec = {
   name: "deploy",
-  group: SHIP,
   summary: "generate deploy artifacts + a runbook for docker, fly, or railway (--run drives it)",
   description:
     "Generate Dockerfile/.dockerignore plus the target config and print an ordered runbook. " +
@@ -404,7 +389,6 @@ const deploy: CommandSpec = {
 
 const schedule: CommandSpec = {
   name: "schedule",
-  group: OPERATE,
   summary: "inspect and control time triggers: run audit, pending fires, cancel a wake-up",
   subcommands: [
     {
@@ -457,7 +441,6 @@ const schedule: CommandSpec = {
 
 const login: CommandSpec = {
   name: "login",
-  group: OPERATE,
   summary: "authenticate a model provider (subscription/OAuth or API key)",
   description:
     "Authenticate a model provider into the project-level <state root>/auth.json — default " +
@@ -475,20 +458,21 @@ const login: CommandSpec = {
     }),
 };
 
-/** Registration order = help order (clig: most common first). Exported for the kernel conformance tests. */
+/** Registration order = help order — the ORIGINAL usage wall's order, kept verbatim (this is a
+ *  commander refactor of the same CLI, not a redesign). Exported for the kernel conformance tests. */
 export const specs: readonly CommandSpec[] = [
   init,
-  dev,
-  chat,
+  models,
   info,
   tool,
   invoke,
   fire,
-  models,
+  schedule,
+  dev,
+  chat,
   start,
   add,
   deploy,
-  schedule,
   login,
 ];
 
@@ -500,8 +484,15 @@ ${helpTitle("Examples:")}
 
 Docs: https://github.com/fastagent-sh/fastagent`;
 
+/**
+ * The production program assembly (specs + the examples/docs tail). Tests build through THIS —
+ * with their IO/width/color seams as overrides — so they exercise the real shape, not a lookalike.
+ */
+export function buildCliProgram(overrides: ProgramOptions = {}) {
+  return buildProgram(specs, { helpTail: HELP_TAIL, ...overrides });
+}
+
 /** Parse and run one CLI invocation (`argv` = process.argv). Usage errors exit 2 via the kernel policy. */
 export async function runCli(argv: readonly string[]): Promise<void> {
-  const program = buildProgram(specs, { version: await fastagentVersion(), helpTail: HELP_TAIL });
-  await program.parseAsync([...argv]);
+  await buildCliProgram({ version: await fastagentVersion() }).parseAsync([...argv]);
 }

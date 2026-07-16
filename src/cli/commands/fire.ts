@@ -40,10 +40,11 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
     // "wrong place", not "broken file".
     const looked =
       fireAgentDir === fireDir ? "" : ` (looked in ${relative(fireDir, fireAgentDir).split(sep).join("/")}/schedules)`;
-    console.error(
-      `unknown schedule "${name}"${looked}. available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,
+    failStartup(
+      new Error(
+        `unknown schedule "${name}"${looked}. available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,
+      ),
     );
-    process.exit(1);
   }
   const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(fireDir, {
     model: opts.model,

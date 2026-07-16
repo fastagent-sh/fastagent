@@ -54,9 +54,9 @@ export function serve(routes: Routes, port: number, onListening?: (boundPort: nu
       onListening?.(boundPort);
     },
     (error: NodeJS.ErrnoException) => {
-      if (error.code === "EADDRINUSE") console.error(`port ${port} is already in use; choose another with --port`);
-      else console.error(`cannot bind http channel on :${port}: ${error.message}`);
-      process.exit(1);
+      if (error.code === "EADDRINUSE")
+        failStartup(new Error(`port ${port} is already in use; choose another with --port`));
+      failStartup(new Error(`cannot bind http channel on :${port}: ${error.message}`));
     },
   );
 }

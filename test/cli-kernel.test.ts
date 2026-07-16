@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildProgram, type CommandSpec, optionKey } from "../src/cli/kernel.ts";
-import { specs } from "../src/cli/program.ts";
+import { buildCliProgram, specs } from "../src/cli/program.ts";
 
 /**
  * The commander kernel: specs-as-data rendered through buildProgram. In-process tests drive the
@@ -23,7 +23,7 @@ class ExitSignal extends Error {
 async function parse(argv: string[]): Promise<{ code: number; out: string; err: string }> {
   let out = "";
   let err = "";
-  const program = buildProgram(specs, {
+  const program = buildCliProgram({
     helpWidth: 80, // the determinism seam: production adapts to the terminal (pipes fall back to 80)
     colors: false, // ditto: production detects per stream (TTY on; pipe/NO_COLOR/TERM=dumb off)
     out: (c) => {
@@ -82,29 +82,50 @@ describe("cli kernel: spec conformance", () => {
   });
 });
 
-describe("cli kernel: help colors", () => {
-  it("styled when the stream has colors, fully stripped otherwise (commander owns the veto)", async () => {
+describe("cli kernel: help styling — bold headings, NO colors; errors carry the one red prefix", () => {
+  /** Parse with forced-on styling to assert what a color TTY would render. */
+  async function parseStyled(argv: string[]): Promise<{ code: number; out: string; err: string }> {
     let out = "";
-    const program = buildProgram(specs, {
+    let err = "";
+    const program = buildCliProgram({
       colors: true,
       helpWidth: 80,
       out: (c) => {
         out += c;
       },
-      err: () => {},
+      err: (c) => {
+        err += c;
+      },
       exit: (code) => {
         throw new ExitSignal(code);
       },
     });
+    let code = 0;
     try {
-      await program.parseAsync(["node", "fastagent", "models", "--help"]);
+      await program.parseAsync(["node", "fastagent", ...argv]);
     } catch (e) {
       if (!(e instanceof ExitSignal)) throw e;
+      code = e.code;
     }
-    expect(out).toContain("\x1b[1;32m"); // headings (incl. the verbatim Examples:) are styled
-    expect(out).toContain("\x1b[32m"); // terms (flags/arguments) are styled
-    const plain = await parse(["models", "--help"]); // the harness pins colors: false
+    return { code, out, err };
+  }
+
+  it("help headings are bold and nothing in help is colored", async () => {
+    const r = await parseStyled(["models", "--help"]);
+    expect(r.out).toContain("\x1b[1mUsage:\x1b[0m"); // bold section headings
+    expect(r.out).toContain("\x1b[1mExamples:\x1b[0m"); // incl. the verbatim ones
+    expect(r.out).not.toMatch(/\x1b\[\d*;?3\dm/); // no foreground COLOR anywhere in help
+    const plain = await parse(["models", "--help"]); // the harness pins colors: false → fully stripped
     expect(plain.out).not.toContain("\x1b[");
+  });
+
+  it("parse errors carry the unified bold-red Error: prefix (plain without colors)", async () => {
+    const styled = await parseStyled(["models", "--force"]);
+    expect(styled.code).toBe(2);
+    expect(styled.err).toContain("\x1b[1;31mError:\x1b[0m unknown option '--force'");
+    const plain = await parse(["models", "--force"]);
+    expect(plain.err).toMatch(/^Error: unknown option '--force'/);
+    expect(plain.err).not.toContain("\x1b[");
   });
 });
 
@@ -158,15 +179,18 @@ describe("cli kernel: help", () => {
 });
 
 describe("cli kernel: the top-level surface", () => {
-  it("--help shows the grouped overview (clig: most common commands first)", async () => {
+  it("--help shows ONE flat Commands list in the original usage-wall order (no groups)", async () => {
     const r = await parse(["--help"]);
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/Author \(the iteration loop\):/);
-    expect(r.out).toMatch(/Verify \(no server needed\):/);
-    expect(r.out).toMatch(/Serve & ship:/);
-    expect(r.out).toMatch(/Operate:/);
-    // The author loop leads the listing — init before deploy.
-    expect(r.out.indexOf("init")).toBeLessThan(r.out.indexOf("deploy"));
+    // A commander refactor of the same CLI, not a redesign: no invented group headings…
+    expect(r.out).not.toMatch(/Author|Verify|Serve & ship|Operate:/);
+    // …one flat section, in the original synopsis order.
+    expect(r.out).toMatch(/^Commands:$/m);
+    const order = ["init", "models", "info", "tool", "invoke", "fire", "schedule", "dev", "chat", "start"];
+    const at = (name: string) => r.out.search(new RegExp(`^  ${name}`, "m"));
+    for (let i = 1; i < order.length; i++) {
+      expect(at(order[i - 1] as string), `${order[i - 1]} before ${order[i]}`).toBeLessThan(at(order[i] as string));
+    }
   });
 
   it("a bare invocation shows the overview on stderr and exits 2 (missing command = usage)", async () => {

@@ -60,7 +60,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   const target = resolve(dirArg);
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
-    failUsage(`[fastagent] deploy stopped: --tunnel is supported only by the local Docker target`);
+    failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
   loadDotEnv(target); // a custom provider/tool may read a key at config load
   installProxyFetch(); // post-deploy channel API calls must honor HTTP(S)_PROXY under Node
@@ -79,10 +79,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     force: !!opts.force,
     authPathOverride: resolveAuthPathOverride(opts.authPath),
   }).catch(failStartup);
-  if (!pre.ok) {
-    console.error(`[fastagent] deploy stopped: ${pre.gate}`);
-    process.exit(1);
-  }
+  if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
   const { channels, hasTimeTriggers, modelAuth, authPath, container, port, extraSecrets } = pre;
 
@@ -223,10 +220,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         `your kept fly.toml scales to zero (min_machines_running = ${min ?? "absent → platform default 0"}), but ` +
         `schedules/self-scheduling need a running machine (no external wake-up). Set min_machines_running = 1, ` +
         `or pass --force to regenerate.`;
-      if (opts.run) {
-        console.error(`[fastagent] deploy stopped: ${msg}`);
-        process.exit(1);
-      }
+      if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg}`);
     }
   }
@@ -322,10 +316,7 @@ async function runDeployDocker(params: {
     spawnRunner("docker", target),
     (message) => console.error(`[fastagent] ${message}`),
   );
-  if (!outcome.ok) {
-    console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
-    process.exit(1);
-  }
+  if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
 
   const compose = `docker compose -f ${composeFile}`;
   console.error(`[fastagent] running${outcome.url ? ` → ${outcome.url}` : ""}`);
@@ -371,8 +362,7 @@ async function runDeployFly(params: {
   const fly = spawnRunner("fly", target);
   // Fail fast if flyctl is absent (spawn ENOENT → 127), with the install link — not a confusing auth gate.
   if ((await fly(["version"], { capture: true })).code === 127) {
-    console.error(`[fastagent] flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`);
-    process.exit(1);
+    failStartup(new Error(`flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`));
   }
 
   const region = parseFlyRegion(await readFile(flyTomlPath, "utf8")) ?? "iad";
@@ -386,10 +376,11 @@ async function runDeployFly(params: {
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env) — gate it
   // here, not through missingSecrets, so the message isn't a contradictory mash of both.
   if (needsModelCredential) {
-    console.error(
-      `[fastagent] deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
+    failStartup(
+      new Error(
+        `deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
+      ),
     );
-    process.exit(1);
   }
 
   const outcome = await deployFlyRun(
@@ -399,10 +390,7 @@ async function runDeployFly(params: {
     (baseUrl) => registerTelegramWebhook(baseUrl),
     (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
   );
-  if (!outcome.ok) {
-    console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
-    process.exit(1);
-  }
+  if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
 }
 
@@ -426,8 +414,7 @@ async function runDeployRailway(params: {
   const railway = spawnRunner("railway", target);
   // Fail fast if the railway CLI is absent (spawn ENOENT → 127), with the install link.
   if ((await railway(["--version"], { capture: true })).code === 127) {
-    console.error(`[fastagent] railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run`);
-    process.exit(1);
+    failStartup(new Error(`railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run`));
   }
 
   const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
@@ -439,10 +426,11 @@ async function runDeployRailway(params: {
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env).
   if (needsModelCredential) {
-    console.error(
-      `[fastagent] deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
+    failStartup(
+      new Error(
+        `deploy stopped: no model credential — run \`fastagent login\`, or set a provider API key in .env, then re-run`,
+      ),
     );
-    process.exit(1);
   }
 
   const outcome = await deployRailwayRun(
@@ -452,9 +440,6 @@ async function runDeployRailway(params: {
     (baseUrl) => registerTelegramWebhook(baseUrl),
     (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
   );
-  if (!outcome.ok) {
-    console.error(`[fastagent] deploy stopped: ${outcome.gate}`);
-    process.exit(1);
-  }
+  if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);
 }

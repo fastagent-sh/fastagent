@@ -12,6 +12,7 @@
  * 1 runtime failure (owned by the command bodies), 2 usage error (anything the parser itself rejects).
  */
 import { Argument, Command, InvalidArgumentError, Option } from "commander";
+import { errorPrefix } from "./fail.ts";
 
 /** One positional argument, in commander syntax: `<name>` required, `[dir]` optional. */
 export interface ArgSpec {
@@ -43,8 +44,6 @@ export interface CommandSpec {
   summary: string;
   /** Longer description for the command's own help; defaults to `summary`. */
   description?: string;
-  /** Heading this command is listed under in the parent help (clig: most common commands first). */
-  group?: string;
   args?: ArgSpec[];
   flags?: FlagSpec[];
   /** Shown in an "Examples:" section of the command's help — clig: users reach for examples first. */
@@ -101,12 +100,11 @@ export function optionKey(flags: string): string {
   return name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 }
 
-// Help colors (clig: use color with intention; let the environment veto it). The styles are ALWAYS
-// embedded; commander strips every SGR code — generated sections AND verbatim addHelpText content
-// alike — whenever the target stream has no colors (non-TTY pipe, NO_COLOR, TERM=dumb), so plain
-// output never depends on our own detection. Two roles only, uv-style: headings, and what you type.
-const title = (s: string): string => `\x1b[1;32m${s}\x1b[0m`; // bold green — section headings
-const term = (s: string): string => `\x1b[32m${s}\x1b[0m`; // green — commands/flags/arguments
+// Help styling (clig: formatting with intention): section headings are BOLD, nothing in help is
+// colored — the only color in the whole CLI is the red error prefix. The style is always embedded;
+// commander strips every SGR code (generated sections and verbatim addHelpText content alike)
+// whenever the target stream has no colors (non-TTY pipe, NO_COLOR, TERM=dumb).
+const title = (s: string): string => `\x1b[1m${s}\x1b[0m`; // bold — section headings
 
 /** Style a heading in verbatim help text exactly like a generated section title (Examples:, a help tail). */
 export const helpTitle = title;
@@ -123,24 +121,21 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   program.configureHelp({
     ...(options.helpWidth !== undefined ? { helpWidth: options.helpWidth } : {}),
     styleTitle: title,
-    styleCommandText: term,
-    styleSubcommandTerm: term,
-    styleOptionTerm: term,
-    styleArgumentTerm: term,
   });
-  if (options.colors !== undefined) {
-    const colors = options.colors;
-    program.configureOutput({ getOutHasColors: () => colors, getErrHasColors: () => colors });
-  }
+  program.configureOutput({
+    ...(options.out ? { writeOut: options.out } : {}),
+    ...(options.err ? { writeErr: options.err } : {}),
+    ...(options.colors !== undefined
+      ? { getOutHasColors: () => options.colors as boolean, getErrHasColors: () => options.colors as boolean }
+      : {}),
+    // Every parse-level error carries the ONE unified prefix: bold-red `Error:` (plain when stderr
+    // has no colors). Command bodies get the same prefix through failStartup/failUsage.
+    outputError: (str, write) =>
+      write(str.startsWith("error:") ? `${errorPrefix(options.colors)}${str.slice("error:".length)}` : str),
+  });
   program.showSuggestionAfterError(); // "did you mean models?" — suggest only, never run it (clig on DWIM)
   program.showHelpAfterError("(run with --help for usage)");
   if (options.version) program.version(options.version, "-v, --version", "print the fastagent version");
-  if (options.out || options.err) {
-    program.configureOutput({
-      ...(options.out ? { writeOut: options.out } : {}),
-      ...(options.err ? { writeErr: options.err } : {}),
-    });
-  }
   if (options.helpTail) program.addHelpText("after", options.helpTail);
   // Subcommands inherit exitOverride/output/suggestion settings at .command() time — register last.
   for (const spec of specs) register(program, spec);
@@ -162,7 +157,6 @@ function register(parent: Command, spec: CommandSpec): void {
   const cmd = parent.command(spec.name);
   cmd.summary(spec.summary);
   cmd.description(spec.description ?? spec.summary);
-  if (spec.group) cmd.helpGroup(spec.group);
   for (const a of spec.args ?? []) {
     const arg = new Argument(a.name, a.description);
     if (a.default !== undefined) arg.default(a.default);

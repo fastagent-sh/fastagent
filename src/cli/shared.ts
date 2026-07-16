@@ -37,8 +37,7 @@ export function parsePort(value: string | undefined, source: string, from: "flag
   if (!/^\d+$/.test(trimmed) || !isValidPort(Number(trimmed))) {
     const message = `invalid ${source} "${value}": must be an integer 0-65535`;
     if (from === "flag") failUsage(message);
-    console.error(message);
-    process.exit(1);
+    failStartup(new Error(message));
   }
   return Number(trimmed);
 }
