@@ -97,9 +97,12 @@ Each invocation builds a fresh harness for its session and discards it after the
 continuity comes from `PiSessionStore`, not a resident harness. Reopening is faithful to the whole
 record, not just the messages: pi's harness writes active-tool changes to the session but never reads
 them back (its own TUI harness is resident), so `piHarnessFactory` resolves the active-tool set itself
-(`harness.ts` `resolveHarnessActiveToolNames`) — the recorded set filtered to the mounted tools (a
-recorded-but-removed tool would fail construction), and with no record (or an unhonorable one) the
-INITIAL set: every non-deferred tool, which is pi's default when nothing is deferred.
+(`harness.ts` `resolveHarnessActiveToolNames`): the UNION of the initial set (every non-deferred tool;
+pi's all-active default when nothing is deferred) and the recorded names, filtered to the mounted
+tools (a recorded-but-removed tool would fail construction). A record is deliberately NOT a frozen
+snapshot — on the serving path only the additive activation bridge writes records, so its semantic is
+"which deferred tools this session activated"; replaying a snapshot would freeze later-added tools out
+of old sessions.
 
 ## 4. Event translation and terminal discipline
 

@@ -86,12 +86,13 @@ const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
  * (pi's default — all active — applies, and no session entry is ever written; tool-sets without
  * deferral behave exactly as before deferral existed).
  *
- * A recorded set is filtered to the currently-mounted tools: the constructor THROWS on unknown names,
- * so a recorded tool that was since removed from the workspace would otherwise brick every future
- * invoke of that session. An intact EMPTY set is restored as-is (pi allows `setActiveTools([])`; a
- * deliberate recorded state, not a degradation). Only a NON-empty set that filters down to empty
- * falls back to the initial set — the recorded intent cannot be honored, and honoring its empty
- * shadow would be a silent capability loss. Both filter degradations are logged (fail visibly) —
+ * A record is NOT replayed as a frozen snapshot — the active set is rebuilt as the UNION of the
+ * initial set and the recorded names (filtered to the mounted tools: the constructor THROWS on
+ * unknown names, so a recorded-but-removed tool would otherwise brick every future invoke of that
+ * session). On the serving path only the additive activation bridge writes records, so a record's
+ * real semantic is "which deferred tools this session activated" — layered on top of whatever the
+ * workspace mounts TODAY. A snapshot replay would silently freeze a later-added non-deferred tool
+ * out of every session the loader ever touched. Missing recorded names are logged (fail visibly) —
  * ONCE per session+missing set: a fresh harness is built per invoke and channel sessions live for
  * weeks, so an un-deduped warn would repeat every turn and dilute its own signal. A log-dedup memo
  * (like L2's findings memo), not session state — the resolve stays derived from the session.
@@ -102,22 +103,18 @@ export function resolveHarnessActiveToolNames(
   tools: AgentTool[],
   sessionId: string,
 ): string[] | undefined {
-  const initial = tools.some(isDeferredTool) ? tools.filter((t) => !isDeferredTool(t)).map((t) => t.name) : undefined;
-  if (recorded === null) return initial;
+  const anyDeferred = tools.some(isDeferredTool);
+  const initial = tools.filter((t) => !isDeferredTool(t)).map((t) => t.name);
+  if (recorded === null) return anyDeferred ? initial : undefined;
   const mounted = new Set(tools.map((t) => t.name));
   const known = recorded.filter((name) => mounted.has(name));
-  if (known.length === recorded.length) return known; // intact, including a deliberate []
   const missing = recorded.filter((name) => !mounted.has(name));
-  const emit = warnedRestores.has(`${sessionId}\u0000${missing.join(",")}`) ? log.debug : log.warn;
-  warnedRestores.add(`${sessionId}\u0000${missing.join(",")}`);
-  if (known.length === 0) {
-    emit(
-      `[fastagent] session ${sessionId}: none of its recorded active tools (${missing.join(", ")}) are mounted — falling back to the initial active set (every non-deferred tool)`,
-    );
-    return initial;
+  if (missing.length > 0) {
+    const emit = warnedRestores.has(`${sessionId}\u0000${missing.join(",")}`) ? log.debug : log.warn;
+    warnedRestores.add(`${sessionId}\u0000${missing.join(",")}`);
+    emit(`[fastagent] session ${sessionId}: dropping recorded active tool(s) no longer mounted: ${missing.join(", ")}`);
   }
-  emit(`[fastagent] session ${sessionId}: dropping recorded active tool(s) no longer mounted: ${missing.join(", ")}`);
-  return known;
+  return [...new Set([...initial, ...known])];
 }
 
 /** Open-or-create the session per invoke: existing → open (history via buildContext); missing → create. */

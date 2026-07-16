@@ -39,3 +39,12 @@ export interface TurnContext {
 }
 
 export const turnContext = new AsyncLocalStorage<TurnContext>();
+
+/** The additive-activation contract, in ONE place for both bridges (invoke.ts over the harness,
+ *  chat.ts over pi's AgentSession): dedupe → keep registered names only (pi's setters THROW on
+ *  unknown) → exclude already-active → the names to actually add (empty = nothing to set). */
+export function additiveActivation(registered: string[], current: string[], names: string[]): string[] {
+  const known = new Set(registered);
+  const active = new Set(current);
+  return [...new Set(names)].filter((name) => known.has(name) && !active.has(name));
+}

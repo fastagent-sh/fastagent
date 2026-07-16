@@ -53,8 +53,8 @@ export function isDeferredTool(tool: AgentTool): boolean {
   return (tool as { deferred?: unknown }).deferred === true;
 }
 
-/** The same tool without the deferred marker — for surfaces that mount everything active (chat) and
- *  for a loader that must stay active. */
+/** The same tool without the deferred marker — for a loader that must stay active (a deferred loader
+ *  could never be activated and would strand every deferred tool). */
 export function stripDeferredMarker(tool: AgentTool): AgentTool {
   if (!isDeferredTool(tool)) return tool;
   const { deferred: _drop, ...active } = tool as AgentTool & { deferred?: boolean };

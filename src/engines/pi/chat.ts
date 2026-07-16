@@ -41,7 +41,7 @@ import { createPiModels } from "./models.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { isDeferredTool, loadTools, mergeDiscoveredTools } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
-import { type ToolActivation, turnContext } from "./tool-context.ts";
+import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 
 export interface RunPiChatOptions {
@@ -69,9 +69,12 @@ export async function buildChatRuntime(
       active: () => session.getActiveToolNames(),
       registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
       async activate(names) {
-        const registered = new Set(session.getAllTools().map((t) => t.name));
         const current = session.getActiveToolNames();
-        const added = [...new Set(names)].filter((n) => registered.has(n) && !current.includes(n));
+        const added = additiveActivation(
+          session.getAllTools().map((t) => t.name),
+          current,
+          names,
+        );
         if (added.length > 0) session.setActiveToolsByName([...current, ...added]);
         return added;
       },

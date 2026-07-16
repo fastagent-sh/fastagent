@@ -36,7 +36,8 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
   // pi's harness writes active_tools_change to the session but its constructor never reads it back —
   // fine for pi's long-lived TUI harness, but fastagent builds a fresh harness per invoke: without the
   // restore, a session's active set silently resets to "all tools" on the next turn.
-  it("a fresh harness reopens the session with its recorded active set, not the default", async () => {
+  it("a fresh harness reopens the session with its recorded activations layered on the initial set", async () => {
+    const deferred = Object.assign(fakeTool("lazy"), { deferred: true });
     const { faux, models } = makeFaux();
     const sessions = inMemorySessionStore();
     const factory = piHarnessFactory({
@@ -44,15 +45,39 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
       env: new NodeExecutionEnv({ cwd: process.cwd() }),
       models,
       model: faux.getModel(),
-      tools: [fakeTool("alpha"), fakeTool("beta")],
+      tools: [fakeTool("alpha"), deferred],
       systemPrompt: "test",
     });
     const first = await factory("s1");
-    expect(first.getActiveTools().map((t) => t.name)).toEqual(["alpha", "beta"]); // default: all mounted
-    await first.setActiveTools(["beta"]); // idle phase → persisted to the session immediately
+    expect(first.getActiveTools().map((t) => t.name)).toEqual(["alpha"]); // initial: non-deferred only
+    await first.setActiveTools(["alpha", "lazy"]); // an activation — idle phase → persisted immediately
 
     const second = await factory("s1"); // a fresh harness, as every invoke builds
-    expect(second.getActiveTools().map((t) => t.name)).toEqual(["beta"]);
+    expect(second.getActiveTools().map((t) => t.name)).toEqual(["alpha", "lazy"]);
+  });
+
+  it("a record is not a frozen snapshot: a tool added to the workspace later joins old sessions", async () => {
+    const deferred = Object.assign(fakeTool("lazy"), { deferred: true });
+    const { faux, models } = makeFaux();
+    const sessions = inMemorySessionStore();
+    const base = {
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      systemPrompt: "test",
+    };
+    const first = await piHarnessFactory({ ...base, tools: [fakeTool("alpha"), deferred] })("s1");
+    await first.setActiveTools(["alpha", "lazy"]); // records TODAY's snapshot
+
+    // The workspace later adds "gamma": a snapshot replay would freeze it out of this session forever.
+    const second = await piHarnessFactory({ ...base, tools: [fakeTool("alpha"), fakeTool("gamma"), deferred] })("s1");
+    expect(
+      second
+        .getActiveTools()
+        .map((t) => t.name)
+        .sort(),
+    ).toEqual(["alpha", "gamma", "lazy"]);
   });
 
   it("a recorded tool that is no longer mounted is dropped instead of bricking the session", async () => {
@@ -74,18 +99,20 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     expect(second.getActiveTools().map((t) => t.name)).toEqual(["beta"]);
   });
 
-  it("resolveHarnessActiveToolNames: null → default; intact [] restored as-is; filter-to-empty → default", () => {
+  it("resolveHarnessActiveToolNames: null → default; union semantics; missing names dropped + warned", () => {
     const tools = [fakeTool("alpha")];
     expect(resolveHarnessActiveToolNames(null, tools, "s")).toBeUndefined(); // never changed → pi's default
     expect(resolveHarnessActiveToolNames(["alpha"], tools, "s")).toEqual(["alpha"]);
-    expect(resolveHarnessActiveToolNames([], tools, "s")).toEqual([]); // deliberate empty set → faithful
-    expect(resolveHarnessActiveToolNames(["ghost"], tools, "s")).toBeUndefined(); // intent unhonorable → default
+    // UNION semantics: a record contributes activations ON TOP of the initial set (which, with no
+    // deferral, is all mounted tools) — it cannot narrow below it. The record's semantic on the
+    // serving path is "which deferred tools this session activated", not a frozen snapshot.
+    expect(resolveHarnessActiveToolNames([], tools, "s")).toEqual(["alpha"]);
+    expect(resolveHarnessActiveToolNames(["ghost"], tools, "s")).toEqual(["alpha"]); // missing → dropped + warned
 
-    // With a deferred tool mounted, both fallbacks resolve to the INITIAL set (non-deferred only) —
-    // never "all mounted", which would silently activate the deferred tool.
     const deferredTool = Object.assign(fakeTool("lazy"), { deferred: true });
     const withDeferred = [fakeTool("alpha"), deferredTool];
-    expect(resolveHarnessActiveToolNames(null, withDeferred, "s")).toEqual(["alpha"]);
+    expect(resolveHarnessActiveToolNames(null, withDeferred, "s")).toEqual(["alpha"]); // initial excludes deferred
+    expect(resolveHarnessActiveToolNames(["lazy"], withDeferred, "s")).toEqual(["alpha", "lazy"]); // union
     expect(resolveHarnessActiveToolNames(["ghost"], withDeferred, "s2")).toEqual(["alpha"]);
   });
 });

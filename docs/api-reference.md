@@ -212,6 +212,14 @@ Costs and behavior to know:
   restriction of its own.
 - `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the activation bridge a custom
   loader can use; `activate` is additive and ignores unknown names.
+- At L1 (`createPiAgent`) the `instructions` are verbatim by contract — fastagent does not inject the
+  discovery note the directory path's base prompt carries. When passing deferred tools at L1, tell the
+  model about `search_tools` in your own instructions (or rely on the loader's description alone,
+  which is weaker).
+- An activation is recorded in the session as "this conversation activated these deferred tools", not
+  as a frozen snapshot: on reopen the active set is rebuilt as the initial set (current non-deferred
+  tools) plus the recorded activations — a tool you add to the workspace later joins existing
+  conversations too.
 - **`fastagent chat` emulates deferral** like the serving path (what you iterate is what you serve):
   the session starts with deferred tools inactive, the same `search_tools` loader discovers and
   activates them (bridged to pi's session instead of the serving harness), and the prompt is

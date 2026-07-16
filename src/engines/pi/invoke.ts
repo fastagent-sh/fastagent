@@ -17,7 +17,7 @@ import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { type Agent, type AgentEvent, type Json, type Prompt, type Scope, SESSION_BUSY_CODE } from "../../agent.ts";
 import { log } from "../../log.ts";
 import type { PiHarnessFactory } from "./harness.ts";
-import { type ToolActivation, turnContext } from "./tool-context.ts";
+import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 
 // ── §1 Lease: single-writer concurrency floor ───────────────────────────────
 //
@@ -176,9 +176,12 @@ function toolActivation(harness: PiHarness): ToolActivation {
     active: () => harness.getActiveTools().map((t) => t.name),
     registered: () => harness.getTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
     async activate(names) {
-      const registered = new Set(harness.getTools().map((t) => t.name));
       const current = harness.getActiveTools().map((t) => t.name);
-      const added = [...new Set(names)].filter((n) => registered.has(n) && !current.includes(n));
+      const added = additiveActivation(
+        harness.getTools().map((t) => t.name),
+        current,
+        names,
+      );
       if (added.length > 0) await harness.setActiveTools([...current, ...added]);
       return added;
     },
