@@ -142,8 +142,10 @@ prompt prefix (the stamp comes from that execute's own `activate()` calls, never
 snapshot diff: batch tool calls run in parallel and a diff would misattribute a sibling's activation)
 — and is recorded in the session, which the per-invoke resolve above carries into later turns. The
 base prompt lists only non-deferred tools plus a discovery note, computed from the static mounted set,
-so activation never rewrites the prompt. `chat` deliberately does not emulate deferral (the author is
-exercising their tools; everything mounts active and the marker is stripped before prompt assembly).
+so activation never rewrites the prompt. `chat` emulates the same behavior over pi's AgentSession —
+the session is narrowed to the initial active set at build, and the same builtin loader activates
+through a chat-side ToolActivation bridge (`chat.ts` `chatToolActivation`) riding the same
+turn context, so the author debugs exactly what serves.
 
 `ExecutionEnv` is a harness assembly seam, not a complete sandbox boundary today. Pi's cwd-bound coding
 tools and `loadProjectContextFiles` still use the local process/filesystem. A future sandbox adapter must

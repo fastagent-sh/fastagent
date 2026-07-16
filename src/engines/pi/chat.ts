@@ -24,6 +24,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
+  type AgentSession,
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   InteractiveMode,
@@ -38,7 +39,9 @@ import { loadConfig, resolveAgentDir, resolveModel, resolveModelSpec } from "./c
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
 import { createPiModels } from "./models.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
-import { loadTools, mergeDiscoveredTools, stripDeferredMarker } from "./tool.ts";
+import { isDeferredTool, loadTools, mergeDiscoveredTools } from "./tool.ts";
+import { withSearchTool } from "./search-tools.ts";
+import { type ToolActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 
 export interface RunPiChatOptions {
@@ -57,6 +60,24 @@ export async function buildChatRuntime(
   /** Session backend. Defaults to pi's project-scoped store; tests inject SessionManager.inMemory(). */
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
+  /** The turn's {@link ToolActivation} over pi's AgentSession — the chat counterpart of invoke.ts's
+   *  harness bridge, so the SAME builtin search_tools serves both paths. Additive; unknown names
+   *  filtered (`setActiveToolsByName` is authoritative on the session and rebuilds its prompt — our
+   *  static override keeps the prompt identical to serving). */
+  function chatToolActivation(session: AgentSession): ToolActivation {
+    return {
+      active: () => session.getActiveToolNames(),
+      registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
+      async activate(names) {
+        const registered = new Set(session.getAllTools().map((t) => t.name));
+        const current = session.getActiveToolNames();
+        const added = [...new Set(names)].filter((n) => registered.has(n) && !current.includes(n));
+        if (added.length > 0) session.setActiveToolsByName([...current, ...added]);
+        return added;
+      },
+    };
+  }
+
   async function resolveAssembly(cwd: string) {
     const { config } = await loadConfig(cwd);
     const modelSpec = resolveModelSpec(options.model, config);
@@ -78,24 +99,34 @@ export async function buildChatRuntime(
     // for rich rendering); customs go through pi's `customTools` path so they survive /new, /resume, fork.
     const discovered = await loadTools(agentDir);
     const merged = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
-    // Chat does NOT emulate deferral — a deliberate, named fidelity gap: deferral is a serving-cost
-    // optimization, and in the local TUI the author is exercising their tools, so every tool mounts
-    // ACTIVE. Strip the marker before the prompt assembly below: piBasePrompt would otherwise hide
-    // the deferred tools and advertise a search_tools loader that is not mounted here — a prompt
-    // that lies about the tool surface.
-    const tools = merged.tools.map(stripDeferredMarker);
+    // Chat EMULATES deferral, like serving (what you iterate is what you serve): the builtin loader
+    // mounts when a deferred tool exists, the initial active set excludes deferred tools (applied on
+    // the session in createRuntime below — pi's TUI session starts all-active), and the activation
+    // bridge below rides the same turn context the serving path uses, so the SAME search_tools works
+    // against pi's AgentSession instead of fastagent's harness.
+    const tools = withSearchTool(merged.tools);
     const crossCollisions = merged.collisions;
     reportToolCollisions([...discovered.collisions, ...crossCollisions]);
     reportModuleLoadFailures(discovered.failures);
     const defaultNames = piDefaultTools(cwd).map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));
-    // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts it).
+    // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
+    // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
+    // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
+    // resolves through sessionRef at call time, exactly like the serving path resolves its harness.
     const customToolDefs = customTools.map((t) => ({
       name: t.name,
       label: t.name,
       description: t.description ?? "",
       parameters: t.parameters,
-      execute: (id: string, params: unknown, signal: AbortSignal | undefined) => t.execute(id, params, signal),
+      execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
+        const session = sessionRef.current;
+        if (!session) return t.execute(id, params, signal);
+        return turnContext.run(
+          { session: session.sessionId, tools: chatToolActivation(session) },
+          () => t.execute(id, params, signal) as Promise<unknown>,
+        );
+      },
     })) as unknown as ToolDefinition[];
 
     // base + instructions ONLY — pi appends the skill section and env (cwd) itself (including
@@ -114,6 +145,9 @@ export async function buildChatRuntime(
   // edits. And keep it workspace-scoped — `.env` is process-global, so a switch to another cwd would
   // leak env or require mutating global env at runtime.
   const rootCwd = canonicalPath(dir);
+  // The CURRENT pi session — rebuilt on /new//resume/fork while the memoized assembly (and its tool
+  // execute closures) stays; the activation bridge reads it at call time.
+  const sessionRef: { current?: AgentSession } = {};
   let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {
     // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would
@@ -169,6 +203,20 @@ export async function buildChatRuntime(
       tools: [...defaultNames, ...customTools.map((t) => t.name)],
       customTools: customToolDefs,
     });
+    sessionRef.current = result.session;
+    // Deferral emulation: pi's TUI session starts with everything active — narrow it to the initial
+    // active set (non-deferred), like a fresh served session. Only when the session still has the
+    // all-active default: a /resume of a session where the loader already activated tools keeps its
+    // narrower recorded set (the corner where a resumed session had ALL tools deliberately active is
+    // re-deferred — chat-local, and search_tools re-activates in one call).
+    const deferredNames = customTools.filter(isDeferredTool).map((t) => t.name);
+    if (deferredNames.length > 0) {
+      const allNames = [...defaultNames, ...customTools.map((t) => t.name)];
+      const active = result.session.getActiveToolNames();
+      if (active.length === allNames.length && allNames.every((n) => active.includes(n))) {
+        result.session.setActiveToolsByName(allNames.filter((n) => !deferredNames.includes(n)));
+      }
+    }
     return { ...result, services, diagnostics: services.diagnostics };
   };
 

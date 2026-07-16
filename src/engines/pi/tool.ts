@@ -25,9 +25,9 @@ export interface ToolContext {
    *  fires a later turn back into this same session.) */
   session?: string;
   /** Tool activation for the current turn (a loader tool activates {@link DefineToolOptions.deferred}
-   *  tools with it — the built-in `search_tools` is one consumer). Undefined outside a serving turn:
-   *  a bare `fastagent tool` run, and `fastagent chat` (pi's own TUI runtime — everything is active
-   *  there, nothing to activate). */
+   *  tools with it — the built-in `search_tools` is one consumer). Provided by both the serving path
+   *  (invoke.ts, over the harness) and chat (over pi's AgentSession); undefined only outside any turn
+   *  (a bare `fastagent tool` run). */
   tools?: ToolActivation;
 }
 
