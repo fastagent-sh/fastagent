@@ -21,6 +21,7 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import type { AgentEvent, Json } from "../../agent.ts";
+import { collect } from "../../collect.ts";
 import { log } from "../../log.ts";
 import {
   ANSWER_ELEMENT_ID,
@@ -30,6 +31,7 @@ import {
   streamingCardJson,
 } from "./card.ts";
 import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
+import { isNoReply } from "./reply-policy.ts";
 import { truncateCodePointPrefix, truncateCodePointSuffix, truncateUtf8 } from "./text.ts";
 
 /** A terminal failure, as the channel hands it to `onError`. */
@@ -206,6 +208,45 @@ export async function settleFeishuPreview(
 ): Promise<void> {
   let sequence = 0;
   await finalize(api, target, preview ?? { kind: "none" }, text, () => ++sequence);
+}
+
+/**
+ * Consume an ambient, unmentioned managed-thread turn WITHOUT mounting Thinking/Queued first. The Agent
+ * sees the message and decides with the channel-local no-reply marker; silence produces no platform
+ * write at all. A real answer lands as a final static Markdown card (no after-the-fact preview flash),
+ * degrading to split text only when card creation/mounting fails. Failures propagate to the operator
+ * log through the caller and deliberately produce no unsolicited user-facing error notice.
+ */
+export async function deliverAgentDecidedFeishuReply(
+  events: AsyncIterable<AgentEvent>,
+  api: FeishuApi,
+  target: FeishuTarget,
+  label = "[feishu]",
+): Promise<"replied" | "silent"> {
+  const { text } = await collect(events);
+  if (isNoReply(text)) return "silent";
+
+  const answer = text.trim();
+  const [head, ...rest] = chunkFeishuText(answer, CARD_MARKDOWN_MAX_BYTES);
+  try {
+    const cardId = await api.createCard(finalCardJson(head ?? ""));
+    const content = cardEntityContent(cardId);
+    const messageId =
+      target.replyTo !== undefined
+        ? await api.replyMessage(target.replyTo, "interactive", content, { replyInThread: target.replyInThread })
+        : await api.sendMessage(target.chatId, "interactive", content);
+    if (messageId === undefined) throw new Error("interactive send returned ok without a message_id");
+  } catch (error) {
+    log.warn(`${label} static answer card unavailable — falling back to text: ${String(error)}`);
+    await api.sendText(target, answer);
+    return "replied";
+  }
+
+  // Once the card mounted it is authoritative. A later continuation failure propagates rather than
+  // falling back with the full answer and duplicating chunks that already landed.
+  const continuationTarget = target.replyInThread ? target : { chatId: target.chatId };
+  for (const chunk of rest) await api.sendText(continuationTarget, chunk);
+  return "replied";
 }
 
 /**

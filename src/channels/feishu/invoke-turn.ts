@@ -15,7 +15,9 @@
 import { type Agent, type AgentEvent, type ImageRef, SESSION_BUSY_CODE } from "../../agent.ts";
 import { log } from "../../log.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
+import type { FeishuReplyPolicy } from "./model.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
+import { replyPolicyInstruction } from "./reply-policy.ts";
 import { codePointPrefix } from "./text.ts";
 
 /** Appended to the prompt (not the system prompt): the channel renders the reply in a card, and the
@@ -121,6 +123,7 @@ export async function* invokeFeishuTurn(
   text: string,
   transport: FeishuTurnTransport,
   attachments: FeishuTurnAttachments,
+  replyPolicy: FeishuReplyPolicy,
   onCompleted?: () => void,
   busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
 ): AsyncIterable<AgentEvent> {
@@ -131,7 +134,10 @@ export async function* invokeFeishuTurn(
     yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
     return;
   }
-  const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };
+  const prompt = {
+    text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}${replyPolicyInstruction(replyPolicy)}`,
+    images: resolved.images,
+  };
   const deadline = Date.now() + busyRetry.maxWaitMs;
   for (;;) {
     let retryBusy = false;

@@ -6,6 +6,7 @@ export {
   type FeishuChannelOptions,
   type FeishuMessageEvent,
   type FeishuMessage,
+  type FeishuReplyPolicy,
   type FeishuRoute,
   type FeishuFailure,
 } from "./channels/feishu/feishu.ts";

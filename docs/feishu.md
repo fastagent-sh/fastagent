@@ -85,12 +85,13 @@ and Secret remain durable. Re-running `add feishu` resumes Token capture for tha
 a second one; the CLI also prints the exact console location for manually copying the Token into `.env`.
 
 One console action remains, and the CLI opens the page for it at the end of the scan: **create + publish
-a version** (self-approved on your own tenant). The switch from the
+a version** (self-approved on your own tenant). Before publishing, add the sensitive
+`im:message.group_msg` permission when managed group threads should receive unmentioned continuations;
+it requires tenant-admin approval and cannot travel on the creation link. The switch from the
 template's long-connection mode to webhook only takes effect on publish; the subscription mode cannot
-be set at creation (the platform excludes it from the creation link — official SDK: "sensitive
-config … cannot travel") and version publishing has no open API (see Limits). It is ONE click ever:
-after it, `fastagent dev --tunnel` / `deploy --run` re-register only the Request URL, which applies
-immediately.
+be set at creation (the platform excludes sensitive config from the creation link — official SDK:
+"sensitive config … cannot travel") and version publishing has no open API (see Limits). After publish,
+`fastagent dev --tunnel` / `deploy --run` re-register only the Request URL, which applies immediately.
 
 ## Configure the app by hand (developer console)
 
@@ -100,6 +101,7 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
 2. **Permissions** — add:
    - `im:message.p2p_msg:readonly` — receive direct messages,
    - `im:message.group_at_msg:readonly` — receive group messages that @mention the bot,
+   - `im:message.group_msg` — sensitive, tenant-admin-approved; required for unmentioned continuations in Agent-managed group threads,
    - `im:message:send_as_bot` — send replies,
    - `im:resource` — download message images/files,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
@@ -141,6 +143,7 @@ export default feishuChannel({
   // Direct/group asks default to independent sessions + platform threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",
+  // groupThreadReplies: "mentions-only", // opt out of Agent-decided managed-thread replies
   onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
 });
 ```
@@ -170,8 +173,9 @@ By default, Feishu uses the canonical `defaultFeishuRoute`; the Lark subpath exp
 its branded `defaultLarkRoute` compatibility alias:
 
 - **p2p chats always answer**,
-- **groups answer only on an @mention of THIS bot** — matched from the platform's `mentions` array by the bot's `open_id` (resolved once at startup via `bot/v3/info`), never a text scan, so a pasted `@bot` in a code block does not summon,
-- **non-user senders are ignored** — a message from another bot/app never summons (two bots answering each other loop forever).
+- **an explicit group @mention always answers** — matched from the platform's `mentions` array by the bot's `open_id` (resolved once at startup via `bot/v3/info`), never a text scan, so a pasted `@bot` in a code block does not summon,
+- **an unmentioned user message inside a group thread this channel created is observed by the Agent** when `groupThreadReplies` is `"agent-decides"` (the default): a useful answer is sent as a final card; the exact internal no-reply decision stays completely silent (no Queued/Thinking preview),
+- **other unmentioned group messages and all non-user senders are ignored** — the latter prevents two bots from answering each other forever.
 
 Override `route(event)` to customise; it returns:
 
@@ -180,22 +184,25 @@ type FeishuRoute = {
   session?: string;
   chatId?: string;
   text?: string;
+  replyPolicy?: "required" | "agent-decides";
 } | null;
 ```
 
-Return `null` to ignore the event. Omitted fields default from the message. The canonical
+Return `null` to ignore the event. Omitted fields default from the message. A custom route is
+authoritative: its `null` does not fall through to managed-thread ambient routing; return
+`replyPolicy: "agent-decides"` explicitly when custom policy wants the silent decision path. The canonical
 `feishuEnvelope(event)` builds the default prompt envelope (chat/sender metadata, group note, reply
 marker, decoded body) for custom Feishu routes. The Lark subpath exposes `larkEnvelope(event)`, which
 reuses that builder with the `[lark: …]` compatibility tag.
 
 ### Group visibility is scope-gated
 
-With the default `im:message.group_at_msg:readonly` scope, the platform delivers **only messages that @mention the bot** — un-mentioned group discussion never reaches the channel at all. Receiving every group message requires the sensitive `im:message.group_msg` scope (custom apps only, tenant-admin approval). This is why the Telegram channel's un-summoned context buffer has no counterpart here yet: it becomes meaningful exactly when that scope is granted.
+With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned thread discussion never reaches the channel at all. Agent-decided managed-thread replies require the sensitive `im:message.group_msg` scope (custom apps only, tenant-admin approval) and a newly published app version. That scope delivers all group messages to the webhook, but FastAgent invokes only user messages whose `chat_id + root_id` match its durable managed-thread index; everything outside those roots is dropped. Unlike Telegram, arbitrary un-summoned group discussion is not buffered.
 
 Practical consequences in groups:
 
-- a **bare image/file** posted without text cannot summon (an image message has no mentions) and, under the default scope, is not even delivered — put the ask and the attachment in ONE message (typing text and pasting an image together sends a rich-text `post` message, which carries text + images + @mentions),
-- or **reply to the attachment** and @mention the bot — the channel fetches the replied-to message and loads its attachments (see below).
+- without `im:message.group_msg`, a **bare image/file** cannot summon (it has no mention) and is not delivered — put the ask and attachment in one rich-text `post`, or reply to the attachment and @mention the bot,
+- with that scope, a bare attachment inside a managed thread is an ambient Agent turn like any other: it is loaded as primary input, then the Agent may answer or stay silent.
 
 ## Threads and sessions
 
@@ -208,8 +215,12 @@ Direct messages and summoned group messages both default to independent threaded
 
 | `groupMessageSession` | Default session | Delivery |
 |---|---|---|
-| `"threaded"` (default) | top-level summon: `<kind>:message_id`; continuation: `<kind>:root_id` | Each top-level `@bot` summon creates an independent platform thread; every Agent reply stays inside it |
+| `"threaded"` (default) | top-level summon: `<kind>:message_id`; continuation: `<kind>:root_id` | Each top-level `@bot` summon creates an independent managed thread; explicit mentions always answer and unmentioned continuations let the Agent decide |
 | `"continuous"` | top level: `chat_id`; existing topic: `chat_id:thread_id` | Legacy shared group/topic context; top-level answers quote the summon without creating a thread |
+
+`groupThreadReplies: "mentions-only"` disables ambient managed-thread turns while retaining threaded
+sessions/delivery. It is also the effective behavior whenever the app lacks `im:message.group_msg`,
+because the platform never delivers those messages.
 
 Restore either continuous UX in `channels/feishu.ts` (or the Lark counterpart) when needed:
 
@@ -236,18 +247,23 @@ but still needs a real tenant smoke test; use the matching `"continuous"` option
 thread creation.
 
 Turns are serialized per session (FIFO) instead of failing fast as `session busy`; different roots in
-threaded mode run concurrently. A turn queued behind another one
-immediately gets a reply-quoted "⏳ Queued" card (configure `queueNoticeDelayMs` only if an intentional
-delay is desired). The running turn takes over that same card and settles the final answer in place: no
-second reply and no visible "recalled a message" tombstone.
+threaded mode run concurrently. An explicit summon queued behind another turn immediately gets a
+reply-quoted "⏳ Queued" card (configure `queueNoticeDelayMs` only if an intentional delay is desired).
+An ambient turn queues silently because the Agent may choose not to reply. The running explicit turn
+takes over its queue card and settles the final answer in place: no second reply and no visible
+"recalled a message" tombstone.
 
 ## Streaming behavior
 
-The live preview is ONE **streaming card** (a card entity in streaming mode):
+An explicit summon uses ONE **streaming card** (a card entity in streaming mode):
 
 - an immediate "💭 Thinking…" card, reply-quoted under the asker in groups; or, for a queued turn, the already-mounted reply-quoted "⏳ Queued" card updated in place,
 - tool-call previews + partial answer text, pushed as full-text snapshots (the client renders the typewriter effect),
 - on completion, the same card settles into the final answer as Markdown (streaming off).
+
+An unmentioned managed-thread turn is buffered invisibly until the Agent decides: no-reply produces no
+platform message; a real answer is sent directly as a final static Markdown card. This avoids flashing
+Thinking/Queued for a message the Agent ultimately ignores.
 
 Card snapshots ride the cardkit quota (50 QPS per app, 10 QPS per card entity, no edit ceiling) — deliberately **not** the 5 QPS per-chat message quota or the 20-edit cap on text messages, which is what makes a live preview viable on this platform at all.
 
@@ -263,7 +279,7 @@ Degrade tiers, all visible in the operator log:
 Two audiences, like the Telegram channel:
 
 - **Operator log**: always receives the full diagnostic details.
-- **Chat user**: receives `onError(failed)` if provided; otherwise a neutral default keyed on `retryable`.
+- **Chat user**: an explicit summon receives `onError(failed)` if provided, otherwise a neutral default keyed on `retryable`; an ambient turn failure stays silent because the user did not summon the bot.
 
 ## Files and images
 
@@ -278,6 +294,7 @@ Message payloads are resolved by the channel before the agent turn runs — all 
 The channel persists its state under `<state root>/channels/<kind>/` (`channels/feishu/` or `channels/lark/` — two mounted kinds never share stores):
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
+- `owned-threads.json` — durable `root_id → chat_id` ownership for managed group threads, written before the top-level webhook ACK so restarts preserve ambient routing,
 - `files/<chat>/` — downloaded inbound files.
 
 Like Telegram, this L1 layer has no completed-delivery ledger. Feishu/Lark document that duplicate
@@ -296,15 +313,16 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 - `add feishu` creates the app from the platform's agent template, whose event subscription starts in
   long-connection mode — the CLI flips the config to webhook during the token capture, but the flip
   only takes effect once a **version is published** (the dispatcher serves the published snapshot; a
-  pure URL change applies immediately, a mode change does not). The subscription mode cannot travel on
-  the creation link (the platform excludes sensitive config from addons) and version publishing has no
-  open API — so this is the one console click, spent right at `add` time (the CLI opens the page).
+  pure URL change applies immediately, a mode change does not). The subscription mode and sensitive
+  `im:message.group_msg` permission cannot travel on the creation link, and version publishing has no
+  open API — configure the permission as needed, then publish on the page the CLI opens.
 - Bound CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every
   ack renders as "Link expired"). `add lark` therefore uses the unbound launcher + guided credential
   paste, then actively probes the config API: automatic mode/token bootstrap on success; manual
   Token + Subscription mode/URL only on an explicit route-level 404.
 - The un-summoned group context buffer (Telegram parity) is gated on the sensitive `im:message.group_msg` scope; not yet implemented.
-- The default threaded direct/group modes create one durable Agent session per top-level DM or summoned group message. Session TTL/GC is not implemented, so storage grows with the number of roots.
+- The default threaded direct/group modes create one durable Agent session per top-level DM or summoned group message. Session/owned-root TTL and GC are not implemented, so storage grows with the number of roots.
+- With `im:message.group_msg`, every user message in a managed thread invokes the Agent even when the final decision is silence; this preserves full thread context but consumes model tokens.
 - `feishu-send` / `lark-send` currently target only `chatId`; schedules and wake-ups cannot select a thread until those tools accept a reply target plus `reply_in_thread`.
 - The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds; the channel persists the turn intent and ACKs immediately, so slow turns are never the webhook's problem.

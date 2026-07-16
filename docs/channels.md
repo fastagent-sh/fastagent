@@ -135,6 +135,7 @@ export default feishuChannel({
   // Direct/group asks default to independent sessions + platform threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",
+  // groupThreadReplies: "mentions-only", // opt out of Agent-decided managed-thread replies
 });
 ```
 

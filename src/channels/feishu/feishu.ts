@@ -20,8 +20,9 @@ import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import { decryptEvent, timingSafeEqualStr, verifySignature } from "./crypto.ts";
 import { invokeFeishuTurn } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
-import type { FeishuEventHeader } from "./model.ts";
+import type { FeishuEventHeader, FeishuReplyPolicy } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
+import { createOwnedFeishuThreads } from "./owned-threads.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -35,6 +36,7 @@ import {
   type FeishuFailure,
   type MountedFeishuPreview,
   defaultErrorMessage,
+  deliverAgentDecidedFeishuReply,
   mountFeishuPreview,
   settleFeishuPreview,
   streamFeishuReply,
@@ -42,7 +44,7 @@ import {
 
 // Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.
 export { defaultFeishuRoute, feishuEnvelope };
-export type { FeishuFailure, FeishuMessage, FeishuMessageEvent, FeishuRoute };
+export type { FeishuFailure, FeishuMessage, FeishuMessageEvent, FeishuReplyPolicy, FeishuRoute };
 
 /** Execution ceiling: a turn that has STARTED running this many times without finishing is dropped
  *  rather than run again (a poison turn must not loop forever under a restart policy). Counted per turn
@@ -73,6 +75,8 @@ interface StoredFeishuTurn {
    *  turn: each queued card must identify its own ask even though ordinary p2p answers are unquoted. */
   queueReplyTo?: string;
   replyInThread?: boolean;
+  /** `agent-decides` is the ambient managed-thread path; absent/`required` is an explicit summon. */
+  replyPolicy?: FeishuReplyPolicy;
   parentId?: string;
   images: { msg: string; key: string }[];
   files: { msg: string; key: string; name?: string }[];
@@ -96,6 +100,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     (r.replyTo === undefined || typeof r.replyTo === "string") &&
     (r.queueReplyTo === undefined || typeof r.queueReplyTo === "string") &&
     (r.replyInThread === undefined || typeof r.replyInThread === "boolean") &&
+    (r.replyPolicy === undefined || r.replyPolicy === "required" || r.replyPolicy === "agent-decides") &&
     (r.parentId === undefined || typeof r.parentId === "string") &&
     refs(r.images) &&
     refs(r.files) &&
@@ -131,6 +136,11 @@ export interface FeishuChannelOptions {
    * message its own session and platform thread; later messages in that thread return to the root
    * session. `continuous` preserves the legacy chat/topic sessions (`chat_id` / `chat_id:thread_id`). */
   groupMessageSession?: "continuous" | "threaded";
+  /** Default routing for unmentioned user messages inside a group thread this channel created.
+   * `agent-decides` (default) invokes silently and lets the Agent choose whether to answer;
+   * `mentions-only` preserves the explicit-@ requirement. Requires the platform's sensitive
+   * `im:message.group_msg` scope — without it, those ambient messages are never delivered. */
+  groupThreadReplies?: "mentions-only" | "agent-decides";
   /** Policy: whether/where to answer an event (return null to ignore). Defaults to {@link defaultFeishuRoute}. */
   route?: (event: FeishuMessageEvent) => FeishuRoute | null;
   /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
@@ -160,6 +170,7 @@ export function buildFeishuChannel(
     encryptKey,
     directMessageSession = "threaded",
     groupMessageSession = "threaded",
+    groupThreadReplies = "agent-decides",
     route,
     onError,
     baseUrl = profile.apiBase,
@@ -186,6 +197,9 @@ export function buildFeishuChannel(
   if (groupMessageSession !== "continuous" && groupMessageSession !== "threaded") {
     throw new Error(`${factoryName} groupMessageSession must be "continuous" or "threaded"`);
   }
+  if (groupThreadReplies !== "mentions-only" && groupThreadReplies !== "agent-decides") {
+    throw new Error(`${factoryName} groupThreadReplies must be "mentions-only" or "agent-decides"`);
+  }
   return ({ agent, stateRoot }) => {
     const formatError = onError ?? defaultErrorMessage;
     const api: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
@@ -210,6 +224,7 @@ export function buildFeishuChannel(
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // create + self-ignore — downloaded files may carry chat content
+    const ownedThreads = createOwnedFeishuThreads(join(stateHome, "owned-threads.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
       isRecord: isStoredFeishuTurn,
@@ -244,6 +259,9 @@ export function buildFeishuChannel(
       // the SAME card/text into Thinking → final answer. Best-effort and post-ACK: a failed mount is a
       // log line, never a failed event delivery; the turn later mounts its normal preview.
       onQueuedBehind: (rec) => {
+        // An ambient turn may end in silence. Showing "Queued" before that decision would itself be an
+        // unsolicited reply, so optional turns wait invisibly; explicit summons keep the feedback.
+        if (rec.replyPolicy === "agent-decides") return;
         let fired = false;
         let settle: () => void = () => {};
         const done = new Promise<void>((resolve) => {
@@ -298,26 +316,33 @@ export function buildFeishuChannel(
           }
           return;
         }
+        const replyPolicy = rec.replyPolicy ?? "required";
         const startedAt = Date.now();
-        log.info(`${label} turn start: turn=${rec.id} session=${rec.session} chat=${rec.chatId}`);
+        log.info(
+          `${label} turn start: turn=${rec.id} session=${rec.session} chat=${rec.chatId} replyPolicy=${replyPolicy}`,
+        );
         try {
-          await streamFeishuReply(
-            invokeFeishuTurn(
-              agent,
-              rec.session,
-              rec.baseText,
-              { api, chatId: rec.chatId, filesDir: join(stateHome, "files"), label },
-              { images: rec.images, files: rec.files, parentId: rec.parentId },
-              // On completed, drop the intent — the turn provably lives in the session from here on.
-              () => store.remove(rec.id),
-            ),
-            api,
-            targetOf(rec),
-            formatError,
-            rec.preview,
-            label,
+          const events = invokeFeishuTurn(
+            agent,
+            rec.session,
+            rec.baseText,
+            { api, chatId: rec.chatId, filesDir: join(stateHome, "files"), label },
+            { images: rec.images, files: rec.files, parentId: rec.parentId },
+            replyPolicy,
+            // On completed, drop the intent — the turn provably lives in the session from here on.
+            () => store.remove(rec.id),
           );
-          log.info(`${label} turn done: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms)`);
+          let outcome: "replied" | "silent";
+          if (replyPolicy === "agent-decides") {
+            outcome = await deliverAgentDecidedFeishuReply(events, api, targetOf(rec), label);
+          } else {
+            await streamFeishuReply(events, api, targetOf(rec), formatError, rec.preview, label);
+            outcome = "replied";
+          }
+          const decision = outcome === "silent" ? "no-reply" : "reply";
+          log.info(
+            `${label} turn done: turn=${rec.id} session=${rec.session} replyPolicy=${replyPolicy} decision=${decision} (${Date.now() - startedAt}ms)`,
+          );
         } catch (error) {
           log.error(
             `${label} turn failed: turn=${rec.id} session=${rec.session} (${Date.now() - startedAt}ms): ${String(error)}`,
@@ -344,6 +369,10 @@ export function buildFeishuChannel(
     // not just an operator log line. Take over its queue preview in place if present (else send fresh) —
     // leaving it pinned at "Queued" while sending a separate failure would double-post.
     const notifyDropped = (r: PendingFeishuTurn): void => {
+      if (r.replyPolicy === "agent-decides") {
+        log.warn(`${label} dropped an ambient managed-thread turn after ${MAX_TURN_ATTEMPTS} attempts (${r.id})`);
+        return;
+      }
       const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
       void settleFeishuPreview(api, targetOf(r), r.preview, body).catch((e) =>
         log.warn(`${label} could not notify a dropped turn (session=${r.session}): ${String(e)}`),
@@ -449,10 +478,32 @@ export function buildFeishuChannel(
       const m = event.message;
       if (!m?.message_id || !m.chat_id) return new Response(null, { status: 200 });
 
-      const r = decide(event);
+      let r = decide(event);
+      let replyPolicy: FeishuReplyPolicy = r?.replyPolicy ?? "required";
+      // The default route remains mention-gated everywhere EXCEPT an unmentioned USER continuation in
+      // a group thread this channel previously created. A custom route stays authoritative: returning
+      // null never falls through to built-in ambient behavior, and it may opt in explicitly by returning
+      // `{ replyPolicy: "agent-decides" }`.
+      if (
+        !r &&
+        route === undefined &&
+        groupMessageSession === "threaded" &&
+        groupThreadReplies === "agent-decides" &&
+        event.sender?.sender_type === "user" &&
+        m.chat_type === "group" &&
+        m.thread_id !== undefined &&
+        m.root_id !== undefined &&
+        ownedThreads.has(m.chat_id, m.root_id)
+      ) {
+        r = {};
+        replyPolicy = "agent-decides";
+      }
       if (!r) {
         log.debug(`${label} not summoned — ignoring message ${m.message_id} (chat ${m.chat_id}, ${m.chat_type})`);
         return new Response(null, { status: 200 });
+      }
+      if (replyPolicy !== "required" && replyPolicy !== "agent-decides") {
+        throw new Error(`route returned an invalid replyPolicy for message ${m.message_id}`);
       }
       {
         const normalized = normalizeFeishuMessage(event, { cloud: kind, appId, header, botOpenId });
@@ -495,6 +546,18 @@ export function buildFeishuChannel(
           .map((resource) => ({ msg: resource.messageId, key: resource.key, name: resource.name }));
         const baseText = r.text ?? cloudEnvelope(event, kind);
         if (baseText.trim() !== "" || images.length > 0 || files.length > 0) {
+          // Persist ownership before ACK. The platform thread does not exist until the first reply lands,
+          // but a failed reply has no continuation to misroute; pre-ACK ownership closes the opposite,
+          // worse window (thread created, process dies, then its unmentioned continuation is forgotten).
+          if (
+            threadedGroup &&
+            m.thread_id === undefined &&
+            sameTarget &&
+            replyInThread === true &&
+            replyPolicy === "required"
+          ) {
+            ownedThreads.add(m.chat_id, m.message_id);
+          }
           submit(
             {
               id: m.message_id,
@@ -505,6 +568,7 @@ export function buildFeishuChannel(
               replyTo,
               queueReplyTo,
               replyInThread,
+              replyPolicy,
               // Inside a threaded session the root conversation history already contains the previous
               // turns. Reloading parent_id would duplicate that input (and its attachments). A top-level
               // quoted reply has no thread_id, starts a new root, and still hydrates its referent.

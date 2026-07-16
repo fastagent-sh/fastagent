@@ -61,11 +61,15 @@ export interface FeishuMessageEvent {
   [k: string]: unknown;
 }
 
+export type FeishuReplyPolicy = "required" | "agent-decides";
+
 /** Existing public route result: act with these overrides, or return null to ignore the message. */
 export interface FeishuRoute {
   session?: string;
   chatId?: string;
   text?: string;
+  /** Whether delivery is mandatory (the normal explicit summon) or the Agent may stay silent. */
+  replyPolicy?: FeishuReplyPolicy;
 }
 
 export type FeishuResourceKind = "image" | "file" | "audio" | "video" | "sticker";

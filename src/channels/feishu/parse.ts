@@ -81,8 +81,9 @@ export function mentionsBot(message: Pick<FeishuMessage, "mentions">, botOpenId:
 }
 
 /**
- * Default policy: ignore non-user senders, always answer p2p, and answer groups only when THIS bot is
- * structurally mentioned. No bot identity means group routing fails closed.
+ * Default EXPLICIT-summon policy: ignore non-user senders, always answer p2p, and answer groups only
+ * when THIS bot is structurally mentioned. No bot identity means group routing fails closed. The
+ * stateful channel wiring may additionally admit unmentioned continuations from its managed-root index.
  */
 export function defaultFeishuRoute(event: FeishuMessageEvent, options?: { botOpenId?: string }): FeishuRoute | null {
   const message = event.message;

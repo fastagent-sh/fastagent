@@ -202,7 +202,8 @@ window can run a delivery twice. Exactly-once execution needs a different backen
 
 Feishu is the second stateful chat-channel reference, shaped as a sibling of Telegram. Its canonical
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
-`model.ts` / `normalize.ts` protocol normalization, `invoke-turn.ts` IO assembly, `preview.ts` pump,
+`model.ts` / `normalize.ts` protocol normalization, `invoke-turn.ts` IO assembly, `preview.ts` delivery,
+`owned-threads.ts` durable managed-root routing, `reply-policy.ts` the optional-response protocol,
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one
 level up.
@@ -242,12 +243,17 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   "continuous"` and `groupMessageSession: "continuous"` are explicit compatibility opt-outs; the latter
   restores legacy `chat_id` / `chat_id:thread_id` group sessions. Thread continuations do not rehydrate
   `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
-  but owns a new root session.
-- **Group visibility is scope-gated.** The default scope delivers only @mentions of the bot, so
-  Telegram's context buffer has no counterpart until the sensitive `im:message.group_msg` scope is
-  granted. Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved);
-  non-`user` senders never summon. A reply summon carries only `parent_id` — the referent's content and
-  attachments are fetched as primary input.
+  but owns a new root session. Group roots are indexed pre-ACK in `owned-threads.json`: with
+  `im:message.group_msg`, unmentioned user continuations in those roots become silent Agent-decision
+  turns; explicit mentions remain required replies. Optional turns mount no Queued/Thinking card and
+  either stay completely silent or send one final static card.
+- **Group visibility is scope-gated.** The default scope delivers only @mentions. The sensitive
+  `im:message.group_msg` scope delivers all group messages, after which the channel admits ambient
+  turns only for `chat_id + root_id` in its durable ownership index; unrelated groups/topics and every
+  non-`user` sender are dropped. Telegram's arbitrary un-summoned context buffer still has no
+  counterpart. Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved).
+  A reply summon carries only `parent_id` — the referent's content and attachments are fetched as
+  primary input.
 - **Registration and creation are automated over the platform's own APIs.** The event Request URL is
   written via the application-v7 config PATCH (immediate effect; the platform challenges the URL during
   the call, so the registrar health-waits first) — used by `--tunnel` and `deploy --run`, with the
@@ -258,8 +264,8 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   the platform-generated verification token over a throwaway tunnel. A re-run with that pair resumes
   missing-Token setup instead of creating another App; `.env` completes before the remaining publish action.
   One console action remains (the CLI opens the page): the long-connection→webhook mode flip takes
-  effect on version publish, which has no open API — the subscription mode cannot travel on the
-  creation link (the platform excludes sensitive config from addons). The intl cloud cannot complete
+  effect on version publish, which has no open API — neither the subscription mode nor the sensitive
+  `im:message.group_msg` permission can travel on the creation link. The intl cloud cannot complete
   the BOUND device flow (its confirm-page ack endpoint is broken), so a new/partial `add lark` setup
   opens the unbound one-click launcher (`/page/launcher?from=backend_oneclick`); a complete existing
   ID/Secret pair skips it and resumes that App directly. Only that pair may reuse its existing Token.
