@@ -5,7 +5,7 @@
  * render from these specs (no hand-maintained usage text).
  */
 import { fastagentVersion } from "../version.ts";
-import { buildProgram, type CommandSpec, type FlagSpec } from "./kernel.ts";
+import { buildProgram, type CommandSpec, type FlagSpec, helpTitle } from "./kernel.ts";
 
 // Help groups (clig: most common commands first) — the authoring loop leads, operations close.
 const AUTHOR = "Author (the iteration loop):";
@@ -493,7 +493,7 @@ export const specs: readonly CommandSpec[] = [
 ];
 
 const HELP_TAIL = `
-Examples:
+${helpTitle("Examples:")}
   $ fastagent init my-agent && cd my-agent   # scaffold an agent
   $ fastagent dev                            # serve locally and iterate
   $ fastagent deploy fly --run               # ship it

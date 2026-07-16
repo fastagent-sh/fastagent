@@ -25,6 +25,7 @@ async function parse(argv: string[]): Promise<{ code: number; out: string; err: 
   let err = "";
   const program = buildProgram(specs, {
     helpWidth: 80, // the determinism seam: production adapts to the terminal (pipes fall back to 80)
+    colors: false, // ditto: production detects per stream (TTY on; pipe/NO_COLOR/TERM=dumb off)
     out: (c) => {
       out += c;
     },
@@ -78,6 +79,32 @@ describe("cli kernel: spec conformance", () => {
         expect(spec.examples?.length ?? 0, `${path} needs an example (clig: lead with examples)`).toBeGreaterThan(0);
       else expect(spec.subcommands?.length ?? 0, `${path} is a group — needs subcommands`).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("cli kernel: help colors", () => {
+  it("styled when the stream has colors, fully stripped otherwise (commander owns the veto)", async () => {
+    let out = "";
+    const program = buildProgram(specs, {
+      colors: true,
+      helpWidth: 80,
+      out: (c) => {
+        out += c;
+      },
+      err: () => {},
+      exit: (code) => {
+        throw new ExitSignal(code);
+      },
+    });
+    try {
+      await program.parseAsync(["node", "fastagent", "models", "--help"]);
+    } catch (e) {
+      if (!(e instanceof ExitSignal)) throw e;
+    }
+    expect(out).toContain("\x1b[1;32m"); // headings (incl. the verbatim Examples:) are styled
+    expect(out).toContain("\x1b[32m"); // terms (flags/arguments) are styled
+    const plain = await parse(["models", "--help"]); // the harness pins colors: false
+    expect(plain.out).not.toContain("\x1b[");
   });
 });
 

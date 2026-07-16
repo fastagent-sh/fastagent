@@ -73,6 +73,11 @@ export interface ProgramOptions {
    * hand-wrapped at ≤78 columns so it reads well at any width ≥ 80 (prose caps, like man pages).
    */
   helpWidth?: number;
+  /**
+   * Force help colors on/off — a TEST seam. Production omits it: commander detects per stream
+   * (color TTY → on; pipe, NO_COLOR, TERM=dumb → off) and strips every SGR code when off.
+   */
+  colors?: boolean;
   out?: (chunk: string) => void;
   err?: (chunk: string) => void;
   exit?: (code: number) => never;
@@ -96,6 +101,16 @@ export function optionKey(flags: string): string {
   return name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 }
 
+// Help colors (clig: use color with intention; let the environment veto it). The styles are ALWAYS
+// embedded; commander strips every SGR code — generated sections AND verbatim addHelpText content
+// alike — whenever the target stream has no colors (non-TTY pipe, NO_COLOR, TERM=dumb), so plain
+// output never depends on our own detection. Two roles only, uv-style: headings, and what you type.
+const title = (s: string): string => `\x1b[1;32m${s}\x1b[0m`; // bold green — section headings
+const term = (s: string): string => `\x1b[32m${s}\x1b[0m`; // green — commands/flags/arguments
+
+/** Style a heading in verbatim help text exactly like a generated section title (Examples:, a help tail). */
+export const helpTitle = title;
+
 /** Build the commander program for `specs`. The CLI entry parses with it; tests inject the IO seams. */
 export function buildProgram(specs: readonly CommandSpec[], options: ProgramOptions = {}): Command {
   const exit: (code: number) => never = options.exit ?? ((code) => process.exit(code));
@@ -105,7 +120,18 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   // exitCode 0 (→ 0), everything else it rejects is a usage error (→ 2). Runtime failures never pass
   // through here; command bodies exit 1 themselves.
   program.exitOverride((err) => exit(err.exitCode === 0 ? 0 : 2));
-  if (options.helpWidth !== undefined) program.configureHelp({ helpWidth: options.helpWidth });
+  program.configureHelp({
+    ...(options.helpWidth !== undefined ? { helpWidth: options.helpWidth } : {}),
+    styleTitle: title,
+    styleCommandText: term,
+    styleSubcommandTerm: term,
+    styleOptionTerm: term,
+    styleArgumentTerm: term,
+  });
+  if (options.colors !== undefined) {
+    const colors = options.colors;
+    program.configureOutput({ getOutHasColors: () => colors, getErrHasColors: () => colors });
+  }
   program.showSuggestionAfterError(); // "did you mean models?" — suggest only, never run it (clig on DWIM)
   program.showHelpAfterError("(run with --help for usage)");
   if (options.version) program.version(options.version, "-v, --version", "print the fastagent version");
@@ -175,7 +201,7 @@ function register(parent: Command, spec: CommandSpec): void {
 function extraHelp(spec: CommandSpec): string {
   const lines: string[] = [];
   if (spec.examples && spec.examples.length > 0) {
-    lines.push("", "Examples:");
+    lines.push("", title("Examples:"));
     // Inline, column-aligned notes (`$ cmd   # note`) — a note on its own line reads as a stray
     // fragment when neighboring examples have none.
     const width = Math.max(...spec.examples.map((e) => e.cmd.length));
