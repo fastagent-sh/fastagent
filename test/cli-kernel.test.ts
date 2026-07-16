@@ -48,6 +48,26 @@ describe("cli kernel: spec conformance", () => {
   const walk = (list: readonly CommandSpec[], prefix = ""): { path: string; spec: CommandSpec }[] =>
     list.flatMap((s) => [{ path: `${prefix}${s.name}`, spec: s }, ...walk(s.subcommands ?? [], `${prefix}${s.name} `)]);
 
+  it("every help surface fits in 80 columns — commander sections and our verbatim text alike", async () => {
+    // The kernel pins helpWidth to 80; Examples/notes are verbatim addHelpText strings the wrapper
+    // never touches — this guard catches a spec whose hand-wrapped text drifts past the sections above it.
+    const paths: string[][] = [[]];
+    const collect = (list: readonly CommandSpec[], prefix: string[]): void => {
+      for (const s of list) {
+        paths.push([...prefix, s.name]);
+        collect(s.subcommands ?? [], [...prefix, s.name]);
+      }
+    };
+    collect(specs, []);
+    for (const p of paths) {
+      const r = await parse([...p, "--help"]);
+      expect(r.code, p.join(" ") || "(top)").toBe(0);
+      for (const line of r.out.split("\n")) {
+        expect(line.length, `${p.join(" ") || "(top)"}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(80);
+      }
+    }
+  });
+
   it("every spec has a one-line summary; every runnable spec has at least one example", () => {
     for (const { path, spec } of walk(specs)) {
       expect(spec.summary, path).toBeTruthy();

@@ -53,13 +53,14 @@ const init: CommandSpec = {
     { flags: "--agent-dir <name>", description: "force the agent kit into ./<name>" },
   ],
   examples: [
-    { cmd: "fastagent init my-agent", note: "a new agent directory, ready for `fastagent dev`" },
+    { cmd: "fastagent init my-agent", note: "a new agent dir, ready to dev" },
     { cmd: "fastagent init", note: "initialize the current directory" },
   ],
   notes:
-    'Layout: flat by default ("a directory is an agent"); when an existing toolchain/deploy claims the\n' +
-    "directory (tsconfig/framework config, a non-JS build manifest like go.mod/pyproject.toml/Cargo.toml,\n" +
-    "Dockerfile/fly/railway, or occupied tools/, channels/, or skills/), the kit goes into ./agent and\n" +
+    'Layout: flat by default ("a directory is an agent"); when an existing\n' +
+    "toolchain/deploy claims the directory (tsconfig/framework config, a non-JS\n" +
+    "build manifest like go.mod/pyproject.toml/Cargo.toml, Dockerfile/fly/railway,\n" +
+    "or occupied tools/, channels/, or skills/), the kit goes into ./agent and\n" +
     "config.agentDir points there — the reason is printed, no prompt.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
@@ -90,7 +91,7 @@ const dev: CommandSpec = {
   ],
   examples: [
     { cmd: "fastagent dev" },
-    { cmd: "fastagent dev --tunnel", note: "serve locally + a public URL, auto-registering webhooks" },
+    { cmd: "fastagent dev --tunnel", note: "public URL + auto-registered webhooks" },
   ],
   run: async (args, f) =>
     (await import("./commands/dev.ts")).runDev(args[0] as string, {
@@ -153,8 +154,9 @@ const tool: CommandSpec = {
   ],
   examples: [{ cmd: `fastagent tool add '{"a":2,"b":3}'` }],
   notes:
-    "Mounts the same tool set dev/start serve (defaults + config.tools + discovered tools/, deduped), so a\n" +
-    "shadowed or broken tool is surfaced here exactly as it would be when serving.",
+    "Mounts the same tool set dev/start serve (defaults + config.tools + discovered\n" +
+    "tools/, deduped), so a shadowed or broken tool is surfaced here exactly as it\n" +
+    "would be when serving.",
   run: async (args) =>
     (await import("./commands/tool.ts")).runTool(args[0] as string, args[1] as string, args[2] as string),
 };
@@ -231,9 +233,10 @@ const start: CommandSpec = {
   notes:
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
-    "  state:    FASTAGENT_STATE_DIR > <dir>/.fastagent — the ONE machine-state root (auth, sessions,\n" +
-    "            channel state all derive from it); point it at a mounted volume so a redeploy that\n" +
-    "            replaces the directory never wipes state\n" +
+    "  state:    FASTAGENT_STATE_DIR > <dir>/.fastagent — the ONE machine-state\n" +
+    "            root (auth, sessions, channel state all derive from it); point\n" +
+    "            it at a mounted volume so a redeploy that replaces the\n" +
+    "            directory never wipes state\n" +
     "  sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <state>/sessions\n" +
     "  auth:     --auth-path > FASTAGENT_AUTH_PATH > <state>/auth.json",
   run: async (args, f) =>
@@ -250,9 +253,15 @@ const start: CommandSpec = {
 /** The retired app-creation flag — parsed so it can explain itself, hidden from help. */
 const CREATE_APP: FlagSpec = { flags: "--create-app", description: "(retired)", hidden: true };
 
-const channelSub = (kind: "github" | "telegram" | "feishu" | "lark", summary: string, notes?: string): CommandSpec => ({
+const channelSub = (
+  kind: "github" | "telegram" | "feishu" | "lark",
+  summary: string,
+  description: string,
+  notes?: string,
+): CommandSpec => ({
   name: kind,
   summary,
+  description,
   args: [DIR_ARG],
   flags: [CREATE_APP],
   examples: [{ cmd: `fastagent add ${kind}` }],
@@ -270,23 +279,39 @@ const add: CommandSpec = {
     "events in on(); telegram/feishu/lark route in the optional route()) — or vendor an Agent Skills " +
     "skill into skills/<name>/.",
   subcommands: [
-    channelSub("github", "scaffold the GitHub webhook channel (issues/PRs → agent turns)"),
-    channelSub("telegram", "scaffold the Telegram bot channel (durable turns, live preview)"),
+    channelSub(
+      "github",
+      "scaffold the GitHub webhook channel (issues/PRs → agent turns)",
+      "Scaffold channels/github.ts — webhook adapter glue that maps repository events (issues, PRs, " +
+        "comments) to agent turns in its on() policy.",
+    ),
+    channelSub(
+      "telegram",
+      "scaffold the Telegram bot channel (durable turns, live preview)",
+      "Scaffold channels/telegram.ts — the Telegram bot channel with durable turns, a live-preview " +
+        "message pump, and an optional route() policy.",
+    ),
     channelSub(
       "feishu",
       "scaffold the Feishu channel AND create/configure the platform app",
-      "Feishu (open.feishu.cn) is the canonical implementation. `add feishu` also CREATES + configures the\n" +
-        'platform app (confirm a link in the app — the platform\'s "scan to create" flow; one version-publish\n' +
-        "action remains) and writes credentials to .env; a persisted ID/Secret pair resumes missing-Token\n" +
+      "Scaffold channels/feishu.ts AND create/configure the Feishu platform app (scan-to-create), " +
+        "writing credentials to .env.",
+      "Feishu (open.feishu.cn) is the canonical implementation. `add feishu` also\n" +
+        "CREATES + configures the platform app (confirm a link in the app — the\n" +
+        'platform\'s "scan to create" flow; one version-publish action remains) and\n' +
+        "writes credentials to .env; a persisted ID/Secret pair resumes missing-Token\n" +
         "setup instead of creating another app.",
     ),
     channelSub(
       "lark",
       "scaffold the Lark (international) channel with guided credential setup",
-      "Lark international (open.larksuite.com) is Feishu's compatibility profile with degraded control-plane\n" +
-        "setup: opens the intl developer console only for a new/partial pair, validates App ID/Secret, then\n" +
-        "probes webhook-mode + Token automation; an explicit config-route 404 falls back to a hidden Token\n" +
-        "prompt + manual mode/URL setup.",
+      "Scaffold channels/lark.ts — the Lark international profile over the Feishu engine — and guide " +
+        "credential setup against the intl developer console.",
+      "Lark international (open.larksuite.com) is Feishu's compatibility profile\n" +
+        "with degraded control-plane setup: opens the intl developer console only for\n" +
+        "a new/partial pair, validates App ID/Secret, then probes webhook-mode + Token\n" +
+        "automation; an explicit config-route 404 falls back to a hidden Token prompt\n" +
+        "+ manual mode/URL setup.",
     ),
     {
       name: "skill",
@@ -308,8 +333,9 @@ const add: CommandSpec = {
         { cmd: "fastagent add skill ./my-skill --update" },
       ],
       notes:
-        "Writing your own skill needs no command: create skills/<name>/SKILL.md with name + description\n" +
-        "frontmatter; it's auto-discovered. `add skill` is only for vendoring an existing one.",
+        "Writing your own skill needs no command: create skills/<name>/SKILL.md with\n" +
+        "name + description frontmatter; it's auto-discovered. `add skill` is only for\n" +
+        "vendoring an existing one.",
       run: async (args, f) =>
         (await import("./commands/add.ts")).runAddSkill(args[0], args[1] as string, { update: f.update === true }),
     },
@@ -355,13 +381,14 @@ const deploy: CommandSpec = {
     AUTH_PATH,
   ],
   examples: [
-    { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks, end to end" },
-    { cmd: "fastagent deploy docker --tunnel --run", note: "local Compose + an ephemeral public URL" },
-    { cmd: "fastagent deploy railway", note: "generate artifacts and print the runbook only" },
+    { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
+    { cmd: "fastagent deploy docker --tunnel --run", note: "Compose + a public URL" },
+    { cmd: "fastagent deploy railway", note: "print the runbook only" },
   ],
   notes:
-    "Definition-read-only: the only writes are generated artifacts (never clobbered without --force).\n" +
-    "A routine redeploy of an already-provisioned agent is just the host's own command (e.g. `railway up`).",
+    "Definition-read-only: the only writes are generated artifacts (never\n" +
+    "clobbered without --force). A routine redeploy of an already-provisioned\n" +
+    "agent is just the host's own command (e.g. `railway up`).",
   run: async (args, f) =>
     (await import("./commands/deploy.ts")).runDeploy(args[0] as "docker" | "fly" | "railway", args[1] as string, {
       run: f.run === true,
@@ -393,7 +420,7 @@ const schedule: CommandSpec = {
       flags: [{ flags: "--json", description: "the full records (complete reply text)" }],
       examples: [
         { cmd: "fastagent schedule history daily-digest" },
-        { cmd: "fastagent schedule history wake --json", note: "the agent's own wake-ups, full records" },
+        { cmd: "fastagent schedule history wake --json", note: "the agent's own wake-ups" },
       ],
       run: async (args, flags) =>
         (await import("./commands/schedule.ts")).runScheduleHistory(
@@ -405,6 +432,9 @@ const schedule: CommandSpec = {
     {
       name: "list",
       summary: "everything that will fire: static schedules (next instant) + pending wake-ups",
+      description:
+        "List everything that will fire, from BOTH producers: the static schedules/ files (name + next " +
+        "cron instant) and the agent's pending self-scheduled wake-ups. Read-only.",
       args: [DIR_ARG],
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent schedule list" }],
@@ -437,7 +467,7 @@ const login: CommandSpec = {
   args: [{ name: "[provider]", description: "provider id (skip the provider menu)" }],
   flags: [AUTH_PATH, NO_INPUT],
   examples: [{ cmd: "fastagent login" }, { cmd: "fastagent login openai" }],
-  notes: "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in.",
+  notes: "The positional is the PROVIDER (not a dir) — `cd` into your agent before\nlogging in.",
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0], {
       authPath: f.authPath as string | undefined,

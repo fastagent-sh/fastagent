@@ -78,6 +78,9 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   // exitCode 0 (→ 0), everything else it rejects is a usage error (→ 2). Runtime failures never pass
   // through here; command bodies exit 1 themselves.
   program.exitOverride((err) => exit(err.exitCode === 0 ? 0 : 2));
+  // Fixed 80-column help: deterministic across terminals/pipes/CI, and the width our verbatim
+  // Examples/notes text is wrapped to — guarded by the ≤80-columns conformance test.
+  program.configureHelp({ helpWidth: 80 });
   program.showSuggestionAfterError(); // "did you mean models?" — suggest only, never run it (clig on DWIM)
   program.showHelpAfterError("(run with --help for usage)");
   if (options.version) program.version(options.version, "-v, --version", "print the fastagent version");
