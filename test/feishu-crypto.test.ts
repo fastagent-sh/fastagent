@@ -18,9 +18,12 @@ describe("decryptEvent", () => {
     expect(decryptEvent("test-key", encryptEvent("test-key", event))).toBe(event);
   });
 
-  it("throws on a wrong key (bad padding) and on a payload too short to carry an IV — never a silent empty", () => {
-    const payload = encryptEvent("right-key", "{}");
-    expect(() => decryptEvent("wrong-key", payload)).toThrow();
+  it("throws on malformed ciphertext and on a payload too short to carry an IV — never a silent empty", () => {
+    const payload = Buffer.from(encryptEvent("right-key", "{}"), "base64");
+    // CBC ciphertext must be block-aligned. Truncation is deterministic; unlike a wrong-key assertion,
+    // it cannot randomly land on valid PKCS#7 padding (AES-CBC is not authenticated).
+    const truncated = payload.subarray(0, -1).toString("base64");
+    expect(() => decryptEvent("right-key", truncated)).toThrow();
     expect(() => decryptEvent("k", Buffer.from("short").toString("base64"))).toThrow(/too short/);
   });
 });

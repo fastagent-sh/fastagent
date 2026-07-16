@@ -23,8 +23,10 @@ export function timingSafeEqualStr(a: string, b: string): boolean {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-/** Decrypt an `{"encrypt": …}` event payload to its plaintext JSON string. Throws on malformed input
- *  or a wrong key (bad padding) — the caller turns that into a 4xx, never a silent drop. */
+/** Decrypt an `{"encrypt": …}` event payload to its plaintext JSON string. Throws on malformed
+ * input or invalid padding. AES-CBC is not authenticated, so a wrong key is not mathematically
+ * guaranteed to fail padding; the caller verifies signed events before decrypting and JSON-parses every
+ * plaintext envelope, turning wrong-key garbage into a 4xx rather than a silent drop. */
 export function decryptEvent(encryptKey: string, encryptB64: string): string {
   const key = createHash("sha256").update(encryptKey, "utf8").digest();
   const buf = Buffer.from(encryptB64, "base64");
