@@ -11,6 +11,27 @@ import type { AgentTool, ExecutionEnv, Skill, ThinkingLevel } from "@earendil-wo
 import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
+import { isDeferredTool } from "./tool.ts";
+
+/**
+ * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred
+ * tools a loader activated in that call. The DEDICATED record the resolve below reads: pi's own
+ * `active_tools_change` entries are full active-set SNAPSHOTS (setActiveTools persists everything
+ * active at that moment), and reinterpreting a snapshot as activations would keep a tool active in
+ * old sessions after the author flips it to `deferred` — the session never discovered it. Deltas
+ * carry only what was actually discovered.
+ */
+export const TOOL_ACTIVATION_ENTRY = "fastagent:tool-activation";
+
+/** The session a factory-built harness is bound to — the seam the activation bridge (invoke.ts) uses
+ *  to write {@link TOOL_ACTIVATION_ENTRY} deltas (pi's harness keeps its session private). Absent for
+ *  a harness built outside {@link piHarnessFactory}: activation still works in-turn there, but is not
+ *  recorded — the factory owns persistence. */
+const harnessSessions = new WeakMap<AgentHarness, PiSession>();
+export type PiSession = Awaited<ReturnType<PiSessionStore["openOrCreate"]>>;
+export function harnessSession(harness: AgentHarness): PiSession | undefined {
+  return harnessSessions.get(harness);
+}
 
 /**
  * pi's Model with the API-shape generic erased — fastagent only passes models through to the
@@ -75,67 +96,81 @@ const PROVIDER_MAX_RETRIES = 2;
 const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 /**
- * Restore the session's recorded active-tool set for a fresh harness. pi's harness WRITES active-tool
- * changes to the session (`setActiveTools` → `active_tools_change`) but its constructor never reads
- * them back — pi's long-lived TUI harness keeps the set in memory, while fastagent builds a FRESH
- * harness per invoke, which would silently reset the session's active set to "all tools" every turn.
- * `null` (never changed) → undefined → pi's default (all mounted tools active).
+ * Resolve the active-tool set for a fresh harness — the ONE place both fallbacks live. pi's harness
+ * WRITES active-tool changes to the session (`setActiveTools` → `active_tools_change`) but its
+ * constructor never reads them back — pi's long-lived TUI harness keeps the set in memory, while
+ * fastagent builds a FRESH harness per invoke, which would silently reset the session's active set
+ * every turn.
  *
- * Names are filtered to the currently-mounted tools: the constructor THROWS on unknown names, so a
- * recorded tool that was since removed from the workspace would otherwise brick every future invoke
- * of that session. An intact EMPTY set is restored as-is (pi allows `setActiveTools([])`; that is a
- * deliberate recorded state, not a degradation). Only a NON-empty set that filters down to empty
- * falls back to the default — the recorded intent cannot be honored, and honoring its empty shadow
- * would be a silent capability loss. Both filter degradations are logged (fail visibly) — ONCE per
- * session+missing set: a fresh harness is built per invoke and channel sessions live for weeks, so an
- * un-deduped warn would repeat every turn and dilute its own signal. A log-dedup memo (like L2's
- * findings memo), not session state — the restore itself stays derived from the session every time.
+ * No record (`null`) → the INITIAL set: every non-deferred tool; undefined when nothing is deferred
+ * (pi's default — all active — applies, and no session entry is ever written; tool-sets without
+ * deferral behave exactly as before deferral existed).
+ *
+ * A record is NOT replayed as a frozen snapshot — the active set is rebuilt as the UNION of the
+ * initial set and the recorded names (filtered to the mounted tools: the constructor THROWS on
+ * unknown names, so a recorded-but-removed tool would otherwise brick every future invoke of that
+ * session). On the serving path only the additive activation bridge writes records, so a record's
+ * real semantic is "which deferred tools this session activated" — layered on top of whatever the
+ * workspace mounts TODAY. A snapshot replay would silently freeze a later-added non-deferred tool
+ * out of every session the loader ever touched. Missing recorded names are logged (fail visibly) —
+ * ONCE per session+missing set: a fresh harness is built per invoke and channel sessions live for
+ * weeks, so an un-deduped warn would repeat every turn and dilute its own signal. A log-dedup memo
+ * (like L2's findings memo), not session state — the resolve stays derived from the session.
  */
 const warnedRestores = new Set<string>();
-export function restoreActiveToolNames(
+export function resolveHarnessActiveToolNames(
   recorded: string[] | null,
   tools: AgentTool[],
   sessionId: string,
 ): string[] | undefined {
-  if (recorded === null) return undefined;
+  const anyDeferred = tools.some(isDeferredTool);
+  const initial = tools.filter((t) => !isDeferredTool(t)).map((t) => t.name);
+  if (recorded === null) return anyDeferred ? initial : undefined;
   const mounted = new Set(tools.map((t) => t.name));
   const known = recorded.filter((name) => mounted.has(name));
-  if (known.length === recorded.length) return known; // intact, including a deliberate []
   const missing = recorded.filter((name) => !mounted.has(name));
-  const emit = warnedRestores.has(`${sessionId}\u0000${missing.join(",")}`) ? log.debug : log.warn;
-  warnedRestores.add(`${sessionId}\u0000${missing.join(",")}`);
-  if (known.length === 0) {
-    emit(
-      `[fastagent] session ${sessionId}: none of its recorded active tools (${missing.join(", ")}) are mounted — falling back to all mounted tools`,
-    );
-    return undefined;
+  if (missing.length > 0) {
+    const emit = warnedRestores.has(`${sessionId}\u0000${missing.join(",")}`) ? log.debug : log.warn;
+    warnedRestores.add(`${sessionId}\u0000${missing.join(",")}`);
+    emit(`[fastagent] session ${sessionId}: dropping recorded activation(s) no longer mounted: ${missing.join(", ")}`);
   }
-  emit(`[fastagent] session ${sessionId}: dropping recorded active tool(s) no longer mounted: ${missing.join(", ")}`);
-  return known;
+  return [...new Set([...initial, ...known])];
 }
 
 /** Open-or-create the session per invoke: existing → open (history via buildContext); missing → create. */
 export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFactory {
   return async (sessionId) => {
     const session = await options.sessions.openOrCreate(sessionId);
-    // One extra entry walk per invoke to read the recorded active-tool set (buildContext is the only
-    // accessor) — negligible against the model call, same trade as L2's per-invoke definition re-read.
-    const context = await session.buildContext();
+    // One extra entry walk per invoke to collect the activation deltas — negligible against the model
+    // call, same trade as L2's per-invoke definition re-read. Serving sessions never branch, so a flat
+    // getEntries() read (no leaf-path walk) is correct.
+    const entries = await session.getEntries();
+    const activated = entries.flatMap((e) =>
+      e.type === "custom" && e.customType === TOOL_ACTIVATION_ENTRY
+        ? ((e.data as { names?: string[] } | undefined)?.names ?? [])
+        : [],
+    );
     const fresh = options.live ? await options.live() : undefined;
     const { systemPrompt } = options;
     const prompt = fresh ? fresh.systemPrompt : typeof systemPrompt === "function" ? systemPrompt() : systemPrompt;
     const skills = fresh ? fresh.skills : options.skills;
-    return new AgentHarness({
+    const harness = new AgentHarness({
       env: options.env,
       session,
       models: options.models,
       model: options.model,
       thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
       tools: options.tools,
-      activeToolNames: restoreActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId),
+      activeToolNames: resolveHarnessActiveToolNames(
+        activated.length > 0 ? activated : null,
+        options.tools ?? [],
+        sessionId,
+      ),
       systemPrompt: prompt,
       resources: skills ? { skills } : undefined,
       streamOptions: { maxRetries: PROVIDER_MAX_RETRIES },
     });
+    harnessSessions.set(harness, session);
+    return harness;
   };
 }

@@ -11,6 +11,78 @@ import { buildChatRuntime } from "../src/engines/pi/chat.ts";
 // TTY. In-memory sessions keep the test from writing to the machine's pi session store. A raw
 // AgentTool via `config.tools` lets the custom-tool path be tested without installing the package.
 describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's session", () => {
+  it("emulates deferral: deferred tools start inactive, search_tools mounts and activates via pi's session", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-chat-defer-"));
+    try {
+      await writeFile(
+        join(dir, "fastagent.config.mjs"),
+        `export default {
+           model: "openai-codex/gpt-5.5",
+           tools: [{
+             name: "lookup_weather",
+             description: "Look up the weather forecast for a city.",
+             parameters: { type: "object", properties: {} },
+             deferred: true,
+             execute: async () => ({ content: [{ type: "text", text: "sunny" }], details: {} }),
+           }],
+         };\n`,
+      );
+      const rt = await buildChatRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        const session = rt.session;
+        // Initial active set mirrors serving: deferred tool registered but NOT active; loader active.
+        expect(session.getAllTools().map((t) => t.name)).toContain("lookup_weather");
+        const active = session.getActiveToolNames();
+        expect(active).toContain("search_tools");
+        expect(active).not.toContain("lookup_weather");
+
+        // Drive the SAME builtin loader through pi's tool surface: it must activate via the session.
+        const loader = session.getAllTools().find((t) => t.name === "search_tools");
+        expect(loader).toBeDefined();
+        const custom = rt.session.agent.state.tools.find((t) => t.name === "search_tools") as unknown as {
+          execute: (
+            id: string,
+            params: unknown,
+            signal?: AbortSignal,
+          ) => Promise<{ content: Array<{ text?: string }> }>;
+        };
+        const result = await custom.execute("c1", { query: "weather forecast" });
+        expect(result.content[0]?.text).toMatch(/Activated: lookup_weather/);
+        expect(session.getActiveToolNames()).toContain("lookup_weather");
+
+        // Attribution regression (review): pi wraps SDK customTools in its own before/after active-set
+        // diff, so two PARALLEL loader calls would both get stamped with the same activation. The
+        // production guard is pi's batch serialization, triggered by the loader's executionMode — the
+        // marker assertion IS the parallel protection (these two awaited calls are serial either way;
+        // they pin the message/stamp behavior UNDER the serialization pi guarantees).
+        await rt.newSession();
+        const reSession = rt.session;
+        const loader2 = rt.session.agent.state.tools.find((t) => t.name === "search_tools") as unknown as {
+          executionMode?: string;
+          execute: (id: string, params: unknown) => Promise<{ addedToolNames?: string[] }>;
+        };
+        expect(loader2.executionMode).toBe("sequential"); // what makes pi serialize the batch
+        const r1 = await loader2.execute("p1", { query: "weather" });
+        const r2 = await loader2.execute("p2", { query: "forecast" });
+        const stamped = [r1, r2].filter((r) => (r.addedToolNames ?? []).length > 0);
+        expect(stamped).toHaveLength(1);
+        expect(stamped[0]?.addedToolNames).toEqual(["lookup_weather"]);
+        expect(reSession.getActiveToolNames()).toContain("lookup_weather");
+
+        // The documented divergence, as a spec: chat activations do not survive /new — pi's chat
+        // session records no activations, so every rebuild re-narrows and discovery starts over.
+        await rt.newSession();
+        const rebuilt = rt.session;
+        expect(rebuilt.getActiveToolNames()).not.toContain("lookup_weather");
+        expect(rebuilt.getActiveToolNames()).toContain("search_tools");
+      } finally {
+        await rt.dispose();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("injects the definition's prompt + skills, the config model, custom tools, definition-only", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-chat-"));
     try {

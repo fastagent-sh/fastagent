@@ -10,7 +10,8 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { FastagentTool } from "./tool.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./harness.ts";
 import { moduleLoadHint } from "../../loader.ts";
@@ -42,8 +43,9 @@ export interface FastagentConfig {
    * subdir and does not collide with the host's `tools/`/`src/` (core.md scenario grid).
    */
   agentDir?: string;
-  /** Extra custom tools, appended after pi defaults — never replaces them. */
-  tools?: AgentTool[];
+  /** Extra custom tools, appended after pi defaults — never replaces them. `FastagentTool` = AgentTool
+   *  plus the optional `deferred` marker (see defineTool). */
+  tools?: FastagentTool[];
   http?: { port?: number };
   /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling).
    *  Off by default — self-scheduling is an autonomy capability, opt in when you want it. Only takes

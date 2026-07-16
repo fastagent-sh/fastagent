@@ -23,7 +23,15 @@ import { createPiModels } from "./models.ts";
 import { reportDefinitionWarnings } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import { type ToolCollision, loadTools, mergeDiscoveredTools } from "./tool.ts";
+import {
+  type DefineToolOptions,
+  type FastagentTool,
+  type ToolCollision,
+  isDeferredTool,
+  loadTools,
+  mergeDiscoveredTools,
+} from "./tool.ts";
+import { withSearchTool } from "./search-tools.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
@@ -55,17 +63,42 @@ export async function resolveWorkspaceTools(
 ): Promise<{
   tools: AgentTool[];
   toolNames: string[];
+  /** Tools registered but not initially active (defineTool `deferred: true`) — discovered/activated
+   *  via the built-in `search_tools` loader. Surfaced so the operator can see deferral took effect. */
+  deferredToolNames: string[];
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
 }> {
   // Default coding tools (read/bash/edit/write) are rooted at `cwd` (the run root the agent operates on);
   // discovered `tools/` come from `agentDir` (the agent's own surface). They coincide in the flat case.
   const discovered = await loadTools(agentDir);
-  const { tools, collisions } = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
-  const toolCollisions = [...discovered.collisions, ...collisions];
+  const merged = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
+  // The built-in `search_tools` loader mounts here — the one place the workspace's full tool set is
+  // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; a
+  // workspace-defined search_tools wins).
+  const tools = withSearchTool(merged.tools);
+  // Builtin = a search_tools that was ABSENT before withSearchTool (a reference compare would misfire
+  // on the deferred-authored-loader case, where withSearchTool returns a new array without adding one).
+  const builtinLoaderMounted =
+    !merged.tools.some((t) => t.name === "search_tools") && tools.some((t) => t.name === "search_tools");
+  const toolCollisions = [...discovered.collisions, ...merged.collisions];
+  // `toolNames` is the AUTHOR's active-by-default surface (config.tools + tools/): exclude pi
+  // defaults, the builtin loader (like wake, a builtin gets its own report line, not an anonymous
+  // slot in the author's list — an author-DEFINED search_tools still shows), and deferred tools —
+  // each name lives in exactly ONE report slot, and deferred names live in `deferredToolNames`.
   const defaultNames = new Set(piDefaultTools(cwd).map((t) => t.name));
-  const toolNames = tools.map((t) => t.name).filter((n) => !defaultNames.has(n));
-  return { tools, toolNames, toolCollisions, toolFailures: discovered.failures };
+  const toolNames = tools
+    .filter(
+      (t) => !defaultNames.has(t.name) && !isDeferredTool(t) && !(builtinLoaderMounted && t.name === "search_tools"),
+    )
+    .map((t) => t.name);
+  return {
+    tools,
+    toolNames,
+    deferredToolNames: tools.filter(isDeferredTool).map((t) => t.name),
+    toolCollisions,
+    toolFailures: discovered.failures,
+  };
 }
 
 // ── §2 prompt: four-segment systemPrompt assembly ───────────────────────────
@@ -88,7 +121,13 @@ export async function resolveWorkspaceTools(
  * `persona` (from persona.md) replaces the default identity line, keeping the tools list + guidelines.
  */
 export function piBasePrompt(options: { tools?: AgentTool[]; persona?: string } = {}): string {
-  const tools = options.tools ?? [];
+  const mounted = options.tools ?? [];
+  // Deferred tools stay OUT of the list: their schemas are not in the request until activated, so
+  // naming them here would invite calls to tools that don't exist yet; discovery is search_tools' job
+  // (which IS listed — it's active). Computed from the static mounted set, so the prompt — the cached
+  // context prefix — does not change when a tool is activated mid-session.
+  const tools = mounted.filter((t) => !isDeferredTool(t));
+  const deferredCount = mounted.length - tools.length;
   const toolsList =
     tools.length > 0 ? tools.map((t) => `- ${t.name}: ${(t.description ?? "").split("\n")[0]}`).join("\n") : "(none)";
   // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line
@@ -96,10 +135,14 @@ export function piBasePrompt(options: { tools?: AgentTool[]; persona?: string } 
   const identity =
     options.persona?.trim() ||
     "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+  const deferredNote =
+    deferredCount > 0
+      ? `\n\n${deferredCount} additional tool(s) are registered but inactive — use search_tools to discover and activate them before concluding a capability is missing.`
+      : "";
   return `${identity}
 
 Available tools:
-${toolsList}
+${toolsList}${deferredNote}
 
 In addition to the tools above, you may have access to other custom tools depending on the project.
 
@@ -208,7 +251,8 @@ export interface CreatePiAgentOptions {
    * or a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
    */
   instructions?: string | (() => string);
-  tools?: AgentTool[];
+  /** `FastagentTool` = AgentTool plus the optional `deferred` marker (see {@link DefineToolOptions}). */
+  tools?: FastagentTool[];
   skills?: Skill[];
   // ── Tier 2: injectable ports ───────────────────────────────────────────────
   /**
@@ -240,7 +284,8 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
     providers: options.providers,
     authPath: options.authPath,
     systemPrompt: instructionsPrompt(options.instructions, options.skills),
-    tools: options.tools,
+    // Deferred tools need their loader on every rung (idempotent; the caller's own search_tools wins).
+    tools: options.tools ? withSearchTool(options.tools) : options.tools,
     skills: options.skills,
     sessions: options.sessions,
     env: options.env,
@@ -260,8 +305,9 @@ export interface CreatePiAgentFromDefinitionOptions {
   /** Override the engine base prompt (segment ①). Defaults to piBasePrompt({ tools, persona }) using the
    *  live-read persona.md; pass base to fully opt out of persona.md. */
   base?: string;
-  /** Override tools. Defaults to piDefaultTools (lock down with a custom list). */
-  tools?: AgentTool[];
+  /** Override tools. Defaults to piDefaultTools (lock down with a custom list). `FastagentTool` =
+   *  AgentTool plus the optional `deferred` marker. */
+  tools?: FastagentTool[];
   /**
    * The agent's working directory: where the default tools operate AND whose ancestors are walked for
    * ② project context (AGENTS.md). Defaults to `dir` (flat: the definition dir is also the run root).
@@ -310,7 +356,9 @@ export async function createPiAgentFromDefinition(
   // runtime-written bad skill surfaces the moment it appears, while a static finding does not spam
   // every turn's log. A log-dedup memo, not session state (stateless invoke holds).
   let reportedFindings = findingsSignature(definition);
-  const tools = options.tools ?? piDefaultTools(env.cwd);
+  // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
+  // it; a caller's own search_tools wins).
+  const tools = withSearchTool(options.tools ?? piDefaultTools(env.cwd));
   const agent = buildPiAgent({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
