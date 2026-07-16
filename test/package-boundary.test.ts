@@ -37,7 +37,7 @@ function staticPackageGraph(entryRel: string): Set<string> {
   return packages;
 }
 
-const CLI_ONLY = ["@clack/prompts", "undici", "chokidar", "giget"];
+const CLI_ONLY = ["@clack/prompts", "undici", "chokidar", "giget", "commander"];
 
 describe("package boundary: embed entry stays free of CLI-only dependencies", () => {
   it("index.ts does not statically load any CLI-only dep", () => {
@@ -56,11 +56,17 @@ describe("package boundary: embed entry stays free of CLI-only dependencies", ()
     expect(pkgs).not.toContain("@octokit/webhooks-methods");
   });
 
-  it("the CLI entry is where the CLI-only deps actually live (the guard has teeth)", () => {
-    const pkgs = staticPackageGraph("cli.ts");
-    expect(pkgs).toContain("@clack/prompts");
-    expect(pkgs).toContain("undici");
-    expect(pkgs).toContain("chokidar"); // via dev-supervisor.ts
+  it("the CLI entry is a thin shell: NO static package loads at all (everything is lazy)", () => {
+    // `fastagent <cmd>` pays only for the executed command's module graph — the entry itself must not
+    // pull anything eagerly (startup responsiveness, clig).
+    expect([...staticPackageGraph("cli.ts")]).toEqual([]);
+  });
+
+  it("the CLI-only deps live behind the lazy command modules (the guard has teeth)", () => {
+    expect(staticPackageGraph("cli/program.ts")).toContain("commander"); // via kernel.ts
+    expect(staticPackageGraph("cli/commands/login.ts")).toContain("@clack/prompts");
+    expect(staticPackageGraph("cli/commands/invoke.ts")).toContain("undici"); // via proxy.ts
+    expect(staticPackageGraph("cli/commands/dev.ts")).toContain("chokidar"); // via dev-supervisor.ts
   });
 });
 
