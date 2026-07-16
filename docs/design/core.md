@@ -96,9 +96,15 @@ parallel implementations.
 Each invocation builds a fresh harness for its session and discards it after the turn. Conversation
 continuity comes from `PiSessionStore`, not a resident harness. Reopening is faithful to the whole
 record, not just the messages: pi's harness writes active-tool changes to the session but never reads
-them back (its own TUI harness is resident), so `piHarnessFactory` restores the recorded active-tool
-set itself — filtered to the mounted tools, since a recorded-but-removed tool would fail construction
-(`harness.ts` `restoreActiveToolNames`).
+them back (its own TUI harness is resident), so `piHarnessFactory` resolves the active-tool set itself
+(`harness.ts` `resolveHarnessActiveToolNames`): the UNION of the initial set (every non-deferred tool;
+pi's all-active default when nothing is deferred) and the session's accumulated activation DELTAS —
+dedicated `fastagent:tool-activation` custom entries the activation bridge writes, each carrying
+exactly the names that call activated. pi's own `active_tools_change` entries are full active-set
+snapshots and are deliberately ignored: replaying a snapshot would freeze later-added tools out of old
+sessions and keep a later-`deferred` tool active in sessions that never discovered it. The corollary
+is a constraint on future writers: NARROWING the active set is not representable in this record — a
+capability that needs durable narrowing must change the resolve semantics here first, deliberately.
 
 ## 4. Event translation and terminal discipline
 
@@ -129,6 +135,22 @@ Workspace tools are merged in this order:
 3. discovered `tools/*.ts|js|mjs`.
 
 Earlier names win and collisions are reported. Broken discovered tools are reported and skipped.
+
+**Deferred tools** (`defineTool({ deferred: true })`) are registered but not initially active: their
+schemas stay out of the request — and the model's sight — until the built-in `search_tools` loader
+(auto-mounted whenever a deferred tool exists; an authored `search_tools` wins, the wake-pair rule)
+activates them by keyword mid-turn. The activation runs through a per-turn bridge on the turn context
+(`ToolActivation`: additive `setActiveTools`, unknown names filtered — pi throws on them), is stamped
+on that tool call's own result as `addedToolNames` — the load point that lets providers with native
+deferred loading add the definitions at the transcript position without invalidating the cached
+prompt prefix (the stamp comes from that execute's own `activate()` calls, never an active-set
+snapshot diff: batch tool calls run in parallel and a diff would misattribute a sibling's activation)
+— and is recorded in the session, which the per-invoke resolve above carries into later turns. The
+base prompt lists only non-deferred tools plus a discovery note, computed from the static mounted set,
+so activation never rewrites the prompt. `chat` emulates the same behavior over pi's AgentSession —
+the session is narrowed to the initial active set at build, and the same builtin loader activates
+through a chat-side ToolActivation bridge (`chat.ts` `chatToolActivation`) riding the same
+turn context, so the author debugs exactly what serves.
 
 `ExecutionEnv` is a harness assembly seam, not a complete sandbox boundary today. Pi's cwd-bound coding
 tools and `loadProjectContextFiles` still use the local process/filesystem. A future sandbox adapter must

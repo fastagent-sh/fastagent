@@ -93,8 +93,9 @@ src/
     ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
     ├── workspace.ts         # shared opener: workspace → agent for dev/start/invoke
     ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
-    ├── tool.ts              # defineTool (Zod) + tools/ filesystem discovery
-    ├── tool-context.ts      # ToolContext.session via AsyncLocalStorage (set around the turn; read in execute — the wake tool's seam)
+    ├── tool.ts              # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
+    ├── tool-context.ts      # ToolContext.session + tool-activation bridge via AsyncLocalStorage (set around the turn; read in execute — the wake/search_tools seam)
+    ├── search-tools.ts      # built-in search_tools loader for deferred tools (auto-mounted when any tool is deferred; author's wins)
     ├── wake-tool.ts         # the built-in `wake` tool (pi-coupled: defineTool): writes a wake-up into ToolContext.session; withWakeTool mounts it (serving path only)
     ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
     ├── harness.ts           # pi harness wiring (factory)
