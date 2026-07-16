@@ -61,12 +61,18 @@ export interface CommandSpec {
   run?: (args: (string | undefined)[], flags: Record<string, unknown>) => Promise<void> | void;
 }
 
-/** Program-level configuration. Output/exit seams let tests drive the program in-process. */
+/** Program-level configuration. Output/exit/width seams let tests drive the program in-process. */
 export interface ProgramOptions {
   /** Printed by `-v`/`--version`. */
   version?: string;
   /** Appended after the top-level help (program examples, docs link). */
   helpTail?: string;
+  /**
+   * Fixed help width — a TEST seam. Production omits it: commander then adapts to the terminal
+   * (and falls back to 80 when piped), the modern behavior. Our verbatim Examples/notes text is
+   * hand-wrapped at ≤78 columns so it reads well at any width ≥ 80 (prose caps, like man pages).
+   */
+  helpWidth?: number;
   out?: (chunk: string) => void;
   err?: (chunk: string) => void;
   exit?: (code: number) => never;
@@ -99,9 +105,7 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   // exitCode 0 (→ 0), everything else it rejects is a usage error (→ 2). Runtime failures never pass
   // through here; command bodies exit 1 themselves.
   program.exitOverride((err) => exit(err.exitCode === 0 ? 0 : 2));
-  // Fixed 80-column help: deterministic across terminals/pipes/CI, and the width our verbatim
-  // Examples/notes text is wrapped to — guarded by the ≤80-columns conformance test.
-  program.configureHelp({ helpWidth: 80 });
+  if (options.helpWidth !== undefined) program.configureHelp({ helpWidth: options.helpWidth });
   program.showSuggestionAfterError(); // "did you mean models?" — suggest only, never run it (clig on DWIM)
   program.showHelpAfterError("(run with --help for usage)");
   if (options.version) program.version(options.version, "-v, --version", "print the fastagent version");

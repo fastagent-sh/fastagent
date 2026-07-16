@@ -24,6 +24,7 @@ async function parse(argv: string[]): Promise<{ code: number; out: string; err: 
   let out = "";
   let err = "";
   const program = buildProgram(specs, {
+    helpWidth: 80, // the determinism seam: production adapts to the terminal (pipes fall back to 80)
     out: (c) => {
       out += c;
     },
@@ -49,8 +50,9 @@ describe("cli kernel: spec conformance", () => {
     list.flatMap((s) => [{ path: `${prefix}${s.name}`, spec: s }, ...walk(s.subcommands ?? [], `${prefix}${s.name} `)]);
 
   it("every help surface fits in 80 columns — commander sections and our verbatim text alike", async () => {
-    // The kernel pins helpWidth to 80; Examples/notes are verbatim addHelpText strings the wrapper
-    // never touches — this guard catches a spec whose hand-wrapped text drifts past the sections above it.
+    // At the narrow floor (helpWidth 80 — what pipes/CI get), commander wraps its sections; the
+    // verbatim Examples/notes strings are hand-wrapped at ≤78 — this guard catches a spec whose
+    // text drifts past that floor. Wider terminals only ever get MORE room.
     const paths: string[][] = [[]];
     const collect = (list: readonly CommandSpec[], prefix: string[]): void => {
       for (const s of list) {
