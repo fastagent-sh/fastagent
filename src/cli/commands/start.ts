@@ -36,7 +36,7 @@ export interface StartOptions {
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const dir = resolve(dirArg);
   setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
-  const portFlag = parsePort(opts.port, "--port");
+  const portFlag = parsePort(opts.port, "--port", "flag");
   loadDotEnv(dir);
   installProxyFetch();
   await resolveFirstRunModel(dir, opts);
@@ -100,7 +100,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const traced = logAgentLoop(agent);
   const routes = await routesFor(agentDir, traced, stateRoot).catch(failStartup);
   await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false);
-  serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env") ?? config.http?.port ?? 8787, (p) =>
+  serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, (p) =>
     maybeTunnel(agentDir, p, opts.tunnel ?? false),
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an

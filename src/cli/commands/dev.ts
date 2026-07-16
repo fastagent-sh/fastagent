@@ -44,13 +44,13 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
     await serveOnce(dir, opts);
     return;
   }
-  parsePort(opts.port, "--port"); // flag-shape check before spawning
+  parsePort(opts.port, "--port", "flag"); // flag-shape check before spawning
   await runDevSupervisor(dir, { tunnel: opts.tunnel ?? false });
 }
 
 /** Assemble the workspace agent and serve it once (the dev worker; also the --no-watch path). */
 async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
-  const portFlag = parsePort(opts.port, "--port");
+  const portFlag = parsePort(opts.port, "--port", "flag");
   loadDotEnv(dir);
   installProxyFetch();
 

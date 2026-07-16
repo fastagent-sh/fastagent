@@ -4,7 +4,7 @@ import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
 import { resolveWorkspaceTools } from "../../engines/pi/create.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
   const toolDir = resolve(dirArg);
@@ -32,9 +32,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   try {
     args = JSON.parse(argsJson);
   } catch {
-    // Malformed input syntax is a usage error (exit 2), same class as a flag the parser rejects.
-    console.error(`invalid JSON args: ${argsJson}`);
-    process.exit(2);
+    failUsage(`invalid JSON args: ${argsJson}`); // malformed input syntax = usage error, exit 2
   }
   const result = await tool.execute(`cli-${name}`, args).catch(failStartup);
   const out =

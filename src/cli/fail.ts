@@ -8,3 +8,13 @@ export function failStartup(error: unknown): never {
   else console.error(error);
   process.exit(1);
 }
+
+/**
+ * A usage error the parser could not catch (a bad value shape, an invalid flag/argument combination
+ * discovered in a command body): print the message and exit 2 — the same class as a parse error.
+ * Exit codes follow responsibility, not the layer that happens to discover the problem.
+ */
+export function failUsage(message: string): never {
+  console.error(message);
+  process.exit(2);
+}

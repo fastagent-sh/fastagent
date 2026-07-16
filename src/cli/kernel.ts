@@ -1,14 +1,17 @@
 /**
  * CLI kernel — commands as data. A {@link CommandSpec} carries everything the CLI surface needs
  * (summary, args/flags, examples, narrative notes, a lazy `run`), and {@link buildProgram} renders
- * the set through commander. Commander is an implementation detail of THIS module: specs and command
- * implementations never import it, so replacing the parser/help renderer stays a one-file change.
+ * the set through commander. Commander is called ONLY from this module; the notation specs are
+ * written in — docopt-style argument brackets (`<required>`/`[optional]`), the flag DSL
+ * (`--auth-path <file>`, `--no-x` negation), and the derived option keys ({@link optionKey}) — is a
+ * contract this module owns and validates at build time. Replacing the parser means re-implementing
+ * that notation here (one module), not editing the specs.
  *
  * Follows clig.dev: per-command help in four spellings (`-h`/`--help`/`help <cmd>`/bare-with-missing-args),
  * examples in help, "did you mean" suggestions (never auto-run), and one exit-code policy — 0 success,
  * 1 runtime failure (owned by the command bodies), 2 usage error (anything the parser itself rejects).
  */
-import { Argument, Command, Option } from "commander";
+import { Argument, Command, InvalidArgumentError, Option } from "commander";
 
 /** One positional argument, in commander syntax: `<name>` required, `[dir]` optional. */
 export interface ArgSpec {
@@ -19,13 +22,13 @@ export interface ArgSpec {
   choices?: string[];
 }
 
-/** One flag, in commander syntax: `--json`, or `--auth-path <file>` for a value-taking flag. */
+/** One flag, in the flag DSL: `--json`, or `--auth-path <file>` for a value-taking flag. */
 export interface FlagSpec {
   flags: string;
   description: string;
   /** Parses but does not appear in help — for retired flags that should still explain themselves. */
   hidden?: boolean;
-  /** Mutually exclusive with these option names (camelCase) — the parser rejects the combination. */
+  /** Mutually exclusive with these {@link optionKey} values — validated at build time. */
   conflicts?: string[];
 }
 
@@ -69,6 +72,24 @@ export interface ProgramOptions {
   exit?: (code: number) => never;
 }
 
+/**
+ * The option key a flag string yields on the parsed-flags record — THE naming rule specs rely on:
+ * camelCase of the long name (`--auth-path` → `authPath`); a `--no-x` flag negates and stores under
+ * `x` (absent ⇒ `x !== false`). Owned and enforced here so `conflicts` references and run-body reads
+ * answer to one authority, not to an implicit parser behavior. Throws on a flag without a long form
+ * (clig: every flag has a full-length spelling).
+ */
+export function optionKey(flags: string): string {
+  const long = flags
+    .split(/[\s,|]+/)
+    .filter((part) => part.startsWith("--"))
+    .at(-1);
+  if (!long) throw new Error(`flag "${flags}" has no long form (clig: have full-length flags)`);
+  let name = long.replace(/^--/, "").replace(/[=<[].*$/, "");
+  if (name.startsWith("no-")) name = name.slice(3);
+  return name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
 /** Build the commander program for `specs`. The CLI entry parses with it; tests inject the IO seams. */
 export function buildProgram(specs: readonly CommandSpec[], options: ProgramOptions = {}): Command {
   const exit: (code: number) => never = options.exit ?? ((code) => process.exit(code));
@@ -97,6 +118,17 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
 }
 
 function register(parent: Command, spec: CommandSpec): void {
+  // Validate the spec's option references BEFORE handing anything to commander: every flag must
+  // have a long form (optionKey throws), and conflicts must name keys that exist on THIS command —
+  // commander matches conflicts by name at parse time, so a typo would otherwise silently never fire.
+  const keys = new Set((spec.flags ?? []).map((f) => optionKey(f.flags)));
+  for (const f of spec.flags ?? []) {
+    for (const target of f.conflicts ?? []) {
+      if (!keys.has(target)) {
+        throw new Error(`command "${spec.name}": "${f.flags}" conflicts with unknown option key "${target}"`);
+      }
+    }
+  }
   const cmd = parent.command(spec.name);
   cmd.summary(spec.summary);
   cmd.description(spec.description ?? spec.summary);
@@ -105,6 +137,15 @@ function register(parent: Command, spec: CommandSpec): void {
     const arg = new Argument(a.name, a.description);
     if (a.default !== undefined) arg.default(a.default);
     if (a.choices) arg.choices(a.choices);
+    // A required argument means a non-empty VALUE, not just a present token: `invoke ""` must be a
+    // usage error, not an empty turn (the old dispatch's falsy guards, kept at the parse boundary).
+    // choices args validate membership already ("" is never a member).
+    if (a.name.startsWith("<") && !a.choices) {
+      arg.argParser((value: string) => {
+        if (value.trim() === "") throw new InvalidArgumentError("must not be empty.");
+        return value;
+      });
+    }
     cmd.addArgument(arg);
   }
   for (const f of spec.flags ?? []) {

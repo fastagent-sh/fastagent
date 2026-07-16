@@ -18,7 +18,7 @@ import {
 } from "../../scaffold/add-channel.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
 import { loadRootIgnore } from "../../workspace.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 
 /** `fastagent add <kind> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
 export async function runAddChannel(
@@ -136,7 +136,9 @@ export async function runAddSkill(
 ): Promise<void> {
   const target = resolve(dirArg);
   if (!source) {
-    console.error(
+    // A missing source is a usage error (exit 2), but the guide is worth more than a bare
+    // missing-argument line — the common path (writing your own skill) needs no command at all.
+    failUsage(
       `add a skill — two ways:\n` +
         `  1. write your own (vibe): create skills/<name>/SKILL.md with name + description\n` +
         `     frontmatter; it's auto-discovered. No command needed — this is the common path.\n` +
@@ -146,7 +148,6 @@ export async function runAddSkill(
         `             bare name found in your global skill dirs (~/.agents/skills, ~/.pi/agent/skills)\n` +
         `     --update overwrites an existing skill (re-fetch from source); review with git diff`,
     );
-    process.exit(2);
   }
   // Skills are agent surface — vendored into agentDir/skills (config.agentDir, or target when flat).
   const { config: skillConfig } = await loadConfig(target).catch(failStartup);

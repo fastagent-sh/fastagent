@@ -40,7 +40,7 @@ import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { announceWebhooks } from "../../tunnel.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 
 export type DeployHost = "docker" | "fly" | "railway";
 
@@ -60,8 +60,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   const target = resolve(dirArg);
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
-    console.error(`[fastagent] deploy stopped: --tunnel is supported only by the local Docker target`);
-    process.exit(2);
+    failUsage(`[fastagent] deploy stopped: --tunnel is supported only by the local Docker target`);
   }
   loadDotEnv(target); // a custom provider/tool may read a key at config load
   installProxyFetch(); // post-deploy channel API calls must honor HTTP(S)_PROXY under Node

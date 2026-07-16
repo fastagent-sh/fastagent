@@ -7,7 +7,7 @@
 import { spawn } from "node:child_process";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { detectHostSignals, nextStepCd, scaffoldWorkspace } from "../../scaffold/init.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 
 export interface InitOptions {
   minimal: boolean;
@@ -28,7 +28,8 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     // locator note — a Windows `relative()` would write backslashes into both.
     const rel = relative(dir, resolve(dir, opts.agentDir)).split(sep).join("/");
     if (rel === "" || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) {
-      failStartup(new Error(`--agent-dir ("${opts.agentDir}") must be a subdirectory of ${dir}`));
+      // An invalid flag VALUE is a usage error (exit 2), same class as a value the parser rejects.
+      failUsage(`--agent-dir ("${opts.agentDir}") must be a subdirectory of ${dir}`);
     }
     agentDir = `./${rel}`;
   } else if (!opts.flat) {

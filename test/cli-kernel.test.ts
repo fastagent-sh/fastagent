@@ -4,7 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildProgram, type CommandSpec } from "../src/cli/kernel.ts";
+import { buildProgram, type CommandSpec, optionKey } from "../src/cli/kernel.ts";
 import { specs } from "../src/cli/program.ts";
 
 /**
@@ -76,6 +76,30 @@ describe("cli kernel: spec conformance", () => {
         expect(spec.examples?.length ?? 0, `${path} needs an example (clig: lead with examples)`).toBeGreaterThan(0);
       else expect(spec.subcommands?.length ?? 0, `${path} is a group — needs subcommands`).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("cli kernel: the option-key naming rule", () => {
+  it("optionKey: camelCase of the long name; --no-x negates and stores under x", () => {
+    expect(optionKey("--json")).toBe("json");
+    expect(optionKey("--auth-path <file>")).toBe("authPath");
+    expect(optionKey("--no-input")).toBe("input");
+    expect(optionKey("--no-scale-to-zero")).toBe("scaleToZero");
+    expect(optionKey("-h, --help")).toBe("help");
+    expect(() => optionKey("-x")).toThrow(/no long form/);
+  });
+
+  it("a conflicts reference to an unknown key fails at BUILD time, not silently at parse time", () => {
+    const bad: CommandSpec = {
+      name: "x",
+      summary: "s",
+      flags: [
+        { flags: "--flat", description: "d", conflicts: ["agentDirTypo"] },
+        { flags: "--agent-dir <name>", description: "d" },
+      ],
+      run: () => {},
+    };
+    expect(() => buildProgram([bad])).toThrow(/unknown option key "agentDirTypo"/);
   });
 });
 
@@ -152,6 +176,36 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     expect(r.err).toMatch(/cancel/); // did-you-mean
   });
 
+  it("an empty required argument is a usage error on every command (the old falsy guards, kept)", async () => {
+    const cases = [
+      ["invoke", ""],
+      ["fire", ""],
+      ["tool", ""],
+      ["schedule", "history", ""],
+      ["schedule", "cancel", ""],
+    ];
+    for (const argv of cases) {
+      const r = await parse(argv);
+      expect(r.code, argv.join(" ")).toBe(2);
+      expect(r.err, argv.join(" ")).toMatch(/must not be empty/);
+    }
+  });
+
+  it("flags belong to their command: the legacy pre-command placement is rejected, exit 2", async () => {
+    // The pre-commander CLI accepted flags anywhere (one global parseArgs). That form is now an
+    // explicit break (documented in docs/cli.md): strict per-command validation wins over placement.
+    const cases = [
+      ["--json", "info"],
+      ["--model", "x", "invoke", "hi"],
+      ["schedule", "--json", "list"],
+    ];
+    for (const argv of cases) {
+      const r = await parse(argv);
+      expect(r.code, argv.join(" ")).toBe(2);
+      expect(r.err, argv.join(" ")).toMatch(/unknown option/);
+    }
+  });
+
   it("an out-of-set <host> argument is rejected by the parser (choices)", async () => {
     const r = await parse(["deploy", "heroku"]);
     expect(r.code).toBe(2);
@@ -170,9 +224,12 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
-function run(args: string[], cwd?: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function run(
+  args: string[],
+  env?: Record<string, string>,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], cwd ? { cwd } : {});
+    const child = spawn(process.execPath, [CLI, ...args], env ? { env: { ...process.env, ...env } } : {});
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -208,6 +265,23 @@ describe("cli end to end: the thin entry", () => {
     const { code, stderr } = await run(["tool"]);
     expect(code).toBe(2);
     expect(stderr).toMatch(/missing required argument 'name'/);
+  });
+
+  it("exit codes follow responsibility: bad --port flag → 2 (usage), bad PORT env → 1 (config)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-kernel-port-"));
+    const flag = await run(["start", dir, "--port", "abc"]);
+    expect(flag.code).toBe(2);
+    expect(flag.stderr).toMatch(/invalid --port/);
+    const env = await run(["start", dir], { PORT: "abc", FASTAGENT_MODEL: "openai/gpt-5.5" });
+    expect(env.code).toBe(1);
+    expect(env.stderr).toMatch(/invalid PORT env/);
+  });
+
+  it("an invalid --agent-dir VALUE is a usage error (exit 2), and nothing is written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-kernel-agentdir-"));
+    const r = await run(["init", dir, "--agent-dir", "."]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/must be a subdirectory/);
   });
 
   it("tool with malformed JSON args exits 2 (usage class); an unknown tool stays a runtime miss (1)", async () => {

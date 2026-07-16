@@ -17,7 +17,7 @@ import {
 import { configuredModelSpecs, createPiModels, probeAuthSource } from "../engines/pi/models.ts";
 import { formatAuthReport } from "../cli-auth.ts";
 import { log } from "../log.ts";
-import { failStartup } from "./fail.ts";
+import { failStartup, failUsage } from "./fail.ts";
 
 /** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
 export function isInteractive(): boolean {
@@ -26,16 +26,19 @@ export function isInteractive(): boolean {
 
 /**
  * Parse + range-check a port string (CLI flag or env). Empty/whitespace is "not set" → undefined, so
- * the `??` chain falls through instead of binding port 0 (`Number("")` is 0). A non-decimal or
- * out-of-range value is an argument error → exit 2 (usage class).
+ * the `??` chain falls through instead of binding port 0 (`Number("")` is 0). The exit code follows
+ * RESPONSIBILITY, not the layer that discovers the problem: a bad `--port` is a usage error (2), a
+ * bad `PORT` env is broken runtime configuration (1).
  */
-export function parsePort(value: string | undefined, source: string): number | undefined {
+export function parsePort(value: string | undefined, source: string, from: "flag" | "env"): number | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
   if (!/^\d+$/.test(trimmed) || !isValidPort(Number(trimmed))) {
-    console.error(`invalid ${source} "${value}": must be an integer 0-65535`);
-    process.exit(2);
+    const message = `invalid ${source} "${value}": must be an integer 0-65535`;
+    if (from === "flag") failUsage(message);
+    console.error(message);
+    process.exit(1);
   }
   return Number(trimmed);
 }

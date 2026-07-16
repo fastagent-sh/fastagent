@@ -261,16 +261,30 @@ FASTAGENT_STATE_DIR=/data/fastagent fastagent start
 
 ## Global options
 
+Flags belong to their command and come **after** it: `fastagent info --json`, not
+`fastagent --json info`. (Earlier releases accepted flags anywhere on the line; that form now fails
+with `unknown option`, exit 2 — move the flag after the command/subcommand.)
+
+Only two options are global:
+
 | Option | Meaning |
 |---|---|
 | `-h`, `--help` | Print help. Works per command too: `fastagent deploy --help`, `fastagent help deploy`. |
 | `-v`, `--version` | Print the package version. |
-| `--no-input` | On interactive commands (`dev`, `start`, `invoke`, `fire`, `login`): never prompt; missing information becomes an error with the flag to pass. |
+
+Recurring per-command options (same meaning everywhere they appear):
+
+| Option | Commands | Meaning |
+|---|---|---|
+| `--no-input` | `dev`, `start`, `invoke`, `fire`, `login` | Never prompt; missing information becomes an error with the flag to pass. |
+| `--model <provider/modelId>` | assembly commands | Model override (`--model > FASTAGENT_MODEL > config`). |
+| `--auth-path <file>` | assembly commands, `login` | Credentials file override. |
+| `--json` | `info`, `schedule history`, `schedule list` | Machine-readable output. |
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Success (including help/version displays). |
-| `1` | Runtime failure — a failed turn, a broken definition, a deploy gate, an unknown tool/schedule name. |
-| `2` | Usage error — unknown command/flag, missing/invalid arguments, conflicting flags. A mistyped command suggests the nearest one (`fastagent depoly` → “Did you mean deploy?”). |
+| `1` | Runtime failure — a failed turn, a broken definition, a deploy gate, an unknown tool/schedule name, invalid runtime configuration (e.g. a bad `PORT` env). |
+| `2` | Usage error — unknown command/flag, missing/empty/invalid arguments, conflicting flags. A mistyped command suggests the nearest one (`fastagent depoly` → “Did you mean deploy?”). |
