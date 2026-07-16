@@ -332,6 +332,52 @@ describe("turn flow", () => {
     expect(settled.config.summary).toEqual({ content: "bold answer" });
   });
 
+  it("dedups an accepted message while pending and after completion, and the ring survives restart", async () => {
+    feishuFetch();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let starts = 0;
+    injectedAgent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        starts++;
+        await gate;
+        yield { type: "completed" };
+      },
+    };
+    const first = buildChannel();
+    const duplicate = messageEvent({ id: "om_dup", text: "run once" });
+
+    expect((await first.handler(feishuRequest(duplicate))).status).toBe(200);
+    await vi.waitFor(() => expect(starts).toBe(1));
+    expect((await first.handler(feishuRequest(duplicate))).status).toBe(200);
+    expect(starts).toBe(1); // duplicate while the original turn is still pending
+
+    release();
+    await first.idle();
+    expect((await first.handler(feishuRequest(duplicate))).status).toBe(200);
+    await first.idle();
+    expect(starts).toBe(1); // duplicate after turns.json no longer carries the completed turn
+    expect(JSON.parse(readFileSync(join(first.home, "seen.json"), "utf8"))).toContain("om_dup");
+
+    const restarted = replyingAgent();
+    const routes = buildFeishuChannel({
+      appId: "app",
+      appSecret: "secret",
+      verificationToken: TOKEN,
+      baseUrl: BASE,
+    })({ agent: restarted.agent, stateRoot: first.root });
+    const again = routes["POST /feishu"];
+    if (!again) throw new Error("expected POST /feishu");
+    const idleAgain = (again as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
+    channelIdles.add(idleAgain);
+
+    expect((await again(feishuRequest(duplicate))).status).toBe(200);
+    await idleAgain();
+    expect(restarted.calls).toHaveLength(0);
+  });
+
   it("continuous p2p remains an explicit opt-out with one chat session and an ordinary send", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel({ directMessageSession: "continuous" }, "continuous answer");
@@ -492,15 +538,18 @@ describe("turn flow", () => {
     expect(reply?.body?.reply_in_thread).toBe(true);
   });
 
-  it("buffers unsummoned main-chat discussion, folds it into the next @mention, then commits it", async () => {
+  it("dedups unsummoned context, folds it into the next @mention, then commits it", async () => {
     feishuFetch();
     const { handler, calls, idle, home } = buildChannel();
     await flush();
     const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+    const context = messageEvent({ id: "om_context", chatType: "group", text: "deploy failed" });
 
-    await handler(feishuRequest(messageEvent({ id: "om_context", chatType: "group", text: "deploy failed" })));
+    await handler(feishuRequest(context));
+    await handler(feishuRequest(context));
     expect(calls).toHaveLength(0);
-    expect(JSON.parse(readFileSync(join(home, "buffers.json"), "utf8"))).toHaveProperty("oc_1");
+    const persisted = JSON.parse(readFileSync(join(home, "buffers.json"), "utf8")) as Record<string, unknown[]>;
+    expect(persisted.oc_1).toHaveLength(1);
 
     await handler(
       feishuRequest(

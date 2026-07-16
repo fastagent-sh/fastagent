@@ -285,13 +285,15 @@ Message payloads are resolved by the channel before the agent turn runs — all 
 The channel persists its state under `<state root>/channels/<kind>/` (`channels/feishu/` or `channels/lark/` — two mounted kinds never share stores):
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
+- `seen.json` — the most recent 2,000 `message_id`s whose turn intent or buffered context was persisted; Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key,
 - `owned-threads.json` — durable `root_id → chat_id` ownership for managed group threads, written before the top-level webhook ACK so restarts preserve continuation routing,
 - `buffers.json` — unsummoned human group/thread discussion, persisted before webhook ACK and consumed only after an Agent turn completes,
 - `files/<chat>/` — downloaded inbound files.
 
-Like Telegram, this L1 layer has no completed-delivery ledger. Feishu/Lark document that duplicate
-pushes can occur, so a duplicate arriving after its turn was removed can run again. The channel keeps
-that at-least-once limitation shared rather than adding a platform-specific reliability mechanism.
+The seen ring is bounded, best-effort delivery dedup rather than exactly-once execution. It is written
+after the turn/buffer state so a failed pre-ACK state write can still be redelivered safely; a crash
+between those writes, a failed ring write, or a duplicate older than the cap can therefore still re-run
+or re-fold. Interrupted-turn recovery also remains L1 at-least-once and can repeat tool side effects.
 
 The state home self-ignores (a nested `.gitignore`). Single-process semantics: two processes must not share a state dir.
 

@@ -1,5 +1,5 @@
 /**
- * Canonical Feishu bot-channel engine: verify webhook → answer url_verification → route → persist → run
+ * Canonical Feishu bot-channel engine: verify webhook → answer url_verification → dedup → route → persist → run
  * the turn → stream a live card → ACK 200. Feishu (open.feishu.cn) is the reference cloud. Lark
  * international binds this engine through an explicit compatibility profile because its control plane
  * trails Feishu; protocol reuse does not make Lark the design center.
@@ -47,6 +47,7 @@ import {
   settleFeishuPreview,
   streamFeishuReply,
 } from "./preview.ts";
+import { createSeenRing } from "./seen.ts";
 
 // Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.
 export { defaultFeishuRoute, feishuEnvelope };
@@ -232,6 +233,7 @@ export function buildFeishuChannel(
       isRecord: isStoredFeishuTurn,
       order: (a, b) => a.seq - b.seq,
     });
+    const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
       const { preview: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
       return { ...intent, attempts: 0 };
@@ -319,6 +321,9 @@ export function buildFeishuChannel(
         log.info(`${label} turn start: turn=${rec.id} session=${rec.session} chat=${rec.chatId}`);
         // Snapshot background discussion at dequeue. Commit only this snapshot on `completed`, so a
         // message arriving while the turn runs remains buffered for the next answered turn.
+        // ponytail: independent threaded roots in one main chat dequeue concurrently and may both fold
+        // this snapshot before either commits it. That fan-out loses nothing; claiming by buffer key
+        // would instead couple otherwise-independent root sessions and require failure rollback.
         const { text: recent, consumed } = buffer.peek(rec.bufferKey);
         const prompt = recent ? `[recent group discussion:\n${recent}\n]\n\n${rec.baseText}` : rec.baseText;
         const buffered = collectFeishuBufferedAttachments(consumed, {
@@ -361,11 +366,14 @@ export function buildFeishuChannel(
       },
     });
 
-    // Accept a turn: persist its intent before the ACK, then enqueue it. This deliberately shares
-    // Telegram's L1 semantics: turns.json tracks unfinished work but there is no channel-specific
-    // completed-delivery ledger. Recovery re-enqueues a crash survivor without re-persisting it.
+    // Accept a turn: persist its intent before the ACK, then record the platform delivery id and enqueue
+    // it. The ordering is deliberate: recording first could turn a failed intent write into silent loss
+    // when the platform redelivers. Recovery re-enqueues a crash survivor without re-persisting it.
     const submit = (rec: PendingFeishuTurn, persist: boolean): void => {
-      if (persist) store.add(toStored(rec)); // failed write → webhook 500 → platform redelivery
+      if (persist) {
+        store.add(toStored(rec)); // failed write → webhook 500 → platform redelivery
+        seen.add(rec.id); // post-persist, best-effort protection from documented duplicate pushes
+      }
       queue.accept(rec);
     };
 
@@ -482,6 +490,10 @@ export function buildFeishuChannel(
       const event = (envelope.event ?? {}) as FeishuMessageEvent;
       const m = event.message;
       if (!m?.message_id || !m.chat_id) return new Response(null, { status: 200 });
+      if (seen.has(m.message_id)) {
+        log.debug(`${label} duplicate push for message ${m.message_id} — already persisted, skipping`);
+        return new Response(null, { status: 200 });
+      }
 
       let r = decide(event);
       const normalized = normalizeFeishuMessage(event, { cloud: kind, appId, header, botOpenId });
@@ -523,6 +535,7 @@ export function buildFeishuChannel(
               files: files.length ? files : undefined,
               images: images.length ? images : undefined,
             });
+            seen.add(m.message_id); // post-persist: a redelivery cannot duplicate buffered context
             log.debug(`${label} buffered unsummoned group message ${m.message_id} (place ${bufferKey})`);
           } else {
             log.debug(`${label} not summoned — ignoring empty message ${m.message_id} (chat ${m.chat_id})`);

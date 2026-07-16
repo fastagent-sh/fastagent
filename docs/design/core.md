@@ -225,8 +225,8 @@ window can run a delivery twice. Exactly-once execution needs a different backen
 Feishu is the second stateful chat-channel reference, shaped as a sibling of Telegram. Its canonical
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
 `model.ts` / `normalize.ts` protocol normalization, `invoke-turn.ts` IO assembly, `preview.ts` delivery,
-`owned-threads.ts` durable managed-root routing, `feishu-api.ts` transport/token pipeline,
-`crypto.ts` security math, `card.ts` builders, and registration
+`owned-threads.ts` durable managed-root routing, `seen.ts` bounded delivery dedup,
+`feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one
 level up.
 
@@ -253,10 +253,13 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   verification from event signatures, so its encrypted `url_verification` challenge takes the narrow
   decrypt → exact-type → constant-time Token path. Without an Encrypt Key, events use the same
   constant-time verification-token match in plaintext.
-- **Turn identity is `message_id`; recovery order is an explicit `seq`.** Feishu ids carry no arrival
-  order, unlike Telegram's numeric `update_id`. The lifecycle semantics are otherwise shared: the
-  generic turn store tracks unfinished work only, with no channel-specific completed-delivery ledger.
-  A documented duplicate push arriving after removal can therefore run again (at-least-once).
+- **Turn identity and delivery dedup use `message_id`; recovery order is an explicit `seq`.** Feishu ids
+  carry no arrival order, unlike Telegram's numeric `update_id`, while Feishu/Lark document duplicate
+  pushes even after a successful ACK and recommend idempotency on `message_id`. A bounded persisted
+  `seen.ts` ring therefore filters message deliveries that already produced a durable turn intent or
+  buffered-context entry. It is post-persist, best-effort insurance rather than exactly-once execution:
+  a crash between the state and ring writes, a failed ring write, or an id beyond the cap retains L1's
+  at-least-once tail. The generic turn store still owns unfinished-run recovery and its poison ceiling.
 - **Session partitioning is policy, not transport inference.** P2p and groups default to threaded root
   sessions: every top-level DM or summoned group message owns a new `<kind>:message_id` session, creates
   its platform thread with `reply_in_thread`, and maps continuations back through `<kind>:root_id`. The
