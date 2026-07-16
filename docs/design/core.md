@@ -102,7 +102,10 @@ pi's all-active default when nothing is deferred) and the recorded names, filter
 tools (a recorded-but-removed tool would fail construction). A record is deliberately NOT a frozen
 snapshot — on the serving path only the additive activation bridge writes records, so its semantic is
 "which deferred tools this session activated"; replaying a snapshot would freeze later-added tools out
-of old sessions.
+of old sessions. The corollary is a constraint on future writers: NARROWING the active set via
+`harness.setActiveTools` is not honored across invokes — the union rebuild expands any record back to
+at least the initial set. A capability that needs durable narrowing must change the resolve semantics
+here first, deliberately.
 
 ## 4. Event translation and terminal discipline
 

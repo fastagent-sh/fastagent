@@ -213,6 +213,39 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     expect((await factory("s4")).getActiveTools().map((t) => t.name)).toEqual(["search_tools"]); // nothing activated
   });
 
+  it("the cap has a guaranteed escape: an exact tool name activates that one tool", async () => {
+    // After an over-cap answer the model narrows to a name from the candidate list — this second step
+    // must succeed, or a shared-prefix tool family (fetch_*) is permanently unreachable.
+    const many = Array.from({ length: 6 }, (_, i) =>
+      defineTool({
+        name: `fetch_${i}`,
+        description: `Fetch resource kind ${i}`,
+        input: z.object({}),
+        deferred: true,
+        execute: () => "ok",
+      }),
+    );
+    const { faux, models } = makeFaux();
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch_3" }, { id: "c1" })),
+      fauxAssistantMessage("ok"),
+    ]);
+    const factory = piHarnessFactory({
+      sessions: inMemorySessionStore(),
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      tools: withSearchTool(many),
+      systemPrompt: "test",
+    });
+    const agent = createPiAgentFromHarness({ harnessFactory: factory });
+    const events: AgentEvent[] = [];
+    for await (const e of agent.invoke({ session: "s7" }, { text: "go" })) events.push(e);
+    const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
+    expect(JSON.stringify(ended.content)).toMatch(/Activated: fetch_3/);
+    expect((await factory("s7")).getActiveTools().map((t) => t.name)).toEqual(["search_tools", "fetch_3"]);
+  });
+
   it("a query matching an ALREADY-ACTIVE tool says so — never 'No tools matched' (capability-missing trap)", async () => {
     // Long conversations forget what they activated; the loader is the only discovery surface, so it
     // must answer for the whole catalog, not only the inactive slice.

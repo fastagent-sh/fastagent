@@ -207,12 +207,15 @@ export async function buildChatRuntime(
       customTools: customToolDefs,
     });
     sessionRef.current = result.session;
-    // Deferral emulation: pi's TUI session starts with everything active — narrow a FRESH session by
-    // SUBTRACTING the deferred names from whatever is active (robust to pi mounting tools of its own;
-    // an exact-set-equality gate would silently stop narrowing the day pi adds one). A resumed session
-    // (has messages) keeps its recorded set — the loader's earlier activations survive, like serving.
+    // Deferral emulation: pi's TUI session starts with everything active — narrow it by SUBTRACTING
+    // the deferred names from whatever is active (robust to pi mounting tools of its own; an
+    // exact-set-equality gate would silently stop narrowing the day pi adds one). Applied on EVERY
+    // build including /resume: pi's chat session does not record activations (its SessionContext has
+    // no activeToolNames), so "restore prior activations" is not implementable here — deferral stays
+    // consistently ON and a resumed conversation re-discovers via search_tools (documented divergence
+    // from serving, where activations persist in the session).
     const deferredNames = customTools.filter(isDeferredTool).map((t) => t.name);
-    if (deferredNames.length > 0 && result.session.messages.length === 0) {
+    if (deferredNames.length > 0) {
       const active = result.session.getActiveToolNames();
       if (deferredNames.some((n) => active.includes(n))) {
         result.session.setActiveToolsByName(active.filter((n) => !deferredNames.includes(n)));

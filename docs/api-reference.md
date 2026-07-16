@@ -223,8 +223,9 @@ Costs and behavior to know:
 - **`fastagent chat` emulates deferral** like the serving path (what you iterate is what you serve):
   the session starts with deferred tools inactive, the same `search_tools` loader discovers and
   activates them (bridged to pi's session instead of the serving harness), and the prompt is
-  identical. One divergence: chat activations live in pi's own chat session, not your served
-  sessions.
+  identical. One divergence: chat activations do not survive `/new`/`/resume` — pi's chat session
+  does not record them, so a resumed conversation re-discovers via `search_tools` (on the serving
+  path activations persist in the session for the conversation's life).
 
 ## Channel authoring
 

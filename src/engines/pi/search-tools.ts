@@ -57,15 +57,23 @@ export function makeSearchToolsTool(): AgentTool {
         .toLowerCase()
         .split(/[^a-z0-9]+/)
         .filter(Boolean);
+      // AND semantics: EVERY token must hit — "adding a word narrows" must actually hold, or the
+      // over-cap "narrow the query" instruction sends the model in circles (OR would widen with each
+      // word, and a shared prefix like "fetch" could make a whole tool family permanently over-cap).
       const matchesQuery = (t: { name: string; description: string }) => {
         const haystack = `${t.name} ${t.description}`.toLowerCase();
-        return tokens.some((token) => haystack.includes(token));
+        return tokens.every((token) => haystack.includes(token));
       };
       const describe = (t: { name: string; description: string }) => `${t.name} — ${t.description.split("\n")[0]}`;
       const active = new Set(ctx.tools.active());
       const registered = ctx.tools.registered();
-      const activeMatches = registered.filter((t) => active.has(t.name) && matchesQuery(t));
-      const inactiveMatches = registered.filter((t) => !active.has(t.name) && matchesQuery(t));
+      // Exact-name shortcut: the guaranteed escape hatch from the cap — a query that IS a registered
+      // tool name addresses that one tool, no keyword scoring in the way.
+      const exact = registered.find((t) => t.name.toLowerCase() === input.query.trim().toLowerCase());
+      const activeMatches = registered.filter((t) => active.has(t.name) && (t === exact || matchesQuery(t)));
+      const inactiveMatches = exact
+        ? [exact].filter((t) => !active.has(t.name))
+        : registered.filter((t) => !active.has(t.name) && matchesQuery(t));
       const activeNote =
         activeMatches.length > 0 ? `Already active (call directly): ${activeMatches.map(describe).join("; ")}.` : "";
       if (inactiveMatches.length === 0) {
