@@ -1,0 +1,8 @@
+{
+  "name": "fastagent-agent",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fastagent-sh/fastagent": "^0.13.0"
+  }
+}

@@ -114,7 +114,11 @@ describe("cli kernel: help styling — bold headings, NO colors; errors carry th
     const r = await parseStyled(["models", "--help"]);
     expect(r.out).toContain("\x1b[1mUsage:\x1b[0m"); // bold section headings
     expect(r.out).toContain("\x1b[1mExamples:\x1b[0m"); // incl. the verbatim ones
-    expect(r.out).not.toMatch(/\x1b\[\d*;?3\dm/); // no foreground COLOR anywhere in help
+    // No foreground COLOR anywhere in help (SGR 30-37 / 90-97) — bold (1) is the only style.
+    const colorCodes = [...r.out.matchAll(/\u001b\[([\d;]+)m/g)].filter((m) =>
+      (m[1] as string).split(";").some((code) => /^[39]\d$/.test(code)),
+    );
+    expect(colorCodes).toEqual([]);
     const plain = await parse(["models", "--help"]); // the harness pins colors: false → fully stripped
     expect(plain.out).not.toContain("\x1b[");
   });
