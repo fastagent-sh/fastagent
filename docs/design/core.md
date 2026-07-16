@@ -244,15 +244,18 @@ can mount both. No SDK — wire protocols are fetch-based, with the adoption tri
   restores legacy `chat_id` / `chat_id:thread_id` group sessions. Thread continuations do not rehydrate
   `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
   but owns a new root session. Group roots are indexed pre-ACK in `owned-threads.json`: with
-  `im:message.group_msg`, every later user message in those roots becomes a normal required turn with
-  the same queue, streaming-card, error, and delivery behavior as an explicit @mention.
+  `im:message.group_msg`, bare user messages in those roots become normal required turns with the same
+  queue, streaming-card, error, and delivery behavior as an explicit @mention. An explicit mention of
+  only other people is targeted discussion instead and enters the context buffer.
 - **Group visibility is scope-gated.** The default scope delivers only @mentions. The sensitive
-  `im:message.group_msg` scope delivers all group messages, after which the channel admits unmentioned
-  turns only for `chat_id + root_id` in its durable ownership index; unrelated groups/topics and every
-  non-`user` sender are dropped. Telegram's arbitrary un-summoned context buffer still has no
-  counterpart. Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved).
-  A reply summon carries only `parent_id` — the referent's content and attachments are fetched as
-  primary input.
+  `im:message.group_msg` scope delivers all group messages. Explicit @bot turns always invoke; bare
+  human messages invoke only in `chat_id + root_id` roots from the durable ownership index. Other human
+  discussion is persisted in `buffers.json`, bucketed by main chat or thread root, and folded into that
+  place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only
+  on `completed`, and retain failures plus messages arriving in-flight. Non-`user` senders are dropped.
+  Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved). A reply summon
+  carries only `parent_id` — the referent's content and attachments are fetched as primary input;
+  buffered attachments are background input and degrade per resource.
 - **Registration and creation are automated over the platform's own APIs.** The event Request URL is
   written via the application-v7 config PATCH (immediate effect; the platform challenges the URL during
   the call, so the registrar health-waits first) — used by `--tunnel` and `deploy --run`, with the

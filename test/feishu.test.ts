@@ -492,7 +492,85 @@ describe("turn flow", () => {
     expect(reply?.body?.reply_in_thread).toBe(true);
   });
 
-  it("every user continuation in an Agent-created group thread answers through the normal streaming path", async () => {
+  it("buffers unsummoned main-chat discussion, folds it into the next @mention, then commits it", async () => {
+    feishuFetch();
+    const { handler, calls, idle, home } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+
+    await handler(feishuRequest(messageEvent({ id: "om_context", chatType: "group", text: "deploy failed" })));
+    expect(calls).toHaveLength(0);
+    expect(JSON.parse(readFileSync(join(home, "buffers.json"), "utf8"))).toHaveProperty("oc_1");
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_context_ask",
+          chatType: "group",
+          text: "@_user_1 summarize",
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt.text).toContain("[recent group discussion:");
+    expect(calls[0]?.prompt.text).toContain("user ou_alice (msg om_context): deploy failed");
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_context_again",
+          chatType: "group",
+          text: "@_user_1 again",
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls[1]?.prompt.text).not.toContain("recent group discussion");
+  });
+
+  it("isolates a non-Agent thread's buffer and folds it only into an @mention in that thread", async () => {
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_foreign_context",
+          chatType: "group",
+          rootId: "om_foreign_root",
+          threadId: "omt_foreign",
+          text: "foreign-thread detail",
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(messageEvent({ id: "om_main_ask", chatType: "group", text: "@_user_1 main", mentions: mention })),
+    );
+    await idle();
+    expect(calls[0]?.prompt.text).not.toContain("foreign-thread detail");
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_foreign_ask",
+          chatType: "group",
+          rootId: "om_foreign_root",
+          threadId: "omt_foreign",
+          content: JSON.stringify({ text: "@_user_1 thread summary" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls[1]?.prompt.text).toContain("foreign-thread detail");
+  });
+
+  it("every bare user continuation in an Agent-created group thread answers through the normal streaming path", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle, home } = buildChannel();
     await flush();
@@ -535,6 +613,92 @@ describe("turn flow", () => {
     const previewCard = fx.calls("/cardkit/v1/cards", "POST")[1];
     expect(JSON.parse(String(previewCard?.body?.data)).config.streaming_mode).toBe(true);
     expect(fx.calls("/cardkit/v1/cards/c2", "PUT")).not.toHaveLength(0);
+  });
+
+  it("buffers @other-only discussion in a managed thread; a bare continuation consumes it", async () => {
+    const fx = feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const botMention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_targeted_root",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot start" }),
+          mentions: botMention,
+        }),
+      ),
+    );
+    await idle();
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_for_bob",
+          chatType: "group",
+          rootId: "om_targeted_root",
+          threadId: "omt_targeted",
+          content: JSON.stringify({ text: "@_bob please check this" }),
+          mentions: [{ key: "@_bob", name: "Bob", id: { open_id: "ou_bob" } }],
+        }),
+      ),
+    );
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(fx.calls("/im/v1/messages/om_for_bob/reply", "POST")).toHaveLength(0);
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_bare_after_bob",
+          chatType: "group",
+          rootId: "om_targeted_root",
+          threadId: "omt_targeted",
+          text: "what is the status?",
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt.text).toContain("@Bob please check this");
+    expect(calls[1]?.prompt.text).toContain("what is the status?");
+  });
+
+  it("an explicit @bot still summons when the same managed-thread message also @mentions other people", async () => {
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const botMention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_multi_root",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot start" }),
+          mentions: botMention,
+        }),
+      ),
+    );
+    await idle();
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_multi_mention",
+          chatType: "group",
+          rootId: "om_multi_root",
+          threadId: "omt_multi",
+          content: JSON.stringify({ text: "@_bot @_bob decide together" }),
+          mentions: [...botMention, { key: "@_bob", name: "Bob", id: { open_id: "ou_bob" } }],
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt.text).toContain("@Bot @Bob decide together");
   });
 
   it("a managed-thread continuation gets normal queue feedback while its root session is busy", async () => {
@@ -635,9 +799,179 @@ describe("turn flow", () => {
     expect(errors.some((message) => message.includes("continuation model failed"))).toBe(true);
   });
 
-  it("an unmentioned message in a thread the Agent does not own is ignored", async () => {
+  it("keeps folded context after a failed managed-thread turn and re-folds it into the retry", async () => {
+    feishuFetch();
+    const prompts: Prompt[] = [];
+    let invocation = 0;
+    injectedAgent = {
+      async *invoke(_scope, prompt): AsyncIterable<AgentEvent> {
+        prompts.push(prompt);
+        invocation++;
+        if (invocation === 2) {
+          yield { type: "failed", details: "model failed", retryable: true };
+          return;
+        }
+        yield { type: "text", delta: "ok" };
+        yield { type: "completed" };
+      },
+    };
+    const { handler, idle } = buildChannel();
+    await flush();
+    const botMention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    const otherMention = [{ key: "@_bob", name: "Bob", id: { open_id: "ou_bob" } }];
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_failed_buffer_root",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot start" }),
+          mentions: botMention,
+        }),
+      ),
+    );
+    await idle();
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_failed_buffer_context",
+          chatType: "group",
+          rootId: "om_failed_buffer_root",
+          threadId: "omt_failed_buffer",
+          content: JSON.stringify({ text: "@_bob durable detail" }),
+          mentions: otherMention,
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_failed_buffer_ask",
+          chatType: "group",
+          rootId: "om_failed_buffer_root",
+          threadId: "omt_failed_buffer",
+          text: "first attempt",
+        }),
+      ),
+    );
+    await idle();
+    expect(prompts[1]?.text).toContain("durable detail");
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_failed_buffer_retry",
+          chatType: "group",
+          rootId: "om_failed_buffer_root",
+          threadId: "omt_failed_buffer",
+          text: "retry",
+        }),
+      ),
+    );
+    await idle();
+    expect(prompts[2]?.text).toContain("durable detail");
+  });
+
+  it("leaves context arriving during a managed-thread turn for the next continuation", async () => {
+    feishuFetch();
+    const prompts: Prompt[] = [];
+    let invocation = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    injectedAgent = {
+      async *invoke(_scope, prompt): AsyncIterable<AgentEvent> {
+        prompts.push(prompt);
+        invocation++;
+        if (invocation === 2) {
+          markStarted();
+          await gate;
+        }
+        yield { type: "text", delta: "ok" };
+        yield { type: "completed" };
+      },
+    };
+    const { handler, idle } = buildChannel();
+    await flush();
+    const botMention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    const otherMention = [{ key: "@_bob", name: "Bob", id: { open_id: "ou_bob" } }];
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_arrival_root",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot start" }),
+          mentions: botMention,
+        }),
+      ),
+    );
+    await idle();
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_context_before",
+          chatType: "group",
+          rootId: "om_arrival_root",
+          threadId: "omt_arrival",
+          content: JSON.stringify({ text: "@_bob before" }),
+          mentions: otherMention,
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_arrival_ask",
+          chatType: "group",
+          rootId: "om_arrival_root",
+          threadId: "omt_arrival",
+          text: "run now",
+        }),
+      ),
+    );
+    await started;
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_context_during",
+          chatType: "group",
+          rootId: "om_arrival_root",
+          threadId: "omt_arrival",
+          content: JSON.stringify({ text: "@_bob during" }),
+          mentions: otherMention,
+        }),
+      ),
+    );
+    release();
+    await idle();
+
+    expect(prompts[1]?.text).toContain("@Bob before");
+    expect(prompts[1]?.text).not.toContain("@Bob during");
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_arrival_next",
+          chatType: "group",
+          rootId: "om_arrival_root",
+          threadId: "omt_arrival",
+          text: "next",
+        }),
+      ),
+    );
+    await idle();
+    expect(prompts[2]?.text).not.toContain("@Bob before");
+    expect(prompts[2]?.text).toContain("@Bob during");
+  });
+
+  it("buffers an unmentioned message in a thread the Agent does not own", async () => {
     const fx = feishuFetch();
-    const { handler, calls } = buildChannel();
+    const { handler, calls, home } = buildChannel();
     await flush();
 
     await handler(
@@ -655,6 +989,9 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(0);
     expect(fx.calls("/im/v1/messages/om_unowned/reply", "POST")).toHaveLength(0);
+    expect(JSON.parse(readFileSync(join(home, "buffers.json"), "utf8"))).toHaveProperty(
+      "oc_1:root:om_someone_elses_root",
+    );
   });
 
   it("threaded group: a continuation returns to the root session without reloading its parent", async () => {
@@ -776,7 +1113,54 @@ describe("turn flow", () => {
     ).toBe(false);
   });
 
-  it("group without a mention is ignored (default route, fail closed)", async () => {
+  it("a failed buffered attachment degrades per resource while readable siblings still load", async () => {
+    const fx = feishuFetch({
+      "/resources/stale": () => Response.json({ code: 234001, msg: "resource expired" }, { status: 410 }),
+    });
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_stale_file",
+          chatType: "group",
+          msgType: "file",
+          content: JSON.stringify({ file_key: "stale", file_name: "stale.txt" }),
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_good_file",
+          chatType: "group",
+          msgType: "file",
+          content: JSON.stringify({ file_key: "good", file_name: "good.txt" }),
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_file_ask",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot summarize the files" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt.text).toContain("1 attachment(s) from the earlier discussion are not loaded");
+    expect(calls[0]?.prompt.text).toContain("- good.txt (from user ou_alice, msg om_good_file, earlier discussion)");
+    expect(fx.calls("/resources/stale", "GET")).toHaveLength(1);
+    expect(fx.calls("/resources/good", "GET")).toHaveLength(1);
+  });
+
+  it("group without a mention is buffered without invoking", async () => {
     feishuFetch();
     const { handler, calls } = buildChannel();
     await flush();
@@ -912,6 +1296,17 @@ describe("turn flow", () => {
     expect(prompt).toContain("spec.pdf");
     expect(fx.calls("/im/v1/messages/om_parent/resources/fk1").length).toBe(1);
     expect(readFileSync(join(home, "files", "oc_1", "spec.pdf")).toString()).toBe("pdf-bytes");
+  });
+
+  it("a custom route's null remains a full ignore and does not enter the default context buffer", async () => {
+    feishuFetch();
+    const { handler, calls, home } = buildChannel({ route: () => null });
+
+    await handler(feishuRequest(messageEvent({ id: "om_custom_ignore", chatType: "group", text: "ignore me" })));
+    await flush();
+
+    expect(calls).toHaveLength(0);
+    expect(existsSync(join(home, "buffers.json"))).toBe(false);
   });
 
   it("a custom route's empty text runs NO turn (nothing to say, nothing to load)", async () => {
