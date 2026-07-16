@@ -65,9 +65,11 @@ export async function buildChatRuntime(
    *  filtered (`setActiveToolsByName` is authoritative on the session and rebuilds its prompt — our
    *  static override keeps the prompt identical to serving). */
   function chatToolActivation(session: AgentSession): ToolActivation {
-    // Same per-turn serialization as invoke.ts's bridge: the read-modify-write below is only race-free
-    // while nothing awaits between read and write, and pi's session setters happening to be synchronous
-    // today is not a contract worth betting parallel tool batches on.
+    // Same serialization as invoke.ts's bridge (there per turn; here per session — chat turns are
+    // interactive, so per-session is equivalent): the read-modify-write below is only race-free while
+    // nothing awaits between read and write, and pi's session setters happening to be synchronous today
+    // is not a contract worth betting parallel tool batches on. Built ONCE per session (createRuntime),
+    // so parallel calls actually share the chain.
     let chain: Promise<string[]> = Promise.resolve([]);
     return {
       active: () => session.getActiveToolNames(),
@@ -132,10 +134,10 @@ export async function buildChatRuntime(
       description: t.description ?? "",
       parameters: t.parameters,
       execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
-        const session = sessionRef.current;
-        if (!session) return t.execute(id, params, signal);
+        const bound = sessionRef.current;
+        if (!bound) return t.execute(id, params, signal);
         return turnContext.run(
-          { session: session.sessionId, tools: chatToolActivation(session) },
+          { session: bound.session.sessionId, tools: bound.activation },
           () => t.execute(id, params, signal) as Promise<unknown>,
         );
       },
@@ -157,9 +159,12 @@ export async function buildChatRuntime(
   // edits. And keep it workspace-scoped — `.env` is process-global, so a switch to another cwd would
   // leak env or require mutating global env at runtime.
   const rootCwd = canonicalPath(dir);
-  // The CURRENT pi session — rebuilt on /new//resume/fork while the memoized assembly (and its tool
-  // execute closures) stays; the activation bridge reads it at call time.
-  const sessionRef: { current?: AgentSession } = {};
+  // The CURRENT pi session + its activation bridge, BOUND TOGETHER — rebuilt on /new//resume/fork
+  // while the memoized assembly (and its tool execute closures) stays. The bridge must share the
+  // session's lifetime, NOT be rebuilt per tool call: parallel calls in one batch serialize on the
+  // bridge's internal chain, and a per-call bridge would give each call its own chain — a
+  // serialization that serializes nothing.
+  const sessionRef: { current?: { session: AgentSession; activation: ToolActivation } } = {};
   let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {
     // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would
@@ -215,7 +220,7 @@ export async function buildChatRuntime(
       tools: [...defaultNames, ...customTools.map((t) => t.name)],
       customTools: customToolDefs,
     });
-    sessionRef.current = result.session;
+    sessionRef.current = { session: result.session, activation: chatToolActivation(result.session) };
     // Deferral emulation: pi's TUI session starts with everything active — narrow it by SUBTRACTING
     // the deferred names from whatever is active (robust to pi mounting tools of its own; an
     // exact-set-equality gate would silently stop narrowing the day pi adds one). Applied on EVERY

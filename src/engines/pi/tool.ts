@@ -22,7 +22,8 @@ export interface ToolContext {
   /** The session id of the current turn — which conversation this tool is running in. A general tool
    *  capability: partition per-conversation data, tag logs, scope state. Undefined outside a turn (a bare
    *  `fastagent tool` run, or any call with no session). (The built-in `wake` tool is one consumer — it
-   *  fires a later turn back into this same session.) */
+   *  fires a later turn back into this same session.) In a `fastagent chat` turn this is pi's LOCAL
+   *  chat session id, not a served session — serving-coupled consumers like wake are not mounted there. */
   session?: string;
   /** Tool activation for the current turn (a loader tool activates {@link DefineToolOptions.deferred}
    *  tools with it — the built-in `search_tools` is one consumer). Provided by both the serving path
