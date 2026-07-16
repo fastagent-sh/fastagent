@@ -135,7 +135,10 @@ export async function buildChatRuntime(
       parameters: t.parameters,
       execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
         const bound = sessionRef.current;
-        if (!bound) return t.execute(id, params, signal);
+        // Unreachable by construction (createRuntime sets sessionRef before any turn can run a tool).
+        // Throw rather than silently run outside the turn context — that would disguise a broken
+        // session-lifecycle invariant as a normal out-of-turn call (fail visibly).
+        if (!bound) throw new Error("chat tool executed before its session was built (lifecycle invariant broken)");
         return turnContext.run(
           { session: bound.session.sessionId, tools: bound.activation },
           () => t.execute(id, params, signal) as Promise<unknown>,

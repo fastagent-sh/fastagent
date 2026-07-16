@@ -81,8 +81,14 @@ export function makeSearchToolsTool(): AgentTool {
       const inactiveMatches = exact
         ? [exact].filter((t) => !active.has(t.name))
         : registered.filter((t) => !active.has(t.name) && matchesQuery(t));
+      // Same listing cap as every other branch — a wide token can match most of the ACTIVE set too
+      // (in chat that includes pi's default tools), and no answer may pour a catalog into the context.
+      const listedActive = activeMatches.slice(0, MAX_MISS_LISTING);
+      const moreActive = activeMatches.length - listedActive.length;
       const activeNote =
-        activeMatches.length > 0 ? `Already active (call directly): ${activeMatches.map(describe).join("; ")}.` : "";
+        activeMatches.length > 0
+          ? `Already active (call directly): ${listedActive.map(describe).join("; ")}${moreActive > 0 ? ` … and ${moreActive} more` : ""}.`
+          : "";
       if (inactiveMatches.length === 0) {
         if (activeNote) return activeNote;
         const inactive = registered.filter((t) => !active.has(t.name));

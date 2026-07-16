@@ -49,6 +49,13 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
         const result = await custom.execute("c1", { query: "weather forecast" });
         expect(result.content[0]?.text).toMatch(/Activated: lookup_weather/);
         expect(session.getActiveToolNames()).toContain("lookup_weather");
+
+        // The documented divergence, as a spec: chat activations do not survive /new — pi's chat
+        // session records no activations, so every rebuild re-narrows and discovery starts over.
+        await rt.newSession();
+        const rebuilt = rt.session;
+        expect(rebuilt.getActiveToolNames()).not.toContain("lookup_weather");
+        expect(rebuilt.getActiveToolNames()).toContain("search_tools");
       } finally {
         await rt.dispose();
       }
