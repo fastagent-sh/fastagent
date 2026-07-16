@@ -98,14 +98,13 @@ continuity comes from `PiSessionStore`, not a resident harness. Reopening is fai
 record, not just the messages: pi's harness writes active-tool changes to the session but never reads
 them back (its own TUI harness is resident), so `piHarnessFactory` resolves the active-tool set itself
 (`harness.ts` `resolveHarnessActiveToolNames`): the UNION of the initial set (every non-deferred tool;
-pi's all-active default when nothing is deferred) and the recorded names, filtered to the mounted
-tools (a recorded-but-removed tool would fail construction). A record is deliberately NOT a frozen
-snapshot — on the serving path only the additive activation bridge writes records, so its semantic is
-"which deferred tools this session activated"; replaying a snapshot would freeze later-added tools out
-of old sessions. The corollary is a constraint on future writers: NARROWING the active set via
-`harness.setActiveTools` is not honored across invokes — the union rebuild expands any record back to
-at least the initial set. A capability that needs durable narrowing must change the resolve semantics
-here first, deliberately.
+pi's all-active default when nothing is deferred) and the session's accumulated activation DELTAS —
+dedicated `fastagent:tool-activation` custom entries the activation bridge writes, each carrying
+exactly the names that call activated. pi's own `active_tools_change` entries are full active-set
+snapshots and are deliberately ignored: replaying a snapshot would freeze later-added tools out of old
+sessions and keep a later-`deferred` tool active in sessions that never discovered it. The corollary
+is a constraint on future writers: NARROWING the active set is not representable in this record — a
+capability that needs durable narrowing must change the resolve semantics here first, deliberately.
 
 ## 4. Event translation and terminal discipline
 

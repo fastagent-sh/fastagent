@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { inMemorySessionStore } from "../src/index.ts";
-import { piHarnessFactory, resolveHarnessActiveToolNames } from "../src/engines/pi/harness.ts";
+import { TOOL_ACTIVATION_ENTRY, piHarnessFactory, resolveHarnessActiveToolNames } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 
 const fakeTool = (name: string): AgentTool =>
@@ -36,7 +36,7 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
   // pi's harness writes active_tools_change to the session but its constructor never reads it back —
   // fine for pi's long-lived TUI harness, but fastagent builds a fresh harness per invoke: without the
   // restore, a session's active set silently resets to "all tools" on the next turn.
-  it("a fresh harness reopens the session with its recorded activations layered on the initial set", async () => {
+  it("a fresh harness reopens the session with its activation DELTAS layered on the initial set", async () => {
     const deferred = Object.assign(fakeTool("lazy"), { deferred: true });
     const { faux, models } = makeFaux();
     const sessions = inMemorySessionStore();
@@ -50,13 +50,15 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     });
     const first = await factory("s1");
     expect(first.getActiveTools().map((t) => t.name)).toEqual(["alpha"]); // initial: non-deferred only
-    await first.setActiveTools(["alpha", "lazy"]); // an activation — idle phase → persisted immediately
+    // The dedicated delta entry the activation bridge writes (pi's own active_tools_change snapshot
+    // is deliberately ignored by the resolve).
+    await (await sessions.openOrCreate("s1")).appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: ["lazy"] });
 
     const second = await factory("s1"); // a fresh harness, as every invoke builds
     expect(second.getActiveTools().map((t) => t.name)).toEqual(["alpha", "lazy"]);
   });
 
-  it("a record is not a frozen snapshot: a tool added to the workspace later joins old sessions", async () => {
+  it("deltas, not snapshots: later-added tools join old sessions; a tool flipped to deferred drops out", async () => {
     const deferred = Object.assign(fakeTool("lazy"), { deferred: true });
     const { faux, models } = makeFaux();
     const sessions = inMemorySessionStore();
@@ -67,20 +69,23 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
       model: faux.getModel(),
       systemPrompt: "test",
     };
-    const first = await piHarnessFactory({ ...base, tools: [fakeTool("alpha"), deferred] })("s1");
-    await first.setActiveTools(["alpha", "lazy"]); // records TODAY's snapshot
+    await piHarnessFactory({ ...base, tools: [fakeTool("alpha"), deferred] })("s1");
+    await (await sessions.openOrCreate("s1")).appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: ["lazy"] });
 
-    // The workspace later adds "gamma": a snapshot replay would freeze it out of this session forever.
-    const second = await piHarnessFactory({ ...base, tools: [fakeTool("alpha"), fakeTool("gamma"), deferred] })("s1");
+    // The workspace later adds "gamma" (joins — a snapshot would freeze it out) and flips "alpha" to
+    // deferred (drops out — this session never DISCOVERED it; a snapshot would keep it active).
+    const flippedAlpha = Object.assign(fakeTool("alpha"), { deferred: true });
+    const second = await piHarnessFactory({ ...base, tools: [flippedAlpha, fakeTool("gamma"), deferred] })("s1");
     expect(
       second
         .getActiveTools()
         .map((t) => t.name)
         .sort(),
-    ).toEqual(["alpha", "gamma", "lazy"]);
+    ).toEqual(["gamma", "lazy"]);
   });
 
-  it("a recorded tool that is no longer mounted is dropped instead of bricking the session", async () => {
+  it("a recorded activation that is no longer mounted is dropped instead of bricking the session", async () => {
+    const deferred = Object.assign(fakeTool("lazy"), { deferred: true });
     const { faux, models } = makeFaux();
     const sessions = inMemorySessionStore();
     const base = {
@@ -90,13 +95,12 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
       model: faux.getModel(),
       systemPrompt: "test",
     };
-    const first = await piHarnessFactory({ ...base, tools: [fakeTool("alpha"), fakeTool("beta")] })("s1");
-    await first.setActiveTools(["alpha", "beta"]);
+    await piHarnessFactory({ ...base, tools: [fakeTool("alpha"), deferred] })("s1");
+    await (await sessions.openOrCreate("s1")).appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: ["ghost"] });
 
-    // The workspace removed "alpha": the constructor throws on unknown names, so an unfiltered restore
-    // would fail every future invoke of this session.
-    const second = await piHarnessFactory({ ...base, tools: [fakeTool("beta")] })("s1");
-    expect(second.getActiveTools().map((t) => t.name)).toEqual(["beta"]);
+    // The constructor throws on unknown names, so an unfiltered restore would fail every future invoke.
+    const second = await piHarnessFactory({ ...base, tools: [fakeTool("alpha"), deferred] })("s1");
+    expect(second.getActiveTools().map((t) => t.name)).toEqual(["alpha"]);
   });
 
   it("resolveHarnessActiveToolNames: null → default; union semantics; missing names dropped + warned", () => {

@@ -163,7 +163,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     expect(stamped[0]?.addedToolNames).toEqual(["lookup_weather"]);
     // The other reports the truth (already active), never an empty "Activated: ." claim.
     const texts = results.map((r) => r.content[0]?.text ?? "");
-    expect(texts.some((t) => /already active/.test(t))).toBe(true);
+    expect(texts.some((t) => /[Aa]lready active/.test(t))).toBe(true);
     expect(texts.some((t) => /Activated: \./.test(t))).toBe(false);
   });
 

@@ -16,7 +16,7 @@ import { DEFAULT_COMPACTION_SETTINGS, calculateContextTokens, shouldCompact } fr
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { type Agent, type AgentEvent, type Json, type Prompt, type Scope, SESSION_BUSY_CODE } from "../../agent.ts";
 import { log } from "../../log.ts";
-import type { PiHarnessFactory } from "./harness.ts";
+import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
 import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 
 // ── §1 Lease: single-writer concurrency floor ───────────────────────────────
@@ -187,7 +187,14 @@ function toolActivation(harness: PiHarness): ToolActivation {
           current,
           names,
         );
-        if (added.length > 0) await harness.setActiveTools([...current, ...added]);
+        if (added.length > 0) {
+          await harness.setActiveTools([...current, ...added]);
+          // Persist the DELTA in a dedicated entry — what the per-invoke resolve (harness.ts) reads.
+          // pi's own active_tools_change record is a full snapshot and is deliberately ignored there.
+          // Absent session (a harness built outside piHarnessFactory): in-turn activation still works,
+          // it just isn't durable — the factory owns persistence.
+          await harnessSession(harness)?.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added });
+        }
         return added;
       };
       const result = chain.then(run, run); // run after the predecessor settles, success or failure

@@ -211,15 +211,21 @@ Costs and behavior to know:
   is pi's (see its Dynamic Tool Loading docs) and evolves with pi releases — fastagent adds no
   restriction of its own.
 - `ToolContext.tools` (`{ active(), registered(), activate(names) }`) is the activation bridge a custom
-  loader can use; `activate` is additive and ignores unknown names.
+  loader can use; `activate` is additive and ignores unknown names. A custom loader must also declare
+  `executionMode: "sequential"` on its tool (pi then serializes the batch — in chat, pi's own
+  before/after diff around SDK tools would otherwise attribute one activation to two parallel calls).
+  Both types are exported: `ToolActivation`, and `FastagentTool` (`AgentTool` + the `deferred` marker —
+  the type `config.tools` and the L1/L2 `tools` options accept, so a raw object literal with
+  `deferred: true` type-checks).
 - At L1 (`createPiAgent`) the `instructions` are verbatim by contract — fastagent does not inject the
   discovery note the directory path's base prompt carries. When passing deferred tools at L1, tell the
   model about `search_tools` in your own instructions (or rely on the loader's description alone,
   which is weaker).
-- An activation is recorded in the session as "this conversation activated these deferred tools", not
-  as a frozen snapshot: on reopen the active set is rebuilt as the initial set (current non-deferred
-  tools) plus the recorded activations — a tool you add to the workspace later joins existing
-  conversations too.
+- An activation is persisted as a dedicated DELTA entry in the session ("this conversation activated
+  these deferred tools"): on reopen the active set is rebuilt as the initial set (current non-deferred
+  tools) plus the accumulated deltas. A tool you add to the workspace later joins existing
+  conversations, and a tool you later flip to `deferred` drops out of sessions that never discovered
+  it.
 - **`fastagent chat` emulates deferral** like the serving path (what you iterate is what you serve):
   the session starts with deferred tools inactive, the same `search_tools` loader discovers and
   activates them (bridged to pi's session instead of the serving harness), and the prompt is

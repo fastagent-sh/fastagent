@@ -10,9 +10,11 @@ export {
   defineTool,
   loadTools,
   type DefineToolOptions,
+  type FastagentTool,
   type ToolCollision,
   type ToolContext,
 } from "./engines/pi/tool.ts";
+export type { ToolActivation } from "./engines/pi/tool-context.ts";
 export { z } from "zod";
 export type { AgentTool, ExecutionEnv, Session, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 

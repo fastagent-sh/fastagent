@@ -50,6 +50,25 @@ describe("chat: buildChatRuntime injects fastagent's assembled agent into pi's s
         expect(result.content[0]?.text).toMatch(/Activated: lookup_weather/);
         expect(session.getActiveToolNames()).toContain("lookup_weather");
 
+        // Attribution regression (review): pi wraps SDK customTools in its own before/after active-set
+        // diff, so two PARALLEL loader calls would both get stamped with the same activation. The
+        // production guard is pi's batch serialization, triggered by the loader's executionMode —
+        // assert the contract (marker present on the REGISTERED tool) and the serial behavior (second
+        // call reports already-active, exactly one stamp).
+        await rt.newSession();
+        const reSession = rt.session;
+        const loader2 = rt.session.agent.state.tools.find((t) => t.name === "search_tools") as unknown as {
+          executionMode?: string;
+          execute: (id: string, params: unknown) => Promise<{ addedToolNames?: string[] }>;
+        };
+        expect(loader2.executionMode).toBe("sequential"); // what makes pi serialize the batch
+        const r1 = await loader2.execute("p1", { query: "weather" });
+        const r2 = await loader2.execute("p2", { query: "forecast" });
+        const stamped = [r1, r2].filter((r) => (r.addedToolNames ?? []).length > 0);
+        expect(stamped).toHaveLength(1);
+        expect(stamped[0]?.addedToolNames).toEqual(["lookup_weather"]);
+        expect(reSession.getActiveToolNames()).toContain("lookup_weather");
+
         // The documented divergence, as a spec: chat activations do not survive /new — pi's chat
         // session records no activations, so every rebuild re-narrows and discovery starts over.
         await rt.newSession();

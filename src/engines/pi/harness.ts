@@ -14,6 +14,26 @@ import type { PiSessionStore } from "./sessions.ts";
 import { isDeferredTool } from "./tool.ts";
 
 /**
+ * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred
+ * tools a loader activated in that call. The DEDICATED record the resolve below reads: pi's own
+ * `active_tools_change` entries are full active-set SNAPSHOTS (setActiveTools persists everything
+ * active at that moment), and reinterpreting a snapshot as activations would keep a tool active in
+ * old sessions after the author flips it to `deferred` — the session never discovered it. Deltas
+ * carry only what was actually discovered.
+ */
+export const TOOL_ACTIVATION_ENTRY = "fastagent:tool-activation";
+
+/** The session a factory-built harness is bound to — the seam the activation bridge (invoke.ts) uses
+ *  to write {@link TOOL_ACTIVATION_ENTRY} deltas (pi's harness keeps its session private). Absent for
+ *  a harness built outside {@link piHarnessFactory}: activation still works in-turn there, but is not
+ *  recorded — the factory owns persistence. */
+const harnessSessions = new WeakMap<AgentHarness, PiSession>();
+export type PiSession = Awaited<ReturnType<PiSessionStore["openOrCreate"]>>;
+export function harnessSession(harness: AgentHarness): PiSession | undefined {
+  return harnessSessions.get(harness);
+}
+
+/**
  * pi's Model with the API-shape generic erased — fastagent only passes models through to the
  * harness, so the generic carries no information. One alias keeps the `any` auditable.
  */
@@ -112,7 +132,7 @@ export function resolveHarnessActiveToolNames(
   if (missing.length > 0) {
     const emit = warnedRestores.has(`${sessionId}\u0000${missing.join(",")}`) ? log.debug : log.warn;
     warnedRestores.add(`${sessionId}\u0000${missing.join(",")}`);
-    emit(`[fastagent] session ${sessionId}: dropping recorded active tool(s) no longer mounted: ${missing.join(", ")}`);
+    emit(`[fastagent] session ${sessionId}: dropping recorded activation(s) no longer mounted: ${missing.join(", ")}`);
   }
   return [...new Set([...initial, ...known])];
 }
@@ -121,24 +141,36 @@ export function resolveHarnessActiveToolNames(
 export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFactory {
   return async (sessionId) => {
     const session = await options.sessions.openOrCreate(sessionId);
-    // One extra entry walk per invoke to read the recorded active-tool set (buildContext is the only
-    // accessor) — negligible against the model call, same trade as L2's per-invoke definition re-read.
-    const context = await session.buildContext();
+    // One extra entry walk per invoke to collect the activation deltas — negligible against the model
+    // call, same trade as L2's per-invoke definition re-read. Serving sessions never branch, so a flat
+    // getEntries() read (no leaf-path walk) is correct.
+    const entries = await session.getEntries();
+    const activated = entries.flatMap((e) =>
+      e.type === "custom" && e.customType === TOOL_ACTIVATION_ENTRY
+        ? ((e.data as { names?: string[] } | undefined)?.names ?? [])
+        : [],
+    );
     const fresh = options.live ? await options.live() : undefined;
     const { systemPrompt } = options;
     const prompt = fresh ? fresh.systemPrompt : typeof systemPrompt === "function" ? systemPrompt() : systemPrompt;
     const skills = fresh ? fresh.skills : options.skills;
-    return new AgentHarness({
+    const harness = new AgentHarness({
       env: options.env,
       session,
       models: options.models,
       model: options.model,
       thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
       tools: options.tools,
-      activeToolNames: resolveHarnessActiveToolNames(context.activeToolNames, options.tools ?? [], sessionId),
+      activeToolNames: resolveHarnessActiveToolNames(
+        activated.length > 0 ? activated : null,
+        options.tools ?? [],
+        sessionId,
+      ),
       systemPrompt: prompt,
       resources: skills ? { skills } : undefined,
       streamOptions: { maxRetries: PROVIDER_MAX_RETRIES },
     });
+    harnessSessions.set(harness, session);
+    return harness;
   };
 }

@@ -133,6 +133,9 @@ export async function buildChatRuntime(
       label: t.name,
       description: t.description ?? "",
       parameters: t.parameters,
+      // Propagate the execution mode — an activating tool (the builtin loader) declares "sequential"
+      // so pi serializes its batch; without this, pi's outer active-set diff double-stamps parallels.
+      executionMode: (t as { executionMode?: "sequential" | "parallel" }).executionMode,
       execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
         const bound = sessionRef.current;
         // Unreachable by construction (createRuntime sets sessionRef before any turn can run a tool).
@@ -164,9 +167,10 @@ export async function buildChatRuntime(
   const rootCwd = canonicalPath(dir);
   // The CURRENT pi session + its activation bridge, BOUND TOGETHER — rebuilt on /new//resume/fork
   // while the memoized assembly (and its tool execute closures) stays. The bridge must share the
-  // session's lifetime, NOT be rebuilt per tool call: parallel calls in one batch serialize on the
-  // bridge's internal chain, and a per-call bridge would give each call its own chain — a
-  // serialization that serializes nothing.
+  // session's lifetime, NOT be rebuilt per tool call (a per-call chain serializes nothing). Note on
+  // parallel batches: pi wraps SDK customTools in its own before/after active-set diff, so an
+  // activating tool must carry `executionMode: "sequential"` (the builtin loader does) — pi then runs
+  // the whole batch serially and the outer diff sees correct snapshots.
   const sessionRef: { current?: { session: AgentSession; activation: ToolActivation } } = {};
   let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {

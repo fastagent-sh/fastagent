@@ -23,7 +23,14 @@ import { createPiModels } from "./models.ts";
 import { reportDefinitionWarnings } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import { type ToolCollision, isDeferredTool, loadTools, mergeDiscoveredTools } from "./tool.ts";
+import {
+  type DefineToolOptions,
+  type FastagentTool,
+  type ToolCollision,
+  isDeferredTool,
+  loadTools,
+  mergeDiscoveredTools,
+} from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
 import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
 
@@ -244,7 +251,8 @@ export interface CreatePiAgentOptions {
    * or a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
    */
   instructions?: string | (() => string);
-  tools?: AgentTool[];
+  /** `FastagentTool` = AgentTool plus the optional `deferred` marker (see {@link DefineToolOptions}). */
+  tools?: FastagentTool[];
   skills?: Skill[];
   // ── Tier 2: injectable ports ───────────────────────────────────────────────
   /**
@@ -297,8 +305,9 @@ export interface CreatePiAgentFromDefinitionOptions {
   /** Override the engine base prompt (segment ①). Defaults to piBasePrompt({ tools, persona }) using the
    *  live-read persona.md; pass base to fully opt out of persona.md. */
   base?: string;
-  /** Override tools. Defaults to piDefaultTools (lock down with a custom list). */
-  tools?: AgentTool[];
+  /** Override tools. Defaults to piDefaultTools (lock down with a custom list). `FastagentTool` =
+   *  AgentTool plus the optional `deferred` marker. */
+  tools?: FastagentTool[];
   /**
    * The agent's working directory: where the default tools operate AND whose ancestors are walked for
    * ② project context (AGENTS.md). Defaults to `dir` (flat: the definition dir is also the run root).

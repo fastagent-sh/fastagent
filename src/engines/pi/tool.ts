@@ -48,10 +48,15 @@ export interface DefineToolOptions<I extends z.ZodType> {
   execute: (input: z.infer<I>, ctx: ToolContext) => unknown | Promise<unknown>;
 }
 
+/** An AgentTool with fastagent's deferral marker — the type for raw tools handed to fastagent
+ *  (`config.tools`, L1/L2 `tools`): plain `AgentTool` has no `deferred`, so an object literal with the
+ *  marker would fail excess-property checking against upstream's type. `defineTool` produces it. */
+export type FastagentTool = AgentTool & { deferred?: boolean };
+
 /** Read the {@link DefineToolOptions.deferred} marker off a mounted tool (extra property on the
- *  AgentTool object — pi ignores it; config.tools authors can set it on a raw tool too). */
+ *  AgentTool object — pi ignores it). */
 export function isDeferredTool(tool: AgentTool): boolean {
-  return (tool as { deferred?: unknown }).deferred === true;
+  return (tool as FastagentTool).deferred === true;
 }
 
 /** The same tool without the deferred marker — for a loader that must stay active (a deferred loader

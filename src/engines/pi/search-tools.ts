@@ -37,8 +37,17 @@ const MAX_ACTIVATIONS_PER_SEARCH = 5;
  *  catalog (the thing deferral keeps OUT of the context) back in as a tool result. */
 const MAX_MISS_LISTING = 10;
 
-/** Build the `search_tools` loader. Keyword search over the inactive tools' name+description. */
+/** Build the `search_tools` loader. Keyword search over the inactive tools' name+description.
+ *
+ * `executionMode: "sequential"` — pi turns any batch containing a sequential tool serial. Required for
+ * correct load-point attribution everywhere an OUTER active-set diff exists: pi wraps SDK customTools
+ * (the chat path) in a before/after diff, and two parallel loader calls would both snapshot the
+ * pre-activation set and get stamped with the same activation. Custom loader authors must set it too. */
 export function makeSearchToolsTool(): AgentTool {
+  return Object.assign(searchToolsDefinition(), { executionMode: "sequential" as const });
+}
+
+function searchToolsDefinition(): AgentTool {
   return defineTool({
     name: "search_tools",
     description:
