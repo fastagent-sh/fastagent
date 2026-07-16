@@ -17,7 +17,7 @@ Inspect the project first, preserve anything that already exists, and make the s
 Decide which job this is before touching anything:
 
 1. **New agent, empty directory.** Nothing agent-shaped exists yet. Run `fastagent init <dir>` (or init the current directory), then flesh out `persona.md`, skills, and tools from what the user wants.
-2. **An existing directory becomes the agent.** The project already has `AGENTS.md`, markdown context, skills, or tools — vibed or handwritten. Do not restructure it: run `fastagent init` in place; init never overwrites existing files and adopts them as the definition.
+2. **An existing directory becomes the agent.** The directory holds what the agent works on or with: `AGENTS.md`, markdown context, skills, tools — or just the projects the agent should manage (a parent directory of repos counts; it needs no agent-shaped files yet). Do not restructure it: run `fastagent init` in place; init never overwrites existing files and adopts them as the definition.
 3. **Embed an agent into an existing application.** The project is an app (framework config, routes, its own toolchain). Initialize — init chooses `./agent` with `config.agentDir` automatically when the root is claimed — then mount the agent in the app's own route with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
 
 All three paths continue with the same steps below: inspect, authenticate, initialize once, test, then connect channels or deploy.
@@ -67,6 +67,8 @@ Run:
 ```bash
 fastagent init <dir>
 ```
+
+Run `init` **in the directory the agent must see and act on** — its location sets the agent's working directory, project context, and what deploy bakes into the image. Never create a fresh subdirectory and init inside it: that scopes the agent to an empty folder, cut off from the projects around it. If a subdirectory layout is needed, init at the root and let init choose `./agent` + `config.agentDir` itself.
 
 The default directory is the current directory. `init`:
 

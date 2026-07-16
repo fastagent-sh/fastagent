@@ -157,12 +157,16 @@ CMD ["./node_modules/.bin/fastagent", "start", "/app"]
 `;
 }
 
-const DOCKERIGNORE = `node_modules
-.fastagent
-.env
-.env.*
-!.env.example
-*.log
+/** Patterns are RECURSIVE (`**​/`) on purpose — dockerignore patterns are root-anchored (unlike
+ *  .gitignore), and a repo-as-agent can hold nested projects: a bare `node_modules` would upload their
+ *  build-machine deps (macOS binaries!) and a bare `.env` would bake their secrets into the image.
+ *  `.git` stays root-anchored: nested projects' own `.git` ships (the agent's write-back needs it). */
+const DOCKERIGNORE = `**/node_modules
+**/.fastagent
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
 # .git is excluded to keep the image small. If your agent runs git on its OWN history
 # (git log/blame over the repo it ships in), delete the next line so that history is in the image.
 .git

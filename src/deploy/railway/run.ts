@@ -23,6 +23,8 @@
  * no bulk stdin import like Fly's `secrets import`). Auth needs an ACCOUNT credential (login or
  * `RAILWAY_API_KEY`), not a project token: `init` creates a project that a project token can't predate.
  */
+import type { RegistrationOutcome } from "../../channels/registration.ts";
+import { registrationGate } from "../registration-gate.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import type { CliRunner } from "../runner.ts";
 
@@ -122,8 +124,8 @@ export async function deployRailwayRun(
   plan: RailwayRunPlan,
   railway: CliRunner,
   log: (msg: string) => void,
-  registerTelegram: (baseUrl: string) => Promise<void>,
-  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<void>,
+  registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
+  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service
@@ -240,23 +242,30 @@ export async function deployRailwayRun(
   if (!url) {
     return gate("couldn't read a domain from `railway domain` — run `railway domain` manually, then set any webhook");
   }
+  // 7. Post-deploy webhook — gate policy is the shared registration-gate kernel (registrars report
+  //    facts, it owns the policy); all channels are attempted first.
+  const reg = registrationGate(log, "re-run with --into-linked to retry registration");
   if (plan.channels.includes("telegram")) {
     log("registering telegram webhook…");
-    await registerTelegram(url);
+    reg.track("telegram", await registerTelegram(url));
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → ${url}/webhook`);
+    reg.track("github", "manual"); // always a human step — re-surface it after the registrar output
   }
   for (const kind of ["feishu", "lark"] as const) {
     if (!plan.channels.includes(kind)) continue;
     if (registerFeishu) {
       log(`registering ${kind} event URL…`);
-      await registerFeishu(url, kind);
+      reg.track(kind, await registerFeishu(url, kind));
     } else {
       log(
         `${kind}: set the event Request URL in the developer console (Events & Callbacks) → ${url}/${kind} (the service must be running when you save)`,
       );
+      reg.track(kind, "manual"); // no registrar wired — the console step above is the operator's
     }
   }
+  const registrationGateMsg = reg.gate();
+  if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true, url };
 }

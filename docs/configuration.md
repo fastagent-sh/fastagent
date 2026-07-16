@@ -38,6 +38,7 @@ Supported keys:
 | Key | Meaning |
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
+| `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
 | `agentDir` | The agent-definition subdirectory (`persona.md`, `skills/`, `tools/`, `channels/`), relative to the config file. Default: the config directory itself (flat). Set it to e.g. `"./agent"` to serve an existing repo as a coding agent — the config directory stays the run root (`cwd`, whose `AGENTS.md` is read as context), while the agent's own surface lives in the subdir and does not collide with the host's `tools/`/`src/`. Must exist, stay inside the config directory, and be a real directory — a missing path is refused at load (a typo would otherwise silently serve an empty agent), and so is a symlink (its target can escape the config directory, where `dev`'s watch would never see edits). |
 | `tools` | Extra programmatic tools appended after default pi tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |

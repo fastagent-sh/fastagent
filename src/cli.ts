@@ -499,11 +499,18 @@ async function runInfo(): Promise<void> {
   const tools = await resolveWorkspaceTools(config, agentDir, dir)
     .then((r) => ({
       names: r.toolNames,
+      deferred: r.deferredToolNames,
       collisions: r.toolCollisions,
       failures: r.toolFailures,
       error: undefined as string | undefined,
     }))
-    .catch((e: unknown) => ({ names: [] as string[], collisions: [], failures: [], error: (e as Error).message }));
+    .catch((e: unknown) => ({
+      names: [] as string[],
+      deferred: [] as string[],
+      collisions: [],
+      failures: [],
+      error: (e as Error).message,
+    }));
   const channels = await discoverChannelFiles(agentDir).catch(failStartup);
   // Loaded (imported + validated), not just discovered: info's job is "fix only what it reports", so a
   // broken schedule file (bad cron/tz, failed import) must show up HERE, not first at dev/start — and
@@ -529,10 +536,12 @@ async function runInfo(): Promise<void> {
           agentDir,
           configPath: configPath ?? null,
           model: modelSpec ?? null,
+          thinkingLevel: config.thinkingLevel ?? null,
           context: definition.contextFiles.map((f) => f.path),
           persona: definition.persona !== undefined,
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
           tools: tools.names,
+          deferredTools: tools.deferred,
           toolError: tools.error ?? null,
           channels,
           schedules,
@@ -556,10 +565,12 @@ async function runInfo(): Promise<void> {
   if (agentDir !== dir) console.log(`agent:    ${agentDir}`);
   console.log(`config:   ${configPath ?? "(none)"}`);
   console.log(`model:    ${modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)"}`);
+  if (config.thinkingLevel) console.log(`thinking: ${config.thinkingLevel}`);
   console.log(`context:  ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
   console.log(`persona:  ${definition.persona ? "persona.md" : "(none)"}`);
   console.log(`skills:   ${definition.skills.map((skill) => skill.name).join(", ") || "(none)"}`);
   console.log(`tools:    ${tools.error ? "(could not load — see warning below)" : tools.names.join(", ") || "(none)"}`);
+  if (tools.deferred.length > 0) console.log(`deferred: ${tools.deferred.join(", ")} (activated via search_tools)`);
   console.log(`channels: ${channels.join(", ") || "(none)"}`);
   console.log(`schedules: ${schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)"}`);
   console.log(`selfSchedule: ${config.selfSchedule ? "on (mounts the wake tool when serving)" : "off"}`);
@@ -809,6 +820,7 @@ async function runDeploy(): Promise<void> {
     process.exit(1);
   }
   loadDotEnv(target); // a custom provider/tool may read a key at config load
+  installProxyFetch(); // post-deploy channel API calls must honor HTTP(S)_PROXY under Node
   const { config } = await loadConfig(target).catch(failStartup);
   const agentDir = resolveAgentDir(target, config);
   const modelSpec = resolveModelSpec(values.model, config);
@@ -1370,6 +1382,9 @@ function reportAgentsSkillsTools(a: Assembled): void {
   if (a.definition.persona) log.info(`[fastagent] persona: persona.md`);
   log.info(`[fastagent] skills: ${a.definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (a.toolNames.length > 0) log.info(`[fastagent] tools:  ${a.toolNames.join(", ")}`);
+  if (a.deferredToolNames.length > 0) {
+    log.info(`[fastagent] deferred: ${a.deferredToolNames.join(", ")} (activated via search_tools)`);
+  }
   reportToolCollisions(a.toolCollisions);
   reportModuleLoadFailures(a.toolFailures);
   reportDefinitionWarnings(a.definition.collisions, a.definition.diagnostics);
@@ -1445,7 +1460,9 @@ async function serveOnce(): Promise<void> {
   log.info(`[fastagent] dir:    ${dir}`);
   if (a.agentDir !== dir) log.info(`[fastagent] agent:  ${a.agentDir}`);
   log.info(`[fastagent] config: ${a.configPath ?? "(zero-config)"}`);
-  log.info(`[fastagent] model:  ${a.modelSpec}`);
+  log.info(
+    `[fastagent] model:  ${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`,
+  );
   await reportAuth(a.modelSpec, a.authPath);
   reportAgentsSkillsTools(a);
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
@@ -1480,6 +1497,7 @@ async function runStart(): Promise<void> {
     sessionsDir,
     authPath,
     toolNames,
+    deferredToolNames,
     toolCollisions,
     toolFailures,
   } = await createPiAgentFromWorkspace(dir, {
@@ -1491,12 +1509,15 @@ async function runStart(): Promise<void> {
 
   log.info(`[fastagent] start:  ${dir}`);
   if (agentDir !== dir) log.info(`[fastagent] agent:  ${agentDir}`);
-  log.info(`[fastagent] model:  ${modelSpec}`);
+  log.info(`[fastagent] model:  ${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(modelSpec, authPath);
   log.info(`[fastagent] context: ${definition.contextFiles.map((f) => f.path).join(", ") || "(none)"}`);
   if (definition.persona) log.info(`[fastagent] persona: persona.md`);
   log.info(`[fastagent] skills: ${definition.skills.map((s) => s.name).join(", ") || "(none)"}`);
   if (toolNames.length > 0) log.info(`[fastagent] tools:  ${toolNames.join(", ")}`);
+  if (deferredToolNames.length > 0) {
+    log.info(`[fastagent] deferred: ${deferredToolNames.join(", ")} (activated via search_tools)`);
+  }
   reportToolCollisions(toolCollisions);
   reportModuleLoadFailures(toolFailures);
   log.info(`[fastagent] state:  ${stateRoot}`);

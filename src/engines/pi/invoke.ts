@@ -16,8 +16,8 @@ import { DEFAULT_COMPACTION_SETTINGS, calculateContextTokens, shouldCompact } fr
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { type Agent, type AgentEvent, type Json, type Prompt, type Scope, SESSION_BUSY_CODE } from "../../agent.ts";
 import { log } from "../../log.ts";
-import type { PiHarnessFactory } from "./harness.ts";
-import { turnContext } from "./tool-context.ts";
+import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
+import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 
 // ── §1 Lease: single-writer concurrency floor ───────────────────────────────
 //
@@ -166,6 +166,45 @@ export function errorToTerminal(error: unknown): AgentEvent {
 type PiHarness = Awaited<ReturnType<PiHarnessFactory>>;
 
 /**
+ * The turn's {@link ToolActivation} over the live harness. `activate` is additive and filters to the
+ * registered names first — pi's `setActiveTools` THROWS on unknown names, and a loader must get a
+ * usable "nothing new" answer, not an exception. pi persists the change in the session, so the
+ * per-invoke restore (harness.ts) carries it into later turns.
+ */
+function toolActivation(harness: PiHarness): ToolActivation {
+  // Serialize activations per turn: "who activated first" must be decided HERE, not by whether pi's
+  // setActiveTools happens to mutate before its first await — parallel tool calls in one batch race
+  // their activate() calls, and the addedToolNames load points must not double-stamp.
+  let chain: Promise<string[]> = Promise.resolve([]);
+  return {
+    active: () => harness.getActiveTools().map((t) => t.name),
+    registered: () => harness.getTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
+    activate(names) {
+      const run = async (): Promise<string[]> => {
+        const current = harness.getActiveTools().map((t) => t.name);
+        const added = additiveActivation(
+          harness.getTools().map((t) => t.name),
+          current,
+          names,
+        );
+        if (added.length > 0) {
+          await harness.setActiveTools([...current, ...added]);
+          // Persist the DELTA in a dedicated entry — what the per-invoke resolve (harness.ts) reads.
+          // pi's own active_tools_change record is a full snapshot and is deliberately ignored there.
+          // Absent session (a harness built outside piHarnessFactory): in-turn activation still works,
+          // it just isn't durable — the factory owns persistence.
+          await harnessSession(harness)?.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added });
+        }
+        return added;
+      };
+      const result = chain.then(run, run); // run after the predecessor settles, success or failure
+      chain = result.catch(() => []); // the caller sees a rejection on `result`; the chain stays usable
+      return result;
+    },
+  };
+}
+
+/**
  * After a successful turn, compact the session if its context has grown past pi's threshold — a long
  * shared (group) or 1:1 conversation otherwise overflows the model's window. pi owns the mechanism
  * (`harness.compact()` writes a summary entry into the session, so the next reopen is compacted); the
@@ -292,7 +331,9 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         // (turnContext / ToolContext.session). prompt() starts the async work synchronously here, so the
         // store propagates to the tool calls awaited within it.
         const opts = await toPiPromptOptions(prompt);
-        const run = turnContext.run({ session: scope.session }, () => harness.prompt(prompt.text, opts));
+        const run = turnContext.run({ session: scope.session, tools: toolActivation(harness) }, () =>
+          harness.prompt(prompt.text, opts),
+        );
         yield* queue.drainUntil(run);
         let terminal: AgentEvent;
         try {

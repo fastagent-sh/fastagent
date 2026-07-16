@@ -7,7 +7,7 @@
  * AGENTS.md up to the repo root and discover skills from pi's own global dirs). So fastagent's
  * assembly is INJECTED into pi's session:
  *   - prompt  → systemPromptOverride = base + instructions ONLY; pi appends the skill section and env
- *               (date/cwd) itself (including them here would duplicate both).
+ *               (cwd) itself (including it here would duplicate it).
  *   - skills  → skillsOverride (fastagent's skills, for the section + invocation).
  *   - tools   → default coding tools by NAME (pi rebuilds them cwd-bound for rich rendering) +
  *               fastagent's custom tools via pi's customTools path (so they survive /new, /resume, fork).
@@ -24,6 +24,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
+  type AgentSession,
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   InteractiveMode,
@@ -38,7 +39,9 @@ import { loadConfig, resolveAgentDir, resolveModel, resolveModelSpec } from "./c
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools, resolveTools } from "./create.ts";
 import { createPiModels } from "./models.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
-import { loadTools, mergeDiscoveredTools } from "./tool.ts";
+import { isDeferredTool, loadTools, mergeDiscoveredTools } from "./tool.ts";
+import { withSearchTool } from "./search-tools.ts";
+import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 
 export interface RunPiChatOptions {
@@ -57,6 +60,38 @@ export async function buildChatRuntime(
   /** Session backend. Defaults to pi's project-scoped store; tests inject SessionManager.inMemory(). */
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
+  /** The turn's {@link ToolActivation} over pi's AgentSession — the chat counterpart of invoke.ts's
+   *  harness bridge, so the SAME builtin search_tools serves both paths. Additive; unknown names
+   *  filtered (`setActiveToolsByName` is authoritative on the session and rebuilds its prompt — our
+   *  static override keeps the prompt identical to serving). */
+  function chatToolActivation(session: AgentSession): ToolActivation {
+    // Same serialization as invoke.ts's bridge (there per turn; here per session — chat turns are
+    // interactive, so per-session is equivalent): the read-modify-write below is only race-free while
+    // nothing awaits between read and write, and pi's session setters happening to be synchronous today
+    // is not a contract worth betting parallel tool batches on. Built ONCE per session (createRuntime),
+    // so parallel calls actually share the chain.
+    let chain: Promise<string[]> = Promise.resolve([]);
+    return {
+      active: () => session.getActiveToolNames(),
+      registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
+      activate(names) {
+        const run = async (): Promise<string[]> => {
+          const current = session.getActiveToolNames();
+          const added = additiveActivation(
+            session.getAllTools().map((t) => t.name),
+            current,
+            names,
+          );
+          if (added.length > 0) session.setActiveToolsByName([...current, ...added]);
+          return added;
+        };
+        const result = chain.then(run, run); // run after the predecessor settles, success or failure
+        chain = result.catch(() => []); // the caller sees a rejection on `result`; the chain stays usable
+        return result;
+      },
+    };
+  }
+
   async function resolveAssembly(cwd: string) {
     const { config } = await loadConfig(cwd);
     const modelSpec = resolveModelSpec(options.model, config);
@@ -77,22 +112,45 @@ export async function buildChatRuntime(
     // Same tool resolution as the dev opener, then split: defaults go to pi by NAME (rebuilt cwd-bound
     // for rich rendering); customs go through pi's `customTools` path so they survive /new, /resume, fork.
     const discovered = await loadTools(agentDir);
-    const { tools, collisions: crossCollisions } = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
+    const merged = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
+    // Chat EMULATES deferral, like serving (what you iterate is what you serve): the builtin loader
+    // mounts when a deferred tool exists, the initial active set excludes deferred tools (applied on
+    // the session in createRuntime below — pi's TUI session starts all-active), and the activation
+    // bridge below rides the same turn context the serving path uses, so the SAME search_tools works
+    // against pi's AgentSession instead of fastagent's harness.
+    const tools = withSearchTool(merged.tools);
+    const crossCollisions = merged.collisions;
     reportToolCollisions([...discovered.collisions, ...crossCollisions]);
     reportModuleLoadFailures(discovered.failures);
     const defaultNames = piDefaultTools(cwd).map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));
-    // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts it).
+    // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
+    // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
+    // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
+    // resolves through sessionRef at call time, exactly like the serving path resolves its harness.
     const customToolDefs = customTools.map((t) => ({
       name: t.name,
       label: t.name,
       description: t.description ?? "",
       parameters: t.parameters,
-      execute: (id: string, params: unknown, signal: AbortSignal | undefined) => t.execute(id, params, signal),
+      // Propagate the execution mode — an activating tool (the builtin loader) declares "sequential"
+      // so pi serializes its batch; without this, pi's outer active-set diff double-stamps parallels.
+      executionMode: t.executionMode,
+      execute: (id: string, params: unknown, signal: AbortSignal | undefined) => {
+        const bound = sessionRef.current;
+        // Unreachable by construction (createRuntime sets sessionRef before any turn can run a tool).
+        // Throw rather than silently run outside the turn context — that would disguise a broken
+        // session-lifecycle invariant as a normal out-of-turn call (fail visibly).
+        if (!bound) throw new Error("chat tool executed before its session was built (lifecycle invariant broken)");
+        return turnContext.run(
+          { session: bound.session.sessionId, tools: bound.activation },
+          () => t.execute(id, params, signal) as Promise<unknown>,
+        );
+      },
     })) as unknown as ToolDefinition[];
 
-    // base + instructions ONLY — pi appends the skill section and env (date/cwd) itself (including
-    // them here would duplicate both).
+    // base + instructions ONLY — pi appends the skill section and env (cwd) itself (including
+    // them here would duplicate them).
     const systemPrompt = assembleSystemPrompt({
       base: piBasePrompt({ tools, persona: definition.persona }),
       contextFiles: definition.contextFiles,
@@ -107,6 +165,13 @@ export async function buildChatRuntime(
   // edits. And keep it workspace-scoped — `.env` is process-global, so a switch to another cwd would
   // leak env or require mutating global env at runtime.
   const rootCwd = canonicalPath(dir);
+  // The CURRENT pi session + its activation bridge, BOUND TOGETHER — rebuilt on /new//resume/fork
+  // while the memoized assembly (and its tool execute closures) stays. The bridge must share the
+  // session's lifetime, NOT be rebuilt per tool call (a per-call chain serializes nothing). Note on
+  // parallel batches: pi wraps SDK customTools in its own before/after active-set diff, so an
+  // activating tool must carry `executionMode: "sequential"` (the builtin loader does) — pi then runs
+  // the whole batch serially and the outer diff sees correct snapshots.
+  const sessionRef: { current?: { session: AgentSession; activation: ToolActivation } } = {};
   let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {
     // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would
@@ -162,6 +227,21 @@ export async function buildChatRuntime(
       tools: [...defaultNames, ...customTools.map((t) => t.name)],
       customTools: customToolDefs,
     });
+    sessionRef.current = { session: result.session, activation: chatToolActivation(result.session) };
+    // Deferral emulation: pi's TUI session starts with everything active — narrow it by SUBTRACTING
+    // the deferred names from whatever is active (robust to pi mounting tools of its own; an
+    // exact-set-equality gate would silently stop narrowing the day pi adds one). Applied on EVERY
+    // build including /resume: pi's chat session does not record activations (its SessionContext has
+    // no activeToolNames), so "restore prior activations" is not implementable here — deferral stays
+    // consistently ON and a resumed conversation re-discovers via search_tools (documented divergence
+    // from serving, where activations persist in the session).
+    const deferredNames = customTools.filter(isDeferredTool).map((t) => t.name);
+    if (deferredNames.length > 0) {
+      const active = result.session.getActiveToolNames();
+      if (deferredNames.some((n) => active.includes(n))) {
+        result.session.setActiveToolsByName(active.filter((n) => !deferredNames.includes(n)));
+      }
+    }
     return { ...result, services, diagnostics: services.diagnostics };
   };
 

@@ -3,7 +3,7 @@
  * secrets / deploy) that the plain runbook hands to the operator; `--run` executes it instead, so a
  * coding agent runs ONE command. Idempotent (app/volume check-then-act; channel secrets come from the
  * local env — NOT minted — so a re-run sets the same values) and resumable: it STOPS at a human gate
- * (not logged in, a missing secret value, a taken app name) with one actionable line and a non-zero
+ * (not logged in, a missing secret value, a taken app name, a failed webhook registration) with one actionable line and a non-zero
  * exit, so the agent clears the gate and re-runs. A `generate` channel secret absent from `.env` is a
  * gate too (`missingSecrets`), not a silent mint — fill it in `.env` (use the random string that
  * `add <channel>` prints).
@@ -17,6 +17,8 @@
  * (one machine, the single-machine tier). Secrets go in via `secrets import` over stdin, so values
  * never land in argv/process listings.
  */
+import type { RegistrationOutcome } from "../../channels/registration.ts";
+import { registrationGate } from "../registration-gate.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import type { CliRunner } from "../runner.ts";
 
@@ -68,8 +70,8 @@ export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
-  registerTelegram: (baseUrl: string) => Promise<void>,
-  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<void>,
+  registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
+  registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -137,24 +139,30 @@ export async function deployFlyRun(
   }
 
   // 7. Post-deploy webhook — telegram end-to-end (fastagent has the token + the live URL); github is a
-  //    repo-settings step only a human can do.
+  //    repo-settings step only a human can do. Gate policy is the shared registration-gate kernel
+  //    (registrars report facts, it owns the policy); all channels are attempted first.
+  const reg = registrationGate(log, "re-run to retry registration (steps already done are skipped)");
   if (plan.channels.includes("telegram")) {
     log("registering telegram webhook…");
-    await registerTelegram(`https://${plan.appName}.fly.dev`);
+    reg.track("telegram", await registerTelegram(`https://${plan.appName}.fly.dev`));
   }
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
+    reg.track("github", "manual"); // always a human step — re-surface it after the registrar output
   }
   for (const kind of ["feishu", "lark"] as const) {
     if (!plan.channels.includes(kind)) continue;
     if (registerFeishu) {
       log(`registering ${kind} event URL…`);
-      await registerFeishu(`https://${plan.appName}.fly.dev`, kind);
+      reg.track(kind, await registerFeishu(`https://${plan.appName}.fly.dev`, kind));
     } else {
       log(
         `${kind}: set the event Request URL in the developer console (Events & Callbacks) → https://${plan.appName}.fly.dev/${kind} (the app must be running when you save)`,
       );
+      reg.track(kind, "manual"); // no registrar wired — the console step above is the operator's
     }
   }
+  const registrationGateMsg = reg.gate();
+  if (registrationGateMsg) return gate(registrationGateMsg);
   return { ok: true };
 }

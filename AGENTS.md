@@ -46,6 +46,7 @@ src/
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
 │   ├── state.ts             # SHARED: atomic state files under <stateRoot>/channels/<kind>/
 │   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
+│   ├── registration.ts      # SHARED: registrar outcome type (registered|manual|failed) — registrars report facts, deploy owns gate policy
 │   ├── github/              # github channel (+ scaffold/ bundle)
 │   ├── telegram/            # telegram channel — see docs/design/core.md §9.2
 │   │   ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)
@@ -72,6 +73,7 @@ src/
 │       └── scaffold/        # `add lark` bundle
 ├── deploy/                  # `deploy fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §10.5)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/
+│   ├── registration-gate.ts # host-NEUTRAL step-7 gate policy: registrars report facts (registered|manual|failed), this owns gate-or-not
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
 │   ├── container.ts         # portable Dockerfile + .dockerignore (host-neutral) + the generated-marker predicate
 │   ├── secrets.ts           # required-secret NAMES (runbook) + assembleSecrets VALUES (--run credential carry)
@@ -91,8 +93,9 @@ src/
     ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
     ├── workspace.ts         # shared opener: workspace → agent for dev/start/invoke
     ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
-    ├── tool.ts              # defineTool (Zod) + tools/ filesystem discovery
-    ├── tool-context.ts      # ToolContext.session via AsyncLocalStorage (set around the turn; read in execute — the wake tool's seam)
+    ├── tool.ts              # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery
+    ├── tool-context.ts      # ToolContext.session + tool-activation bridge via AsyncLocalStorage (set around the turn; read in execute — the wake/search_tools seam)
+    ├── search-tools.ts      # built-in search_tools loader for deferred tools (auto-mounted when any tool is deferred; author's wins)
     ├── wake-tool.ts         # the built-in `wake` tool (pi-coupled: defineTool): writes a wake-up into ToolContext.session; withWakeTool mounts it (serving path only)
     ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
     ├── harness.ts           # pi harness wiring (factory)
@@ -133,8 +136,8 @@ Full version: `CONTRIBUTING.md`. The essentials:
    npm run lint && npm run typecheck && npm test
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
-3. **Rebase merge by default** (preserve curated commits); squash only to clean up a WIP branch. Merge commits are disabled. `main` enforces linear history; force-push is forbidden.
-4. **Review policy.** Maintainer-authored PRs may self-merge after green CI; external-contributor PRs are reviewed and merged by a maintainer.
+3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. `main` enforces linear history; force-push is forbidden.
+4. **Review policy.** Merging is an explicit maintainer decision — agents never merge. Green CI makes a PR eligible; report "ready to merge" and stop. External-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**
    ```bash
    git checkout main && git pull --ff-only && git branch -d <branch> && git fetch --prune origin

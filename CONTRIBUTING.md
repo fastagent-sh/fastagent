@@ -59,21 +59,20 @@ Add or update the smallest relevant tests that prove the change. Reusable SPEC c
 
 ## Merge strategy
 
-**Rebase merge is the default**, not squash. This is a deliberate divergence from squash-only workflows: commit messages in this repo are a design asset — each commit explains one decision — and `main` already enforces linear history. Curated, individually meaningful commits should reach `main` intact.
+**Squash merge only** — the repository settings enforce it (rebase merges and merge commits are disabled). One PR lands as exactly one commit on `main`, so `main` reads as a sequence of reviewed changes and history stays linear.
 
-- **Rebase merge** (default): keep the branch's curated, individually meaningful commits.
-- **Squash merge**: collapse a messy WIP branch into one commit before it reaches `main`.
-- **Merge commits are disabled** (they break linear history).
+- Curate the PR title and description: they become the squash commit's subject and body — the durable record of the change. Branch commits are working state; the PR is the design asset.
 
-Either way, one branch = one focused change. If a branch grows several unrelated changes, split it into multiple PRs rather than squashing them into an opaque blob.
+One branch = one focused change. If a branch grows several unrelated changes, split it into multiple PRs rather than squashing them into an opaque blob.
 
 ## Review policy
 
-A maintainer is a collaborator with write or admin access.
+A maintainer is a collaborator with write or admin access. The project is open source: every change lands through a reviewed PR, without exception.
 
-- A maintainer-authored PR may be self-merged after all required checks pass. A second maintainer review is optional, including for SPEC and public API changes.
+- **Merging is an explicit maintainer decision.** Green CI makes a PR *eligible*; a maintainer *lands* it. Nothing merges automatically — not CI, and not coding agents: an agent may open a PR, respond to review, and report "CI green, ready to merge", but the merge itself is always issued by a human maintainer.
+- Maintainer-authored PRs require green CI before merging. Review by a second maintainer is recommended for SPEC and public API changes.
 - A PR from an external contributor must be reviewed and merged by a maintainer; external contributors do not have merge permission.
-- `CODEOWNERS` routes changes to the relevant maintainers; it does not impose an additional approval on maintainer-authored PRs.
+- `CODEOWNERS` routes changes to the relevant maintainers.
 
 All changes still go through a PR. Force-pushing to `main` is forbidden. Long-lived PRs (> ~3 days) should be rebased on `main`.
 

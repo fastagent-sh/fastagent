@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -119,6 +120,47 @@ describe("cli papercuts", () => {
     expect(second.code).toBe(0);
     expect(second.stderr).not.toContain("fastagent.compose.yml — it no longer matches");
     expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toBe(compose);
+  });
+
+  it("deploy loads .env and installs its proxy before config-time network work", async () => {
+    // Regression: the Node CLI used to load .env but omit installProxyFetch(), so post-deploy channel
+    // calls bypassed HTTP(S)_PROXY. A config-time fetch gives the real CLI path an early network probe;
+    // the reserved .invalid host can succeed only when the .env-only local proxy was installed first.
+    const requests: string[] = [];
+    const proxy = createServer((req, res) => {
+      requests.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("proxied");
+    });
+    await new Promise<void>((resolve, reject) => {
+      proxy.once("error", reject);
+      proxy.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = proxy.address();
+      if (!address || typeof address === "string") throw new Error("proxy did not bind a TCP port");
+      const proxyUrl = `http://127.0.0.1:${address.port}`;
+      const dir = await mkdtemp(join(tmpdir(), "fa-deploy-proxy-"));
+      await writeFile(join(dir, ".env"), `HTTP_PROXY=${proxyUrl}\nHTTPS_PROXY=${proxyUrl}\n`);
+      await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
+      await writeFile(
+        join(dir, "fastagent.config.mjs"),
+        `const response = await fetch("http://deploy-proxy.invalid/probe");\n` +
+          `if (!response.ok) throw new Error("proxy probe failed");\n` +
+          `export default { model: "openai-codex/gpt-5.5" };\n`,
+      );
+      const env = { ...process.env };
+      for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]) {
+        delete env[key]; // the proxy must come from the workspace .env, loaded inside runDeploy()
+      }
+
+      const { code, stderr } = await run(["deploy", "fly", dir], undefined, env);
+      expect(code, stderr).toBe(0);
+      expect(requests).toContain("http://deploy-proxy.invalid/probe");
+    } finally {
+      await new Promise<void>((resolve, reject) => proxy.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 
   it("--version / -v prints the version to stdout and exits 0 (no parse crash)", async () => {

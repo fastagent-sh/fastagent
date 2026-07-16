@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerFeishuWebhook } from "../src/channels/feishu/register-webhook.ts";
+import { log } from "../src/log.ts";
 
 // Mirrors the telegram registrar's G5 discipline: the application-v7 config PATCH triggers the
 // platform's url_verification challenge against the new Request URL, so registration must wait until
@@ -14,6 +15,7 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
   };
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     process.env.LARK_APP_ID = prev.id;
     process.env.LARK_APP_SECRET = prev.secret;
     process.env.FEISHU_APP_ID = prev.fid;
@@ -46,11 +48,12 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
         return new Response(null, { status: 404 });
       }),
     );
-    await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
+    const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
       readyTimeoutMs: 5000,
       readyIntervalMs: 1,
       apiBase: "http://feishu.test",
     });
+    expect(ok).toBe("registered");
     expect(health).toBeGreaterThanOrEqual(3); // waited for readiness, not a fixed timer
     expect(patches).toHaveLength(1);
     expect(patches[0]?.url).toContain("http://feishu.test/open-apis/application/v7/applications/cli_app/config");
@@ -103,7 +106,11 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
         throw new Error("ECONNREFUSED"); // /health never reachable
       }),
     );
-    await registerFeishuWebhook("https://dead.example", "feishu", { readyTimeoutMs: 20, readyIntervalMs: 5 });
+    const ok = await registerFeishuWebhook("https://dead.example", "feishu", {
+      readyTimeoutMs: 20,
+      readyIntervalMs: 5,
+    });
+    expect(ok).toBe("failed"); // terminal for this run → deploy --run gates
     expect(patches).toHaveLength(0);
   });
 
@@ -152,15 +159,22 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
         return new Response(null, { status: 404 });
       }),
     );
+    const errors: string[] = [];
+    vi.spyOn(log, "error").mockImplementation((m: string) => {
+      errors.push(m);
+    });
     const onManualRegistration = vi.fn();
-    await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
+    const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
       readyTimeoutMs: 100,
       readyIntervalMs: 1,
       retryMs: 1,
       apiBase: "http://feishu.test",
       onManualRegistration,
     });
+    expect(ok).toBe("failed"); // terminal for this run → deploy --run gates
     expect(patches).toBe(8);
+    // Exhausted retries are a terminal failure (event URL not registered) — reported at ERROR.
+    expect(errors.join("\n")).toMatch(/still failing after retries/);
     expect(onManualRegistration).toHaveBeenCalledOnce();
     expect(onManualRegistration).toHaveBeenCalledWith({
       consoleUrl: "http://feishu.test/app/cli_app/event",
@@ -185,12 +199,13 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
         return new Response(null, { status: 404 });
       }),
     );
-    await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
+    const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "feishu", {
       readyTimeoutMs: 100,
       readyIntervalMs: 1,
       retryMs: 1,
       apiBase: "http://feishu.test",
     });
+    expect(ok).toBe("failed"); // a config error the operator must fix → deploy --run gates
     expect(patches).toBe(1); // permanent error — no blind retries
   });
 
@@ -221,13 +236,14 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
       informed.push(m);
     });
     const onManualRegistration = vi.fn();
-    await registerFeishuWebhook("https://x.trycloudflare.com", "lark", {
+    const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "lark", {
       readyTimeoutMs: 100,
       readyIntervalMs: 1,
       retryMs: 1,
       apiBase: "http://larksuite.test", // the intl cloud — no v7 config route
       onManualRegistration,
     });
+    expect(ok).toBe("manual"); // the norm on this cloud — a re-run can never succeed, so no re-run gate
     warnSpy.mockRestore();
     infoSpy.mockRestore();
     expect(patches).toBe(1); // a missing route never gets blind retries
@@ -247,7 +263,8 @@ describe("registerFeishuWebhook: waits for /health, then PATCHes the event subsc
     delete process.env.LARK_APP_SECRET;
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    await registerFeishuWebhook("https://x.trycloudflare.com", "lark");
+    const ok = await registerFeishuWebhook("https://x.trycloudflare.com", "lark");
+    expect(ok).toBe("manual"); // not configured is the designed manual path, not a deploy gate
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
