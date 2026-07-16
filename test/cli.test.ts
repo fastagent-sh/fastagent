@@ -87,6 +87,21 @@ describe("cli papercuts", () => {
     expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toBe(customCompose);
   });
 
+  it("deploy docker --tunnel keeps an existing app-only topology and prints an actionable runbook", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-deploy-kept-no-tunnel-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+    expect((await run(["deploy", "docker", dir])).code).toBe(0);
+    const compose = await readFile(join(dir, "fastagent.compose.yml"), "utf8");
+
+    const result = await run(["deploy", "docker", dir, "--tunnel"]);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toMatch(/--tunnel.*kept fastagent\.compose\.yml.*no "tunnel" service/);
+    expect(result.stderr).toMatch(/edit it, delete it and regenerate, or pass --force/);
+    expect(result.stdout).not.toContain("logs -f tunnel");
+    expect(result.stdout).toContain("docker compose -f fastagent.compose.yml up -d --build");
+    expect(await readFile(join(dir, "fastagent.compose.yml"), "utf8")).toBe(compose);
+  });
+
   it("deploy docker --tunnel shapes Compose but does not run Docker without --run", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-deploy-tunnel-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);

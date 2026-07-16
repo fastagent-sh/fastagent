@@ -35,7 +35,7 @@ Model auth: if your local auth is an **env key** (e.g. `OPENAI_API_KEY`), `deplo
 
 ## Local Docker
 
-Prerequisite: Docker Engine/Desktop with the Compose plugin (`docker compose version`).
+Prerequisite: Docker Engine/Desktop with Docker Compose 2.3.3 or newer (`docker compose version`).
 
 ```bash
 fastagent deploy docker

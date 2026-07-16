@@ -142,6 +142,11 @@ describe("deploy/docker/run: local Compose journey", () => {
         gate: /daemon is unavailable/,
       },
       {
+        name: "unsupported Compose file",
+        script: (args) => (args.includes("config") ? { code: 1 } : {}),
+        gate: /generated files require Docker Compose >= 2\.3\.3/,
+      },
+      {
         name: "up",
         script: (args) => {
           if (args.includes("--services")) return { stdout: "agent\n" };

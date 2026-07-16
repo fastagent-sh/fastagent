@@ -5,6 +5,7 @@
  */
 import { waitForHealth } from "../../channels/wait-health.ts";
 import { parseTunnelUrl } from "../../tunnel.ts";
+import { MIN_DOCKER_COMPOSE_VERSION } from "./plan.ts";
 import type { CliRunner } from "../runner.ts";
 
 export interface DockerRunPlan {
@@ -109,7 +110,10 @@ export async function deployDockerRun(
   // both to protect the `agent` run contract and to catch `--tunnel` against a kept non-tunnel topology.
   const configured = await docker([...compose, "config", "--services"], { capture: true, env });
   if (configured.code !== 0) {
-    return gate(`invalid Compose file — fix ${plan.composeFile}, then re-run`);
+    return gate(
+      `could not load ${plan.composeFile} — generated files require Docker Compose >= ` +
+        `${MIN_DOCKER_COMPOSE_VERSION}; upgrade Compose or fix the file, then re-run`,
+    );
   }
   const services = configured.stdout.split(/\s+/).filter(Boolean);
   if (!services.includes("agent")) {

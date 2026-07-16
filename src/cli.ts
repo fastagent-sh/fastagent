@@ -843,13 +843,16 @@ async function runDeploy(): Promise<void> {
     const projectName = toDockerProjectName(basename(target));
     const dockerPlan = (tunnel: boolean) =>
       planDockerDeploy({ projectName, port, modelAuth, channels, tunnel, extraSecrets, ...container });
-    let plan = dockerPlan(!!values.tunnel);
-    // Absence of --tunnel never means "remove it": an existing Compose file is authoritative. Preserve
-    // its generated tunnel shape in the comparison/runbook so a later plain `--run` starts + registers
-    // the topology the operator already chose. `--force` is the explicit reset to a no-tunnel default.
+    const requestedTunnel = !!values.tunnel;
+    let plan = dockerPlan(requestedTunnel);
+    // An existing Compose file is authoritative: shape its comparison/runbook from the topology on disk,
+    // regardless of the current flag. `--force` is the explicit reset to the requested generated shape.
     const composeFile = join(target, plan.composePath);
-    if (!values.tunnel && !values.force && (await exists(composeFile))) {
-      if (composeHasTunnelService(await readFile(composeFile, "utf8"))) plan = dockerPlan(true);
+    let keptWithoutRequestedTunnel = false;
+    if (!values.force && (await exists(composeFile))) {
+      const existingHasTunnel = composeHasTunnelService(await readFile(composeFile, "utf8"));
+      plan = dockerPlan(existingHasTunnel);
+      keptWithoutRequestedTunnel = requestedTunnel && !existingHasTunnel;
     }
     await writeArtifacts(target, plan.artifacts, { neverForce: container.kitDir ? [".dockerignore"] : [] });
     if (values.run) {
@@ -858,12 +861,18 @@ async function runDeploy(): Promise<void> {
         agentDir,
         composeFile: plan.composePath,
         port,
-        requireTunnel: !!values.tunnel,
+        requireTunnel: requestedTunnel,
         modelAuth,
         authPath,
         channels,
         extraSecrets,
       });
+    }
+    if (keptWithoutRequestedTunnel) {
+      console.error(
+        `[fastagent] warn: --tunnel was requested but kept ${plan.composePath} has no "tunnel" service — ` +
+          `edit it, delete it and regenerate, or pass --force`,
+      );
     }
     console.log(plan.runbook.join("\n"));
     return;

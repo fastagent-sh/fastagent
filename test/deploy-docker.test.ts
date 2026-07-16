@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CLOUDFLARED_IMAGE,
+  MIN_DOCKER_COMPOSE_VERSION,
   composeHasTunnelService,
   dockerWebhookPaths,
   planDockerDeploy,
@@ -103,6 +104,7 @@ describe("deploy/docker: planDockerDeploy", () => {
 
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
     const out = runbook(planDockerDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram", "github"] }));
+    expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
     expect(out).toContain("docker compose -f fastagent.compose.yml up -d --build");
     expect(out).toContain("down        # stops containers; keeps the state volume");
     expect(out).toContain("down -v   # DESTRUCTIVE");
@@ -115,6 +117,8 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(toDockerProjectName("My Agent!")).toBe("fastagent-my-agent");
     expect(toDockerProjectName("___")).toBe("fastagent-agent");
     expect(composeHasTunnelService("services:\n  tunnel:\n    image: cloudflare/cloudflared\n")).toBe(true);
+    expect(composeHasTunnelService("services:\n    tunnel:\n        image: cloudflare/cloudflared\n")).toBe(true);
+    expect(composeHasTunnelService("services:\n\ttunnel:\n\t\timage: cloudflare/cloudflared\n")).toBe(true);
     expect(composeHasTunnelService("services:\n  agent:\n")).toBe(false);
     expect(dockerWebhookPaths(["telegram", "github", "feishu", "lark"])).toEqual([
       "/telegram",
