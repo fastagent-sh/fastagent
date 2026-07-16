@@ -33,15 +33,22 @@ export function withSearchTool(tools: AgentTool[]): AgentTool[] {
  *  activates; the model gets the candidates and narrows the query. */
 const MAX_ACTIVATIONS_PER_SEARCH = 5;
 
+/** Miss-path listing cap — same rationale as the activation cap: a typo query must not pour the whole
+ *  catalog (the thing deferral keeps OUT of the context) back in as a tool result. */
+const MAX_MISS_LISTING = 10;
+
 /** Build the `search_tools` loader. Keyword search over the inactive tools' name+description. */
 export function makeSearchToolsTool(): AgentTool {
   return defineTool({
     name: "search_tools",
     description:
-      "Discover and activate additional tools. Part of this agent's toolset is inactive until needed: " +
-      "search by keywords (e.g. what you are trying to do), and matching inactive tools are activated and " +
-      "become callable from that point on (if too many match, you get the candidates back — narrow the " +
-      "query). ALWAYS search here before concluding a capability is missing.",
+      // First line short on purpose: the base prompt's tools list truncates at the first newline, and
+      // the discovery guidance below would otherwise flood it (and duplicate its deferred note).
+      "Discover and activate additional tools.\n" +
+      "Part of this agent's toolset is inactive until needed: search by keywords (e.g. what you are " +
+      "trying to do), and matching inactive tools are activated and become callable from that point on " +
+      "(if too many match, you get the candidates back — narrow the query, or query an exact tool " +
+      "name). ALWAYS search here before concluding a capability is missing.",
     input: z.object({
       query: z.string().min(1).describe("keywords describing the capability you need (e.g. 'weather forecast')"),
     }),
@@ -80,7 +87,11 @@ export function makeSearchToolsTool(): AgentTool {
         if (activeNote) return activeNote;
         const inactive = registered.filter((t) => !active.has(t.name));
         if (inactive.length === 0) return "All tools are already active — nothing to discover.";
-        return `No tools matched "${input.query}". Inactive tools: ${inactive.map(describe).join("; ")}`;
+        // Cap the miss listing like the activation cap — both guard the same semantic (don't pour the
+        // catalog back into the context the deferral exists to protect).
+        const listed = inactive.slice(0, MAX_MISS_LISTING);
+        const more = inactive.length - listed.length;
+        return `No tools matched "${input.query}". Inactive tools: ${listed.map(describe).join("; ")}${more > 0 ? ` … and ${more} more — search with different keywords.` : ""}`;
       }
       if (inactiveMatches.length > MAX_ACTIVATIONS_PER_SEARCH) {
         return `${inactiveMatches.length} inactive tools matched "${input.query}" — too many to activate at once (activation is permanent for this conversation). Narrow the query. Matches: ${inactiveMatches
