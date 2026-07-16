@@ -115,7 +115,9 @@ describe("cli kernel: help styling — bold headings, NO colors; errors carry th
     expect(r.out).toContain("\x1b[1mUsage:\x1b[0m"); // bold section headings
     expect(r.out).toContain("\x1b[1mExamples:\x1b[0m"); // incl. the verbatim ones
     // No foreground COLOR anywhere in help (SGR 30-37 / 90-97) — bold (1) is the only style.
-    const colorCodes = [...r.out.matchAll(/\u001b\[([\d;]+)m/g)].filter((m) =>
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: scanning for ANSI escapes is the point
+    const sgr = /\x1b\[([\d;]+)m/g;
+    const colorCodes = [...r.out.matchAll(sgr)].filter((m) =>
       (m[1] as string).split(";").some((code) => /^[39]\d$/.test(code)),
     );
     expect(colorCodes).toEqual([]);
