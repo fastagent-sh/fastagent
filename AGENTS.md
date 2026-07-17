@@ -49,7 +49,7 @@ src/
 │   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
 │   ├── registration.ts      # SHARED: registrar outcome type (registered|manual|failed) — registrars report facts, deploy owns gate policy
 │   ├── github/              # github channel (+ scaffold/ bundle)
-│   ├── telegram/            # telegram channel — see docs/design/core.md §9.2
+│   ├── telegram/            # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts      # Telegram wiring: ingress + per-turn lifecycle + composition (pure parsing → parse.ts, run one turn → invoke-turn.ts)
 │   │   ├── parse.ts         # pure protocol parsing: field extraction, prompt envelope, summon/route policy (no state/IO)
 │   │   ├── invoke-turn.ts   # run one turn: assemble inputs (resolve attachments: download/vision) + stream agent.invoke
@@ -64,6 +64,9 @@ src/
 │   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles
 │   │   ├── model.ts, normalize.ts, parse.ts, crypto.ts, card.ts # protocol model/content normalization/policy + security/card
 │   │   ├── invoke-turn.ts, preview.ts, seen.ts # turn IO, streaming-card delivery, delivery dedup
+│   │   ├── owned-threads.ts # durable index of Agent-created group threads (admits bare continuations)
+│   │   ├── context-buffer.ts# unsummoned group/thread discussion (durable, commit-on-completed)
+│   │   ├── text.ts          # Unicode-safe code-point slicing for card/text rendering
 │   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)
 │   │   ├── register-app.ts  # `add feishu`: scan-to-create device flow
 │   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation
@@ -72,13 +75,14 @@ src/
 │       ├── lark.ts          # thin branded adapter bound to LARK_COMPAT_CLOUD
 │       ├── onboard.ts       # unbound launcher + credentials + manual config fallback
 │       └── scaffold/        # `add lark` bundle
-├── deploy/                  # `deploy fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §10.5)
+├── deploy/                  # `deploy docker|fly|railway`: host artifacts + runbook + `--run` CLI drive (docs/design/core.md §9)
 │   │                        # LAYOUT: neutral kernel at top (horizontal) + one dir per host (vertical) — new host = new dir, copy fly/
 │   ├── registration-gate.ts # host-NEUTRAL step-7 gate policy: registrars report facts (registered|manual|failed), this owns gate-or-not
 │   ├── preflight.ts         # host-NEUTRAL pre-flight: model-travel gate (modelTravelIssue), channel discovery, auth probe, container facts + warnings
 │   ├── container.ts         # portable Dockerfile + .dockerignore (host-neutral) + the generated-marker predicate
 │   ├── secrets.ts           # required-secret NAMES (runbook) + assembleSecrets VALUES (--run credential carry)
 │   ├── runner.ts            # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
+│   ├── docker/  { plan.ts, run.ts }  # Local Docker: Compose topology (agent + optional Quick Tunnel) + `--run` compose driver
 │   ├── fly/     { plan.ts, run.ts }  # Fly: PLAN (artifacts + runbook, pure) + `--run` driver (drives flyctl behind the runner seam)
 │   └── railway/ { plan.ts, run.ts }  # Railway: same two roles — NOT a copy of Fly (thin config, minted URL, no scriptable scale-to-zero)
 ├── schedule/               # the N axis, clock form: a time-trigger firing the agent on a cron (schedules/<name>.ts)

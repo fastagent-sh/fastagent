@@ -332,6 +332,7 @@ would silently miss clock events.
 ├── auth.json
 ├── sessions/
 ├── channels/telegram/
+├── channels/feishu/
 └── schedule/
 ```
 
@@ -352,7 +353,7 @@ The following are explicit limits, not implied capabilities:
 
 - pi is the reference implementation; additional engine bindings can implement the same Agent contract;
 - `ExecutionEnv` alone is not a complete sandbox for directory agents;
-- GitHub post-ACK work has no replay; Telegram replay is at-least-once;
+- GitHub post-ACK work has no replay; Telegram and Feishu replay is at-least-once;
 - file-backed state is single-process;
 - the repo-as-workspace deploy path is experimental;
 - observability is logs/traces, without an OpenTelemetry exporter.

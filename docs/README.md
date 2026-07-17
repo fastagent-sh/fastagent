@@ -14,6 +14,7 @@ FastAgent is the serving layer for local agent directories. It takes a directory
 2. Run the [Quickstart](quickstart.md) to create and serve a workspace.
 3. Use [Configuration](configuration.md) when choosing models, auth, ports, sessions, tools, and channels.
 4. Pick the integration path you need: [Embedding](embedding.md) or [Channels](channels.md).
+5. Ship the directory with [Deploy](deploy.md) when the agent should run on a host.
 
 Using a coding agent? Give it the repository's [`ai-start.md`](ai-start.md) for an AI-guided setup path.
 
@@ -27,6 +28,7 @@ Using a coding agent? Give it the repository's [`ai-start.md`](ai-start.md) for 
 | Configure model, auth, ports, sessions, tools, and channels | [Configuration](configuration.md) |
 | Embed an agent in an existing app or route | [Embedding](embedding.md) |
 | Connect GitHub, Telegram, or another channel | [Channels](channels.md) |
+| Run the agent on a cron, or let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [API reference](api-reference.md#schedule-authoring) |
 | Ship the agent to a host | [Deploy](deploy.md) |
 
 ## Channel guides

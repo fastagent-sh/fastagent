@@ -27,7 +27,7 @@ Most commands take an optional workspace directory. When omitted, the current di
 | `invoke <message> [dir]` | Run one agent turn and exit. |
 | `fire <name> [dir]` | Run one schedule's turn immediately (authoring loop). |
 | `schedule history <name> [dir]` | Print the run audit for a schedule (or `wake`). |
-| `schedule list [dir]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
+| `schedule list [dir] [--json]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
 | `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
 | `add github|telegram|feishu|lark [dir]` | Scaffold a first-party channel. Feishu is the canonical implementation; Lark international is its protocol-compatible, control-plane-degraded profile. `add feishu` scan-creates/configures the app, persists ID/Secret before Token bootstrap, and resumes a stored pair instead of creating twice. `add lark` opens the intl launcher only for a new/partial pair, validates the App-scoped credentials, probes Feishu's webhook/token automation, and falls back to manual mode/URL setup on the known config-route 404. |
@@ -116,6 +116,7 @@ Options:
 |---|---|
 | `--port N` | Override `http.port` / default `8787`. |
 | `--model spec` | Override model selection. |
+| `--auth-path file` | Override the credential file (default `<state root>/auth.json`). |
 | `--no-watch` | Serve once without the watch supervisor. |
 | `--tunnel` | Open a Cloudflare quick tunnel for webhook testing. |
 | `--no-input` | Never prompt (CI/scripts) — e.g. the first-run model pick becomes an actionable error instead of a question. |
@@ -179,7 +180,8 @@ written by the serving scheduler); `--json` prints the full records, including t
 
 `fastagent schedule list [dir]` shows everything that will fire, from BOTH producers: the static
 `schedules/` files (name + next cron instant) and the agent's pending self-scheduled wake-ups (id, next
-fire, one-shot/cron, session, prompt); `fastagent schedule cancel <id> [dir]` removes one wake-up — the
+fire, one-shot/cron, session, prompt), with `--json` for the machine-readable form;
+`fastagent schedule cancel <id> [dir]` removes one wake-up: the
 operator's kill switch for a runaway recurring wake (the agent's own is the `unwake` tool, which is
 session-scoped).
 
