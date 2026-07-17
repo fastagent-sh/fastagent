@@ -158,7 +158,7 @@ Check:
 
 - `cloudflared` is installed,
 - the public URL printed by FastAgent is the one configured in the provider,
-- the route path matches the channel (`/webhook` for GitHub scaffold, `/telegram` for Telegram scaffold),
+- the route path matches the channel (`/webhook` for the GitHub scaffold, `/telegram` for Telegram, `/feishu` for Feishu, `/lark` for Lark),
 - the provider secret matches your `.env`,
 - your `.env` is loaded from the workspace directory.
 
@@ -197,6 +197,66 @@ Telegram documents/audio/video are downloaded under:
 ```
 
 The path is appended to the prompt. Make sure the agent has filesystem tools enabled and the file still exists. Long-running bots should mount or clean this directory deliberately.
+
+## Feishu URL verification fails
+
+When you save the event Request URL, Feishu sends a `url_verification` challenge that the running
+channel must answer.
+
+Check:
+
+- `fastagent dev --tunnel` (or the deployed service) is running and reachable at the URL you saved,
+- the path matches the channel route (`/feishu` for the Feishu scaffold, `/lark` for Lark),
+- `FEISHU_VERIFICATION_TOKEN` (or `LARK_VERIFICATION_TOKEN`) matches the app's Verification Token,
+- `FEISHU_ENCRYPT_KEY` matches the console's Encrypt Key setting: set both or neither. With an
+  Encrypt Key configured, the channel refuses plaintext events entirely, so a missing or stale key
+  value makes every event fail verification.
+
+`fastagent add feishu` writes these values to `.env` automatically; re-check them after rotating
+keys in the developer console.
+
+## Feishu bot ignores group messages
+
+With only the `im:message.group_at_msg:readonly` scope, the platform delivers just the messages that
+@mention the bot. Unmentioned group or thread discussion never reaches the channel, so it cannot be
+buffered, and bare continuations inside Agent-created threads are not delivered either.
+
+To receive them, add the sensitive `im:message.group_msg` scope (custom apps only, tenant-admin
+approval) and publish a new app version. See the [Feishu channel](feishu.md) guide.
+
+## Schedule did not fire
+
+Cron schedules fire only while a serving process is up:
+
+- `fastagent dev` or `fastagent start` must be running at the cron instant; `invoke` and `fire` do
+  not start the scheduler,
+- a run missed while the process was down is caught up once on the next start, not once per missed
+  slot,
+- a scaled-to-zero deployment sleeps through cron instants; keep one machine running (see
+  [Deploy](deploy.md)).
+
+Diagnose with commands that exit:
+
+```bash
+fastagent schedule list             # everything that will fire, with the next instant
+fastagent schedule history <name>   # did last night's run silently fail?
+fastagent fire <name>               # run the schedule's turn now, without touching cron state
+```
+
+A broken `schedules/<name>.ts` file is reported by `fastagent info` before it ever reaches `dev`.
+
+## Deployed agent crash-loops with `missing model`
+
+The deployed box reads the model only from `fastagent.config.*`. A builder-local `--model` flag,
+`FASTAGENT_MODEL`, or `.env` value does not travel (`.env` is dockerignored). Set
+`model: "provider/id"` in the config file and redeploy. See [Deploy](deploy.md).
+
+## Webhooks stop working after a tunnel restart
+
+Quick Tunnel URLs are ephemeral. Restarting the tunnel container, the Docker daemon, or
+`fastagent dev --tunnel` mints a new URL, and the old webhook registration points at a dead one.
+Re-run `fastagent dev --tunnel` (or `fastagent deploy docker --tunnel --run`) to register the new
+URL. For a stable endpoint, bring your own named tunnel or reverse proxy.
 
 ## Proxy / network issues
 

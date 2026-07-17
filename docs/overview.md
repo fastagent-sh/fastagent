@@ -30,7 +30,7 @@ agent/
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 3. **A reference implementation** — pi-based assembly for `persona.md`, `AGENTS.md` context, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `fire`, `schedule`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
-5. **Composable adapters** — GitHub, Telegram, the default local invoke channel, and a small public kit for third-party channels.
+5. **Composable adapters**: GitHub, Telegram, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
 6. **Time triggers** — cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit (`fastagent schedule history`).
 
 ## Design choices
@@ -121,13 +121,14 @@ Implemented today:
 - Agent Handler v0.1 reference implementation over pi.
 - Directory assembly from `persona.md`, `AGENTS.md` project context, `skills/`, discovered `tools/`, and `fastagent.config.*`.
 - HTTP/SSE invoke channel.
-- GitHub and Telegram channel adapters.
-- `dev`, `chat`, `invoke`, `tool`, `info`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` (`--run` drives Docker Compose or the host CLI end-to-end).
+- GitHub, Telegram, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
+- Cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit.
+- `dev`, `chat`, `invoke`, `tool`, `info`, `fire`, `schedule`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
 - CLI login backed by a project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`; override: `--auth-path` / `FASTAGENT_AUTH_PATH`, root: `FASTAGENT_STATE_DIR`).
 
 Not implemented yet:
 
-- General durable post-ACK execution for every webhook channel (Telegram has an at-least-once intent layer; GitHub does not).
+- General durable post-ACK execution for every webhook channel (Telegram and Feishu have an at-least-once intent layer; GitHub does not).
 - Multi-instance session/lease/auth backends out of the box (the single-machine tier is the shipped scope).
 - Additional engine reference bindings beyond pi.

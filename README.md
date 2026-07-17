@@ -36,7 +36,7 @@ FastAgent is the missing bridge from local agent directory to live service.
 ## Features
 
 - **Vibe first — a directory is an agent.** Point FastAgent at the `AGENTS.md` + `skills/` you already vibed in a coding agent. Markdown instructions, reusable skills, and TypeScript tools stay as files you inspect, edit, and commit — no new DSL, no framework rewrite.
-- **Channels.** Serve the same agent as a GitHub PR reviewer, a Telegram bot, an HTTP/SSE endpoint, or your own adapter — verified webhooks, streaming replies, group-aware.
+- **Channels.** Serve the same agent as a GitHub PR reviewer, a Telegram bot, a Feishu or Lark bot, an HTTP/SSE endpoint, or your own adapter: verified webhooks, streaming replies, group-aware.
 - **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key; typed tools discovered from `tools/` (the filename is the name, Zod-validated); Agent Skills loaded on demand. Built on the open-source [pi](https://github.com/earendil-works/pi) harness.
 - **App embedding — your stack, we plug in.** Mount the agent in your Next / Astro / Hono / Bun / Node route with one handler, or call `invoke` like any function from your own code — your auth, your database, your infra. FastAgent composes with your app, never owns it.
 - **Deploy anywhere.** No application build step — the directory is the deployable unit. `fastagent deploy docker|fly|railway` generates the container + target config and a runbook (`--run` drives it to completion). Local Docker gets user-owned Compose + durable state; optional `--tunnel` adds an ephemeral Quick Tunnel service for webhook channels. Durable ingress remains yours.
@@ -194,7 +194,7 @@ FastAgent is pre-1.0. The stable design center is the Agent Handler contract in 
 
 The neutral contract leaves room for capabilities that are not complete product features yet:
 
-- **Durable execution** — Telegram accepted turns replay at least once today; general durability and exactly-once execution remain future backend work.
+- **Durable execution**: Telegram and Feishu accepted turns replay at least once today; general durability and exactly-once execution remain future backend work.
 - **Sandboxed execution** — `ExecutionEnv` is an assembly seam, but the pi coding tools and project-context loader are still local; a complete sandbox adapter is future work.
 - **Observability export** — leveled logs and per-turn traces exist today; an OpenTelemetry exporter does not.
 - **More harness bindings and channels** — pi is the built-in harness; another harness can implement the Agent contract, and community channels can use the channel kit.

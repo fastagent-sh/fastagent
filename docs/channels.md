@@ -208,5 +208,6 @@ Read [Channel development](channel-development.md) for adapter design, packaging
 
 - [GitHub channel](github.md)
 - [Telegram channel](telegram.md)
+- [Feishu channel (Lark compatibility)](feishu.md)
 - [Channel development](channel-development.md)
 - [Embedding](embedding.md)
