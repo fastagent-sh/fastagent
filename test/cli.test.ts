@@ -170,10 +170,10 @@ describe("cli papercuts", () => {
     expect((await run(["-v"])).stdout.trim()).toBe(v.stdout.trim());
   });
 
-  it("invoke without a message prints usage to stderr and exits 2 (stdout clean)", async () => {
+  it("invoke without a message is a usage error on stderr, exits 2 (stdout clean)", async () => {
     const { code, stdout, stderr } = await run(["invoke"]);
     expect(code).toBe(2);
-    expect(stderr).toMatch(/usage: fastagent invoke/);
+    expect(stderr).toMatch(/missing required argument 'message'/);
     expect(stdout).toBe("");
   });
 
@@ -204,10 +204,10 @@ describe("cli papercuts", () => {
     expect(stderr).not.toMatch(/routes:.*\/invoke/);
   });
 
-  it("fire without a name prints usage to stderr and exits 2 (stdout clean)", async () => {
+  it("fire without a name is a usage error on stderr, exits 2 (stdout clean)", async () => {
     const { code, stdout, stderr } = await run(["fire"]);
     expect(code).toBe(2);
-    expect(stderr).toMatch(/usage: fastagent fire/);
+    expect(stderr).toMatch(/missing required argument 'name'/);
     expect(stdout).toBe("");
   });
 

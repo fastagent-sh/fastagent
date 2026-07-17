@@ -1,0 +1,41 @@
+/** `fastagent invoke <message> [dir]`: run ONE turn against the assembled agent, then exit. */
+import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { loadDotEnv } from "../../env.ts";
+import { resolveAuthPathOverride } from "../../engines/pi/config.ts";
+import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
+import { runInvokeStream } from "../../invoke-stream.ts";
+import { installProxyFetch } from "../../proxy.ts";
+import { failStartup } from "../fail.ts";
+import { reportAuth, resolveFirstRunModel } from "../shared.ts";
+
+export interface InvokeOptions {
+  model?: string;
+  authPath?: string;
+  /** false ⇔ `--no-input`. */
+  input?: boolean;
+}
+
+export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
+  const invokeDir = resolve(dirArg);
+  loadDotEnv(invokeDir);
+  installProxyFetch();
+  await resolveFirstRunModel(invokeDir, opts);
+  const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(invokeDir, {
+    model: opts.model,
+    authPath: resolveAuthPathOverride(opts.authPath),
+  }).catch(failStartup);
+  console.error(`[fastagent] invoke: ${invokeDir} (${modelSpec})`);
+  await reportAuth(modelSpec, authPath);
+  // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
+  // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).
+  const exitCode = await runInvokeStream(
+    agent.invoke({ session: randomUUID() }, { text: message }),
+    (text) => process.stdout.write(text),
+    (line) => console.error(line),
+  );
+  process.stdout.write("\n");
+  // Always exit explicitly: the undici proxy agent's keep-alive sockets would otherwise hold the
+  // event loop open after a successful one-shot turn.
+  process.exit(exitCode);
+}

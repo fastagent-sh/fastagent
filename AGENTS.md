@@ -25,7 +25,8 @@ src/
 ├── collect.ts               # buffered consumption helper
 ├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
 ├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
-├── cli.ts                   # command entry points (process side effects live here)
+├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)
+├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), shared.ts/serve.ts (cross-command helpers; process side effects live in the command modules), fail.ts, commands/ (one module per command)
 ├── invoke-stream.ts, cli-models.ts, cli-auth.ts, cli-add-feishu.ts # command rendering layers (`invoke` stream → exit code, `models`/auth-report output, `add feishu|lark` app onboarding)
 ├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
 ├── log.ts                   # leveled logging singleton (dev=debug, start=info)

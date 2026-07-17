@@ -59,7 +59,7 @@ Options:
 ## `fastagent info`
 
 ```bash
-fastagent info [dir] [--json] [--auth-path file]
+fastagent info [dir] [--json] [--model provider/modelId] [--auth-path file] [--sessions-dir dir]
 ```
 
 Prints the assembled surface without starting a server:
@@ -89,7 +89,7 @@ Use a listed spec with `--model`, `FASTAGENT_MODEL`, or `fastagent.config.*`.
 ## `fastagent login`
 
 ```bash
-fastagent login [provider] [--auth-path file]
+fastagent login [provider] [--auth-path file] [--no-input]
 ```
 
 Authenticates a model provider and stores credentials in the **project-level** `<state root>/auth.json` — by default `<cwd>/.fastagent/auth.json` (root override: `FASTAGENT_STATE_DIR`; file override: `--auth-path` / `FASTAGENT_AUTH_PATH`; run it from `$HOME` to write the global `~/.fastagent/auth.json`). There is no implicit fallback between the project and global files — the default is project-level for **isolation** (different agents can use different accounts) and **fail-visibly** (a missing credential surfaces instead of being masked by a machine-global one absent on a fresh box). So `cd` into your agent before logging in. FastAgent uses its own credential file, separate from pi's CLI state.
@@ -99,7 +99,7 @@ Authenticates a model provider and stores credentials in the **project-level** `
 ## `fastagent dev`
 
 ```bash
-fastagent dev [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel]
+fastagent dev [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel] [--no-input]
 ```
 
 Assembles the workspace and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
@@ -118,6 +118,7 @@ Options:
 | `--model spec` | Override model selection. |
 | `--no-watch` | Serve once without the watch supervisor. |
 | `--tunnel` | Open a Cloudflare quick tunnel for webhook testing. |
+| `--no-input` | Never prompt (CI/scripts) — e.g. the first-run model pick becomes an actionable error instead of a question. |
 
 Model precedence:
 
@@ -136,7 +137,7 @@ Opens the same assembled workspace in pi's interactive TUI. This is useful for t
 ## `fastagent invoke`
 
 ```bash
-fastagent invoke <message> [dir] [--model provider/modelId] [--auth-path file]
+fastagent invoke <message> [dir] [--model provider/modelId] [--auth-path file] [--no-input]
 ```
 
 Runs one turn through the same workspace assembly and exits:
@@ -150,7 +151,7 @@ Use this for smoke tests and scripts.
 ## `fastagent fire`
 
 ```bash
-fastagent fire <name> [dir] [--model provider/modelId] [--auth-path file]
+fastagent fire <name> [dir] [--model provider/modelId] [--auth-path file] [--no-input]
 ```
 
 Runs ONE schedule's turn immediately — the authoring loop for schedules (like `invoke` is for a
@@ -234,7 +235,7 @@ Use `--update` to overwrite an existing vendored skill. Review the result with `
 ## `fastagent start`
 
 ```bash
-fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel]
+fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel] [--no-input]
 ```
 
 Runs the workspace in production posture: no watch, same assembly as `dev`.
@@ -260,7 +261,30 @@ FASTAGENT_STATE_DIR=/data/fastagent fastagent start
 
 ## Global options
 
+Flags belong to their command and come **after** it: `fastagent info --json`, not
+`fastagent --json info`. (Earlier releases accepted flags anywhere on the line; that form now fails
+with `unknown option`, exit 2 — move the flag after the command/subcommand.)
+
+Only two options are global:
+
 | Option | Meaning |
 |---|---|
-| `-h`, `--help` | Print CLI help. |
+| `-h`, `--help` | Print help. Works per command too: `fastagent deploy --help`, `fastagent help deploy`. |
 | `-v`, `--version` | Print the package version. |
+
+Recurring per-command options (same meaning everywhere they appear):
+
+| Option | Commands | Meaning |
+|---|---|---|
+| `--no-input` | `dev`, `start`, `invoke`, `fire`, `login` | Never prompt; missing information becomes an error with the flag to pass. |
+| `--model <provider/modelId>` | assembly commands | Model override (`--model > FASTAGENT_MODEL > config`). |
+| `--auth-path <file>` | assembly commands, `login` | Credentials file override. |
+| `--json` | `info`, `schedule history`, `schedule list` | Machine-readable output. |
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success (including help/version displays). |
+| `1` | Runtime failure — a failed turn, a broken definition, a deploy gate, an unknown tool/schedule name, invalid runtime configuration (e.g. a bad `PORT` env). |
+| `2` | Usage error — unknown command/flag, missing/empty/invalid arguments, conflicting flags. A mistyped command suggests the nearest one (`fastagent depoly` → “Did you mean deploy?”). |

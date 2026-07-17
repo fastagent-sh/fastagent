@@ -325,9 +325,10 @@ describe("init: scaffoldWorkspace", () => {
     const self = await freshDir();
     expect(await cliInit(["init", "--agent-dir", "."], self)).toMatch(/must be a subdirectory/);
 
-    // Conflicting flags are refused.
+    // Conflicting flags are refused (by the parser — a usage error, nothing written).
     const both = await freshDir();
-    expect(await cliInit(["init", "--flat", "--agent-dir", "agent"], both)).toMatch(/conflict/);
+    expect(await cliInit(["init", "--flat", "--agent-dir", "agent"], both)).toMatch(/cannot be used with/);
+    expect(await exists(join(both, "persona.md"))).toBe(false);
   });
 
   it("createPiAgentFromWorkspace wires config.agentDir end-to-end: persona/tools from agentDir, ② context from cwd", async () => {
