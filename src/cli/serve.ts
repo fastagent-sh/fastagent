@@ -4,7 +4,7 @@
  * tunnel. Bodies moved verbatim from cli.ts; `values.tunnel` became a parameter.
  */
 import type { Agent } from "../agent.ts";
-import { createInvokeHandler } from "../channels/http.ts";
+import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
 import { text } from "../channels/respond.ts";
 import { loadChannels } from "../engines/pi/channel.ts";
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
@@ -19,8 +19,14 @@ import { failStartup } from "./fail.ts";
 /**
  * The routes this deployment serves: a default `GET /health` plus the workspace's discovered
  * `channels/` — or the default invoke channel at POST /invoke when none are declared.
+ * `builtinInvoke` records which of the two it was: the "try it" curl hint holds only for the
+ * built-in handler (a user channel at the same key may speak a different body shape).
  */
-export async function routesFor(workspaceDir: string, agent: Agent, stateRoot: string): Promise<Routes> {
+export async function routesFor(
+  workspaceDir: string,
+  agent: Agent,
+  stateRoot: string,
+): Promise<{ routes: Routes; builtinInvoke: boolean }> {
   const { routes, collisions, failures } = await loadChannels(workspaceDir, { agent, stateRoot });
   for (const c of collisions) {
     console.error(
@@ -34,23 +40,39 @@ export async function routesFor(workspaceDir: string, agent: Agent, stateRoot: s
         `fix it, or rename an intentionally disabled file to *.disabled`,
     );
   }
-  const channels = Object.keys(routes).length > 0 ? routes : { "POST /invoke": createInvokeHandler(agent) };
+  const builtinInvoke = Object.keys(routes).length === 0;
+  const channels = builtinInvoke ? { "POST /invoke": createInvokeHandler(agent) } : routes;
   // Add a default GET /health unless a channel already covers it (overlap, not exact-key: an
   // any-method `/health` also handles GET, so the built-in steps aside).
   const healthCovered = Object.keys(channels).some((k) => {
     const e = parseRouteKey(k);
     return e.path === "/health" && (e.method === undefined || e.method === "GET");
   });
-  return healthCovered ? channels : { "GET /health": () => text("ok\n", 200), ...channels };
+  return {
+    routes: healthCovered ? channels : { "GET /health": () => text("ok\n", 200), ...channels },
+    builtinInvoke,
+  };
 }
 
 /** Serve `routes` via the Node host. serveNode owns binding; the CLI owns policy (errors, ready signal, log). */
-export function serve(routes: Routes, port: number, onListening?: (boundPort: number) => void): void {
+export function serve(
+  { routes, builtinInvoke }: { routes: Routes; builtinInvoke: boolean },
+  port: number,
+  onListening?: (boundPort: number) => void,
+): void {
   serveNode(router(routes), { port }).listening.then(
     (boundPort) => {
       process.send?.({ type: "ready", port: boundPort }); // tell the dev supervisor we bound + on which port
       log.info(`[fastagent] http channel on :${boundPort}`);
       log.info(`[fastagent] routes: ${Object.keys(routes).join(", ") || "(none)"}`);
+      // Proof of life: end setup with an observable success, not an inferred one. Only for the
+      // BUILT-IN invoke handler — its body ships from the http channel (INVOKE_EXAMPLE_BODY, pinned
+      // by test); a user channel at the same key may speak a different shape, so no hint there.
+      if (builtinInvoke) {
+        log.info(
+          `[fastagent] try it: curl -s localhost:${boundPort}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
+        );
+      }
       onListening?.(boundPort);
     },
     (error: NodeJS.ErrnoException) => {

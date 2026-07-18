@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { createInvokeHandler, nodeListener, inMemorySessionStore, type Agent, type AgentEvent } from "../src/index.ts";
+import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
@@ -50,6 +51,15 @@ describe("invoke handler (Fetch/SSE)", () => {
       .join("");
     expect(text).toBe("hello over http");
     expect(events.at(-1)).toEqual({ type: "completed" });
+  });
+
+  it("INVOKE_EXAMPLE_BODY (the CLI's \"try it\" hint) satisfies the handler's shape check", async () => {
+    // The constant's contract: it lives next to the shape check and must keep passing it — this test
+    // is what actually prevents the curl hint from drifting when the protocol changes.
+    const handler = createInvokeHandler(makeAgent([fauxAssistantMessage("ok")]));
+    const res = await handler(new Request("http://app/invoke", { method: "POST", body: INVOKE_EXAMPLE_BODY }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
 
   it("same-session concurrency: one stream completes, the other receives failed 'session busy'", async () => {

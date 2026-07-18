@@ -11,9 +11,9 @@ Common FastAgent setup and runtime issues.
 ## `missing model`
 
 FastAgent needs a model spec such as `openai-codex/gpt-5.5`. In a terminal, `dev` / `start` /
-`invoke` prompt you to pick one from the providers you are logged into (run `fastagent login` first)
-and save it. This error means the run is **non-interactive** (CI, a container, a piped command) with
-no model set.
+`invoke` prompt you to pick one from the full catalog (logging you in inline when the pick needs
+auth) and save it. This error means the run is **non-interactive** (CI, a container, a piped
+command) with no model set.
 
 Check available specs:
 

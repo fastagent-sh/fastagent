@@ -98,9 +98,9 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 
   // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
   const traced = logAgentLoop(agent);
-  const routes = await routesFor(agentDir, traced, stateRoot).catch(failStartup);
+  const routed = await routesFor(agentDir, traced, stateRoot).catch(failStartup);
   await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false);
-  serve(routes, portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, (p) =>
+  serve(routed, portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, (p) =>
     maybeTunnel(agentDir, p, opts.tunnel ?? false),
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an

@@ -72,8 +72,8 @@ CLI --model > FASTAGENT_MODEL > fastagent.config.* model
 ```
 
 With none of these set, a serving command (`dev` / `start` / `invoke`) run in a terminal prompts you
-to pick from the models of the providers you are logged into, then writes the choice back to the
-config. Non-interactive runs (CI, a container) skip the prompt and fail with a clear `missing model`
+to pick from the full model catalog (ready providers first, annotated with the credential source;
+a pick that needs auth runs `login` inline), then writes the choice back to the config. Non-interactive runs (CI, a container) skip the prompt and fail with a clear `missing model`
 error instead — set one of the sources above.
 
 Examples:

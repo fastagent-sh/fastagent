@@ -6,8 +6,8 @@
  */
 import { type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { log } from "../../log.ts";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
+import { hasInteractiveLogin } from "./login.ts";
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
   /** Credentials file path. Defaults to the global `~/.fastagent/auth.json`; the directory opener passes
@@ -33,35 +33,40 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
   return models;
 }
 
+/** Per-provider auth status for the first-run model picker: usable now (with the source label), not
+ *  configured, or configured-but-broken (expired token, refresh failure, corrupt store — kept as DATA
+ *  so the picker can show it instead of silently dropping the provider). Non-ready states carry
+ *  whether `loginFlow` can actually fix them ({@link hasInteractiveLogin}), so the picker's hint
+ *  never promises a login that doesn't exist (env-key-only providers). */
+export type ProviderAuthStatus =
+  | { state: "ready"; source?: string }
+  | { state: "unconfigured"; interactiveLogin: boolean }
+  | { state: "broken"; message: string; interactiveLogin: boolean };
+
 /**
- * The "provider/modelId" specs whose provider currently has USABLE credentials (a stored login or an
- * env key) — the menu for the first-run model picker (`fastagent dev`/`start`/`invoke` with no model
- * set). Auth is provider-scoped, so probe once per provider (any of its models) rather than per model.
- * A provider that resolves no auth (unconfigured) or rejects it (configured-but-expired) is omitted:
- * the picker offers only models that would actually run now; `fastagent login` fixes the rest. Sorted.
- *
- * pi deliberately has no "best/tier" ranking on Model, so this does not auto-pick — it narrows the menu
- * to what the user can use and lets them choose (mirroring pi-coding-agent's select-then-persist).
+ * Probe every provider's auth once (auth is provider-scoped, so any of its models works as the probe)
+ * — the status map behind the first-run model picker (`fastagent dev`/`start`/`invoke` with no model
+ * set). The picker shows the FULL catalog annotated with these statuses, so "what fastagent supports"
+ * and "what is authenticated on this machine" stay distinguishable; a needs-login choice triggers an
+ * inline `loginFlow`. Providers with no models are omitted (nothing to pick).
  */
-export async function configuredModelSpecs(models: Models): Promise<string[]> {
-  const specs: string[] = [];
+export async function providerAuthStatuses(models: Models): Promise<Map<string, ProviderAuthStatus>> {
+  const statuses = new Map<string, ProviderAuthStatus>();
   for (const provider of models.getProviders()) {
     const [probe] = provider.getModels();
     if (!probe) continue;
-    let usable: boolean;
+    const interactiveLogin = hasInteractiveLogin(provider);
     try {
-      usable = (await models.getAuth(probe)) !== undefined;
+      const auth = await models.getAuth(probe);
+      statuses.set(
+        provider.id,
+        auth ? { state: "ready", source: auth.source } : { state: "unconfigured", interactiveLogin },
+      );
     } catch (error) {
-      // Configured-but-broken (expired token, a refresh network failure, a corrupt store): omit it
-      // from the menu, but SAY so — a silent disappearance is the same fail-visibly gap the caller
-      // guards against for the top-level enumeration. `undefined` (plainly unconfigured) stays quiet.
-      log.warn(`[fastagent] skipping provider "${provider.id}": auth check failed (${(error as Error).message})`);
-      continue;
+      statuses.set(provider.id, { state: "broken", message: (error as Error).message, interactiveLogin });
     }
-    if (!usable) continue;
-    for (const model of provider.getModels()) specs.push(`${provider.id}/${model.id}`);
   }
-  return specs.sort();
+  return statuses;
 }
 
 /**

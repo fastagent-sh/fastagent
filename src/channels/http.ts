@@ -20,6 +20,10 @@ const MAX_BODY_BYTES = 1 << 20;
 
 const encoder = new TextEncoder();
 
+/** A valid example request body for the invoke handler — lives HERE, next to the shape check it must
+ *  satisfy, so the CLI's "try it" hint can't drift from the protocol. */
+export const INVOKE_EXAMPLE_BODY = '{"session":"dev","text":"hello"}';
+
 /**
  * Fetch-shaped invoke handler. Mount it at any route in the host app; it accepts POST only.
  * Returns SSE (`text/event-stream`) with one `data:` line per AgentEvent.
@@ -41,6 +45,7 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
     if (typeof session !== "string" || typeof promptText !== "string") {
       return text('need { "session": string, "text": string }\n', 400);
     }
+    // ^ the request shape INVOKE_EXAMPLE_BODY (below) must keep satisfying.
 
     // Take the iterator explicitly so the stream's cancel() (consumer disconnect) can return() it and
     // run invoke's cancellation cleanup (SPEC MUST 3). pull = backpressure: the next event is produced on demand.

@@ -58,12 +58,13 @@ fastagent info
 
 **Initializing inside an existing project?** When the directory is already claimed by a toolchain or deploy setup (a `tsconfig.json`/framework config, a non-JS build manifest like `go.mod`/`pyproject.toml`/`Cargo.toml`, a `Dockerfile`/`fly.toml`/`railway.toml`, or occupied `tools/`, `channels/`, or `skills/`), `init` puts the agent kit into `./agent` instead of flat, writes `agentDir: "./agent"` into the config, and prints the reason — the host's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. Override with `--flat` or `--agent-dir <name>`.
 
-A fresh workspace presets no model. Log in first, **inside the workspace** — `fastagent login` stores
-credentials per project (`<cwd>/.fastagent/auth.json`, no global fallback), so a login run elsewhere is
-invisible here (alternative: a provider API key in the workspace `.env`). Then on the first
-`fastagent dev` (or `start` / `invoke`) in a terminal, FastAgent lists the models of the providers you
-are logged into and writes your pick back to `fastagent.config.mjs`. To set it non-interactively (or in
-CI/deploy, where there is no prompt):
+A fresh workspace presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
+terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a
+stored login, or a provider API key in your env/`.env`) come first, annotated with the source; picking
+one that needs auth runs the login flow right there — and writes your pick back to
+`fastagent.config.mjs`. Credentials are stored per project (`<cwd>/.fastagent/auth.json`, no global
+fallback), so a login from another directory is invisible here. To set the model non-interactively
+(or in CI/deploy, where there is no prompt):
 
 ```bash
 fastagent dev --model provider/model-id

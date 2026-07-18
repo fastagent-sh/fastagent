@@ -70,9 +70,9 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
-  const routes = await routesFor(a.agentDir, traced, a.stateRoot).catch(failStartup);
+  const routed = await routesFor(a.agentDir, traced, a.stateRoot).catch(failStartup);
   await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
-  serve(routes, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.agentDir, p, opts.tunnel ?? false));
+  serve(routed, portFlag ?? a.config.http?.port ?? 8787, (p) => maybeTunnel(a.agentDir, p, opts.tunnel ?? false));
 }
 
 type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;

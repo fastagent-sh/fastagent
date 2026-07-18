@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatModelsCommand } from "../src/cli-models.ts";
+import { buildModelPickerOptions, formatModelsCommand } from "../src/cli-models.ts";
+import type { ProviderAuthStatus } from "../src/engines/pi/models.ts";
 
 describe("cli-models: formatModelsCommand (`fastagent models [search]` stdout/stderr)", () => {
   it("no search → all lines; a substring filters; a miss → empty lines + an stderr diagnostic", () => {
@@ -7,6 +8,26 @@ describe("cli-models: formatModelsCommand (`fastagent models [search]` stdout/st
     expect(formatModelsCommand(specs)).toEqual({ lines: specs }); // no search → all, no error
     expect(formatModelsCommand(specs, "OpenAI")).toEqual({ lines: ["openai/gpt-5", "openai/o3"] }); // case-insensitive
     expect(formatModelsCommand(specs, "zzznope")).toEqual({ lines: [], error: 'no model matches "zzznope"' }); // miss
+  });
+
+  it("buildModelPickerOptions: ready first (annotated with the source), remedy-annotated after, broken visible", () => {
+    const statuses = new Map<string, ProviderAuthStatus>([
+      ["openai", { state: "ready", source: "OPENAI_API_KEY" }],
+      ["oauthy", { state: "ready" }], // no source label → plain "ready"
+      ["anthropic", { state: "unconfigured", interactiveLogin: true }],
+      ["envonly", { state: "unconfigured", interactiveLogin: false }], // no login flow → don't promise one
+      ["codex", { state: "broken", message: "expired", interactiveLogin: true }],
+    ]);
+    const specs = ["anthropic/claude", "codex/gpt-5.5", "envonly/m1", "oauthy/m1", "openai/gpt-5", "unknown/m2"];
+    expect(buildModelPickerOptions(specs, statuses)).toEqual([
+      // ready group leads, input order preserved within each group
+      { value: "oauthy/m1", label: "oauthy/m1", hint: "ready" },
+      { value: "openai/gpt-5", label: "openai/gpt-5", hint: "ready — OPENAI_API_KEY" },
+      { value: "anthropic/claude", label: "anthropic/claude", hint: "login required" },
+      { value: "codex/gpt-5.5", label: "codex/gpt-5.5", hint: "login required — stored auth unusable: expired" },
+      { value: "envonly/m1", label: "envonly/m1", hint: "API key required — set the provider's env var" },
+      { value: "unknown/m2", label: "unknown/m2", hint: "auth required" }, // absent from the map → neutral, no login claim
+    ]);
   });
 
   it("ranks a provider-name match above an incidental model-id match (anthropic/* before bedrock/anthropic.*)", () => {

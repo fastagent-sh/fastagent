@@ -245,6 +245,14 @@ export function resolveAgentDir(dir: string, config: FastagentConfig): string {
   return resolve(dir, config.agentDir ?? ".");
 }
 
+/** The provider prefix of a "provider/modelId" spec. A spec without "/" returns whole — downstream
+ *  lookups then miss visibly (an unknown-provider error / a login-required hint), never a mangled id
+ *  (`slice(0, indexOf("/"))` silently drops the last char when "/" is absent). */
+export function providerOf(spec: string): string {
+  const slash = spec.indexOf("/");
+  return slash > 0 ? spec.slice(0, slash) : spec;
+}
+
 /** Resolve "provider/modelId" → a pi Model from `models`, so the harness resolves auth from the same collection. */
 export function resolveModel(models: Models, spec: string): AnyModel {
   const slash = spec.indexOf("/");

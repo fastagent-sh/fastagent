@@ -1,22 +1,29 @@
 /**
  * Helpers shared across command modules: interactivity gates, port parsing, the startup auth report,
- * and first-run model resolution. Bodies moved verbatim from cli.ts; the module-scoped flag access
- * (`values.*`) became parameters.
+ * first-run model resolution, and the login terminal IO. Bodies moved verbatim from cli.ts; the
+ * module-scoped flag access (`values.*`) became parameters.
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { relative } from "node:path";
-import { autocomplete, isCancel, select } from "@clack/prompts";
+import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
+import { buildModelPickerOptions } from "../cli-models.ts";
 import { fastagentCredentialStore } from "../engines/pi/auth.ts";
 import {
   isValidPort,
+  listModels,
   loadConfig,
+  providerOf,
   resolveAuthPath,
   resolveModelSpec,
+  resolveStateRoot,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
-import { configuredModelSpecs, createPiModels, probeAuthSource } from "../engines/pi/models.ts";
+import { ensureStateRootSelfIgnored, isUnderDir } from "../engines/pi/definition.ts";
+import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
+import { createPiModels, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "../cli-auth.ts";
 import { log } from "../log.ts";
+import { openExternalUrl } from "../open-url.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
 /** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
@@ -44,7 +51,7 @@ export function parsePort(value: string | undefined, source: string, from: "flag
 
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. Non-blocking. */
 export async function reportAuth(modelSpec: string, authPath: string): Promise<void> {
-  const provider = modelSpec.slice(0, modelSpec.indexOf("/"));
+  const provider = providerOf(modelSpec);
   const source = await probeAuthSource(createPiModels({ authPath }), modelSpec);
   // Only when nothing satisfies auth do we read the store (refresh-FREE) to tell "nothing stored" from
   // "stored but unusable" — see formatAuthReport for why. store.read warns on a corrupt file itself.
@@ -60,12 +67,14 @@ export async function reportAuth(modelSpec: string, authPath: string): Promise<v
 }
 
 /**
- * First-run model resolution for the serving commands. When no model is set (flag/env/config), and
- * we're on a TTY, pick one from the providers the user is logged into and persist the choice. A no-op
- * when a model is already set; on a non-TTY (CI/deploy), or with `--no-input`, or with nothing
- * configured it stays silent and lets the opener raise its clear "missing model" error. The pick is
- * exported to FASTAGENT_MODEL so a spawned `dev` worker inherits it, and best-effort written back to
- * the config so the next run is quiet.
+ * First-run model resolution for the serving commands: ONE funnel, no dead ends. When no model is set
+ * (flag/env/config) and we're on a TTY, show the FULL catalog annotated per provider — ready (with the
+ * credential source, so which account pays is visible at the decision point) or login-required — and,
+ * when the choice needs auth, run the login flow INLINE instead of exiting with "run `fastagent login`
+ * and come back". A no-op when a model is already set; on a non-TTY (CI/deploy), with `--no-input`, on
+ * cancel, or on a failed login it stays quiet and lets the opener raise its clear "missing model"
+ * error. The pick is exported to FASTAGENT_MODEL so a spawned `dev` worker inherits it, and
+ * best-effort written back to the config so the next run is quiet.
  */
 export async function resolveFirstRunModel(
   workspaceDir: string,
@@ -77,30 +86,68 @@ export async function resolveFirstRunModel(
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
   const authPath = resolveAuthPath(workspaceDir, options.authPath);
-  let specs: string[];
+  const models = createPiModels({ authPath });
+  let statuses: Awaited<ReturnType<typeof providerAuthStatuses>>;
   try {
-    specs = await configuredModelSpecs(createPiModels({ authPath }));
+    statuses = await providerAuthStatuses(models);
   } catch (error) {
-    // Enumerating providers/auth threw — a system fault (a corrupt auth store, a throwing provider),
-    // NOT "not logged in". Surface it instead of masking it as the login hint; the opener then still
-    // raises the clear missing-model error.
-    log.warn(`[fastagent] could not list configured models: ${(error as Error).message}`);
+    // Per-provider auth throws are captured as `broken` INSIDE providerAuthStatuses; reaching here
+    // means the enumeration itself failed (getProviders / a provider with no probe-able surface) — a
+    // system fault. Surface it; the opener then still raises the clear missing-model error.
+    log.warn(`[fastagent] could not probe provider auth: ${(error as Error).message}`);
     return;
   }
-  if (specs.length === 0) {
-    log.warn(
-      `[fastagent] no model set and no authenticated provider — run \`fastagent login\`, then \`fastagent dev\``,
-    );
-    return;
-  }
-  const r = await (specs.length > 7 ? autocomplete : select)({
+  const r = await autocomplete({
     message: "Choose a model for this agent",
-    options: specs.map((s) => ({ value: s, label: s })),
+    options: buildModelPickerOptions(listModels(models), statuses),
   });
   if (isCancel(r)) return; // cancelled: let the opener report the missing model
   const chosen = r as string;
+  const provider = providerOf(chosen);
+  const status = statuses.get(provider);
+  if (status && status.state !== "ready" && !status.interactiveLogin) {
+    // No login flow exists for this provider — the model choice is still valid (its validity is
+    // independent of credentials), so KEEP it and name the remedy; the startup auth report warns too.
+    log.warn(`[fastagent] "${provider}" has no interactive login — set its API key env var; invokes fail until then`);
+  } else if (status?.state !== "ready") {
+    // Inline login. Same leak guard as `login`: self-ignore the state root BEFORE a credential
+    // can land in-tree, so the secret is never untracked-but-committable.
+    const stateRoot = resolveStateRoot(workspaceDir);
+    if (isUnderDir(authPath, stateRoot)) await ensureStateRootSelfIgnored(workspaceDir, stateRoot);
+    try {
+      await loginFlow(terminalLoginIO(), { provider, authPath });
+      console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
+    } catch (error) {
+      if (error instanceof LoginCancelled) return; // user backed out — discard the choice, like a picker cancel
+      // A FAILED login keeps the choice (same policy as the env-only branch above: model validity is
+      // independent of credentials) — the pick persists, the startup auth report names the remedy,
+      // and a later `fastagent login` fixes auth without re-picking the model.
+      log.warn(
+        `[fastagent] login for "${provider}" failed: ${(error as Error).message} — model saved; run \`fastagent login\` to fix auth`,
+      );
+    }
+  }
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
   await persistModelChoice(workspaceDir, configPath, chosen);
+}
+
+/** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. Shared
+ *  by the `login` command and the first-run picker's inline login. */
+export function terminalLoginIO(): LoginIO {
+  return {
+    async select(message, options) {
+      const r = await (options.length > 7 ? autocomplete : select)({ message, options });
+      return isCancel(r) ? undefined : (r as string);
+    },
+    async prompt(message, opts) {
+      const r = opts?.hidden
+        ? await password({ message, signal: opts.signal })
+        : await clackText({ message, signal: opts?.signal });
+      return isCancel(r) ? undefined : (r as string);
+    },
+    note: (message) => clackLog.info(message),
+    openUrl: openExternalUrl,
+  };
 }
 
 /**
