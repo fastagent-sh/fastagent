@@ -114,6 +114,8 @@ fastagent dev --model provider/id
 
 Background it or ask the user to run it, then send a turn to `POST /invoke`.
 
+For an interactive session, ask the user to run `fastagent chat` in a terminal: it opens the same assembled agent in pi's TUI, with the same model, tool, and skill resolution as `dev`.
+
 ## Add tools
 
 Put tools in `tools/<name>.ts`. Use `defineTool` and `z` from `@fastagent-sh/fastagent`, then test the tool directly:
@@ -121,6 +123,8 @@ Put tools in `tools/<name>.ts`. Use `defineTool` and `z` from `@fastagent-sh/fas
 ```bash
 fastagent tool <name> '<json>'
 ```
+
+To vendor an existing Agent Skills skill instead of writing one, run `fastagent add skill <source>` with a git ref (`owner/repo/path`), a local path, or a bare name from `~/.agents/skills`.
 
 ## Add channels
 
@@ -143,6 +147,15 @@ fastagent add telegram
 ```
 
 Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_SECRET_TOKEN`. Use `fastagent dev --tunnel` for local webhook testing.
+
+### Feishu / Lark
+
+```bash
+fastagent add feishu   # Feishu (open.feishu.cn)
+fastagent add lark     # Lark international (open.larksuite.com)
+```
+
+`add feishu` creates and configures the platform app (a scan-to-confirm flow in the Feishu app) and writes credentials to `.env`; one manual version-publish click remains in the console. `add lark` opens the international developer console and guides App ID/Secret setup. Both are interactive — ask the user to run them in a terminal. Use `fastagent dev --tunnel` for local webhook testing.
 
 ## Add schedules
 
