@@ -101,7 +101,7 @@ export async function probeApiKey(models: Models, model: Model<Api>): Promise<Ke
   try {
     reply = await models.complete(
       model,
-      { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+      { messages: [{ role: "user", content: "ping", timestamp: Date.now() }] },
       {
         maxTokens: 16,
         timeoutMs: 15_000,
