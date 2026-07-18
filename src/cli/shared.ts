@@ -108,8 +108,16 @@ export async function resolveFirstRunModel(
   const status = statuses.get(provider);
   if (status && status.state !== "ready" && status.login === "none") {
     // No login flow exists for this provider — the model choice is still valid (its validity is
-    // independent of credentials), so KEEP it and name the remedy; the startup auth report warns too.
-    log.warn(`[fastagent] "${provider}" has no interactive login — set its API key env var; invokes fail until then`);
+    // independent of credentials), so KEEP it and name the remedy. The remedy depends on WHY it is
+    // not ready: a BROKEN stored credential still owns the provider (env is consulted only when
+    // nothing is stored — createPiModels), so "set the env var" would not help there.
+    if (status.state === "broken") {
+      log.warn(
+        `[fastagent] stored auth for "${provider}" is unusable: ${status.message} — fix or remove it in ${authPath}; invokes fail until then`,
+      );
+    } else {
+      log.warn(`[fastagent] "${provider}" has no interactive login — set its API key env var; invokes fail until then`);
+    }
   } else if (status?.state !== "ready") {
     // Inline login. Same leak guard as `login`: self-ignore the state root BEFORE a credential
     // can land in-tree, so the secret is never untracked-but-committable.
@@ -146,13 +154,24 @@ export async function loginWithKeyCheck(
   provider: string | undefined,
   authPath: string,
   spec?: string,
+  // Test seams: this loop DESTROYS credential state on `rejected`, so its policy (rejected → delete →
+  // re-ask ONLY the key) is pinned by a test through fake flow/verify; production callers omit both.
+  seams: {
+    flow?: (
+      io: LoginIO,
+      options: { provider?: string; authPath?: string; method?: LoginMethod },
+    ) => Promise<LoginResult>;
+    verify?: (provider: string, authPath: string, spec?: string) => Promise<"ok" | "rejected" | "unknown">;
+  } = {},
 ): Promise<LoginResult> {
+  const flow = seams.flow ?? loginFlow;
+  const verify = seams.verify ?? verifyApiKeyLogin;
   const io = terminalLoginIO();
   let method: LoginMethod | undefined;
   for (;;) {
-    const result = await loginFlow(io, { provider, authPath, method });
+    const result = await flow(io, { provider, authPath, method });
     if (result.method !== "api_key") return result;
-    const verdict = await verifyApiKeyLogin(result.provider, authPath, spec);
+    const verdict = await verify(result.provider, authPath, spec);
     if (verdict !== "rejected") return result;
     // Retry re-asks ONLY the key: the provider/method choices weren't the mistake, the keystrokes were.
     provider = result.provider;

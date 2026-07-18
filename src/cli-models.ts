@@ -40,10 +40,15 @@ export function buildModelPickerOptions(
     if (status?.state === "ready") {
       ready.push({ value: spec, label: spec, hint: status.source ? `ready — ${status.source}` : "ready" });
     } else if (status?.state === "broken") {
+      // A broken stored credential OWNS the provider (env is consulted only when nothing is stored),
+      // so with no login flow the remedy is fixing the store — not the env var (which can't win here).
       rest.push({
         value: spec,
         label: spec,
-        hint: `${remedy(status.login)} — stored auth unusable: ${status.message}`,
+        hint:
+          status.login === "none"
+            ? `stored auth unusable: ${status.message} — fix or remove the stored credential`
+            : `${remedy(status.login)} — stored auth unusable: ${status.message}`,
       });
     } else if (status) {
       rest.push({ value: spec, label: spec, hint: remedy(status.login) });

@@ -18,10 +18,12 @@ describe("cli-models: formatModelsCommand (`fastagent models [search]` stdout/st
       ["keyentry", { state: "unconfigured", login: "api_key" }], // interactive key prompt → "API key required"
       ["envonly", { state: "unconfigured", login: "none" }], // no flow at all → point at the env var
       ["codex", { state: "broken", message: "expired", login: "oauth" }],
+      ["deadenv", { state: "broken", message: "corrupt", login: "none" }], // broken + no flow → fix the STORE, not the env
     ]);
     const specs = [
       "anthropic/claude",
       "codex/gpt-5.5",
+      "deadenv/m3",
       "envonly/m1",
       "keyentry/m1",
       "oauthy/m1",
@@ -34,6 +36,13 @@ describe("cli-models: formatModelsCommand (`fastagent models [search]` stdout/st
       { value: "openai/gpt-5", label: "openai/gpt-5", hint: "ready — OPENAI_API_KEY" },
       { value: "anthropic/claude", label: "anthropic/claude", hint: "login required" },
       { value: "codex/gpt-5.5", label: "codex/gpt-5.5", hint: "login required — stored auth unusable: expired" },
+      {
+        value: "deadenv/m3",
+        label: "deadenv/m3",
+        // NOT the env-var wording: a broken stored credential owns the provider (env is only consulted
+        // when nothing is stored), so the remedy must point at the store.
+        hint: "stored auth unusable: corrupt — fix or remove the stored credential",
+      },
       { value: "envonly/m1", label: "envonly/m1", hint: "API key required — set the provider's env var" },
       { value: "keyentry/m1", label: "keyentry/m1", hint: "API key required" },
       { value: "unknown/m2", label: "unknown/m2", hint: "auth required" }, // absent from the map → neutral, no login claim
