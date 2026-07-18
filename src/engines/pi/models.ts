@@ -4,7 +4,7 @@
  * it into the harness alongside the selected `model`; the two must come from the same collection so
  * the model's provider auth is in scope.
  */
-import { type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
+import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
@@ -79,4 +79,44 @@ export async function probeAuthSource(models: Models, spec: string): Promise<str
   if (!model) return undefined;
   const auth = await models.getAuth(model).catch(() => undefined);
   return auth?.source;
+}
+
+/** Verdict of {@link probeApiKey}: `rejected` is DEFINITIVE (the provider answered HTTP 401 — the key
+ *  is wrong); everything else non-ok is `unknown` — a 403 can be a VALID key without model permission,
+ *  a 429/5xx/network failure says nothing about the key — so callers must only destroy state on
+ *  `rejected`. */
+export type KeyProbe = { state: "ok" } | { state: "rejected" | "unknown"; message: string };
+
+/**
+ * Quick-fail probe for a just-stored API key: one minimal real request through the standard auth
+ * resolution path (the same path invokes take), so a mistyped key surfaces at login time, not at the
+ * first turn. `complete` reports provider errors as `stopReason: "error"` rather than throwing; the
+ * HTTP status arrives via `onResponse` — when a provider path never calls it (SDK transports), fall
+ * back to a conservative "401" match in the error text. Short timeout, no retries: feedback speed
+ * over transient-failure tolerance (a transient lands on `unknown`, which keeps the key).
+ */
+export async function probeApiKey(models: Models, model: Model<Api>): Promise<KeyProbe> {
+  let status: number | undefined;
+  let reply: Awaited<ReturnType<Models["complete"]>>;
+  try {
+    reply = await models.complete(
+      model,
+      { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+      {
+        maxTokens: 16,
+        timeoutMs: 15_000,
+        maxRetries: 0,
+        onResponse: (r) => {
+          status = r.status;
+        },
+      },
+    );
+  } catch (error) {
+    // Thrown = before/around the request (auth resolution, transport setup) — not a provider verdict.
+    return { state: "unknown", message: (error as Error).message };
+  }
+  if (reply.stopReason !== "error" && reply.stopReason !== "aborted") return { state: "ok" };
+  const message = reply.errorMessage ?? `stopReason "${reply.stopReason}"`;
+  const unauthorized = status === 401 || (status === undefined && /(^|\D)401(\D|$)/.test(message));
+  return { state: unauthorized ? "rejected" : "unknown", message };
 }

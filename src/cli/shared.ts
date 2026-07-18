@@ -14,13 +14,14 @@ import {
   loadConfig,
   providerOf,
   resolveAuthPath,
+  resolveModel,
   resolveModelSpec,
   resolveStateRoot,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
 import { ensureStateRootSelfIgnored, isUnderDir } from "../engines/pi/definition.ts";
 import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
-import { createPiModels, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
+import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "../cli-auth.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -115,8 +116,12 @@ export async function resolveFirstRunModel(
     const stateRoot = resolveStateRoot(workspaceDir);
     if (isUnderDir(authPath, stateRoot)) await ensureStateRootSelfIgnored(workspaceDir, stateRoot);
     try {
-      await loginFlow(terminalLoginIO(), { provider, authPath });
+      const result = await loginFlow(terminalLoginIO(), { provider, authPath });
       console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
+      // Quick-fail an entered key with the CHOSEN model — the exact request the agent is about to
+      // make. A rejection keeps the model (same policy as a failed login below) with the credential
+      // removed; the remedy is already printed.
+      if (result.method === "api_key") await verifyApiKeyLogin(provider, authPath, chosen);
     } catch (error) {
       if (error instanceof LoginCancelled) return; // user backed out — discard the choice, like a picker cancel
       // A FAILED login keeps the choice (same policy as the env-only branch above: model validity is
@@ -129,6 +134,42 @@ export async function resolveFirstRunModel(
   }
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
   await persistModelChoice(workspaceDir, configPath, chosen);
+}
+
+/**
+ * Quick-fail check after an api_key login (OAuth needs none — completing the flow already proved the
+ * credential): probe the stored key with one minimal request against `spec`, or the provider's first
+ * model. Policy over {@link probeApiKey}'s verdict: `rejected` (definitive HTTP 401) DELETES the
+ * just-stored credential — a mistyped key must not persist as plausible state — while `unknown`
+ * (network, quota, permissions) keeps it and prints the provider's message: the key may still be
+ * right, and wrongly destroying a good credential costs more than keeping a doubtful one.
+ */
+export async function verifyApiKeyLogin(
+  provider: string,
+  authPath: string,
+  spec?: string,
+): Promise<"ok" | "rejected" | "unknown"> {
+  const models = createPiModels({ authPath });
+  const model = spec ? resolveModel(models, spec) : models.getProvider(provider)?.getModels()[0];
+  if (!model) {
+    console.error(`[fastagent] cannot verify the key: provider "${provider}" lists no models — kept as stored`);
+    return "unknown";
+  }
+  const label = `${model.provider}/${model.id}`;
+  const probe = await probeApiKey(models, model);
+  if (probe.state === "ok") {
+    console.error(`[fastagent] key verified — ${label} responded`);
+  } else if (probe.state === "rejected") {
+    await fastagentCredentialStore(authPath).delete(provider);
+    console.error(
+      `[fastagent] ${provider} rejected the API key (HTTP 401): ${probe.message} — removed; run \`fastagent login ${provider}\` to retry`,
+    );
+  } else {
+    console.error(
+      `[fastagent] could not verify the key with ${label}: ${probe.message} — kept; invokes surface the provider's error`,
+    );
+  }
+  return probe.state;
 }
 
 /** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. Shared
