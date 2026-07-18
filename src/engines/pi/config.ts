@@ -292,6 +292,12 @@ export function rewriteConfigModel(src: string, spec: string): string | null {
   const active = /^[ \t]*model:[ \t]*["'].*$/m;
   if (commented.test(src)) return src.replace(commented, line);
   if (active.test(src)) return src.replace(active, line);
+  // No model line at all — the natural state after "picked once, then hand-deleted the line to reset".
+  // Re-INSERT at the top of the default-export object while the config still has the scaffold's block
+  // shape; anything else (a wrapper call, a one-liner, a computed export) is hand-shaped — leave it
+  // untouched (the caller prints the set-it-yourself hint).
+  const opener = /^export default[ \t]*\{[ \t]*$/m;
+  if (opener.test(src)) return src.replace(opener, (open) => `${open}\n${line}`);
   return null;
 }
 

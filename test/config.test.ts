@@ -404,7 +404,14 @@ describe("rewriteConfigModel (first-run picker write-back)", async () => {
     expect(rewriteConfigModel(src, "new/two")).toBe('export default {\n  model: "new/two",\n};\n');
   });
 
-  it("returns null when there is no model line to touch (hand-shaped / zero-config)", () => {
-    expect(rewriteConfigModel("export default { http: { port: 8787 } };\n", "x/y")).toBeNull();
+  it("re-inserts the model line into a scaffold-shaped config whose line was hand-deleted", () => {
+    // Deleting the model line is the natural "reset" gesture — the next pick must persist again.
+    const src = "export default {\n  http: { port: 8787 },\n};\n";
+    expect(rewriteConfigModel(src, "x/y")).toBe('export default {\n  model: "x/y",\n  http: { port: 8787 },\n};\n');
+  });
+
+  it("returns null for a hand-shaped config (no model line, no scaffold block shape)", () => {
+    expect(rewriteConfigModel("export default { http: { port: 8787 } };\n", "x/y")).toBeNull(); // one-liner
+    expect(rewriteConfigModel("export default defineConfig({\n});\n", "x/y")).toBeNull(); // wrapper call
   });
 });

@@ -218,9 +218,10 @@ export function terminalLoginIO(): LoginIO {
 }
 
 /**
- * Best-effort persist the picked model so the next run does not prompt. Only rewrites the commented
- * `model:` placeholder the scaffold writes (or an existing `model:` line); anything else (zero-config,
- * a hand-shaped config) is left untouched with a printed hint. Never throws — persistence is a convenience.
+ * Best-effort persist the picked model so the next run does not prompt. Rewrites the commented
+ * `model:` placeholder the scaffold writes / an existing `model:` line, or re-inserts the line into a
+ * scaffold-shaped config (the hand-deleted-to-reset case); anything else (zero-config, a hand-shaped
+ * config) is left untouched with a printed hint. Never throws — persistence is a convenience.
  */
 async function persistModelChoice(workspaceDir: string, configPath: string | undefined, spec: string): Promise<void> {
   const hint = (): void =>
