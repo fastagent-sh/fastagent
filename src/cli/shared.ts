@@ -20,7 +20,7 @@ import {
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
 import { ensureStateRootSelfIgnored, isUnderDir } from "../engines/pi/definition.ts";
-import { LoginCancelled, type LoginIO, loginFlow } from "../engines/pi/login.ts";
+import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
 import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "../cli-auth.ts";
 import { log } from "../log.ts";
@@ -116,12 +116,10 @@ export async function resolveFirstRunModel(
     const stateRoot = resolveStateRoot(workspaceDir);
     if (isUnderDir(authPath, stateRoot)) await ensureStateRootSelfIgnored(workspaceDir, stateRoot);
     try {
-      const result = await loginFlow(terminalLoginIO(), { provider, authPath });
+      // Verified against the CHOSEN model — the exact request the agent is about to make; a rejected
+      // key re-prompts inside the loop, so reaching here means a usable (or at worst unverifiable) key.
+      await loginWithKeyCheck(provider, authPath, chosen);
       console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
-      // Quick-fail an entered key with the CHOSEN model — the exact request the agent is about to
-      // make. A rejection keeps the model (same policy as a failed login below) with the credential
-      // removed; the remedy is already printed.
-      if (result.method === "api_key") await verifyApiKeyLogin(provider, authPath, chosen);
     } catch (error) {
       if (error instanceof LoginCancelled) return; // user backed out — discard the choice, like a picker cancel
       // A FAILED login keeps the choice (same policy as the env-only branch above: model validity is
@@ -137,14 +135,41 @@ export async function resolveFirstRunModel(
 }
 
 /**
+ * Interactive login with the api_key quick-fail probe closed into a LOOP: a definitively rejected key
+ * (HTTP 401) deletes the bad credential and RE-PROMPTS immediately — the user's hands are on the
+ * keyboard NOW; parking the failure for a later `fastagent login` would waste that. The loop exits on
+ * a verified/unverifiable key (kept), an OAuth login (completing the flow already proved the
+ * credential), or cancel (LoginCancelled propagates to the caller's cancel policy). Used by both the
+ * `login` command and the first-run picker's inline login.
+ */
+export async function loginWithKeyCheck(
+  provider: string | undefined,
+  authPath: string,
+  spec?: string,
+): Promise<LoginResult> {
+  const io = terminalLoginIO();
+  let method: LoginMethod | undefined;
+  for (;;) {
+    const result = await loginFlow(io, { provider, authPath, method });
+    if (result.method !== "api_key") return result;
+    const verdict = await verifyApiKeyLogin(result.provider, authPath, spec);
+    if (verdict !== "rejected") return result;
+    // Retry re-asks ONLY the key: the provider/method choices weren't the mistake, the keystrokes were.
+    provider = result.provider;
+    method = "api_key";
+  }
+}
+
+/**
  * Quick-fail check after an api_key login (OAuth needs none — completing the flow already proved the
  * credential): probe the stored key with one minimal request against `spec`, or the provider's first
  * model. Policy over {@link probeApiKey}'s verdict: `rejected` (definitive HTTP 401) DELETES the
- * just-stored credential — a mistyped key must not persist as plausible state — while `unknown`
- * (network, quota, permissions) keeps it and prints the provider's message: the key may still be
- * right, and wrongly destroying a good credential costs more than keeping a doubtful one.
+ * just-stored credential — a mistyped key must not persist as plausible state — and the caller
+ * ({@link loginWithKeyCheck}) re-prompts; `unknown` (network, quota, permissions) keeps it and prints
+ * the provider's message: the key may still be right, and wrongly destroying a good credential costs
+ * more than keeping a doubtful one.
  */
-export async function verifyApiKeyLogin(
+async function verifyApiKeyLogin(
   provider: string,
   authPath: string,
   spec?: string,
@@ -156,13 +181,14 @@ export async function verifyApiKeyLogin(
     return "unknown";
   }
   const label = `${model.provider}/${model.id}`;
+  console.error(`[fastagent] verifying the key with ${label}…`);
   const probe = await probeApiKey(models, model);
   if (probe.state === "ok") {
     console.error(`[fastagent] key verified — ${label} responded`);
   } else if (probe.state === "rejected") {
     await fastagentCredentialStore(authPath).delete(provider);
     console.error(
-      `[fastagent] ${provider} rejected the API key (HTTP 401): ${probe.message} — removed; run \`fastagent login ${provider}\` to retry`,
+      `[fastagent] ${provider} rejected the API key (HTTP 401): ${probe.message} — enter it again (or cancel)`,
     );
   } else {
     console.error(

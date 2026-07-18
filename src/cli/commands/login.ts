@@ -11,10 +11,10 @@
 import { loadDotEnv } from "../../env.ts";
 import { defaultAuthPath, resolveAuthPathOverride, resolveStateRoot } from "../../engines/pi/config.ts";
 import { ensureStateRootSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
-import { LoginCancelled, loginFlow } from "../../engines/pi/login.ts";
+import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup } from "../fail.ts";
-import { isInteractive, terminalLoginIO, verifyApiKeyLogin } from "../shared.ts";
+import { isInteractive, loginWithKeyCheck } from "../shared.ts";
 
 export interface LoginOptions {
   authPath?: string;
@@ -45,8 +45,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
       new Error(`login is interactive (it shows a menu and opens a browser) — run it in a terminal, not a pipe/CI`),
     );
   }
-  const io = terminalLoginIO();
-  const result = await loginFlow(io, { provider, authPath }).catch((error: unknown) => {
+  // loginWithKeyCheck: an entered API key is verified with one minimal request; a rejected key (401)
+  // re-prompts in place, so a returned result is always a stored-and-not-definitively-bad credential.
+  const result = await loginWithKeyCheck(provider, authPath).catch((error: unknown) => {
     if (error instanceof LoginCancelled) {
       // A decision, not a failure — neutral wording; non-zero exit because no credential was stored.
       console.error(`[fastagent] login cancelled`);
@@ -54,12 +55,6 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     }
     failStartup(error);
   });
-  // Quick-fail an entered key before declaring success — a definitive rejection (HTTP 401) removed
-  // the credential inside verifyApiKeyLogin, so exit non-zero: nothing usable was stored.
-  if (result.method === "api_key") {
-    const verdict = await verifyApiKeyLogin(result.provider, authPath).catch(failStartup);
-    if (verdict === "rejected") process.exit(1);
-  }
   console.error(`[fastagent] logged in to ${result.provider} (${result.method}) — saved to ${authPath}`);
   process.exit(0); // the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
 }
