@@ -31,6 +31,20 @@ describe("config: resolveSessionsDirOverride (start's sessions precedence)", () 
   });
 });
 
+describe("config: loadConfig rereads a config rewritten in-process (ESM cache-bust)", () => {
+  it("a write-back (the first-run picker) is visible to the next loadConfig — not the cached module", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-fresh-"));
+    const path = join(dir, "fastagent.config.mjs");
+    await writeFile(path, "export default {\n};\n");
+    expect((await loadConfig(dir)).config.model).toBeUndefined();
+    // Simulate persistModelChoice: rewrite the file AFTER it was imported once. Without the mtime
+    // cache-buster the second load returns the stale cached module and deploy's model-travel gate
+    // contradicts the "saved model" line it just printed.
+    await writeFile(path, 'export default {\n  model: "prov/m1",\n};\n');
+    expect((await loadConfig(dir)).config.model).toBe("prov/m1");
+  });
+});
+
 describe("config: loadConfig agentDir validation", () => {
   it("accepts a subdirectory agentDir; rejects one that escapes the config dir (dev watch-scope guard)", async () => {
     const ok = await mkdtemp(join(tmpdir(), "fa-agentdir-ok-"));

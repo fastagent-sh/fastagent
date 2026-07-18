@@ -76,10 +76,15 @@ export async function reportAuth(modelSpec: string, authPath: string): Promise<v
  * cancel, or on a failed login it stays quiet and lets the opener raise its clear "missing model"
  * error. The pick is exported to FASTAGENT_MODEL so a spawned `dev` worker inherits it, and
  * best-effort written back to the config so the next run is quiet.
+ *
+ * `pickOnly` drops the credential dimension entirely — a plain catalog, no ready/login annotations,
+ * no inline login — for commands whose auth does NOT live in fastagent's credential file (`chat`
+ * authenticates through pi's own `~/.pi` store): annotations judged against fastagent's store would
+ * lie there, in both directions.
  */
 export async function resolveFirstRunModel(
   workspaceDir: string,
-  options: { model?: string; authPath?: string; input?: boolean } = {},
+  options: { model?: string; authPath?: string; input?: boolean; pickOnly?: boolean } = {},
 ): Promise<void> {
   const { config, path: configPath } = await loadConfig(workspaceDir).catch(failStartup);
   if (resolveModelSpec(options.model, config)) return; // already set (flag > FASTAGENT_MODEL > config)
@@ -88,6 +93,16 @@ export async function resolveFirstRunModel(
 
   const authPath = resolveAuthPath(workspaceDir, options.authPath);
   const models = createPiModels({ authPath });
+  if (options.pickOnly) {
+    const r = await autocomplete({
+      message: "Choose a model for this agent",
+      options: listModels(models).map((s) => ({ value: s, label: s })),
+    });
+    if (isCancel(r)) return; // cancelled: the caller raises its clear missing-model error
+    process.env.FASTAGENT_MODEL = r as string;
+    await persistModelChoice(workspaceDir, configPath, r as string);
+    return;
+  }
   let statuses: Awaited<ReturnType<typeof providerAuthStatuses>>;
   try {
     statuses = await providerAuthStatuses(models);

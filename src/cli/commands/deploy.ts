@@ -41,6 +41,7 @@ import { exists } from "../../scaffold/init.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { announceWebhooks } from "../../tunnel.ts";
 import { failStartup, failUsage } from "../fail.ts";
+import { resolveFirstRunModel } from "../shared.ts";
 
 export type DeployHost = "docker" | "fly" | "railway";
 
@@ -54,6 +55,8 @@ export interface DeployOptions {
   intoLinked?: boolean;
   model?: string;
   authPath?: string;
+  /** false ⇔ `--no-input`. */
+  input?: boolean;
 }
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
@@ -64,6 +67,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   }
   loadDotEnv(target); // a custom provider/tool may read a key at config load
   installProxyFetch(); // post-deploy channel API calls must honor HTTP(S)_PROXY under Node
+  // First-run funnel, FULL picker: the write-back lands the model in fastagent.config.* — exactly what
+  // the model-travel gate below requires (--model/env don't reach the deployed box) — and an inline
+  // login stores the credential `--run` then carries. Runs BEFORE loadConfig; the read-back sees the
+  // rewritten file because loadConfig cache-busts on mtime (a failed write-back still gates, correctly).
+  await resolveFirstRunModel(target, { model: opts.model, authPath: opts.authPath, input: opts.input });
   const { config } = await loadConfig(target).catch(failStartup);
   const agentDir = resolveAgentDir(target, config);
   const modelSpec = resolveModelSpec(opts.model, config);

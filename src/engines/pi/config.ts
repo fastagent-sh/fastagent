@@ -6,7 +6,7 @@
  * live in persona.md + skills, with AGENTS.md as project context). Deleting the config still leaves a
  * zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL.
  */
-import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -112,7 +112,12 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   const path = found[0]!;
   let mod: { default?: unknown };
   try {
-    mod = (await import(pathToFileURL(path).href)) as { default?: unknown };
+    // Cache-bust on file change: ESM `import()` caches by URL, so a config REWRITTEN in this process
+    // (the first-run picker's write-back) would otherwise read back stale — deploy's model-travel gate
+    // then contradicts the "saved model" line it just printed. mtime keeps unchanged files cached.
+    const url = pathToFileURL(path);
+    url.searchParams.set("v", String(statSync(path).mtimeMs));
+    mod = (await import(url.href)) as { default?: unknown };
   } catch (error) {
     throw new Error(`${path}: ${(error as Error).message}${moduleLoadHint(error as NodeJS.ErrnoException)}`);
   }
