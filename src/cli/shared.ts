@@ -105,7 +105,7 @@ export async function resolveFirstRunModel(
   const chosen = r as string;
   const provider = providerOf(chosen);
   const status = statuses.get(provider);
-  if (status && status.state !== "ready" && !status.interactiveLogin) {
+  if (status && status.state !== "ready" && status.login === "none") {
     // No login flow exists for this provider — the model choice is still valid (its validity is
     // independent of credentials), so KEEP it and name the remedy; the startup auth report warns too.
     log.warn(`[fastagent] "${provider}" has no interactive login — set its API key env var; invokes fail until then`);

@@ -7,7 +7,7 @@
 import { type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
-import { hasInteractiveLogin } from "./login.ts";
+import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
   /** Credentials file path. Defaults to the global `~/.fastagent/auth.json`; the directory opener passes
@@ -35,13 +35,13 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
 
 /** Per-provider auth status for the first-run model picker: usable now (with the source label), not
  *  configured, or configured-but-broken (expired token, refresh failure, corrupt store — kept as DATA
- *  so the picker can show it instead of silently dropping the provider). Non-ready states carry
- *  whether `loginFlow` can actually fix them ({@link hasInteractiveLogin}), so the picker's hint
- *  never promises a login that doesn't exist (env-key-only providers). */
+ *  so the picker can show it instead of silently dropping the provider). Non-ready states carry the
+ *  provider's {@link InteractiveLoginKind}, so the picker's hint predicts what picking does — an
+ *  OAuth login, an API-key prompt, or (env-key-only providers) neither. */
 export type ProviderAuthStatus =
   | { state: "ready"; source?: string }
-  | { state: "unconfigured"; interactiveLogin: boolean }
-  | { state: "broken"; message: string; interactiveLogin: boolean };
+  | { state: "unconfigured"; login: InteractiveLoginKind }
+  | { state: "broken"; message: string; login: InteractiveLoginKind };
 
 /**
  * Probe every provider's auth once (auth is provider-scoped, so any of its models works as the probe)
@@ -55,15 +55,12 @@ export async function providerAuthStatuses(models: Models): Promise<Map<string, 
   for (const provider of models.getProviders()) {
     const [probe] = provider.getModels();
     if (!probe) continue;
-    const interactiveLogin = hasInteractiveLogin(provider);
+    const login = interactiveLoginKind(provider);
     try {
       const auth = await models.getAuth(probe);
-      statuses.set(
-        provider.id,
-        auth ? { state: "ready", source: auth.source } : { state: "unconfigured", interactiveLogin },
-      );
+      statuses.set(provider.id, auth ? { state: "ready", source: auth.source } : { state: "unconfigured", login });
     } catch (error) {
-      statuses.set(provider.id, { state: "broken", message: (error as Error).message, interactiveLogin });
+      statuses.set(provider.id, { state: "broken", message: (error as Error).message, login });
     }
   }
   return statuses;

@@ -14,11 +14,20 @@ describe("cli-models: formatModelsCommand (`fastagent models [search]` stdout/st
     const statuses = new Map<string, ProviderAuthStatus>([
       ["openai", { state: "ready", source: "OPENAI_API_KEY" }],
       ["oauthy", { state: "ready" }], // no source label → plain "ready"
-      ["anthropic", { state: "unconfigured", interactiveLogin: true }],
-      ["envonly", { state: "unconfigured", interactiveLogin: false }], // no login flow → don't promise one
-      ["codex", { state: "broken", message: "expired", interactiveLogin: true }],
+      ["anthropic", { state: "unconfigured", login: "oauth" }], // OAuth flow → "login required"
+      ["keyentry", { state: "unconfigured", login: "api_key" }], // interactive key prompt → "API key required"
+      ["envonly", { state: "unconfigured", login: "none" }], // no flow at all → point at the env var
+      ["codex", { state: "broken", message: "expired", login: "oauth" }],
     ]);
-    const specs = ["anthropic/claude", "codex/gpt-5.5", "envonly/m1", "oauthy/m1", "openai/gpt-5", "unknown/m2"];
+    const specs = [
+      "anthropic/claude",
+      "codex/gpt-5.5",
+      "envonly/m1",
+      "keyentry/m1",
+      "oauthy/m1",
+      "openai/gpt-5",
+      "unknown/m2",
+    ];
     expect(buildModelPickerOptions(specs, statuses)).toEqual([
       // ready group leads, input order preserved within each group
       { value: "oauthy/m1", label: "oauthy/m1", hint: "ready" },
@@ -26,6 +35,7 @@ describe("cli-models: formatModelsCommand (`fastagent models [search]` stdout/st
       { value: "anthropic/claude", label: "anthropic/claude", hint: "login required" },
       { value: "codex/gpt-5.5", label: "codex/gpt-5.5", hint: "login required — stored auth unusable: expired" },
       { value: "envonly/m1", label: "envonly/m1", hint: "API key required — set the provider's env var" },
+      { value: "keyentry/m1", label: "keyentry/m1", hint: "API key required" },
       { value: "unknown/m2", label: "unknown/m2", hint: "auth required" }, // absent from the map → neutral, no login claim
     ]);
   });

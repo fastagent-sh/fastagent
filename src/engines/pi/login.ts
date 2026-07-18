@@ -47,11 +47,16 @@ export type LoginMethod = "oauth" | "api_key";
  *  the login command) match on this to report neutrally instead of as a login "failure". */
 export class LoginCancelled extends Error {}
 
-/** Whether the provider offers ANY interactive login (OAuth, or an API-key entry flow) — i.e. whether
- *  `loginFlow` can do something for it; otherwise its API key must come from the provider's env var.
- *  The first-run picker uses this to annotate honestly ("login required" vs "set the env var"). */
-export function hasInteractiveLogin(p: Provider): boolean {
-  return Boolean(p.auth.oauth || p.auth.apiKey?.login);
+/** What `loginFlow` can offer a provider interactively: an OAuth flow, an API-key ENTRY prompt, or
+ *  nothing ("none" — the key must come from the provider's env var). */
+export type InteractiveLoginKind = LoginMethod | "none";
+
+/** The provider's {@link InteractiveLoginKind}. OAuth wins when both exist (methodForProvider still
+ *  asks at login time); the first-run picker annotates with this so the hint predicts what picking
+ *  actually does — a browser login ("oauth"), a key prompt ("api_key"), or neither. */
+export function interactiveLoginKind(p: Provider): InteractiveLoginKind {
+  if (p.auth.oauth) return "oauth";
+  return p.auth.apiKey?.login ? "api_key" : "none";
 }
 export interface LoginResult {
   provider: string;

@@ -16,7 +16,7 @@ function fakeModels(providers: FakeProvider[]): Models {
     getProviders: () =>
       providers.map((p) => ({
         id: p.id,
-        // hasInteractiveLogin probes BOTH disjuncts: OAuth, and an interactive api-key entry flow.
+        // interactiveLoginKind probes both surfaces: OAuth, and an interactive api-key entry flow.
         auth: { oauth: p.oauth ? {} : undefined, apiKey: p.apiKeyLogin ? { login: () => {} } : undefined },
         getModels: () => p.models.map((id) => ({ id, provider: p.id })),
       })),
@@ -35,16 +35,18 @@ describe("providerAuthStatuses", () => {
         { id: "anthropic", models: ["claude-a"], auth: "ok" },
         { id: "openai", models: ["gpt-x"], auth: "none", oauth: true },
         { id: "envonly", models: ["m1"], auth: "none" }, // no interactive login → the picker says "set the env var"
-        { id: "keylogin", models: ["m2"], auth: "none", apiKeyLogin: true }, // api-key ENTRY flow counts as login
+        { id: "keylogin", models: ["m2"], auth: "none", apiKeyLogin: true }, // key ENTRY flow → "api_key"
+        { id: "both", models: ["m3"], auth: "none", oauth: true, apiKeyLogin: true }, // OAuth wins when both exist
         { id: "codex", models: ["gpt-5.5"], auth: "reject", oauth: true }, // configured-but-broken → data, not a silent drop
         { id: "empty", models: [], auth: "ok" }, // no models → nothing to pick → omitted
       ]),
     );
     expect(statuses.get("anthropic")).toEqual({ state: "ready", source: "TEST_KEY" });
-    expect(statuses.get("openai")).toEqual({ state: "unconfigured", interactiveLogin: true });
-    expect(statuses.get("envonly")).toEqual({ state: "unconfigured", interactiveLogin: false });
-    expect(statuses.get("keylogin")).toEqual({ state: "unconfigured", interactiveLogin: true });
-    expect(statuses.get("codex")).toEqual({ state: "broken", message: "expired", interactiveLogin: true });
+    expect(statuses.get("openai")).toEqual({ state: "unconfigured", login: "oauth" });
+    expect(statuses.get("envonly")).toEqual({ state: "unconfigured", login: "none" });
+    expect(statuses.get("keylogin")).toEqual({ state: "unconfigured", login: "api_key" });
+    expect(statuses.get("both")).toEqual({ state: "unconfigured", login: "oauth" });
+    expect(statuses.get("codex")).toEqual({ state: "broken", message: "expired", login: "oauth" });
     expect(statuses.has("empty")).toBe(false);
   });
 });

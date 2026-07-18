@@ -5,6 +5,7 @@
  * spawning the CLI.
  */
 import { providerOf } from "./engines/pi/config.ts";
+import type { InteractiveLoginKind } from "./engines/pi/login.ts";
 import type { ProviderAuthStatus } from "./engines/pi/models.ts";
 
 /** One first-run picker entry (@clack/prompts option shape). */
@@ -14,10 +15,11 @@ export interface ModelPickerOption {
   hint: string;
 }
 
-/** The remedy hint for a non-ready provider: only promise `login` where an interactive flow exists;
- *  an env-key-only provider is told to set the env var instead. */
-function remedy(interactiveLogin: boolean): string {
-  return interactiveLogin ? "login required" : "API key required — set the provider's env var";
+/** The remedy hint for a non-ready provider, by what picking it actually does: an OAuth flow →
+ *  "login required"; an interactive key prompt → "API key required"; no flow at all → the env var. */
+function remedy(login: InteractiveLoginKind): string {
+  if (login === "oauth") return "login required";
+  return login === "api_key" ? "API key required" : "API key required — set the provider's env var";
 }
 
 /**
@@ -41,10 +43,10 @@ export function buildModelPickerOptions(
       rest.push({
         value: spec,
         label: spec,
-        hint: `${remedy(status.interactiveLogin)} — stored auth unusable: ${status.message}`,
+        hint: `${remedy(status.login)} — stored auth unusable: ${status.message}`,
       });
     } else if (status) {
-      rest.push({ value: spec, label: spec, hint: remedy(status.interactiveLogin) });
+      rest.push({ value: spec, label: spec, hint: remedy(status.login) });
     } else {
       // Unreachable when `specs` and `statuses` come from the same Models (every listed provider is
       // probed); if a caller ever mixes sources, promise nothing — neutral wording, no login claim.
