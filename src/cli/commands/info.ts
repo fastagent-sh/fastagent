@@ -3,11 +3,10 @@ import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { discoverChannelFiles } from "../../engines/pi/channel.ts";
 import {
-  defaultAuthPath,
   defaultSessionsDir,
   loadConfig,
   resolveAgentDir,
-  resolveAuthPathOverride,
+  resolveAuthPath,
   resolveModelSpec,
   resolveSessionsDirOverride,
   resolveStateRoot,
@@ -69,7 +68,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // create them, info must not).
   const stateRoot = resolveStateRoot(dir);
   const sessionsDir = resolveSessionsDirOverride(opts.sessionsDir) ?? defaultSessionsDir(stateRoot);
-  const authPath = resolveAuthPathOverride(opts.authPath) ?? defaultAuthPath(stateRoot);
+  const authPath = resolveAuthPath(dir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
 
   if (opts.json) {
     console.log(
