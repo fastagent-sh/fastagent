@@ -49,11 +49,12 @@ export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
  *  fails again; re-dispatch only after `state()` shows an active run. */
 export const NO_ACTIVE_RUN_CODE = "no_active_run";
 
-/** Stable `SessionResult.error.code` for a run command that reached an active run but could not
- *  take effect (the run raced to settlement, or the engine refused it). Distinct from
- *  {@link NO_ACTIVE_RUN_CODE}: the run existed. Still pre-acceptance — nothing was queued — and
- *  `retryable: false` for the same reason: the run is gone, so the same command as-is fails again;
- *  consult `state()` before re-dispatching. */
+/** Stable `SessionResult.error.code` for a run command that reached a run but could not take
+ *  effect. Distinct from {@link NO_ACTIVE_RUN_CODE}: the run existed. Two situations share it —
+ *  the run raced to settlement (gone by now), or the runtime registered the run without
+ *  modulation controls (observation-only; still running). `state()` alone cannot disambiguate;
+ *  inspect `error.message`. Still pre-acceptance — nothing was queued — and `retryable: false`:
+ *  the same command as-is fails again. */
 export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
 
 // ── Commands (control plane) ─────────────────────────────────────────────────
