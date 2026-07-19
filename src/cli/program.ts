@@ -104,13 +104,16 @@ const chat: CommandSpec = {
   summary: "open the SAME assembled agent in pi's interactive TUI",
   description:
     "Open the SAME assembled agent in pi's interactive TUI (the real harness, not a crude REPL) — to " +
-    "try it locally before serving. Same model/tool/skill resolution as dev; pi handles login, " +
-    "sessions, and /resume natively.",
+    "try it locally before serving. Same model/tool/skill/auth resolution as dev; pi handles " +
+    "rendering, sessions, and /resume natively (its /login writes to the same fastagent auth file).",
   args: [DIR_ARG],
-  flags: [MODEL],
+  flags: [MODEL, AUTH_PATH],
   examples: [{ cmd: "fastagent chat" }],
   run: async (args, f) =>
-    (await import("./commands/chat.ts")).runChat(args[0] as string, { model: f.model as string | undefined }),
+    (await import("./commands/chat.ts")).runChat(args[0] as string, {
+      model: f.model as string | undefined,
+      authPath: f.authPath as string | undefined,
+    }),
 };
 
 const info: CommandSpec = {

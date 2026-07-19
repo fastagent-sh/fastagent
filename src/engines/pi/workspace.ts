@@ -9,14 +9,15 @@
  * watch and can point sessions at a mounted volume.
  */
 import { mkdir } from "node:fs/promises";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Agent } from "../../agent.ts";
 import {
   type FastagentConfig,
   type LoadedConfig,
-  defaultAuthPath,
   defaultSessionsDir,
   loadConfig,
   resolveAgentDir,
+  resolveAuthPath,
   resolveModelSpec,
   resolveStateRoot,
 } from "./config.ts";
@@ -51,6 +52,74 @@ export interface CreatePiAgentFromWorkspaceOptions {
 }
 
 /**
+ * The workspace assembly FRONT HALF — everything that is independent of how pi consumes the
+ * definition (transient harness for serving vs resident AgentSession for chat / session control):
+ * config → model spec → agentDir → the full tool surface ({@link resolveWorkspaceTools} — the ONE
+ * place it is computed) → state root → auth path. Both {@link createPiAgentFromWorkspace} and the
+ * session builder (session-builder.ts) consume this, so the two consumption shapes can never drift
+ * on what they assemble — only on how they mount it.
+ */
+export interface WorkspaceAssembly {
+  config: FastagentConfig;
+  configPath?: string;
+  /** The resolved "provider/modelId" spec in use. */
+  modelSpec: string;
+  /** Absolute agent-definition dir (config.agentDir resolved against dir; = dir when unset). */
+  agentDir: string;
+  /** Absolute state root (FASTAGENT_STATE_DIR > <dir>/.fastagent). */
+  stateRoot: string;
+  /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <stateRoot>/auth.json). */
+  authPath: string;
+  /** The full mounted tool surface (config.tools + discovered tools/, search_tools applied). */
+  tools: AgentTool[];
+  toolNames: string[];
+  deferredToolNames: string[];
+  toolCollisions: ToolCollision[];
+  toolFailures: ModuleLoadFailure[];
+}
+
+export async function resolveWorkspaceAssembly(
+  dir: string,
+  options: { model?: string; authPath?: string } = {},
+): Promise<WorkspaceAssembly> {
+  const { config, path: configPath }: LoadedConfig = await loadConfig(dir);
+  const modelSpec = resolveModelSpec(options.model, config);
+  if (!modelSpec) {
+    throw new Error(
+      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
+    );
+  }
+  // The run root is `dir` (cwd — where config lives, whose AGENTS.md is ② context); the agent's own
+  // surface (persona/skills/tools/channels) lives in `agentDir` (config.agentDir, or `dir` when flat).
+  const agentDir = resolveAgentDir(dir, config);
+  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures } = await resolveWorkspaceTools(
+    config,
+    agentDir,
+    dir,
+  );
+  // The state root: auth/sessions/channel state all derive from it, so FASTAGENT_STATE_DIR moves the
+  // whole machine-state home in one knob (a container mounts one volume); the finer overrides below
+  // still win for their specific path.
+  const stateRoot = resolveStateRoot(dir);
+  // The credentials file: project-level by default (under the state root); only resolved here, never
+  // created (a missing file reads as not-configured — `fastagent login` creates it).
+  const authPath = resolveAuthPath(dir, options.authPath);
+  return {
+    config,
+    configPath,
+    modelSpec,
+    agentDir,
+    stateRoot,
+    authPath,
+    tools,
+    toolNames,
+    deferredToolNames,
+    toolCollisions,
+    toolFailures,
+  };
+}
+
+/**
  * "Point at a workspace → agent": load the config, resolve model and tools, then L2. Throws a clear
  * error when no model source is set (fail visibly at startup). Returns everything an entry point needs
  * to report what it assembled.
@@ -82,33 +151,24 @@ export async function createPiAgentFromWorkspace(
   /** `tools/` files that failed to import — skipped, reported by the caller, never fatal. */
   toolFailures: ModuleLoadFailure[];
 }> {
-  const { config, path: configPath }: LoadedConfig = await loadConfig(dir);
-  const modelSpec = resolveModelSpec(options.model, config);
-  if (!modelSpec) {
-    throw new Error(
-      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
-    );
-  }
-  // The run root is `dir` (cwd — where config lives, whose AGENTS.md is ② context); the agent's own
-  // surface (persona/skills/tools/channels) lives in `agentDir` (config.agentDir, or `dir` when flat).
-  const agentDir = resolveAgentDir(dir, config);
-  const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures } = await resolveWorkspaceTools(
+  const {
     config,
+    configPath,
+    modelSpec,
     agentDir,
-    dir,
-  );
-  // The state root: auth/sessions/channel state all derive from it, so FASTAGENT_STATE_DIR moves the
-  // whole machine-state home in one knob (a container mounts one volume); the finer overrides below
-  // still win for their specific path.
-  const stateRoot = resolveStateRoot(dir);
+    stateRoot,
+    authPath,
+    tools,
+    toolNames,
+    deferredToolNames,
+    toolCollisions,
+    toolFailures,
+  } = await resolveWorkspaceAssembly(dir, options);
   // Mount the built-in `wake` tool only when BOTH: this is a long-running serve (the poller honors it) AND
   // the author opted into self-scheduling (config.selfSchedule). The workspace's own `wake` wins if defined.
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
-  // The credentials file: project-level by default (under the self-ignored state root); only READ here,
-  // so no mkdir (a missing file reads as not-configured — `fastagent login` creates it).
-  const authPath = options.authPath ?? defaultAuthPath(stateRoot);
   // Self-ignore the state root iff it lands in-tree — which covers everything under it (sessions, auth,
   // every channel's `channels/<kind>` home), including a custom in-tree `FASTAGENT_STATE_DIR`. A
   // per-path override to an external volume is out-of-tree and correctly left alone.
