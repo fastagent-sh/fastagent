@@ -32,7 +32,7 @@ import {
   mergeDiscoveredTools,
 } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
-import { type Lease, createPiAgentFromHarness } from "./invoke.ts";
+import { type Lease, type SessionObserver, createPiAgentFromHarness } from "./invoke.ts";
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
@@ -203,10 +203,12 @@ function buildPiAgent(opts: {
   sessions?: PiSessionStore;
   env?: ExecutionEnv;
   lease?: Lease;
+  observer?: SessionObserver;
 }): Agent {
   const models = createPiModels({ providers: opts.providers, authPath: opts.authPath });
   return createPiAgentFromHarness({
     lease: opts.lease,
+    observer: opts.observer,
     harnessFactory: piHarnessFactory({
       sessions: opts.sessions ?? inMemorySessionStore(),
       env: opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() }),
@@ -274,6 +276,9 @@ export interface CreatePiAgentOptions {
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;
+  /** Observation-plane tap (session control): every rich session event of every run. Wire the one
+   *  returned by `createPiSessionControl` to serve `state`/`entries`/`events` for this agent. */
+  observer?: SessionObserver;
 }
 
 /** L1: assemble from typed parts. */
@@ -290,6 +295,7 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
     sessions: options.sessions,
     env: options.env,
     lease: options.lease,
+    observer: options.observer,
   });
 }
 
@@ -328,6 +334,8 @@ export interface CreatePiAgentFromDefinitionOptions {
    *  context loader remain local today, so injecting this alone does not sandbox a directory agent. */
   env?: ExecutionEnv;
   lease?: Lease;
+  /** Observation-plane tap; see {@link CreatePiAgentOptions.observer}. */
+  observer?: SessionObserver;
 }
 
 /** Stable identity of a definition's non-fatal findings, for change-detection in `live` (dedup only). */
@@ -400,6 +408,7 @@ export async function createPiAgentFromDefinition(
     sessions: options.sessions,
     env,
     lease: options.lease,
+    observer: options.observer,
   });
   return { agent, definition };
 }

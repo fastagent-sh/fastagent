@@ -15,6 +15,7 @@ import type { AgentHarnessEvent } from "@earendil-works/pi-agent-core";
 import { DEFAULT_COMPACTION_SETTINGS, calculateContextTokens, shouldCompact } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { type Agent, type AgentEvent, type Json, type Prompt, type Scope, SESSION_BUSY_CODE } from "../../agent.ts";
+import type { RunSettledEvent, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
 import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
 import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
@@ -127,23 +128,83 @@ function messageSignal(message: AssistantMessage): { status?: number; code?: unk
   return {};
 }
 
-/** In-stream event mapping. Non text/tool_* pi events (turn_start, message_start, …) are dropped. */
-function toAgentEvent(pe: AgentHarnessEvent): AgentEvent | null {
+/**
+ * In-stream event mapping — pi events are translated ONCE into the rich `SessionEvent` vocabulary;
+ * the SPEC `AgentEvent` stream is a narrow {@link projectAgentEvent} of it (design §6: one
+ * translation plus one projection, never two parallel translations). pi events with no session
+ * vocabulary yet (turn_start, agent_start, …) are dropped.
+ */
+function toSessionEvent(pe: AgentHarnessEvent, runId: string): SessionEvent | null {
+  const at = Date.now();
   switch (pe.type) {
+    case "message_start":
+      // Assistant streaming only — a user/toolResult message is not a live message boundary.
+      if (pe.message.role !== "assistant") return null;
+      return { type: "message_started", timestamp: at, runId, data: {} };
     case "message_update": {
       const ev = pe.assistantMessageEvent;
-      if (ev.type === "text_delta") return { type: "text", delta: ev.delta };
-      if (ev.type === "thinking_delta") return { type: "thinking", delta: ev.delta };
+      if (ev.type === "text_delta") {
+        return { type: "message_delta", timestamp: at, runId, data: { channel: "text", delta: ev.delta } };
+      }
+      if (ev.type === "thinking_delta") {
+        return { type: "message_delta", timestamp: at, runId, data: { channel: "thinking", delta: ev.delta } };
+      }
       return null;
     }
+    case "message_end":
+      if (pe.message.role !== "assistant") return null;
+      return { type: "message_finished", timestamp: at, runId, data: {} };
     case "tool_execution_start":
-      return { type: "tool_started", id: pe.toolCallId, name: pe.toolName, args: pe.args as Json };
+      return {
+        type: "tool_started",
+        timestamp: at,
+        runId,
+        data: { id: pe.toolCallId, name: pe.toolName, args: pe.args as Json },
+      };
+    case "tool_execution_update":
+      return {
+        type: "tool_progress",
+        timestamp: at,
+        runId,
+        data: { id: pe.toolCallId, name: pe.toolName, partialResult: pe.partialResult as Json },
+      };
     case "tool_execution_end":
-      return { type: "tool_ended", id: pe.toolCallId, isError: pe.isError, content: pe.result as Json };
+      return {
+        type: "tool_finished",
+        timestamp: at,
+        runId,
+        data: { id: pe.toolCallId, isError: pe.isError, content: pe.result as Json },
+      };
     default:
       return null;
   }
 }
+
+/** The SPEC projection of the rich stream. Events with no `AgentEvent` counterpart (progress,
+ *  message boundaries, run boundaries) project to null — the invoke terminal is produced from the
+ *  resolved message ({@link toTerminal}), not from `run_settled`. */
+export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
+  switch (se.type) {
+    case "message_delta": {
+      const d = se.data as { channel: "text" | "thinking"; delta: string };
+      return d.channel === "text" ? { type: "text", delta: d.delta } : { type: "thinking", delta: d.delta };
+    }
+    case "tool_started": {
+      const d = se.data as { id: string; name: string; args: Json };
+      return { type: "tool_started", id: d.id, name: d.name, args: d.args };
+    }
+    case "tool_finished": {
+      const d = se.data as { id: string; isError: boolean; content: Json };
+      return { type: "tool_ended", id: d.id, isError: d.isError, content: d.content };
+    }
+    default:
+      return null;
+  }
+}
+
+/** The observation-plane seam: every rich event of every run, pushed as it happens. A hub
+ *  (session-control.ts) implements this to serve `events()`/`state()`; absent = zero overhead. */
+export type SessionObserver = (session: string, event: SessionEvent) => void;
 
 /**
  * Terminal mapping, decided by the resolved message's stopReason: pi's prompt() resolves a message
@@ -293,15 +354,19 @@ export interface CreatePiAgentFromHarnessOptions {
   harnessFactory: PiHarnessFactory;
   /** Single-writer lease. Defaults to the in-process per-session fail-fast lease. */
   lease?: Lease;
+  /** Observation-plane tap (see {@link SessionObserver}). Optional; invoke behavior is identical
+   *  with or without it — the SPEC stream is a projection of what the observer sees. */
+  observer?: SessionObserver;
 }
 
 /** "From a harness factory": engine wired by the caller; adds only the concurrency/stream shell. */
 export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOptions): Agent {
-  const { harnessFactory, lease = inProcessLease() } = options;
+  const { harnessFactory, lease = inProcessLease(), observer } = options;
 
   async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
     const release = lease.tryAcquire(scope.session);
     if (!release) {
+      // Rejected BEFORE acceptance: no run exists, so the observer sees nothing (replay-safe).
       yield {
         type: "failed",
         details: "session busy: a turn is already in flight for this session",
@@ -310,19 +375,45 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       };
       return;
     }
+    // The run exists from here: one run_started, exactly one run_settled (emitted in the outer
+    // finally — covering completion, failure, AND caller cancellation, which yields no terminal).
+    const runId = crypto.randomUUID();
+    let settled: RunSettledEvent["data"] | undefined;
+    const observe = (event: SessionEvent | null): void => {
+      if (!event || !observer) return;
+      try {
+        observer(scope.session, event);
+      } catch (error) {
+        // The observation plane must never break the data plane; a broken hub is its own problem.
+        log.warn(`[fastagent] session observer threw (event ${event.type}): ${String(error)}`);
+      }
+    };
+    const settle = (data: RunSettledEvent["data"]): void => {
+      if (settled) return;
+      settled = data;
+      observe({ type: "run_settled", timestamp: Date.now(), runId, data });
+    };
+    observe({ type: "run_started", timestamp: Date.now(), runId, data: {} });
     try {
       let harness: Awaited<ReturnType<PiHarnessFactory>>;
       try {
         harness = await harnessFactory(scope.session);
       } catch (error) {
         // Setup failures (session open / auth / …) MUST surface as a failed event, never a throw.
-        yield errorToTerminal(error);
+        const terminal = errorToTerminal(error);
+        if (terminal.type === "failed") {
+          settle({ status: "failed", error: { message: terminal.details, retryable: terminal.retryable } });
+        }
+        yield terminal;
         return;
       }
 
       const queue = new EventQueue<AgentEvent>();
       const unsub = harness.subscribe((pe) => {
-        const event = toAgentEvent(pe);
+        const rich = toSessionEvent(pe, runId);
+        if (!rich) return;
+        observe(rich);
+        const event = projectAgentEvent(rich);
         if (event) queue.push(event);
       });
       let completed: AssistantMessage | undefined; // the assistant message of a cleanly completed turn
@@ -342,6 +433,13 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
           if (terminal.type === "completed") completed = message;
         } catch (error) {
           terminal = errorToTerminal(error);
+        }
+        if (terminal.type === "completed") settle({ status: "completed" });
+        else if (terminal.type === "failed") {
+          settle({
+            status: "failed",
+            error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },
+          });
         }
         yield terminal;
       } finally {
@@ -375,6 +473,9 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         }
       }
     } finally {
+      // A run the caller cancelled mid-stream produced no terminal (SPEC: cancellation has no
+      // terminal event) — the observation plane still gets its exactly-one settlement.
+      settle({ status: "aborted" });
       release(); // after cleanup, so the next invoke for this session can enter
     }
   }

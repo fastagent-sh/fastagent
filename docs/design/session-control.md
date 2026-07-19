@@ -94,8 +94,8 @@ belong to the transport envelope ([§13](#13-transport-and-envelope)).
 
 ## 5. The contract
 
-Pure types under a future `@fastagent-sh/fastagent/session` subpath; the pi implementation lives
-under `engines/pi/`. Exact TypeScript names may change during implementation; the boundary may not.
+Pure types under the `@fastagent-sh/fastagent/session` subpath (`src/session.ts`); the pi
+implementation lives under `engines/pi/` (`session-control.ts`, exported from `/pi`).
 
 ```ts
 interface SessionControl {
@@ -387,7 +387,7 @@ safe for untrusted users; `ExecutionEnv` is still not a complete sandbox boundar
 | Phase | Work | Done when |
 |---|---|---|
 | 0 | **Done.** The definition-aware session builder is extracted (`session-builder.ts`); the TUI-only `~/.pi` auth divergence is eliminated in place; `runPiChat` is one consumer. | Chat assembly semantics unchanged; auth source and `thinkingLevel` deliberately converged to serving; builder independently instantiable. |
-| 1 | Observation plane: translate pi events to `SessionEvent` once inside the invoke path and derive `AgentEvent` as a projection; add the `session` subpath types and pi `state`/`entries`/`events`; conformance tests for projection fidelity, ordering, reconnect, and single-writer. | An L0 client can watch and reconnect to any invoke-driven run. |
+| 1 | **Done.** Observation plane: pi events translate ONCE to `SessionEvent` inside the invoke path (`toSessionEvent`), `AgentEvent` is its projection (`projectAgentEvent`); the `session` subpath types + pi `createPiSessionControl` (`state`/`entries`/`events` over a read-only `PiSessionReader`); conformance tests for projection fidelity, run boundaries (incl. cancellation → exactly-one `run_settled{aborted}`), reconnect, and single-writer. | An L0 client can watch and reconnect to any invoke-driven run. |
 | 2 | Control plane: `steer`/`follow_up`/`abort` with settle-window invoke semantics and `queue_changed`; boundary mutations (`compact`, `set_model`, `set_thinking`) under the lease. | L1–L2 clients. |
 | 3 | Transport codec and a remote/subprocess adapter (the envelope is born here); product runners add authentication, idempotency, event persistence, and routing. | Remote `SessionControl` is isomorphic to local. |
 

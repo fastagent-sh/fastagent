@@ -359,8 +359,13 @@ interface PiSessionStore {
   openOrCreate(sessionId: string): Promise<Session>;
 }
 
-function inMemorySessionStore(): PiSessionStore;
-function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore;
+/** Read-only sibling for the observation plane: unknown session → undefined, never created. */
+interface PiSessionReader {
+  openIfExists(sessionId: string): Promise<Session | undefined>;
+}
+
+function inMemorySessionStore(): PiSessionStore & PiSessionReader;
+function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore & PiSessionReader;
 ```
 
 Lease:
@@ -376,10 +381,38 @@ function inProcessLease(): Lease;
 
 The lease is the same-session concurrency floor. A failed acquisition yields a retryable `failed` event.
 
+## Session control (observation plane)
+
+The optional serving extension beside `invoke`
+([design](design/session-control.md)): watch and reconnect to invoke-driven runs. Neutral types live
+in `@fastagent-sh/fastagent/session`; the pi implementation in `/pi`:
+
+```ts
+import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
+import { createPiAgent, createPiSessionControl, inMemorySessionStore } from "@fastagent-sh/fastagent/pi";
+
+const sessions = inMemorySessionStore();
+const { control, observer } = createPiSessionControl({ sessions });
+const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer });
+
+// Data plane drives the run…
+for await (const e of agent.invoke({ session: "s1" }, { text: "hi" })) void e;
+// …while any number of observers watch, live and reconnectable:
+for await (const ev of control.events("s1")) console.log(ev.type); // run_started, message_delta, …
+const { entries } = await control.entries("s1", { since: cursor }); // durable backfill
+const state = await control.state("s1"); // { status, activeRunId?, leafEntryId? }
+```
+
+`invoke` stays the only way to start work; the `AgentEvent` stream is a projection of the rich
+`SessionEvent` stream. `dispatch` (steer/follow_up/abort/…) arrives with the control plane — until
+then `capabilities()` reports it off and commands are rejected with `unsupported_capability`.
+`createPiAgentFromWorkspace` accepts the same `observer` and returns its `sessions` store for wiring.
+
 ## Subpath exports
 
 ```ts
 import { type Agent, collect, readBodyCapped } from "@fastagent-sh/fastagent/core";
+import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
 import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
 import { githubChannel } from "@fastagent-sh/fastagent/github";
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";

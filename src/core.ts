@@ -1,6 +1,18 @@
 // Engine-neutral Agent Handler contract, consumption helpers, host/channel kit, and time triggers.
 // Import this subpath from channel packages or contract-only integrations to avoid loading the pi runtime.
 export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.ts";
+export type {
+  KnownSessionEvent,
+  SessionCapabilities,
+  SessionCommand,
+  SessionControl,
+  SessionEntries,
+  SessionEntry,
+  SessionEvent,
+  SessionResult,
+  SessionState,
+} from "./session.ts";
+export { UNSUPPORTED_CAPABILITY_CODE } from "./session.ts";
 export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 export type { ModuleLoadFailure } from "./loader.ts";
 

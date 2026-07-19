@@ -20,6 +20,16 @@ export interface PiSessionStore {
 }
 
 /**
+ * READ-only sibling of {@link PiSessionStore}, for the observation plane (session-control.ts):
+ * `state()`/`entries()` on an unknown session must answer "empty", never create one — the
+ * observation plane is strictly read-only (design §16 invariant 4). Also skips the open-time
+ * crash reconciliation (that appends repair entries — a write).
+ */
+export interface PiSessionReader {
+  openIfExists(sessionId: string): Promise<Session | undefined>;
+}
+
+/**
  * Crash-safety reconciliation, run on every OPEN of an existing session.
  *
  * A turn that dies mid tool-execution leaves an assistant `tool_use` with no matching result (pi
@@ -97,7 +107,7 @@ async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
 }
 
 /** In-process store (pi InMemorySessionRepo). Continuity lives and dies with the instance. */
-export function inMemorySessionStore(): PiSessionStore {
+export function inMemorySessionStore(): PiSessionStore & PiSessionReader {
   const repo = new InMemorySessionRepo();
   return {
     async openOrCreate(sessionId) {
@@ -107,6 +117,10 @@ export function inMemorySessionStore(): PiSessionStore {
       await reconcileInterruptedToolCalls(session);
       return session;
     },
+    async openIfExists(sessionId) {
+      const existing = (await repo.list()).find((m) => m.id === sessionId);
+      return existing ? repo.open(existing) : undefined;
+    },
   };
 }
 
@@ -114,7 +128,7 @@ export function inMemorySessionStore(): PiSessionStore {
  * Disk-backed store (pi JsonlSessionRepo under `dir`): restart the process, conversations continue.
  * `cwd` is recorded in session metadata; defaults to process.cwd().
  */
-export function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore {
+export function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore & PiSessionReader {
   const cwd = options.cwd ?? process.cwd();
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: options.dir });
   return {
@@ -128,6 +142,11 @@ export function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSes
       const session = await repo.open(existing);
       await reconcileInterruptedToolCalls(session);
       return session;
+    },
+    async openIfExists(sessionId) {
+      const id = encodeSessionId(sessionId);
+      const existing = (await repo.list({ cwd })).find((m) => m.id === id);
+      return existing ? repo.open(existing) : undefined;
     },
   };
 }

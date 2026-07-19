@@ -22,6 +22,8 @@ import {
   resolveStateRoot,
 } from "./config.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
+import type { SessionObserver } from "./invoke.ts";
+import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import { type LoadedDefinition, ensureStateRootSelfIgnored } from "./definition.ts";
@@ -49,6 +51,9 @@ export interface CreatePiAgentFromWorkspaceOptions {
    * and never poll). The built-in `wake` tool mounts only when this is set AND `config.selfSchedule` is on.
    */
   serving?: boolean;
+  /** Observation-plane tap (session control); see `createPiSessionControl`. Wire its observer here
+   *  and its reader to the returned {@link sessions} store. */
+  observer?: SessionObserver;
 }
 
 /**
@@ -147,6 +152,8 @@ export async function createPiAgentFromWorkspace(
   sessionsDir: string;
   /** Absolute credentials file in use (for the startup report). */
   authPath: string;
+  /** The session store in use — also a {@link PiSessionReader} for `createPiSessionControl`. */
+  sessions: PiSessionStore & PiSessionReader;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. Each name
    *  lives in exactly one report slot — deferred names are in {@link deferredToolNames} instead. */
   toolNames: string[];
@@ -174,6 +181,7 @@ export async function createPiAgentFromWorkspace(
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
+  const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: dir });
   const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
     model: modelSpec,
     thinkingLevel: config.thinkingLevel,
@@ -181,11 +189,13 @@ export async function createPiAgentFromWorkspace(
     tools: mountedTools,
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
-    sessions: jsonlSessionStore({ dir: sessionsDir, cwd: dir }),
+    sessions,
+    observer: options.observer,
   });
   return {
     agent,
     definition,
+    sessions,
     agentDir,
     config,
     configPath,
