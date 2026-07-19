@@ -1,18 +1,20 @@
 /**
- * The pi implementation of the session control plane's OBSERVATION half (design Phase 1):
- * `state`/`entries`/`events` over invoke-driven runs. `createPiSessionControl` returns the neutral
- * `SessionControl` plus the {@link SessionObserver} to plug into the invoke pipeline
- * (`createPiAgentFromHarness({ observer })`) — the hub derives everything from the rich event
- * stream, holds no durable state of its own, and never writes: durable truth stays in the session
- * repository (read via {@link PiSessionReader}), live truth in the events the data plane emits.
+ * The pi implementation of the session control plane: observation (`state`/`entries`/`events`,
+ * design Phase 1) and run modulation (`dispatch`: steer/follow_up/abort, Phase 2a) over
+ * invoke-driven runs. `createPiSessionControl` returns the neutral `SessionControl` plus the
+ * {@link SessionObserver} to plug into the invoke pipeline (`createPiAgentFromHarness({ observer })`)
+ * — the hub derives everything from the rich event stream (plus the {@link RunControls} the
+ * run_started event carries), holds no durable state of its own, and never writes: durable truth
+ * stays in the session repository (read via {@link PiSessionReader}), live truth in the events the
+ * data plane emits, modulation in the controls the data plane registers.
  *
- * Phase 2 (steer/follow_up/abort/compact/set_model/set_thinking) lands in `dispatch`; until then
- * every command is rejected before acceptance with `unsupported_capability` — a client gating on
- * `capabilities()` never sends them.
+ * Phase 2b (boundary mutations: compact/set_model/set_thinking) is still rejected before acceptance
+ * with `unsupported_capability` — a client gating on `capabilities()` never sends them.
  */
 import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import type { Json } from "../../agent.ts";
 import {
+  NO_ACTIVE_RUN_CODE,
   type SessionCapabilities,
   type SessionCommand,
   type SessionControl,
@@ -23,7 +25,7 @@ import {
   type SessionState,
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
-import type { SessionObserver } from "./invoke.ts";
+import type { RunControls, SessionObserver } from "./invoke.ts";
 import type { PiSessionReader } from "./sessions.ts";
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
@@ -124,23 +126,33 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   observer: SessionObserver;
 } {
   const { sessions } = options;
-  /** Live run state per session — derived purely from run_started/run_settled. */
-  const active = new Map<string, string>(); // session → activeRunId
+  /** Live run state per session — derived purely from run_started/run_settled and the controls
+   *  registered with run_started. */
+  const active = new Map<
+    string,
+    { runId: string; controls?: RunControls; pending: { steering: number; followUp: number } }
+  >();
   const subscribers = new Map<string, Set<Subscriber>>();
 
-  const observer: SessionObserver = (session, event) => {
-    if (event.type === "run_started" && event.runId) active.set(session, event.runId);
-    else if (event.type === "run_settled") active.delete(session);
+  const observer: SessionObserver = (session, event, run) => {
+    if (event.type === "run_started" && event.runId) {
+      active.set(session, { runId: event.runId, controls: run, pending: { steering: 0, followUp: 0 } });
+    } else if (event.type === "run_settled") {
+      active.delete(session);
+    } else if (event.type === "queue_changed") {
+      const entry = active.get(session);
+      if (entry) entry.pending = event.data as { steering: number; followUp: number };
+    }
     const subs = subscribers.get(session);
     if (subs) for (const sub of [...subs]) sub.push(event);
   };
 
   const capabilities: SessionCapabilities = {
-    steering: false,
-    followUp: false,
-    manualCompaction: false,
-    modelSelection: false,
-    thinkingLevel: false,
+    steering: true,
+    followUp: true,
+    manualCompaction: false, // Phase 2b
+    modelSelection: false, // Phase 2b
+    thinkingLevel: false, // Phase 2b
     toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
     usage: false,
   };
@@ -149,13 +161,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     capabilities: () => capabilities,
 
     async state(session): Promise<SessionState> {
-      const activeRunId = active.get(session);
+      const run = active.get(session);
       const opened = await sessions.openIfExists(session);
       const leafEntryId = opened ? ((await opened.getLeafId()) ?? undefined) : undefined;
       return {
-        status: activeRunId ? "running" : "idle",
-        ...(activeRunId ? { activeRunId } : {}),
-        pending: { steering: 0, followUp: 0 },
+        status: run ? "running" : "idle",
+        ...(run ? { activeRunId: run.runId } : {}),
+        pending: run ? { ...run.pending } : { steering: 0, followUp: 0 },
         ...(leafEntryId ? { leafEntryId } : {}),
       };
     },
@@ -197,17 +209,51 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       })();
     },
 
-    async dispatch(_session, command: SessionCommand): Promise<SessionResult> {
-      // Phase 1 is the observation plane only. Rejected BEFORE acceptance (safe to retry after
-      // upgrading); a capability-gating client never lands here.
-      return {
-        ok: false,
-        error: {
-          code: UNSUPPORTED_CAPABILITY_CODE,
-          message: `command "${command.type}" is not supported by this runtime (observation plane only)`,
-          retryable: false,
-        },
-      };
+    async dispatch(session, command: SessionCommand): Promise<SessionResult> {
+      switch (command.type) {
+        case "steer":
+        case "follow_up":
+        case "abort": {
+          const run = active.get(session);
+          if (!run?.controls) {
+            // Rejected BEFORE acceptance: no run exists (or its controls are gone), nothing
+            // happened, safe to retry once a run is active.
+            return {
+              ok: false,
+              error: {
+                code: NO_ACTIVE_RUN_CODE,
+                message: `no active run for this session — ${command.type} modulates a run an invoke is driving`,
+                retryable: false,
+              },
+            };
+          }
+          try {
+            if (command.type === "steer") await run.controls.steer(command.prompt);
+            else if (command.type === "follow_up") await run.controls.followUp(command.prompt);
+            else await run.controls.abort();
+          } catch (error) {
+            // The run raced us to settlement (or the engine refused): still pre-acceptance — the
+            // queue/abort call did not take effect.
+            return {
+              ok: false,
+              error: { code: NO_ACTIVE_RUN_CODE, message: String(error), retryable: false },
+            };
+          }
+          // Accepted: joined (or stopped) THIS run. The outcome arrives as run_settled.
+          return { ok: true, runId: run.runId };
+        }
+        default:
+          // Phase 2b (compact/set_model/set_thinking): rejected before acceptance; a
+          // capability-gating client never lands here.
+          return {
+            ok: false,
+            error: {
+              code: UNSUPPORTED_CAPABILITY_CODE,
+              message: `command "${command.type}" is not supported by this runtime yet`,
+              retryable: false,
+            },
+          };
+      }
     },
   };
 

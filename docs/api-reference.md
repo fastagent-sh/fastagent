@@ -412,8 +412,20 @@ const state = await control.state("s1"); // { status, activeRunId?, leafEntryId?
 ```
 
 `invoke` stays the only way to start work; the `AgentEvent` stream is a projection of the rich
-`SessionEvent` stream. `dispatch` (steer/follow_up/abort/…) arrives with the control plane — until
-then `capabilities()` reports it off and commands are rejected with `unsupported_capability`.
+`SessionEvent` stream. `dispatch` modulates the run an invoke is driving — acceptance is not
+outcome (`ok: true` = admitted; the result arrives as `run_settled`):
+
+```ts
+await control.dispatch("s1", { type: "steer", prompt: { text: "use bun, not npm" } }); // joins the run
+await control.dispatch("s1", { type: "follow_up", prompt: { text: "then summarize" } }); // FIFO queue
+await control.dispatch("s1", { type: "abort" }); // invoke ends failed{code:"aborted"}, run_settled{aborted}
+```
+
+With steering/follow-ups the invoke stream terminates at the run's SETTLE (all queued continuations
+drained) — for consumers that never dispatch, a run equals a single turn, byte-identical behavior.
+Run commands on an idle session reject with `no_active_run` before acceptance. Boundary mutations
+(`compact`/`set_model`/`set_thinking`) are not shipped yet: `capabilities()` reports them off and
+they reject with `unsupported_capability`.
 For workspace assembly the store lives inside the opener, so ask the opener to wire the hub:
 
 ```ts

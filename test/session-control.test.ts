@@ -14,7 +14,7 @@ import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
 import { createPiAgentFromWorkspace } from "../src/engines/pi/workspace.ts";
-import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
+import { NO_ACTIVE_RUN_CODE, UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
 import { makeFaux } from "./faux.ts";
 
 const echoTool: AgentTool = {
@@ -324,18 +324,192 @@ describe("session control (Phase 1): observation plane", () => {
     }
   });
 
-  it("dispatch(): Phase 1 rejects every command before acceptance with the stable code", async () => {
+  it("dispatch(): boundary mutations still reject with unsupported_capability; run commands on idle reject with no_active_run", async () => {
     const { control } = makeObserved([]);
-    const result = await control.dispatch("sD", { type: "abort" });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
-      expect(result.error.retryable).toBe(false);
+    const compact = await control.dispatch("sD", { type: "compact" });
+    expect(compact.ok).toBe(false);
+    if (!compact.ok) expect(compact.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
+    // steer/follow_up/abort on an idle session: rejected BEFORE acceptance with the stable code.
+    for (const cmd of [
+      { type: "steer", prompt: { text: "x" } },
+      { type: "follow_up", prompt: { text: "x" } },
+      { type: "abort" },
+    ] as const) {
+      const r = await control.dispatch("sD", cmd);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe(NO_ACTIVE_RUN_CODE);
     }
-    // And capabilities honestly gate them off.
     const caps = control.capabilities();
-    expect(caps.steering).toBe(false);
-    expect(caps.followUp).toBe(false);
-    expect(caps.toolProgress).toBe(true);
+    expect(caps.steering).toBe(true);
+    expect(caps.followUp).toBe(true);
+    expect(caps.manualCompaction).toBe(false);
+  });
+});
+
+/** A tool whose execution blocks until the test releases it — the deterministic mid-run window. */
+function makeGate() {
+  let release: () => void = () => {};
+  const opened = new Promise<void>((r) => {
+    release = r;
+  });
+  const tool: AgentTool = {
+    name: "gate",
+    label: "Gate",
+    description: "Blocks until released",
+    parameters: Type.Object({}),
+    async execute(_id, _params, signal) {
+      await Promise.race([
+        opened,
+        new Promise<never>((_, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+      ]);
+      return { content: [{ type: "text", text: "gate opened" }], details: {} };
+    },
+  };
+  return { tool, release };
+}
+
+/** Agent + control with the gate tool mounted — for mid-run dispatch tests. */
+function makeGated(responses: FauxResponseStep[]) {
+  const { faux, models } = makeFaux();
+  faux.setResponses(responses);
+  const sessions = inMemorySessionStore();
+  const { control, observer } = createPiSessionControl({ sessions });
+  const gate = makeGate();
+  const agent = createPiAgentFromHarness({
+    observer,
+    harnessFactory: piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      tools: [gate.tool],
+      systemPrompt: "test",
+    }),
+  });
+  return { agent, control, gate };
+}
+
+/** Drive invoke in the background; resolve with all events once settled. */
+function drive(
+  agent: { invoke: (s: { session: string }, p: { text: string }) => AsyncIterable<AgentEvent> },
+  session: string,
+) {
+  return (async () => {
+    const out: AgentEvent[] = [];
+    for await (const e of agent.invoke({ session }, { text: "go" })) out.push(e);
+    return out;
+  })();
+}
+
+/** Wait until the control plane reports an active run for the session. */
+async function waitForRunning(control: ReturnType<typeof makeGated>["control"], session: string) {
+  for (let i = 0; i < 200; i++) {
+    const s = await control.state(session);
+    if (s.status === "running" && s.activeRunId) return s.activeRunId;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error("run never became active");
+}
+
+/** Wait until the given tool is executing (its started event was observed). */
+async function waitForToolStarted(control: ReturnType<typeof makeGated>["control"], session: string) {
+  for await (const ev of control.events(session)) {
+    if (ev.type === "tool_started") return;
+    if (ev.type === "run_settled") throw new Error("run settled before the tool started");
+  }
+}
+
+describe("session control (Phase 2a): run modulation", () => {
+  it("steer joins the active run: accepted with its runId, delivered before the next model call, settle window spans it", async () => {
+    const { agent, control, gate } = makeGated([
+      fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),
+      fauxAssistantMessage("steered answer"),
+    ]);
+    const invoked = drive(agent, "s2a");
+    const toolRunning = waitForToolStarted(control, "s2a");
+    const runId = await waitForRunning(control, "s2a");
+    await toolRunning;
+
+    const result = await control.dispatch("s2a", { type: "steer", prompt: { text: "actually, do it differently" } });
+    expect(result).toEqual({ ok: true, runId });
+    // Queue visibility while the steer is pending (the gate still holds the run).
+    expect((await control.state("s2a")).pending.steering).toBe(1);
+
+    gate.release();
+    const events = await invoked;
+    // Settle window: the steered continuation's text arrives in the SAME invoke stream.
+    const text = events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as { delta: string }).delta)
+      .join("");
+    expect(text).toContain("steered answer");
+    expect(events.at(-1)).toEqual({ type: "completed" });
+    // After settle the queue state is gone with the run.
+    const after = await control.state("s2a");
+    expect(after.status).toBe("idle");
+    expect(after.pending).toEqual({ steering: 0, followUp: 0 });
+  });
+
+  it("follow_up continues the run after it would otherwise stop; queue_changed is observable", async () => {
+    const { agent, control, gate } = makeGated([
+      fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),
+      fauxAssistantMessage("first answer"),
+      fauxAssistantMessage("follow-up answer"),
+    ]);
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("s2b")) {
+        seen.push(ev);
+        if (ev.type === "run_settled") break;
+      }
+    })();
+    const invoked = drive(agent, "s2b");
+    await waitForRunning(control, "s2b");
+    // Wait for the tool to be executing before queueing the follow-up.
+    while (!seen.some((e) => e.type === "tool_started")) await new Promise((r) => setTimeout(r, 5));
+
+    const result = await control.dispatch("s2b", { type: "follow_up", prompt: { text: "and then summarize" } });
+    expect(result.ok).toBe(true);
+    gate.release();
+    const events = await invoked;
+    await watching;
+
+    const text = events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as { delta: string }).delta)
+      .join("");
+    expect(text).toContain("first answer");
+    expect(text).toContain("follow-up answer"); // the settle window spanned the continuation
+    expect(seen.some((e) => e.type === "queue_changed")).toBe(true);
+    expect(seen.filter((e) => e.type === "run_settled")).toHaveLength(1); // still exactly one
+  });
+
+  it("abort stops the run: accepted, invoke terminal failed{code: aborted}, run_settled{aborted}", async () => {
+    const { agent, control, gate } = makeGated([fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("s2c")) {
+        seen.push(ev);
+        if (ev.type === "run_settled") break;
+      }
+    })();
+    const invoked = drive(agent, "s2c");
+    await waitForRunning(control, "s2c");
+    while (!seen.some((e) => e.type === "tool_started")) await new Promise((r) => setTimeout(r, 5));
+
+    const result = await control.dispatch("s2c", { type: "abort" });
+    expect(result.ok).toBe(true);
+    void gate; // never released — abort must cut through the blocked tool
+    const events = await invoked;
+    await watching;
+
+    const terminal = events.at(-1);
+    expect(terminal).toMatchObject({ type: "failed", code: "aborted", retryable: false });
+    const settled = seen.find((e) => e.type === "run_settled");
+    expect(settled?.data).toEqual({ status: "aborted" });
+    // The session is reusable: back to idle, not poisoned.
+    expect((await control.state("s2c")).status).toBe("idle");
   });
 });

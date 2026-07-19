@@ -44,6 +44,11 @@ export interface SessionCapabilities {
 /** Stable `SessionResult.error.code` for a command the implementation does not support. */
 export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
 
+/** Stable `SessionResult.error.code` for a run-modulating command (`steer`/`follow_up`/`abort`)
+ *  dispatched while the session has no active run — rejected before acceptance, safe to retry
+ *  once a run exists. */
+export const NO_ACTIVE_RUN_CODE = "no_active_run";
+
 // ── Commands (control plane) ─────────────────────────────────────────────────
 
 /** Six commands; deliberately NO `prompt` — starting work is the data plane's definition. */
@@ -139,6 +144,11 @@ export type ToolProgressEvent = SessionEvent<"tool_progress", { id: string; name
 export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isError: boolean; content: Json }> & {
   runId: string;
 };
+/** Normalized live queue depths for the active run (L1). */
+export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number; followUp: number }> & {
+  runId: string;
+};
+
 /**
  * The serving process failed outside a normal run outcome (fail visibly). Emitted by TRANSPORT
  * adapters (design §13) when they lose the backend before ending a remote stream — an in-process
@@ -147,9 +157,9 @@ export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isEr
  */
 export type ServingErrorEvent = SessionEvent<"serving_error", { message: string }>;
 
-/** The Phase 1 (L0) vocabulary — every event the in-process observation plane emits today. L1–L2
- *  events (queue_changed, turn_*, compaction_*, retry_*, state_changed) arrive with the control
- *  plane; {@link ServingErrorEvent} arrives with the transport adapter. */
+/** Every event the in-process observation plane emits today: the L0 vocabulary plus L1
+ *  `queue_changed`. L2 events (turn_*, compaction_*, retry_*, state_changed) arrive with boundary
+ *  mutations; {@link ServingErrorEvent} arrives with the transport adapter. */
 export type KnownSessionEvent =
   | RunStartedEvent
   | RunSettledEvent
@@ -158,4 +168,5 @@ export type KnownSessionEvent =
   | MessageFinishedEvent
   | ToolStartedEvent
   | ToolProgressEvent
-  | ToolFinishedEvent;
+  | ToolFinishedEvent
+  | QueueChangedEvent;

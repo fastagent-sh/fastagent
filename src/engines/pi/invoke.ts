@@ -137,6 +137,13 @@ function messageSignal(message: AssistantMessage): { status?: number; code?: unk
 function toSessionEvent(pe: AgentHarnessEvent, runId: string): SessionEvent | null {
   const at = Date.now();
   switch (pe.type) {
+    case "queue_update":
+      return {
+        type: "queue_changed",
+        timestamp: at,
+        runId,
+        data: { steering: pe.steer.length, followUp: pe.followUp.length },
+      };
     case "message_start":
       // Assistant streaming only — a user/toolResult message is not a live message boundary.
       if (pe.message.role !== "assistant") return null;
@@ -202,9 +209,20 @@ export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
   }
 }
 
-/** The observation-plane seam: every rich event of every run, pushed as it happens. A hub
- *  (session-control.ts) implements this to serve `events()`/`state()`; absent = zero overhead. */
-export type SessionObserver = (session: string, event: SessionEvent) => void;
+/** Live modulation handles for one active run — what the control plane's `dispatch` routes to.
+ *  Built inside the invoke closure (it owns the harness); registered with the observer at
+ *  run_started, gone after run_settled. */
+export interface RunControls {
+  steer(prompt: Prompt): Promise<void>;
+  followUp(prompt: Prompt): Promise<void>;
+  abort(): Promise<void>;
+}
+
+/** The observation-plane seam: every rich event of every run, pushed as it happens. `run` carries
+ *  the live {@link RunControls}, attached to the `run_started` event only. A hub
+ *  (session-control.ts) implements this to serve `events()`/`state()`/`dispatch`; absent = zero
+ *  overhead. */
+export type SessionObserver = (session: string, event: SessionEvent, run?: RunControls) => void;
 
 /**
  * Terminal mapping, decided by the resolved message's stopReason: pi's prompt() resolves a message
@@ -212,7 +230,14 @@ export type SessionObserver = (session: string, event: SessionEvent) => void;
  * entire failure class (violating SPEC MUST 1).
  */
 export function toTerminal(message: AssistantMessage): AgentEvent {
-  if (message.stopReason === "error" || message.stopReason === "aborted") {
+  if (message.stopReason === "aborted") {
+    // A deliberate stop (control-plane abort / harness abort), not an error: `code: "aborted"` lets
+    // a channel render cancellation distinctly, and channels MUST treat it as a settled outcome
+    // (durable turn-intent cleanup included) so an operator's abort is never replayed (design §6).
+    const details = message.errorMessage ?? "run aborted";
+    return { type: "failed", details, retryable: false, code: "aborted" };
+  }
+  if (message.stopReason === "error") {
     const details = message.errorMessage ?? `model stopped: ${message.stopReason}`;
     return { type: "failed", details, retryable: classifyRetryable(details, messageSignal(message)) };
   }
@@ -383,16 +408,41 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
     // was cancelled by the caller (SPEC: cancellation has no terminal event) → aborted.
     const runId = crypto.randomUUID();
     let outcome: RunSettledEvent["data"] | undefined;
-    const observe = (event: SessionEvent | null): void => {
+    const observe = (event: SessionEvent | null, run?: RunControls): void => {
       if (!event || !observer) return;
       try {
-        observer(scope.session, event);
+        observer(scope.session, event, run);
       } catch (error) {
         // The observation plane must never break the data plane; a broken hub is its own problem.
         log.warn(`[fastagent] session observer threw (event ${event.type}): ${String(error)}`);
       }
     };
-    observe({ type: "run_started", timestamp: Date.now(), runId, data: {} });
+    // The controls close over the harness REFERENCE (assigned below): run_started must be observed
+    // before the (awaited) harness build so no early event outruns registration, and a dispatch
+    // that races the build simply finds the queue on the freshly built harness.
+    let liveHarness: Awaited<ReturnType<PiHarnessFactory>> | undefined;
+    const requireHarness = () => {
+      if (!liveHarness) throw new Error("run is still assembling; retry the command");
+      return liveHarness;
+    };
+    // A control-plane abort may surface from pi as a THROWN harness error or as a resolved
+    // stopReason:"aborted" message depending on where the run was cut — the flag classifies the
+    // terminal deterministically either way.
+    let abortRequested = false;
+    const controls: RunControls = {
+      async steer(p: Prompt) {
+        await requireHarness().steer(p.text, await toPiPromptOptions(p));
+      },
+      async followUp(p: Prompt) {
+        await requireHarness().followUp(p.text, await toPiPromptOptions(p));
+      },
+      async abort() {
+        const harness = requireHarness();
+        abortRequested = true;
+        await harness.abort();
+      },
+    };
+    observe({ type: "run_started", timestamp: Date.now(), runId, data: {} }, controls);
     try {
       let harness: Awaited<ReturnType<PiHarnessFactory>>;
       try {
@@ -405,6 +455,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         return; // → outer finally emits the settlement
       }
 
+      liveHarness = harness;
       const queue = new EventQueue<AgentEvent>();
       const unsub = harness.subscribe((pe) => {
         const rich = toSessionEvent(pe, runId);
@@ -431,12 +482,18 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         } catch (error) {
           terminal = errorToTerminal(error);
         }
+        if (abortRequested && terminal.type === "failed") {
+          terminal = { type: "failed", details: terminal.details, retryable: false, code: "aborted" };
+        }
         if (terminal.type === "completed") outcome = { status: "completed" };
         else if (terminal.type === "failed") {
-          outcome = {
-            status: "failed",
-            error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },
-          };
+          outcome =
+            terminal.code === "aborted"
+              ? { status: "aborted" }
+              : {
+                  status: "failed",
+                  error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },
+                };
         }
         yield terminal;
       } finally {
