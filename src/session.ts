@@ -22,9 +22,15 @@ export interface SessionControl {
   dispatch(session: string, command: SessionCommand): Promise<SessionResult>;
 }
 
-/** Static support declaration. Clients MUST gate controls on it; unsupported commands are rejected
- *  before acceptance with {@link UNSUPPORTED_CAPABILITY_CODE}. `state`/`entries`/`events` are
- *  mandatory (the reconnect contract) and deliberately absent here. */
+/**
+ * Static support declaration, two kinds of flag:
+ * - COMMAND GATES (`steering`, `followUp`, `manualCompaction`, `modelSelection`, `thinkingLevel`):
+ *   clients MUST gate dispatch on them; an unsupported command is rejected before acceptance with
+ *   {@link UNSUPPORTED_CAPABILITY_CODE}.
+ * - OBSERVATION-QUALITY flags (`toolProgress`, `usage`): whether those events/state fields appear
+ *   at all — nothing to dispatch, nothing to reject.
+ * `state`/`entries`/`events` are mandatory (the reconnect contract) and deliberately absent here.
+ */
 export interface SessionCapabilities {
   steering: boolean;
   followUp: boolean;
