@@ -615,8 +615,9 @@ describe("session control (Phase 2a): run modulation", () => {
     const settled = seen.find((e) => e.type === "run_settled");
     // Intent-attributed (the faux provider surfaces a plain error, not stopReason "aborted" — the
     // in-flight abort classifies it), and NON-LOSSY: what actually stopped the run stays readable.
-    expect(settled?.data).toMatchObject({ status: "aborted" });
-    expect((settled?.data as { error?: { message: string } }).error?.message).toBeTruthy();
+    const settledData = settled?.data as { status: string; error?: { message: string } };
+    expect(settledData).toMatchObject({ status: "aborted" });
+    expect(settledData.error?.message).toBeTruthy();
     // The session is reusable: back to idle, not poisoned.
     expect((await control.state("s2c")).status).toBe("idle");
   });
