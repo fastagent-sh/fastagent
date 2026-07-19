@@ -434,7 +434,11 @@ describe("session control (Phase 2a): run modulation", () => {
 
     const result = await control.dispatch("s2a", { type: "steer", prompt: { text: "actually, do it differently" } });
     expect(result).toEqual({ ok: true, runId });
-    // Queue visibility while the steer is pending (the gate still holds the run).
+    // Queue visibility while the steer is pending (the gate still holds the run). Poll: the
+    // contract says "queued", not "queue_update delivered synchronously before dispatch resolves".
+    for (let i = 0; i < 200 && (await control.state("s2a")).pending.steering !== 1; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
     expect((await control.state("s2a")).pending.steering).toBe(1);
 
     gate.release();

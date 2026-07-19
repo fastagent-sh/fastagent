@@ -49,6 +49,12 @@ export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
  *  once a run exists. */
 export const NO_ACTIVE_RUN_CODE = "no_active_run";
 
+/** Stable `SessionResult.error.code` for a run command that reached an active run but could not
+ *  take effect (the run raced to settlement, or the engine refused it). Distinct from
+ *  {@link NO_ACTIVE_RUN_CODE}: the run existed. Still pre-acceptance — nothing was queued — and
+ *  safe to retry against the session's next state. */
+export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
+
 // ── Commands (control plane) ─────────────────────────────────────────────────
 
 /** Six commands; deliberately NO `prompt` — starting work is the data plane's definition. */

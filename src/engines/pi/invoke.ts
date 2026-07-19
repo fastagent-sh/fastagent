@@ -211,7 +211,9 @@ export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
 
 /** Live modulation handles for one active run — what the control plane's `dispatch` routes to.
  *  Built inside the invoke closure (it owns the harness); registered with the observer at
- *  run_started, gone after run_settled. */
+ *  run_started, gone after run_settled. RACE WINDOW: an accepted `abort` can still settle
+ *  `completed` — the run may finish between acceptance and the cut; acceptance is not outcome,
+ *  the settlement is the truth. */
 export interface RunControls {
   steer(prompt: Prompt): Promise<void>;
   followUp(prompt: Prompt): Promise<void>;
@@ -417,29 +419,39 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         log.warn(`[fastagent] session observer threw (event ${event.type}): ${String(error)}`);
       }
     };
-    // The controls close over the harness REFERENCE (assigned below): run_started must be observed
-    // before the (awaited) harness build so no early event outruns registration, and a dispatch
-    // that races the build simply finds the queue on the freshly built harness.
-    let liveHarness: Awaited<ReturnType<PiHarnessFactory>> | undefined;
-    const requireHarness = () => {
-      if (!liveHarness) throw new Error("run is still assembling; retry the command");
-      return liveHarness;
-    };
+    // run_started must be observed before the (awaited) harness build so no early event outruns
+    // registration — so the controls AWAIT the build instead of erroring on the assembling window:
+    // a dispatch that races the build simply queues on the freshly built harness. A setup failure
+    // rejects the gate (and the run settles failed); the guard keeps an undispatched rejection from
+    // becoming an unhandled-rejection crash.
+    let harnessReady!: (h: Awaited<ReturnType<PiHarnessFactory>>) => void;
+    let harnessFailed!: (e: unknown) => void;
+    const harnessGate = new Promise<Awaited<ReturnType<PiHarnessFactory>>>((resolve, reject) => {
+      harnessReady = resolve;
+      harnessFailed = reject;
+    });
+    harnessGate.catch(() => {}); // observed via controls only when a dispatch actually happens
     // A control-plane abort may surface from pi as a THROWN harness error or as a resolved
     // stopReason:"aborted" message depending on where the run was cut — the flag classifies the
-    // terminal deterministically either way.
+    // terminal deterministically either way. Set optimistically and ROLLED BACK if abort() itself
+    // fails: a rejected abort must not reclassify this run's real error as a deliberate stop.
     let abortRequested = false;
     const controls: RunControls = {
       async steer(p: Prompt) {
-        await requireHarness().steer(p.text, await toPiPromptOptions(p));
+        await (await harnessGate).steer(p.text, await toPiPromptOptions(p));
       },
       async followUp(p: Prompt) {
-        await requireHarness().followUp(p.text, await toPiPromptOptions(p));
+        await (await harnessGate).followUp(p.text, await toPiPromptOptions(p));
       },
       async abort() {
-        const harness = requireHarness();
+        const harness = await harnessGate;
         abortRequested = true;
-        await harness.abort();
+        try {
+          await harness.abort();
+        } catch (error) {
+          abortRequested = false;
+          throw error;
+        }
       },
     };
     observe({ type: "run_started", timestamp: Date.now(), runId, data: {} }, controls);
@@ -449,13 +461,14 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         harness = await harnessFactory(scope.session);
       } catch (error) {
         // Setup failures (session open / auth / …) MUST surface as a failed event, never a throw.
+        harnessFailed(error); // a pending dispatch learns the run cannot take commands
         const terminal = errorToTerminal(error);
         outcome = { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
         yield terminal;
         return; // → outer finally emits the settlement
       }
 
-      liveHarness = harness;
+      harnessReady(harness);
       const queue = new EventQueue<AgentEvent>();
       const unsub = harness.subscribe((pe) => {
         const rich = toSessionEvent(pe, runId);

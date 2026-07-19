@@ -15,6 +15,7 @@ import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import type { Json } from "../../agent.ts";
 import {
   NO_ACTIVE_RUN_CODE,
+  RUN_COMMAND_FAILED_CODE,
   type SessionCapabilities,
   type SessionCommand,
   type SessionControl,
@@ -232,11 +233,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             else if (command.type === "follow_up") await run.controls.followUp(command.prompt);
             else await run.controls.abort();
           } catch (error) {
-            // The run raced us to settlement (or the engine refused): still pre-acceptance — the
-            // queue/abort call did not take effect.
+            // The run raced us to settlement, failed setup, or the engine refused: still
+            // pre-acceptance (nothing was queued), distinct from "no run existed" — and safe to
+            // retry against the session's next state.
             return {
               ok: false,
-              error: { code: NO_ACTIVE_RUN_CODE, message: String(error), retryable: false },
+              error: { code: RUN_COMMAND_FAILED_CODE, message: String(error), retryable: true },
             };
           }
           // Accepted: joined (or stopped) THIS run. The outcome arrives as run_settled.

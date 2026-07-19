@@ -423,7 +423,10 @@ await control.dispatch("s1", { type: "abort" }); // invoke ends failed{code:"abo
 
 With steering/follow-ups the invoke stream terminates at the run's SETTLE (all queued continuations
 drained) — for consumers that never dispatch, a run equals a single turn, byte-identical behavior.
-Run commands on an idle session reject with `no_active_run` before acceptance. Boundary mutations
+Run commands on an idle session reject with `no_active_run` before acceptance; a command that
+reached a run but could not take effect (the run raced to settlement) rejects with
+`run_command_failed`, retryable. An accepted `abort` can still settle `completed` when the run
+finishes inside the race window — acceptance is not outcome; the settlement is the truth. Boundary mutations
 (`compact`/`set_model`/`set_thinking`) are not shipped yet: `capabilities()` reports them off and
 they reject with `unsupported_capability`.
 For workspace assembly the store lives inside the opener, so ask the opener to wire the hub:
