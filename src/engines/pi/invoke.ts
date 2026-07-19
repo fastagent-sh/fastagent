@@ -436,6 +436,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
     // terminal deterministically either way. Set optimistically and ROLLED BACK if abort() itself
     // fails: a rejected abort must not reclassify this run's real error as a deliberate stop.
     let abortRequested = false;
+    let abortSucceeded = false; // any ONE successful abort() pins the aborted classification
     // Stale-controls guard: after settlement pi's steer()/followUp()/abort() would still resolve
     // (they queue / no-op on the to-be-discarded harness) — a silent acceptance of a command that
     // can never take effect. The flag flips in the outer finally BEFORE run_settled is observed, so
@@ -461,14 +462,17 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       async abort() {
         const harness = await harnessGate;
         if (runSettled) throw settledError();
-        // Rollback is scoped to THIS call: a failed second abort must not undo a first, successful
-        // abort's classification — only the caller that flipped the flag may flip it back.
+        // The optimistic flag covers the window where the harness error lands before abort()
+        // resolves. Rollback only when NO abort call has succeeded: the flag means "an abort took
+        // effect", so a failed first call must not undo a concurrent second call's success (nor
+        // vice versa) — ownership alone would roll back the wrong direction.
         const mine = !abortRequested;
         abortRequested = true;
         try {
           await harness.abort();
+          abortSucceeded = true;
         } catch (error) {
-          if (mine) abortRequested = false;
+          if (mine && !abortSucceeded) abortRequested = false;
           throw error;
         }
       },
@@ -522,7 +526,10 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         else if (terminal.type === "failed") {
           outcome =
             terminal.code === "aborted"
-              ? { status: "aborted" }
+              ? // Carry the detail: an independent real error that raced an accepted abort must stay
+                // diagnosable in the settlement (audit consumers read run_settled, not the invoke
+                // stream) — aborted classifies the run, the message preserves what actually stopped it.
+                { status: "aborted", error: { message: terminal.details, retryable: false } }
               : {
                   status: "failed",
                   error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },

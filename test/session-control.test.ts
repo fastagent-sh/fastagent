@@ -519,6 +519,34 @@ describe("session control (Phase 2a): run modulation", () => {
     await expect((captured as NonNullable<typeof captured>).abort()).rejects.toThrow(/already settled/);
   });
 
+  it("a dispatch racing a failing harness build gets run_command_failed with the setup error", async () => {
+    const sessions = inMemorySessionStore();
+    const { control, observer } = createPiSessionControl({ sessions });
+    let releaseFactory: () => void = () => {};
+    const factoryGate = new Promise<void>((r) => {
+      releaseFactory = r;
+    });
+    const agent = createPiAgentFromHarness({
+      observer,
+      harnessFactory: async () => {
+        await factoryGate;
+        throw new Error("boom: setup exploded");
+      },
+    });
+    const invoked = drive(agent, "sSetup");
+    await waitForRunning(control, "sSetup"); // run_started observed; harness still assembling
+    const pending = control.dispatch("sSetup", { type: "steer", prompt: { text: "late" } });
+    releaseFactory(); // → factory throws → gate rejects → the pending dispatch learns it
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(RUN_COMMAND_FAILED_CODE);
+      expect(result.error.message).toContain("boom");
+    }
+    const events = await invoked;
+    expect(events.at(-1)).toMatchObject({ type: "failed" }); // the data plane failed visibly too
+  });
+
   it("dispatch maps a refused run command to run_command_failed", async () => {
     const sessions = inMemorySessionStore();
     const { control, observer } = createPiSessionControl({ sessions });
@@ -564,7 +592,7 @@ describe("session control (Phase 2a): run modulation", () => {
     const terminal = events.at(-1);
     expect(terminal).toMatchObject({ type: "failed", code: "aborted", retryable: false });
     const settled = seen.find((e) => e.type === "run_settled");
-    expect(settled?.data).toEqual({ status: "aborted" });
+    expect(settled?.data).toMatchObject({ status: "aborted" }); // error.message carries the stop detail
     // The session is reusable: back to idle, not poisoned.
     expect((await control.state("s2c")).status).toBe("idle");
   });
