@@ -439,15 +439,17 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       harnessFailed = reject;
     });
     harnessGate.catch(() => {}); // observed via controls only when a dispatch actually happens
-    // A control-plane abort may surface from pi as a THROWN harness error or as a resolved
-    // stopReason:"aborted" message, and providers do not uniformly attribute an aborted stream —
-    // so classification is by INTENT (this flag), not by error source. Set optimistically (the
-    // harness error can land before abort() resolves) and rolled back only when no abort call
-    // succeeded. GUARANTEE BOUNDARY: if abort() ultimately rejects but the run resolved with an
-    // independent real error before the rollback landed, that error is classified `aborted` — a
-    // narrow window, and non-lossy: the settlement carries `error.message` either way.
-    let abortRequested = false;
-    let abortSucceeded = false; // any ONE successful abort() pins the aborted classification
+    // Aborted classification has two attribution sources, either suffices: pi's own
+    // stopReason:"aborted" (toTerminal), and control-plane INTENT — needed because providers do
+    // not uniformly attribute an aborted stream (verified empirically: the faux path surfaces a
+    // plain error). Intent = "an abort() succeeded, OR one was still in flight when the terminal
+    // arrived" (the harness error often lands before abort() resolves). A rejected abort that
+    // RETURNED before the terminal counts as nothing — no rollback dance, no interleaving hazard.
+    // GUARANTEE BOUNDARY: an abort still in flight that ultimately rejects can classify a
+    // concurrent real error as aborted — narrow, and non-lossy: the settlement carries
+    // `error.message` either way.
+    let abortsInFlight = 0;
+    let abortSucceeded = false;
     // Stale-controls guard: after settlement pi's steer()/followUp()/abort() would still resolve
     // (they queue / no-op on the to-be-discarded harness) — a silent acceptance of a command that
     // can never take effect. The flag flips at THREE points, earliest wins: (1) the moment the
@@ -476,18 +478,12 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       async abort() {
         const harness = await harnessGate;
         if (runSettled) throw settledError();
-        // The optimistic flag covers the window where the harness error lands before abort()
-        // resolves. Rollback only when NO abort call has succeeded: the flag means "an abort took
-        // effect", so a failed first call must not undo a concurrent second call's success (nor
-        // vice versa) — ownership alone would roll back the wrong direction.
-        const mine = !abortRequested;
-        abortRequested = true;
+        abortsInFlight++;
         try {
           await harness.abort();
           abortSucceeded = true;
-        } catch (error) {
-          if (mine && !abortSucceeded) abortRequested = false;
-          throw error;
+        } finally {
+          abortsInFlight--;
         }
       },
     };
@@ -533,7 +529,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         } catch (error) {
           terminal = errorToTerminal(error);
         }
-        if (abortRequested && terminal.type === "failed") {
+        if ((abortSucceeded || abortsInFlight > 0) && terminal.type === "failed") {
           terminal = { type: "failed", details: terminal.details, retryable: false, code: ABORTED_CODE };
         }
         if (terminal.type === "completed") outcome = { status: "completed" };

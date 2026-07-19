@@ -495,6 +495,27 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(seen.filter((e) => e.type === "run_settled")).toHaveLength(1); // still exactly one
   });
 
+  it("toTerminal attributes pi's own stopReason 'aborted' without any control-plane intent", async () => {
+    const { toTerminal } = await import("../src/engines/pi/invoke.ts");
+    const terminal = toTerminal({
+      role: "assistant",
+      content: [],
+      api: "openai-completions",
+      provider: "faux",
+      model: "faux",
+      stopReason: "aborted",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: 0,
+    } as never);
+    expect(terminal).toMatchObject({ type: "failed", code: ABORTED_CODE, retryable: false });
+  });
+
   it("stale controls are rejected after settlement — never a silent acceptance", async () => {
     const { faux, models } = makeFaux();
     faux.setResponses([fauxAssistantMessage("done")]);
@@ -592,7 +613,10 @@ describe("session control (Phase 2a): run modulation", () => {
     const terminal = events.at(-1);
     expect(terminal).toMatchObject({ type: "failed", code: ABORTED_CODE, retryable: false });
     const settled = seen.find((e) => e.type === "run_settled");
-    expect(settled?.data).toMatchObject({ status: "aborted" }); // error.message carries the stop detail
+    // Intent-attributed (the faux provider surfaces a plain error, not stopReason "aborted" — the
+    // in-flight abort classifies it), and NON-LOSSY: what actually stopped the run stays readable.
+    expect(settled?.data).toMatchObject({ status: "aborted" });
+    expect((settled?.data as { error?: { message: string } }).error?.message).toBeTruthy();
     // The session is reusable: back to idle, not poisoned.
     expect((await control.state("s2c")).status).toBe("idle");
   });

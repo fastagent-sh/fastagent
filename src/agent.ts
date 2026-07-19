@@ -47,11 +47,12 @@ export type AgentEvent =
 export const SESSION_BUSY_CODE = "session_busy";
 
 /**
- * The `failed.code` set when a run was deliberately stopped (a control-plane abort) rather than
- * failing on its own. Channels can render cancellation distinctly from an error, and MUST treat it
- * as a settled outcome — durable turn-intent cleanup included — so an operator's abort is never
- * replayed as a fresh turn on restart. Exported as a constant for the same reason as
- * {@link SESSION_BUSY_CODE}: a consumer that must branch on it should not string-match.
+ * The `failed.code` set when a run was DELIBERATELY stopped — a control-plane abort, or any
+ * harness-level abort the engine attributes (`stopReason: "aborted"`) — rather than failing on its
+ * own. Channels can render cancellation distinctly from an error, and MUST treat it as a settled
+ * outcome — durable turn-intent cleanup included — so a deliberate stop is never replayed as a
+ * fresh turn on restart. Exported as a constant for the same reason as {@link SESSION_BUSY_CODE}:
+ * a consumer that must branch on it should not string-match.
  */
 export const ABORTED_CODE = "aborted";
 
