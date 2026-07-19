@@ -116,13 +116,23 @@ export type RunSettledEvent = SessionEvent<
     error?: { code?: string; message: string; retryable: boolean };
   }
 > & { runId: string };
-export type MessageStartedEvent = SessionEvent<"message_started", Record<never, never>>;
-export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" | "thinking"; delta: string }>;
-export type MessageFinishedEvent = SessionEvent<"message_finished", Record<never, never>>;
-export type ToolStartedEvent = SessionEvent<"tool_started", { id: string; name: string; args: Json }>;
+// message_*/tool_* events only exist inside a run, so their types REQUIRE `runId` — a consumer of
+// KnownSessionEvent must not null-check a field the contract guarantees.
+export type MessageStartedEvent = SessionEvent<"message_started", Record<never, never>> & { runId: string };
+export type MessageDeltaEvent = SessionEvent<"message_delta", { channel: "text" | "thinking"; delta: string }> & {
+  runId: string;
+};
+export type MessageFinishedEvent = SessionEvent<"message_finished", Record<never, never>> & { runId: string };
+export type ToolStartedEvent = SessionEvent<"tool_started", { id: string; name: string; args: Json }> & {
+  runId: string;
+};
 /** Replace semantics: `partialResult` is the accumulated snapshot so far, not a delta. */
-export type ToolProgressEvent = SessionEvent<"tool_progress", { id: string; name: string; partialResult: Json }>;
-export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isError: boolean; content: Json }>;
+export type ToolProgressEvent = SessionEvent<"tool_progress", { id: string; name: string; partialResult: Json }> & {
+  runId: string;
+};
+export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isError: boolean; content: Json }> & {
+  runId: string;
+};
 /**
  * The serving process failed outside a normal run outcome (fail visibly). Emitted by TRANSPORT
  * adapters (design §13) when they lose the backend before ending a remote stream — an in-process

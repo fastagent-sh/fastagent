@@ -240,6 +240,42 @@ describe("session control (Phase 1): observation plane", () => {
     expect(ra.at(-1)?.type).toBe("run_settled");
   });
 
+  it("openIfExists is strictly read-only: no crash reconciliation, no repair entries", async () => {
+    const sessions = inMemorySessionStore();
+    // Simulate a turn that died mid tool-execution: assistant(toolCall) persisted, NO result.
+    const s = await sessions.openOrCreate("crashed");
+    await s.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "run it" }],
+      timestamp: Date.now(),
+    } as never);
+    await s.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "echo", arguments: { value: "x" } }],
+      provider: "faux",
+      model: "faux",
+      stopReason: "toolUse",
+      usage: { input: 0, output: 0 },
+      timestamp: Date.now(),
+    } as never);
+
+    // The READ path must not append the interrupted-tool-call repair (that is a write).
+    const observed = await sessions.openIfExists("crashed");
+    const entriesAfterRead = await observed?.getEntries();
+    const repairIn = (entries: { type: string }[] | undefined) =>
+      (entries ?? []).filter(
+        (e) =>
+          e.type === "message" &&
+          (e as unknown as { message: { details?: { fastagent?: string } } }).message.details?.fastagent ===
+            "interrupted-tool-call",
+      );
+    expect(repairIn(entriesAfterRead)).toHaveLength(0);
+
+    // The WRITE path (openOrCreate) still reconciles — the guarantee lives there, not in the reader.
+    const reopened = await sessions.openOrCreate("crashed");
+    expect(repairIn(await reopened.getEntries())).toHaveLength(1);
+  });
+
   it("a throwing observer never breaks the data plane", async () => {
     const { faux, models } = makeFaux();
     faux.setResponses([fauxAssistantMessage("resilient")]);

@@ -42,7 +42,7 @@ import {
 import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
-import { createPiModelRuntime } from "./models.ts";
+import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
 import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
@@ -101,8 +101,10 @@ export async function buildWorkspaceSessionRuntime(
 
   async function resolveAssembly(cwd: string) {
     // The shared front half — the SAME config/model-spec/agentDir/tool/auth resolution the serving
-    // opener uses (workspace.ts), so the two pi consumption shapes can never drift on what they
-    // assemble. `tools` arrives with search_tools applied; deferral is EMULATED below like serving
+    // opener uses (workspace.ts); those inputs cannot drift between the two consumption shapes.
+    // (Definition→prompt assembly is NOT shared: serving re-reads live per invoke, this runtime is a
+    // startup snapshot and pi appends skills/env itself — see the header.) `tools` arrives with
+    // search_tools applied; deferral is EMULATED below like serving
     // (what you iterate is what you serve): the initial active set excludes deferred tools (applied
     // on the session in createRuntime — pi's session starts all-active), and the activation bridge
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
@@ -115,13 +117,17 @@ export async function buildWorkspaceSessionRuntime(
     // serving's createPiModels; see models.ts.
     const modelRuntime = await createPiModelRuntime({ authPath });
     // MIGRATION HINT (deliberate breaking change): chat historically used pi's own `~/.pi` auth;
-    // it now reads the workspace credential file like every other command. A user whose workspace
-    // auth is empty while pi's old file exists would otherwise hit a bare provider "no credentials"
-    // error with nothing pointing at the cause — tell them where their credentials went.
-    if ((await modelRuntime.listCredentials()).length === 0 && existsSync(join(getAgentDir(), "auth.json"))) {
+    // it now reads the workspace credential file like every other command. Probe the RESOLVED
+    // model's provider through the normal resolution path (stored credential OR env var — an
+    // env-authed user is fine and must not be warned): only when that provider has no usable auth
+    // AND pi's old file exists does the bare provider error get its cause named.
+    if (
+      (await probeAuthSource(modelRuntime, modelSpec)) === undefined &&
+      existsSync(join(getAgentDir(), "auth.json"))
+    ) {
       log.warn(
-        `[fastagent] no credentials in ${authPath} — this runtime no longer reads pi's ~/.pi auth; ` +
-          `run \`fastagent login\` (or /login in the TUI) to store credentials for this workspace`,
+        `[fastagent] no credentials for ${modelSpec} in ${authPath} — this runtime no longer reads ` +
+          `pi's ~/.pi auth; run \`fastagent login\` (or /login in the TUI) to store credentials for this workspace`,
       );
     }
     const model = resolveModel(modelRuntime, modelSpec);

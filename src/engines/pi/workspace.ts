@@ -61,8 +61,9 @@ export interface CreatePiAgentFromWorkspaceOptions {
  * definition (transient harness for serving vs resident AgentSession for chat / session control):
  * config → model spec → agentDir → the full tool surface ({@link resolveWorkspaceTools} — the ONE
  * place it is computed) → state root → auth path. Both {@link createPiAgentFromWorkspace} and the
- * session builder (session-builder.ts) consume this, so the two consumption shapes can never drift
- * on what they assemble — only on how they mount it.
+ * session builder (session-builder.ts) consume this, so THESE inputs cannot drift between the two
+ * consumption shapes. (Definition loading and prompt assembly stay per-consumer: serving re-reads
+ * them live per invoke, the session builder snapshots at startup and lets pi append skills/env.)
  */
 export interface WorkspaceAssembly {
   config: FastagentConfig;
