@@ -94,16 +94,12 @@ class Subscriber {
     wake?.();
   }
 
-  async *iterate(onDone: () => void): AsyncGenerator<SessionEvent> {
-    try {
-      while (true) {
-        while (this.buffer.length > 0) yield this.buffer.shift() as SessionEvent;
-        await new Promise<void>((resolve) => {
-          this.wake = resolve;
-        });
-      }
-    } finally {
-      onDone(); // consumer broke/returned — unregister
+  async *iterate(): AsyncGenerator<SessionEvent> {
+    while (true) {
+      while (this.buffer.length > 0) yield this.buffer.shift() as SessionEvent;
+      await new Promise<void>((resolve) => {
+        this.wake = resolve;
+      });
     }
   }
 }
@@ -180,17 +176,25 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     },
 
     events(session): AsyncIterable<SessionEvent> {
-      const sub = new Subscriber();
-      let set = subscribers.get(session);
-      if (!set) {
-        set = new Set();
-        subscribers.set(session, set);
-      }
-      set.add(sub);
-      return sub.iterate(() => {
-        set.delete(sub);
-        if (set.size === 0) subscribers.delete(session);
-      });
+      // Registration happens INSIDE the generator body (on first next()), not at call time:
+      // subscription semantics = you are subscribed while you iterate. An iterable that is obtained
+      // but never iterated must not register — it would buffer the session's events forever with no
+      // way to release them (the only unregistration path is the generator's own finally).
+      return (async function* iterate(): AsyncGenerator<SessionEvent> {
+        const sub = new Subscriber();
+        let set = subscribers.get(session);
+        if (!set) {
+          set = new Set();
+          subscribers.set(session, set);
+        }
+        set.add(sub);
+        try {
+          yield* sub.iterate();
+        } finally {
+          set.delete(sub);
+          if (set.size === 0) subscribers.delete(session);
+        }
+      })();
     },
 
     async dispatch(_session, command: SessionCommand): Promise<SessionResult> {

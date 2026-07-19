@@ -26,7 +26,7 @@
  * workspace.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSession,
@@ -43,6 +43,7 @@ import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { createPiModelRuntime } from "./models.ts";
+import { log } from "../../log.ts";
 import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 import { resolveWorkspaceAssembly } from "./workspace.ts";
@@ -113,6 +114,16 @@ export async function buildWorkspaceSessionRuntime(
     // ONE hub owns model resolution AND per-request auth — the ModelRuntime-shaped sibling of
     // serving's createPiModels; see models.ts.
     const modelRuntime = await createPiModelRuntime({ authPath });
+    // MIGRATION HINT (deliberate breaking change): chat historically used pi's own `~/.pi` auth;
+    // it now reads the workspace credential file like every other command. A user whose workspace
+    // auth is empty while pi's old file exists would otherwise hit a bare provider "no credentials"
+    // error with nothing pointing at the cause — tell them where their credentials went.
+    if ((await modelRuntime.listCredentials()).length === 0 && existsSync(join(getAgentDir(), "auth.json"))) {
+      log.warn(
+        `[fastagent] no credentials in ${authPath} — this runtime no longer reads pi's ~/.pi auth; ` +
+          `run \`fastagent login\` (or /login in the TUI) to store credentials for this workspace`,
+      );
+    }
     const model = resolveModel(modelRuntime, modelSpec);
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(agentDir, { cwd, env });

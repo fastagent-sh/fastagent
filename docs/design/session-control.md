@@ -2,13 +2,14 @@
 title: Session control plane
 description: "An engine-neutral serving extension beside Agent Handler: observe and modulate live runs. invoke stays the only data plane; there is no second way to start work."
 type: design-doc
-status: proposed
+status: current
 updated: 2026-07-19
 ---
 
 # Session control plane
 
-This document proposes a serving extension for FastAgent. It is a companion to, not a replacement
+This document is the serving-extension design for FastAgent. Phases 0–1 (§15) are implemented;
+Phases 2–3 remain proposed. It is a companion to, not a replacement
 for, the locked [Agent Handler SPEC v0.1](../SPEC.md).
 
 The whole design reduces to one sentence: **`invoke` is the only data plane; the session control
@@ -287,7 +288,7 @@ compare. The vocabulary, grouped by the client maturity level that needs it:
 | L0 | `run_started`, `run_settled { status: completed \| failed \| aborted, error? }` | Run boundaries; exactly one `run_settled` per `run_started` while the serving process lives. |
 | L0 | `message_started`, `message_delta { channel: "text" \| "thinking", delta }`, `message_finished` | Streaming text. The text/thinking distinction of `AgentEvent` is preserved; thinking MUST NOT be folded into the answer. |
 | L0 | `tool_started`, `tool_progress { partialResult }`, `tool_finished` | Tool activity. `tool_progress` uses **replace semantics**: the accumulated snapshot so far, not a delta. |
-| L0 | `serving_error` | The serving process failed outside a normal run outcome. Fail visibly. |
+| transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome (fail visibly). Not emittable in-process — a dead process has no one left to emit. |
 | L1 | `queue_changed { steering, followUp }` | Normalized queue depths. |
 | L2 | `turn_started`, `turn_finished` | Group tool activity under one assistant turn. |
 | L2 | `compaction_started/finished`, `retry_scheduled/finished` | Explain why a run is alive with no tokens flowing. |

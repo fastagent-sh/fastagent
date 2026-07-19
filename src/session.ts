@@ -117,11 +117,17 @@ export type ToolStartedEvent = SessionEvent<"tool_started", { id: string; name: 
 /** Replace semantics: `partialResult` is the accumulated snapshot so far, not a delta. */
 export type ToolProgressEvent = SessionEvent<"tool_progress", { id: string; name: string; partialResult: Json }>;
 export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isError: boolean; content: Json }>;
-/** The serving process failed outside a normal run outcome (fail visibly). */
+/**
+ * The serving process failed outside a normal run outcome (fail visibly). Emitted by TRANSPORT
+ * adapters (design §13) when they lose the backend before ending a remote stream — an in-process
+ * embedding cannot produce it (a dead process has no one left to emit), so it is deliberately NOT
+ * part of {@link KnownSessionEvent}: a local L0 client would be handling a signal that cannot occur.
+ */
 export type ServingErrorEvent = SessionEvent<"serving_error", { message: string }>;
 
-/** The Phase 1 (L0) vocabulary. L1–L2 events (queue_changed, turn_*, compaction_*, retry_*,
- *  state_changed) arrive with the control plane. */
+/** The Phase 1 (L0) vocabulary — every event the in-process observation plane emits today. L1–L2
+ *  events (queue_changed, turn_*, compaction_*, retry_*, state_changed) arrive with the control
+ *  plane; {@link ServingErrorEvent} arrives with the transport adapter. */
 export type KnownSessionEvent =
   | RunStartedEvent
   | RunSettledEvent
@@ -130,5 +136,4 @@ export type KnownSessionEvent =
   | MessageFinishedEvent
   | ToolStartedEvent
   | ToolProgressEvent
-  | ToolFinishedEvent
-  | ServingErrorEvent;
+  | ToolFinishedEvent;
