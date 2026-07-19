@@ -45,14 +45,15 @@ export interface SessionCapabilities {
 export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
 
 /** Stable `SessionResult.error.code` for a run-modulating command (`steer`/`follow_up`/`abort`)
- *  dispatched while the session has no active run — rejected before acceptance, safe to retry
- *  once a run exists. */
+ *  dispatched while the session has no active run. `retryable: false` — re-dispatching as-is
+ *  fails again; re-dispatch only after `state()` shows an active run. */
 export const NO_ACTIVE_RUN_CODE = "no_active_run";
 
 /** Stable `SessionResult.error.code` for a run command that reached an active run but could not
  *  take effect (the run raced to settlement, or the engine refused it). Distinct from
  *  {@link NO_ACTIVE_RUN_CODE}: the run existed. Still pre-acceptance — nothing was queued — and
- *  safe to retry against the session's next state. */
+ *  `retryable: false` for the same reason: the run is gone, so the same command as-is fails again;
+ *  consult `state()` before re-dispatching. */
 export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
 
 // ── Commands (control plane) ─────────────────────────────────────────────────
@@ -69,7 +70,10 @@ export type SessionCommand =
 /**
  * Acceptance is not outcome: `ok: true` means admitted or applied, never that the run ultimately
  * succeeded (outcomes are `run_settled` events / the invoke terminal). `ok: false` is guaranteed to
- * mean rejection BEFORE acceptance — the only case that is safe to blindly retry.
+ * mean rejection BEFORE acceptance — nothing took effect. `error.retryable` means "re-dispatching
+ * the SAME command as-is may succeed"; a `false` with a state-dependent code (e.g.
+ * {@link NO_ACTIVE_RUN_CODE}) invites a re-dispatch only after `state()` shows the condition
+ * changed.
  */
 export type SessionResult =
   | { ok: true; runId?: string }

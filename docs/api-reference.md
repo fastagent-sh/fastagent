@@ -425,7 +425,8 @@ With steering/follow-ups the invoke stream terminates at the run's SETTLE (all q
 drained) — for consumers that never dispatch, a run equals a single turn, byte-identical behavior.
 Run commands on an idle session reject with `no_active_run` before acceptance; a command that
 reached a run but could not take effect (the run raced to settlement) rejects with
-`run_command_failed`, retryable. An accepted `abort` can still settle `completed` when the run
+`run_command_failed`. Both are `retryable: false` — the same command as-is fails again; consult
+`state()` before re-dispatching. An accepted `abort` can still settle `completed` when the run
 finishes inside the race window — acceptance is not outcome; the settlement is the truth. Boundary mutations
 (`compact`/`set_model`/`set_thinking`) are not shipped yet: `capabilities()` reports them off and
 they reject with `unsupported_capability`.

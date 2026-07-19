@@ -441,22 +441,26 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
     // can never take effect. The flag flips in the outer finally BEFORE run_settled is observed, so
     // a post-settle call throws and the dispatcher maps it to `run_command_failed`.
     let runSettled = false;
-    const requireLive = async () => {
-      const harness = await harnessGate;
-      if (runSettled) throw new Error("run already settled; the command cannot take effect");
-      return harness;
-    };
+    const settledError = () => new Error("run already settled; the command cannot take effect");
+    // The settled check and the harness call MUST share one synchronous block (no await between):
+    // pi enqueues/aborts synchronously at method entry, so check-then-call in the same tick truly
+    // closes the race — a check behind its own await boundary would only shrink it.
     const controls: RunControls = {
       async steer(p: Prompt) {
         const opts = await toPiPromptOptions(p);
-        await (await requireLive()).steer(p.text, opts);
+        const harness = await harnessGate;
+        if (runSettled) throw settledError();
+        await harness.steer(p.text, opts);
       },
       async followUp(p: Prompt) {
         const opts = await toPiPromptOptions(p);
-        await (await requireLive()).followUp(p.text, opts);
+        const harness = await harnessGate;
+        if (runSettled) throw settledError();
+        await harness.followUp(p.text, opts);
       },
       async abort() {
-        const harness = await requireLive();
+        const harness = await harnessGate;
+        if (runSettled) throw settledError();
         abortRequested = true;
         try {
           await harness.abort();

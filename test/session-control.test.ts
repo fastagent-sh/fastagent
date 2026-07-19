@@ -519,7 +519,7 @@ describe("session control (Phase 2a): run modulation", () => {
     await expect((captured as NonNullable<typeof captured>).abort()).rejects.toThrow(/already settled/);
   });
 
-  it("dispatch maps a refused run command to run_command_failed (retryable)", async () => {
+  it("dispatch maps a refused run command to run_command_failed", async () => {
     const sessions = inMemorySessionStore();
     const { control, observer } = createPiSessionControl({ sessions });
     // Register a live run whose controls refuse — the observer seam is the public wiring point.
@@ -538,7 +538,7 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe(RUN_COMMAND_FAILED_CODE);
-      expect(result.error.retryable).toBe(true);
+      expect(result.error.retryable).toBe(false); // as-is retry fails again — consult state() first
     }
   });
 

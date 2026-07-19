@@ -218,7 +218,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           const run = active.get(session);
           if (!run?.controls) {
             // Rejected BEFORE acceptance: no run exists (or its controls are gone), nothing
-            // happened, safe to retry once a run is active.
+            // happened. retryable: false — as-is retry fails again; re-dispatch after state()
+            // shows an active run.
             return {
               ok: false,
               error: {
@@ -234,11 +235,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             else await run.controls.abort();
           } catch (error) {
             // The run raced us to settlement, failed setup, or the engine refused: still
-            // pre-acceptance (nothing was queued), distinct from "no run existed" — and safe to
-            // retry against the session's next state.
+            // pre-acceptance (nothing was queued), distinct from "no run existed". retryable:
+            // false for the same reason — the run is gone; consult state() before re-dispatching.
             return {
               ok: false,
-              error: { code: RUN_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+              error: { code: RUN_COMMAND_FAILED_CODE, message: String(error), retryable: false },
             };
           }
           // Accepted: joined (or stopped) THIS run. The outcome arrives as run_settled.
