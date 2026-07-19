@@ -14,7 +14,12 @@ import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
 import { createPiAgentFromWorkspace } from "../src/engines/pi/workspace.ts";
-import { NO_ACTIVE_RUN_CODE, UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
+import {
+  NO_ACTIVE_RUN_CODE,
+  RUN_COMMAND_FAILED_CODE,
+  UNSUPPORTED_CAPABILITY_CODE,
+  type SessionEvent,
+} from "../src/session.ts";
 import { makeFaux } from "./faux.ts";
 
 const echoTool: AgentTool = {
@@ -488,6 +493,53 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(text).toContain("follow-up answer"); // the settle window spanned the continuation
     expect(seen.some((e) => e.type === "queue_changed")).toBe(true);
     expect(seen.filter((e) => e.type === "run_settled")).toHaveLength(1); // still exactly one
+  });
+
+  it("stale controls are rejected after settlement — never a silent acceptance", async () => {
+    const { faux, models } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("done")]);
+    let captured: import("../src/engines/pi/invoke.ts").RunControls | undefined;
+    const agent = createPiAgentFromHarness({
+      observer: (_s, ev, run) => {
+        if (ev.type === "run_started") captured = run;
+      },
+      harnessFactory: piHarnessFactory({
+        sessions: inMemorySessionStore(),
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+        models,
+        model: faux.getModel(),
+        systemPrompt: "test",
+      }),
+    });
+    await drain(agent.invoke({ session: "sStale" }, { text: "hi" })); // run fully settled
+    expect(captured).toBeDefined();
+    // A dispatch that grabbed the controls before settlement and calls after it must THROW —
+    // pi's queue/abort calls would otherwise resolve silently against a discarded harness.
+    await expect((captured as NonNullable<typeof captured>).steer({ text: "late" })).rejects.toThrow(/already settled/);
+    await expect((captured as NonNullable<typeof captured>).abort()).rejects.toThrow(/already settled/);
+  });
+
+  it("dispatch maps a refused run command to run_command_failed (retryable)", async () => {
+    const sessions = inMemorySessionStore();
+    const { control, observer } = createPiSessionControl({ sessions });
+    // Register a live run whose controls refuse — the observer seam is the public wiring point.
+    observer(
+      "sRefuse",
+      { type: "run_started", timestamp: Date.now(), runId: "r1", data: {} },
+      {
+        steer: async () => {
+          throw new Error("run already settled; the command cannot take effect");
+        },
+        followUp: async () => {},
+        abort: async () => {},
+      },
+    );
+    const result = await control.dispatch("sRefuse", { type: "steer", prompt: { text: "x" } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(RUN_COMMAND_FAILED_CODE);
+      expect(result.error.retryable).toBe(true);
+    }
   });
 
   it("abort stops the run: accepted, invoke terminal failed{code: aborted}, run_settled{aborted}", async () => {

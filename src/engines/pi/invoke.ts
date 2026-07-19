@@ -436,15 +436,27 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
     // terminal deterministically either way. Set optimistically and ROLLED BACK if abort() itself
     // fails: a rejected abort must not reclassify this run's real error as a deliberate stop.
     let abortRequested = false;
+    // Stale-controls guard: after settlement pi's steer()/followUp()/abort() would still resolve
+    // (they queue / no-op on the to-be-discarded harness) — a silent acceptance of a command that
+    // can never take effect. The flag flips in the outer finally BEFORE run_settled is observed, so
+    // a post-settle call throws and the dispatcher maps it to `run_command_failed`.
+    let runSettled = false;
+    const requireLive = async () => {
+      const harness = await harnessGate;
+      if (runSettled) throw new Error("run already settled; the command cannot take effect");
+      return harness;
+    };
     const controls: RunControls = {
       async steer(p: Prompt) {
-        await (await harnessGate).steer(p.text, await toPiPromptOptions(p));
+        const opts = await toPiPromptOptions(p);
+        await (await requireLive()).steer(p.text, opts);
       },
       async followUp(p: Prompt) {
-        await (await harnessGate).followUp(p.text, await toPiPromptOptions(p));
+        const opts = await toPiPromptOptions(p);
+        await (await requireLive()).followUp(p.text, opts);
       },
       async abort() {
-        const harness = await harnessGate;
+        const harness = await requireLive();
         abortRequested = true;
         try {
           await harness.abort();
@@ -541,7 +553,9 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       }
     } finally {
       // Exactly-one settlement, after ALL run work (incl. auto-compaction) and immediately before
-      // the lease releases — see the outcome note above.
+      // the lease releases — see the outcome note above. The stale-controls flag flips FIRST so a
+      // dispatch racing this settlement is rejected instead of silently accepted.
+      runSettled = true;
       observe({ type: "run_settled", timestamp: Date.now(), runId, data: outcome ?? { status: "aborted" } });
       release(); // after cleanup, so the next invoke for this session can enter
     }
