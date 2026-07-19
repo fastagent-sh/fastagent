@@ -240,6 +240,30 @@ describe("session control (Phase 1): observation plane", () => {
     expect(ra.at(-1)?.type).toBe("run_settled");
   });
 
+  it("a throwing observer never breaks the data plane", async () => {
+    const { faux, models } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("resilient")]);
+    const agent = createPiAgentFromHarness({
+      observer: () => {
+        throw new Error("broken hub");
+      },
+      harnessFactory: piHarnessFactory({
+        sessions: inMemorySessionStore(),
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+        models,
+        model: faux.getModel(),
+        systemPrompt: "test",
+      }),
+    });
+    const invoked = await drain(agent.invoke({ session: "sX" }, { text: "hi" }));
+    expect(invoked.at(-1)).toEqual({ type: "completed" });
+    const text = invoked
+      .filter((e) => e.type === "text")
+      .map((e) => (e as { delta: string }).delta)
+      .join("");
+    expect(text).toBe("resilient");
+  });
+
   it("dispatch(): Phase 1 rejects every command before acceptance with the stable code", async () => {
     const { control } = makeObserved([]);
     const result = await control.dispatch("sD", { type: "abort" });

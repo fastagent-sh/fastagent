@@ -235,6 +235,11 @@ interface SessionState {
 }
 ```
 
+`compacting` refers to Phase 2 manual compaction at a session boundary; automatic overflow
+compaction happens inside a run's activity window (before its `run_settled`) and reports as
+`running` — the observation plane's "running" window equals the data plane's lease window, so
+`state()` never says idle while an invoke would still be rejected `session_busy`.
+
 There is deliberately no `failed` status. A failed run settles (`run_settled { failed }`) and the
 session returns to `idle` — the conversation is intact and can continue. A serving-process fault
 surfaces as `serving_error` plus event-iterator termination; recovery is resubscription, not a
@@ -256,9 +261,11 @@ interface SessionEntry {
 
 Entries are append-ordered with stable ids, including pre-compaction records and abandoned branches
 where the engine preserves them — `parentId` exists because branches objectively occur (compaction)
-even though branching commands are deferred. The guaranteed `kind` minimum is what a reconnecting
-client needs to render a conversation; engine-specific kinds may appear beyond it and MUST be
-skippable.
+even though branching commands are deferred. The `since` cursor is an APPEND-ORDER position ("every
+record appended after this id"), not a descendant filter: in a branched session it may include
+records from other branches, and the client reconstructs the active path via `parentId` chains from
+`leafEntryId`. The guaranteed `kind` minimum is what a reconnecting client needs to render a
+conversation; engine-specific kinds may appear beyond it and MUST be skippable.
 
 Reconnect is four steps: `entries({ since: cursor })` to backfill → `state()` to learn whether work
 is active → resubscribe `events()` → continue. Live events are not the durable history API; a

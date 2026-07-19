@@ -219,7 +219,7 @@ export function toTerminal(message: AssistantMessage): AgentEvent {
   return { type: "completed" };
 }
 
-export function errorToTerminal(error: unknown): AgentEvent {
+export function errorToTerminal(error: unknown): Extract<AgentEvent, { type: "failed" }> {
   const details = error instanceof Error ? error.message : String(error);
   return { type: "failed", details, retryable: classifyRetryable(details, errorSignal(error)) };
 }
@@ -375,10 +375,14 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       };
       return;
     }
-    // The run exists from here: one run_started, exactly one run_settled (emitted in the outer
-    // finally — covering completion, failure, AND caller cancellation, which yields no terminal).
+    // The run exists from here: one run_started, exactly one run_settled. Terminal points only
+    // RECORD the outcome; the settlement event is emitted in the outer finally, right before
+    // release() — so the observation plane's "running" window equals the lease window (state()
+    // must never say idle while a new invoke would still be rejected session_busy), and the
+    // post-terminal auto-compaction is naturally inside the run. A run with no recorded outcome
+    // was cancelled by the caller (SPEC: cancellation has no terminal event) → aborted.
     const runId = crypto.randomUUID();
-    let settled: RunSettledEvent["data"] | undefined;
+    let outcome: RunSettledEvent["data"] | undefined;
     const observe = (event: SessionEvent | null): void => {
       if (!event || !observer) return;
       try {
@@ -388,11 +392,6 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         log.warn(`[fastagent] session observer threw (event ${event.type}): ${String(error)}`);
       }
     };
-    const settle = (data: RunSettledEvent["data"]): void => {
-      if (settled) return;
-      settled = data;
-      observe({ type: "run_settled", timestamp: Date.now(), runId, data });
-    };
     observe({ type: "run_started", timestamp: Date.now(), runId, data: {} });
     try {
       let harness: Awaited<ReturnType<PiHarnessFactory>>;
@@ -401,11 +400,9 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       } catch (error) {
         // Setup failures (session open / auth / …) MUST surface as a failed event, never a throw.
         const terminal = errorToTerminal(error);
-        if (terminal.type === "failed") {
-          settle({ status: "failed", error: { message: terminal.details, retryable: terminal.retryable } });
-        }
+        outcome = { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
         yield terminal;
-        return;
+        return; // → outer finally emits the settlement
       }
 
       const queue = new EventQueue<AgentEvent>();
@@ -434,12 +431,12 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         } catch (error) {
           terminal = errorToTerminal(error);
         }
-        if (terminal.type === "completed") settle({ status: "completed" });
+        if (terminal.type === "completed") outcome = { status: "completed" };
         else if (terminal.type === "failed") {
-          settle({
+          outcome = {
             status: "failed",
             error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },
-          });
+          };
         }
         yield terminal;
       } finally {
@@ -473,9 +470,9 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         }
       }
     } finally {
-      // A run the caller cancelled mid-stream produced no terminal (SPEC: cancellation has no
-      // terminal event) — the observation plane still gets its exactly-one settlement.
-      settle({ status: "aborted" });
+      // Exactly-one settlement, after ALL run work (incl. auto-compaction) and immediately before
+      // the lease releases — see the outcome note above.
+      observe({ type: "run_settled", timestamp: Date.now(), runId, data: outcome ?? { status: "aborted" } });
       release(); // after cleanup, so the next invoke for this session can enter
     }
   }

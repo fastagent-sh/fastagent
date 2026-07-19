@@ -13,6 +13,10 @@ import type { Json, Prompt } from "./agent.ts";
 export interface SessionControl {
   capabilities(): SessionCapabilities;
   state(session: string): Promise<SessionState>;
+  /** `since` is an APPEND-ORDER position cursor: "every record appended after the one with this
+   *  id", regardless of branch structure. Reconstructing the active path in a branched session is
+   *  the client's job via `parentId` chains from `leafEntryId`. An unknown cursor falls back to a
+   *  full backfill (correct, merely larger). */
   entries(session: string, options?: { since?: string }): Promise<SessionEntries>;
   events(session: string): AsyncIterable<SessionEvent>;
   dispatch(session: string, command: SessionCommand): Promise<SessionResult>;
@@ -57,6 +61,8 @@ export type SessionResult =
 // ── State and durable entries (observation plane) ────────────────────────────
 
 export interface SessionState {
+  /** `compacting` refers to Phase 2 MANUAL compaction at a session boundary. Automatic overflow
+   *  compaction happens inside a run's activity window and reports as `running`. */
   status: "idle" | "running" | "compacting";
   activeRunId?: string;
   model?: string;
