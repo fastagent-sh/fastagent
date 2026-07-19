@@ -14,7 +14,15 @@
 import type { AgentHarnessEvent } from "@earendil-works/pi-agent-core";
 import { DEFAULT_COMPACTION_SETTINGS, calculateContextTokens, shouldCompact } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
-import { type Agent, type AgentEvent, type Json, type Prompt, type Scope, SESSION_BUSY_CODE } from "../../agent.ts";
+import {
+  ABORTED_CODE,
+  type Agent,
+  type AgentEvent,
+  type Json,
+  type Prompt,
+  type Scope,
+  SESSION_BUSY_CODE,
+} from "../../agent.ts";
 import type { RunSettledEvent, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
 import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
@@ -233,11 +241,10 @@ export type SessionObserver = (session: string, event: SessionEvent, run?: RunCo
  */
 export function toTerminal(message: AssistantMessage): AgentEvent {
   if (message.stopReason === "aborted") {
-    // A deliberate stop (control-plane abort / harness abort), not an error: `code: "aborted"` lets
-    // a channel render cancellation distinctly, and channels MUST treat it as a settled outcome
-    // (durable turn-intent cleanup included) so an operator's abort is never replayed (design §6).
+    // A deliberate stop (control-plane abort / harness abort), not an error — see {@link ABORTED_CODE}
+    // for the consumer contract (design §6).
     const details = message.errorMessage ?? "run aborted";
-    return { type: "failed", details, retryable: false, code: "aborted" };
+    return { type: "failed", details, retryable: false, code: ABORTED_CODE };
   }
   if (message.stopReason === "error") {
     const details = message.errorMessage ?? `model stopped: ${message.stopReason}`;
@@ -432,15 +439,21 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
     });
     harnessGate.catch(() => {}); // observed via controls only when a dispatch actually happens
     // A control-plane abort may surface from pi as a THROWN harness error or as a resolved
-    // stopReason:"aborted" message depending on where the run was cut — the flag classifies the
-    // terminal deterministically either way. Set optimistically and ROLLED BACK if abort() itself
-    // fails: a rejected abort must not reclassify this run's real error as a deliberate stop.
+    // stopReason:"aborted" message, and providers do not uniformly attribute an aborted stream —
+    // so classification is by INTENT (this flag), not by error source. Set optimistically (the
+    // harness error can land before abort() resolves) and rolled back only when no abort call
+    // succeeded. GUARANTEE BOUNDARY: if abort() ultimately rejects but the run resolved with an
+    // independent real error before the rollback landed, that error is classified `aborted` — a
+    // narrow window, and non-lossy: the settlement carries `error.message` either way.
     let abortRequested = false;
     let abortSucceeded = false; // any ONE successful abort() pins the aborted classification
     // Stale-controls guard: after settlement pi's steer()/followUp()/abort() would still resolve
     // (they queue / no-op on the to-be-discarded harness) — a silent acceptance of a command that
-    // can never take effect. The flag flips in the outer finally BEFORE run_settled is observed, so
-    // a post-settle call throws and the dispatcher maps it to `run_command_failed`.
+    // can never take effect. The flag flips at THREE points, earliest wins: (1) the moment the
+    // run's terminal is determined (the main window — before the consumer-paced `yield terminal`
+    // and auto-compaction), (2) the setup-failure path, (3) the outer finally as the backstop for
+    // caller cancellation. A post-settle call throws and the dispatcher maps it to
+    // `run_command_failed`.
     let runSettled = false;
     const settledError = () => new Error("run already settled; the command cannot take effect");
     // The settled check and the harness call MUST share one synchronous block (no await between):
@@ -520,12 +533,12 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
           terminal = errorToTerminal(error);
         }
         if (abortRequested && terminal.type === "failed") {
-          terminal = { type: "failed", details: terminal.details, retryable: false, code: "aborted" };
+          terminal = { type: "failed", details: terminal.details, retryable: false, code: ABORTED_CODE };
         }
         if (terminal.type === "completed") outcome = { status: "completed" };
         else if (terminal.type === "failed") {
           outcome =
-            terminal.code === "aborted"
+            terminal.code === ABORTED_CODE
               ? // Carry the detail: an independent real error that raced an accepted abort must stay
                 // diagnosable in the settlement (audit consumers read run_settled, not the invoke
                 // stream) — aborted classifies the run, the message preserves what actually stopped it.

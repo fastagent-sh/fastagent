@@ -8,7 +8,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import type { AgentEvent } from "../src/agent.ts";
+import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
@@ -590,7 +590,7 @@ describe("session control (Phase 2a): run modulation", () => {
     await watching;
 
     const terminal = events.at(-1);
-    expect(terminal).toMatchObject({ type: "failed", code: "aborted", retryable: false });
+    expect(terminal).toMatchObject({ type: "failed", code: ABORTED_CODE, retryable: false });
     const settled = seen.find((e) => e.type === "run_settled");
     expect(settled?.data).toMatchObject({ status: "aborted" }); // error.message carries the stop detail
     // The session is reusable: back to idle, not poisoned.

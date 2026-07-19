@@ -47,6 +47,15 @@ export type AgentEvent =
 export const SESSION_BUSY_CODE = "session_busy";
 
 /**
+ * The `failed.code` set when a run was deliberately stopped (a control-plane abort) rather than
+ * failing on its own. Channels can render cancellation distinctly from an error, and MUST treat it
+ * as a settled outcome — durable turn-intent cleanup included — so an operator's abort is never
+ * replayed as a fresh turn on restart. Exported as a constant for the same reason as
+ * {@link SESSION_BUSY_CODE}: a consumer that must branch on it should not string-match.
+ */
+export const ABORTED_CODE = "aborted";
+
+/**
  * One turn = one invoke, returning a single async event stream. The stream MUST terminate with
  * exactly one of completed / failed, or be cancelled by the caller (no terminal event). Any
  * AsyncIterable producer that implements this conforms (interface, not base class).
