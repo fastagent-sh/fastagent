@@ -21,8 +21,10 @@ import {
   resolveModelSpec,
   resolveStateRoot,
 } from "./config.ts";
+import type { SessionControl } from "../../session.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
 import type { SessionObserver } from "./invoke.ts";
+import { createPiSessionControl } from "./session-control.ts";
 import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
@@ -51,8 +53,12 @@ export interface CreatePiAgentFromWorkspaceOptions {
    * and never poll). The built-in `wake` tool mounts only when this is set AND `config.selfSchedule` is on.
    */
   serving?: boolean;
-  /** Observation-plane tap (session control); see `createPiSessionControl`. Wire its observer here
-   *  and its reader to the returned {@link sessions} store. */
+  /** Assemble the session control plane over this workspace's session store and return it as
+   *  {@link sessionControl} — the store is created inside this opener, so the hub must be wired
+   *  here too (an external `createPiSessionControl` cannot exist before the store does). */
+  sessionControl?: boolean;
+  /** Additional raw observation tap, composed AFTER the {@link sessionControl} hub's observer.
+   *  Advanced: most consumers want {@link sessionControl} instead. */
   observer?: SessionObserver;
 }
 
@@ -153,8 +159,10 @@ export async function createPiAgentFromWorkspace(
   sessionsDir: string;
   /** Absolute credentials file in use (for the startup report). */
   authPath: string;
-  /** The session store in use — also a {@link PiSessionReader} for `createPiSessionControl`. */
+  /** The session store in use — also a {@link PiSessionReader}. */
   sessions: PiSessionStore & PiSessionReader;
+  /** The observation plane over this workspace's sessions; present iff `options.sessionControl`. */
+  sessionControl?: SessionControl;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. Each name
    *  lives in exactly one report slot — deferred names are in {@link deferredToolNames} instead. */
   toolNames: string[];
@@ -183,6 +191,18 @@ export async function createPiAgentFromWorkspace(
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
   const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: dir });
+  // The hub is wired HERE because the store is created here: chicken-and-egg otherwise (the hub
+  // needs the store; the agent needs the hub's observer). An extra caller observer composes after it.
+  const hub = options.sessionControl ? createPiSessionControl({ sessions }) : undefined;
+  const caller = options.observer;
+  const observer: SessionObserver | undefined = hub
+    ? caller
+      ? (session, event) => {
+          hub.observer(session, event);
+          caller(session, event);
+        }
+      : hub.observer
+    : caller;
   const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
     model: modelSpec,
     thinkingLevel: config.thinkingLevel,
@@ -191,12 +211,13 @@ export async function createPiAgentFromWorkspace(
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
-    observer: options.observer,
+    observer,
   });
   return {
     agent,
     definition,
     sessions,
+    sessionControl: hub?.control,
     agentDir,
     config,
     configPath,

@@ -13,6 +13,7 @@ import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
+import { createPiAgentFromWorkspace } from "../src/engines/pi/workspace.ts";
 import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -298,6 +299,29 @@ describe("session control (Phase 1): observation plane", () => {
       .map((e) => (e as { delta: string }).delta)
       .join("");
     expect(text).toBe("resilient");
+  });
+
+  it("workspace opener wires the hub itself (sessionControl: true) — the seam is executable", async () => {
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "fa-sc-ws-"));
+    try {
+      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      const opened = await createPiAgentFromWorkspace(dir, { sessionControl: true });
+      expect(opened.sessionControl).toBeDefined();
+      const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
+      // The control is live over this workspace's (jsonl) store: read-only observation works
+      // without a single model call, and an unknown session stays uncreated.
+      expect(await control.state("ghost")).toEqual({ status: "idle", pending: { steering: 0, followUp: 0 } });
+      expect(await control.entries("ghost")).toEqual({ entries: [] });
+      expect(await opened.sessions.openIfExists("ghost")).toBeUndefined();
+      // Not requested → not built.
+      const plain = await createPiAgentFromWorkspace(dir, {});
+      expect(plain.sessionControl).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("dispatch(): Phase 1 rejects every command before acceptance with the stable code", async () => {
