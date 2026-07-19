@@ -461,11 +461,14 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       async abort() {
         const harness = await harnessGate;
         if (runSettled) throw settledError();
+        // Rollback is scoped to THIS call: a failed second abort must not undo a first, successful
+        // abort's classification — only the caller that flipped the flag may flip it back.
+        const mine = !abortRequested;
         abortRequested = true;
         try {
           await harness.abort();
         } catch (error) {
-          abortRequested = false;
+          if (mine) abortRequested = false;
           throw error;
         }
       },
@@ -480,6 +483,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         harnessFailed(error); // a pending dispatch learns the run cannot take commands
         const terminal = errorToTerminal(error);
         outcome = { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
+        runSettled = true; // commands can no longer take effect — reject stale controls from here on
         yield terminal;
         return; // → outer finally emits the settlement
       }
@@ -524,6 +528,11 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
                   error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },
                 };
         }
+        // Commands become ineffective the moment the run resolved — NOT at the outer finally, which
+        // sits behind `yield terminal` (a consumer-paced suspension) and auto-compaction. Flipping
+        // here closes the silent-drop window for steer/follow_up dispatched in that gap; the
+        // outer-finally flip remains as the backstop for caller cancellation.
+        runSettled = true;
         yield terminal;
       } finally {
         // After a successful turn, keep the session under the model's context window (a long shared group
