@@ -20,7 +20,7 @@ const call = (target: string, config: FastagentConfig, over: Partial<Parameters<
     modelSpec: config.model,
     run: false,
     force: false,
-    authPathOverride: undefined,
+    authPathFlag: undefined,
     ...over,
   });
 

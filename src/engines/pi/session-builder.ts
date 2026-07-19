@@ -43,7 +43,6 @@ import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { createPiModelRuntime } from "./models.ts";
-import { isDeferredTool } from "./tool.ts";
 import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 import { resolveWorkspaceAssembly } from "./workspace.ts";
@@ -107,7 +106,7 @@ export async function buildWorkspaceSessionRuntime(
     // on the session in createRuntime — pi's session starts all-active), and the activation bridge
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
     // instead of fastagent's harness.
-    const { config, modelSpec, agentDir, authPath, tools, toolCollisions, toolFailures } =
+    const { config, modelSpec, agentDir, authPath, tools, deferredToolNames, toolCollisions, toolFailures } =
       await resolveWorkspaceAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
@@ -161,6 +160,7 @@ export async function buildWorkspaceSessionRuntime(
       defaultNames,
       customTools,
       customToolDefs,
+      deferredToolNames,
       systemPrompt,
     };
   }
@@ -191,8 +191,17 @@ export async function buildWorkspaceSessionRuntime(
   };
 
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-    const { model, modelRuntime, thinkingLevel, definition, defaultNames, customTools, customToolDefs, systemPrompt } =
-      await assemblyFor(cwd);
+    const {
+      model,
+      modelRuntime,
+      thinkingLevel,
+      definition,
+      defaultNames,
+      customTools,
+      customToolDefs,
+      deferredToolNames,
+      systemPrompt,
+    } = await assemblyFor(cwd);
 
     const services = await createAgentSessionServices({
       cwd,
@@ -245,12 +254,12 @@ export async function buildWorkspaceSessionRuntime(
     // build including /resume: pi's chat session does not record activations (its SessionContext has
     // no activeToolNames), so "restore prior activations" is not implementable here — deferral stays
     // consistently ON and a resumed conversation re-discovers via search_tools (documented divergence
-    // from serving, where activations persist in the session).
-    const deferredNames = customTools.filter(isDeferredTool).map((t) => t.name);
-    if (deferredNames.length > 0) {
+    // from serving, where activations persist in the session). The deferred SET comes from the shared
+    // assembly (one definition of "deferred"), never recomputed here.
+    if (deferredToolNames.length > 0) {
       const active = result.session.getActiveToolNames();
-      if (deferredNames.some((n) => active.includes(n))) {
-        result.session.setActiveToolsByName(active.filter((n) => !deferredNames.includes(n)));
+      if (deferredToolNames.some((n) => active.includes(n))) {
+        result.session.setActiveToolsByName(active.filter((n) => !deferredToolNames.includes(n)));
       }
     }
     return { ...result, services, diagnostics: services.diagnostics };

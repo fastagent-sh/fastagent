@@ -12,7 +12,7 @@
 import { readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import type { FastagentConfig } from "../engines/pi/config.ts";
-import { defaultAuthPath, resolveStateRoot } from "../engines/pi/config.ts";
+import { resolveAuthPath } from "../engines/pi/config.ts";
 import { discoverChannelFiles } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
@@ -65,10 +65,11 @@ export async function preflightDeploy(input: {
   run: boolean;
   /** `--force` regenerates artifacts, so the kept-hand-written-Dockerfile apt warning does not apply. */
   force: boolean;
-  /** `--auth-path` / `FASTAGENT_AUTH_PATH`; falls back to the project default `<state root>/auth.json`. */
-  authPathOverride: string | undefined;
+  /** The raw `--auth-path` flag; the chain (flag > FASTAGENT_AUTH_PATH > `<state root>/auth.json`)
+   *  is resolved HERE via {@link resolveAuthPath} — the one owner, same as every serving command. */
+  authPathFlag: string | undefined;
 }): Promise<DeployPreflight> {
-  const { target, agentDir, config, modelSpec, run, force, authPathOverride } = input;
+  const { target, agentDir, config, modelSpec, run, force, authPathFlag } = input;
   const messages: DeployMessage[] = [];
 
   // The deployed box resolves the model from fastagent.config.ts ONLY (in the image); a model set via
@@ -105,7 +106,7 @@ export async function preflightDeploy(input: {
 
   // Probe auth from the SAME project-level file the opener/login use — not the global default, which would
   // miss a `fastagent login` credential and falsely report "none configured".
-  const authPath = authPathOverride ?? defaultAuthPath(resolveStateRoot(target));
+  const authPath = resolveAuthPath(target, authPathFlag);
   const modelAuth = modelSpec ? await probeAuthSource(createPiModels({ authPath }), modelSpec) : undefined;
 
   // Container facts (shared by every host) + the warnings that follow. Repo-as-workspace layout

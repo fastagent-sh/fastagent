@@ -34,7 +34,7 @@ import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir, resolveAuthPathOverride, resolveModelSpec } from "../../engines/pi/config.ts";
+import { loadConfig, resolveAgentDir, resolveModelSpec } from "../../engines/pi/config.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
@@ -77,7 +77,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     modelSpec,
     run: !!opts.run,
     force: !!opts.force,
-    authPathOverride: resolveAuthPathOverride(opts.authPath),
+    authPathFlag: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by preflight (one owner)
   }).catch(failStartup);
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
