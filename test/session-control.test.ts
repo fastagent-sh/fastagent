@@ -568,6 +568,21 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(events.at(-1)).toMatchObject({ type: "failed" }); // the data plane failed visibly too
   });
 
+  it("an observation-only run (no controls) rejects with unsupported_capability, not a run code", async () => {
+    const sessions = inMemorySessionStore();
+    const { control, observer } = createPiSessionControl({ sessions });
+    // run_started without controls — the observer seam permits observation-only registration.
+    observer("sObs", { type: "run_started", timestamp: Date.now(), runId: "r1", data: {} });
+    expect((await control.state("sObs")).status).toBe("running"); // state truthfully reports the run
+    const result = await control.dispatch("sObs", { type: "steer", prompt: { text: "x" } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Capability problem (permanent for this wiring) — NOT no_active_run (would poll forever)
+      // and NOT run_command_failed (transient).
+      expect(result.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
+    }
+  });
+
   it("dispatch maps a refused run command to run_command_failed", async () => {
     const sessions = inMemorySessionStore();
     const { control, observer } = createPiSessionControl({ sessions });

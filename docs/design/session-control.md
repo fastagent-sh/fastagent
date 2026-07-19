@@ -412,7 +412,9 @@ unlocks those options; it does not mandate them.
 
 Implementation review should reject changes that violate these:
 
-1. Agent Handler v0.1 and `src/agent.ts` stay unchanged.
+1. Agent Handler v0.1 semantics and the frozen terminal set stay unchanged; additive advisory
+   `failed.code` constants in `src/agent.ts` are allowed (the `SESSION_BUSY_CODE` precedent —
+   `ABORTED_CODE` followed it).
 2. `invoke` holds no state between calls.
 3. No run exists without an invoke; the control plane modulates, never initiates.
 4. The observation plane is strictly read-only.

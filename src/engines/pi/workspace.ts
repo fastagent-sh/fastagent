@@ -57,8 +57,9 @@ export interface CreatePiAgentFromWorkspaceOptions {
    *  {@link sessionControl} — the store is created inside this opener, so the hub must be wired
    *  here too (an external `createPiSessionControl` cannot exist before the store does). */
   sessionControl?: boolean;
-  /** Additional raw observation tap, composed AFTER the {@link sessionControl} hub's observer.
-   *  Advanced: most consumers want {@link sessionControl} instead. */
+  /** Additional raw tap, composed AFTER the {@link sessionControl} hub's observer. TRUSTED seam:
+   *  since Phase 2a an observer receives each run's live modulation handles (see
+   *  `SessionObserver`) — for read-only consumers use the hub's `events()` stream instead. */
   observer?: SessionObserver;
 }
 

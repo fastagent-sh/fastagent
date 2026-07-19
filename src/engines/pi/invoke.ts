@@ -232,7 +232,9 @@ export interface RunControls {
 /** The observation-plane seam: every rich event of every run, pushed as it happens. `run` carries
  *  the live {@link RunControls}, attached to the `run_started` event only. A hub
  *  (session-control.ts) implements this to serve `events()`/`state()`/`dispatch`; absent = zero
- *  overhead. */
+ *  overhead. TRUST BOUNDARY: since Phase 2a this seam hands every wired observer the run's
+ *  modulation handles — it is the trusted hub seam, not a public fan-out point. Do not wire
+ *  untrusted taps here; give third parties the read-only `events()` stream instead. */
 export type SessionObserver = (session: string, event: SessionEvent, run?: RunControls) => void;
 
 /**

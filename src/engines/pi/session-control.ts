@@ -230,14 +230,14 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           }
           if (!run.controls) {
             // A run EXISTS (state() rightly reports running) but was registered observation-only
-            // (the observer seam allows run_started without controls) — a different failure than
-            // "no run": the no_active_run guidance ("re-dispatch once state() shows a run") would
-            // loop forever here.
+            // (the observer seam allows run_started without controls). That is a CAPABILITY
+            // problem, not a run problem — permanent for this wiring, so neither no_active_run
+            // (would poll forever) nor run_command_failed (transient) fits.
             return {
               ok: false,
               error: {
-                code: RUN_COMMAND_FAILED_CODE,
-                message: `the active run registered without controls (observation-only) — ${command.type} cannot reach it`,
+                code: UNSUPPORTED_CAPABILITY_CODE,
+                message: `the active run registered without modulation controls (observation-only) — ${command.type} cannot reach it`,
                 retryable: false,
               },
             };
