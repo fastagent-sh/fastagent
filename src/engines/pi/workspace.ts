@@ -104,6 +104,11 @@ export async function resolveWorkspaceAssembly(
   // The credentials file: project-level by default (under the state root); only resolved here, never
   // created (a missing file reads as not-configured — `fastagent login` creates it).
   const authPath = resolveAuthPath(dir, options.authPath);
+  // Self-ignore the state root iff it lands in-tree — which covers everything under it (sessions, auth,
+  // every channel's `channels/<kind>` home). HERE, not in the serving opener: every consumer of this
+  // assembly can WRITE under the state root (serving: sessions/channels; the session builder: pi's
+  // `/login` writing auth.json), so resolving a workspace's state root must make it leak-safe.
+  await ensureStateRootSelfIgnored(dir, stateRoot);
   return {
     config,
     configPath,
@@ -169,10 +174,6 @@ export async function createPiAgentFromWorkspace(
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
-  // Self-ignore the state root iff it lands in-tree — which covers everything under it (sessions, auth,
-  // every channel's `channels/<kind>` home), including a custom in-tree `FASTAGENT_STATE_DIR`. A
-  // per-path override to an external volume is out-of-tree and correctly left alone.
-  await ensureStateRootSelfIgnored(dir, stateRoot);
   const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
     model: modelSpec,
     thinkingLevel: config.thinkingLevel,

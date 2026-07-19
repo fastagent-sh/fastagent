@@ -6,12 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { authSeedBytes } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
-import {
-  defaultAuthPath,
-  resolveAuthPathOverride,
-  resolveSessionsDirOverride,
-  resolveStateRoot,
-} from "../../engines/pi/config.ts";
+import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
@@ -43,8 +38,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 
   // A `deploy --run` may carry the operator's local credential as FASTAGENT_AUTH_SEED —
   // materialize it onto the writable state root BEFORE the opener resolves auth (once, absent-only).
-  const authPathOverride = resolveAuthPathOverride(opts.authPath);
-  await maybeSeedAuth(authPathOverride ?? defaultAuthPath(resolveStateRoot(dir)));
+  // Same resolveAuthPath the opener uses — ONE owner of the flag > env > default chain.
+  await maybeSeedAuth(resolveAuthPath(dir, opts.authPath));
 
   // The same opener dev uses (single assembly source), just no watch.
   const sessionsDirOverride = resolveSessionsDirOverride(opts.sessionsDir);
@@ -64,7 +59,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   } = await createPiAgentFromWorkspace(dir, {
     model: opts.model,
     sessionsDir: sessionsDirOverride,
-    authPath: authPathOverride,
+    authPath: opts.authPath,
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
 

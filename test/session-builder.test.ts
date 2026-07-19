@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -221,6 +221,51 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
       else process.env.PI_CODING_AGENT_DIR = prev;
       await rm(dir, { recursive: true, force: true });
       await rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("wires auth to the workspace credential file (not ~/.pi) and self-ignores the state root", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-sb-auth-"));
+    try {
+      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      // A credential in the PROJECT-level auth.json — the same file dev/start/login use.
+      await mkdir(join(dir, ".fastagent"), { recursive: true });
+      await writeFile(
+        join(dir, ".fastagent", "auth.json"),
+        `${JSON.stringify({ openai: { type: "api_key", key: "sk-test" } })}\n`,
+      );
+
+      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        // The session's model hub reads the workspace store: the stored credential is visible.
+        const creds = await rt.session.modelRuntime.listCredentials();
+        expect(creds.some((c) => c.providerId === "openai" && c.type === "api_key")).toBe(true);
+        // The state root is leak-safe on this path too: pi's /login writes auth.json here, so the
+        // shared front half must have self-ignored it (the serving opener's guard, now shared).
+        expect(existsSync(join(dir, ".fastagent", ".gitignore"))).toBe(true);
+      } finally {
+        rt.session.dispose?.();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors config.thinkingLevel like serving does (fidelity)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-sb-think-"));
+    try {
+      await writeFile(
+        join(dir, "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5", thinkingLevel: "high" };\n`,
+      );
+      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        expect(rt.session.thinkingLevel).toBe("high");
+      } finally {
+        rt.session.dispose?.();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 
