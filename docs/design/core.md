@@ -3,7 +3,7 @@ title: Core design
 description: "Architecture of FastAgent's pi reference implementation: the assembly ladder, prompt assembly, event translation, sessions, channels, schedules, and state."
 type: design-doc
 status: current
-updated: 2026-07-10
+updated: 2026-07-19
 ---
 
 # Core design
@@ -106,6 +106,11 @@ sessions and keep a later-`deferred` tool active in sessions that never discover
 is a constraint on future writers: NARROWING the active set is not representable in this record — a
 capability that needs durable narrowing must change the resolve semantics here first, deliberately.
 
+This per-invoke assembly remains the only data plane. A client that needs mid-run control, live
+observation, or reconnectable history uses the optional [session control plane](session-control.md):
+session-scoped observe/modulate methods beside `invoke` — never a second way to start work, and
+never resident process state as the source of continuity.
+
 ## 4. Event translation and terminal discipline
 
 Pi exposes a promise for the final assistant message and a subscription side channel for streaming
@@ -147,10 +152,11 @@ prompt prefix (the stamp comes from that execute's own `activate()` calls, never
 snapshot diff: batch tool calls run in parallel and a diff would misattribute a sibling's activation)
 — and is recorded in the session, which the per-invoke resolve above carries into later turns. The
 base prompt lists only non-deferred tools plus a discovery note, computed from the static mounted set,
-so activation never rewrites the prompt. `chat` emulates the same behavior over pi's AgentSession —
-the session is narrowed to the initial active set at build, and the same builtin loader activates
-through a chat-side ToolActivation bridge (`chat.ts` `chatToolActivation`) riding the same
-turn context, so the author debugs exactly what serves.
+so activation never rewrites the prompt. The shared session builder (`session-builder.ts`, which
+`chat` consumes) emulates the same behavior over pi's AgentSession — the session is narrowed to the
+initial active set at build, and the same builtin loader activates through a session-side
+ToolActivation bridge (`sessionToolActivation`) riding the same turn context, so the author debugs
+exactly what serves.
 
 `ExecutionEnv` is a harness assembly seam, not a complete sandbox boundary today. Pi's cwd-bound coding
 tools and `loadProjectContextFiles` still use the local process/filesystem. A future sandbox adapter must

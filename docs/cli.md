@@ -138,10 +138,14 @@ Model precedence:
 ## `fastagent chat`
 
 ```bash
-fastagent chat [dir] [--model provider/modelId]
+fastagent chat [dir] [--model provider/modelId] [--auth-path file]
 ```
 
 Opens the same assembled workspace in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
+
+Auth is fastagent's, same as every other command: `--auth-path` > `FASTAGENT_AUTH_PATH` > the
+workspace `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
+to the same file).
 
 ## `fastagent invoke`
 

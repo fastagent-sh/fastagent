@@ -32,3 +32,4 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 | Document | Purpose |
 |---|---|
 | [core.md](core.md) | Current architecture of the pi reference implementation. |
+| [session-control.md](session-control.md) | Proposed session control plane: the serving extension beside `invoke` for interactive clients. |

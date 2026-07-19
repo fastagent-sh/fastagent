@@ -65,5 +65,6 @@ These are not required to use FastAgent, but they explain public architecture de
 |---|---|
 | [Design notes](design/README.md) | What belongs in public design docs |
 | [Core design](design/core.md) | pi reference implementation, assembly ladder, sessions, auth, and deployment model |
+| [Session control plane](design/session-control.md) | Proposed serving extension: observe and modulate live runs beside `invoke` |
 
 For contribution workflow, see [../CONTRIBUTING.md](../CONTRIBUTING.md).
