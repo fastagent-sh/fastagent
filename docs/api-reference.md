@@ -426,8 +426,10 @@ drained) — for consumers that never dispatch, a run equals a single turn, byte
 Run commands on an idle session reject with `no_active_run` before acceptance; a command that
 reached a run but could not take effect (the run raced to settlement) rejects with
 `run_command_failed`. Both are `retryable: false` — the same command as-is fails again; consult
-`state()` before re-dispatching. An accepted `abort` can still settle `completed` when the run
-finishes inside the race window — acceptance is not outcome; the settlement is the truth. Boundary mutations
+`state()` before re-dispatching. The race window applies to all three commands symmetrically: an
+accepted `abort` can still settle `completed`, and an accepted `steer`/`follow_up` can settle
+without its prompt being consumed, when the run finishes inside the window — acceptance is not
+outcome; the settlement is the truth. Boundary mutations
 (`compact`/`set_model`/`set_thinking`) are not shipped yet: `capabilities()` reports them off and
 they reject with `unsupported_capability`.
 For workspace assembly the store lives inside the opener, so ask the opener to wire the hub:

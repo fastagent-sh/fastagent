@@ -219,9 +219,10 @@ export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
 
 /** Live modulation handles for one active run — what the control plane's `dispatch` routes to.
  *  Built inside the invoke closure (it owns the harness); registered with the observer at
- *  run_started, gone after run_settled. RACE WINDOW: an accepted `abort` can still settle
- *  `completed` — the run may finish between acceptance and the cut; acceptance is not outcome,
- *  the settlement is the truth. */
+ *  run_started, gone after run_settled. RACE WINDOW (all three commands, symmetric): the run may
+ *  resolve between the settled-check and the engine call landing — an accepted `abort` can still
+ *  settle `completed`, and an accepted `steer`/`followUp` can settle without the prompt ever being
+ *  consumed. Acceptance is not outcome; the settlement is the truth. */
 export interface RunControls {
   steer(prompt: Prompt): Promise<void>;
   followUp(prompt: Prompt): Promise<void>;

@@ -216,15 +216,28 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         case "follow_up":
         case "abort": {
           const run = active.get(session);
-          if (!run?.controls) {
-            // Rejected BEFORE acceptance: no run exists (or its controls are gone), nothing
-            // happened. retryable: false — as-is retry fails again; re-dispatch after state()
-            // shows an active run.
+          if (!run) {
+            // Rejected BEFORE acceptance: no run exists, nothing happened. retryable: false —
+            // as-is retry fails again; re-dispatch after state() shows an active run.
             return {
               ok: false,
               error: {
                 code: NO_ACTIVE_RUN_CODE,
                 message: `no active run for this session — ${command.type} modulates a run an invoke is driving`,
+                retryable: false,
+              },
+            };
+          }
+          if (!run.controls) {
+            // A run EXISTS (state() rightly reports running) but was registered observation-only
+            // (the observer seam allows run_started without controls) — a different failure than
+            // "no run": the no_active_run guidance ("re-dispatch once state() shows a run") would
+            // loop forever here.
+            return {
+              ok: false,
+              error: {
+                code: RUN_COMMAND_FAILED_CODE,
+                message: `the active run registered without controls (observation-only) — ${command.type} cannot reach it`,
                 retryable: false,
               },
             };
