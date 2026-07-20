@@ -178,6 +178,32 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("a seq gap ends the events iterator cleanly (the one envelope behavior the client owns)", async () => {
+    // Injected fetch: capabilities → JSON; events → an SSE body whose second message skips seq 1.
+    const sse = [
+      `data: ${JSON.stringify({ sessionId: "s", epoch: "e1", seq: 0, event: { type: "run_started", timestamp: 1, runId: "r", data: {} } })}\n\n`,
+      `data: ${JSON.stringify({ sessionId: "s", epoch: "e1", seq: 2, event: { type: "run_settled", timestamp: 2, runId: "r", data: { status: "completed" } } })}\n\n`,
+    ];
+    const fetchFn = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/control/capabilities")) {
+        return new Response("{}", { headers: { "content-type": "application/json" } });
+      }
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enc = new TextEncoder();
+          for (const block of sse) controller.enqueue(enc.encode(block));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn });
+    const seen: string[] = [];
+    for await (const ev of remote.events("s")) seen.push(ev.type); // must END, not throw or yield past the gap
+    expect(seen).toEqual(["run_started"]);
+  });
+
   it("controlRoutes refuses to mount without a token", () => {
     const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
     expect(() => controlRoutes(control, { token: "" })).toThrow(/token is required/);

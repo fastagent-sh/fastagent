@@ -12,7 +12,7 @@
  * `<stateRoot>/control.json` for local discovery — filesystem permissions are the local trust
  * boundary.
  */
-import type { SessionControl, SessionEvent } from "../session.ts";
+import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";
 import type { Routes } from "../host/node.ts";
 import { readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
@@ -34,7 +34,42 @@ const json = (value: unknown, status = 200): Response =>
 /** SSE comment heartbeat interval — keeps proxies/tunnels from idling out a quiet stream. */
 const HEARTBEAT_MS = 30_000;
 
-const DISPATCH_BODY_LIMIT = 256 * 1024; // commands carry prompts; images ride base64 in Prompt
+/** Same cap as the invoke channel (1 MiB): commands carry Prompts, which may ride base64 images —
+ *  the two Prompt-bearing wire surfaces reject oversized bodies at the same line. */
+const DISPATCH_BODY_LIMIT = 1 << 20;
+
+/**
+ * Parse-don't-validate at the wire: a remote client can send any JSON, and the hub's inner layers
+ * trust command shapes (a malformed `steer` would surface as an ENGINE failure misclassified as
+ * `run_command_failed`). Returns the typed command, or undefined for anything malformed — which
+ * answers protocol-level `invalid_command`, same responsibility as the hub's unknown-type default.
+ */
+function parseWireCommand(raw: unknown): SessionCommand | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const c = raw as Record<string, unknown>;
+  const promptOk = (p: unknown): p is { text: string } =>
+    typeof p === "object" &&
+    p !== null &&
+    typeof (p as { text?: unknown }).text === "string" &&
+    ((p as { images?: unknown }).images === undefined || Array.isArray((p as { images?: unknown }).images));
+  switch (c.type) {
+    case "steer":
+    case "follow_up":
+      return promptOk(c.prompt) ? ({ type: c.type, prompt: c.prompt } as SessionCommand) : undefined;
+    case "abort":
+      return { type: "abort" };
+    case "compact":
+      return c.instructions === undefined || typeof c.instructions === "string"
+        ? { type: "compact", instructions: c.instructions as string | undefined }
+        : undefined;
+    case "set_model":
+      return typeof c.model === "string" ? { type: "set_model", model: c.model } : undefined;
+    case "set_thinking":
+      return typeof c.level === "string" ? { type: "set_thinking", level: c.level } : undefined;
+    default:
+      return undefined;
+  }
+}
 
 export interface ControlRoutesOptions {
   /** Shared bearer secret, required on every route. Never optional: an unauthenticated
@@ -86,12 +121,20 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
       } catch {
         return text("invalid JSON\n", 400);
       }
-      if (typeof parsed.session !== "string" || typeof parsed.command !== "object" || parsed.command === null) {
+      if (typeof parsed.session !== "string") {
         return text("expected { session: string, command: SessionCommand }\n", 400);
+      }
+      const command = parseWireCommand(parsed.command);
+      if (!command) {
+        // Malformed shape = a protocol-level answer, mirrored from the hub's unknown-type default.
+        return json({
+          ok: false,
+          error: { code: INVALID_COMMAND_CODE, message: "malformed command", retryable: false },
+        });
       }
       // The result rides HTTP 200 either way: `ok: false` is a protocol-level answer (rejected
       // before acceptance), not a transport failure.
-      return json(await control.dispatch(parsed.session, parsed.command as Parameters<typeof control.dispatch>[1]));
+      return json(await control.dispatch(parsed.session, command));
     }),
 
     "GET /control/events": guard((_req, url) => {

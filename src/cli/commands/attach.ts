@@ -92,7 +92,12 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   if ((opts.url === undefined) !== (opts.token === undefined)) {
     failStartup(new Error("--url and --token must be given together (one without the other is ambiguous)"));
   }
-  const endpoint = opts.url && opts.token ? { url: opts.url, token: opts.token } : discover(dir);
+  let endpoint: { url: string; token: string };
+  try {
+    endpoint = opts.url && opts.token ? { url: opts.url, token: opts.token } : discover(dir);
+  } catch (error) {
+    failStartup(error as Error); // a user-fixable startup problem: one line, not a stack trace
+  }
   const control = await connectSessionControl(endpoint).catch(failStartup);
 
   const state = await control.state(sessionArg);
@@ -115,30 +120,34 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     );
   });
 
-  // The standard remote-client loop: the events iterator ends on drop/restart/gap → backfill from
-  // the durable cursor (RENDERED — what the agent said while away is the point of a tail), re-check
-  // state, resubscribe. Live events carry no entry ids, so the cursor only advances on backfill:
-  // records already watched live may replay after a drop — labeled as replay rather than silently
-  // miscounted. Ctrl+C is the only exit.
+  // Every round has ONE shape: subscribe → backfill (render the durable record since the cursor)
+  // → drain live until the stream drops. Subscribing FIRST means the window between cursor and
+  // subscription is always covered by that round's backfill — without it, events landing before
+  // the first subscription would be lost unless a disconnect happened to occur. Live events carry
+  // no entry ids, so the cursor advances only on backfill; a replay may therefore overlap what was
+  // already seen live — labeled, not silently dropped or miscounted. Ctrl+C is the only exit.
   let cursor = (await control.entries(sessionArg)).leafEntryId;
   for (;;) {
-    await watch(control, sessionArg).catch((error) => log.warn(`[fastagent] event stream error: ${String(error)}`));
-    await new Promise((r) => setTimeout(r, 1_000));
+    const draining = watch(control, sessionArg).catch((error) =>
+      log.warn(`[fastagent] event stream error: ${String(error)}`),
+    );
+    await new Promise((r) => setTimeout(r, 300)); // let the subscription land before syncing
     try {
       const backfill = await control.entries(sessionArg, cursor !== undefined ? { since: cursor } : undefined);
       cursor = backfill.leafEntryId ?? cursor;
       if (backfill.entries.length > 0) {
-        console.log("[reconnected — replaying the record since the last sync (may overlap what you saw live)]");
+        console.log("[replaying the record since the last sync (may overlap what you saw live)]");
         for (const entry of backfill.entries) {
           const line = renderEntry(entry);
           if (line !== undefined) console.log(line);
         }
-        console.log("[end of replay — live again]");
+        console.log("[end of replay — live]");
       }
     } catch (error) {
-      log.warn(`[fastagent] reconnect failed (serve down?): ${String(error)}`);
-      await new Promise((r) => setTimeout(r, 2_000));
+      log.warn(`[fastagent] sync failed (serve down?): ${String(error)}`);
     }
+    await draining;
+    await new Promise((r) => setTimeout(r, 1_000)); // the stream dropped — pause, then resubscribe
   }
 }
 
