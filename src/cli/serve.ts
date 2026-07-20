@@ -3,7 +3,7 @@
  * channels/, the Node host binding, the scheduler lifecycle, and the optional Cloudflare quick
  * tunnel. Bodies moved verbatim from cli.ts; `values.tunnel` became a parameter.
  */
-import { chmodSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Agent } from "../agent.ts";
 import { controlRoutes } from "../channels/control.ts";
@@ -81,6 +81,10 @@ export function mountSessionControl(
   return {
     routes: { ...routes, ...mounted },
     announce: (boundPort) => {
+      // The state root normally exists (the opener mkdirs the sessions dir under it), but an
+      // external --sessions-dir leaves it uncreated — and announce runs inside serve's listening
+      // callback, where a throw is an unhandled rejection, not a one-line startup diagnostic.
+      mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
       const path = join(stateRoot, "control.json");
       writeFileSync(path, `${JSON.stringify({ url: `http://127.0.0.1:${boundPort}`, token })}\n`, { mode: 0o600 });
       chmodSync(path, 0o600); // an existing file keeps its old mode on rewrite — pin it

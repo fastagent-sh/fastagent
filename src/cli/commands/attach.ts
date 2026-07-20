@@ -14,7 +14,7 @@ import { createInterface } from "node:readline";
 import { loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../engines/pi/config.ts";
 import { log, setLogLevel } from "../../log.ts";
-import { connectSessionControl } from "../../session-remote.ts";
+import { ControlRequestError, connectSessionControl } from "../../session-remote.ts";
 import type { SessionControl, SessionEntry, SessionEvent } from "../../session.ts";
 import { failStartup } from "../fail.ts";
 
@@ -119,6 +119,11 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
 
   const state = await control.state(sessionArg);
   log.info(`[fastagent] attached to ${sessionArg} @ ${endpoint.url} — ${state.status}`);
+  if (state.leafEntryId === undefined && state.status === "idle") {
+    // A typo'd id and a fresh session render identically otherwise (sessions are lazily created by
+    // invoke) — give the human a corrective signal.
+    log.warn(`[fastagent] no durable record for "${sessionArg}" yet — a new session, or a typo?`);
+  }
   log.info(`[fastagent] type to steer the active run; /abort to stop it; Ctrl+C to detach`);
 
   // stdin → control plane. Acceptance is not outcome: a rejection prints the code and moves on.
@@ -152,7 +157,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         `the control endpoint rejected the token (${String(error)}) — the serve likely restarted with a new one; re-run attach`,
       ),
     );
-  const isAuthError = (error: unknown): boolean => /\b401\b/.test(String(error));
+  const isAuthError = (error: unknown): boolean => error instanceof ControlRequestError && error.status === 401;
   let cursor = (await control.entries(sessionArg)).leafEntryId;
   for (;;) {
     const draining = watch(control, sessionArg).catch((error) => {

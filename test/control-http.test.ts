@@ -204,6 +204,34 @@ describe("session control over HTTP (Phase 3)", () => {
     expect(seen).toEqual(["run_started"]);
   });
 
+  it("mountSessionControl merges routes and announce writes the 0600 discovery file", async () => {
+    const { mkdtemp, rm, readFile, stat } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { mountSessionControl } = await import("../src/cli/serve.ts");
+    const root = await mkdtemp(join(tmpdir(), "fa-ctl-mount-"));
+    const stateRoot = join(root, "nested", ".fastagent"); // deliberately not pre-created
+    try {
+      const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+      const base = { "GET /health": () => new Response("ok") };
+      const mounted = mountSessionControl(base, control, stateRoot);
+      expect(Object.keys(mounted.routes)).toEqual(expect.arrayContaining(["GET /health", "GET /control/state"]));
+      mounted.announce(12345);
+      const file = JSON.parse(await readFile(join(stateRoot, "control.json"), "utf8")) as {
+        url: string;
+        token: string;
+      };
+      expect(file.url).toBe("http://127.0.0.1:12345");
+      expect(file.token).toBeTruthy();
+      expect((await stat(join(stateRoot, "control.json"))).mode & 0o777).toBe(0o600);
+      // Without a hub: passthrough, no file side effects.
+      const off = mountSessionControl(base, undefined, stateRoot);
+      expect(off.routes).toBe(base);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("controlRoutes refuses to mount without a token", () => {
     const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
     expect(() => controlRoutes(control, { token: "" })).toThrow(/token is required/);

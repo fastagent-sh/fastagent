@@ -60,10 +60,19 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
     // failure this parser exists to prevent (ImageRef shape from src/session.ts's Prompt).
     return images === undefined || (Array.isArray(images) && images.every(imageOk));
   };
+  // REBUILD, never pass raw through: "typed command out" must be construction, not assertion — a
+  // passed-through object would carry arbitrary extra keys into the engine.
+  const rebuildPrompt = (p: { text: string }): { text: string; images?: { data: string; mimeType: string }[] } => {
+    const images = (p as { images?: { data: string; mimeType: string }[] }).images;
+    return {
+      text: p.text,
+      ...(images ? { images: images.map((i) => ({ data: i.data, mimeType: i.mimeType })) } : {}),
+    };
+  };
   switch (c.type) {
     case "steer":
     case "follow_up":
-      return promptOk(c.prompt) ? ({ type: c.type, prompt: c.prompt } as SessionCommand) : undefined;
+      return promptOk(c.prompt) ? ({ type: c.type, prompt: rebuildPrompt(c.prompt) } as SessionCommand) : undefined;
     case "abort":
       return { type: "abort" };
     case "compact":

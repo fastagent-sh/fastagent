@@ -16,6 +16,17 @@
 import { log } from "./log.ts";
 import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
 
+/** A control request the server answered with a non-2xx status. Carries the STRUCTURED status so a
+ *  consumer distinguishing auth failure (401 — stale token, unrecoverable) from transient transport
+ *  trouble branches on `status`, never on message prose. */
+export class ControlRequestError extends Error {
+  readonly status: number;
+  constructor(status: number, body: string) {
+    super(`control request failed: ${status} ${body}`);
+    this.status = status;
+  }
+}
+
 export interface ConnectSessionControlOptions {
   /** Base URL of the serving process (e.g. `http://127.0.0.1:8787`); `/control/*` is appended. */
   url: string;
@@ -37,7 +48,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
 
   const get = async <T>(path: string): Promise<T> => {
     const res = await fetchFn(`${base}${path}`, { headers });
-    if (!res.ok) throw new Error(`control request failed: ${res.status} ${await res.text()}`);
+    if (!res.ok) throw new ControlRequestError(res.status, await res.text());
     return (await res.json()) as T;
   };
 
@@ -61,7 +72,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
         headers: { ...headers, "content-type": "application/json" },
         body: JSON.stringify({ session, command }),
       });
-      if (!res.ok) throw new Error(`control dispatch failed: ${res.status} ${await res.text()}`);
+      if (!res.ok) throw new ControlRequestError(res.status, await res.text());
       return (await res.json()) as Awaited<ReturnType<SessionControl["dispatch"]>>;
     },
 
@@ -76,7 +87,8 @@ export async function connectSessionControl(options: ConnectSessionControlOption
             headers,
             signal: abort.signal,
           });
-          if (!res.ok || !res.body) throw new Error(`control events failed: ${res.status} ${await res.text()}`);
+          if (!res.ok) throw new ControlRequestError(res.status, await res.text());
+          if (!res.body) throw new Error("control events: response has no body");
           let nextSeq = 0;
           for await (const data of sseData(res.body)) {
             const wire = JSON.parse(data) as { sessionId: string; epoch: string; seq: number; event: SessionEvent };

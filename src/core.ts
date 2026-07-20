@@ -9,7 +9,11 @@ export type { ModuleLoadFailure } from "./loader.ts";
 
 export { createInvokeHandler, nodeListener } from "./channels/http.ts";
 export { controlRoutes, type ControlRoutesOptions, type WireEvent } from "./channels/control.ts";
-export { connectSessionControl, type ConnectSessionControlOptions } from "./session-remote.ts";
+export {
+  ControlRequestError,
+  connectSessionControl,
+  type ConnectSessionControlOptions,
+} from "./session-remote.ts";
 export { readBodyCapped } from "./channels/body.ts";
 export { text, textHeaders } from "./channels/respond.ts";
 export {
