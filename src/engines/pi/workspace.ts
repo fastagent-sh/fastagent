@@ -220,7 +220,6 @@ export async function createPiAgentFromWorkspace(
     onAssembly: hub
       ? (parts) => {
           boundaryParts = {
-            store: sessions,
             lease: parts.lease,
             models: parts.models,
             harnessFactory: parts.harnessFactory,

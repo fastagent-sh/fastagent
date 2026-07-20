@@ -18,6 +18,7 @@ import {
   BOUNDARY_COMMAND_FAILED_CODE,
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
+  NO_SUCH_SESSION_CODE,
   RUN_COMMAND_FAILED_CODE,
   type SessionCapabilities,
   type SessionCommand,
@@ -33,7 +34,7 @@ import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
 import { type PiHarnessFactory, THINKING_LEVELS } from "./harness.ts";
 import { log } from "../../log.ts";
-import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
+import type { PiSessionReader } from "./sessions.ts";
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
@@ -116,10 +117,11 @@ class Subscriber {
 // ── The hub ──────────────────────────────────────────────────────────────────
 
 /** What boundary mutations (compact / set_model / set_thinking) need — the SAME instances the
- *  agent assembly uses: the lease (mutations must not race a run), the write store, the model
- *  registry (validation + allowedModels), and the harness factory (compaction is a model call). */
+ *  agent assembly uses: the lease (mutations must not race a run), the model registry (validation +
+ *  allowedModels), and the harness factory (compaction is a model call). Writes go through the
+ *  session the hub's reader opened — after an existence check, so the control plane never creates
+ *  a session (that is the data plane's monopoly). */
 export interface PiBoundaryWiring {
-  store: PiSessionStore;
   lease: Lease;
   models: Models;
   harnessFactory: PiHarnessFactory;
@@ -339,7 +341,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             }
             apply = async (s) => {
               await s.appendModelChange(model.provider, model.id);
-              return { type: "state_changed", timestamp: Date.now(), data: { model: command.model } };
+              // The CANONICAL spec, same string the durable entry and state() report — the event
+              // must not echo a client alias the other two surfaces would disagree with.
+              return { type: "state_changed", timestamp: Date.now(), data: { model: `${model.provider}/${model.id}` } };
             };
           } else if (command.type === "set_thinking") {
             if (!(THINKING_LEVELS as ReadonlySet<string>).has(command.level)) {
@@ -358,6 +362,19 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           } else {
             apply = async () => undefined; // compact runs through the harness below, not an entry append
+          }
+          // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
+          // not minted into a ghost record. (Existence check before the lease — read-only.)
+          const existing = await sessions.openIfExists(session);
+          if (!existing) {
+            return {
+              ok: false,
+              error: {
+                code: NO_SUCH_SESSION_CODE,
+                message: `session "${session}" does not exist — sessions are created by invoke, not by boundary mutations`,
+                retryable: false,
+              },
+            };
           }
           // Boundary mutations are the control plane's only writers: same lease as every run — a
           // mutation must never race one (design §9).
@@ -403,8 +420,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 }
               }
             } else {
-              const opened = await b.store.openOrCreate(session);
-              const event = await apply(opened);
+              const event = await apply(existing);
               if (event) fanOut(session, event);
             }
           } catch (error) {

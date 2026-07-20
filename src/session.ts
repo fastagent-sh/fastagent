@@ -54,6 +54,12 @@ export const NO_ACTIVE_RUN_CODE = "no_active_run";
  *  may succeed. Rejected before acceptance. */
 export const INVALID_COMMAND_CODE = "invalid_command";
 
+/** Stable `SessionResult.error.code` for a boundary mutation on a session that does not exist.
+ *  Sessions are created by the DATA plane (`invoke`), never by the control plane — a mutation on an
+ *  unknown id (a typo, a not-yet-started conversation) must not mint a ghost record. Rejected
+ *  before acceptance; retry after the session's first turn exists. */
+export const NO_SUCH_SESSION_CODE = "no_such_session";
+
 /** Stable `SessionResult.error.code` for a boundary mutation (`compact`) that was admitted but
  *  failed before any durable change landed (e.g. the summarization model call failed). Nothing took
  *  effect; the same command may succeed on retry. */

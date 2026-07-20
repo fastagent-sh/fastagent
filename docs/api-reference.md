@@ -441,7 +441,9 @@ await control.dispatch("s1", { type: "compact", instructions: "keep the decision
 ```
 
 Overrides persist in the session record and every later turn's fresh harness applies them — on any
-serving path, channels included. Invalid payloads reject `invalid_command` before acceptance;
+serving path, channels included. Boundary mutations require an EXISTING session (`no_such_session`
+otherwise): sessions are created by `invoke`, never by the control plane. Invalid payloads reject
+`invalid_command` before acceptance;
 `capabilities()` lists `allowedModels`/`allowedLevels`. Boundary commands require the wiring the
 workspace opener provides (`sessionControl: true`); a hub without it reports them off and rejects
 with `unsupported_capability`.

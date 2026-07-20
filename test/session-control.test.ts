@@ -18,6 +18,7 @@ import {
   BOUNDARY_COMMAND_FAILED_CODE,
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
+  NO_SUCH_SESSION_CODE,
   RUN_COMMAND_FAILED_CODE,
   UNSUPPORTED_CAPABILITY_CODE,
   type SessionEvent,
@@ -658,7 +659,7 @@ function makeBoundary(responses: FauxResponseStep[]) {
     tools: [],
     systemPrompt: "test",
   });
-  const boundary: PiBoundaryWiring = { store: sessions, lease, models, harnessFactory: factory };
+  const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
   const { control, observer } = createControl({ sessions, boundary: () => boundary });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
@@ -701,6 +702,23 @@ describe("session control (Phase 2b): boundary mutations", () => {
       "sB1",
     );
     expect(resolved.thinkingLevel).toBe("high");
+  });
+
+  it("resolveHarnessOverrides: a known recorded model override wins over the default", () => {
+    const { faux, models } = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
+    const fallback = {
+      model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>,
+      thinkingLevel: "medium" as const,
+    };
+    const recorded = faux.getModel("faux-b") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const out = resolveHarnessOverrides(
+      [{ type: "model_change", provider: recorded.provider, modelId: recorded.id }],
+      models,
+      fallback,
+      "sRK",
+    );
+    expect(out.model).toBe(recorded); // the session override rides the fresh harness
+    expect(out.model).not.toBe(fallback.model);
   });
 
   it("resolveHarnessOverrides: last entry wins; unknown recorded model falls back with the default", () => {
@@ -752,7 +770,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       tools: [gate.tool],
       systemPrompt: "test",
     });
-    const boundary: PiBoundaryWiring = { store: sessions, lease, models, harnessFactory: factory };
+    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
     const { control, observer } = createControl({ sessions, boundary: () => boundary });
     const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
     const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
@@ -832,6 +850,17 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const state = await control.state("sB7");
     expect(state.model).toBe(spec);
     expect(state.thinkingLevel).toBe("xhigh");
+  });
+
+  it("boundary mutations never mint sessions: unknown id rejects no_such_session", async () => {
+    const { control, sessions, spec } = makeBoundary([]);
+    const result = await control.dispatch("ghost", { type: "set_model", model: spec });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe(NO_SUCH_SESSION_CODE);
+    expect(await sessions.openIfExists("ghost")).toBeUndefined(); // no ghost record landed
+    const compact = await control.dispatch("ghost", { type: "compact" });
+    expect(compact.ok).toBe(false);
+    if (!compact.ok) expect(compact.error.code).toBe(NO_SUCH_SESSION_CODE);
   });
 
   it("without boundary wiring the commands stay gated off and rejected", async () => {
