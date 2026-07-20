@@ -9,8 +9,9 @@
  * is REQUIRED (there is no unauthenticated mode) and is the only auth the framework owns; anything
  * beyond a shared secret (principals, per-permission split, audit) is the wrapping host's job
  * (design §14). The serving process generates a per-boot token and writes it to
- * `<stateRoot>/control.json` for local discovery — filesystem permissions are the local trust
- * boundary.
+ * `<stateRoot>/control.json` for local discovery — filesystem permissions guard the token, and
+ * the token guards the routes: the serve binds ALL interfaces (containers require it), so the port
+ * is LAN-reachable and the mount warns accordingly.
  */
 import type { Prompt } from "../agent.ts";
 import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";

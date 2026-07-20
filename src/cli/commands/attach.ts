@@ -222,6 +222,12 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   rl.on("line", (line) => {
     const trimmed = line.trim();
     if (trimmed === "") return;
+    // `/` is a reserved command prefix: a typo'd /aboort silently steering the model (injecting a
+    // prompt when the user meant to STOP the run) is the dangerous direction of the ambiguity.
+    if (trimmed.startsWith("/") && trimmed !== "/abort") {
+      console.log(`[unknown command ${trimmed} — /abort stops the run; a leading / is reserved]`);
+      return;
+    }
     const command =
       trimmed === "/abort" ? ({ type: "abort" } as const) : ({ type: "steer", prompt: { text: trimmed } } as const);
     void control.dispatch(sessionArg, command).then(

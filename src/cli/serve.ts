@@ -93,9 +93,16 @@ export function mountSessionControl(
       chmodSync(tmp, 0o600); // an existing file keeps its old mode on rewrite — pin it
       renameSync(tmp, path);
       log.info(`[fastagent] session control on /control/* (token in ${path})`);
+      // The serve binds ALL interfaces (containers require it), so /control/* is LAN-reachable
+      // with the bearer token as the only protection — the tunnel and deploy paths warn loudly,
+      // and the LAN path must not be the silent third way past the local trust story.
+      log.warn(
+        "[fastagent] the port binds all interfaces: /control/* is reachable on your LAN, protected only by " +
+          "the bearer token — firewall the port or wrap it for real exposure (docs: design §14)",
+      );
       if (options.tunnel) {
-        // The safety narrative is "loopback + file permissions"; --tunnel breaks it for the whole
-        // port. The operator asked for the tunnel (webhooks), but must not DISCOVER the control
+        // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC
+        // (beyond even the LAN reach the mount already warned about). The operator asked for the tunnel (webhooks), but must not DISCOVER the control
         // plane went public with it — say it loudly.
         log.warn(
           "[fastagent] --tunnel exposes /control/* (steer/abort/set_model) at the public tunnel URL, " +

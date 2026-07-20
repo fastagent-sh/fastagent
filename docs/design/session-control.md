@@ -3,7 +3,7 @@ title: Session control plane
 description: "An engine-neutral serving extension beside Agent Handler: observe and modulate live runs. invoke stays the only data plane; there is no second way to start work."
 type: design-doc
 status: current
-updated: 2026-07-19
+updated: 2026-07-20
 ---
 
 # Session control plane
