@@ -852,6 +852,40 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(state.thinkingLevel).toBe("xhigh");
   });
 
+  it("the override rides the next turn end to end: set_model changes which model answers", async () => {
+    // Two faux models in ONE registry; the response FACTORY answers with the model that was asked —
+    // this pins the factory→resolveHarnessOverrides→AgentHarness wiring, not just the resolver.
+    const { faux, models } = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
+    faux.setResponses([
+      (_ctx: unknown, _opts: unknown, _state: unknown, model: { id: string }) =>
+        fauxAssistantMessage(`answered by ${model.id}`),
+      (_ctx: unknown, _opts: unknown, _state: unknown, model: { id: string }) =>
+        fauxAssistantMessage(`answered by ${model.id}`),
+    ] as never);
+    const sessions = inMemorySessionStore();
+    const lease = inProcessLease();
+    const factory = piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>, // assembly default
+      tools: [],
+      systemPrompt: "test",
+    });
+    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
+    const { control, observer } = createControl({ sessions, boundary: () => boundary });
+    const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+
+    const first = await drain(agent.invoke({ session: "sE2E" }, { text: "hi" }));
+    expect(first.map((e) => (e.type === "text" ? (e as { delta: string }).delta : "")).join("")).toContain("faux-a");
+
+    expect(await control.dispatch("sE2E", { type: "set_model", model: `${faux.provider.id}/faux-b` })).toEqual({
+      ok: true,
+    });
+    const second = await drain(agent.invoke({ session: "sE2E" }, { text: "again" }));
+    expect(second.map((e) => (e.type === "text" ? (e as { delta: string }).delta : "")).join("")).toContain("faux-b");
+  });
+
   it("boundary mutations never mint sessions: unknown id rejects no_such_session", async () => {
     const { control, sessions, spec } = makeBoundary([]);
     const result = await control.dispatch("ghost", { type: "set_model", model: spec });

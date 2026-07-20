@@ -119,18 +119,21 @@ const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
  */
 const warnedRestores = new Set<string>();
 
-/** pi's ThinkingLevel scale as a checkable set — THE single source (session entries store plain
- *  strings; session-control's dispatch validation and capabilities derive from this too, so a new
- *  pi level added here cannot leave the two sides disagreeing). */
-export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set<ThinkingLevel>([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
+/** pi's ThinkingLevel scale as a checkable set — THE single source for fastagent (session entries
+ *  store plain strings; session-control's dispatch validation and capabilities derive from this).
+ *  The `satisfies Record<ThinkingLevel, …>` anchor makes it EXHAUSTIVE against pi's union: pi
+ *  adding a level turns this into a type error instead of a silent drift where `set_thinking`
+ *  rejects a value pi supports. */
+const ALL_THINKING_LEVELS = {
+  off: true,
+  minimal: true,
+  low: true,
+  medium: true,
+  high: true,
+  xhigh: true,
+  max: true,
+} satisfies Record<ThinkingLevel, true>;
+export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set(Object.keys(ALL_THINKING_LEVELS) as ThinkingLevel[]);
 
 /**
  * Resolve the session's model/thinking OVERRIDES for a fresh harness — same shape as the

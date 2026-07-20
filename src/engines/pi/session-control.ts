@@ -207,8 +207,15 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         const entries = await opened.getEntries();
         for (let i = entries.length - 1; i >= 0; i--) {
           const e = entries[i] as { type: string; provider?: string; modelId?: string; thinkingLevel?: string };
-          if (model === undefined && e.type === "model_change") model = `${e.provider}/${e.modelId}`;
-          if (thinkingLevel === undefined && e.type === "thinking_level_change") thinkingLevel = e.thinkingLevel;
+          // Same malformed-entry guard as resolveHarnessOverrides: a broken record reads as absent
+          // on BOTH surfaces — state() must not report "undefined/undefined" while the resolve
+          // falls back to the default.
+          if (model === undefined && e.type === "model_change" && e.provider !== undefined && e.modelId !== undefined) {
+            model = `${e.provider}/${e.modelId}`;
+          }
+          if (thinkingLevel === undefined && e.type === "thinking_level_change" && e.thinkingLevel !== undefined) {
+            thinkingLevel = e.thinkingLevel;
+          }
           if (model !== undefined && thinkingLevel !== undefined) break;
         }
       }
