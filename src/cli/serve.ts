@@ -3,7 +3,7 @@
  * channels/, the Node host binding, the scheduler lifecycle, and the optional Cloudflare quick
  * tunnel. Bodies moved verbatim from cli.ts; `values.tunnel` became a parameter.
  */
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Agent } from "../agent.ts";
 import { controlRoutes } from "../channels/control.ts";
@@ -86,8 +86,12 @@ export function mountSessionControl(
       // callback, where a throw is an unhandled rejection, not a one-line startup diagnostic.
       mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
       const path = join(stateRoot, "control.json");
-      writeFileSync(path, `${JSON.stringify({ url: `http://127.0.0.1:${boundPort}`, token })}\n`, { mode: 0o600 });
-      chmodSync(path, 0o600); // an existing file keeps its old mode on rewrite — pin it
+      // Atomic (tmp+rename, the state.ts pattern): attach re-reads this file exactly during the
+      // restart window — a torn read would be misdiagnosed as "serve gone".
+      const tmp = `${path}.tmp`;
+      writeFileSync(tmp, `${JSON.stringify({ url: `http://127.0.0.1:${boundPort}`, token })}\n`, { mode: 0o600 });
+      chmodSync(tmp, 0o600); // an existing file keeps its old mode on rewrite — pin it
+      renameSync(tmp, path);
       log.info(`[fastagent] session control on /control/* (token in ${path})`);
       if (options.tunnel) {
         // The safety narrative is "loopback + file permissions"; --tunnel breaks it for the whole

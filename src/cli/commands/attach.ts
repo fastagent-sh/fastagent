@@ -204,6 +204,16 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // `state` already carries the cursor — fetching the FULL record just to read leafEntryId would
   // download the whole history of a long session for nothing.
   let cursor = state.leafEntryId;
+  // LIVENESS IS PROBED, NEVER INFERRED FROM THE FILE: control.json is advisory — briefly absent
+  // during a dev-watch restart (unlink → new worker rewrites seconds later) and stale after a
+  // crash (no handler ran) — so its presence is neither necessary nor sufficient. The one state
+  // machine for local endpoints: every failed round re-reads discovery (a CHANGED file → reattach
+  // with the fresh credentials — 401s from an old token against a restarted serve heal here too);
+  // otherwise a consecutive-failure budget decides — reset by any successful round or reattach,
+  // exhausted → exit with the honest ambiguous diagnosis. --url endpoints keep plain retries with
+  // immediate 401 exit: their token lifecycle is the operator's, not a local boot's.
+  const LOCAL_GRACE_ROUNDS = 30; // ≈ 30s+ of consecutive failures before giving up
+  let failures = 0;
   for (;;) {
     try {
       cursor = await attachRound(control, sessionArg, cursor, {
@@ -211,16 +221,14 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         write: (chunk) => process.stdout.write(chunk),
         warn: (line) => log.warn(line),
       });
+      failures = 0;
     } catch (error) {
-      if (isAuthError(error)) stale(error);
-      // A discovered (local) endpoint's token is per-boot, so after the serve dies retries can
-      // only 401 or be refused — but a RESTART is the normal dev-watch rhythm (every file save
-      // respawns the worker with a fresh token): re-read the discovery file and REATTACH with the
-      // new credentials. Session ids are stable across restarts; the next round is the standard
-      // reconnect (replay + state). Only a REMOVED file (clean shutdown, no serve coming back on
-      // its own) exits. --url endpoints keep plain retries — real networks recover, and their
-      // token lifecycle is the operator's, not a local boot's.
-      if (discovered) {
+      failures++;
+      if (!discovered) {
+        if (isAuthError(error)) stale(error);
+        log.warn(`[fastagent] round failed: ${String(error)}`);
+      } else {
+        let reattached = false;
         try {
           const fresh = discover(dir);
           if (fresh.url !== endpoint.url || fresh.token !== endpoint.token) {
@@ -229,19 +237,27 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
               endpoint = fresh;
               control = next;
               remoteAgent = connectAgent(fresh);
+              failures = 0;
+              reattached = true;
               console.log("[serve restarted — reattached]");
-              continue; // straight into the next round with the new connection
             } catch (reconnectError) {
-              // Mid-restart (file written, port not bound yet): fall through to the normal retry;
-              // the next round re-reads discovery again.
+              // Mid-restart (file written, port not bound yet): the budget keeps us patient.
               log.warn(`[fastagent] serve restarting? reattach not ready: ${String(reconnectError)}`);
             }
           }
         } catch {
-          exitWith(new Error("the serve is gone (control.json removed) — restart it and re-run attach"));
+          // Absent or torn — possibly mid-restart; the budget below decides, never this read alone.
         }
+        if (reattached) continue; // straight into the next round, no pause
+        if (failures >= LOCAL_GRACE_ROUNDS) {
+          exitWith(
+            new Error(
+              `the serve has been unreachable for ~${LOCAL_GRACE_ROUNDS}s — it may have crashed (stale control.json) or shut down; restart it and re-run attach`,
+            ),
+          );
+        }
+        log.warn(`[fastagent] round failed (${failures}/${LOCAL_GRACE_ROUNDS}): ${String(error)}`);
       }
-      log.warn(`[fastagent] round failed: ${String(error)}`);
     }
     await new Promise((r) => setTimeout(r, 1_000)); // the stream dropped — pause, then resubscribe
   }
@@ -253,8 +269,10 @@ const isAuthError = (error: unknown): boolean => error instanceof ControlRequest
  *  startup (a serve restart hours in), so the local name must not imply "startup only". */
 const exitWith = failStartup;
 
-/** What one round prints through — the COMPLETE output seam (streamed deltas included), so tests
- *  can observe every path a round writes. Output only: timing knobs travel as their own parameter. */
+/** What one ROUND prints through (streamed deltas included), so tests can observe every path a
+ *  round writes. Round output only: stdin-side acceptance/rejection lines print directly — they
+ *  are immediate feedback to a user action and may interleave with a replay block. Timing knobs
+ *  travel as their own parameter. */
 export interface AttachIo {
   println: (line: string) => void;
   /** Raw chunk, no newline — the streamed message_delta path. */
