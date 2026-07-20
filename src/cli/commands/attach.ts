@@ -126,9 +126,13 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // discovery (a restart mints fresh credentials mid-window). --url fails immediately at startup:
   // nothing has ever succeeded on that endpoint, so a wrong --url is likelier than a transient
   // (once attached, drops get a bounded retry budget instead).
-  const STARTUP_GRACE = 10; // ≈ 10s
+  // Budgets are WALL-CLOCK, not round counts: a round's duration varies by an order of magnitude
+  // (fast ECONNREFUSED ≈ 1s vs the 10s black-hole timeout), so counting rounds would make the
+  // user-facing "~Ns" claims false exactly in the black-hole case the timeouts exist for.
+  const STARTUP_GRACE_MS = 15_000;
   const connectWithGrace = async (): Promise<{ control: SessionControl; state: SessionState }> => {
-    for (let attempt = 1; ; attempt++) {
+    const startedAt = Date.now();
+    for (;;) {
       try {
         const connected = await connectSessionControl(endpoint);
         return { control: connected, state: await connected.state(sessionArg) };
@@ -140,7 +144,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
               : (error as Error),
           );
         }
-        if (attempt >= STARTUP_GRACE) {
+        if (Date.now() - startedAt >= STARTUP_GRACE_MS) {
           exitWith(
             new Error(
               `${String(error)} — the serve is unreachable; it may be down, or <stateRoot>/control.json is stale. ` +
@@ -153,7 +157,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         } catch {
           // Absent or torn — possibly mid-restart; the budget decides, never this read alone.
         }
-        log.warn(`[fastagent] serve not ready (${attempt}/${STARTUP_GRACE}) — retrying…`);
+        log.warn(`[fastagent] serve not ready (~${Math.round((Date.now() - startedAt) / 1000)}s) — retrying…`);
         await new Promise((r) => setTimeout(r, 1_000));
       }
     }
@@ -242,13 +246,13 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // otherwise a consecutive-failure budget decides — reset by any successful round or reattach,
   // exhausted → exit with the honest ambiguous diagnosis. --url endpoints keep plain retries with
   // immediate 401 exit: their token lifecycle is the operator's, not a local boot's.
-  const LOCAL_GRACE_ROUNDS = 30; // ≈ 30s+ of consecutive failures before giving up
+  const LOCAL_GRACE_MS = 30_000;
   // Remote endpoints get a LARGER budget (real networks recover slowly), but not an infinite one:
   // steady-state and startup differ on priors, not on principle — at startup nothing has ever
   // succeeded (a wrong --url is likelier than a transient → fail fast), while a drop after a
-  // working attach is likelier transient → retry, bounded.
-  const REMOTE_GRACE_ROUNDS = 120; // ≈ 2min+
-  let failures = 0;
+  // working attach is likelier transient → retry, bounded. Wall-clock, like STARTUP_GRACE_MS.
+  const REMOTE_GRACE_MS = 120_000;
+  let failingSince: number | undefined;
   for (;;) {
     try {
       cursor = await attachRound(control, sessionArg, cursor, {
@@ -256,19 +260,23 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         write: (chunk) => process.stdout.write(chunk),
         warn: (line) => log.warn(line),
       });
-      failures = 0;
+      failingSince = undefined;
     } catch (error) {
-      failures++;
+      failingSince ??= Date.now();
+      const since = failingSince; // this round's anchor — a reattach resets the outer variable
+      const downSeconds = Math.round((Date.now() - since) / 1000);
       if (!discovered) {
         if (isAuthError(error)) stale(error);
-        if (failures >= REMOTE_GRACE_ROUNDS) {
+        if (Date.now() - since >= REMOTE_GRACE_MS) {
           exitWith(
             new Error(
-              `the remote endpoint has been unreachable for ~${REMOTE_GRACE_ROUNDS}s — check the serve and re-run attach`,
+              `the remote endpoint has been unreachable for ~${downSeconds}s — check the serve and re-run attach`,
             ),
           );
         }
-        log.warn(`[fastagent] round failed (${failures}/${REMOTE_GRACE_ROUNDS}): ${String(error)}`);
+        log.warn(
+          `[fastagent] round failed (down ~${downSeconds}s, limit ${REMOTE_GRACE_MS / 1000}s): ${String(error)}`,
+        );
       } else {
         let reattached = false;
         try {
@@ -279,7 +287,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
               endpoint = fresh;
               control = next;
               remoteAgent = connectAgent(fresh);
-              failures = 0;
+              failingSince = undefined;
               reattached = true;
               console.log("[serve restarted — reattached]");
             } catch (reconnectError) {
@@ -301,14 +309,14 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
           // Absent or torn — possibly mid-restart; the budget below decides, never this read alone.
         }
         if (reattached) continue; // straight into the next round, no pause
-        if (failures >= LOCAL_GRACE_ROUNDS) {
+        if (Date.now() - since >= LOCAL_GRACE_MS) {
           exitWith(
             new Error(
-              `the serve has been unreachable for ~${LOCAL_GRACE_ROUNDS}s — it may have crashed (stale control.json) or shut down; restart it and re-run attach`,
+              `the serve has been unreachable for ~${downSeconds}s — it may have crashed (stale control.json) or shut down; restart it and re-run attach`,
             ),
           );
         }
-        log.warn(`[fastagent] round failed (${failures}/${LOCAL_GRACE_ROUNDS}): ${String(error)}`);
+        log.warn(`[fastagent] round failed (down ~${downSeconds}s, limit ${LOCAL_GRACE_MS / 1000}s): ${String(error)}`);
       }
     }
     await new Promise((r) => setTimeout(r, 1_000)); // the stream dropped — pause, then resubscribe
