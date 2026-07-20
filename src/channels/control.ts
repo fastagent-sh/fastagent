@@ -149,6 +149,11 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
       const session = requireSession(url);
       if (!session) return text("missing ?session\n", 400);
       const iterator = control.events(session)[Symbol.asyncIterator]();
+      // EAGER registration: issue the first pull NOW, before the Response (and thus the client's
+      // fetch resolution) exists — hub subscription is registered synchronously inside next(), so
+      // "the client saw response headers" implies "events from that moment on will be delivered".
+      // Shrinks the subscribe/backfill race to network reordering instead of a full pull cycle.
+      let pending: Promise<IteratorResult<SessionEvent>> | undefined = iterator.next();
       let seq = 0;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       const encoder = new TextEncoder();
@@ -163,7 +168,8 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
           }, HEARTBEAT_MS);
         },
         async pull(controller) {
-          const next = await iterator.next();
+          const next = await (pending ?? iterator.next());
+          pending = undefined;
           if (next.done) {
             clearInterval(heartbeat);
             controller.close();

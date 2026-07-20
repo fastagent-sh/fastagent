@@ -138,16 +138,27 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   });
 
   // Every round has ONE shape: subscribe → backfill (render the durable record since the cursor)
-  // → drain live until the stream drops. Subscribing FIRST means the window between cursor and
-  // subscription is always covered by that round's backfill — without it, events landing before
-  // the first subscription would be lost unless a disconnect happened to occur. Live events carry
-  // no entry ids, so the cursor advances only on backfill; a replay may therefore overlap what was
-  // already seen live — labeled, not silently dropped or miscounted. Ctrl+C is the only exit.
+  // → drain live until the stream drops. Subscribing first + the server's eager registration
+  // (subscribed before response headers) covers the cursor→subscription window in the normal case;
+  // the 300ms wait is a HEURISTIC — on a very slow link an event can still land between the
+  // backfill and the subscription taking effect, surfacing only at the next drop-triggered replay.
+  // Live events carry no entry ids, so the cursor advances only on backfill; a replay may overlap
+  // what was already seen live — labeled, not silently dropped or miscounted. Ctrl+C is the only
+  // exit; a 401 means the serve restarted and minted a new token — unrecoverable here, so exit
+  // with the re-attach hint instead of retrying forever.
+  const stale = (error: unknown): never =>
+    failStartup(
+      new Error(
+        `the control endpoint rejected the token (${String(error)}) — the serve likely restarted with a new one; re-run attach`,
+      ),
+    );
+  const isAuthError = (error: unknown): boolean => /\b401\b/.test(String(error));
   let cursor = (await control.entries(sessionArg)).leafEntryId;
   for (;;) {
-    const draining = watch(control, sessionArg).catch((error) =>
-      log.warn(`[fastagent] event stream error: ${String(error)}`),
-    );
+    const draining = watch(control, sessionArg).catch((error) => {
+      if (isAuthError(error)) stale(error);
+      log.warn(`[fastagent] event stream error: ${String(error)}`);
+    });
     await new Promise((r) => setTimeout(r, 300)); // let the subscription land before syncing
     try {
       const backfill = await control.entries(sessionArg, cursor !== undefined ? { since: cursor } : undefined);
@@ -166,6 +177,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         console.log("[end of replay — live]");
       }
     } catch (error) {
+      if (isAuthError(error)) stale(error);
       log.warn(`[fastagent] sync failed (serve down?): ${String(error)}`);
     }
     await draining;

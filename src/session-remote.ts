@@ -13,6 +13,7 @@
  * Nothing here retries silently: a broken stream is visible as a terminated iterator, a failed
  * request as a rejected promise.
  */
+import { log } from "./log.ts";
 import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
 
 export interface ConnectSessionControlOptions {
@@ -81,7 +82,14 @@ export async function connectSessionControl(options: ConnectSessionControlOption
             const wire = JSON.parse(data) as { sessionId: string; epoch: string; seq: number; event: SessionEvent };
             // Envelope checks — consumed HERE, surfaced only as iterator termination. (epoch is not
             // compared: it cannot change within one connection — see the header note.)
-            if (wire.seq !== nextSeq) return; // loss in transit
+            if (wire.seq !== nextSeq) {
+              // Fail visibly: a gap-terminated stream must be distinguishable from a clean end in
+              // the diagnostics, even though both surface as iterator termination + resync.
+              log.warn(
+                `[fastagent] control events: sequence gap (expected ${nextSeq}, got ${wire.seq}) — ending the stream for resync`,
+              );
+              return;
+            }
             nextSeq = wire.seq + 1;
             yield wire.event;
           }

@@ -96,16 +96,25 @@ export function mountSessionControl(
       }
       // Best-effort lifecycle end: a clean exit removes the discovery file so a later `attach`
       // fails with "cannot read" (accurate) instead of a stale token's misleading 401/ECONNREFUSED.
-      const unlinkOnce = (): void => {
+      const unlink = (): void => {
         try {
           rmSync(path, { force: true });
         } catch {
           /* the file is advisory — exit must not fail on it */
         }
       };
-      process.once("SIGINT", unlinkOnce);
-      process.once("SIGTERM", unlinkOnce);
-      process.once("exit", unlinkOnce);
+      // Signal handlers MUST NOT absorb termination: registering any listener disables Node's
+      // default kill, so clean up and RE-RAISE — by then every `once` handler (scheduler stop,
+      // tunnel close) has run and the re-raised signal hits the default action. Without this, the
+      // first Ctrl+C would leave the serve alive minus its control.json, and dev's watch restart
+      // (SIGTERM → wait for exit → respawn) would hang on a worker that never exits.
+      const unlinkAndReraise = (signal: NodeJS.Signals) => (): void => {
+        unlink();
+        process.kill(process.pid, signal);
+      };
+      process.once("SIGINT", unlinkAndReraise("SIGINT"));
+      process.once("SIGTERM", unlinkAndReraise("SIGTERM"));
+      process.once("exit", unlink);
     },
   };
 }
