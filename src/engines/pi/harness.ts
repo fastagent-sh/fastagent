@@ -135,17 +135,54 @@ const ALL_THINKING_LEVELS = {
 } satisfies Record<ThinkingLevel, true>;
 export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set(Object.keys(ALL_THINKING_LEVELS) as ThinkingLevel[]);
 
+/** The shape both override consumers walk — a session entry, structurally. */
+export interface OverrideEntryLike {
+  type: string;
+  provider?: string;
+  modelId?: string;
+  thinkingLevel?: string;
+}
+
+/**
+ * The session's durable override FACTS — the ONE walk both surfaces consume (`state()` reports the
+ * recorded truth; `resolveHarnessOverrides` below applies registry/scale fallbacks on top). The
+ * LAST entry of each kind wins, and a malformed record reads as ABSENT for that kind — never
+ * skipped over to an earlier record: the reporting surface and the execution surface must agree on
+ * which record is "the" override.
+ */
+export function lastOverrideEntries(entries: OverrideEntryLike[]): {
+  model?: { provider: string; modelId: string };
+  thinkingLevel?: string;
+} {
+  let model: { provider: string; modelId: string } | undefined;
+  let modelSeen = false;
+  let thinkingLevel: string | undefined;
+  let thinkingSeen = false;
+  for (let i = entries.length - 1; i >= 0 && !(modelSeen && thinkingSeen); i--) {
+    const e = entries[i];
+    if (!modelSeen && e?.type === "model_change") {
+      modelSeen = true;
+      if (e.provider !== undefined && e.modelId !== undefined) model = { provider: e.provider, modelId: e.modelId };
+    }
+    if (!thinkingSeen && e?.type === "thinking_level_change") {
+      thinkingSeen = true;
+      if (e.thinkingLevel !== undefined) thinkingLevel = e.thinkingLevel;
+    }
+  }
+  return { model, thinkingLevel };
+}
+
 /**
  * Resolve the session's model/thinking OVERRIDES for a fresh harness — same shape as the
  * active-tools resolve above: pi writes `model_change`/`thinking_level_change` entries on explicit
  * setModel/setThinkingLevel (the control plane's `set_model`/`set_thinking` append them directly)
- * but a fresh harness never reads them back. The LAST entry of each kind wins; absent → the
- * assembly default. A recorded model no longer in this deployment's registry falls back to the
- * default with a deduped warn (fail visibly without bricking the session — the conversation must
- * survive a registry change across deploys); an unknown thinking level likewise.
+ * but a fresh harness never reads them back. Override facts come from {@link lastOverrideEntries};
+ * this adds the EXECUTION fallbacks: a recorded model no longer in this deployment's registry falls
+ * back to the default with a deduped warn (fail visibly without bricking the session — the
+ * conversation must survive a registry change across deploys); an unknown thinking level likewise.
  */
 export function resolveHarnessOverrides(
-  entries: { type: string; provider?: string; modelId?: string; thinkingLevel?: string }[],
+  entries: OverrideEntryLike[],
   models: Models,
   defaults: { model: AnyModel; thinkingLevel: ThinkingLevel },
   sessionId: string,
@@ -157,31 +194,26 @@ export function resolveHarnessOverrides(
     warnedRestores.add(key);
     emit(message);
   };
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i];
-    if (e?.type !== "model_change") continue;
-    const recorded = e.provider !== undefined && e.modelId !== undefined && models.getModel(e.provider, e.modelId);
-    if (recorded) model = recorded as AnyModel;
+  const recorded = lastOverrideEntries(entries);
+  if (recorded.model) {
+    const found = models.getModel(recorded.model.provider, recorded.model.modelId);
+    if (found) model = found as AnyModel;
     else {
       warnOnce(
-        `${sessionId}\u0000model\u0000${e.provider}/${e.modelId}`,
-        `[fastagent] session ${sessionId}: recorded model override ${e.provider}/${e.modelId} is not in this deployment's registry — using the configured default`,
+        `${sessionId}\u0000model\u0000${recorded.model.provider}/${recorded.model.modelId}`,
+        `[fastagent] session ${sessionId}: recorded model override ${recorded.model.provider}/${recorded.model.modelId} is not in this deployment's registry — using the configured default`,
       );
     }
-    break;
   }
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i];
-    if (e?.type !== "thinking_level_change") continue;
-    if (e.thinkingLevel !== undefined && THINKING_LEVELS.has(e.thinkingLevel as ThinkingLevel)) {
-      thinkingLevel = e.thinkingLevel as ThinkingLevel;
+  if (recorded.thinkingLevel !== undefined) {
+    if (THINKING_LEVELS.has(recorded.thinkingLevel as ThinkingLevel)) {
+      thinkingLevel = recorded.thinkingLevel as ThinkingLevel;
     } else {
       warnOnce(
-        `${sessionId}\u0000thinking\u0000${e.thinkingLevel}`,
-        `[fastagent] session ${sessionId}: recorded thinking level "${e.thinkingLevel}" is unknown — using the configured default`,
+        `${sessionId}\u0000thinking\u0000${recorded.thinkingLevel}`,
+        `[fastagent] session ${sessionId}: recorded thinking level "${recorded.thinkingLevel}" is unknown — using the configured default`,
       );
     }
-    break;
   }
   return { model, thinkingLevel };
 }

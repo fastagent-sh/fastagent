@@ -32,7 +32,7 @@ import {
 } from "../../session.ts";
 import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
-import { type PiHarnessFactory, THINKING_LEVELS } from "./harness.ts";
+import { type PiHarnessFactory, THINKING_LEVELS, lastOverrideEntries } from "./harness.ts";
 import { log } from "../../log.ts";
 import type { PiSessionReader } from "./sessions.ts";
 
@@ -197,27 +197,17 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       const run = active.get(session);
       const opened = await sessions.openIfExists(session);
       const leafEntryId = opened ? ((await opened.getLeafId()) ?? undefined) : undefined;
-      // The durable overrides (set_model / set_thinking): the LAST record of each kind — what a
-      // reconnecting client needs without scanning entries itself. Reported as recorded, even if
-      // the current registry lacks the model (state reports session truth; the harness resolve
-      // owns the execution fallback).
+      // The durable overrides (set_model / set_thinking), via the SAME walk the harness resolve
+      // uses (lastOverrideEntries) — one physical implementation, so the reporting surface and the
+      // execution surface can never disagree on which record is "the" override. Reported as
+      // recorded, even if the current registry lacks the model (state reports session truth; the
+      // harness resolve owns the execution fallback).
       let model: string | undefined;
       let thinkingLevel: string | undefined;
       if (opened) {
-        const entries = await opened.getEntries();
-        for (let i = entries.length - 1; i >= 0; i--) {
-          const e = entries[i] as { type: string; provider?: string; modelId?: string; thinkingLevel?: string };
-          // Same malformed-entry guard as resolveHarnessOverrides: a broken record reads as absent
-          // on BOTH surfaces — state() must not report "undefined/undefined" while the resolve
-          // falls back to the default.
-          if (model === undefined && e.type === "model_change" && e.provider !== undefined && e.modelId !== undefined) {
-            model = `${e.provider}/${e.modelId}`;
-          }
-          if (thinkingLevel === undefined && e.type === "thinking_level_change" && e.thinkingLevel !== undefined) {
-            thinkingLevel = e.thinkingLevel;
-          }
-          if (model !== undefined && thinkingLevel !== undefined) break;
-        }
+        const recorded = lastOverrideEntries((await opened.getEntries()) as Parameters<typeof lastOverrideEntries>[0]);
+        if (recorded.model) model = `${recorded.model.provider}/${recorded.model.modelId}`;
+        thinkingLevel = recorded.thinkingLevel;
       }
       return {
         status: run ? "running" : compacting.has(session) ? "compacting" : "idle",

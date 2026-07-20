@@ -746,6 +746,24 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(bad.thinkingLevel).toBe("medium");
   });
 
+  it("a malformed override record reads as ABSENT on both surfaces — never skipped over", async () => {
+    const { faux, models } = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
+    const fallback = {
+      model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>,
+      thinkingLevel: "medium" as const,
+    };
+    const entries = [
+      { type: "model_change", provider: faux.provider.id, modelId: "faux-b" }, // an earlier, VALID override
+      { type: "model_change" }, // the LAST record is malformed
+    ];
+    // Execution surface: malformed = absent → the default, NOT the earlier valid record.
+    const resolved = resolveHarnessOverrides(entries, models, fallback, "sMal");
+    expect(resolved.model).toBe(fallback.model);
+    // Fact surface agrees: no override reported.
+    const { lastOverrideEntries } = await import("../src/engines/pi/harness.ts");
+    expect(lastOverrideEntries(entries).model).toBeUndefined();
+  });
+
   it("set_model rejects an unknown spec before acceptance (invalid_command)", async () => {
     const { control } = makeBoundary([]);
     const result = await control.dispatch("sB2", { type: "set_model", model: "ghost/model" });
