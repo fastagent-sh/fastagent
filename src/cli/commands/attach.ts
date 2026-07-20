@@ -15,6 +15,7 @@ import { createInterface } from "node:readline";
 import { loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../engines/pi/config.ts";
 import { log, setLogLevel } from "../../log.ts";
+import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import { ControlRequestError, connectAgent, connectSessionControl } from "../../session-remote.ts";
 import type { SessionControl, SessionEntry, SessionEvent } from "../../session.ts";
 import { failStartup } from "../fail.ts";
@@ -155,8 +156,9 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     let sawBusy = false;
     for await (const e of remoteAgent.invoke({ session: sessionArg }, { text })) {
       if (e.type !== "failed") continue;
-      if (e.code === "session_busy") sawBusy = true;
-      else console.log(`[prompt failed: ${e.details}]`);
+      if (e.code === SESSION_BUSY_CODE) sawBusy = true;
+      else if (e.code !== ABORTED_CODE) console.log(`[prompt failed: ${e.details}]`);
+      // ABORTED_CODE: the user's own /abort — a deliberate outcome the settled line already reports.
     }
     if (sawBusy) console.log("[a run started in the meantime — type again to steer it]");
   };

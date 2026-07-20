@@ -10,6 +10,7 @@ export default {
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
   http: { port: 8787 },
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
+  // sessionControl: true, // serve /control/* for remote observation + steering (fastagent attach / Web panel)
   //                     // ("check the deploy in 10 min"). Cron jobs need no opt-in — drop a schedules/<name>.ts.
   // deploy: what the agent needs on the box (so `fastagent deploy` doesn't need a hand-written Dockerfile
   // or hand-set host variables). Uncomment as needed:
