@@ -968,8 +968,9 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sB9", { type: "abort" })).toEqual({ ok: true });
     await watching;
     expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
-    const closed = seen.at(-1)?.data as { error?: string };
-    expect(closed.error).toBeTruthy(); // interrupted ⇒ finished{error}, the bounds contract holds
+    // A deliberate stop reads as aborted, NOT error — the same vocabulary split as
+    // run_settled{status: "aborted"}; a client's own abort must not render as a failure.
+    expect(seen.at(-1)?.data).toEqual({ aborted: true });
     // Converged: lease free, status recovered, nothing stuck.
     expect((await control.state("sB9")).status).toBe("idle");
     expect(await control.dispatch("sB9", { type: "set_thinking", level: "low" })).toEqual({ ok: true });

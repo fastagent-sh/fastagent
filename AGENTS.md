@@ -26,10 +26,12 @@ src/
 ├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
 ├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
 ├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)
-├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), shared.ts/serve.ts (cross-command helpers; process side effects live in the command modules), fail.ts, commands/ (one module per command)
+├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), shared.ts/serve.ts (cross-command helpers incl. mountSessionControl — per-boot token + control.json discovery file; process side effects live in the command modules), fail.ts, commands/ (one module per command)
 ├── invoke-stream.ts, cli-models.ts, cli-auth.ts, cli-add-feishu.ts # command rendering layers (`invoke` stream → exit code, `models`/auth-report output, `add feishu|lark` app onboarding)
 ├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
 ├── log.ts                   # leveled logging singleton (dev=debug, start=info)
+├── session.ts               # engine-neutral session-control contract (SessionControl: state/entries/events + dispatch, error codes)
+├── session-remote.ts        # remote clients over /control/*: connectSessionControl (control plane) + connectAgent (data plane)
 ├── observe.ts               # turn-trace logging around an Agent
 ├── tunnel.ts                # `--tunnel`: cloudflared + per-channel webhook dispatch
 ├── dev-supervisor.ts        # `dev` supervisor: restart on code-input edits (definition is live-read per invoke)
@@ -42,6 +44,7 @@ src/
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
+│   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
 │   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + feishu)
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
@@ -96,6 +99,8 @@ src/
 └── engines/pi/              # the pi reference implementation
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
     ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
+    ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
+    ├── session-builder.ts   # definition-aware session builder: workspace assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
     ├── workspace.ts         # shared opener: workspace → agent for dev/start/invoke
     ├── chat.ts              # `chat` channel: drive pi's interactive TUI with the assembled agent
     ├── tool.ts              # defineTool (Zod, incl. deferred: true) + tools/ filesystem discovery

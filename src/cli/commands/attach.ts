@@ -70,7 +70,8 @@ function render(event: SessionEvent): string | undefined {
     case "compaction_started":
       return "[compaction started]";
     case "compaction_finished":
-      return `[compaction ${d.error ? `FAILED: ${String(d.error)}` : "done"}]`;
+      // aborted is a deliberate stop (this attach's /abort or another client's) — not a failure.
+      return `[compaction ${d.aborted ? "aborted" : d.error ? `FAILED: ${String(d.error)}` : "done"}]`;
     default:
       return `[${event.type}]`;
   }

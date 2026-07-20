@@ -516,7 +516,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             compacting.set(session, door); // admission: from here `abort` reaches the model call
             emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
             void (async () => {
-              let outcome: { summary: string } | { error: string };
+              let outcome: { summary: string } | { error: string } | { aborted: true };
               try {
                 const record = harnessSession(harness);
                 if (!record) throw new Error("harness has no bound session (factory invariant broken)");
@@ -540,7 +540,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 );
                 outcome = { summary: done.value.summary };
               } catch (error) {
-                outcome = { error: String(error) };
+                // A deliberate stop is not a failure — run/compaction symmetry with
+                // run_settled{aborted}: the door's signal is the classification, same discipline
+                // as run abort attribution (a racing real failure still reads as aborted — the
+                // intent was live while the work resolved).
+                outcome = door.signal.aborted ? { aborted: true } : { error: String(error) };
               }
               try {
                 await harness.abort(); // teardown — fresh-harness discipline

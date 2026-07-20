@@ -190,10 +190,15 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
 export type StateChangedEvent = SessionEvent<"state_changed", { model?: string; thinkingLevel?: string }>;
 
 /** Manual compaction bounds (L2): every `compaction_started` is closed by exactly one
- *  `compaction_finished` — `summary` on success, `error` on failure (nothing durable landed).
- *  Automatic overflow compaction stays inside its run's activity window and does not emit these. */
+ *  `compaction_finished` — `summary` on success, `error` on failure, `aborted: true` on a
+ *  deliberate stop (run/compaction symmetry with `run_settled{status: "aborted"}`: a client's own
+ *  abort is not a failure). In the failure and aborted cases nothing durable landed. Automatic
+ *  overflow compaction stays inside its run's activity window and does not emit these. */
 export type CompactionStartedEvent = SessionEvent<"compaction_started", Record<never, never>>;
-export type CompactionFinishedEvent = SessionEvent<"compaction_finished", { summary?: string; error?: string }>;
+export type CompactionFinishedEvent = SessionEvent<
+  "compaction_finished",
+  { summary?: string; error?: string; aborted?: boolean }
+>;
 
 /**
  * The serving process failed outside a normal run outcome (fail visibly). Emitted by TRANSPORT
