@@ -113,12 +113,11 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   if (remote && !(opts.url && opts.token)) {
     failStartup(new Error("--url and --token must be given together and non-empty"));
   }
-  let endpoint: { url: string; token: string };
-  try {
-    endpoint = remote ? { url: opts.url as string, token: opts.token as string } : discover(dir);
-  } catch (error) {
-    failStartup(error as Error); // a user-fixable startup problem: one line, not a stack trace
-  }
+  // For a discovered endpoint the FIRST read joins the startup budget below: the dev-watch
+  // restart window has two halves — control.json unlinked (not yet rewritten) and port not yet
+  // bound — and dying instantly on the first half would contradict the grace the second half gets.
+  let endpoint!: { url: string; token: string };
+  if (remote) endpoint = { url: opts.url as string, token: opts.token as string };
   const discovered = !remote;
   // The SAME patience the round loop applies, at startup: `attach` during a dev-watch restart's
   // 1–2s window (port not bound / control.json mid-rewrite) must wait it out, not exit with a
@@ -131,7 +130,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // port — and must exit with that fact, not burn a budget toward "unreachable". A changed or
   // unreadable file returns to the caller (reattach / budget decides).
   const exitIfLocal401Unchanged = (error: unknown): void => {
-    if (!isAuthError(error)) return;
+    if (!endpoint || !isAuthError(error)) return; // pre-first-discovery errors cannot be auth
     try {
       const fresh = discover(dir);
       if (fresh.url === endpoint.url && fresh.token === endpoint.token) {
@@ -154,6 +153,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     const startedAt = Date.now();
     for (;;) {
       try {
+        if (!endpoint) endpoint = discover(dir); // discovered: the first read shares the budget
         const connected = await connectSessionControl(endpoint);
         return { control: connected, state: await connected.state(sessionArg) };
       } catch (error) {
@@ -168,8 +168,8 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         if (Date.now() - startedAt >= STARTUP_GRACE_MS) {
           exitWith(
             new Error(
-              `${String(error)} — the serve is unreachable; it may be down, or <stateRoot>/control.json is stale. ` +
-                `Start (or restart) the serve and re-run attach.`,
+              `${String(error)} — the serve is unreachable; it may be down, not yet started, or ` +
+                `<stateRoot>/control.json is stale. Start (or restart) the serve and re-run attach.`,
             ),
           );
         }
