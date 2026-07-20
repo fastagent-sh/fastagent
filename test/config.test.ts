@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -41,6 +41,9 @@ describe("config: loadConfig rereads a config rewritten in-process (ESM cache-bu
     // cache-buster the second load returns the stale cached module and deploy's model-travel gate
     // contradicts the "saved model" line it just printed.
     await writeFile(path, 'export default {\n  model: "prov/m1",\n};\n');
+    // Push mtime past any fs timestamp granularity — the assertion targets the cache-bust, not the fs.
+    const t = new Date((await stat(path)).mtimeMs + 2000);
+    await utimes(path, t, t);
     expect((await loadConfig(dir)).config.model).toBe("prov/m1");
   });
 });

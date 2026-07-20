@@ -114,7 +114,9 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   try {
     // Cache-bust on file change: ESM `import()` caches by URL, so a config REWRITTEN in this process
     // (the first-run picker's write-back) would otherwise read back stale — deploy's model-travel gate
-    // then contradicts the "saved model" line it just printed. mtime keeps unchanged files cached.
+    // then contradicts the "saved model" line it just printed. mtime keeps unchanged files cached;
+    // its resolution is the ceiling — a rewrite within the same timestamp tick reads stale (fine for
+    // the write-back: sub-tick only on coarse-mtime filesystems, and the next process starts fresh).
     const url = pathToFileURL(path);
     url.searchParams.set("v", String(statSync(path).mtimeMs));
     mod = (await import(url.href)) as { default?: unknown };
