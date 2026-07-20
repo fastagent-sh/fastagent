@@ -22,7 +22,7 @@ Code truth is `src/`.
 ```
 src/
 ├── agent.ts                 # the Agent Handler contract (pure types, no engine import)
-├── collect.ts               # buffered consumption helper
+├── collect.ts               # caller-side stream helpers: collect (buffered consumption) + abortFirstIterator (shared cancellation protocol)
 ├── core.ts, pi.ts           # lightweight neutral subpath + pi reference-implementation subpath
 ├── index.ts                 # supported all-in-one public surface (re-exports core + pi)
 ├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)

@@ -23,6 +23,7 @@ import {
   type Scope,
   SESSION_BUSY_CODE,
 } from "../../agent.ts";
+import { abortFirstIterator } from "../../collect.ts";
 import type { RunSettledEvent, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
 import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
@@ -403,32 +404,19 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
   const { harnessFactory, lease = inProcessLease(), observer } = options;
 
   function invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-    // The cancellation DOOR: a generator suspended on a quiet stream (a tool mid-execution, no
-    // events flowing) parks inside an await — `gen.return()` queues behind that pending next()
-    // FOREVER (async-generator semantics), so a consumer's cancel would deadlock and the run would
-    // never be released (SPEC MUST 3). The wrapper's return() first aborts the engine work (which
-    // settles the run and releases the suspension), then delegates. The local for-await pattern
-    // never hit this (it breaks at a yield boundary); pull-driven consumers (the SSE handler's
-    // eager reads) do.
+    // The cancellation DOOR (SPEC MUST 3), via the shared abort-first protocol (see
+    // abortFirstIterator): cancel aborts the engine work, which settles the run and releases a
+    // generator suspended on a quiet stream (a tool mid-execution). The local for-await pattern
+    // never hit the underlying deadlock (it breaks at a yield boundary); pull-driven consumers
+    // (the SSE handler's eager reads) do.
     let externalCancel: (() => void) | undefined;
     const gen = turn(scope, prompt, (cancel) => {
       externalCancel = cancel;
     });
+    const iterator = abortFirstIterator(gen, () => externalCancel?.());
     return {
       [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
-        return {
-          next: () => gen.next(),
-          async return(value?: unknown) {
-            externalCancel?.();
-            await gen.return(value as never).catch(() => {});
-            return { done: true as const, value: undefined };
-          },
-          async throw(error?: unknown): Promise<IteratorResult<AgentEvent>> {
-            externalCancel?.();
-            await gen.return(undefined as never).catch(() => {});
-            throw error;
-          },
-        };
+        return iterator;
       },
     };
   }

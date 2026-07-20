@@ -248,7 +248,10 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         } else if (command.type === "steer" && result.error.code === NO_ACTIVE_RUN_CODE) {
           // The invoke stream attach holds IS this run's driver (design: disconnect = cancel), so
           // unlike channel-started runs, this one dies with the attach. Say so up front.
-          console.log("[no active run — starting one; detaching (Ctrl+C) will cancel it]");
+          // Intent, not fact: admission may still fail (session_busy — the lease could be held
+          // by a compaction or another client's run); startRun's own lines report the outcome,
+          // and promising "detaching will cancel it" for a run that never starts would be a lie.
+          console.log("[no active run — trying to start one; if it starts, detaching (Ctrl+C) cancels it]");
           void startRun(trimmed).catch((error) => console.log(`[prompt failed: ${String(error)}]`));
         } else {
           console.log(`[${command.type} rejected: ${result.error.code} — ${result.error.message}]`);

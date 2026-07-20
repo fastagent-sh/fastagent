@@ -15,6 +15,7 @@
  */
 import type { Agent, AgentEvent, Prompt, Scope } from "./agent.ts";
 import { SSE_HEARTBEAT_MS } from "./channels/http.ts";
+import { abortFirstIterator } from "./collect.ts";
 import type { WireEvent } from "./channels/control.ts";
 
 /** Dead-connection watchdog for SSE reads: the server heartbeats every SSE_HEARTBEAT_MS, so this
@@ -192,23 +193,9 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
       return {
         [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
           const abort = new AbortController();
-          const gen = openStream(abort);
-          return {
-            next: () => gen.next(),
-            async return(value?: unknown) {
-              abort.abort(); // unblocks a generator suspended on the stream read
-              await gen.return(value as never).catch(() => {});
-              return { done: true as const, value: undefined };
-            },
-            async throw(error?: unknown): Promise<IteratorResult<SessionEvent>> {
-              // throw = terminate with the caller's error: tear the connection down exactly like
-              // return() (abort first — gen.throw would queue behind a quiet read), then rethrow
-              // deterministically instead of poking a completed generator.
-              abort.abort();
-              await gen.return(undefined as never).catch(() => {});
-              throw error;
-            },
-          };
+          // Abort-first cancellation (see abortFirstIterator): aborting the connection unblocks a
+          // generator suspended on a quiet stream read.
+          return abortFirstIterator(openStream(abort), () => abort.abort());
         },
       };
     },
@@ -333,22 +320,12 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
         })();
       // ONE stream per invoke, like a local async generator (which is its own iterator): a second
       // iteration must never re-POST — that would silently start a second run with the same prompt.
-      const gen = openStream();
+      // Abort-first cancellation (see abortFirstIterator): disconnect = cancel the run, even
+      // while suspended on a quiet read.
+      const iterator = abortFirstIterator(openStream(), () => abort.abort());
       return {
         [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
-          return {
-            next: () => gen.next(),
-            async return(value?: unknown) {
-              abort.abort(); // disconnect = cancel the run, even while suspended on a quiet read
-              await gen.return(value as never).catch(() => {});
-              return { done: true as const, value: undefined };
-            },
-            async throw(error?: unknown): Promise<IteratorResult<AgentEvent>> {
-              abort.abort();
-              await gen.return(undefined as never).catch(() => {});
-              throw error;
-            },
-          };
+          return iterator;
         },
       };
     },
