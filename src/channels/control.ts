@@ -154,7 +154,9 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
 
     "POST /control/dispatch": guard(async (req) => {
       const body = await readBodyCapped(req, DISPATCH_BODY_LIMIT);
-      if ("tooLarge" in body) return text("body too large\n", 413);
+      // The 413 names the ceiling: the docs promise images on this plane, and an unexplained
+      // rejection would send a client author hunting everywhere but the cap.
+      if ("tooLarge" in body) return text("body too large (limit 1 MiB — images count base64-inflated)\n", 413);
       let parsed: { session?: unknown; command?: unknown };
       try {
         parsed = JSON.parse(body.text) as typeof parsed;

@@ -475,7 +475,8 @@ The DATA plane travels the same wire: `connectAgent({ url, token })` returns an 
 paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
 same two contracts local code uses. Disconnecting the invoke stream cancels the run. The invoke wire is
 text-only for now (images fail visibly there); `steer`/`follow_up` via `dispatch` carry full
-Prompts, images included.
+Prompts, images included — within the dispatch body cap (1 MiB, with base64 inflation counted;
+oversized bodies get a 413 naming the limit).
 
 The transport envelope (`epoch`/`seq` per SSE message) is consumed inside the client: a sequence
 gap or a server restart ends the events iterator, and the consumer runs the standard reconnect
