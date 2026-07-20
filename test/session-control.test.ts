@@ -595,6 +595,19 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(drained).toBeLessThanOrEqual(10_000);
   }, 10_000);
 
+  it("concurrent next() calls on one events subscription both settle", async () => {
+    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const iterator = control.events("sConc")[Symbol.asyncIterator]();
+    const n1 = iterator.next(); // registers synchronously, then awaits
+    const n2 = iterator.next(); // a second pending pull — must not overwrite the first's waiter
+    observer("sConc", { type: "run_started", timestamp: 0, runId: "rA", data: {} });
+    observer("sConc", { type: "run_settled", timestamp: 1, runId: "rA", data: { status: "completed" } });
+    const [r1, r2] = await Promise.all([n1, n2]); // the old bug: one of these hung forever
+    const types = [r1, r2].map((r) => (r.done ? "done" : r.value.type)).sort();
+    expect(types).toEqual(["run_settled", "run_started"].sort());
+    await iterator.return?.(undefined);
+  }, 5_000);
+
   it("the hub's own last line: an unknown command type (in-process misuse) answers invalid_command", async () => {
     // The transport's parseWireCommand intercepts wire input first; this default branch is the
     // LAST line for in-process callers casting past the union — it must answer, never undefined.

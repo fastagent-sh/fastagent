@@ -10,8 +10,7 @@
  * would otherwise be invisible) → drain live.
  */
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../engines/pi/config.ts";

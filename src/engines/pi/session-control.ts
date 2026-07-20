@@ -104,8 +104,18 @@ const SUBSCRIBER_BUFFER_CAP = 10_000;
  *  alone (it queues behind the never-settling await), so teardown needs this explicit door. */
 class Subscriber {
   private buffer: SessionEvent[] = [];
-  private wake?: () => void;
+  // A QUEUE of waiters, not a single slot: concurrent next() calls are contract-legal (any wrapper
+  // may poll twice), and a single `wake` field would let the second await overwrite the first's
+  // resolver — hanging the first next() forever. Every wake flushes all waiters; each re-checks the
+  // buffer and re-queues if another consumer won the event.
+  private wakes: (() => void)[] = [];
   private closed = false;
+
+  private flush(): void {
+    const wakes = this.wakes;
+    this.wakes = [];
+    for (const wake of wakes) wake();
+  }
 
   push(event: SessionEvent): void {
     if (this.closed) return;
@@ -115,16 +125,12 @@ class Subscriber {
       return;
     }
     this.buffer.push(event);
-    const wake = this.wake;
-    this.wake = undefined;
-    wake?.();
+    this.flush();
   }
 
   close(): void {
     this.closed = true;
-    const wake = this.wake;
-    this.wake = undefined;
-    wake?.();
+    this.flush();
   }
 
   async next(): Promise<IteratorResult<SessionEvent>> {
@@ -132,7 +138,7 @@ class Subscriber {
       if (this.buffer.length > 0) return { done: false, value: this.buffer.shift() as SessionEvent };
       if (this.closed) return { done: true, value: undefined };
       await new Promise<void>((resolve) => {
-        this.wake = resolve;
+        this.wakes.push(resolve);
       });
     }
   }
