@@ -16,6 +16,7 @@ import { loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../engines/pi/config.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
+import { NO_ACTIVE_RUN_CODE } from "../../session.ts";
 import { ControlRequestError, connectAgent, connectSessionControl } from "../../session-remote.ts";
 import type { SessionControl, SessionEntry, SessionEvent, SessionState } from "../../session.ts";
 import { failStartup } from "../fail.ts";
@@ -242,7 +243,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       (result) => {
         if (result.ok) {
           console.log(`[${command.type} accepted]`);
-        } else if (command.type === "steer" && result.error.code === "no_active_run") {
+        } else if (command.type === "steer" && result.error.code === NO_ACTIVE_RUN_CODE) {
           // The invoke stream attach holds IS this run's driver (design: disconnect = cancel), so
           // unlike channel-started runs, this one dies with the attach. Say so up front.
           console.log("[no active run — starting one; detaching (Ctrl+C) will cancel it]");

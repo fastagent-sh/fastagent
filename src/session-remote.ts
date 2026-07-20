@@ -80,13 +80,14 @@ export async function connectSessionControl(options: ConnectSessionControlOption
   // tunnel) would silently defeat — a hung state()/entries() ticks nothing. The SSE stream stays
   // timeout-free (quiet is normal there; heartbeats cover proxy idling).
   const REQUEST_TIMEOUT_MS = 10_000;
-  // dispatch is the ONE Prompt-bearing control call (steer/follow_up may carry up to the 1 MiB
-  // body cap in base64 images) — a slow link legitimately needs longer than the black-hole
-  // detector's 10s to upload it, and cutting a healthy upload would be indistinguishable from a
-  // dead endpoint.
-  const DISPATCH_TIMEOUT_MS = 60_000;
-  const get = async <T>(path: string): Promise<T> => {
-    const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  // The PAYLOAD-bearing calls get a longer budget than the black-hole detector's 10s — in both
+  // directions: dispatch may UPLOAD up to the 1 MiB body cap (base64 images in steer/follow_up),
+  // and entries may DOWNLOAD a long session's full record (a cursor-less first backfill) — a slow
+  // link legitimately needs longer, and cutting a healthy transfer would be indistinguishable from
+  // a dead endpoint. capabilities/state stay on the short detector: they are small by contract.
+  const PAYLOAD_TIMEOUT_MS = 60_000;
+  const get = async <T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> => {
+    const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) throw new ControlRequestError(res.status, await res.text());
     return (await res.json()) as T;
   };
@@ -103,6 +104,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
         `/control/entries?session=${encodeURIComponent(session)}${
           opts?.since !== undefined ? `&since=${encodeURIComponent(opts.since)}` : ""
         }`,
+        PAYLOAD_TIMEOUT_MS, // the download-direction payload call — see the constant's note
       ),
 
     async dispatch(session, command) {
@@ -110,7 +112,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
         method: "POST",
         headers: { ...headers, "content-type": "application/json" },
         body: JSON.stringify({ session, command }),
-        signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(PAYLOAD_TIMEOUT_MS),
       });
       if (!res.ok) throw new ControlRequestError(res.status, await res.text());
       return (await res.json()) as Awaited<ReturnType<SessionControl["dispatch"]>>;
