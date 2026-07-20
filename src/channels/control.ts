@@ -21,7 +21,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import type { Routes } from "../host/node.ts";
 import { readBodyCapped } from "./body.ts";
-import { SSE_HEARTBEAT_MS, createInvokeHandler } from "./http.ts";
+import { MAX_BODY_BYTES, SSE_HEARTBEAT_MS, createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
 
 /** The SSE payload: one control-plane event in its transport envelope. */
@@ -38,9 +38,9 @@ export interface WireEvent {
 const json = (value: unknown, status = 200): Response =>
   new Response(`${JSON.stringify(value)}\n`, { status, headers: { "content-type": "application/json" } });
 
-/** Same cap as the invoke channel (1 MiB): commands carry Prompts, which may ride base64 images —
- *  the two Prompt-bearing wire surfaces reject oversized bodies at the same line. */
-const DISPATCH_BODY_LIMIT = 1 << 20;
+// ONE constant for every Prompt-bearing wire surface (imported from the invoke channel — the two
+// caps cannot drift apart): commands carry Prompts, which may ride base64 images.
+const DISPATCH_BODY_LIMIT = MAX_BODY_BYTES;
 
 /**
  * Parse-don't-validate at the wire: a remote client can send any JSON, and the hub's inner layers

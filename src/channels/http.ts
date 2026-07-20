@@ -15,8 +15,9 @@ import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { text, textHeaders } from "./respond.ts";
 
-/** Request body cap (1 MiB). */
-const MAX_BODY_BYTES = 1 << 20;
+/** Request body cap (1 MiB) — shared by every Prompt-bearing wire surface (the control plane's
+ *  dispatch imports it), so the two caps cannot drift apart. */
+export const MAX_BODY_BYTES = 1 << 20;
 
 const encoder = new TextEncoder();
 
