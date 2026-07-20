@@ -8,9 +8,11 @@
  * stays in the session repository (read via {@link PiSessionReader}), live truth in the events the
  * data plane emits, modulation in the controls the data plane registers.
  *
- * Phase 2b (boundary mutations: compact/set_model/set_thinking) is still rejected before acceptance
- * with `unsupported_capability` — a client gating on `capabilities()` never sends them.
+ * Boundary mutations (Phase 2b: compact/set_model/set_thinking) take the same lease as runs;
+ * without boundary wiring they are rejected before acceptance with `unsupported_capability` — a
+ * client gating on `capabilities()` never sends them.
  */
+import { DEFAULT_COMPACTION_SETTINGS, compact, prepareCompaction } from "@earendil-works/pi-agent-core";
 import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import type { Models } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
@@ -32,7 +34,7 @@ import {
 } from "../../session.ts";
 import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
-import { type PiHarnessFactory, THINKING_LEVELS, lastOverrideEntries } from "./harness.ts";
+import { type PiHarnessFactory, THINKING_LEVELS, harnessSession, lastOverrideEntries } from "./harness.ts";
 import { log } from "../../log.ts";
 import type { PiSessionReader } from "./sessions.ts";
 
@@ -204,8 +206,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     { runId: string; controls?: RunControls; pending: { steering: number; followUp: number } }
   >();
   const subscribers = new Map<string, Set<Subscriber>>();
-  /** Sessions with a manual compaction in flight — reported as `status: "compacting"`. */
-  const compacting = new Set<string>();
+  /** Sessions with a manual compaction in flight — reported as `status: "compacting"`, keyed to
+   *  the summarization's AbortController so `abort` has a door into it (run/compaction symmetry:
+   *  both are model calls a client must be able to stop). Set at ADMISSION, cleared by the
+   *  detached task before `compaction_finished`. */
+  const compacting = new Map<string, AbortController>();
 
   /** Fan an event out to this session's subscribers — shared by the observer (run events) and the
    *  boundary mutations (session-level events, no runId). */
@@ -353,6 +358,15 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         case "abort": {
           const run = active.get(session);
           if (!run) {
+            // Run/compaction symmetry: an in-flight manual compaction is a model call too, and
+            // `abort` is its only door — interrupting the harness converges through the detached
+            // task's catch into `compaction_finished{error}` with the lease released; answering
+            // no_active_run against a state() that says "compacting" would be a lie.
+            const comp = command.type === "abort" ? compacting.get(session) : undefined;
+            if (comp) {
+              comp.abort();
+              return { ok: true }; // no runId — the outcome travels as compaction_finished{error}
+            }
             // Rejected BEFORE acceptance: no run exists, nothing happened. retryable: false —
             // as-is retry fails again; re-dispatch after state() shows an active run.
             return {
@@ -482,23 +496,49 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // The dispatch answers once the work is ADMITTED (lease held, harness built); the
             // outcome travels as compaction_finished{summary|error}, the bounds contract watchers
             // already rely on. Pre-acceptance failures (the harness build) still reject here.
-            compacting.add(session);
+            // The harness build stays the admission step: it is the ONE canonical resolution of
+            // session overrides + auth (resolveHarnessOverrides inside the factory). The
+            // summarization itself runs through pi's compaction primitives instead of
+            // harness.compact() for exactly one reason: the harness surface passes no signal to
+            // its model call, so an in-flight compaction would be uncancellable — and `abort`
+            // needs a real door (run/compaction symmetry).
             let harness: Awaited<ReturnType<typeof b.harnessFactory>>;
             try {
               harness = await b.harnessFactory(session);
             } catch (error) {
-              compacting.delete(session);
               release();
               return {
                 ok: false,
                 error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
               };
             }
+            const door = new AbortController();
+            compacting.set(session, door); // admission: from here `abort` reaches the model call
             emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
             void (async () => {
               let outcome: { summary: string } | { error: string };
               try {
-                outcome = { summary: (await harness.compact(command.instructions)).summary };
+                const record = harnessSession(harness);
+                if (!record) throw new Error("harness has no bound session (factory invariant broken)");
+                const prep = prepareCompaction(await record.getBranch(), DEFAULT_COMPACTION_SETTINGS);
+                if (!prep.ok) throw prep.error;
+                if (!prep.value) throw new Error("nothing to compact");
+                const done = await compact(
+                  prep.value,
+                  b.models,
+                  harness.getModel(),
+                  command.instructions,
+                  door.signal,
+                  harness.getThinkingLevel(),
+                );
+                if (!done.ok) throw done.error;
+                await record.appendCompaction(
+                  done.value.summary,
+                  done.value.firstKeptEntryId,
+                  done.value.tokensBefore,
+                  done.value.details,
+                );
+                outcome = { summary: done.value.summary };
               } catch (error) {
                 outcome = { error: String(error) };
               }

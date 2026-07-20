@@ -319,6 +319,53 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("quiet-but-alive streams EMIT heartbeats on both SSE routes — the watchdog's other half", async () => {
+    // The client watchdog (90s no bytes → kill) assumes the server pings every 30s; a regression
+    // on the emission side would misdiagnose every long tool call as a dead connection. Handlers
+    // are called directly (no socket) so fake timers drive the interval.
+    const fakeTimers = await import("vitest").then((m) => m.vi);
+    const hang = () => new Promise<never>(() => {}); // a stream with no events — quiet, alive
+    const quietControl = {
+      events: () => ({ [Symbol.asyncIterator]: () => ({ next: hang, return: async () => ({ done: true }) }) }),
+    } as never;
+    const quietAgent = {
+      invoke: () => ({ [Symbol.asyncIterator]: () => ({ next: hang, return: async () => ({ done: true }) }) }),
+    } as never;
+    const routes = controlRoutes(quietControl, { token: TOKEN, agent: quietAgent });
+    const auth = { authorization: `Bearer ${TOKEN}` };
+    fakeTimers.useFakeTimers();
+    try {
+      const eventsRoute = routes["GET /control/events"];
+      const invokeRoute = routes["POST /control/invoke"];
+      if (!eventsRoute || !invokeRoute) throw new Error("routes missing");
+      for (const [name, res] of [
+        ["events", await eventsRoute(new Request("http://x/control/events?session=s", { headers: auth }))],
+        [
+          "invoke",
+          await invokeRoute(
+            new Request("http://x/control/invoke", {
+              method: "POST",
+              headers: { ...auth, "content-type": "application/json" },
+              body: JSON.stringify({ session: "s", text: "hi" }),
+            }),
+          ),
+        ],
+      ] as const) {
+        const reader = (res as Response).body?.getReader();
+        if (!reader) throw new Error(`${name}: no body`);
+        const read = reader.read();
+        await fakeTimers.advanceTimersByTimeAsync(30_000);
+        const chunk = await read;
+        expect(new TextDecoder().decode(chunk.value)).toBe(": ping\n\n");
+        await reader.cancel();
+      }
+      // cancel() tears the intervals down — no timer may leak past the streams' death.
+      expect(fakeTimers.getTimerCount()).toBe(0);
+    } finally {
+      fakeTimers.useRealTimers();
+    }
+  });
+
   it("non-envelope stream data is protocol mismatch — thrown, not misdiagnosed as a gap", async () => {
     const makeFetch = (body: string) =>
       (async (input: string | URL | Request) => {

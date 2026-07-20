@@ -21,7 +21,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import type { Routes } from "../host/node.ts";
 import { readBodyCapped } from "./body.ts";
-import { MAX_BODY_BYTES, SSE_HEARTBEAT_MS, createInvokeHandler } from "./http.ts";
+import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";
 import { text } from "./respond.ts";
 
 /** The SSE payload: one control-plane event in its transport envelope. */
@@ -200,17 +200,11 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
       // process-killing unhandledRejection; awaiting `pending` at pull still surfaces the error.
       pending.catch(() => {});
       let seq = 0;
-      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      let stopHeartbeat = () => {};
       const encoder = new TextEncoder();
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
-          heartbeat = setInterval(() => {
-            try {
-              controller.enqueue(encoder.encode(": ping\n\n"));
-            } catch {
-              clearInterval(heartbeat);
-            }
-          }, SSE_HEARTBEAT_MS);
+          stopHeartbeat = sseHeartbeat(controller);
         },
         async pull(controller) {
           let next: IteratorResult<SessionEvent>;
@@ -220,14 +214,14 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
             // A rejecting implementation (the neutral contract permits it) must not leak its
             // subscription: an errored stream never gets cancel(), so the unsubscribe and the
             // heartbeat teardown happen HERE.
-            clearInterval(heartbeat);
+            stopHeartbeat();
             void iterator.return?.(undefined)?.catch?.(() => {});
             controller.error(error);
             return;
           }
           pending = undefined;
           if (next.done) {
-            clearInterval(heartbeat);
+            stopHeartbeat();
             controller.close();
             return;
           }
@@ -235,7 +229,7 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(wire)}\n\n`));
         },
         cancel() {
-          clearInterval(heartbeat);
+          stopHeartbeat();
           // Same neutral-contract defense as the pull error path: a rejecting return() on client
           // disconnect must not become a process-level unhandledRejection.
           void iterator.return?.(undefined)?.catch?.(() => {});

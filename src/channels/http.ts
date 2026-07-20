@@ -25,6 +25,22 @@ const encoder = new TextEncoder();
  *  it, and the remote client sizes its dead-connection watchdog as a multiple of it). */
 export const SSE_HEARTBEAT_MS = 30_000;
 
+/** The emitting half of the heartbeat contract (the client watchdog is the other): starts the
+ *  `: ping` comment interval on an SSE stream controller and returns its stop function — ONE
+ *  implementation for every SSE surface, so the emission side cannot regress on one route while
+ *  the shared client watchdog keeps assuming it. Self-stops if the controller is already closed. */
+export function sseHeartbeat(controller: ReadableStreamDefaultController<Uint8Array>): () => void {
+  const encoder = new TextEncoder();
+  const timer = setInterval(() => {
+    try {
+      controller.enqueue(encoder.encode(": ping\n\n"));
+    } catch {
+      clearInterval(timer);
+    }
+  }, SSE_HEARTBEAT_MS);
+  return () => clearInterval(timer);
+}
+
 /** A valid example request body for the invoke handler — lives HERE, next to the shape check it must
  *  satisfy, so the CLI's "try it" hint can't drift from the protocol. */
 export const INVOKE_EXAMPLE_BODY = '{"session":"dev","text":"hello"}';
@@ -58,28 +74,22 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
     // Heartbeats: a QUIET stream (a long tool call, no events) is normal here — remote consumers
     // distinguish "quiet but alive" from a dead connection by byte arrival, so silence must not
     // look identical to a black hole (SSE comments are ignored by spec-conforming parsers).
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let stopHeartbeat = () => {};
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        heartbeat = setInterval(() => {
-          try {
-            controller.enqueue(encoder.encode(": ping\n\n"));
-          } catch {
-            clearInterval(heartbeat);
-          }
-        }, SSE_HEARTBEAT_MS);
+        stopHeartbeat = sseHeartbeat(controller);
       },
       async pull(controller) {
         const { value, done } = await iterator.next();
         if (done) {
-          clearInterval(heartbeat);
+          stopHeartbeat();
           controller.close();
           return;
         }
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
       },
       async cancel() {
-        clearInterval(heartbeat);
+        stopHeartbeat();
         await iterator.return?.();
       },
     });

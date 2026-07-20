@@ -935,6 +935,46 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sB8", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
   });
 
+  it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {
+    // Both are model calls a client must be able to stop: `abort` is the door out of `compacting`.
+    const { agent, control } = makeBoundary([
+      fauxAssistantMessage("seed"),
+      (async (_c: unknown, o: { signal?: AbortSignal } | undefined) => {
+        // The summarization call hangs until aborted — the only way this test's compaction ends.
+        // Checked up front too: the abort may land BEFORE this factory runs, and an
+        // already-aborted signal never fires its "abort" event again.
+        await new Promise<never>((_resolve, reject) => {
+          const bail = () => reject(new Error("summarization aborted"));
+          if (o?.signal?.aborted) return bail();
+          o?.signal?.addEventListener("abort", bail, { once: true });
+        });
+        return fauxAssistantMessage("unreachable");
+      }) as never,
+    ]);
+    await drain(agent.invoke({ session: "sB9" }, { text: "hi" }));
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB9")) {
+        seen.push(ev);
+        if (ev.type === "compaction_finished") break;
+      }
+    })();
+    expect(await control.dispatch("sB9", { type: "compact" })).toEqual({ ok: true });
+    for (let i = 0; i < 100 && (await control.state("sB9")).status !== "compacting"; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    // The door: abort routes to the compaction's harness — answering no_active_run against a
+    // state() that says "compacting" would be a lie.
+    expect(await control.dispatch("sB9", { type: "abort" })).toEqual({ ok: true });
+    await watching;
+    expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
+    const closed = seen.at(-1)?.data as { error?: string };
+    expect(closed.error).toBeTruthy(); // interrupted ⇒ finished{error}, the bounds contract holds
+    // Converged: lease free, status recovered, nothing stuck.
+    expect((await control.state("sB9")).status).toBe("idle");
+    expect(await control.dispatch("sB9", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
+  });
+
   it("a failing compaction is ACCEPTED then closed with finished{error}; nothing durable, lease free", async () => {
     // ONE response seeds the conversation; the compaction's summarization call then finds the faux
     // queue empty and throws — the deterministic model-call failure, AFTER acceptance.

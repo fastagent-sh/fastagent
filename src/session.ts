@@ -45,8 +45,10 @@ export interface SessionCapabilities {
 export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
 
 /** Stable `SessionResult.error.code` for a run-modulating command (`steer`/`follow_up`/`abort`)
- *  dispatched while the session has no active run. `retryable: false` — re-dispatching as-is
- *  fails again; re-dispatch only after `state()` shows an active run. */
+ *  dispatched while the session has no active run — and, for `abort`, no in-flight manual
+ *  compaction either (`abort` is also the door out of a `compacting` state; the outcome then
+ *  travels as `compaction_finished{error}`). `retryable: false` — re-dispatching as-is fails
+ *  again; re-dispatch only after `state()` shows an active run. */
 export const NO_ACTIVE_RUN_CODE = "no_active_run";
 
 /** Stable `SessionResult.error.code` for a command whose PAYLOAD is invalid for this runtime — an
