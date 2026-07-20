@@ -100,6 +100,8 @@ export interface SessionState {
    *  compaction happens inside a run's activity window and reports as `running`. */
   status: "idle" | "running" | "compacting";
   activeRunId?: string;
+  /** The session's durable overrides (set_model / set_thinking), read from the record — so a
+   *  reconnecting client sees them without scanning entries. Absent = the assembly default. */
   model?: string;
   thinkingLevel?: string;
   pending: { steering: number; followUp: number };
@@ -177,10 +179,11 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
  *  between runs). */
 export type StateChangedEvent = SessionEvent<"state_changed", { model?: string; thinkingLevel?: string }>;
 
-/** Manual compaction bounds (L2). Automatic overflow compaction stays inside its run's activity
- *  window and does not emit these. */
+/** Manual compaction bounds (L2): every `compaction_started` is closed by exactly one
+ *  `compaction_finished` — `summary` on success, `error` on failure (nothing durable landed).
+ *  Automatic overflow compaction stays inside its run's activity window and does not emit these. */
 export type CompactionStartedEvent = SessionEvent<"compaction_started", Record<never, never>>;
-export type CompactionFinishedEvent = SessionEvent<"compaction_finished", { summary: string }>;
+export type CompactionFinishedEvent = SessionEvent<"compaction_finished", { summary?: string; error?: string }>;
 
 /**
  * The serving process failed outside a normal run outcome (fail visibly). Emitted by TRANSPORT

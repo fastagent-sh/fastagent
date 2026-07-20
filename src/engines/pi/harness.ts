@@ -119,8 +119,18 @@ const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
  */
 const warnedRestores = new Set<string>();
 
-/** pi's ThinkingLevel union as a checkable set — a session entry stores a plain string. */
-const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+/** pi's ThinkingLevel scale as a checkable set — THE single source (session entries store plain
+ *  strings; session-control's dispatch validation and capabilities derive from this too, so a new
+ *  pi level added here cannot leave the two sides disagreeing). */
+export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set<ThinkingLevel>([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 
 /**
  * Resolve the session's model/thinking OVERRIDES for a fresh harness — same shape as the

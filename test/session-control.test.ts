@@ -15,6 +15,7 @@ import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
 import { createPiAgentFromWorkspace } from "../src/engines/pi/workspace.ts";
 import {
+  BOUNDARY_COMMAND_FAILED_CODE,
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
   RUN_COMMAND_FAILED_CODE,
@@ -791,6 +792,46 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const kinds = (await control.entries("sB4")).entries.map((e) => e.kind);
     expect(kinds).toContain("compaction");
     expect((await control.state("sB4")).status).toBe("idle"); // lease released, not stuck compacting
+  });
+
+  it("a failing compaction is closed and non-durable: boundary_command_failed, finished{error}, clean state", async () => {
+    // ONE response seeds the conversation; the compaction's summarization call then finds the faux
+    // queue empty and throws — the deterministic model-call failure.
+    const { agent, control } = makeBoundary([fauxAssistantMessage("seed")]);
+    await drain(agent.invoke({ session: "sB6" }, { text: "hi" }));
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB6")) {
+        seen.push(ev);
+        if (ev.type === "compaction_finished") break; // bounds contract: failure must still close
+      }
+    })();
+    const result = await control.dispatch("sB6", { type: "compact" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
+      expect(result.error.retryable).toBe(true);
+    }
+    await watching;
+    expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
+    expect((seen.at(-1)?.data as { error?: string }).error).toBeTruthy();
+    // Nothing durable landed, and neither the lease nor the compacting flag is stuck.
+    const kinds = (await control.entries("sB6")).entries.map((e) => e.kind);
+    expect(kinds).not.toContain("compaction");
+    expect((await control.state("sB6")).status).toBe("idle");
+    const retry = await control.dispatch("sB6", { type: "set_thinking", level: "low" });
+    expect(retry.ok).toBe(true); // the lease was released
+  });
+
+  it("state() reports the durable overrides for a reconnecting client", async () => {
+    const { agent, control, spec } = makeBoundary([fauxAssistantMessage("ok")]);
+    await drain(agent.invoke({ session: "sB7" }, { text: "hi" }));
+    expect((await control.state("sB7")).model).toBeUndefined(); // no override → assembly default
+    await control.dispatch("sB7", { type: "set_model", model: spec });
+    await control.dispatch("sB7", { type: "set_thinking", level: "xhigh" });
+    const state = await control.state("sB7");
+    expect(state.model).toBe(spec);
+    expect(state.thinkingLevel).toBe("xhigh");
   });
 
   it("without boundary wiring the commands stay gated off and rejected", async () => {

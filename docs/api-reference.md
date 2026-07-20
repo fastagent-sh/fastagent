@@ -443,9 +443,9 @@ await control.dispatch("s1", { type: "compact", instructions: "keep the decision
 Overrides persist in the session record and every later turn's fresh harness applies them — on any
 serving path, channels included. Invalid payloads reject `invalid_command` before acceptance;
 `capabilities()` lists `allowedModels`/`allowedLevels`. Boundary commands require the wiring the
-workspace opener provides (`sessionControl: true`); an observation-only hub reports them off. Boundary mutations
-(`compact`/`set_model`/`set_thinking`) are not shipped yet: `capabilities()` reports them off and
-they reject with `unsupported_capability`.
+workspace opener provides (`sessionControl: true`); a hub without it reports them off and rejects
+with `unsupported_capability`.
+
 For workspace assembly the store lives inside the opener, so ask the opener to wire the hub:
 
 ```ts

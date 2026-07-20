@@ -31,12 +31,9 @@ import {
 } from "../../session.ts";
 import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
-import type { PiHarnessFactory } from "./harness.ts";
+import { type PiHarnessFactory, THINKING_LEVELS } from "./harness.ts";
 import { log } from "../../log.ts";
 import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
-
-/** pi's thinking scale, mirrored for capability reporting (pi clamps unsupported levels per model). */
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
@@ -188,7 +185,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         followUp: true,
         manualCompaction: !!b,
         modelSelection: b ? { allowedModels: listModels(b.models) } : false,
-        thinkingLevel: b ? { allowedLevels: [...THINKING_LEVELS] } : false,
+        thinkingLevel: b ? { allowedLevels: [...THINKING_LEVELS] as string[] } : false,
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: false,
       };
@@ -198,9 +195,26 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       const run = active.get(session);
       const opened = await sessions.openIfExists(session);
       const leafEntryId = opened ? ((await opened.getLeafId()) ?? undefined) : undefined;
+      // The durable overrides (set_model / set_thinking): the LAST record of each kind — what a
+      // reconnecting client needs without scanning entries itself. Reported as recorded, even if
+      // the current registry lacks the model (state reports session truth; the harness resolve
+      // owns the execution fallback).
+      let model: string | undefined;
+      let thinkingLevel: string | undefined;
+      if (opened) {
+        const entries = await opened.getEntries();
+        for (let i = entries.length - 1; i >= 0; i--) {
+          const e = entries[i] as { type: string; provider?: string; modelId?: string; thinkingLevel?: string };
+          if (model === undefined && e.type === "model_change") model = `${e.provider}/${e.modelId}`;
+          if (thinkingLevel === undefined && e.type === "thinking_level_change") thinkingLevel = e.thinkingLevel;
+          if (model !== undefined && thinkingLevel !== undefined) break;
+        }
+      }
       return {
         status: run ? "running" : compacting.has(session) ? "compacting" : "idle",
         ...(run ? { activeRunId: run.runId } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
         pending: run ? { ...run.pending } : { steering: 0, followUp: 0 },
         ...(leafEntryId ? { leafEntryId } : {}),
       };
@@ -328,7 +342,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               return { type: "state_changed", timestamp: Date.now(), data: { model: command.model } };
             };
           } else if (command.type === "set_thinking") {
-            if (!THINKING_LEVELS.includes(command.level)) {
+            if (!(THINKING_LEVELS as ReadonlySet<string>).has(command.level)) {
               return {
                 ok: false,
                 error: {
@@ -363,7 +377,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               compacting.add(session);
               fanOut(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
               // Compaction is a model call: build the session's full harness (the factory applies
-              // the session's own model/thinking overrides) and tear it down after.
+              // the session's own model/thinking overrides) and tear it down after. Every started
+              // is CLOSED: success → finished{summary}; failure → finished{error} (the bounds
+              // contract — an events-only watcher must never hang on an open compaction).
               const harness = await b.harnessFactory(session);
               try {
                 const result = await harness.compact(command.instructions);
@@ -372,6 +388,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                   timestamp: Date.now(),
                   data: { summary: result.summary },
                 });
+              } catch (error) {
+                fanOut(session, {
+                  type: "compaction_finished",
+                  timestamp: Date.now(),
+                  data: { error: String(error) },
+                });
+                throw error; // → the shared catch below returns boundary_command_failed
               } finally {
                 try {
                   await harness.abort(); // teardown — fresh-harness discipline (never throws past here)
