@@ -52,6 +52,11 @@ export async function connectSessionControl(options: ConnectSessionControlOption
   // tunnel) would silently defeat — a hung state()/entries() ticks nothing. The SSE stream stays
   // timeout-free (quiet is normal there; heartbeats cover proxy idling).
   const REQUEST_TIMEOUT_MS = 10_000;
+  // dispatch is the ONE Prompt-bearing control call (steer/follow_up may carry up to the 1 MiB
+  // body cap in base64 images) — a slow link legitimately needs longer than the black-hole
+  // detector's 10s to upload it, and cutting a healthy upload would be indistinguishable from a
+  // dead endpoint.
+  const DISPATCH_TIMEOUT_MS = 60_000;
   const get = async <T>(path: string): Promise<T> => {
     const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     if (!res.ok) throw new ControlRequestError(res.status, await res.text());
@@ -77,7 +82,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
         method: "POST",
         headers: { ...headers, "content-type": "application/json" },
         body: JSON.stringify({ session, command }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
       });
       if (!res.ok) throw new ControlRequestError(res.status, await res.text());
       return (await res.json()) as Awaited<ReturnType<SessionControl["dispatch"]>>;

@@ -898,6 +898,43 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect((await control.state("sB4")).status).toBe("idle");
   });
 
+  it("while a compaction is in flight the lease is held: state() compacting, dispatch session_busy", async () => {
+    // The accept-fast window is the refactor's new invariant: ok returned, lease still held.
+    let releaseSummary: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      releaseSummary = r;
+    });
+    const { agent, control } = makeBoundary([
+      fauxAssistantMessage("seed"),
+      (async (_c: unknown, _o: unknown, _s: unknown, _m: unknown) => {
+        await gate; // the summarization model call hangs until the test releases it
+        return fauxAssistantMessage("the summary");
+      }) as never,
+    ]);
+    await drain(agent.invoke({ session: "sB8" }, { text: "hi" }));
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB8")) {
+        seen.push(ev);
+        if (ev.type === "compaction_finished") break;
+      }
+    })();
+    expect(await control.dispatch("sB8", { type: "compact" })).toEqual({ ok: true });
+    // In flight: status reports compacting and the lease rejects other boundary work.
+    for (let i = 0; i < 100 && (await control.state("sB8")).status !== "compacting"; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect((await control.state("sB8")).status).toBe("compacting");
+    const busy = await control.dispatch("sB8", { type: "set_thinking", level: "low" });
+    expect(busy.ok).toBe(false);
+    if (!busy.ok) expect(busy.error.code).toBe(SESSION_BUSY_CODE);
+    releaseSummary();
+    await watching;
+    // finished ⇒ lease free and status recovered.
+    expect((await control.state("sB8")).status).toBe("idle");
+    expect(await control.dispatch("sB8", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
+  });
+
   it("a failing compaction is ACCEPTED then closed with finished{error}; nothing durable, lease free", async () => {
     // ONE response seeds the conversation; the compaction's summarization call then finds the faux
     // queue empty and throws — the deterministic model-call failure, AFTER acceptance.

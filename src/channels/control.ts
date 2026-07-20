@@ -2,8 +2,10 @@
  * The session control plane over HTTP + SSE — the Phase 3 transport (design §13). Engine-neutral:
  * consumes only the `SessionControl` contract. One transport serves every remote consumer (Web
  * panel, desktop app, `fastagent attach`); the embedded API stays semantic-only and the ENVELOPE
- * lives here: `id` (request correlation — implicit in HTTP), `epoch` (serving-process incarnation,
- * fences a restart), `seq` (per-connection monotonic, detects loss in transit).
+ * lives here: `id` (request correlation — implicit in HTTP), `epoch` (serving-process incarnation
+ * — INFORMATIONAL, for consumers correlating across connections; a restart surfaces as its
+ * connections dropping, so no one fences on it), `seq` (per-connection monotonic, detects loss in
+ * transit).
  *
  * SECURITY: these routes carry steer/abort/set_model — a remote-control surface. The bearer token
  * is REQUIRED (there is no unauthenticated mode) and is the only auth the framework owns; anything
