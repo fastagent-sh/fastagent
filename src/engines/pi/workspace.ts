@@ -56,7 +56,9 @@ export interface CreatePiAgentFromWorkspaceOptions {
   /** Assemble the session control plane over this workspace's session store and return it as
    *  {@link sessionControl} — the store is created inside this opener, so the hub must be wired
    *  here too (an external `createPiSessionControl` cannot exist before the store does).
-   *  Defaults to `config.sessionControl` (the serve commands mount `/control/*` from it). */
+   *  Default: `config.sessionControl` AND {@link serving} — the config key means "serve the control
+   *  plane", so one-shot commands (invoke/fire) do not assemble an unused hub. Pass explicitly to
+   *  override either way. */
   sessionControl?: boolean;
   /** Additional raw tap with the FULL vocabulary: run events composed after the
    *  {@link sessionControl} hub's observer, plus the hub's own boundary-mutation events
@@ -202,7 +204,7 @@ export async function createPiAgentFromWorkspace(
   // dispatch sees them). An extra caller observer composes after the hub's (TRUSTED seam).
   let boundaryParts: PiBoundaryWiring | undefined;
   const caller = options.observer;
-  const wantControl = options.sessionControl ?? config.sessionControl === true;
+  const wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
   const hub = wantControl
     ? createPiSessionControl({
         sessions,

@@ -77,41 +77,46 @@ export async function connectSessionControl(options: ConnectSessionControlOption
     },
 
     events(session): AsyncIterable<SessionEvent> {
+      // Each ITERATION opens its own connection (gen/abort created inside asyncIterator), matching
+      // the local hub's "every iteration is a fresh subscription" — a shared single-use generator
+      // would make the second for-await silently empty, breaking local/remote isomorphism.
       // The abort controller lives OUTSIDE the generator: a consumer's `return()`/`break` while the
       // generator is suspended on a quiet SSE read must abort the fetch FIRST — an async generator's
       // own finally only runs after the pending await settles, which a silent stream never does.
-      const abort = new AbortController();
-      const gen = (async function* iterate(): AsyncGenerator<SessionEvent> {
-        try {
-          const res = await fetchFn(`${base}/control/events?session=${encodeURIComponent(session)}`, {
-            headers,
-            signal: abort.signal,
-          });
-          if (!res.ok) throw new ControlRequestError(res.status, await res.text());
-          if (!res.body) throw new Error("control events: response has no body");
-          let nextSeq = 0;
-          for await (const data of sseData(res.body)) {
-            const wire = JSON.parse(data) as { sessionId: string; epoch: string; seq: number; event: SessionEvent };
-            // Envelope checks — consumed HERE, surfaced only as iterator termination. (epoch is not
-            // compared: it cannot change within one connection — see the header note.)
-            if (wire.seq !== nextSeq) {
-              // Fail visibly: a gap-terminated stream must be distinguishable from a clean end in
-              // the diagnostics, even though both surface as iterator termination + resync.
-              log.warn(
-                `[fastagent] control events: sequence gap (expected ${nextSeq}, got ${wire.seq}) — ending the stream for resync`,
-              );
-              return;
+      const openStream = (abort: AbortController) =>
+        (async function* iterate(): AsyncGenerator<SessionEvent> {
+          try {
+            const res = await fetchFn(`${base}/control/events?session=${encodeURIComponent(session)}`, {
+              headers,
+              signal: abort.signal,
+            });
+            if (!res.ok) throw new ControlRequestError(res.status, await res.text());
+            if (!res.body) throw new Error("control events: response has no body");
+            let nextSeq = 0;
+            for await (const data of sseData(res.body)) {
+              const wire = JSON.parse(data) as { sessionId: string; epoch: string; seq: number; event: SessionEvent };
+              // Envelope checks — consumed HERE, surfaced only as iterator termination. (epoch is not
+              // compared: it cannot change within one connection — see the header note.)
+              if (wire.seq !== nextSeq) {
+                // Fail visibly: a gap-terminated stream must be distinguishable from a clean end in
+                // the diagnostics, even though both surface as iterator termination + resync.
+                log.warn(
+                  `[fastagent] control events: sequence gap (expected ${nextSeq}, got ${wire.seq}) — ending the stream for resync`,
+                );
+                return;
+              }
+              nextSeq = wire.seq + 1;
+              yield wire.event;
             }
-            nextSeq = wire.seq + 1;
-            yield wire.event;
+          } catch (error) {
+            if (abort.signal.aborted) return; // the consumer walked away — clean end, not an error
+            throw error;
           }
-        } catch (error) {
-          if (abort.signal.aborted) return; // the consumer walked away — clean end, not an error
-          throw error;
-        }
-      })();
+        })();
       return {
         [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
+          const abort = new AbortController();
+          const gen = openStream(abort);
           return {
             next: () => gen.next(),
             async return(value?: unknown) {

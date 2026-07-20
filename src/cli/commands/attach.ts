@@ -67,7 +67,7 @@ function render(event: SessionEvent): string | undefined {
   }
 }
 
-async function watch(control: SessionControl, session: string): Promise<void> {
+async function watchInto(control: SessionControl, session: string, io: AttachIo): Promise<void> {
   for await (const event of control.events(session)) {
     if (event.type === "message_delta") {
       const d = event.data as { channel: string; delta: string };
@@ -86,7 +86,7 @@ async function watch(control: SessionControl, session: string): Promise<void> {
     } catch {
       line = `[${event.type}]`;
     }
-    if (line !== undefined) console.log(line);
+    if (line !== undefined) io.println(line);
   }
 }
 
@@ -157,37 +157,77 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         `the control endpoint rejected the token (${String(error)}) — the serve likely restarted with a new one; re-run attach`,
       ),
     );
-  const isAuthError = (error: unknown): boolean => error instanceof ControlRequestError && error.status === 401;
-  let cursor = (await control.entries(sessionArg)).leafEntryId;
+  // `state` already carries the cursor — fetching the FULL record just to read leafEntryId would
+  // download the whole history of a long session for nothing.
+  let cursor = state.leafEntryId;
   for (;;) {
-    const draining = watch(control, sessionArg).catch((error) => {
-      if (isAuthError(error)) stale(error);
-      log.warn(`[fastagent] event stream error: ${String(error)}`);
-    });
-    await new Promise((r) => setTimeout(r, 300)); // let the subscription land before syncing
     try {
-      const backfill = await control.entries(sessionArg, cursor !== undefined ? { since: cursor } : undefined);
-      cursor = backfill.leafEntryId ?? cursor;
-      if (backfill.entries.length > 0) {
-        console.log("[replaying the record since the last sync (may overlap what you saw live)]");
-        for (const entry of backfill.entries) {
-          let line: string | undefined;
-          try {
-            line = renderEntry(entry);
-          } catch {
-            line = `[${entry.kind}]`;
-          }
-          if (line !== undefined) console.log(line);
-        }
-        console.log("[end of replay — live]");
-      }
+      cursor = await attachRound(control, sessionArg, cursor, {
+        println: (line) => console.log(line),
+        warn: (line) => log.warn(line),
+        settleMs: 300,
+      });
     } catch (error) {
       if (isAuthError(error)) stale(error);
-      log.warn(`[fastagent] sync failed (serve down?): ${String(error)}`);
+      log.warn(`[fastagent] round failed: ${String(error)}`);
     }
-    await draining;
     await new Promise((r) => setTimeout(r, 1_000)); // the stream dropped — pause, then resubscribe
   }
+}
+
+const isAuthError = (error: unknown): boolean => error instanceof ControlRequestError && error.status === 401;
+
+/** What one round prints through — injectable for tests. */
+export interface AttachIo {
+  println: (line: string) => void;
+  warn: (line: string) => void;
+  /** The subscribe→sync settle heuristic (see the round comment). Tests shrink it. */
+  settleMs: number;
+}
+
+/**
+ * ONE attach round: subscribe → backfill (render the durable record since `cursor`) → drain live
+ * until the stream drops. Returns the advanced cursor. Subscribing first + the server's eager
+ * registration (subscribed before response headers) covers the cursor→subscription window in the
+ * normal case; `settleMs` is a HEURISTIC — on a very slow link an event can still land between the
+ * backfill and the subscription taking effect, surfacing only at the next round's replay. Live
+ * events carry no entry ids, so the cursor advances only on backfill; a replay may overlap what
+ * was already seen live — labeled, not silently dropped. A 401 (stale token after a serve restart)
+ * is thrown to the caller: unrecoverable here, never retried silently.
+ */
+export async function attachRound(
+  control: SessionControl,
+  session: string,
+  cursor: string | undefined,
+  io: AttachIo,
+): Promise<string | undefined> {
+  let authError: unknown;
+  const draining = watchInto(control, session, io).catch((error) => {
+    if (isAuthError(error)) {
+      authError = error;
+      return;
+    }
+    io.warn(`[fastagent] event stream error: ${String(error)}`);
+  });
+  await new Promise((r) => setTimeout(r, io.settleMs)); // let the subscription land before syncing
+  const backfill = await control.entries(session, cursor !== undefined ? { since: cursor } : undefined);
+  const next = backfill.leafEntryId ?? cursor;
+  if (backfill.entries.length > 0) {
+    io.println("[replaying the record since the last sync (may overlap what you saw live)]");
+    for (const entry of backfill.entries) {
+      let line: string | undefined;
+      try {
+        line = renderEntry(entry);
+      } catch {
+        line = `[${entry.kind}]`;
+      }
+      if (line !== undefined) io.println(line);
+    }
+    io.println("[end of replay — live]");
+  }
+  await draining;
+  if (authError) throw authError; // the stream's 401 is the round's 401
+  return next;
 }
 
 /** Render one durable record on replay — the guaranteed kind vocabulary; other kinds are skipped. */

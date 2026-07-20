@@ -232,6 +232,55 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("attachRound: renders the backfill, advances the cursor, and surfaces a 401 instead of retrying", async () => {
+    const { attachRound } = await import("../src/cli/commands/attach.ts");
+    const { ControlRequestError } = await import("../src/session-remote.ts");
+    const lines: string[] = [];
+    const io = { println: (l: string) => lines.push(l), warn: (l: string) => lines.push(`W:${l}`), settleMs: 1 };
+    const entriesPage = {
+      entries: [
+        { id: "e2", timestamp: 1, kind: "user", data: { text: "question" } },
+        { id: "e3", timestamp: 2, kind: "assistant", data: { text: "answer" } },
+      ],
+      leafEntryId: "e3",
+    };
+    const quietEvents = (): AsyncIterable<never> => ({
+      // biome-ignore lint/correctness/useYield: an intentionally empty stream
+      [Symbol.asyncIterator]: async function* () {},
+    });
+    const fake = {
+      capabilities: () => ({}) as never,
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
+      entries: async (_s: string, opts?: { since?: string }) => {
+        expect(opts?.since).toBe("e1"); // the cursor travels into the backfill
+        return entriesPage as never;
+      },
+      events: quietEvents,
+      dispatch: async () => ({ ok: true }) as never,
+    };
+    const next = await attachRound(fake as never, "s", "e1", io);
+    expect(next).toBe("e3"); // advanced to the leaf
+    expect(lines).toEqual([
+      "[replaying the record since the last sync (may overlap what you saw live)]",
+      "> question",
+      "answer",
+      "[end of replay — live]",
+    ]);
+
+    // A 401 from the stream is the round's 401 — thrown, not warn-and-retried.
+    const auth = new ControlRequestError(401, "unauthorized");
+    const failing = {
+      ...fake,
+      entries: async () => ({ entries: [] }) as never,
+      events: () => ({
+        [Symbol.asyncIterator]: () => ({
+          next: (): Promise<IteratorResult<never>> => Promise.reject(auth),
+        }),
+      }),
+    };
+    await expect(attachRound(failing as never, "s", undefined, io)).rejects.toBe(auth);
+  });
+
   it("controlRoutes refuses to mount without a token", () => {
     const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
     expect(() => controlRoutes(control, { token: "" })).toThrow(/token is required/);
