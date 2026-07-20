@@ -124,7 +124,7 @@ Put tools in `tools/<name>.ts`. Use `defineTool` and `z` from `@fastagent-sh/fas
 fastagent tool <name> '<json>'
 ```
 
-To vendor an existing Agent Skills skill instead of writing one, run `fastagent add skill <source>` with a git ref (`owner/repo/path`), a local path, or a bare name from `~/.agents/skills`.
+To vendor an existing Agent Skills skill instead of writing one, run `fastagent add skill <source>` with a git ref (`owner/repo/path`), a local path, or a bare name from your global skill dirs (`~/.agents/skills`, `~/.pi/agent/skills`).
 
 ## Add channels
 
