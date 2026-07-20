@@ -181,7 +181,10 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       // ABORTED_CODE: a deliberate stop from ANY client (this attach's /abort, another attach, a
       // Web panel) — the settled line reports it either way; no source discrimination here.
     }
-    if (sawBusy) console.log("[a run started in the meantime — type again to steer it]");
+    // session_busy = the LEASE is held — by another run OR a boundary mutation (compact/set_model
+    // contend on the same lease); "a run started" would be a guess, and "steer it" bad advice
+    // against a compact. State the lease fact, promise nothing.
+    if (sawBusy) console.log("[session busy — another run or a boundary operation holds it; try again shortly]");
   };
   const rl = createInterface({ input: process.stdin });
   rl.on("line", (line) => {
