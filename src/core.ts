@@ -1,8 +1,11 @@
 // Engine-neutral Agent Handler contract, consumption helpers, host/channel kit, and time triggers.
 // Import this subpath from channel packages or contract-only integrations to avoid loading the pi runtime.
-// The session control plane is deliberately NOT re-exported here: it lives behind the `/session`
-// subpath precisely so interactive serving does not grow this minimal handler surface (design §1).
-// The root entry re-exports it as part of the all-in-one convenience surface.
+// Session-control layering (design §1): the CONTRACT (SessionControl types, error codes) lives
+// behind the `/session` subpath so interactive serving does not grow the minimal handler contract,
+// and the pi hub (`createPiSessionControl`) lives under `/pi`. The engine-neutral TRANSPORT —
+// `controlRoutes` server-side, `connectSessionControl`/`connectAgent` client-side — belongs here
+// with the rest of the channel kit: fetch-shaped routes and contract-consuming clients, no pi
+// import anywhere in their closure.
 export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.ts";
 export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 export type { ModuleLoadFailure } from "./loader.ts";
