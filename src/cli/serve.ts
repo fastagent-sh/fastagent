@@ -108,10 +108,14 @@ export function mountSessionControl(
         }
       };
       // Signal handlers MUST NOT absorb termination: registering any listener disables Node's
-      // default kill, so clean up and RE-RAISE — by then every `once` handler (scheduler stop,
-      // tunnel close) has run and the re-raised signal hits the default action. Without this, the
-      // first Ctrl+C would leave the serve alive minus its control.json, and dev's watch restart
-      // (SIGTERM → wait for exit → respawn) would hang on a worker that never exits.
+      // default kill, so clean up and RE-RAISE. The mechanism: `process.kill` delivery is ASYNC —
+      // it lands after the current emit completes, so every listener of this same emit (scheduler
+      // stop, tunnel close — regardless of registration order) runs first, and the re-raised
+      // signal then hits the default action because each `once` handler is already consumed. When
+      // some listener exits the process itself (the tunnel path calls process.exit(0)), the
+      // re-raise is harmless redundancy. Without this, the first Ctrl+C would leave the serve
+      // alive minus its control.json, and dev's watch restart (SIGTERM → wait for exit → respawn)
+      // would hang on a worker that never exits.
       const unlinkAndReraise = (signal: NodeJS.Signals) => (): void => {
         unlink();
         process.kill(process.pid, signal);
