@@ -324,7 +324,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           }
           // Payload validation BEFORE the lease — an invalid value must not briefly block a run.
-          let apply: (session: import("@earendil-works/pi-agent-core").Session) => Promise<SessionEvent | undefined>;
+          /** The entry-append for set_model/set_thinking — undefined for compact (harness path). */
+          let apply: ((session: import("@earendil-works/pi-agent-core").Session) => Promise<SessionEvent>) | undefined;
           if (command.type === "set_model") {
             const slash = command.model.indexOf("/");
             const model =
@@ -360,13 +361,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               await s.appendThinkingLevelChange(command.level);
               return { type: "state_changed", timestamp: Date.now(), data: { thinkingLevel: command.level } };
             };
-          } else {
-            apply = async () => undefined; // compact runs through the harness below, not an entry append
           }
           // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
-          // not minted into a ghost record. (Existence check before the lease — read-only.)
-          const existing = await sessions.openIfExists(session);
-          if (!existing) {
+          // not minted into a ghost record. (Existence check before the lease — read-only; the
+          // WRITE handle is re-opened under the lease below, this one is discarded.)
+          if (!(await sessions.openIfExists(session))) {
             return {
               ok: false,
               error: {
@@ -392,12 +391,14 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           try {
             if (command.type === "compact") {
               compacting.add(session);
-              fanOut(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
               // Compaction is a model call: build the session's full harness (the factory applies
-              // the session's own model/thinking overrides) and tear it down after. Every started
-              // is CLOSED: success → finished{summary}; failure → finished{error} (the bounds
-              // contract — an events-only watcher must never hang on an open compaction).
+              // the session's own model/thinking overrides) and tear it down after. `started` is
+              // emitted only once the harness EXISTS — a factory failure rejects with no started
+              // at all — and every started is then CLOSED: success → finished{summary}; failure →
+              // finished{error} (the bounds contract — an events-only watcher must never hang on
+              // an open compaction).
               const harness = await b.harnessFactory(session);
+              fanOut(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
               try {
                 const result = await harness.compact(command.instructions);
                 fanOut(session, {
@@ -420,7 +421,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 }
               }
             } else {
-              const event = await apply(existing);
+              // The WRITE handle is opened UNDER the lease: a handle from before tryAcquire could
+              // be a stale snapshot of a run that completed in the window — appending to it would
+              // hang the override off an outdated leaf. `apply` is set by construction (only
+              // set_model/set_thinking reach this branch; compact took the branch above).
+              const fresh = await sessions.openIfExists(session);
+              if (!fresh || !apply) throw new Error("session disappeared between existence check and lease");
+              const event = await apply(fresh);
               if (event) fanOut(session, event);
             }
           } catch (error) {
