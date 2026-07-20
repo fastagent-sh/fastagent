@@ -850,7 +850,8 @@ describe("session control (Phase 2b): boundary mutations", () => {
     }
     await watching;
     expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
-    expect((seen.at(-1)?.data as { error?: string }).error).toBeTruthy();
+    const closed = seen.at(-1)?.data as { error?: string };
+    expect(closed.error).toBeTruthy();
     // Nothing durable landed, and neither the lease nor the compacting flag is stuck.
     const kinds = (await control.entries("sB6")).entries.map((e) => e.kind);
     expect(kinds).not.toContain("compaction");
