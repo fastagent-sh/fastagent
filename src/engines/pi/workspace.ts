@@ -57,9 +57,11 @@ export interface CreatePiAgentFromWorkspaceOptions {
    *  {@link sessionControl} — the store is created inside this opener, so the hub must be wired
    *  here too (an external `createPiSessionControl` cannot exist before the store does). */
   sessionControl?: boolean;
-  /** Additional raw tap, composed AFTER the {@link sessionControl} hub's observer. TRUSTED seam:
-   *  since Phase 2a an observer receives each run's live modulation handles (see
-   *  `SessionObserver`) — for read-only consumers use the hub's `events()` stream instead. */
+  /** Additional raw tap with the FULL vocabulary: run events composed after the
+   *  {@link sessionControl} hub's observer, plus the hub's own boundary-mutation events
+   *  (`state_changed`/`compaction_*`) via the hub's tap. TRUSTED seam: since Phase 2a an observer
+   *  receives each run's live modulation handles (see `SessionObserver`) — for read-only consumers
+   *  use the hub's `events()` stream instead. */
   observer?: SessionObserver;
 }
 
@@ -198,8 +200,17 @@ export async function createPiAgentFromWorkspace(
   // assembly's onAssembly callback (assembly completes before this function returns, so every
   // dispatch sees them). An extra caller observer composes after the hub's (TRUSTED seam).
   let boundaryParts: PiBoundaryWiring | undefined;
-  const hub = options.sessionControl ? createPiSessionControl({ sessions, boundary: () => boundaryParts }) : undefined;
   const caller = options.observer;
+  const hub = options.sessionControl
+    ? createPiSessionControl({
+        sessions,
+        boundary: () => boundaryParts,
+        // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub
+        // and never cross the data plane's observer seam — without this, an audit tap wired here
+        // would miss exactly the mutations it most needs to see (set_model).
+        tap: caller ? (session, event) => caller(session, event) : undefined,
+      })
+    : undefined;
   const observer: SessionObserver | undefined = hub
     ? caller
       ? (session, event, run) => {

@@ -298,7 +298,8 @@ compare. The vocabulary, grouped by the client maturity level that needs it:
 | transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome (fail visibly). Not emittable in-process — a dead process has no one left to emit. |
 | L1 | `queue_changed { steering, followUp }` | Normalized queue depths. |
 | L2 | `turn_started`, `turn_finished` | Group tool activity under one assistant turn. |
-| L2 | `compaction_started/finished`, `retry_scheduled/finished` | Explain why a run is alive with no tokens flowing. |
+| L2 | `compaction_started/finished` | Manual compaction bounds: between runs, no `runId`; every started is closed (`summary` or `error`). Automatic overflow compaction stays inside its run and does not emit these. |
+| L2 | `retry_scheduled/finished` | Explain why a run is alive with no tokens flowing (future vocabulary — not yet emitted). |
 | L2 | `state_changed { model?, thinkingLevel? }` | Material state changes. |
 
 Consumers MUST forward or ignore unknown event types; the vocabulary is additive. The contract

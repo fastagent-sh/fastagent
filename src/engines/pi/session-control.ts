@@ -135,6 +135,11 @@ export interface CreatePiSessionControlOptions {
    *  (assembly completes before any dispatch can arrive). Absent / undefined → boundary commands
    *  are gated off in `capabilities()` and rejected `unsupported_capability`. */
   boundary?: () => PiBoundaryWiring | undefined;
+  /** Tap for the events the HUB ITSELF generates (boundary mutations: `state_changed`,
+   *  `compaction_*`) — those never pass through the data plane's observer seam, so a consumer
+   *  composing a full-vocabulary tap wires the run events via the observer AND this. Called after
+   *  the hub's own subscribers. */
+  tap?: (session: string, event: SessionEvent) => void;
 }
 
 /**
@@ -165,6 +170,18 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   const fanOut = (session: string, event: SessionEvent): void => {
     const subs = subscribers.get(session);
     if (subs) for (const sub of [...subs]) sub.push(event);
+  };
+
+  /** Emit a HUB-generated event: subscribers first, then the external tap — the boundary-event
+   *  half of a full-vocabulary tap (run events reach it through the observer composition). */
+  const emitOwn = (session: string, event: SessionEvent): void => {
+    fanOut(session, event);
+    try {
+      options.tap?.(session, event);
+    } catch (error) {
+      // Same discipline as the data plane's observer guard: a broken tap is its own problem.
+      log.warn(`[fastagent] session-control tap threw (event ${event.type}): ${String(error)}`);
+    }
   };
 
   const observer: SessionObserver = (session, event, run) => {
@@ -395,16 +412,16 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               // finished{error} (the bounds contract — an events-only watcher must never hang on
               // an open compaction).
               const harness = await b.harnessFactory(session);
-              fanOut(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
+              emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
               try {
                 const result = await harness.compact(command.instructions);
-                fanOut(session, {
+                emitOwn(session, {
                   type: "compaction_finished",
                   timestamp: Date.now(),
                   data: { summary: result.summary },
                 });
               } catch (error) {
-                fanOut(session, {
+                emitOwn(session, {
                   type: "compaction_finished",
                   timestamp: Date.now(),
                   data: { error: String(error) },
@@ -437,7 +454,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               // Unreachable by construction: only set_model/set_thinking reach this branch, and
               // both assign `apply` in validation. Throw rather than silently skip (fail visibly).
               if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
-              fanOut(session, await apply(fresh));
+              emitOwn(session, await apply(fresh));
             }
           } catch (error) {
             // Admitted but nothing durable landed (pi appends the compaction entry only at the

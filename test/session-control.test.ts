@@ -905,6 +905,32 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(second.map((e) => (e.type === "text" ? (e as { delta: string }).delta : "")).join("")).toContain("faux-b");
   });
 
+  it("a workspace caller observer receives the full vocabulary, boundary events included", async () => {
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "fa-sc-tap-"));
+    try {
+      await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      const seen: string[] = [];
+      const opened = await createPiAgentFromWorkspace(dir, {
+        sessionControl: true,
+        observer: (_s, event) => {
+          seen.push(event.type);
+        },
+      });
+      const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
+      // Seed a session WITHOUT a model call: boundary mutations need an existing session, and the
+      // observer tap must then see the hub-generated state_changed — the audit-tap guarantee.
+      await opened.sessions.openOrCreate("sTap");
+      const result = await control.dispatch("sTap", { type: "set_thinking", level: "low" });
+      expect(result.ok).toBe(true);
+      expect(seen).toContain("state_changed");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("boundary mutations never mint sessions: unknown id rejects no_such_session", async () => {
     const { control, sessions, spec } = makeBoundary([]);
     const result = await control.dispatch("ghost", { type: "set_model", model: spec });
