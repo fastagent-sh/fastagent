@@ -13,7 +13,7 @@
  * Nothing here retries silently: a broken stream is visible as a terminated iterator, a failed
  * request as a rejected promise.
  */
-import type { Agent, AgentEvent } from "./agent.ts";
+import type { Agent, AgentEvent, Prompt } from "./agent.ts";
 import { log } from "./log.ts";
 import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
 
@@ -160,6 +160,11 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
     }
     return { type: "failed", details: String(error), retryable: true }; // network-class: worth re-sending
   };
+  // COMPILE-TIME drift guard (dispatch-wire parity): the invoke body carries exactly text (and
+  // rejects images visibly) — a new Prompt field must break THIS line and force a decision
+  // (carry it or reject it), never vanish on the wire while the client believes it was sent.
+  const _invokeDriftGuard: Record<Exclude<keyof Prompt, "text" | "images">, never> = {};
+  void _invokeDriftGuard;
   return {
     invoke(scope, prompt): AsyncIterable<AgentEvent> {
       const abort = new AbortController();

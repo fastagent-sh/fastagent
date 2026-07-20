@@ -117,8 +117,9 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // The SAME patience the round loop applies, at startup: `attach` during a dev-watch restart's
   // 1–2s window (port not bound / control.json mid-rewrite) must wait it out, not exit with a
   // misleading "stale file" diagnosis while the serve is seconds from ready. Each retry re-reads
-  // discovery (a restart mints fresh credentials mid-window). --url fails immediately — its
-  // endpoint lifecycle is the operator's.
+  // discovery (a restart mints fresh credentials mid-window). --url fails immediately at startup:
+  // nothing has ever succeeded on that endpoint, so a wrong --url is likelier than a transient
+  // (once attached, drops get a bounded retry budget instead).
   const STARTUP_GRACE = 10; // ≈ 10s
   const connectWithGrace = async (): Promise<{ control: SessionControl; state: SessionState }> => {
     for (let attempt = 1; ; attempt++) {
@@ -236,6 +237,11 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // exhausted → exit with the honest ambiguous diagnosis. --url endpoints keep plain retries with
   // immediate 401 exit: their token lifecycle is the operator's, not a local boot's.
   const LOCAL_GRACE_ROUNDS = 30; // ≈ 30s+ of consecutive failures before giving up
+  // Remote endpoints get a LARGER budget (real networks recover slowly), but not an infinite one:
+  // steady-state and startup differ on priors, not on principle — at startup nothing has ever
+  // succeeded (a wrong --url is likelier than a transient → fail fast), while a drop after a
+  // working attach is likelier transient → retry, bounded.
+  const REMOTE_GRACE_ROUNDS = 120; // ≈ 2min+
   let failures = 0;
   for (;;) {
     try {
@@ -249,7 +255,14 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       failures++;
       if (!discovered) {
         if (isAuthError(error)) stale(error);
-        log.warn(`[fastagent] round failed: ${String(error)}`);
+        if (failures >= REMOTE_GRACE_ROUNDS) {
+          exitWith(
+            new Error(
+              `the remote endpoint has been unreachable for ~${REMOTE_GRACE_ROUNDS}s — check the serve and re-run attach`,
+            ),
+          );
+        }
+        log.warn(`[fastagent] round failed (${failures}/${REMOTE_GRACE_ROUNDS}): ${String(error)}`);
       } else {
         let reattached = false;
         try {
