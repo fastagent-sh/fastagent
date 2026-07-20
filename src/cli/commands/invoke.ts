@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { resolveAuthPathOverride } from "../../engines/pi/config.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { runInvokeStream } from "../../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
@@ -23,7 +22,7 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   await resolveFirstRunModel(invokeDir, opts);
   const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(invokeDir, {
     model: opts.model,
-    authPath: resolveAuthPathOverride(opts.authPath),
+    authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
   console.error(`[fastagent] invoke: ${invokeDir} (${modelSpec})`);
   await reportAuth(modelSpec, authPath);

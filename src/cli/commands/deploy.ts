@@ -34,13 +34,14 @@ import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir, resolveAuthPathOverride, resolveModelSpec } from "../../engines/pi/config.ts";
+import { loadConfig, resolveAgentDir, resolveModelSpec } from "../../engines/pi/config.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { announceWebhooks } from "../../tunnel.ts";
 import { failStartup, failUsage } from "../fail.ts";
+import { resolveFirstRunModel } from "../shared.ts";
 
 export type DeployHost = "docker" | "fly" | "railway";
 
@@ -54,6 +55,8 @@ export interface DeployOptions {
   intoLinked?: boolean;
   model?: string;
   authPath?: string;
+  /** false ⇔ `--no-input`. */
+  input?: boolean;
 }
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
@@ -64,6 +67,11 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   }
   loadDotEnv(target); // a custom provider/tool may read a key at config load
   installProxyFetch(); // post-deploy channel API calls must honor HTTP(S)_PROXY under Node
+  // First-run funnel, FULL picker: the write-back lands the model in fastagent.config.* — exactly what
+  // the model-travel gate below requires (--model/env don't reach the deployed box) — and an inline
+  // login stores the credential `--run` then carries. Runs BEFORE loadConfig; the read-back sees the
+  // rewritten file because loadConfig cache-busts on mtime (a failed write-back still gates, correctly).
+  await resolveFirstRunModel(target, { model: opts.model, authPath: opts.authPath, input: opts.input });
   const { config } = await loadConfig(target).catch(failStartup);
   const agentDir = resolveAgentDir(target, config);
   const modelSpec = resolveModelSpec(opts.model, config);
@@ -77,7 +85,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     modelSpec,
     run: !!opts.run,
     force: !!opts.force,
-    authPathOverride: resolveAuthPathOverride(opts.authPath),
+    authPathFlag: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by preflight (one owner)
   }).catch(failStartup);
   if (!pre.ok) failStartup(new Error(`deploy stopped: ${pre.gate}`));
   for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);

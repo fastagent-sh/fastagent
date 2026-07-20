@@ -6,7 +6,7 @@
  */
 import { relative, resolve, sep } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir, resolveAuthPathOverride } from "../../engines/pi/config.ts";
+import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { runInvokeStream } from "../../invoke-stream.ts";
@@ -48,7 +48,7 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
   }
   const { agent, modelSpec, authPath } = await createPiAgentFromWorkspace(fireDir, {
     model: opts.model,
-    authPath: resolveAuthPathOverride(opts.authPath),
+    authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
   console.error(`[fastagent] fire: ${name} (${modelSpec})`);
   await reportAuth(modelSpec, authPath);

@@ -9,7 +9,7 @@
  * empty state dir behind, by design (no secret without its `.gitignore`). Skipped for the HOME-global dir.
  */
 import { loadDotEnv } from "../../env.ts";
-import { defaultAuthPath, resolveAuthPathOverride, resolveStateRoot } from "../../engines/pi/config.ts";
+import { resolveAuthPath, resolveStateRoot } from "../../engines/pi/config.ts";
 import { ensureStateRootSelfIgnored, isUnderDir } from "../../engines/pi/definition.ts";
 import { LoginCancelled } from "../../engines/pi/login.ts";
 import { installProxyFetch } from "../../proxy.ts";
@@ -27,7 +27,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   loadDotEnv(loginDir); // FASTAGENT_AUTH_PATH / a proxy (HTTPS_PROXY) may be configured in the project .env
   installProxyFetch(); // the OAuth token exchange must go through HTTPS_PROXY (region-locked providers)
   const stateRoot = resolveStateRoot(loginDir);
-  const authPath = resolveAuthPathOverride(opts.authPath) ?? defaultAuthPath(stateRoot);
+  const authPath = resolveAuthPath(loginDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
   // login is the command that CREATES the credential file, so the leak guard binds HERE too (not only
   // in the opener): on an adapted project dir, a `login` before the first dev/start would otherwise
   // leave the secret untracked-but-committable. Unlike the opener (which populates the WHOLE root, so

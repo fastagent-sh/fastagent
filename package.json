@@ -42,6 +42,10 @@
       "types": "./dist/core.d.ts",
       "default": "./dist/core.js"
     },
+    "./session": {
+      "types": "./dist/session.d.ts",
+      "default": "./dist/session.js"
+    },
     "./pi": {
       "types": "./dist/pi.d.ts",
       "default": "./dist/pi.js"

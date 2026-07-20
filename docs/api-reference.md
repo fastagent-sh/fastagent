@@ -359,8 +359,13 @@ interface PiSessionStore {
   openOrCreate(sessionId: string): Promise<Session>;
 }
 
-function inMemorySessionStore(): PiSessionStore;
-function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore;
+/** Read-only sibling for the observation plane: unknown session → undefined, never created. */
+interface PiSessionReader {
+  openIfExists(sessionId: string): Promise<Session | undefined>;
+}
+
+function inMemorySessionStore(): PiSessionStore & PiSessionReader;
+function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore & PiSessionReader;
 ```
 
 Lease:
@@ -376,10 +381,68 @@ function inProcessLease(): Lease;
 
 The lease is the same-session concurrency floor. A failed acquisition yields a retryable `failed` event.
 
+## Session control (observation plane)
+
+The optional serving extension beside `invoke`
+([design](design/session-control.md)): watch and reconnect to invoke-driven runs. Neutral types live
+in `@fastagent-sh/fastagent/session`; the pi implementation in `/pi`:
+
+```ts
+import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
+import { createPiAgent, createPiSessionControl, inMemorySessionStore } from "@fastagent-sh/fastagent/pi";
+
+const sessions = inMemorySessionStore();
+const { control, observer } = createPiSessionControl({ sessions });
+const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer });
+
+// Live events are NOT durable history: a subscription sees only what happens while it iterates,
+// so start watching BEFORE (or while) the run is driven — never after it drained.
+const watching = (async () => {
+  for await (const ev of control.events("s1")) {
+    console.log(ev.type); // run_started, message_delta, tool_started, …
+    if (ev.type === "run_settled") break; // events() has no natural end — the consumer decides
+  }
+})();
+for await (const e of agent.invoke({ session: "s1" }, { text: "hi" })) void e; // the data plane
+await watching;
+
+// After a disconnect, missed history comes from the durable plane, not the live stream:
+const { entries, leafEntryId } = await control.entries("s1", { since: cursor });
+const state = await control.state("s1"); // { status, activeRunId?, leafEntryId? }
+```
+
+`invoke` stays the only way to start work; the `AgentEvent` stream is a projection of the rich
+`SessionEvent` stream. `dispatch` modulates the run an invoke is driving — acceptance is not
+outcome (`ok: true` = admitted; the result arrives as `run_settled`):
+
+```ts
+await control.dispatch("s1", { type: "steer", prompt: { text: "use bun, not npm" } }); // joins the run
+await control.dispatch("s1", { type: "follow_up", prompt: { text: "then summarize" } }); // FIFO queue
+await control.dispatch("s1", { type: "abort" }); // invoke ends failed{code:"aborted"}, run_settled{aborted}
+```
+
+With steering/follow-ups the invoke stream terminates at the run's SETTLE (all queued continuations
+drained) — for consumers that never dispatch, a run equals a single turn, byte-identical behavior.
+Run commands on an idle session reject with `no_active_run` before acceptance; a command that
+reached a run but could not take effect (the run raced to settlement) rejects with
+`run_command_failed`. Both are `retryable: false` — the same command as-is fails again; consult
+`state()` before re-dispatching. The race window applies to all three commands symmetrically: an
+accepted `abort` can still settle `completed`, and an accepted `steer`/`follow_up` can settle
+without its prompt being consumed, when the run finishes inside the window — acceptance is not
+outcome; the settlement is the truth. Boundary mutations
+(`compact`/`set_model`/`set_thinking`) are not shipped yet: `capabilities()` reports them off and
+they reject with `unsupported_capability`.
+For workspace assembly the store lives inside the opener, so ask the opener to wire the hub:
+
+```ts
+const { agent, sessionControl } = await createPiAgentFromWorkspace(dir, { sessionControl: true });
+```
+
 ## Subpath exports
 
 ```ts
 import { type Agent, collect, readBodyCapped } from "@fastagent-sh/fastagent/core";
+import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
 import { createPiAgent, defineTool, z } from "@fastagent-sh/fastagent/pi";
 import { githubChannel } from "@fastagent-sh/fastagent/github";
 import { telegramChannel } from "@fastagent-sh/fastagent/telegram";

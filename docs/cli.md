@@ -115,8 +115,8 @@ live next turn, no restart); a supervisor restarts the worker on edits to the co
 With no model set and a terminal attached, `dev` first shows the full model catalog — models whose
 provider already has credentials are listed first and annotated with the source (e.g. `ready —
 OPENAI_API_KEY`); picking one that needs auth runs the login flow inline — then writes the choice
-back to the config (same for `start` / `invoke`). Pass `--model` or set `FASTAGENT_MODEL` to skip
-the prompt.
+back to the config (same for `start` / `invoke` / `fire` / `chat` / `deploy`). Pass `--model` or set
+`FASTAGENT_MODEL` to skip the prompt.
 
 Options:
 
@@ -138,10 +138,15 @@ Model precedence:
 ## `fastagent chat`
 
 ```bash
-fastagent chat [dir] [--model provider/modelId]
+fastagent chat [dir] [--model provider/modelId] [--auth-path file]
 ```
 
 Opens the same assembled workspace in pi's interactive TUI. This is useful for trying the agent before serving it through channels.
+
+Auth is fastagent's, same as every other command: `--auth-path` > `FASTAGENT_AUTH_PATH` > the
+workspace `auth.json`. Log in with `fastagent login` (or pi's `/login` inside the TUI, which writes
+to the same file). With no model set, `chat` runs the same first-run picker as the serving commands
+(credential-annotated catalog, inline login) and writes the choice back to the config.
 
 ## `fastagent invoke`
 
@@ -286,7 +291,7 @@ Recurring per-command options (same meaning everywhere they appear):
 
 | Option | Commands | Meaning |
 |---|---|---|
-| `--no-input` | `dev`, `start`, `invoke`, `fire`, `login` | Never prompt; missing information becomes an error with the flag to pass. |
+| `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
 | `--model <provider/modelId>` | assembly commands | Model override (`--model > FASTAGENT_MODEL > config`). |
 | `--auth-path <file>` | assembly commands, `login` | Credentials file override. |
 | `--json` | `info`, `schedule history`, `schedule list` | Machine-readable output. |

@@ -40,7 +40,7 @@ All three paths continue with the same steps below: inspect, authenticate, initi
 
 You are non-interactive, so do not rely on prompts you cannot answer.
 
-- A model must be explicit. Without one, `dev`, `start`, and `invoke` open an interactive picker and fail in a non-TTY with `missing model`.
+- A model must be explicit. Without one, `dev`, `start`, `invoke`, `fire`, and `chat` open a picker on a TTY and fail in a non-TTY with `missing model`. `deploy` also opens the picker on a TTY, but non-interactively it does NOT say `missing model`: plan mode warns, and `--run` stops at the model-travel gate ("no model in fastagent.config.ts").
 - `fastagent login` is also interactive. Ask the user to run it in a terminal inside the workspace; it writes project-level `.fastagent/auth.json`, and credentials written in another directory are not visible here.
 - Alternatively, ask the user for a provider API key and put it in `.env` only with permission.
 - List available specifications with `fastagent models`.

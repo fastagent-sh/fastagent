@@ -6,6 +6,7 @@
  */
 import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
 
@@ -31,6 +32,25 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
   });
   for (const provider of options.providers ?? []) models.setProvider(provider);
   return models;
+}
+
+/**
+ * The `ModelRuntime`-shaped sibling of {@link createPiModels} — the SAME hub semantics (built-in
+ * providers + fastagent's credential store at `authPath`) in the type pi's session services require
+ * (`createAgentSessionServices({ modelRuntime })`). Builtins only (`modelsPath: null` — pi's
+ * machine-global models.json is definition-foreign) and no availability network, so the model
+ * surface equals serving's. No `providers` option: `ModelRuntime` registers providers by config
+ * record, not `Provider` instance — accepting the option and dropping it would be a silent no-op;
+ * add the mapping when a consumer actually needs it.
+ */
+export function createPiModelRuntime(
+  options: FastagentAuthOptions & { authPath?: string } = {},
+): Promise<ModelRuntime> {
+  return ModelRuntime.create({
+    credentials: fastagentCredentialStore(options.authPath, { warn: options.warn }),
+    modelsPath: null,
+    allowModelNetwork: false,
+  });
 }
 
 /** Per-provider auth status for the first-run model picker: usable now (with the source label), not

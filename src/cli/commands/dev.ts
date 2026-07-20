@@ -6,7 +6,6 @@
 import { resolve } from "node:path";
 import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { loadDotEnv } from "../../env.ts";
-import { resolveAuthPathOverride } from "../../engines/pi/config.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { log, setLogLevel } from "../../log.ts";
@@ -56,7 +55,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
 
   const a = await createPiAgentFromWorkspace(dir, {
     model: opts.model,
-    authPath: resolveAuthPathOverride(opts.authPath),
+    authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
     serving: true, // long-running serve: the scheduler poller runs (wake mounts iff config.selfSchedule)
   }).catch(failStartup);
   log.info(`[fastagent] dir:    ${dir}`);

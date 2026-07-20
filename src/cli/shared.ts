@@ -6,6 +6,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { relative } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
+import type { Models } from "@earendil-works/pi-ai";
 import { buildModelPickerOptions } from "../cli-models.ts";
 import { fastagentCredentialStore } from "../engines/pi/auth.ts";
 import {
@@ -68,14 +69,15 @@ export async function reportAuth(modelSpec: string, authPath: string): Promise<v
 }
 
 /**
- * First-run model resolution for the serving commands: ONE funnel, no dead ends. When no model is set
- * (flag/env/config) and we're on a TTY, show the FULL catalog annotated per provider — ready (with the
- * credential source, so which account pays is visible at the decision point) or login-required — and,
- * when the choice needs auth, run the login flow INLINE instead of exiting with "run `fastagent login`
- * and come back". A no-op when a model is already set; on a non-TTY (CI/deploy), with `--no-input`, on
- * cancel, or on a failed login it stays quiet and lets the opener raise its clear "missing model"
- * error. The pick is exported to FASTAGENT_MODEL so a spawned `dev` worker inherits it, and
- * best-effort written back to the config so the next run is quiet.
+ * First-run model resolution for every assembly command (dev/start/invoke/fire/chat/deploy): ONE
+ * funnel, no dead ends. When no model is set (flag/env/config) and we're on a TTY, show the FULL
+ * catalog annotated per provider — ready (with the credential source, so which account pays is
+ * visible at the decision point) or login-required — and, when the choice needs auth, run the login
+ * flow INLINE instead of exiting with "run `fastagent login` and come back". A no-op when a model is
+ * already set; on a non-TTY (CI, a piped stdin), with `--no-input`, on cancel, or on a failed login
+ * it stays quiet and lets the caller raise its own clear error (`missing model`, or deploy's
+ * model-travel gate). The pick is exported to FASTAGENT_MODEL so a spawned `dev` worker inherits it,
+ * and best-effort written back to the config so the next run is quiet.
  */
 export async function resolveFirstRunModel(
   workspaceDir: string,
@@ -88,6 +90,23 @@ export async function resolveFirstRunModel(
 
   const authPath = resolveAuthPath(workspaceDir, options.authPath);
   const models = createPiModels({ authPath });
+  const chosen = await pickWithCredentials(workspaceDir, models, authPath);
+  if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
+  process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
+  await persistModelChoice(workspaceDir, configPath, chosen);
+}
+
+/**
+ * The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy —
+ * remedy warnings for providers no login flow can fix (the choice is KEPT: model validity is
+ * independent of credentials), or the inline login for the rest. Returns the chosen spec, or
+ * undefined when the pick should be discarded (picker cancel, login cancel, a failed auth probe).
+ */
+async function pickWithCredentials(
+  workspaceDir: string,
+  models: Models,
+  authPath: string,
+): Promise<string | undefined> {
   let statuses: Awaited<ReturnType<typeof providerAuthStatuses>>;
   try {
     statuses = await providerAuthStatuses(models);
@@ -96,21 +115,22 @@ export async function resolveFirstRunModel(
     // means the enumeration itself failed (getProviders / a provider with no probe-able surface) — a
     // system fault. Surface it; the opener then still raises the clear missing-model error.
     log.warn(`[fastagent] could not probe provider auth: ${(error as Error).message}`);
-    return;
+    return undefined;
   }
   const r = await autocomplete({
     message: "Choose a model for this agent",
     options: buildModelPickerOptions(listModels(models), statuses),
   });
-  if (isCancel(r)) return; // cancelled: let the opener report the missing model
+  if (isCancel(r)) return undefined; // cancelled: the caller raises its clear missing-model error
   const chosen = r as string;
   const provider = providerOf(chosen);
   const status = statuses.get(provider);
-  if (status && status.state !== "ready" && status.login === "none") {
-    // No login flow exists for this provider — the model choice is still valid (its validity is
-    // independent of credentials), so KEEP it and name the remedy. The remedy depends on WHY it is
-    // not ready: a BROKEN stored credential still owns the provider (env is consulted only when
-    // nothing is stored — createPiModels), so "set the env var" would not help there.
+  if (status?.state === "ready") return chosen; // usable now — nothing to fix
+
+  if (status && status.login === "none") {
+    // No login flow exists for this provider — KEEP the choice and name the remedy. The remedy depends
+    // on WHY it is not ready: a BROKEN stored credential still owns the provider (env is consulted
+    // only when nothing is stored — createPiModels), so "set the env var" would not help there.
     if (status.state === "broken") {
       log.warn(
         `[fastagent] stored auth for "${provider}" is unusable: ${status.message} — fix or remove it in ${authPath}; invokes fail until then`,
@@ -118,28 +138,27 @@ export async function resolveFirstRunModel(
     } else {
       log.warn(`[fastagent] "${provider}" has no interactive login — set its API key env var; invokes fail until then`);
     }
-  } else if (status?.state !== "ready") {
-    // Inline login. Same leak guard as `login`: self-ignore the state root BEFORE a credential
-    // can land in-tree, so the secret is never untracked-but-committable.
-    const stateRoot = resolveStateRoot(workspaceDir);
-    if (isUnderDir(authPath, stateRoot)) await ensureStateRootSelfIgnored(workspaceDir, stateRoot);
-    try {
-      // Verified against the CHOSEN model — the exact request the agent is about to make; a rejected
-      // key re-prompts inside the loop, so reaching here means a usable (or at worst unverifiable) key.
-      await loginWithKeyCheck(provider, authPath, chosen);
-      console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
-    } catch (error) {
-      if (error instanceof LoginCancelled) return; // user backed out — discard the choice, like a picker cancel
-      // A FAILED login keeps the choice (same policy as the env-only branch above: model validity is
-      // independent of credentials) — the pick persists, the startup auth report names the remedy,
-      // and a later `fastagent login` fixes auth without re-picking the model.
-      log.warn(
-        `[fastagent] login for "${provider}" failed: ${(error as Error).message} — model saved; run \`fastagent login\` to fix auth`,
-      );
-    }
+    return chosen;
   }
-  process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
-  await persistModelChoice(workspaceDir, configPath, chosen);
+
+  // Inline login. Same leak guard as `login`: self-ignore the state root BEFORE a credential
+  // can land in-tree, so the secret is never untracked-but-committable.
+  const stateRoot = resolveStateRoot(workspaceDir);
+  if (isUnderDir(authPath, stateRoot)) await ensureStateRootSelfIgnored(workspaceDir, stateRoot);
+  try {
+    // Verified against the CHOSEN model — the exact request the agent is about to make; a rejected
+    // key re-prompts inside the loop, so reaching here means a usable (or at worst unverifiable) key.
+    await loginWithKeyCheck(provider, authPath, chosen);
+    console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
+  } catch (error) {
+    if (error instanceof LoginCancelled) return undefined; // user backed out — discard the choice, like a picker cancel
+    // A FAILED login keeps the choice: the pick persists, the startup auth report names the remedy,
+    // and a later `fastagent login` fixes auth without re-picking the model.
+    log.warn(
+      `[fastagent] login for "${provider}" failed: ${(error as Error).message} — model saved; run \`fastagent login\` to fix auth`,
+    );
+  }
+  return chosen;
 }
 
 /**
@@ -245,7 +264,8 @@ export function terminalLoginIO(): LoginIO {
 async function persistModelChoice(workspaceDir: string, configPath: string | undefined, spec: string): Promise<void> {
   const hint = (): void =>
     console.error(
-      `[fastagent] using ${spec} for this run; set \`model: ${JSON.stringify(spec)}\` in your config to persist`,
+      // No "using it for this run" promise: deploy's model-travel gate rightly ignores the un-persisted pick.
+      `[fastagent] picked ${spec} — set \`model: ${JSON.stringify(spec)}\` in your config to persist`,
     );
   if (!configPath) return hint();
   try {
