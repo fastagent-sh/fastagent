@@ -76,17 +76,25 @@ function render(event: SessionEvent): string | undefined {
 }
 
 async function drainEvents(iterator: AsyncIterator<SessionEvent>, io: AttachIo): Promise<void> {
+  // Only close a line we actually opened: message_finished fires for EVERY assistant message
+  // (pure tool-call and pure thinking ones included), and an unconditional newline would dilute a
+  // multi-tool run's output with blank lines.
+  let wroteText = false;
   for (;;) {
     const result = await iterator.next();
     if (result.done) return;
     const event = result.value;
     if (event.type === "message_delta") {
       const d = event.data as { channel: string; delta: string };
-      if (d.channel === "text") io.write(d.delta);
+      if (d.channel === "text") {
+        io.write(d.delta);
+        wroteText = true;
+      }
       continue;
     }
     if (event.type === "message_finished") {
-      io.write("\n");
+      if (wroteText) io.write("\n");
+      wroteText = false;
       continue;
     }
     // A remote (or version-skewed) serve may send data shapes this renderer does not expect — a
@@ -291,6 +299,10 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       });
       failingSince = undefined;
     } catch (error) {
+      // A failed round may still have advanced the cursor (backfill rendered before the stream
+      // error) — keep the progress or every retry replays the same records in full.
+      const advanced = roundCursor(error);
+      if (advanced !== undefined) cursor = advanced;
       failingSince ??= Date.now();
       const since = failingSince; // this round's anchor — a reattach resets the outer variable
       const downSeconds = Math.round((Date.now() - since) / 1000);
@@ -408,9 +420,10 @@ export async function attachRound(
     }
     // Recorded and RETHROWN at round end: a stream error (protocol mismatch, dropped transport)
     // must fail the round so the caller's budget ticks — a warn-and-succeed round would loop a
-    // permanent mismatch forever.
+    // permanent mismatch forever. Through liveIo: this warn is concurrent with the replay block
+    // and must respect its buffering like every other drain-side line.
     streamError = error;
-    io.warn(`[fastagent] event stream error: ${String(error)}`);
+    liveIo.warn(`[fastagent] event stream error: ${String(error)}`);
   });
   await new Promise((r) => setTimeout(r, settleMs)); // let the subscription land before syncing
   // The WHOLE post-subscribe sync (backfill + state re-check) shares one failure discipline: close
@@ -446,13 +459,29 @@ export async function attachRound(
     await draining;
     // The stream's 401 outranks this round's transient sync error (restart window: old connection
     // rejected while the port is still unbound) — auth facts must not degrade to transients.
-    throw authError ?? error;
+    throw withCursor(authError ?? error, next);
   }
   release();
   await draining;
-  if (authError) throw authError; // the stream's 401 is the round's 401
-  if (streamError) throw streamError; // and its protocol/transport error is the round's failure
+  if (authError) throw withCursor(authError, next); // the stream's 401 is the round's 401
+  if (streamError) throw withCursor(streamError, next); // and its protocol/transport error is the round's failure
   return next;
+}
+
+/**
+ * A failed round still carries its cursor progress: the backfill may have completed (rendered and
+ * advanced) before the stream error surfaced — discarding the advancement would make every retry
+ * round replay the same records in full until the budget runs out. The caller reads it back via
+ * {@link roundCursor}.
+ */
+function withCursor(error: unknown, cursor: string | undefined): Error {
+  const e = error instanceof Error ? error : new Error(String(error));
+  return Object.assign(e, { attachCursor: cursor });
+}
+
+/** The cursor a failed round reached, if it recorded one. */
+export function roundCursor(error: unknown): string | undefined {
+  return (error as { attachCursor?: string }).attachCursor;
 }
 
 /** Render one durable record on replay — the guaranteed kind vocabulary; other kinds are skipped. */
