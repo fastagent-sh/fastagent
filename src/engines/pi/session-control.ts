@@ -282,7 +282,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // promptly instead of queueing behind a never-settling pull — without it every attach/detach
       // against an idle session would leak a permanently registered subscriber.
       let sub: Subscriber | undefined;
+      // `finished` is its own state: `sub === undefined` alone would conflate "not yet registered"
+      // with "terminated", and a post-done next() would silently REGISTER A FRESH subscription —
+      // the exact ghost-subscriber leak this class exists to prevent, reachable by any wrapper that
+      // polls one extra time. done is terminal, per the iterator protocol.
+      let finished = false;
       const cleanup = (): void => {
+        finished = true;
         if (!sub) return;
         sub.close();
         const set = subscribers.get(session);
@@ -296,6 +302,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
           return {
             async next() {
+              if (finished) return { done: true, value: undefined };
               if (!sub) {
                 sub = new Subscriber();
                 let set = subscribers.get(session);

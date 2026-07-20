@@ -948,6 +948,8 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const race = await Promise.race([fresh.next(), new Promise((r) => setTimeout(() => r("empty"), 50))]);
     expect(race).toBe("empty"); // the pre-subscription event was not buffered anywhere
     await fresh.return?.(undefined);
+    // done is TERMINAL: a post-return next() answers done — it must not silently re-register.
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   }, 5_000);
 
   it("a workspace caller observer receives the full vocabulary, boundary events included", async () => {
