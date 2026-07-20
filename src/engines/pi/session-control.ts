@@ -420,12 +420,24 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             } else {
               // The WRITE handle is opened UNDER the lease: a handle from before tryAcquire could
               // be a stale snapshot of a run that completed in the window — appending to it would
-              // hang the override off an outdated leaf. `apply` is set by construction (only
-              // set_model/set_thinking reach this branch; compact took the branch above).
+              // hang the override off an outdated leaf.
               const fresh = await sessions.openIfExists(session);
-              if (!fresh || !apply) throw new Error("session disappeared between existence check and lease");
-              const event = await apply(fresh);
-              if (event) fanOut(session, event);
+              if (!fresh) {
+                // Same real condition as the pre-lease check (the session vanished in the window):
+                // same code, same disposition — not a retryable internal error.
+                return {
+                  ok: false,
+                  error: {
+                    code: NO_SUCH_SESSION_CODE,
+                    message: `session "${session}" does not exist — sessions are created by invoke, not by boundary mutations`,
+                    retryable: false,
+                  },
+                };
+              }
+              // Unreachable by construction: only set_model/set_thinking reach this branch, and
+              // both assign `apply` in validation. Throw rather than silently skip (fail visibly).
+              if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
+              fanOut(session, await apply(fresh));
             }
           } catch (error) {
             // Admitted but nothing durable landed (pi appends the compaction entry only at the

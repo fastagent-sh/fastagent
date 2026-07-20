@@ -24,7 +24,7 @@ import {
   type SessionEvent,
 } from "../src/session.ts";
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
-import { type PiBoundaryWiring, createPiSessionControl as createControl } from "../src/engines/pi/session-control.ts";
+import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
 import { inProcessLease } from "../src/engines/pi/invoke.ts";
 import { resolveHarnessOverrides } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
@@ -660,7 +660,7 @@ function makeBoundary(responses: FauxResponseStep[]) {
     systemPrompt: "test",
   });
   const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
-  const { control, observer } = createControl({ sessions, boundary: () => boundary });
+  const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
   return { agent, control, sessions, spec, models };
@@ -789,7 +789,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       systemPrompt: "test",
     });
     const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
-    const { control, observer } = createControl({ sessions, boundary: () => boundary });
+    const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
     const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
     const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
 
@@ -891,7 +891,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       systemPrompt: "test",
     });
     const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
-    const { control, observer } = createControl({ sessions, boundary: () => boundary });
+    const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
     const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
 
     const first = await drain(agent.invoke({ session: "sE2E" }, { text: "hi" }));
