@@ -281,6 +281,39 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("a black-holed CONNECT is terminated by the watchdog on both streaming planes", async () => {
+    // fetch never resolves unless aborted — the connect-phase window no request timeout covers.
+    const blackHole = ((_input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        if (String(_input).includes("/control/capabilities")) {
+          resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+          return;
+        }
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+          once: true,
+        });
+      })) as typeof fetch;
+    const fakeTimers = await import("vitest").then((m) => m.vi);
+    fakeTimers.useFakeTimers();
+    try {
+      const remote = await connectSessionControl({ url: "http://hole", token: "t", fetchFn: blackHole });
+      const eventsAttempt = (async () => {
+        for await (const _ of remote.events("s")) void _;
+      })();
+      const agentAttempt = drain(
+        connectAgent({ url: "http://hole", token: "t", fetchFn: blackHole }).invoke({ session: "s" }, { text: "hi" }),
+      );
+      await fakeTimers.advanceTimersByTimeAsync(4 * 30_000); // past SSE_IDLE_LIMIT_MS
+      await expect(eventsAttempt).rejects.toThrow(/dead connection/);
+      const agentEvents = await agentAttempt;
+      expect(agentEvents).toEqual([
+        expect.objectContaining({ type: "failed", retryable: true, details: expect.stringContaining("no bytes") }),
+      ]);
+    } finally {
+      fakeTimers.useRealTimers();
+    }
+  });
+
   it("non-envelope stream data is protocol mismatch — thrown, not misdiagnosed as a gap", async () => {
     const makeFetch = (body: string) =>
       (async (input: string | URL | Request) => {

@@ -125,15 +125,18 @@ export async function connectSessionControl(options: ConnectSessionControlOption
       // own finally only runs after the pending await settles, which a silent stream never does.
       const openStream = (abort: AbortController) =>
         (async function* iterate(): AsyncGenerator<SessionEvent> {
-          let watchdog: ReturnType<typeof idleWatchdog> | undefined;
+          // Armed BEFORE the fetch: the connect phase (headers never arriving from a black-holed
+          // endpoint) is otherwise a window no timeout covers — the same watchdog terminates it,
+          // with headers-arrival counting as the first sign of life.
+          const watchdog = idleWatchdog(abort);
           try {
             const res = await fetchFn(`${base}/control/events?session=${encodeURIComponent(session)}`, {
               headers,
               signal: abort.signal,
             });
+            watchdog.onByte(); // headers arrived
             if (!res.ok) throw new ControlRequestError(res.status, await res.text());
             if (!res.body) throw new Error("control events: response has no body");
-            watchdog = idleWatchdog(abort); // reads have no timeout of their own — see SSE_IDLE_LIMIT_MS
             let nextSeq = 0;
             for await (const data of sseData(res.body, watchdog.onByte)) {
               // Parse discipline, same as the other two wire planes (dispatch parses, invoke
@@ -170,7 +173,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
             }
           } catch (error) {
             if (abort.signal.aborted) {
-              if (watchdog?.stale()) {
+              if (watchdog.stale()) {
                 throw new Error(
                   `control events: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection; resync via entries()`,
                 );
@@ -179,7 +182,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
             }
             throw error;
           } finally {
-            watchdog?.stop();
+            watchdog.stop();
           }
         })();
       return {
@@ -253,7 +256,9 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
           // must not append a second one (catch included), and a stream that ends WITHOUT one
           // (server died mid-run) must be closed with a failed — never a terminal-less end.
           let terminalSeen = false;
-          let watchdog: ReturnType<typeof idleWatchdog> | undefined;
+          // Armed BEFORE the fetch — the run's driver must not hang on a black-holed connect
+          // either (headers-arrival counts as the first sign of life).
+          const watchdog = idleWatchdog(abort);
           try {
             const res = await fetchFn(`${base}/control/invoke`, {
               method: "POST",
@@ -261,6 +266,7 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
               body: JSON.stringify({ session: scope.session, text: prompt.text }),
               signal: abort.signal,
             });
+            watchdog.onByte(); // headers arrived
             if (!res.ok) {
               yield toFailed(new ControlRequestError(res.status, await res.text()));
               return;
@@ -269,7 +275,6 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
               yield { type: "failed", details: "remote invoke: response has no body", retryable: true };
               return;
             }
-            watchdog = idleWatchdog(abort); // the run's driver must not hang on a dead connection
             for await (const data of sseData(res.body, watchdog.onByte)) {
               let event: AgentEvent;
               try {
@@ -308,7 +313,7 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
             }
           } catch (error) {
             if (abort.signal.aborted) {
-              if (watchdog?.stale() && !terminalSeen) {
+              if (watchdog.stale() && !terminalSeen) {
                 yield {
                   type: "failed",
                   details: `remote invoke: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection`,
@@ -319,7 +324,7 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
             }
             if (!terminalSeen) yield toFailed(error);
           } finally {
-            watchdog?.stop();
+            watchdog.stop();
           }
         })();
       // ONE stream per invoke, like a local async generator (which is its own iterator): a second
