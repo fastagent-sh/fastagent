@@ -595,6 +595,23 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(drained).toBeLessThanOrEqual(10_000);
   }, 10_000);
 
+  it("every iteration of one events iterable is a FRESH subscription (isomorphic with remote)", async () => {
+    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const iterable = control.events("sReIter");
+    // First iteration: consume one event, then walk away.
+    const first = iterable[Symbol.asyncIterator]();
+    const p1 = first.next();
+    observer("sReIter", { type: "run_started", timestamp: 0, runId: "r1", data: {} });
+    expect(((await p1) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_started");
+    await first.return?.(undefined);
+    // Second iteration of the SAME iterable: a fresh subscription, not a poisoned/shared one.
+    const second = iterable[Symbol.asyncIterator]();
+    const p2 = second.next();
+    observer("sReIter", { type: "run_settled", timestamp: 1, runId: "r1", data: { status: "completed" } });
+    expect(((await p2) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_settled");
+    await second.return?.(undefined);
+  }, 5_000);
+
   it("concurrent next() calls on one events subscription both settle", async () => {
     const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
     const iterator = control.events("sConc")[Symbol.asyncIterator]();

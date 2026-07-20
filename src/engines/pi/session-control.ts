@@ -291,30 +291,33 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     },
 
     events(session): AsyncIterable<SessionEvent> {
-      // Registration happens on the FIRST next(), not at call time: subscription semantics = you
-      // are subscribed while you iterate; an iterable obtained but never iterated must not buffer.
-      // Teardown goes through Subscriber.close() so a `return()` on a QUIET stream resolves
-      // promptly instead of queueing behind a never-settling pull — without it every attach/detach
-      // against an idle session would leak a permanently registered subscriber.
-      let sub: Subscriber | undefined;
-      // `finished` is its own state: `sub === undefined` alone would conflate "not yet registered"
-      // with "terminated", and a post-done next() would silently REGISTER A FRESH subscription —
-      // the exact ghost-subscriber leak this class exists to prevent, reachable by any wrapper that
-      // polls one extra time. done is terminal, per the iterator protocol.
-      let finished = false;
-      const cleanup = (): void => {
-        finished = true;
-        if (!sub) return;
-        sub.close();
-        const set = subscribers.get(session);
-        if (set) {
-          set.delete(sub);
-          if (set.size === 0) subscribers.delete(session);
-        }
-        sub = undefined;
-      };
+      // EVERY ITERATION IS A FRESH SUBSCRIPTION — the per-subscription state lives inside
+      // asyncIterator(), matching the remote client (one connection per iteration): two concurrent
+      // iterations each get the full stream, and one iteration's end does not poison the next.
+      // Registration happens on the FIRST next(), not at iterator creation: subscription semantics
+      // = you are subscribed while you iterate; an iterator obtained but never driven must not
+      // buffer. Teardown goes through Subscriber.close() so a `return()` on a QUIET stream
+      // resolves promptly instead of queueing behind a never-settling pull — without it every
+      // attach/detach against an idle session would leak a permanently registered subscriber.
       return {
         [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
+          let sub: Subscriber | undefined;
+          // `finished` is its own state: `sub === undefined` alone would conflate "not yet
+          // registered" with "terminated", and a post-done next() would silently REGISTER A FRESH
+          // subscription — the exact ghost-subscriber leak this class exists to prevent, reachable
+          // by any wrapper that polls one extra time. done is terminal, per the iterator protocol.
+          let finished = false;
+          const cleanup = (): void => {
+            finished = true;
+            if (!sub) return;
+            sub.close();
+            const set = subscribers.get(session);
+            if (set) {
+              set.delete(sub);
+              if (set.size === 0) subscribers.delete(session);
+            }
+            sub = undefined;
+          };
           return {
             async next() {
               if (finished) return { done: true, value: undefined };
