@@ -56,7 +56,9 @@ export class ControlRequestError extends Error {
   }
 }
 
-export interface ConnectSessionControlOptions {
+/** Connection parameters shared by BOTH remote planes (`connectSessionControl` and
+ *  `connectAgent`) — plane-neutral on purpose: one endpoint, one token, two contracts. */
+export interface RemoteEndpointOptions {
   /** Base URL of the serving process (e.g. `http://127.0.0.1:8787`); `/control/*` is appended. */
   url: string;
   /** The shared bearer secret (`<stateRoot>/control.json` on the serving machine). */
@@ -70,7 +72,7 @@ export interface ConnectSessionControlOptions {
  * the contract: the static declaration is fetched ONCE here and served from memory — which also
  * makes a wrong URL/token fail at connect time, not on first use.
  */
-export async function connectSessionControl(options: ConnectSessionControlOptions): Promise<SessionControl> {
+export async function connectSessionControl(options: RemoteEndpointOptions): Promise<SessionControl> {
   const { url, token, fetchFn = fetch } = options;
   const base = url.replace(/\/$/, "");
   const headers = { authorization: `Bearer ${token}` };
@@ -224,7 +226,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
  * the wire). The invoke wire is text-only for now: a prompt with images fails visibly instead of
  * silently dropping them (steer/follow_up on the control plane carry full Prompts).
  */
-export function connectAgent(options: ConnectSessionControlOptions): Agent {
+export function connectAgent(options: RemoteEndpointOptions): Agent {
   const { url, token, fetchFn = fetch } = options;
   const base = url.replace(/\/$/, "");
   const toFailed = (error: unknown): AgentEvent => {

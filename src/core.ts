@@ -13,7 +13,7 @@ export {
   ControlRequestError,
   connectAgent,
   connectSessionControl,
-  type ConnectSessionControlOptions,
+  type RemoteEndpointOptions,
 } from "./session-remote.ts";
 export { readBodyCapped } from "./channels/body.ts";
 export { text, textHeaders } from "./channels/respond.ts";

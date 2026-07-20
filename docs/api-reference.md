@@ -77,7 +77,10 @@ Fetch-shaped HTTP/SSE handler. Accepts `POST` JSON:
 { "session": "s1", "text": "hello" }
 ```
 
-Returns Server-Sent Events with one JSON `AgentEvent` per `data:` line.
+Returns Server-Sent Events with one JSON `AgentEvent` per `data:` line. The stream also carries
+SSE comment heartbeats (`: ping`, every 30s) so remote consumers can distinguish a quiet run from
+a dead connection — parse per the SSE spec (only `data:` lines carry events), not line-by-line
+JSON.
 
 ```ts
 function nodeListener(handler: (req: Request) => Promise<Response>): (req, res) => void;

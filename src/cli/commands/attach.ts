@@ -76,14 +76,16 @@ function render(event: SessionEvent): string | undefined {
   }
 }
 
-async function drainEvents(iterator: AsyncIterator<SessionEvent>, io: AttachIo): Promise<void> {
+async function drainEvents(iterator: AsyncIterator<SessionEvent>, io: AttachIo): Promise<number> {
   // Only close a line we actually opened: message_finished fires for EVERY assistant message
   // (pure tool-call and pure thinking ones included), and an unconditional newline would dilute a
   // multi-tool run's output with blank lines.
   let wroteText = false;
+  let consumed = 0;
   for (;;) {
     const result = await iterator.next();
-    if (result.done) return;
+    if (result.done) return consumed;
+    consumed++;
     const event = result.value;
     if (event.type === "message_delta") {
       const d = event.data as { channel: string; delta: string };
@@ -296,12 +298,30 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   let failingSince: number | undefined;
   for (;;) {
     try {
-      cursor = await attachRound(control, sessionArg, cursor, {
+      const round = await attachRound(control, sessionArg, cursor, {
         println: (line) => console.log(line),
         write: (chunk) => process.stdout.write(chunk),
         warn: (line) => log.warn(line),
       });
-      failingSince = undefined;
+      cursor = round.cursor;
+      if (round.sawProgress) {
+        failingSince = undefined;
+      } else {
+        // A clean end that delivered nothing is not health: an endpoint answering 200 and closing
+        // every stream immediately (buffering proxy, half-dead tunnel) would otherwise loop
+        // forever with the budget never ticking.
+        failingSince ??= Date.now();
+        const idleSeconds = Math.round((Date.now() - failingSince) / 1000);
+        const limitMs = discovered ? LOCAL_GRACE_MS : REMOTE_GRACE_MS;
+        if (Date.now() - failingSince >= limitMs) {
+          exitWith(
+            new Error(
+              `the endpoint keeps closing the event stream immediately with nothing delivered (~${idleSeconds}s) — a buffering proxy or half-dead tunnel? Re-run attach when the path is fixed`,
+            ),
+          );
+        }
+        log.warn(`[fastagent] stream closed with nothing delivered (~${idleSeconds}s / ${limitMs / 1000}s limit)`);
+      }
     } catch (error) {
       // A failed round may still have advanced the cursor (backfill rendered before the stream
       // error) — keep the progress or every retry replays the same records in full.
@@ -393,7 +413,7 @@ export async function attachRound(
   io: AttachIo,
   /** The subscribe→sync settle heuristic (see the round comment). Tests shrink it. */
   settleMs = 300,
-): Promise<string | undefined> {
+): Promise<{ cursor: string | undefined; sawProgress: boolean }> {
   // The round HOLDS its subscription's iterator: one round = one stream, on every path — a
   // backfill failure must close it before propagating, or the caller's retry round would stack a
   // second concurrent stream interleaving the same session's output.
@@ -417,25 +437,32 @@ export async function attachRound(
   };
   let authError: unknown;
   let streamError: unknown;
-  const draining = drainEvents(iterator, liveIo).catch((error) => {
-    if (isAuthError(error)) {
-      authError = error;
-      return;
-    }
-    // Recorded and RETHROWN at round end: a stream error (protocol mismatch, dropped transport)
-    // must fail the round so the caller's budget ticks — a warn-and-succeed round would loop a
-    // permanent mismatch forever. Through liveIo: this warn is concurrent with the replay block
-    // and must respect its buffering like every other drain-side line.
-    streamError = error;
-    liveIo.warn(`[fastagent] event stream error: ${String(error)}`);
-  });
+  let liveCount = 0;
+  const draining = drainEvents(iterator, liveIo)
+    .then((n) => {
+      liveCount = n;
+    })
+    .catch((error) => {
+      if (isAuthError(error)) {
+        authError = error;
+        return;
+      }
+      // Recorded and RETHROWN at round end: a stream error (protocol mismatch, dropped transport)
+      // must fail the round so the caller's budget ticks — a warn-and-succeed round would loop a
+      // permanent mismatch forever. Through liveIo: this warn is concurrent with the replay block
+      // and must respect its buffering like every other drain-side line.
+      streamError = error;
+      liveIo.warn(`[fastagent] event stream error: ${String(error)}`);
+    });
   await new Promise((r) => setTimeout(r, settleMs)); // let the subscription land before syncing
   // The WHOLE post-subscribe sync (backfill + state re-check) shares one failure discipline: close
   // this round's stream and drain before propagating — an exception escaping with the subscription
   // alive would stack a second concurrent stream on the caller's retry.
   let next = cursor;
+  let sawBackfill = false;
   try {
     const backfill = await control.entries(session, cursor !== undefined ? { since: cursor } : undefined);
+    sawBackfill = backfill.entries.length > 0;
     // Advance by APPEND ORDER (the last returned record), never by leafEntryId: `since` is an
     // append-position cursor (design §7), and a leaf that sits before later appends (abandoned
     // branches) would make every reconnect permanently replay the same tail.
@@ -469,7 +496,10 @@ export async function attachRound(
   await draining;
   if (authError) throw withCursor(authError, next); // the stream's 401 is the round's 401
   if (streamError) throw withCursor(streamError, next); // and its protocol/transport error is the round's failure
-  return next;
+  // sawProgress feeds the caller's budget: a clean end that delivered NOTHING (no live events, no
+  // backfill) is indistinguishable from a half-dead proxy closing every stream immediately — the
+  // caller must not treat it as health.
+  return { cursor: next, sawProgress: liveCount > 0 || sawBackfill };
 }
 
 /**

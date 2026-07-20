@@ -425,7 +425,8 @@ describe("session control over HTTP (Phase 3)", () => {
       events: eagerEvents,
       dispatch: async () => ({ ok: true }) as never,
     };
-    await attachRound(fake as never, "s", undefined, io, 25);
+    const buffered = await attachRound(fake as never, "s", undefined, io, 25);
+    expect(buffered.sawProgress).toBe(true); // a live event arrived
     // Contiguity: the whole replay block (and the state line) precede the buffered live output.
     expect(lines).toEqual([
       "[replaying the record since the last sync (may overlap what you saw live)]",
@@ -479,8 +480,9 @@ describe("session control over HTTP (Phase 3)", () => {
       events: quietEvents,
       dispatch: async () => ({ ok: true }) as never,
     };
-    const next = await attachRound(fake as never, "s", "e1", io, 1);
-    expect(next).toBe("e3"); // advanced to the leaf
+    const round = await attachRound(fake as never, "s", "e1", io, 1);
+    expect(round.cursor).toBe("e3"); // advanced by append order
+    expect(round.sawProgress).toBe(true); // the backfill delivered records
     expect(lines).toEqual([
       "[replaying the record since the last sync (may overlap what you saw live)]",
       "> question",
