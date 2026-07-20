@@ -13,6 +13,7 @@
  * boundary.
  */
 import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";
+import { timingSafeEqual } from "node:crypto";
 import type { Routes } from "../host/node.ts";
 import { readBodyCapped } from "./body.ts";
 import { text } from "./respond.ts";
@@ -103,7 +104,13 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
   if (!token) throw new Error("controlRoutes: a bearer token is required (empty tokens are not a mode)");
   const epoch = crypto.randomUUID();
 
-  const authed = (req: Request): boolean => req.headers.get("authorization") === `Bearer ${token}`;
+  // Timing-safe: the bearer token is this surface's ONLY auth (and the --tunnel warning names it
+  // as the sole protection on a public URL) — a plain === would leak byte-by-byte via timing.
+  const expected = Buffer.from(`Bearer ${token}`);
+  const authed = (req: Request): boolean => {
+    const header = Buffer.from(req.headers.get("authorization") ?? "");
+    return header.length === expected.length && timingSafeEqual(header, expected);
+  };
   /** Wrap a handler with auth + the session query param most routes need. */
   const guard =
     (handler: (req: Request, url: URL) => Response | Promise<Response>) =>
@@ -205,7 +212,9 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
         },
         cancel() {
           clearInterval(heartbeat);
-          void iterator.return?.(undefined);
+          // Same neutral-contract defense as the pull error path: a rejecting return() on client
+          // disconnect must not become a process-level unhandledRejection.
+          void iterator.return?.(undefined)?.catch?.(() => {});
         },
       });
       return new Response(stream, {
