@@ -474,6 +474,11 @@ describe("session control over HTTP (Phase 3)", () => {
       const base = { "GET /health": () => new Response("ok") };
       const mounted = mountSessionControl(base, control, stateRoot);
       expect(Object.keys(mounted.routes)).toEqual(expect.arrayContaining(["GET /health", "GET /control/state"]));
+      // Collision is PATH-level, matching the router's semantics: an any-method channel key would
+      // dodge an exact-key check yet still shadow the method-qualified control route at match time.
+      expect(() => mountSessionControl({ "/control/dispatch": () => new Response("x") }, control, stateRoot)).toThrow(
+        /collide with the session control plane/,
+      );
       mounted.announce(12345);
       const file = JSON.parse(await readFile(join(stateRoot, "control.json"), "utf8")) as {
         url: string;

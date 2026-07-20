@@ -77,7 +77,11 @@ export function mountSessionControl(
   if (!control) return { routes, announce: () => {} };
   const token = crypto.randomUUID();
   const mounted = controlRoutes(control, { token, agent: options.agent });
-  const collisions = Object.keys(mounted).filter((key) => key in routes);
+  // PATH-level collision, matching the router's semantics (an any-method "/control/dispatch"
+  // channel key would dodge an exact-key check yet still shadow the method-qualified control
+  // route at match time — the router matches by path first).
+  const mountedPaths = new Set(Object.keys(mounted).map((k) => parseRouteKey(k).path));
+  const collisions = Object.keys(routes).filter((key) => mountedPaths.has(parseRouteKey(key).path));
   if (collisions.length > 0) {
     throw new Error(
       `channel route(s) ${collisions.map((k) => `"${k}"`).join(", ")} collide with the session control plane — ` +
