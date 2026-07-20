@@ -235,32 +235,35 @@ export async function attachRound(
     io.warn(`[fastagent] event stream error: ${String(error)}`);
   });
   await new Promise((r) => setTimeout(r, io.settleMs)); // let the subscription land before syncing
-  let backfill: Awaited<ReturnType<SessionControl["entries"]>>;
+  // The WHOLE post-subscribe sync (backfill + state re-check) shares one failure discipline: close
+  // this round's stream and drain before propagating — an exception escaping with the subscription
+  // alive would stack a second concurrent stream on the caller's retry.
+  let next = cursor;
   try {
-    backfill = await control.entries(session, cursor !== undefined ? { since: cursor } : undefined);
+    const backfill = await control.entries(session, cursor !== undefined ? { since: cursor } : undefined);
+    next = backfill.leafEntryId ?? cursor;
+    if (backfill.entries.length > 0) {
+      io.println("[replaying the record since the last sync (may overlap what you saw live)]");
+      for (const entry of backfill.entries) {
+        let line: string | undefined;
+        try {
+          line = renderEntry(entry);
+        } catch {
+          line = `[${entry.kind}]`;
+        }
+        if (line !== undefined) io.println(line);
+      }
+      io.println("[end of replay]");
+    }
+    // The protocol's reconnect step the replay cannot cover: status changes while away are
+    // LIVE-only events (state_changed before a restart is neither replayed nor re-emitted).
+    const now = await control.state(session);
+    io.println(`[live — ${now.status}${now.activeRunId ? ` (run ${now.activeRunId})` : ""}]`);
   } catch (error) {
     await iterator.return?.(undefined)?.catch?.(() => {});
     await draining;
     throw error;
   }
-  const next = backfill.leafEntryId ?? cursor;
-  if (backfill.entries.length > 0) {
-    io.println("[replaying the record since the last sync (may overlap what you saw live)]");
-    for (const entry of backfill.entries) {
-      let line: string | undefined;
-      try {
-        line = renderEntry(entry);
-      } catch {
-        line = `[${entry.kind}]`;
-      }
-      if (line !== undefined) io.println(line);
-    }
-    io.println("[end of replay]");
-  }
-  // The protocol's reconnect step the replay cannot cover: status changes while away are LIVE-only
-  // events (state_changed before a restart is neither replayed nor re-emitted) — re-check and show.
-  const now = await control.state(session);
-  io.println(`[live — ${now.status}${now.activeRunId ? ` (run ${now.activeRunId})` : ""}]`);
   await draining;
   if (authError) throw authError; // the stream's 401 is the round's 401
   return next;

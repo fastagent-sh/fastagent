@@ -182,7 +182,18 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
           }, HEARTBEAT_MS);
         },
         async pull(controller) {
-          const next = await (pending ?? iterator.next());
+          let next: IteratorResult<SessionEvent>;
+          try {
+            next = await (pending ?? iterator.next());
+          } catch (error) {
+            // A rejecting implementation (the neutral contract permits it) must not leak its
+            // subscription: an errored stream never gets cancel(), so the unsubscribe and the
+            // heartbeat teardown happen HERE.
+            clearInterval(heartbeat);
+            void iterator.return?.(undefined)?.catch?.(() => {});
+            controller.error(error);
+            return;
+          }
           pending = undefined;
           if (next.done) {
             clearInterval(heartbeat);

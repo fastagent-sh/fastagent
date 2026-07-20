@@ -315,6 +315,34 @@ describe("session control over HTTP (Phase 3)", () => {
     };
     await expect(attachRound(leaky as never, "s", undefined, io)).rejects.toThrow(/transient 500/);
     expect(returned).toBe(true);
+
+    // The SAME discipline for a state() re-check failure — the round's stream must close too.
+    let returned2 = false;
+    const stateFails = {
+      ...fake,
+      entries: async () => ({ entries: [] }) as never,
+      state: async () => {
+        throw new Error("state 500");
+      },
+      events: () => {
+        let settle: ((r: IteratorResult<never>) => void) | undefined;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () =>
+              new Promise<IteratorResult<never>>((res) => {
+                settle = res;
+              }),
+            return: async () => {
+              returned2 = true;
+              settle?.({ done: true, value: undefined });
+              return { done: true as const, value: undefined };
+            },
+          }),
+        };
+      },
+    };
+    await expect(attachRound(stateFails as never, "s", undefined, io)).rejects.toThrow(/state 500/);
+    expect(returned2).toBe(true);
   });
 
   it("controlRoutes refuses to mount without a token", () => {

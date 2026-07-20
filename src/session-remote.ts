@@ -124,9 +124,13 @@ export async function connectSessionControl(options: ConnectSessionControlOption
               await gen.return(value as never).catch(() => {});
               return { done: true as const, value: undefined };
             },
-            throw(error?: unknown) {
-              abort.abort(); // same suspension as return(): gen.throw also queues behind a quiet read
-              return gen.throw(error);
+            async throw(error?: unknown): Promise<IteratorResult<SessionEvent>> {
+              // throw = terminate with the caller's error: tear the connection down exactly like
+              // return() (abort first — gen.throw would queue behind a quiet read), then rethrow
+              // deterministically instead of poking a completed generator.
+              abort.abort();
+              await gen.return(undefined as never).catch(() => {});
+              throw error;
             },
           };
         },
