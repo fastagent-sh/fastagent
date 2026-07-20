@@ -265,6 +265,33 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("non-envelope stream data is protocol mismatch — thrown, not misdiagnosed as a gap", async () => {
+    const makeFetch = (body: string) =>
+      (async (input: string | URL | Request) => {
+        if (String(input).includes("/control/capabilities")) {
+          return new Response("{}", { headers: { "content-type": "application/json" } });
+        }
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode(body));
+              c.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }) as typeof fetch;
+    // Valid JSON, wrong shape (a foreign SSE endpoint) — and plain non-JSON: both THROW so a
+    // consumer's failure budget applies; reconnecting can never fix a protocol mismatch.
+    for (const body of ['data: {"hello":"world"}\n\n', "data: not json at all\n\n"]) {
+      const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn: makeFetch(body) });
+      const iterate = async () => {
+        for await (const _ of remote.events("s")) void _;
+      };
+      await expect(iterate()).rejects.toThrow(/protocol/);
+    }
+  });
+
   it("a seq gap ends the events iterator cleanly (the one envelope behavior the client owns)", async () => {
     // Injected fetch: capabilities → JSON; events → an SSE body whose second message skips seq 1.
     const sse = [

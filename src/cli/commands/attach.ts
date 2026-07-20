@@ -392,11 +392,16 @@ export async function attachRound(
     warn: (line) => (hold ? void pending.push(() => io.warn(line)) : io.warn(line)),
   };
   let authError: unknown;
+  let streamError: unknown;
   const draining = drainEvents(iterator, liveIo).catch((error) => {
     if (isAuthError(error)) {
       authError = error;
       return;
     }
+    // Recorded and RETHROWN at round end: a stream error (protocol mismatch, dropped transport)
+    // must fail the round so the caller's budget ticks — a warn-and-succeed round would loop a
+    // permanent mismatch forever.
+    streamError = error;
     io.warn(`[fastagent] event stream error: ${String(error)}`);
   });
   await new Promise((r) => setTimeout(r, settleMs)); // let the subscription land before syncing
@@ -435,6 +440,7 @@ export async function attachRound(
   release();
   await draining;
   if (authError) throw authError; // the stream's 401 is the round's 401
+  if (streamError) throw streamError; // and its protocol/transport error is the round's failure
   return next;
 }
 

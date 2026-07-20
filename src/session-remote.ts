@@ -102,11 +102,27 @@ export async function connectSessionControl(options: ConnectSessionControlOption
             if (!res.body) throw new Error("control events: response has no body");
             let nextSeq = 0;
             for await (const data of sseData(res.body)) {
-              // The ONE envelope type (control.ts's WireEvent) — an inline shape here would let the
-              // envelope drift server-side while this cast silently kept the old fields.
-              const wire = JSON.parse(data) as WireEvent;
-              // Envelope checks — consumed HERE, surfaced only as iterator termination. (epoch is not
-              // compared: it cannot change within one connection — see the header note.)
+              // Parse discipline, same as the other two wire planes (dispatch parses, invoke
+              // classifies drift): a non-JSON or non-envelope payload is PROTOCOL MISMATCH —
+              // thrown, so a consumer's failure budget applies — never misdiagnosed as an
+              // in-transit gap whose remedy (reconnect) can never fix it.
+              let wire: WireEvent;
+              try {
+                // The ONE envelope type (control.ts's WireEvent) — an inline shape would let the
+                // envelope drift server-side while this cast silently kept the old fields.
+                wire = JSON.parse(data) as WireEvent;
+              } catch (parseError) {
+                throw new Error(
+                  `control events: non-JSON data on the stream (${String(parseError)}) — protocol mismatch?`,
+                );
+              }
+              if (typeof wire.seq !== "number" || typeof wire.event !== "object" || wire.event === null) {
+                throw new Error(
+                  "control events: malformed envelope — the endpoint does not speak this protocol version",
+                );
+              }
+              // Envelope checks — consumed HERE, surfaced only as iterator termination. (epoch is
+              // not compared: it cannot change within one connection — see the header note.)
               if (wire.seq !== nextSeq) {
                 // Fail visibly: a gap-terminated stream must be distinguishable from a clean end in
                 // the diagnostics, even though both surface as iterator termination + resync.
