@@ -160,7 +160,10 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
       const body = await readBodyCapped(req, DISPATCH_BODY_LIMIT);
       // The 413 names the ceiling: the docs promise images on this plane, and an unexplained
       // rejection would send a client author hunting everywhere but the cap.
-      if ("tooLarge" in body) return text("body too large (limit 1 MiB — images count base64-inflated)\n", 413);
+      if ("tooLarge" in body) {
+        // Derived from the constant — a hardcoded "1 MiB" would lie the day the cap changes.
+        return text(`body too large (limit ${MAX_BODY_BYTES >> 20} MiB — images count base64-inflated)\n`, 413);
+      }
       let parsed: { session?: unknown; command?: unknown };
       try {
         parsed = JSON.parse(body.text) as typeof parsed;

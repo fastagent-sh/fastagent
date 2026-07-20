@@ -265,10 +265,13 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // what was already seen live — labeled, not silently dropped or miscounted. Ctrl+C is the only
   // exit; a 401 means the serve restarted and minted a new token — unrecoverable here, so exit
   // with the re-attach hint instead of retrying forever.
+  // --url mode only (discovered endpoints self-heal through re-discovery): re-running with the
+  // SAME --token would just 401 again — the remedy is a fresh token, and the message must say so.
   const stale = (error: unknown): never =>
     exitWith(
       new Error(
-        `the control endpoint rejected the token (${String(error)}) — the serve likely restarted with a new one; re-run attach`,
+        `the control endpoint rejected the token (${String(error)}) — obtain the current token from the ` +
+          `serve (its <stateRoot>/control.json) and re-run with --token`,
       ),
     );
   // Initial cursor: `state.leafEntryId` is the ACTIVE-PATH leaf, not an append-order position —
@@ -491,8 +494,12 @@ function renderEntry(entry: SessionEntry): string | undefined {
   switch (entry.kind) {
     case "user":
       return `> ${String(d.text)}`;
-    case "assistant":
-      return String(d.text);
+    case "assistant": {
+      // Same rule as the live path's wroteText: a tool-only assistant record has empty text —
+      // printing it would fill a multi-tool run's replay with blank lines.
+      const assistantText = String(d.text ?? "");
+      return assistantText === "" ? undefined : assistantText;
+    }
     case "tool":
       return `[tool ${String(d.toolName)} ${(d.isError as boolean) ? "FAILED" : "done"}]`;
     default:
