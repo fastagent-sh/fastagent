@@ -905,6 +905,22 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(second.map((e) => (e.type === "text" ? (e as { delta: string }).delta : "")).join("")).toContain("faux-b");
   });
 
+  it("events(): detaching from a quiet stream resolves promptly and releases the subscription", async () => {
+    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const iterator = control.events("sQuiet")[Symbol.asyncIterator]();
+    const pending = iterator.next(); // registers; the stream never produces
+    await new Promise((r) => setTimeout(r, 20));
+    await iterator.return?.(undefined); // the old bug: this hung forever behind the quiet pull
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
+    // Released: a later event for that session finds no subscriber to buffer into — push must not
+    // throw, and a NEW subscription starts empty (nothing buffered against the dead one).
+    observer("sQuiet", { type: "run_started", timestamp: Date.now(), runId: "r9", data: {} });
+    const fresh = control.events("sQuiet")[Symbol.asyncIterator]();
+    const race = await Promise.race([fresh.next(), new Promise((r) => setTimeout(() => r("empty"), 50))]);
+    expect(race).toBe("empty"); // the pre-subscription event was not buffered anywhere
+    await fresh.return?.(undefined);
+  }, 5_000);
+
   it("a workspace caller observer receives the full vocabulary, boundary events included", async () => {
     const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");

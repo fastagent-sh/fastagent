@@ -92,21 +92,33 @@ function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
 
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
 
-/** One subscriber's unbounded push→pull queue. Ends only when the CONSUMER stops iterating. */
+/** One subscriber's unbounded push→pull queue. `close()` settles a pending pull — an async
+ *  generator suspended on a quiet stream cannot be ended by `return()` alone (it queues behind the
+ *  never-settling await), so teardown needs this explicit door. */
 class Subscriber {
   private buffer: SessionEvent[] = [];
   private wake?: () => void;
+  private closed = false;
 
   push(event: SessionEvent): void {
+    if (this.closed) return;
     this.buffer.push(event);
     const wake = this.wake;
     this.wake = undefined;
     wake?.();
   }
 
-  async *iterate(): AsyncGenerator<SessionEvent> {
+  close(): void {
+    this.closed = true;
+    const wake = this.wake;
+    this.wake = undefined;
+    wake?.();
+  }
+
+  async next(): Promise<IteratorResult<SessionEvent>> {
     while (true) {
-      while (this.buffer.length > 0) yield this.buffer.shift() as SessionEvent;
+      if (this.buffer.length > 0) return { done: false, value: this.buffer.shift() as SessionEvent };
+      if (this.closed) return { done: true, value: undefined };
       await new Promise<void>((resolve) => {
         this.wake = resolve;
       });
@@ -252,25 +264,46 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     },
 
     events(session): AsyncIterable<SessionEvent> {
-      // Registration happens INSIDE the generator body (on first next()), not at call time:
-      // subscription semantics = you are subscribed while you iterate. An iterable that is obtained
-      // but never iterated must not register — it would buffer the session's events forever with no
-      // way to release them (the only unregistration path is the generator's own finally).
-      return (async function* iterate(): AsyncGenerator<SessionEvent> {
-        const sub = new Subscriber();
-        let set = subscribers.get(session);
-        if (!set) {
-          set = new Set();
-          subscribers.set(session, set);
-        }
-        set.add(sub);
-        try {
-          yield* sub.iterate();
-        } finally {
+      // Registration happens on the FIRST next(), not at call time: subscription semantics = you
+      // are subscribed while you iterate; an iterable obtained but never iterated must not buffer.
+      // Teardown goes through Subscriber.close() so a `return()` on a QUIET stream resolves
+      // promptly instead of queueing behind a never-settling pull — without it every attach/detach
+      // against an idle session would leak a permanently registered subscriber.
+      let sub: Subscriber | undefined;
+      const cleanup = (): void => {
+        if (!sub) return;
+        sub.close();
+        const set = subscribers.get(session);
+        if (set) {
           set.delete(sub);
           if (set.size === 0) subscribers.delete(session);
         }
-      })();
+        sub = undefined;
+      };
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
+          return {
+            async next() {
+              if (!sub) {
+                sub = new Subscriber();
+                let set = subscribers.get(session);
+                if (!set) {
+                  set = new Set();
+                  subscribers.set(session, set);
+                }
+                set.add(sub);
+              }
+              const result = await sub.next();
+              if (result.done) cleanup();
+              return result;
+            },
+            async return(value?: unknown) {
+              cleanup();
+              return { done: true as const, value: value as undefined };
+            },
+          };
+        },
+      };
     },
 
     async dispatch(session, command: SessionCommand): Promise<SessionResult> {
@@ -469,6 +502,17 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           }
           return { ok: true };
         }
+        default:
+          // Wire input bypasses the TS union (a remote client can send any `type`): a protocol-
+          // level answer, never an undefined body — the transport promises `ok: false` shapes.
+          return {
+            ok: false,
+            error: {
+              code: INVALID_COMMAND_CODE,
+              message: `unknown command type "${String((command as { type?: unknown }).type)}"`,
+              retryable: false,
+            },
+          };
       }
     },
   };

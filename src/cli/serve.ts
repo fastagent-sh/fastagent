@@ -75,7 +75,7 @@ export function mountSessionControl(
   const token = crypto.randomUUID();
   const mounted = controlRoutes(control, { token });
   for (const key of Object.keys(mounted)) {
-    if (key in routes) console.error(`[fastagent] warn: channel route "${key}" is shadowed by the control plane`);
+    if (key in routes) log.warn(`[fastagent] channel route "${key}" is shadowed by the control plane`);
   }
   return {
     routes: { ...routes, ...mounted },

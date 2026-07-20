@@ -144,17 +144,35 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
-  it("a stopped consumer releases its subscription (no server-side leak)", async () => {
+  it("detaching from a QUIET stream resolves promptly end to end (no hang, server survives)", async () => {
     const served = await serveControl();
     try {
       const remote = await connectSessionControl({ url: served.url, token: TOKEN });
       const iterator = remote.events("sL")[Symbol.asyncIterator]();
-      const first = iterator.next(); // establishes the connection
+      const first = iterator.next(); // establishes the connection; the stream never produces
       await new Promise((r) => setTimeout(r, 100));
-      await iterator.return?.(undefined); // consumer walks away
+      // The old failure mode on both sides was a permanent hang here (generator return queued
+      // behind a never-settling read) — a resolved return within the timeout IS the assertion.
+      await iterator.return?.(undefined);
       void first;
-      // The server must survive further use after the aborted stream.
       expect((await remote.state("sL")).status).toBe("idle");
+    } finally {
+      served.close();
+    }
+  }, 5_000);
+
+  it("an unknown wire command type gets a protocol-level invalid_command, not a broken body", async () => {
+    const served = await serveControl();
+    try {
+      const res = await fetch(`${served.url}/control/dispatch`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ session: "sX", command: { type: "make_coffee" } }),
+      });
+      expect(res.status).toBe(200);
+      const result = (await res.json()) as { ok: boolean; error?: { code: string } };
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe("invalid_command");
     } finally {
       served.close();
     }

@@ -15,7 +15,7 @@ import { loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../engines/pi/config.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { connectSessionControl } from "../../session-remote.ts";
-import type { SessionControl, SessionEvent } from "../../session.ts";
+import type { SessionControl, SessionEntry, SessionEvent } from "../../session.ts";
 import { failStartup } from "../fail.ts";
 
 export interface AttachOptions {
@@ -87,6 +87,11 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   setLogLevel("info");
   const dir = resolve(dirArg ?? ".");
   loadDotEnv(dir);
+  // --url and --token travel together: a lone --url silently falling back to the LOCAL control.json
+  // would attach (and steer!) a same-named local session while the user believes they are remote.
+  if ((opts.url === undefined) !== (opts.token === undefined)) {
+    failStartup(new Error("--url and --token must be given together (one without the other is ambiguous)"));
+  }
   const endpoint = opts.url && opts.token ? { url: opts.url, token: opts.token } : discover(dir);
   const control = await connectSessionControl(endpoint).catch(failStartup);
 
@@ -111,22 +116,43 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   });
 
   // The standard remote-client loop: the events iterator ends on drop/restart/gap → backfill from
-  // the durable cursor, re-check state, resubscribe. Ctrl+C is the only exit.
+  // the durable cursor (RENDERED — what the agent said while away is the point of a tail), re-check
+  // state, resubscribe. Live events carry no entry ids, so the cursor only advances on backfill:
+  // records already watched live may replay after a drop — labeled as replay rather than silently
+  // miscounted. Ctrl+C is the only exit.
   let cursor = (await control.entries(sessionArg)).leafEntryId;
   for (;;) {
     await watch(control, sessionArg).catch((error) => log.warn(`[fastagent] event stream error: ${String(error)}`));
     await new Promise((r) => setTimeout(r, 1_000));
     try {
       const backfill = await control.entries(sessionArg, cursor !== undefined ? { since: cursor } : undefined);
+      cursor = backfill.leafEntryId ?? cursor;
       if (backfill.entries.length > 0) {
-        cursor = backfill.leafEntryId ?? cursor;
-        console.log(
-          `[reconnected — ${backfill.entries.length} entr${backfill.entries.length === 1 ? "y" : "ies"} while away]`,
-        );
+        console.log("[reconnected — replaying the record since the last sync (may overlap what you saw live)]");
+        for (const entry of backfill.entries) {
+          const line = renderEntry(entry);
+          if (line !== undefined) console.log(line);
+        }
+        console.log("[end of replay — live again]");
       }
     } catch (error) {
       log.warn(`[fastagent] reconnect failed (serve down?): ${String(error)}`);
       await new Promise((r) => setTimeout(r, 2_000));
     }
+  }
+}
+
+/** Render one durable record on replay — the guaranteed kind vocabulary; other kinds are skipped. */
+function renderEntry(entry: SessionEntry): string | undefined {
+  const d = entry.data as Record<string, unknown>;
+  switch (entry.kind) {
+    case "user":
+      return `> ${String(d.text)}`;
+    case "assistant":
+      return String(d.text);
+    case "tool":
+      return `[tool ${String(d.toolName)} ${(d.isError as boolean) ? "FAILED" : "done"}]`;
+    default:
+      return undefined;
   }
 }

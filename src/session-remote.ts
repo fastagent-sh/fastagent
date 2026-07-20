@@ -5,11 +5,13 @@
  * local and remote consumers are isomorphic — client code does not change when the agent moves out
  * of process.
  *
- * Envelope consumption is internal: a seq gap (loss in transit) or an epoch change (the serving
- * process restarted) ENDS the events iterator — the consumer then runs the standard reconnect steps
- * (`entries({ since })` → `state()` → resubscribe), exactly as after any disconnect. Nothing here
- * retries silently: a broken stream is visible as a terminated iterator, a failed request as a
- * rejected promise.
+ * Envelope consumption is internal: a seq gap (loss in transit on this connection) ENDS the events
+ * iterator — the consumer then runs the standard reconnect steps (`entries({ since })` → `state()`
+ * → resubscribe), exactly as after any disconnect. A server RESTART is covered by the same rule
+ * (its connections drop); the envelope's `epoch` is informational for consumers that correlate
+ * ACROSS connections — within one connection it cannot change, so this client does not compare it.
+ * Nothing here retries silently: a broken stream is visible as a terminated iterator, a failed
+ * request as a rejected promise.
  */
 import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
 
@@ -74,13 +76,11 @@ export async function connectSessionControl(options: ConnectSessionControlOption
             signal: abort.signal,
           });
           if (!res.ok || !res.body) throw new Error(`control events failed: ${res.status} ${await res.text()}`);
-          let epoch: string | undefined;
           let nextSeq = 0;
           for await (const data of sseData(res.body)) {
             const wire = JSON.parse(data) as { sessionId: string; epoch: string; seq: number; event: SessionEvent };
-            // Envelope checks — consumed HERE, surfaced only as iterator termination:
-            if (epoch === undefined) epoch = wire.epoch;
-            else if (wire.epoch !== epoch) return; // server restarted mid-stream
+            // Envelope checks — consumed HERE, surfaced only as iterator termination. (epoch is not
+            // compared: it cannot change within one connection — see the header note.)
             if (wire.seq !== nextSeq) return; // loss in transit
             nextSeq = wire.seq + 1;
             yield wire.event;
