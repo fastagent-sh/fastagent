@@ -496,12 +496,15 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // The dispatch answers once the work is ADMITTED (lease held, harness built); the
             // outcome travels as compaction_finished{summary|error|aborted}, the bounds contract watchers
             // already rely on. Pre-acceptance failures (the harness build) still reject here.
-            // The harness build stays the admission step: it is the ONE canonical resolution of
-            // session overrides + auth (resolveHarnessOverrides inside the factory). The
-            // summarization itself runs through pi's compaction primitives instead of
-            // harness.compact() for exactly one reason: the harness surface passes no signal to
-            // its model call, so an in-flight compaction would be uncancellable — and `abort`
-            // needs a real door (run/compaction symmetry).
+            // The admission step is EVERYTHING cheap and local: the harness build (the ONE
+            // canonical resolution of session overrides + auth) plus the compaction PREPARATION
+            // (a pure branch-read computation) — the boundary between "reject the dispatch" and
+            // "outcome travels as an event" sits where the work becomes asynchronous and
+            // expensive: the model call. "Nothing to compact" is thus a pre-acceptance answer,
+            // never a finished{error} dressed as a failure. The summarization runs through pi's
+            // compaction primitives instead of harness.compact() for exactly one reason: the
+            // harness surface passes no signal to its model call, so an in-flight compaction
+            // would be uncancellable — and `abort` needs a real door (run/compaction symmetry).
             let harness: Awaited<ReturnType<typeof b.harnessFactory>>;
             try {
               harness = await b.harnessFactory(session);
@@ -512,19 +515,52 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
               };
             }
+            const teardown = async () => {
+              try {
+                await harness.abort(); // fresh-harness discipline
+              } catch (error) {
+                log.warn(`[fastagent] compaction harness teardown failed: ${String(error)}`);
+              }
+            };
+            let record: NonNullable<ReturnType<typeof harnessSession>>;
+            let preparation: Parameters<typeof compact>[0];
+            try {
+              const bound = harnessSession(harness);
+              if (!bound) throw new Error("harness has no bound session (factory invariant broken)");
+              record = bound;
+              const prep = prepareCompaction(await record.getBranch(), DEFAULT_COMPACTION_SETTINGS);
+              if (!prep.ok) throw prep.error;
+              if (!prep.value) {
+                await teardown();
+                release();
+                return {
+                  ok: false,
+                  error: {
+                    code: BOUNDARY_COMMAND_FAILED_CODE,
+                    message: "nothing to compact — the session has no compactable history yet; retry after more turns",
+                    // State-dependent false (the NO_ACTIVE_RUN pattern): as-is retry fails now,
+                    // but the same command succeeds once the session grows.
+                    retryable: false,
+                  },
+                };
+              }
+              preparation = prep.value;
+            } catch (error) {
+              await teardown();
+              release();
+              return {
+                ok: false,
+                error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+              };
+            }
             const door = new AbortController();
-            compacting.set(session, door); // admission: from here `abort` reaches the model call
+            compacting.set(session, door); // admission complete: from here `abort` reaches the model call
             emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
             void (async () => {
               let outcome: { summary: string } | { error: string } | { aborted: true };
               try {
-                const record = harnessSession(harness);
-                if (!record) throw new Error("harness has no bound session (factory invariant broken)");
-                const prep = prepareCompaction(await record.getBranch(), DEFAULT_COMPACTION_SETTINGS);
-                if (!prep.ok) throw prep.error;
-                if (!prep.value) throw new Error("nothing to compact");
                 const done = await compact(
-                  prep.value,
+                  preparation,
                   b.models,
                   harness.getModel(),
                   command.instructions,
@@ -546,11 +582,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 // intent was live while the work resolved).
                 outcome = door.signal.aborted ? { aborted: true } : { error: String(error) };
               }
-              try {
-                await harness.abort(); // teardown — fresh-harness discipline
-              } catch (error) {
-                log.warn(`[fastagent] compaction harness teardown failed: ${String(error)}`);
-              }
+              await teardown();
               // Release BEFORE emitting finished: a watcher seeing finished may dispatch next —
               // "finished ⇒ the lease is free and status is no longer compacting" must hold.
               compacting.delete(session);

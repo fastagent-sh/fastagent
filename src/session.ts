@@ -63,10 +63,13 @@ export const INVALID_COMMAND_CODE = "invalid_command";
 export const NO_SUCH_SESSION_CODE = "no_such_session";
 
 /** Stable `SessionResult.error.code` for a boundary mutation rejected BEFORE acceptance with
- *  nothing durable landed — a failed override append, or compact's setup (the harness build).
- *  Post-acceptance compaction outcomes travel as `compaction_finished{summary|error|aborted}` events
- *  (compact is accept-fast: a summarization is a full model call, and holding the dispatch open
- *  for it would make acceptance = outcome). The same command may succeed on retry. */
+ *  nothing durable landed — a failed override append, or compact's admission (the harness build
+ *  and the local preparation; "nothing to compact" answers here with `retryable: false`, the
+ *  state-dependent pattern — it succeeds once the session grows). Acceptance sits where the work
+ *  becomes asynchronous and expensive: the model call — compact is accept-fast (holding the
+ *  dispatch open for a full model call would make acceptance = outcome), and post-acceptance
+ *  outcomes travel as `compaction_finished{summary|error|aborted}` events. Other rejections here
+ *  may succeed on retry as-is. */
 export const BOUNDARY_COMMAND_FAILED_CODE = "boundary_command_failed";
 
 /** Stable `SessionResult.error.code` for a run command that reached an active run but could not

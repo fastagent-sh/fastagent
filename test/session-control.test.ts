@@ -935,6 +935,33 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sB8", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
   });
 
+  it("nothing-to-compact is a pre-acceptance rejection, not a finished{error} dressed as failure", async () => {
+    // The preparation is a cheap local computation — it belongs to admission: the client gets the
+    // answer in the dispatch, and started/finished never fire for work that never begins.
+    const { control, sessions } = makeBoundary([]);
+    await sessions.openOrCreate("sEmpty"); // exists but has no compactable history
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sEmpty")) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break; // the sentinel dispatched after the rejection
+      }
+    })();
+    const result = await control.dispatch("sEmpty", { type: "compact" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
+      expect(result.error.message).toContain("nothing to compact");
+      expect(result.error.retryable).toBe(false); // state-dependent: succeeds once the session grows
+    }
+    expect((await control.state("sEmpty")).status).toBe("idle");
+    // Lease free (the sentinel): a boundary mutation succeeds right after the rejection…
+    expect(await control.dispatch("sEmpty", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
+    await watching;
+    // …and the event stream carries ONLY it — no compaction bounds ever fired.
+    expect(seen.map((e) => e.type)).toEqual(["state_changed"]);
+  });
+
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {
     // Both are model calls a client must be able to stop: `abort` is the door out of `compacting`.
     const { agent, control } = makeBoundary([
