@@ -291,7 +291,7 @@ Recurring per-command options (same meaning everywhere they appear):
 
 | Option | Commands | Meaning |
 |---|---|---|
-| `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass. |
+| `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
 | `--model <provider/modelId>` | assembly commands | Model override (`--model > FASTAGENT_MODEL > config`). |
 | `--auth-path <file>` | assembly commands, `login` | Credentials file override. |
 | `--json` | `info`, `schedule history`, `schedule list` | Machine-readable output. |
