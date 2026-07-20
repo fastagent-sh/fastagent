@@ -70,11 +70,11 @@ export function mountSessionControl(
   routes: Routes,
   control: SessionControl | undefined,
   stateRoot: string,
-  options: { tunnel?: boolean } = {},
+  options: { tunnel?: boolean; agent?: Agent } = {},
 ): { routes: Routes; announce: (boundPort: number) => void } {
   if (!control) return { routes, announce: () => {} };
   const token = crypto.randomUUID();
-  const mounted = controlRoutes(control, { token });
+  const mounted = controlRoutes(control, { token, agent: options.agent });
   for (const key of Object.keys(mounted)) {
     if (key in routes) log.warn(`[fastagent] channel route "${key}" is shadowed by the control plane`);
   }

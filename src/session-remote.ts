@@ -13,6 +13,7 @@
  * Nothing here retries silently: a broken stream is visible as a terminated iterator, a failed
  * request as a rejected promise.
  */
+import type { Agent, AgentEvent } from "./agent.ts";
 import { log } from "./log.ts";
 import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
 
@@ -128,6 +129,64 @@ export async function connectSessionControl(options: ConnectSessionControlOption
               // throw = terminate with the caller's error: tear the connection down exactly like
               // return() (abort first — gen.throw would queue behind a quiet read), then rethrow
               // deterministically instead of poking a completed generator.
+              abort.abort();
+              await gen.return(undefined as never).catch(() => {});
+              throw error;
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
+/**
+ * The remote DATA plane: an `Agent` whose `invoke` drives `POST /control/invoke` on a serving
+ * process — paired with {@link connectSessionControl}, a client holds a full remote fastagent
+ * instance through the same two contracts local code uses. The invoke stream is the run's driver:
+ * breaking out of iteration disconnects the request, which cancels the run (SPEC cancellation
+ * semantics travel the wire). Text prompts only for now — the wire handler does not carry images;
+ * a prompt with images fails visibly instead of silently dropping them.
+ */
+export function connectAgent(options: ConnectSessionControlOptions): Agent {
+  const { url, token, fetchFn = fetch } = options;
+  const base = url.replace(/\/$/, "");
+  return {
+    invoke(scope, prompt): AsyncIterable<AgentEvent> {
+      const abort = new AbortController();
+      const openStream = () =>
+        (async function* iterate(): AsyncGenerator<AgentEvent> {
+          if (prompt.images && prompt.images.length > 0) {
+            throw new Error("remote invoke does not carry images yet — send text, or invoke in-process");
+          }
+          const res = await fetchFn(`${base}/control/invoke`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            body: JSON.stringify({ session: scope.session, text: prompt.text }),
+            signal: abort.signal,
+          });
+          if (!res.ok) throw new ControlRequestError(res.status, await res.text());
+          if (!res.body) throw new Error("remote invoke: response has no body");
+          try {
+            for await (const data of sseData(res.body)) yield JSON.parse(data) as AgentEvent;
+          } catch (error) {
+            if (abort.signal.aborted) return; // the consumer walked away — cancellation, not an error
+            throw error;
+          }
+        })();
+      // ONE stream per invoke, like a local async generator (which is its own iterator): a second
+      // iteration must never re-POST — that would silently start a second run with the same prompt.
+      const gen = openStream();
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
+          return {
+            next: () => gen.next(),
+            async return(value?: unknown) {
+              abort.abort(); // disconnect = cancel the run, even while suspended on a quiet read
+              await gen.return(value as never).catch(() => {});
+              return { done: true as const, value: undefined };
+            },
+            async throw(error?: unknown): Promise<IteratorResult<AgentEvent>> {
               abort.abort();
               await gen.return(undefined as never).catch(() => {});
               throw error;

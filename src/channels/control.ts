@@ -14,8 +14,10 @@
  */
 import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
+import type { Agent } from "../agent.ts";
 import type { Routes } from "../host/node.ts";
 import { readBodyCapped } from "./body.ts";
+import { createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
 
 /** The SSE payload: one control-plane event in its transport envelope. */
@@ -93,6 +95,11 @@ export interface ControlRoutesOptions {
   /** Shared bearer secret, required on every route. Never optional: an unauthenticated
    *  remote-control endpoint must not be constructible by omission. */
   token: string;
+  /** The DATA plane over the wire: when provided, `POST /control/invoke` mounts the standard
+   *  invoke handler behind the same bearer token — a remote client (Web panel, desktop app,
+   *  `attach`) can START runs regardless of which channels occupy `/invoke`. Same contract, same
+   *  SSE event stream; disconnecting the response cancels the run (SPEC cancellation). */
+  agent?: Agent;
 }
 
 /**
@@ -111,6 +118,7 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
     const header = Buffer.from(req.headers.get("authorization") ?? "");
     return header.length === expected.length && timingSafeEqual(header, expected);
   };
+  const invokeHandler = options.agent ? createInvokeHandler(options.agent) : undefined;
   /** Wrap a handler with auth + the session query param most routes need. */
   const guard =
     (handler: (req: Request, url: URL) => Response | Promise<Response>) =>
@@ -122,6 +130,7 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
   const sessionParam = (url: URL): string | undefined => url.searchParams.get("session") ?? undefined;
 
   return {
+    ...(invokeHandler ? { "POST /control/invoke": guard((req) => invokeHandler(req)) } : {}),
     "GET /control/capabilities": guard(() => json(control.capabilities())),
 
     "GET /control/state": guard(async (_req, url) => {

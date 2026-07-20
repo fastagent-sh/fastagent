@@ -470,6 +470,12 @@ const remote = await connectSessionControl({ url: "http://127.0.0.1:8787", token
 for await (const ev of remote.events("s1")) console.log(ev.type);
 ```
 
+The DATA plane travels the same wire: `connectAgent({ url, token })` returns an `Agent` whose
+`invoke` drives `POST /control/invoke` (mounted when the serve wires an agent — dev/start do) —
+paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
+same two contracts local code uses. Disconnecting the invoke stream cancels the run; text prompts
+only for now (images fail visibly).
+
 The transport envelope (`epoch`/`seq` per SSE message) is consumed inside the client: a sequence
 gap or a server restart ends the events iterator, and the consumer runs the standard reconnect
 steps. Exposing the port beyond loopback exposes a remote-control surface — wrap it with real

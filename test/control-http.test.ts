@@ -16,7 +16,7 @@ import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
 import { router, serveNode } from "../src/host/node.ts";
-import { connectSessionControl } from "../src/session-remote.ts";
+import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
 import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -50,7 +50,7 @@ async function serveControl() {
     boundary: () => ({ lease, models, harnessFactory: factory }),
   });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
-  const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+  const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
   const port = await server.listening;
   return {
     agent,
@@ -176,6 +176,51 @@ describe("session control over HTTP (Phase 3)", () => {
       expect(result.error?.code).toBe("invalid_command");
     } finally {
       served.close();
+    }
+  });
+
+  it("the remote data plane: connectAgent drives a run through /control/invoke, observed via events", async () => {
+    const served = await serveControl();
+    try {
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const remoteAgent = connectAgent({ url: served.url, token: TOKEN });
+      const seen: SessionEvent[] = [];
+      const watching = (async () => {
+        for await (const ev of remote.events("sRD")) {
+          seen.push(ev);
+          if (ev.type === "run_settled") break;
+        }
+      })();
+      await new Promise((r) => setTimeout(r, 100));
+      // The full remote instance: the DATA plane starts the run, the control plane watches it.
+      const events = await drain(remoteAgent.invoke({ session: "sRD" }, { text: "hi" }));
+      expect(events.at(-1)).toEqual({ type: "completed" });
+      await watching;
+      expect(seen.map((e) => e.type)).toContain("run_started");
+      // Auth applies to the data plane too, and images fail visibly rather than silently dropping.
+      const wrong = connectAgent({ url: served.url, token: "wrong" });
+      await expect(drain(wrong.invoke({ session: "x" }, { text: "hi" }))).rejects.toThrow(/401/);
+      await expect(
+        drain(remoteAgent.invoke({ session: "x" }, { text: "hi", images: [{ mimeType: "image/png", data: "x" }] })),
+      ).rejects.toThrow(/images/);
+    } finally {
+      served.close();
+    }
+  });
+
+  it("without an agent, /control/invoke is not mounted", async () => {
+    const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const port = await server.listening;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/control/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        body: "{}",
+      });
+      expect(res.status).toBe(404);
+    } finally {
+      server.close();
     }
   });
 

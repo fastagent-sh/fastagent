@@ -72,6 +72,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   const routed = await routesFor(a.agentDir, traced, a.stateRoot).catch(failStartup);
   const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot, {
     tunnel: opts.tunnel ?? false,
+    agent: traced, // the remote data plane (POST /control/invoke) drives the SAME traced agent
   });
   await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
   serve({ ...routed, routes: withControl.routes }, portFlag ?? a.config.http?.port ?? 8787, (p) => {

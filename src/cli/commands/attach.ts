@@ -15,7 +15,7 @@ import { createInterface } from "node:readline";
 import { loadDotEnv } from "../../env.ts";
 import { resolveStateRoot } from "../../engines/pi/config.ts";
 import { log, setLogLevel } from "../../log.ts";
-import { ControlRequestError, connectSessionControl } from "../../session-remote.ts";
+import { ControlRequestError, connectAgent, connectSessionControl } from "../../session-remote.ts";
 import type { SessionControl, SessionEntry, SessionEvent } from "../../session.ts";
 import { failStartup } from "../fail.ts";
 
@@ -141,7 +141,19 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   }
   log.info(`[fastagent] type to steer the active run; /abort to stop it; Ctrl+C to detach`);
 
-  // stdin → control plane. Acceptance is not outcome: a rejection prints the code and moves on.
+  // stdin → the two planes: a line steers the ACTIVE run; with no run to join (no_active_run) it
+  // falls back to STARTING one over the remote data plane (`POST /control/invoke`) — try-steer-
+  // then-prompt avoids a state() pre-check race. Acceptance is not outcome: rejections print and
+  // move on. The invoke stream is drained silently (its content already renders via events); it
+  // must be held open, though — disconnecting it cancels the run.
+  const remoteAgent = connectAgent(endpoint);
+  const startRun = async (text: string): Promise<void> => {
+    let sawBusy = false;
+    for await (const e of remoteAgent.invoke({ session: sessionArg }, { text })) {
+      if (e.type === "failed" && e.code === "session_busy") sawBusy = true;
+    }
+    if (sawBusy) console.log("[a run started in the meantime — type again to steer it]");
+  };
   const rl = createInterface({ input: process.stdin });
   rl.on("line", (line) => {
     const trimmed = line.trim();
@@ -150,8 +162,14 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       trimmed === "/abort" ? ({ type: "abort" } as const) : ({ type: "steer", prompt: { text: trimmed } } as const);
     void control.dispatch(sessionArg, command).then(
       (result) => {
-        if (result.ok) console.log(`[${command.type} accepted]`);
-        else console.log(`[${command.type} rejected: ${result.error.code} — ${result.error.message}]`);
+        if (result.ok) {
+          console.log(`[${command.type} accepted]`);
+        } else if (command.type === "steer" && result.error.code === "no_active_run") {
+          console.log("[no active run — starting one]");
+          void startRun(trimmed).catch((error) => console.log(`[prompt failed: ${String(error)}]`));
+        } else {
+          console.log(`[${command.type} rejected: ${result.error.code} — ${result.error.message}]`);
+        }
       },
       (error) => console.log(`[${command.type} failed: ${String(error)}]`),
     );
