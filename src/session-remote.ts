@@ -47,8 +47,13 @@ export async function connectSessionControl(options: ConnectSessionControlOption
   const base = url.replace(/\/$/, "");
   const headers = { authorization: `Bearer ${token}` };
 
+  // Non-streaming requests carry a TIMEOUT: attach's whole reliability model counts failed rounds
+  // against a budget ("unreachable for ~Ns"), which a black-hole endpoint (firewall drop, half-dead
+  // tunnel) would silently defeat — a hung state()/entries() ticks nothing. The SSE stream stays
+  // timeout-free (quiet is normal there; heartbeats cover proxy idling).
+  const REQUEST_TIMEOUT_MS = 10_000;
   const get = async <T>(path: string): Promise<T> => {
-    const res = await fetchFn(`${base}${path}`, { headers });
+    const res = await fetchFn(`${base}${path}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     if (!res.ok) throw new ControlRequestError(res.status, await res.text());
     return (await res.json()) as T;
   };
@@ -72,6 +77,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
         method: "POST",
         headers: { ...headers, "content-type": "application/json" },
         body: JSON.stringify({ session, command }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!res.ok) throw new ControlRequestError(res.status, await res.text());
       return (await res.json()) as Awaited<ReturnType<SessionControl["dispatch"]>>;

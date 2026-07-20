@@ -351,7 +351,9 @@ export async function attachRound(
   const liveIo: AttachIo = {
     println: (line) => (hold ? void pending.push(() => io.println(line)) : io.println(line)),
     write: (chunk) => (hold ? void pending.push(() => io.write(chunk)) : io.write(chunk)),
-    warn: io.warn,
+    // warn buffers too: a stream-error warn is not user-action feedback (the stdin exemption), and
+    // an interleaved warn would break the replay block's contiguity the same as any other line.
+    warn: (line) => (hold ? void pending.push(() => io.warn(line)) : io.warn(line)),
   };
   let authError: unknown;
   const draining = drainEvents(iterator, liveIo).catch((error) => {
