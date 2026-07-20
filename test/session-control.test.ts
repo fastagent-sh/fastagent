@@ -871,7 +871,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sB3", { type: "set_model", model: spec })).toEqual({ ok: true });
   });
 
-  it("compact summarizes under the lease: compaction events, durable compaction entry, ok:true", async () => {
+  it("compact is accept-fast: ok on admission, outcome via compaction_finished, then lease free", async () => {
     const { agent, control } = makeBoundary([
       fauxAssistantMessage("a long answer worth compacting"),
       fauxAssistantMessage("summary of the conversation"), // consumed by harness.compact()
@@ -884,20 +884,23 @@ describe("session control (Phase 2b): boundary mutations", () => {
         if (ev.type === "compaction_finished") break;
       }
     })();
+    // Acceptance is not outcome: the dispatch answers on ADMISSION (a compaction is a full model
+    // call — a remote client's request timeout must not race it).
     const result = await control.dispatch("sB4", { type: "compact" });
     expect(result).toEqual({ ok: true });
     await watching;
     expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
     const finished = seen.at(-1)?.data as { summary: string };
     expect(finished.summary).toBeTruthy();
+    // finished ⇒ the lease is free and the record is durable — the ordering the server guarantees.
     const kinds = (await control.entries("sB4")).entries.map((e) => e.kind);
     expect(kinds).toContain("compaction");
-    expect((await control.state("sB4")).status).toBe("idle"); // lease released, not stuck compacting
+    expect((await control.state("sB4")).status).toBe("idle");
   });
 
-  it("a failing compaction is closed and non-durable: boundary_command_failed, finished{error}, clean state", async () => {
+  it("a failing compaction is ACCEPTED then closed with finished{error}; nothing durable, lease free", async () => {
     // ONE response seeds the conversation; the compaction's summarization call then finds the faux
-    // queue empty and throws — the deterministic model-call failure.
+    // queue empty and throws — the deterministic model-call failure, AFTER acceptance.
     const { agent, control } = makeBoundary([fauxAssistantMessage("seed")]);
     await drain(agent.invoke({ session: "sB6" }, { text: "hi" }));
     const seen: SessionEvent[] = [];
@@ -908,11 +911,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       }
     })();
     const result = await control.dispatch("sB6", { type: "compact" });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
-      expect(result.error.retryable).toBe(true);
-    }
+    expect(result).toEqual({ ok: true }); // accept-fast: admission succeeded; the OUTCOME fails
     await watching;
     expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
     const closed = seen.at(-1)?.data as { error?: string };
@@ -923,6 +922,24 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect((await control.state("sB6")).status).toBe("idle");
     const retry = await control.dispatch("sB6", { type: "set_thinking", level: "low" });
     expect(retry.ok).toBe(true); // the lease was released
+
+    // PRE-acceptance failure (the harness build) still rejects with boundary_command_failed —
+    // and releases the lease.
+    const sessions = inMemorySessionStore();
+    await sessions.openOrCreate("sPre"); // must exist, or no_such_session wins
+    const lease = inProcessLease();
+    const boundary: PiBoundaryWiring = {
+      lease,
+      models: makeFaux().models,
+      harnessFactory: async () => {
+        throw new Error("no harness for you");
+      },
+    };
+    const { control: broken } = createPiSessionControl({ sessions, boundary: () => boundary });
+    const pre = await broken.dispatch("sPre", { type: "compact" });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) expect(pre.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
+    expect(lease.tryAcquire("sPre")).not.toBeNull(); // released on the pre-acceptance path
   });
 
   it("state() reports the durable overrides for a reconnecting client", async () => {

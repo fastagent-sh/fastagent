@@ -472,69 +472,75 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               },
             };
           }
-          try {
-            if (command.type === "compact") {
-              compacting.add(session);
-              // Compaction is a model call: build the session's full harness (the factory applies
-              // the session's own model/thinking overrides) and tear it down after. `started` is
-              // emitted only once the harness EXISTS — a factory failure rejects with no started
-              // at all — and every started is then CLOSED: success → finished{summary}; failure →
-              // finished{error} (the bounds contract — an events-only watcher must never hang on
-              // an open compaction).
-              const harness = await b.harnessFactory(session);
-              emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
-              try {
-                const result = await harness.compact(command.instructions);
-                emitOwn(session, {
-                  type: "compaction_finished",
-                  timestamp: Date.now(),
-                  data: { summary: result.summary },
-                });
-              } catch (error) {
-                emitOwn(session, {
-                  type: "compaction_finished",
-                  timestamp: Date.now(),
-                  data: { error: String(error) },
-                });
-                throw error; // → the shared catch below returns boundary_command_failed
-              } finally {
-                try {
-                  await harness.abort(); // teardown — fresh-harness discipline (never throws past here)
-                } catch (error) {
-                  log.warn(`[fastagent] compaction harness teardown failed: ${String(error)}`);
-                }
-              }
-            } else {
-              // The WRITE handle is opened UNDER the lease: a handle from before tryAcquire could
-              // be a stale snapshot of a run that completed in the window — appending to it would
-              // hang the override off an outdated leaf.
-              const fresh = await sessions.openIfExists(session);
-              if (!fresh) {
-                // Same real condition as the pre-lease check (the session vanished in the window):
-                // same code, same disposition — not a retryable internal error.
-                return {
-                  ok: false,
-                  error: {
-                    code: NO_SUCH_SESSION_CODE,
-                    message: `session "${session}" does not exist — sessions are created by invoke, not by boundary mutations`,
-                    retryable: false,
-                  },
-                };
-              }
-              // Unreachable by construction: only set_model/set_thinking reach this branch, and
-              // both assign `apply` in validation. Throw rather than silently skip (fail visibly).
-              if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
-              emitOwn(session, await apply(fresh));
+          if (command.type === "compact") {
+            // ACCEPT-FAST: compaction is a full model call (tens of seconds is normal) — holding
+            // the dispatch open until it finishes made acceptance = outcome, the one exception to
+            // §5.2, and broke remote clients whose request timeouts are sized for control calls.
+            // The dispatch answers once the work is ADMITTED (lease held, harness built); the
+            // outcome travels as compaction_finished{summary|error}, the bounds contract watchers
+            // already rely on. Pre-acceptance failures (the harness build) still reject here.
+            compacting.add(session);
+            let harness: Awaited<ReturnType<typeof b.harnessFactory>>;
+            try {
+              harness = await b.harnessFactory(session);
+            } catch (error) {
+              compacting.delete(session);
+              release();
+              return {
+                ok: false,
+                error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+              };
             }
+            emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
+            void (async () => {
+              let outcome: { summary: string } | { error: string };
+              try {
+                outcome = { summary: (await harness.compact(command.instructions)).summary };
+              } catch (error) {
+                outcome = { error: String(error) };
+              }
+              try {
+                await harness.abort(); // teardown — fresh-harness discipline
+              } catch (error) {
+                log.warn(`[fastagent] compaction harness teardown failed: ${String(error)}`);
+              }
+              // Release BEFORE emitting finished: a watcher seeing finished may dispatch next —
+              // "finished ⇒ the lease is free and status is no longer compacting" must hold.
+              compacting.delete(session);
+              release();
+              emitOwn(session, { type: "compaction_finished", timestamp: Date.now(), data: outcome });
+            })();
+            return { ok: true };
+          }
+          try {
+            // The WRITE handle is opened UNDER the lease: a handle from before tryAcquire could
+            // be a stale snapshot of a run that completed in the window — appending to it would
+            // hang the override off an outdated leaf.
+            const fresh = await sessions.openIfExists(session);
+            if (!fresh) {
+              // Same real condition as the pre-lease check (the session vanished in the window):
+              // same code, same disposition — not a retryable internal error.
+              return {
+                ok: false,
+                error: {
+                  code: NO_SUCH_SESSION_CODE,
+                  message: `session "${session}" does not exist — sessions are created by invoke, not by boundary mutations`,
+                  retryable: false,
+                },
+              };
+            }
+            // Unreachable by construction: only set_model/set_thinking reach this branch, and
+            // both assign `apply` in validation. Throw rather than silently skip (fail visibly).
+            if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
+            emitOwn(session, await apply(fresh));
           } catch (error) {
-            // Admitted but nothing durable landed (pi appends the compaction entry only at the
-            // end): still "nothing took effect" — the same command may succeed on retry.
+            // The append failed before anything durable landed — "nothing took effect"; the same
+            // command may succeed on retry.
             return {
               ok: false,
               error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
             };
           } finally {
-            compacting.delete(session);
             release();
           }
           return { ok: true };

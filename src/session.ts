@@ -60,9 +60,11 @@ export const INVALID_COMMAND_CODE = "invalid_command";
  *  before acceptance; retry after the session's first turn exists. */
 export const NO_SUCH_SESSION_CODE = "no_such_session";
 
-/** Stable `SessionResult.error.code` for a boundary mutation (`compact`) that was admitted but
- *  failed before any durable change landed (e.g. the summarization model call failed). Nothing took
- *  effect; the same command may succeed on retry. */
+/** Stable `SessionResult.error.code` for a boundary mutation rejected BEFORE acceptance with
+ *  nothing durable landed — a failed override append, or compact's setup (the harness build).
+ *  Post-acceptance compaction outcomes travel as `compaction_finished{summary|error}` events
+ *  (compact is accept-fast: a summarization is a full model call, and holding the dispatch open
+ *  for it would make acceptance = outcome). The same command may succeed on retry. */
 export const BOUNDARY_COMMAND_FAILED_CODE = "boundary_command_failed";
 
 /** Stable `SessionResult.error.code` for a run command that reached an active run but could not
