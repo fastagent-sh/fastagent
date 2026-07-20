@@ -12,6 +12,7 @@
  * `<stateRoot>/control.json` for local discovery — filesystem permissions are the local trust
  * boundary.
  */
+import type { Prompt } from "../agent.ts";
 import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
@@ -72,6 +73,11 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
       ...(images ? { images: images.map((i) => ({ data: i.data, mimeType: i.mimeType })) } : {}),
     };
   };
+  // COMPILE-TIME drift guard: whitelist reconstruction silently strips any field it does not know.
+  // A new Prompt field must break THIS line (non-empty Exclude → {} unassignable), not vanish on
+  // the wire while the client believes it was sent.
+  const _promptDriftGuard: Record<Exclude<keyof Prompt, keyof ReturnType<typeof rebuildPrompt>>, never> = {};
+  void _promptDriftGuard;
   switch (c.type) {
     case "steer":
     case "follow_up":

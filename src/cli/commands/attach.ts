@@ -114,7 +114,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     failStartup(error as Error); // a user-fixable startup problem: one line, not a stack trace
   }
   const discovered = !remote;
-  const control = await connectSessionControl(endpoint).catch((error: Error) =>
+  let control = await connectSessionControl(endpoint).catch((error: Error) =>
     failStartup(
       discovered
         ? new Error(
@@ -147,7 +147,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // then-prompt avoids a state() pre-check race. Acceptance is not outcome: rejections print and
   // move on. The invoke stream is drained silently (its content already renders via events); it
   // must be held open, though — disconnecting it cancels the run.
-  const remoteAgent = connectAgent(endpoint);
+  let remoteAgent = connectAgent(endpoint);
   const startRun = async (text: string): Promise<void> => {
     // Drained quietly EXCEPT failures: a run that never started (transport 401/refused/404, wire
     // errors) surfaces only on this stream — the events plane has nothing to render. A run that
@@ -158,7 +158,8 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       if (e.type !== "failed") continue;
       if (e.code === SESSION_BUSY_CODE) sawBusy = true;
       else if (e.code !== ABORTED_CODE) console.log(`[prompt failed: ${e.details}]`);
-      // ABORTED_CODE: the user's own /abort — a deliberate outcome the settled line already reports.
+      // ABORTED_CODE: a deliberate stop from ANY client (this attach's /abort, another attach, a
+      // Web panel) — the settled line reports it either way; no source discrimination here.
     }
     if (sawBusy) console.log("[a run started in the meantime — type again to steer it]");
   };
@@ -209,20 +210,32 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         println: (line) => console.log(line),
         write: (chunk) => process.stdout.write(chunk),
         warn: (line) => log.warn(line),
-        settleMs: 300,
       });
     } catch (error) {
       if (isAuthError(error)) stale(error);
-      // A discovered (local) endpoint cannot outlive its serve: the token is per-boot, so once the
-      // process is gone every retry can only 401 or be refused — re-read the discovery file and
-      // exit with the accurate hint instead of retrying forever. Same file + token → the process
-      // is alive and this was transient; keep going. --url endpoints keep retrying (real networks
-      // recover).
+      // A discovered (local) endpoint's token is per-boot, so after the serve dies retries can
+      // only 401 or be refused — but a RESTART is the normal dev-watch rhythm (every file save
+      // respawns the worker with a fresh token): re-read the discovery file and REATTACH with the
+      // new credentials. Session ids are stable across restarts; the next round is the standard
+      // reconnect (replay + state). Only a REMOVED file (clean shutdown, no serve coming back on
+      // its own) exits. --url endpoints keep plain retries — real networks recover, and their
+      // token lifecycle is the operator's, not a local boot's.
       if (discovered) {
         try {
           const fresh = discover(dir);
           if (fresh.url !== endpoint.url || fresh.token !== endpoint.token) {
-            exitWith(new Error("the serve restarted (new control token) — re-run attach"));
+            try {
+              const next = await connectSessionControl(fresh);
+              endpoint = fresh;
+              control = next;
+              remoteAgent = connectAgent(fresh);
+              console.log("[serve restarted — reattached]");
+              continue; // straight into the next round with the new connection
+            } catch (reconnectError) {
+              // Mid-restart (file written, port not bound yet): fall through to the normal retry;
+              // the next round re-reads discovery again.
+              log.warn(`[fastagent] serve restarting? reattach not ready: ${String(reconnectError)}`);
+            }
           }
         } catch {
           exitWith(new Error("the serve is gone (control.json removed) — restart it and re-run attach"));
@@ -241,14 +254,12 @@ const isAuthError = (error: unknown): boolean => error instanceof ControlRequest
 const exitWith = failStartup;
 
 /** What one round prints through — the COMPLETE output seam (streamed deltas included), so tests
- *  can observe every path a round writes. */
+ *  can observe every path a round writes. Output only: timing knobs travel as their own parameter. */
 export interface AttachIo {
   println: (line: string) => void;
   /** Raw chunk, no newline — the streamed message_delta path. */
   write: (chunk: string) => void;
   warn: (line: string) => void;
-  /** The subscribe→sync settle heuristic (see the round comment). Tests shrink it. */
-  settleMs: number;
 }
 
 /**
@@ -266,6 +277,8 @@ export async function attachRound(
   session: string,
   cursor: string | undefined,
   io: AttachIo,
+  /** The subscribe→sync settle heuristic (see the round comment). Tests shrink it. */
+  settleMs = 300,
 ): Promise<string | undefined> {
   // The round HOLDS its subscription's iterator: one round = one stream, on every path — a
   // backfill failure must close it before propagating, or the caller's retry round would stack a
@@ -285,7 +298,6 @@ export async function attachRound(
     println: (line) => (hold ? void pending.push(() => io.println(line)) : io.println(line)),
     write: (chunk) => (hold ? void pending.push(() => io.write(chunk)) : io.write(chunk)),
     warn: io.warn,
-    settleMs: io.settleMs,
   };
   let authError: unknown;
   const draining = drainEvents(iterator, liveIo).catch((error) => {
@@ -295,7 +307,7 @@ export async function attachRound(
     }
     io.warn(`[fastagent] event stream error: ${String(error)}`);
   });
-  await new Promise((r) => setTimeout(r, io.settleMs)); // let the subscription land before syncing
+  await new Promise((r) => setTimeout(r, settleMs)); // let the subscription land before syncing
   // The WHOLE post-subscribe sync (backfill + state re-check) shares one failure discipline: close
   // this round's stream and drain before propagating — an exception escaping with the subscription
   // alive would stack a second concurrent stream on the caller's retry.

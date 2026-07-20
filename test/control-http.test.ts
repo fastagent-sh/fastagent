@@ -162,6 +162,31 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   }, 5_000);
 
+  it("steer carries a full Prompt (images included) over the wire; malformed images reject", async () => {
+    const served = await serveControl();
+    try {
+      // No active run — the command is rejected at the hub, but ONLY IF the wire parser accepted
+      // the shape first: no_active_run proves the images passed parsing; invalid_command proves a
+      // malformed element did not.
+      const post = (command: unknown) =>
+        fetch(`${served.url}/control/dispatch`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+          body: JSON.stringify({ session: "sImg", command }),
+        }).then((r) => r.json() as Promise<{ ok: boolean; error?: { code: string } }>);
+      const withImages = await post({
+        type: "steer",
+        prompt: { text: "look", images: [{ data: "aGk=", mimeType: "image/png" }] },
+      });
+      expect(withImages.ok).toBe(false);
+      expect(withImages.error?.code).toBe("no_active_run"); // parsed fine, rejected downstream
+      const badImage = await post({ type: "steer", prompt: { text: "look", images: [42] } });
+      expect(badImage.error?.code).toBe("invalid_command"); // element-level parse rejection
+    } finally {
+      served.close();
+    }
+  });
+
   it("an unknown wire command type gets a protocol-level invalid_command, not a broken body", async () => {
     const served = await serveControl();
     try {
@@ -302,7 +327,6 @@ describe("session control over HTTP (Phase 3)", () => {
       println: (l: string) => lines.push(l),
       write: (c: string) => lines.push(`D:${c}`),
       warn: (l: string) => lines.push(`W:${l}`),
-      settleMs: 1,
     };
     const entriesPage = {
       entries: [
@@ -325,7 +349,7 @@ describe("session control over HTTP (Phase 3)", () => {
       events: quietEvents,
       dispatch: async () => ({ ok: true }) as never,
     };
-    const next = await attachRound(fake as never, "s", "e1", io);
+    const next = await attachRound(fake as never, "s", "e1", io, 1);
     expect(next).toBe("e3"); // advanced to the leaf
     expect(lines).toEqual([
       "[replaying the record since the last sync (may overlap what you saw live)]",
@@ -346,7 +370,7 @@ describe("session control over HTTP (Phase 3)", () => {
         }),
       }),
     };
-    await expect(attachRound(failing as never, "s", undefined, io)).rejects.toBe(auth);
+    await expect(attachRound(failing as never, "s", undefined, io, 1)).rejects.toBe(auth);
 
     // A backfill failure closes the round's OWN subscription before propagating — a retrying
     // caller must never stack a second concurrent stream.
@@ -374,7 +398,7 @@ describe("session control over HTTP (Phase 3)", () => {
         };
       },
     };
-    await expect(attachRound(leaky as never, "s", undefined, io)).rejects.toThrow(/transient 500/);
+    await expect(attachRound(leaky as never, "s", undefined, io, 1)).rejects.toThrow(/transient 500/);
     expect(returned).toBe(true);
 
     // The SAME discipline for a state() re-check failure — the round's stream must close too.
@@ -402,7 +426,7 @@ describe("session control over HTTP (Phase 3)", () => {
         };
       },
     };
-    await expect(attachRound(stateFails as never, "s", undefined, io)).rejects.toThrow(/state 500/);
+    await expect(attachRound(stateFails as never, "s", undefined, io, 1)).rejects.toThrow(/state 500/);
     expect(returned2).toBe(true);
   });
 
