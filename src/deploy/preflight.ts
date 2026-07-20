@@ -80,6 +80,21 @@ export async function preflightDeploy(input: {
     messages.push({ level: "warn", text: modelIssue });
   }
 
+  // The control plane on a deployed box: `start` honors `sessionControl: true`, so `/control/*`
+  // (steer/abort/set_model) rides the PUBLIC host URL — protected only by a per-boot bearer token
+  // minted INSIDE the container (`<stateRoot>/control.json`), which external consumers cannot read.
+  // Publicly reachable yet unusable is the worst of both; the tunnel path warns loudly and deploy
+  // must not be the silent second way to break the loopback trust story.
+  if (config.sessionControl === true) {
+    messages.push({
+      level: "warn",
+      text:
+        `sessionControl: true — the deployed box serves /control/* (steer/abort/set_model) at its public URL, ` +
+        `protected only by a per-boot token written inside the container; read it from <stateRoot>/control.json ` +
+        `on the box (e.g. via the host's ssh/console) or front the endpoint with real auth (design §14)`,
+    });
+  }
+
   // Known channel kinds only — a custom channel's secrets/webhook are unknown to us; note and let the
   // author wire them.
   const discovered = await discoverChannelFiles(agentDir);
