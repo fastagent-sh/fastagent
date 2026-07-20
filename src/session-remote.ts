@@ -155,7 +155,13 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
               signal: abort.signal,
             });
             watchdog.disarm(); // headers arrived
-            if (!res.ok) throw new ControlRequestError(res.status, await res.text());
+            if (!res.ok) {
+              // The error body is a pending read too — a half-dead tunnel serving 4xx headers then
+              // black-holing the body must not hang the round outside every budget. Re-armed: the
+              // watchdog aborts the read and the round fails with the dead-connection diagnosis.
+              watchdog.arm();
+              throw new ControlRequestError(res.status, await res.text());
+            }
             if (!res.body) throw new Error("control events: response has no body");
             let nextSeq = 0;
             for await (const data of sseData(res.body, watchdog)) {
@@ -275,7 +281,10 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
             });
             watchdog.disarm(); // headers arrived
             if (!res.ok) {
-              yield toFailed(new ControlRequestError(res.status, await res.text()));
+              watchdog.arm(); // the error body is a pending read too — see the events() twin
+              const failure = toFailed(new ControlRequestError(res.status, await res.text()));
+              watchdog.disarm();
+              yield failure;
               return;
             }
             if (!res.body) {

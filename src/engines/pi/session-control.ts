@@ -20,6 +20,7 @@ import {
   BOUNDARY_COMMAND_FAILED_CODE,
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
+  NOTHING_TO_COMPACT_CODE,
   NO_SUCH_SESSION_CODE,
   RUN_COMMAND_FAILED_CODE,
   type SessionCapabilities,
@@ -533,13 +534,14 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               if (!prep.value) {
                 await teardown();
                 release();
+                // A no-op, not a failure — its OWN code (the NO_ACTIVE_RUN pattern): a client must
+                // machine-distinguish "give up" from "re-dispatch once the session grows", and
+                // branching on message prose is forbidden by contract.
                 return {
                   ok: false,
                   error: {
-                    code: BOUNDARY_COMMAND_FAILED_CODE,
+                    code: NOTHING_TO_COMPACT_CODE,
                     message: "nothing to compact — the session has no compactable history yet; retry after more turns",
-                    // State-dependent false (the NO_ACTIVE_RUN pattern): as-is retry fails now,
-                    // but the same command succeeds once the session grows.
                     retryable: false,
                   },
                 };

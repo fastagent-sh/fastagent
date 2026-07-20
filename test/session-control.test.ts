@@ -16,6 +16,7 @@ import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
 import { createPiAgentFromWorkspace } from "../src/engines/pi/workspace.ts";
 import {
   BOUNDARY_COMMAND_FAILED_CODE,
+  NOTHING_TO_COMPACT_CODE,
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
   NO_SUCH_SESSION_CODE,
@@ -950,8 +951,9 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const result = await control.dispatch("sEmpty", { type: "compact" });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
-      expect(result.error.message).toContain("nothing to compact");
+      // Its OWN code (not boundary_command_failed): a client must machine-distinguish "give up"
+      // from "re-dispatch once the session grows" without parsing prose.
+      expect(result.error.code).toBe(NOTHING_TO_COMPACT_CODE);
       expect(result.error.retryable).toBe(false); // state-dependent: succeeds once the session grows
     }
     expect((await control.state("sEmpty")).status).toBe("idle");
