@@ -236,7 +236,12 @@ describe("session control over HTTP (Phase 3)", () => {
     const { attachRound } = await import("../src/cli/commands/attach.ts");
     const { ControlRequestError } = await import("../src/session-remote.ts");
     const lines: string[] = [];
-    const io = { println: (l: string) => lines.push(l), warn: (l: string) => lines.push(`W:${l}`), settleMs: 1 };
+    const io = {
+      println: (l: string) => lines.push(l),
+      write: (c: string) => lines.push(`D:${c}`),
+      warn: (l: string) => lines.push(`W:${l}`),
+      settleMs: 1,
+    };
     const entriesPage = {
       entries: [
         { id: "e2", timestamp: 1, kind: "user", data: { text: "question" } },
@@ -279,6 +284,35 @@ describe("session control over HTTP (Phase 3)", () => {
       }),
     };
     await expect(attachRound(failing as never, "s", undefined, io)).rejects.toBe(auth);
+
+    // A backfill failure closes the round's OWN subscription before propagating — a retrying
+    // caller must never stack a second concurrent stream.
+    let returned = false;
+    const leaky = {
+      ...fake,
+      entries: async () => {
+        throw new Error("transient 500");
+      },
+      events: () => {
+        // A quiet stream whose return() settles the pending next() — as the real client/hub do.
+        let settle: ((r: IteratorResult<never>) => void) | undefined;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () =>
+              new Promise<IteratorResult<never>>((res) => {
+                settle = res;
+              }),
+            return: async () => {
+              returned = true;
+              settle?.({ done: true, value: undefined });
+              return { done: true as const, value: undefined };
+            },
+          }),
+        };
+      },
+    };
+    await expect(attachRound(leaky as never, "s", undefined, io)).rejects.toThrow(/transient 500/);
+    expect(returned).toBe(true);
   });
 
   it("controlRoutes refuses to mount without a token", () => {

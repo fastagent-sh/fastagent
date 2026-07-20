@@ -67,15 +67,18 @@ function render(event: SessionEvent): string | undefined {
   }
 }
 
-async function watchInto(control: SessionControl, session: string, io: AttachIo): Promise<void> {
-  for await (const event of control.events(session)) {
+async function drainEvents(iterator: AsyncIterator<SessionEvent>, io: AttachIo): Promise<void> {
+  for (;;) {
+    const result = await iterator.next();
+    if (result.done) return;
+    const event = result.value;
     if (event.type === "message_delta") {
       const d = event.data as { channel: string; delta: string };
-      if (d.channel === "text") process.stdout.write(d.delta);
+      if (d.channel === "text") io.write(d.delta);
       continue;
     }
     if (event.type === "message_finished") {
-      process.stdout.write("\n");
+      io.write("\n");
       continue;
     }
     // A remote (or version-skewed) serve may send data shapes this renderer does not expect — a
@@ -164,6 +167,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     try {
       cursor = await attachRound(control, sessionArg, cursor, {
         println: (line) => console.log(line),
+        write: (chunk) => process.stdout.write(chunk),
         warn: (line) => log.warn(line),
         settleMs: 300,
       });
@@ -177,9 +181,12 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
 
 const isAuthError = (error: unknown): boolean => error instanceof ControlRequestError && error.status === 401;
 
-/** What one round prints through — injectable for tests. */
+/** What one round prints through — the COMPLETE output seam (streamed deltas included), so tests
+ *  can observe every path a round writes. */
 export interface AttachIo {
   println: (line: string) => void;
+  /** Raw chunk, no newline — the streamed message_delta path. */
+  write: (chunk: string) => void;
   warn: (line: string) => void;
   /** The subscribe→sync settle heuristic (see the round comment). Tests shrink it. */
   settleMs: number;
@@ -201,8 +208,12 @@ export async function attachRound(
   cursor: string | undefined,
   io: AttachIo,
 ): Promise<string | undefined> {
+  // The round HOLDS its subscription's iterator: one round = one stream, on every path — a
+  // backfill failure must close it before propagating, or the caller's retry round would stack a
+  // second concurrent stream interleaving the same session's output.
+  const iterator = control.events(session)[Symbol.asyncIterator]();
   let authError: unknown;
-  const draining = watchInto(control, session, io).catch((error) => {
+  const draining = drainEvents(iterator, io).catch((error) => {
     if (isAuthError(error)) {
       authError = error;
       return;
@@ -210,7 +221,14 @@ export async function attachRound(
     io.warn(`[fastagent] event stream error: ${String(error)}`);
   });
   await new Promise((r) => setTimeout(r, io.settleMs)); // let the subscription land before syncing
-  const backfill = await control.entries(session, cursor !== undefined ? { since: cursor } : undefined);
+  let backfill: Awaited<ReturnType<SessionControl["entries"]>>;
+  try {
+    backfill = await control.entries(session, cursor !== undefined ? { since: cursor } : undefined);
+  } catch (error) {
+    await iterator.return?.(undefined)?.catch?.(() => {});
+    await draining;
+    throw error;
+  }
   const next = backfill.leafEntryId ?? cursor;
   if (backfill.entries.length > 0) {
     io.println("[replaying the record since the last sync (may overlap what you saw live)]");
