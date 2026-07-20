@@ -90,8 +90,9 @@ export async function preflightDeploy(input: {
       level: "warn",
       text:
         `sessionControl: true — the deployed box serves /control/* (steer/abort/set_model) at its public URL, ` +
-        `protected only by a per-boot token written inside the container; read it from <stateRoot>/control.json ` +
-        `on the box (e.g. via the host's ssh/console) or front the endpoint with real auth (design §14)`,
+        `protected only by a per-boot token written inside the container. Read the TOKEN from ` +
+        `<stateRoot>/control.json on the box (its url field is container-loopback — pair the token with the ` +
+        `public host URL: attach --url <public-url> --token …), or front the endpoint with real auth (design §14)`,
     });
   }
 
