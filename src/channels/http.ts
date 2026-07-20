@@ -20,6 +20,10 @@ const MAX_BODY_BYTES = 1 << 20;
 
 const encoder = new TextEncoder();
 
+/** SSE comment-heartbeat interval, shared by every SSE surface (the control events route imports
+ *  it, and the remote client sizes its dead-connection watchdog as a multiple of it). */
+export const SSE_HEARTBEAT_MS = 30_000;
+
 /** A valid example request body for the invoke handler — lives HERE, next to the shape check it must
  *  satisfy, so the CLI's "try it" hint can't drift from the protocol. */
 export const INVOKE_EXAMPLE_BODY = '{"session":"dev","text":"hello"}';
@@ -50,16 +54,31 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
     // Take the iterator explicitly so the stream's cancel() (consumer disconnect) can return() it and
     // run invoke's cancellation cleanup (SPEC MUST 3). pull = backpressure: the next event is produced on demand.
     const iterator = agent.invoke({ session }, { text: promptText })[Symbol.asyncIterator]();
+    // Heartbeats: a QUIET stream (a long tool call, no events) is normal here — remote consumers
+    // distinguish "quiet but alive" from a dead connection by byte arrival, so silence must not
+    // look identical to a black hole (SSE comments are ignored by spec-conforming parsers).
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
     const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        heartbeat = setInterval(() => {
+          try {
+            controller.enqueue(encoder.encode(": ping\n\n"));
+          } catch {
+            clearInterval(heartbeat);
+          }
+        }, SSE_HEARTBEAT_MS);
+      },
       async pull(controller) {
         const { value, done } = await iterator.next();
         if (done) {
+          clearInterval(heartbeat);
           controller.close();
           return;
         }
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`));
       },
       async cancel() {
+        clearInterval(heartbeat);
         await iterator.return?.();
       },
     });

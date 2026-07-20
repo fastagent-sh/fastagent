@@ -14,7 +14,35 @@
  * request as a rejected promise.
  */
 import type { Agent, AgentEvent, Prompt, Scope } from "./agent.ts";
+import { SSE_HEARTBEAT_MS } from "./channels/http.ts";
 import type { WireEvent } from "./channels/control.ts";
+
+/** Dead-connection watchdog for SSE reads: the server heartbeats every SSE_HEARTBEAT_MS, so this
+ *  many missed beats (bytes of ANY kind count — comments included) means the connection is a black
+ *  hole. The stream is aborted and THROWS, so a consumer's failure budget ticks instead of hanging
+ *  forever; quiet-but-alive streams (a long tool call) keep heartbeating and never trip this. */
+const SSE_IDLE_LIMIT_MS = 3 * SSE_HEARTBEAT_MS;
+
+/** Wrap an SSE read loop with the idle watchdog. `armed()` reports whether the abort that ended
+ *  the stream was the watchdog's own (→ the caller throws a dead-connection error) rather than the
+ *  consumer walking away (→ clean end). */
+function idleWatchdog(abort: AbortController): { onByte: () => void; stale: () => boolean; stop: () => void } {
+  let lastByteAt = Date.now();
+  let stale = false;
+  const timer = setInterval(() => {
+    if (Date.now() - lastByteAt > SSE_IDLE_LIMIT_MS) {
+      stale = true;
+      abort.abort();
+    }
+  }, SSE_HEARTBEAT_MS);
+  return {
+    onByte: () => {
+      lastByteAt = Date.now();
+    },
+    stale: () => stale,
+    stop: () => clearInterval(timer),
+  };
+}
 import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
 
 /** A control request the server answered with a non-2xx status. Carries the STRUCTURED status so a
@@ -97,6 +125,7 @@ export async function connectSessionControl(options: ConnectSessionControlOption
       // own finally only runs after the pending await settles, which a silent stream never does.
       const openStream = (abort: AbortController) =>
         (async function* iterate(): AsyncGenerator<SessionEvent> {
+          let watchdog: ReturnType<typeof idleWatchdog> | undefined;
           try {
             const res = await fetchFn(`${base}/control/events?session=${encodeURIComponent(session)}`, {
               headers,
@@ -104,8 +133,9 @@ export async function connectSessionControl(options: ConnectSessionControlOption
             });
             if (!res.ok) throw new ControlRequestError(res.status, await res.text());
             if (!res.body) throw new Error("control events: response has no body");
+            watchdog = idleWatchdog(abort); // reads have no timeout of their own — see SSE_IDLE_LIMIT_MS
             let nextSeq = 0;
-            for await (const data of sseData(res.body)) {
+            for await (const data of sseData(res.body, watchdog.onByte)) {
               // Parse discipline, same as the other two wire planes (dispatch parses, invoke
               // classifies drift): a non-JSON or non-envelope payload is PROTOCOL MISMATCH —
               // thrown, so a consumer's failure budget applies — never misdiagnosed as an
@@ -139,8 +169,17 @@ export async function connectSessionControl(options: ConnectSessionControlOption
               yield wire.event;
             }
           } catch (error) {
-            if (abort.signal.aborted) return; // the consumer walked away — clean end, not an error
+            if (abort.signal.aborted) {
+              if (watchdog?.stale()) {
+                throw new Error(
+                  `control events: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection; resync via entries()`,
+                );
+              }
+              return; // the consumer walked away — clean end, not an error
+            }
             throw error;
+          } finally {
+            watchdog?.stop();
           }
         })();
       return {
@@ -214,6 +253,7 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
           // must not append a second one (catch included), and a stream that ends WITHOUT one
           // (server died mid-run) must be closed with a failed — never a terminal-less end.
           let terminalSeen = false;
+          let watchdog: ReturnType<typeof idleWatchdog> | undefined;
           try {
             const res = await fetchFn(`${base}/control/invoke`, {
               method: "POST",
@@ -229,7 +269,8 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
               yield { type: "failed", details: "remote invoke: response has no body", retryable: true };
               return;
             }
-            for await (const data of sseData(res.body)) {
+            watchdog = idleWatchdog(abort); // the run's driver must not hang on a dead connection
+            for await (const data of sseData(res.body, watchdog.onByte)) {
               let event: AgentEvent;
               try {
                 event = JSON.parse(data) as AgentEvent;
@@ -266,8 +307,19 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
               yield { type: "failed", details: "remote invoke: stream ended without a terminal", retryable: true };
             }
           } catch (error) {
-            if (abort.signal.aborted) return; // the consumer walked away — cancellation, not an error
+            if (abort.signal.aborted) {
+              if (watchdog?.stale() && !terminalSeen) {
+                yield {
+                  type: "failed",
+                  details: `remote invoke: no bytes for ${SSE_IDLE_LIMIT_MS / 1000}s (heartbeats absent) — dead connection`,
+                  retryable: true,
+                };
+              }
+              return; // the consumer walked away — cancellation, not an error
+            }
             if (!terminalSeen) yield toFailed(error);
+          } finally {
+            watchdog?.stop();
           }
         })();
       // ONE stream per invoke, like a local async generator (which is its own iterator): a second
@@ -295,10 +347,11 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
 }
 
 /** Minimal SSE reader: yields each `data:` payload; ignores comments (heartbeats) and other fields. */
-async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+async function* sseData(body: ReadableStream<Uint8Array>, onByte?: () => void): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   let buffer = "";
   for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+    onByte?.(); // ANY bytes — heartbeats included — mean the connection is alive
     // SSE permits CRLF line endings (proxies/other servers may produce them); normalize AFTER
     // appending so a \r\n split across chunks still collapses once its second half arrives.
     buffer = (buffer + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, "\n");

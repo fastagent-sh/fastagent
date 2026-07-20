@@ -21,7 +21,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import type { Routes } from "../host/node.ts";
 import { readBodyCapped } from "./body.ts";
-import { createInvokeHandler } from "./http.ts";
+import { SSE_HEARTBEAT_MS, createInvokeHandler } from "./http.ts";
 import { text } from "./respond.ts";
 
 /** The SSE payload: one control-plane event in its transport envelope. */
@@ -37,9 +37,6 @@ export interface WireEvent {
 
 const json = (value: unknown, status = 200): Response =>
   new Response(`${JSON.stringify(value)}\n`, { status, headers: { "content-type": "application/json" } });
-
-/** SSE comment heartbeat interval — keeps proxies/tunnels from idling out a quiet stream. */
-const HEARTBEAT_MS = 30_000;
 
 /** Same cap as the invoke channel (1 MiB): commands carry Prompts, which may ride base64 images —
  *  the two Prompt-bearing wire surfaces reject oversized bodies at the same line. */
@@ -210,7 +207,7 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
             } catch {
               clearInterval(heartbeat);
             }
-          }, HEARTBEAT_MS);
+          }, SSE_HEARTBEAT_MS);
         },
         async pull(controller) {
           let next: IteratorResult<SessionEvent>;

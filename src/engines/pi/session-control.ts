@@ -94,9 +94,12 @@ function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
 
 /** Ceiling for one subscriber's unconsumed backlog. A consumer this far behind (a stalled remote
  *  connection — the wire's ReadableStream backpressure stops pulling while invokes keep pushing)
- *  is CLOSED instead of growing server memory without bound; ending the stream is semantically
- *  lossless — the client runs the same reconnect+backfill it runs for any drop. ≈10k small events
- *  ≈ a few MB worst case per stuck connection. */
+ *  has its buffer FROZEN at the cap (memory bounded — the actual goal: ≈10k small events ≈ a few
+ *  MB worst case per stuck connection) and its subscription marked closed. The close is observed
+ *  via pulls — which a stalled connection by definition does not make — so a consumer that RESUMES
+ *  pulling first drains the frozen backlog, then gets done (no buffered event dropped), while a
+ *  permanently stalled one holds the frozen buffer until its TCP connection dies. Recovery either
+ *  way is the standard reconnect+backfill, semantically lossless. */
 export const SUBSCRIBER_BUFFER_CAP = 10_000;
 
 /** One subscriber's push→pull queue, capped at {@link SUBSCRIBER_BUFFER_CAP}. `close()` settles a
@@ -128,7 +131,7 @@ class Subscriber {
     if (this.closed) return;
     if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP) {
       log.warn(
-        `[fastagent] session-control subscriber for session "${this.session}" is ${SUBSCRIBER_BUFFER_CAP} events behind — buffer frozen; its stream ends at the next pull or connection death`,
+        `[fastagent] session-control subscriber for session "${this.session}" is ${SUBSCRIBER_BUFFER_CAP} events behind — no further events buffered; its stream ends after draining the backlog (or at connection death), then the client resyncs via entries()`,
       );
       this.close();
       return;
