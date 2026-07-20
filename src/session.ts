@@ -44,6 +44,19 @@ export interface SessionCapabilities {
 /** Stable `SessionResult.error.code` for a command the implementation does not support. */
 export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
 
+/** Stable `SessionResult.error.code` for a run-modulating command (`steer`/`follow_up`/`abort`)
+ *  dispatched while the session has no active run. `retryable: false` — re-dispatching as-is
+ *  fails again; re-dispatch only after `state()` shows an active run. */
+export const NO_ACTIVE_RUN_CODE = "no_active_run";
+
+/** Stable `SessionResult.error.code` for a run command that reached an active run but could not
+ *  take effect because the run raced to settlement (or the engine refused it). Distinct from
+ *  {@link NO_ACTIVE_RUN_CODE}: the run existed — and TRANSIENT: the session's next run can be
+ *  dispatched to. Still pre-acceptance — nothing was queued — and `retryable: false`: the same
+ *  command as-is fails again. (A run registered without modulation controls is a capability
+ *  problem, not a run problem, and rejects with {@link UNSUPPORTED_CAPABILITY_CODE}.) */
+export const RUN_COMMAND_FAILED_CODE = "run_command_failed";
+
 // ── Commands (control plane) ─────────────────────────────────────────────────
 
 /** Six commands; deliberately NO `prompt` — starting work is the data plane's definition. */
@@ -58,7 +71,13 @@ export type SessionCommand =
 /**
  * Acceptance is not outcome: `ok: true` means admitted or applied, never that the run ultimately
  * succeeded (outcomes are `run_settled` events / the invoke terminal). `ok: false` is guaranteed to
- * mean rejection BEFORE acceptance — the only case that is safe to blindly retry.
+ * mean rejection BEFORE acceptance — nothing was queued or applied. ONE exception to "nothing took
+ * effect": a rejected `abort` may still have attributed a concurrently-settling run as `aborted`
+ * (the intent was live while the run resolved — see the guarantee boundary in the pi
+ * implementation); the settlement is the truth. `error.retryable` means "re-dispatching the SAME
+ * command as-is may succeed"; a `false` with a state-dependent code (e.g.
+ * {@link NO_ACTIVE_RUN_CODE}) invites a re-dispatch only after `state()` shows the condition
+ * changed.
  */
 export type SessionResult =
   | { ok: true; runId?: string }
@@ -139,6 +158,11 @@ export type ToolProgressEvent = SessionEvent<"tool_progress", { id: string; name
 export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isError: boolean; content: Json }> & {
   runId: string;
 };
+/** Normalized live queue depths for the active run (L1). */
+export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number; followUp: number }> & {
+  runId: string;
+};
+
 /**
  * The serving process failed outside a normal run outcome (fail visibly). Emitted by TRANSPORT
  * adapters (design §13) when they lose the backend before ending a remote stream — an in-process
@@ -147,9 +171,9 @@ export type ToolFinishedEvent = SessionEvent<"tool_finished", { id: string; isEr
  */
 export type ServingErrorEvent = SessionEvent<"serving_error", { message: string }>;
 
-/** The Phase 1 (L0) vocabulary — every event the in-process observation plane emits today. L1–L2
- *  events (queue_changed, turn_*, compaction_*, retry_*, state_changed) arrive with the control
- *  plane; {@link ServingErrorEvent} arrives with the transport adapter. */
+/** Every event the in-process observation plane emits today: the L0 vocabulary plus L1
+ *  `queue_changed`. L2 events (turn_*, compaction_*, retry_*, state_changed) arrive with boundary
+ *  mutations; {@link ServingErrorEvent} arrives with the transport adapter. */
 export type KnownSessionEvent =
   | RunStartedEvent
   | RunSettledEvent
@@ -158,4 +182,5 @@ export type KnownSessionEvent =
   | MessageFinishedEvent
   | ToolStartedEvent
   | ToolProgressEvent
-  | ToolFinishedEvent;
+  | ToolFinishedEvent
+  | QueueChangedEvent;

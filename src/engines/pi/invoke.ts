@@ -14,7 +14,15 @@
 import type { AgentHarnessEvent } from "@earendil-works/pi-agent-core";
 import { DEFAULT_COMPACTION_SETTINGS, calculateContextTokens, shouldCompact } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
-import { type Agent, type AgentEvent, type Json, type Prompt, type Scope, SESSION_BUSY_CODE } from "../../agent.ts";
+import {
+  ABORTED_CODE,
+  type Agent,
+  type AgentEvent,
+  type Json,
+  type Prompt,
+  type Scope,
+  SESSION_BUSY_CODE,
+} from "../../agent.ts";
 import type { RunSettledEvent, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
 import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
@@ -137,6 +145,13 @@ function messageSignal(message: AssistantMessage): { status?: number; code?: unk
 function toSessionEvent(pe: AgentHarnessEvent, runId: string): SessionEvent | null {
   const at = Date.now();
   switch (pe.type) {
+    case "queue_update":
+      return {
+        type: "queue_changed",
+        timestamp: at,
+        runId,
+        data: { steering: pe.steer.length, followUp: pe.followUp.length },
+      };
     case "message_start":
       // Assistant streaming only — a user/toolResult message is not a live message boundary.
       if (pe.message.role !== "assistant") return null;
@@ -202,9 +217,25 @@ export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
   }
 }
 
-/** The observation-plane seam: every rich event of every run, pushed as it happens. A hub
- *  (session-control.ts) implements this to serve `events()`/`state()`; absent = zero overhead. */
-export type SessionObserver = (session: string, event: SessionEvent) => void;
+/** Live modulation handles for one active run — what the control plane's `dispatch` routes to.
+ *  Built inside the invoke closure (it owns the harness); registered with the observer at
+ *  run_started, gone after run_settled. RACE WINDOW (all three commands, symmetric): the run may
+ *  resolve between the settled-check and the engine call landing — an accepted `abort` can still
+ *  settle `completed`, and an accepted `steer`/`followUp` can settle without the prompt ever being
+ *  consumed. Acceptance is not outcome; the settlement is the truth. */
+export interface RunControls {
+  steer(prompt: Prompt): Promise<void>;
+  followUp(prompt: Prompt): Promise<void>;
+  abort(): Promise<void>;
+}
+
+/** The observation-plane seam: every rich event of every run, pushed as it happens. `run` carries
+ *  the live {@link RunControls}, attached to the `run_started` event only. A hub
+ *  (session-control.ts) implements this to serve `events()`/`state()`/`dispatch`; absent = zero
+ *  overhead. TRUST BOUNDARY: since Phase 2a this seam hands every wired observer the run's
+ *  modulation handles — it is the trusted hub seam, not a public fan-out point. Do not wire
+ *  untrusted taps here; give third parties the read-only `events()` stream instead. */
+export type SessionObserver = (session: string, event: SessionEvent, run?: RunControls) => void;
 
 /**
  * Terminal mapping, decided by the resolved message's stopReason: pi's prompt() resolves a message
@@ -212,7 +243,13 @@ export type SessionObserver = (session: string, event: SessionEvent) => void;
  * entire failure class (violating SPEC MUST 1).
  */
 export function toTerminal(message: AssistantMessage): AgentEvent {
-  if (message.stopReason === "error" || message.stopReason === "aborted") {
+  if (message.stopReason === "aborted") {
+    // A deliberate stop (control-plane abort / harness abort), not an error — see {@link ABORTED_CODE}
+    // for the consumer contract (design §6).
+    const details = message.errorMessage ?? "run aborted";
+    return { type: "failed", details, retryable: false, code: ABORTED_CODE };
+  }
+  if (message.stopReason === "error") {
     const details = message.errorMessage ?? `model stopped: ${message.stopReason}`;
     return { type: "failed", details, retryable: classifyRetryable(details, messageSignal(message)) };
   }
@@ -383,28 +420,91 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
     // was cancelled by the caller (SPEC: cancellation has no terminal event) → aborted.
     const runId = crypto.randomUUID();
     let outcome: RunSettledEvent["data"] | undefined;
-    const observe = (event: SessionEvent | null): void => {
+    const observe = (event: SessionEvent | null, run?: RunControls): void => {
       if (!event || !observer) return;
       try {
-        observer(scope.session, event);
+        observer(scope.session, event, run);
       } catch (error) {
         // The observation plane must never break the data plane; a broken hub is its own problem.
         log.warn(`[fastagent] session observer threw (event ${event.type}): ${String(error)}`);
       }
     };
-    observe({ type: "run_started", timestamp: Date.now(), runId, data: {} });
+    // run_started must be observed before the (awaited) harness build so no early event outruns
+    // registration — so the controls AWAIT the build instead of erroring on the assembling window:
+    // a dispatch that races the build simply queues on the freshly built harness. A setup failure
+    // rejects the gate (and the run settles failed); the guard keeps an undispatched rejection from
+    // becoming an unhandled-rejection crash.
+    let harnessReady!: (h: Awaited<ReturnType<PiHarnessFactory>>) => void;
+    let harnessFailed!: (e: unknown) => void;
+    const harnessGate = new Promise<Awaited<ReturnType<PiHarnessFactory>>>((resolve, reject) => {
+      harnessReady = resolve;
+      harnessFailed = reject;
+    });
+    harnessGate.catch(() => {}); // observed via controls only when a dispatch actually happens
+    // Aborted classification has two attribution sources, either suffices: pi's own
+    // stopReason:"aborted" (toTerminal), and control-plane INTENT — needed because providers do
+    // not uniformly attribute an aborted stream (verified empirically: the faux path surfaces a
+    // plain error). Intent = "an abort() succeeded, OR one was still in flight when the terminal
+    // arrived" (the harness error often lands before abort() resolves). A rejected abort that
+    // RETURNED before the terminal counts as nothing — no rollback dance, no interleaving hazard.
+    // GUARANTEE BOUNDARY: an abort still in flight that ultimately rejects can classify a
+    // concurrent real error as aborted — narrow, and non-lossy: the settlement carries
+    // `error.message` either way.
+    let abortsInFlight = 0;
+    let abortSucceeded = false;
+    // Stale-controls guard: after settlement pi's steer()/followUp()/abort() would still resolve
+    // (they queue / no-op on the to-be-discarded harness) — a silent acceptance of a command that
+    // can never take effect. The flag flips at THREE points, earliest wins: (1) the moment the
+    // run's terminal is determined (the main window — before the consumer-paced `yield terminal`
+    // and auto-compaction), (2) the setup-failure path, (3) the outer finally as the backstop for
+    // caller cancellation. A post-settle call throws and the dispatcher maps it to
+    // `run_command_failed`.
+    let runSettled = false;
+    const settledError = () => new Error("run already settled; the command cannot take effect");
+    // The settled check and the harness call MUST share one synchronous block (no await between):
+    // pi enqueues/aborts synchronously at method entry, so check-then-call in the same tick truly
+    // closes the race — a check behind its own await boundary would only shrink it.
+    const controls: RunControls = {
+      async steer(p: Prompt) {
+        const opts = await toPiPromptOptions(p);
+        const harness = await harnessGate;
+        if (runSettled) throw settledError();
+        await harness.steer(p.text, opts);
+      },
+      async followUp(p: Prompt) {
+        const opts = await toPiPromptOptions(p);
+        const harness = await harnessGate;
+        if (runSettled) throw settledError();
+        await harness.followUp(p.text, opts);
+      },
+      async abort() {
+        const harness = await harnessGate;
+        if (runSettled) throw settledError();
+        abortsInFlight++;
+        try {
+          await harness.abort();
+          abortSucceeded = true;
+        } finally {
+          abortsInFlight--;
+        }
+      },
+    };
+    observe({ type: "run_started", timestamp: Date.now(), runId, data: {} }, controls);
     try {
       let harness: Awaited<ReturnType<PiHarnessFactory>>;
       try {
         harness = await harnessFactory(scope.session);
       } catch (error) {
         // Setup failures (session open / auth / …) MUST surface as a failed event, never a throw.
+        harnessFailed(error); // a pending dispatch learns the run cannot take commands
         const terminal = errorToTerminal(error);
         outcome = { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
+        runSettled = true; // commands can no longer take effect — reject stale controls from here on
         yield terminal;
         return; // → outer finally emits the settlement
       }
 
+      harnessReady(harness);
       const queue = new EventQueue<AgentEvent>();
       const unsub = harness.subscribe((pe) => {
         const rich = toSessionEvent(pe, runId);
@@ -431,13 +531,27 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
         } catch (error) {
           terminal = errorToTerminal(error);
         }
+        if ((abortSucceeded || abortsInFlight > 0) && terminal.type === "failed") {
+          terminal = { type: "failed", details: terminal.details, retryable: false, code: ABORTED_CODE };
+        }
         if (terminal.type === "completed") outcome = { status: "completed" };
         else if (terminal.type === "failed") {
-          outcome = {
-            status: "failed",
-            error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },
-          };
+          outcome =
+            terminal.code === ABORTED_CODE
+              ? // Carry the detail: an independent real error that raced an accepted abort must stay
+                // diagnosable in the settlement (audit consumers read run_settled, not the invoke
+                // stream) — aborted classifies the run, the message preserves what actually stopped it.
+                { status: "aborted", error: { message: terminal.details, retryable: false } }
+              : {
+                  status: "failed",
+                  error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },
+                };
         }
+        // Commands become ineffective the moment the run resolved — NOT at the outer finally, which
+        // sits behind `yield terminal` (a consumer-paced suspension) and auto-compaction. Flipping
+        // here closes the silent-drop window for steer/follow_up dispatched in that gap; the
+        // outer-finally flip remains as the backstop for caller cancellation.
+        runSettled = true;
         yield terminal;
       } finally {
         // After a successful turn, keep the session under the model's context window (a long shared group
@@ -471,7 +585,9 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       }
     } finally {
       // Exactly-one settlement, after ALL run work (incl. auto-compaction) and immediately before
-      // the lease releases — see the outcome note above.
+      // the lease releases — see the outcome note above. The stale-controls flag flips FIRST so a
+      // dispatch racing this settlement is rejected instead of silently accepted.
+      runSettled = true;
       observe({ type: "run_settled", timestamp: Date.now(), runId, data: outcome ?? { status: "aborted" } });
       release(); // after cleanup, so the next invoke for this session can enter
     }

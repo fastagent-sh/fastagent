@@ -31,7 +31,12 @@ interface Agent {
 }
 ```
 
-One turn = one `invoke`. The result is one async event stream; buffered consumption is a degeneration of that stream (§7).
+One turn = one `invoke`; a turn is the ACTIVITY WINDOW of one invoke. Without mid-run intervention
+that window is a single prompt→response exchange. With the optional session control plane
+([design](design/session-control.md)), steering and queued follow-ups may extend it — the stream
+then terminates when the run settles. Consumers that never dispatch mid-run see identical behavior
+either way. The result is one async event stream; buffered consumption is a degeneration of that
+stream (§7).
 
 The return type MUST be `AsyncIterable`; `async function*`, `ReadableStream`, and equivalent implementations are all valid.
 
@@ -137,7 +142,7 @@ The core stays small. The following extensions attach through additional `scope`
 | Identity / multi-tenancy | `scope.principal`, e.g. `{ type, issuer, subject }` |
 | Source / trace | `scope.source` and other identifying fields |
 | Execution constraints such as deadline / budget | Middleware; for example, `budget_exceeded` becomes a `failed` event produced by Middleware |
-| Mid-turn steering | **Extension, not part of the v0.1 core signature**: add an optional third parameter `input?: AsyncIterable<Prompt>` to `invoke` and feed input into the in-flight turn, corresponding to pi `steer` / `followUp` / `nextTurn`. If the desired behavior is “discard the current turn and go another way”, use cancel + a new `invoke` with the same `session`; no steering extension is required. |
+| Mid-turn steering | **Extension, not part of the v0.1 core signature** — provided by the [session control plane](design/session-control.md): `dispatch(session, { type: "steer" \| "follow_up" \| "abort", … })` modulates the run an invoke is driving, beside the invoke rather than through its signature. (An earlier sketch — an optional third `input?: AsyncIterable<Prompt>` parameter — was rejected in favor of the control plane.) If the desired behavior is “discard the current turn and go another way”, cancel + a new `invoke` with the same `session` still works without any extension. |
 | Thinking / citations / artifact streaming | Add new non-terminal `AgentEvent` types |
 | Structured / typed result | Per-invoke output-schema negotiation; the validated result rides on `completed.data`. Demand-driven (task-style embed features); not in v0.1 core, and MUST NOT change the frozen terminal set. |
 | Failure subdivision | `failed.code?` — **adopted**: an optional machine-readable code alongside `details` (e.g. the reference engine sets `session_busy` for a same-session-busy reject). |
