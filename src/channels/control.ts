@@ -49,6 +49,19 @@ const DISPATCH_BODY_LIMIT = MAX_BODY_BYTES;
  * answers protocol-level `invalid_command`, same responsibility as the hub's unknown-type default.
  */
 function parseWireCommand(raw: unknown): SessionCommand | undefined {
+  // COMPILE-TIME drift guard, variant level: this switch hand-mirrors the SessionCommand union,
+  // and a new variant added in session.ts would otherwise compile clean while the wire answers it
+  // `invalid_command` — silently breaking local/remote isomorphism. A new variant must break THIS
+  // line first, forcing the decision of how the wire carries it.
+  const _commandDriftGuard: Record<SessionCommand["type"], true> = {
+    steer: true,
+    follow_up: true,
+    abort: true,
+    compact: true,
+    set_model: true,
+    set_thinking: true,
+  };
+  void _commandDriftGuard;
   if (typeof raw !== "object" || raw === null) return undefined;
   const c = raw as Record<string, unknown>;
   const imageOk = (i: unknown): boolean =>
