@@ -131,36 +131,26 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   let endpoint!: { url: string; token: string };
   if (remote) endpoint = { url: opts.url as string, token: opts.token as string };
   const discovered = !remote;
-  // The SAME patience the round loop applies, at startup: `attach` during a dev-watch restart's
-  // 1–2s window (port not bound / control.json mid-rewrite) must wait it out, not exit with a
-  // misleading "stale file" diagnosis while the serve is seconds from ready. Each retry re-reads
-  // discovery (a restart mints fresh credentials mid-window). --url fails immediately at startup:
-  // nothing has ever succeeded on that endpoint, so a wrong --url is likelier than a transient
-  // (once attached, drops get a bounded retry budget instead).
-  // The shared local-401 diagnosis (startup grace + round loop): a 401 with UNCHANGED
-  // control.json is reachable-and-rejecting — the file may belong to another/dead serve on this
-  // port — and must exit with that fact, not burn a budget toward "unreachable". A changed or
-  // unreadable file returns to the caller (reattach / budget decides).
-  const exitIfLocal401Unchanged = (error: unknown): void => {
-    if (!endpoint || !isAuthError(error)) return; // pre-first-discovery errors cannot be auth
-    try {
-      const fresh = discover(dir);
-      if (fresh.url === endpoint.url && fresh.token === endpoint.token) {
-        exitWith(
-          new Error(
-            "the endpoint rejected the token though control.json is unchanged — the file may belong to " +
-              "another (or dead) serve on this port; restart the serve and re-run attach",
-          ),
-        );
+  // ONE policy for both phases: startup and the round loop gather the same facts (errorFacts)
+  // and route them through decideRound with their phase — the local-401-unchanged diagnosis, the
+  // reattach-on-changed-credentials rule, and every budget claim exist exactly once, tested.
+  const errorFacts = (error: unknown): RoundOutcome => {
+    let discovery: "unchanged" | "changed" | "unavailable" = "unavailable";
+    let fresh: { url: string; token: string } | undefined;
+    if (discovered && endpoint) {
+      try {
+        const read = discover(dir);
+        if (read.url === endpoint.url && read.token === endpoint.token) discovery = "unchanged";
+        else {
+          discovery = "changed";
+          fresh = read;
+        }
+      } catch {
+        // Absent or torn — possibly mid-restart; budgets decide, never this read alone.
       }
-    } catch {
-      // Absent or torn — possibly mid-restart; the caller's budget decides.
     }
+    return { type: "error", error, isAuth: isAuthError(error), discovery, fresh };
   };
-  // Budgets are WALL-CLOCK, not round counts: a round's duration varies by an order of magnitude
-  // (fast ECONNREFUSED ≈ 1s vs the 10s black-hole timeout), so counting rounds would make the
-  // user-facing "~Ns" claims false exactly in the black-hole case the timeouts exist for.
-  const STARTUP_GRACE_MS = 15_000;
   const connectWithGrace = async (): Promise<{ control: SessionControl; state: SessionState }> => {
     const startedAt = Date.now();
     for (;;) {
@@ -169,28 +159,15 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         const connected = await connectSessionControl(endpoint);
         return { control: connected, state: await connected.state(sessionArg) };
       } catch (error) {
-        if (!discovered) {
-          exitWith(
-            isAuthError(error)
-              ? new Error(`the control endpoint rejected the token (${String(error)}) — check --token`)
-              : (error as Error),
-          );
-        }
-        exitIfLocal401Unchanged(error);
-        if (Date.now() - startedAt >= STARTUP_GRACE_MS) {
-          exitWith(
-            new Error(
-              `${String(error)} — the serve is unreachable; it may be down, not yet started, or ` +
-                `<stateRoot>/control.json is stale. Start (or restart) the serve and re-run attach.`,
-            ),
-          );
-        }
-        try {
-          endpoint = discover(dir);
-        } catch {
-          // Absent or torn — possibly mid-restart; the budget decides, never this read alone.
-        }
-        log.warn(`[fastagent] serve not ready (~${Math.round((Date.now() - startedAt) / 1000)}s) — retrying…`);
+        const decision = decideRound(errorFacts(error), {
+          discovered,
+          downMs: Date.now() - startedAt,
+          phase: "startup",
+        });
+        if (decision.kind === "exit") exitWith(new Error(decision.message));
+        // try-reattach at startup = adopt the fresh credentials; the next loop iteration connects.
+        if (decision.kind === "try-reattach") endpoint = decision.fresh;
+        else if (decision.kind === "retry") log.warn(decision.warn);
         await new Promise((r) => setTimeout(r, 1_000));
       }
     }
@@ -300,17 +277,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       // error) — keep the progress or every retry replays the same records in full.
       const advanced = roundCursor(error);
       if (advanced !== undefined) cursor = advanced;
-      let discovery: "unchanged" | "changed" | "unavailable" = "unavailable";
-      let fresh: { url: string; token: string } | undefined;
-      if (discovered) {
-        try {
-          fresh = discover(dir);
-          discovery = fresh.url === endpoint.url && fresh.token === endpoint.token ? "unchanged" : "changed";
-        } catch {
-          // Absent or torn — possibly mid-restart; the budget decides, never this read alone.
-        }
-      }
-      outcome = { type: "error", error, isAuth: isAuthError(error), discovery, fresh };
+      outcome = errorFacts(error);
     }
     if (outcome.type !== "progress") failingSince ??= Date.now();
     const decision = decideRound(outcome, {
@@ -357,7 +324,10 @@ const LOCAL_GRACE_MS = 30_000;
 // working attach is likelier transient → retry, bounded. Wall-clock like STARTUP_GRACE_MS: a
 // round's duration varies by an order of magnitude (fast ECONNREFUSED ≈ 1s vs the 10s black-hole
 // timeout), so counting rounds would make the "~Ns" claims false exactly when they matter.
+// Startup patience covers the dev-watch restart window's two halves — control.json unlinked (not
+// yet rewritten) and port not yet bound — with discovery re-read each retry.
 const REMOTE_GRACE_MS = 120_000;
+const STARTUP_GRACE_MS = 15_000;
 
 /** One round's observed facts, gathered by the loop (IO) and judged by {@link decideRound} (pure). */
 export type RoundOutcome =
@@ -381,11 +351,19 @@ export type RoundDecision =
   | { kind: "retry"; warn: string };
 
 /**
- * The round loop's policy, pure and testable: every exit diagnosis and budget claim lives here.
- * `downMs` is wall-clock time since the first non-progress round (the caller anchors it).
+ * The reconnect policy for BOTH phases (`startup` = connectWithGrace, `steady` = the round loop),
+ * pure and testable: every exit diagnosis and budget claim lives here. `downMs` is wall-clock time
+ * since the phase's anchor (first connect attempt / first non-progress round). The phases differ
+ * on priors, not principle: startup has never succeeded (short budget; a remote non-auth error
+ * exits at once), steady-state had a working attach (longer budgets); the local-401-unchanged
+ * diagnosis and reattach-on-changed-credentials apply identically to both.
  */
-export function decideRound(outcome: RoundOutcome, ctx: { discovered: boolean; downMs: number }): RoundDecision {
-  const limitMs = ctx.discovered ? LOCAL_GRACE_MS : REMOTE_GRACE_MS;
+export function decideRound(
+  outcome: RoundOutcome,
+  ctx: { discovered: boolean; downMs: number; phase?: "startup" | "steady" },
+): RoundDecision {
+  const startup = ctx.phase === "startup";
+  const limitMs = startup ? STARTUP_GRACE_MS : ctx.discovered ? LOCAL_GRACE_MS : REMOTE_GRACE_MS;
   const downSeconds = Math.round(ctx.downMs / 1000);
   if (outcome.type === "progress") return { kind: "reset" };
   if (outcome.type === "empty") {
@@ -403,12 +381,20 @@ export function decideRound(outcome: RoundOutcome, ctx: { discovered: boolean; d
     };
   }
   if (!ctx.discovered) {
-    // --url mode: re-running with the SAME token would just 401 again — name the real remedy.
+    // --url mode: re-running with the SAME token would just 401 again — name the real remedy
+    // (at startup the shorter "check --token": the token came from the command line seconds ago).
     if (outcome.isAuth) {
       return {
         kind: "exit",
-        message: `the control endpoint rejected the token (${String(outcome.error)}) — obtain the current token from the serve (its <stateRoot>/control.json) and re-run with --token`,
+        message: startup
+          ? `the control endpoint rejected the token (${String(outcome.error)}) — check --token`
+          : `the control endpoint rejected the token (${String(outcome.error)}) — obtain the current token from the serve (its <stateRoot>/control.json) and re-run with --token`,
       };
+    }
+    // Startup: nothing has ever succeeded on this endpoint — a wrong --url is likelier than a
+    // transient, so fail fast instead of burning a budget.
+    if (startup) {
+      return { kind: "exit", message: outcome.error instanceof Error ? outcome.error.message : String(outcome.error) };
     }
     if (ctx.downMs >= limitMs) {
       return {
@@ -437,12 +423,16 @@ export function decideRound(outcome: RoundOutcome, ctx: { discovered: boolean; d
   if (ctx.downMs >= limitMs) {
     return {
       kind: "exit",
-      message: `the serve has been unreachable for ~${downSeconds}s — it may have crashed (stale control.json) or shut down; restart it and re-run attach`,
+      message: startup
+        ? `${String(outcome.error)} — the serve is unreachable; it may be down, not yet started, or <stateRoot>/control.json is stale. Start (or restart) the serve and re-run attach.`
+        : `the serve has been unreachable for ~${downSeconds}s — it may have crashed (stale control.json) or shut down; restart it and re-run attach`,
     };
   }
   return {
     kind: "retry",
-    warn: `[fastagent] round failed (down ~${downSeconds}s, limit ${limitMs / 1000}s): ${String(outcome.error)}`,
+    warn: startup
+      ? `[fastagent] serve not ready (~${downSeconds}s) — retrying…`
+      : `[fastagent] round failed (down ~${downSeconds}s, limit ${limitMs / 1000}s): ${String(outcome.error)}`,
   };
 }
 

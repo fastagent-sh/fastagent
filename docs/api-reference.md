@@ -441,7 +441,8 @@ retryable at idle):
 await control.dispatch("s1", { type: "set_model", model: "anthropic/claude-sonnet-4-5" }); // durable per-session override
 await control.dispatch("s1", { type: "set_thinking", level: "high" });
 await control.dispatch("s1", { type: "compact", instructions: "keep the decisions" }); // accept-fast: ok on
-// admission; the outcome arrives as compaction_finished{summary|error} (emitted after the lease frees)
+// admission; the outcome arrives as compaction_finished{summary|error|aborted} (emitted after the
+// lease frees; aborted = a deliberate stop via dispatch(abort) — not a failure)
 ```
 
 Overrides persist in the session record and every later turn's fresh harness applies them — on any

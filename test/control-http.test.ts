@@ -488,6 +488,32 @@ describe("session control over HTTP (Phase 3)", () => {
       kind: "exit",
       message: expect.stringContaining("unreachable"),
     });
+    // Startup phase: the same policy with startup priors — the 401-unchanged diagnosis and
+    // reattach-on-changed hold identically; budgets and remedies differ.
+    expect(
+      decideRound(err({ isAuth: true, discovery: "unchanged" }), { discovered: true, downMs: 0, phase: "startup" }),
+    ).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("control.json is unchanged"),
+    });
+    expect(
+      decideRound(err({ discovery: "changed", fresh }), { discovered: true, downMs: 0, phase: "startup" }),
+    ).toEqual({ kind: "try-reattach", fresh });
+    expect(decideRound(err({ isAuth: true }), { discovered: false, downMs: 0, phase: "startup" })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("check --token"),
+    });
+    // Remote non-auth at startup fails fast: nothing has ever succeeded on that endpoint.
+    expect(decideRound(err(), { discovered: false, downMs: 0, phase: "startup" })).toMatchObject({ kind: "exit" });
+    // Local startup grace: 15s of patience for the dev-watch restart window, then the honest exit.
+    expect(decideRound(err(), { discovered: true, downMs: 14_000, phase: "startup" })).toMatchObject({
+      kind: "retry",
+      warn: expect.stringContaining("serve not ready"),
+    });
+    expect(decideRound(err(), { discovered: true, downMs: 15_000, phase: "startup" })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("not yet started"),
+    });
     // Empty clean rounds tick the same budget — a half-dead proxy must not loop forever.
     expect(decideRound({ type: "empty" }, { discovered: true, downMs: 0 })).toMatchObject({ kind: "retry" });
     expect(decideRound({ type: "empty" }, { discovered: true, downMs: 30_000 })).toMatchObject({
