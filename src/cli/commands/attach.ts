@@ -122,7 +122,15 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     ),
   );
 
-  const state = await control.state(sessionArg);
+  const state = await control
+    .state(sessionArg)
+    .catch((error: unknown) =>
+      exitWith(
+        isAuthError(error)
+          ? new Error(`the control endpoint rejected the token (${String(error)}) — re-run attach`)
+          : (error as Error),
+      ),
+    );
   log.info(`[fastagent] attached to ${sessionArg} @ ${endpoint.url} — ${state.status}`);
   if (state.leafEntryId === undefined && state.status === "idle") {
     // A typo'd id and a fresh session render identically otherwise (sessions are lazily created by
@@ -157,7 +165,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // exit; a 401 means the serve restarted and minted a new token — unrecoverable here, so exit
   // with the re-attach hint instead of retrying forever.
   const stale = (error: unknown): never =>
-    failStartup(
+    exitWith(
       new Error(
         `the control endpoint rejected the token (${String(error)}) — the serve likely restarted with a new one; re-run attach`,
       ),
@@ -182,6 +190,10 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
 }
 
 const isAuthError = (error: unknown): boolean => error instanceof ControlRequestError && error.status === 401;
+
+/** `failStartup` borrowed for its print-one-line-and-exit behavior — attach can fail long after
+ *  startup (a serve restart hours in), so the local name must not imply "startup only". */
+const exitWith = failStartup;
 
 /** What one round prints through — the COMPLETE output seam (streamed deltas included), so tests
  *  can observe every path a round writes. */

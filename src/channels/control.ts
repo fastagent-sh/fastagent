@@ -111,19 +111,20 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
       if (!authed(req)) return text("unauthorized\n", 401);
       return handler(req, new URL(req.url));
     };
-  const requireSession = (url: URL): string | undefined => url.searchParams.get("session") ?? undefined;
+  // Extraction only — each route still answers its own 400 (the name must not imply enforcement).
+  const sessionParam = (url: URL): string | undefined => url.searchParams.get("session") ?? undefined;
 
   return {
     "GET /control/capabilities": guard(() => json(control.capabilities())),
 
     "GET /control/state": guard(async (_req, url) => {
-      const session = requireSession(url);
+      const session = sessionParam(url);
       if (!session) return text("missing ?session\n", 400);
       return json(await control.state(session));
     }),
 
     "GET /control/entries": guard(async (_req, url) => {
-      const session = requireSession(url);
+      const session = sessionParam(url);
       if (!session) return text("missing ?session\n", 400);
       const since = url.searchParams.get("since") ?? undefined;
       return json(await control.entries(session, since !== undefined ? { since } : undefined));
@@ -155,7 +156,7 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
     }),
 
     "GET /control/events": guard((_req, url) => {
-      const session = requireSession(url);
+      const session = sessionParam(url);
       if (!session) return text("missing ?session\n", 400);
       const iterator = control.events(session)[Symbol.asyncIterator]();
       // EAGER registration: issue the first pull NOW, before the Response (and thus the client's
@@ -163,6 +164,10 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
       // "the client saw response headers" implies "events from that moment on will be delivered".
       // Shrinks the subscribe/backfill race to network reordering instead of a full pull cycle.
       let pending: Promise<IteratorResult<SessionEvent>> | undefined = iterator.next();
+      // Observed here so a client that disconnects BEFORE the first pull cannot turn a rejecting
+      // events iterator (this is the neutral contract face — any implementation may reject) into a
+      // process-killing unhandledRejection; awaiting `pending` at pull still surfaces the error.
+      pending.catch(() => {});
       let seq = 0;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       const encoder = new TextEncoder();

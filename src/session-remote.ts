@@ -124,7 +124,10 @@ export async function connectSessionControl(options: ConnectSessionControlOption
               await gen.return(value as never).catch(() => {});
               return { done: true as const, value: undefined };
             },
-            throw: (error?: unknown) => gen.throw(error),
+            throw(error?: unknown) {
+              abort.abort(); // same suspension as return(): gen.throw also queues behind a quiet read
+              return gen.throw(error);
+            },
           };
         },
       };
@@ -137,7 +140,9 @@ async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string
   const decoder = new TextDecoder();
   let buffer = "";
   for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
-    buffer += decoder.decode(chunk, { stream: true });
+    // SSE permits CRLF line endings (proxies/other servers may produce them); normalize AFTER
+    // appending so a \r\n split across chunks still collapses once its second half arrives.
+    buffer = (buffer + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, "\n");
     let sep = buffer.indexOf("\n\n");
     while (sep !== -1) {
       const block = buffer.slice(0, sep);
