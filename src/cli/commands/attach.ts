@@ -148,9 +148,15 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // must be held open, though — disconnecting it cancels the run.
   const remoteAgent = connectAgent(endpoint);
   const startRun = async (text: string): Promise<void> => {
+    // Drained quietly EXCEPT failures: a run that never started (transport 401/refused/404, wire
+    // errors) surfaces only on this stream — the events plane has nothing to render. A run that
+    // started and failed prints twice (here + run_settled) — the replay-overlap precedent: label,
+    // never silently drop. connectAgent never throws (SPEC), so failures ARE these events.
     let sawBusy = false;
     for await (const e of remoteAgent.invoke({ session: sessionArg }, { text })) {
-      if (e.type === "failed" && e.code === "session_busy") sawBusy = true;
+      if (e.type !== "failed") continue;
+      if (e.code === "session_busy") sawBusy = true;
+      else console.log(`[prompt failed: ${e.details}]`);
     }
     if (sawBusy) console.log("[a run started in the meantime — type again to steer it]");
   };
@@ -203,6 +209,21 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       });
     } catch (error) {
       if (isAuthError(error)) stale(error);
+      // A discovered (local) endpoint cannot outlive its serve: the token is per-boot, so once the
+      // process is gone every retry can only 401 or be refused — re-read the discovery file and
+      // exit with the accurate hint instead of retrying forever. Same file + token → the process
+      // is alive and this was transient; keep going. --url endpoints keep retrying (real networks
+      // recover).
+      if (discovered) {
+        try {
+          const fresh = discover(dir);
+          if (fresh.url !== endpoint.url || fresh.token !== endpoint.token) {
+            exitWith(new Error("the serve restarted (new control token) — re-run attach"));
+          }
+        } catch {
+          exitWith(new Error("the serve is gone (control.json removed) — restart it and re-run attach"));
+        }
+      }
       log.warn(`[fastagent] round failed: ${String(error)}`);
     }
     await new Promise((r) => setTimeout(r, 1_000)); // the stream dropped — pause, then resubscribe
