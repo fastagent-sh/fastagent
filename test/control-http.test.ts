@@ -452,6 +452,50 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("decideRound: every reconnect-loop diagnosis and budget claim, pinned", async () => {
+    const { decideRound } = await import("../src/cli/commands/attach.ts");
+    const err = (over: Partial<Parameters<typeof decideRound>[0] & { type: "error" }> = {}) =>
+      ({ type: "error", error: new Error("boom"), isAuth: false, discovery: "unavailable", ...over }) as never;
+    // progress resets the budget.
+    expect(decideRound({ type: "progress" }, { discovered: true, downMs: 999_999 })).toEqual({ kind: "reset" });
+    // 401 + UNCHANGED control.json (local) → the reachable-and-rejecting diagnosis, not a budget burn.
+    expect(decideRound(err({ isAuth: true, discovery: "unchanged" }), { discovered: true, downMs: 0 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("control.json is unchanged"),
+    });
+    // CHANGED credentials → reattach, even when the round's error was a 401 (a fresh boot mints a
+    // fresh token, so this round's 401 may already be stale) and even past the budget.
+    const fresh = { url: "http://x", token: "t2" };
+    expect(
+      decideRound(err({ isAuth: true, discovery: "changed", fresh }), { discovered: true, downMs: 999_999 }),
+    ).toEqual({ kind: "try-reattach", fresh });
+    // Local budget: below 30s → retry with the countdown; at 30s → exit with the crash diagnosis.
+    expect(decideRound(err(), { discovered: true, downMs: 29_000 })).toMatchObject({
+      kind: "retry",
+      warn: expect.stringContaining("limit 30s"),
+    });
+    expect(decideRound(err(), { discovered: true, downMs: 30_000 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("crashed"),
+    });
+    // Remote: 401 exits immediately with the --token remedy; budget is 120s.
+    expect(decideRound(err({ isAuth: true }), { discovered: false, downMs: 0 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("--token"),
+    });
+    expect(decideRound(err(), { discovered: false, downMs: 119_000 })).toMatchObject({ kind: "retry" });
+    expect(decideRound(err(), { discovered: false, downMs: 120_000 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("unreachable"),
+    });
+    // Empty clean rounds tick the same budget — a half-dead proxy must not loop forever.
+    expect(decideRound({ type: "empty" }, { discovered: true, downMs: 0 })).toMatchObject({ kind: "retry" });
+    expect(decideRound({ type: "empty" }, { discovered: true, downMs: 30_000 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("nothing delivered"),
+    });
+  });
+
   it("attachRound buffers live output during the replay block and flushes it after, failure path included", async () => {
     const { attachRound } = await import("../src/cli/commands/attach.ts");
     const lines: string[] = [];

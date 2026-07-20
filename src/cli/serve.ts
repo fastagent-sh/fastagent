@@ -63,8 +63,10 @@ export async function routesFor(
  * (`config.sessionControl`): merge the bearer-authenticated routes and return an announcer that
  * writes `<stateRoot>/control.json` — `{ url, token }`, 0600 — once the port is known. The file is
  * the LOCAL discovery channel (`fastagent attach`, a local desktop app); filesystem permissions are
- * its trust boundary, and each boot overwrites it with a fresh per-boot token. Control routes are
- * merged LAST: a user channel colliding on `/control/*` loses, loudly.
+ * its trust boundary, and each boot overwrites it with a fresh per-boot token. A user channel
+ * colliding on `/control/*` fails startup — the same disposition as a channel-channel collision
+ * (routesFor): `sessionControl` is an explicit opt-in, so declaring both is a configuration error,
+ * and silently shadowing either side would serve a surface the author didn't write.
  */
 export function mountSessionControl(
   routes: Routes,
@@ -75,8 +77,12 @@ export function mountSessionControl(
   if (!control) return { routes, announce: () => {} };
   const token = crypto.randomUUID();
   const mounted = controlRoutes(control, { token, agent: options.agent });
-  for (const key of Object.keys(mounted)) {
-    if (key in routes) log.warn(`[fastagent] channel route "${key}" is shadowed by the control plane`);
+  const collisions = Object.keys(mounted).filter((key) => key in routes);
+  if (collisions.length > 0) {
+    throw new Error(
+      `channel route(s) ${collisions.map((k) => `"${k}"`).join(", ")} collide with the session control plane — ` +
+        `rename the channel route or disable sessionControl in fastagent.config`,
+    );
   }
   return {
     routes: { ...routes, ...mounted },

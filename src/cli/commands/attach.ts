@@ -269,17 +269,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // backfill and the subscription taking effect, surfacing only at the next drop-triggered replay.
   // Live events carry no entry ids, so the cursor advances only on backfill; a replay may overlap
   // what was already seen live — labeled, not silently dropped or miscounted. Ctrl+C is the only
-  // exit; a 401 means the serve restarted and minted a new token — unrecoverable here, so exit
-  // with the re-attach hint instead of retrying forever.
-  // --url mode only (discovered endpoints self-heal through re-discovery): re-running with the
-  // SAME --token would just 401 again — the remedy is a fresh token, and the message must say so.
-  const stale = (error: unknown): never =>
-    exitWith(
-      new Error(
-        `the control endpoint rejected the token (${String(error)}) — obtain the current token from the ` +
-          `serve (its <stateRoot>/control.json) and re-run with --token`,
-      ),
-    );
+  // exit; failure dispositions (401, budgets, reattach) live in decideRound.
   // Initial cursor: `state.leafEntryId` is the ACTIVE-PATH leaf, not an append-order position —
   // an approximation of "now" that avoids downloading the whole history just to find the tail. In
   // a branched record (compaction leaves abandoned branches) the first replay may include a few
@@ -293,14 +283,10 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // otherwise a consecutive-failure budget decides — reset by any successful round or reattach,
   // exhausted → exit with the honest ambiguous diagnosis. --url endpoints keep plain retries with
   // immediate 401 exit: their token lifecycle is the operator's, not a local boot's.
-  const LOCAL_GRACE_MS = 30_000;
-  // Remote endpoints get a LARGER budget (real networks recover slowly), but not an infinite one:
-  // steady-state and startup differ on priors, not on principle — at startup nothing has ever
-  // succeeded (a wrong --url is likelier than a transient → fail fast), while a drop after a
-  // working attach is likelier transient → retry, bounded. Wall-clock, like STARTUP_GRACE_MS.
-  const REMOTE_GRACE_MS = 120_000;
   let failingSince: number | undefined;
   for (;;) {
+    // Gather this round's FACTS (IO), then let decideRound (pure, tested) pick the disposition.
+    let outcome: RoundOutcome;
     try {
       const round = await attachRound(control, sessionArg, cursor, {
         println: (line) => console.log(line),
@@ -308,79 +294,156 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         warn: (line) => log.warn(line),
       });
       cursor = round.cursor;
-      if (round.sawProgress) {
-        failingSince = undefined;
-      } else {
-        // A clean end that delivered nothing is not health: an endpoint answering 200 and closing
-        // every stream immediately (buffering proxy, half-dead tunnel) would otherwise loop
-        // forever with the budget never ticking.
-        failingSince ??= Date.now();
-        const idleSeconds = Math.round((Date.now() - failingSince) / 1000);
-        const limitMs = discovered ? LOCAL_GRACE_MS : REMOTE_GRACE_MS;
-        if (Date.now() - failingSince >= limitMs) {
-          exitWith(
-            new Error(
-              `the endpoint keeps closing the event stream immediately with nothing delivered (~${idleSeconds}s) — a buffering proxy or half-dead tunnel? Re-run attach when the path is fixed`,
-            ),
-          );
-        }
-        log.warn(`[fastagent] stream closed with nothing delivered (~${idleSeconds}s / ${limitMs / 1000}s limit)`);
-      }
+      outcome = round.sawProgress ? { type: "progress" } : { type: "empty" };
     } catch (error) {
       // A failed round may still have advanced the cursor (backfill rendered before the stream
       // error) — keep the progress or every retry replays the same records in full.
       const advanced = roundCursor(error);
       if (advanced !== undefined) cursor = advanced;
-      failingSince ??= Date.now();
-      const since = failingSince; // this round's anchor — a reattach resets the outer variable
-      const downSeconds = Math.round((Date.now() - since) / 1000);
-      if (!discovered) {
-        if (isAuthError(error)) stale(error);
-        if (Date.now() - since >= REMOTE_GRACE_MS) {
-          exitWith(
-            new Error(
-              `the remote endpoint has been unreachable for ~${downSeconds}s — check the serve and re-run attach`,
-            ),
-          );
-        }
-        log.warn(
-          `[fastagent] round failed (down ~${downSeconds}s, limit ${REMOTE_GRACE_MS / 1000}s): ${String(error)}`,
-        );
-      } else {
-        let reattached = false;
+      let discovery: "unchanged" | "changed" | "unavailable" = "unavailable";
+      let fresh: { url: string; token: string } | undefined;
+      if (discovered) {
         try {
-          const fresh = discover(dir);
-          if (fresh.url !== endpoint.url || fresh.token !== endpoint.token) {
-            try {
-              const next = await connectSessionControl(fresh);
-              endpoint = fresh;
-              control = next;
-              remoteAgent = connectAgent(fresh);
-              failingSince = undefined;
-              reattached = true;
-              console.log("[serve restarted — reattached]");
-            } catch (reconnectError) {
-              // Mid-restart (file written, port not bound yet): the budget keeps us patient.
-              log.warn(`[fastagent] serve restarting? reattach not ready: ${String(reconnectError)}`);
-            }
-          }
+          fresh = discover(dir);
+          discovery = fresh.url === endpoint.url && fresh.token === endpoint.token ? "unchanged" : "changed";
         } catch {
-          // Absent or torn — possibly mid-restart; the budget below decides, never this read alone.
+          // Absent or torn — possibly mid-restart; the budget decides, never this read alone.
         }
-        if (reattached) continue; // straight into the next round, no pause
-        exitIfLocal401Unchanged(error); // reachable-and-rejecting exits with the accurate diagnosis
-        if (Date.now() - since >= LOCAL_GRACE_MS) {
-          exitWith(
-            new Error(
-              `the serve has been unreachable for ~${downSeconds}s — it may have crashed (stale control.json) or shut down; restart it and re-run attach`,
-            ),
-          );
-        }
-        log.warn(`[fastagent] round failed (down ~${downSeconds}s, limit ${LOCAL_GRACE_MS / 1000}s): ${String(error)}`);
       }
+      outcome = { type: "error", error, isAuth: isAuthError(error), discovery, fresh };
+    }
+    if (outcome.type !== "progress") failingSince ??= Date.now();
+    const decision = decideRound(outcome, {
+      discovered,
+      downMs: failingSince === undefined ? 0 : Date.now() - failingSince,
+    });
+    switch (decision.kind) {
+      case "reset":
+        failingSince = undefined;
+        break; // healthy round; still pause below before resubscribing
+      case "exit":
+        exitWith(new Error(decision.message));
+        break;
+      case "try-reattach": {
+        // The decision says the credentials changed (a restarted serve mints fresh ones); whether
+        // the new endpoint is READY yet is an IO fact only the connect can tell.
+        const fresh = decision.fresh;
+        try {
+          const next = await connectSessionControl(fresh);
+          endpoint = fresh;
+          control = next;
+          remoteAgent = connectAgent(fresh);
+          failingSince = undefined;
+          console.log("[serve restarted — reattached]");
+          continue; // straight into the next round, no pause
+        } catch (reconnectError) {
+          // Mid-restart (file written, port not bound yet): the budget keeps us patient.
+          log.warn(`[fastagent] serve restarting? reattach not ready: ${String(reconnectError)}`);
+        }
+        break;
+      }
+      case "retry":
+        log.warn(decision.warn);
+        break;
     }
     await new Promise((r) => setTimeout(r, 1_000)); // the stream dropped — pause, then resubscribe
   }
+}
+
+const LOCAL_GRACE_MS = 30_000;
+// Remote endpoints get a LARGER budget (real networks recover slowly), but not an infinite one:
+// steady-state and startup differ on priors, not on principle — at startup nothing has ever
+// succeeded (a wrong --url is likelier than a transient → fail fast), while a drop after a
+// working attach is likelier transient → retry, bounded. Wall-clock like STARTUP_GRACE_MS: a
+// round's duration varies by an order of magnitude (fast ECONNREFUSED ≈ 1s vs the 10s black-hole
+// timeout), so counting rounds would make the "~Ns" claims false exactly when they matter.
+const REMOTE_GRACE_MS = 120_000;
+
+/** One round's observed facts, gathered by the loop (IO) and judged by {@link decideRound} (pure). */
+export type RoundOutcome =
+  | { type: "progress" }
+  /** Clean end that delivered nothing — indistinguishable from a half-dead proxy closing every stream. */
+  | { type: "empty" }
+  | {
+      type: "error";
+      error: unknown;
+      isAuth: boolean;
+      /** discover(dir) compared against the current endpoint; remote endpoints report "unavailable". */
+      discovery: "unchanged" | "changed" | "unavailable";
+      /** The freshly discovered credentials when {@link discovery} is "changed". */
+      fresh?: { url: string; token: string };
+    };
+
+export type RoundDecision =
+  | { kind: "reset" }
+  | { kind: "exit"; message: string }
+  | { kind: "try-reattach"; fresh: { url: string; token: string } }
+  | { kind: "retry"; warn: string };
+
+/**
+ * The round loop's policy, pure and testable: every exit diagnosis and budget claim lives here.
+ * `downMs` is wall-clock time since the first non-progress round (the caller anchors it).
+ */
+export function decideRound(outcome: RoundOutcome, ctx: { discovered: boolean; downMs: number }): RoundDecision {
+  const limitMs = ctx.discovered ? LOCAL_GRACE_MS : REMOTE_GRACE_MS;
+  const downSeconds = Math.round(ctx.downMs / 1000);
+  if (outcome.type === "progress") return { kind: "reset" };
+  if (outcome.type === "empty") {
+    // Not health: an endpoint answering 200 and closing every stream immediately (buffering
+    // proxy, half-dead tunnel) would otherwise loop forever with the budget never ticking.
+    if (ctx.downMs >= limitMs) {
+      return {
+        kind: "exit",
+        message: `the endpoint keeps closing the event stream immediately with nothing delivered (~${downSeconds}s) — a buffering proxy or half-dead tunnel? Re-run attach when the path is fixed`,
+      };
+    }
+    return {
+      kind: "retry",
+      warn: `[fastagent] stream closed with nothing delivered (~${downSeconds}s / ${limitMs / 1000}s limit)`,
+    };
+  }
+  if (!ctx.discovered) {
+    // --url mode: re-running with the SAME token would just 401 again — name the real remedy.
+    if (outcome.isAuth) {
+      return {
+        kind: "exit",
+        message: `the control endpoint rejected the token (${String(outcome.error)}) — obtain the current token from the serve (its <stateRoot>/control.json) and re-run with --token`,
+      };
+    }
+    if (ctx.downMs >= limitMs) {
+      return {
+        kind: "exit",
+        message: `the remote endpoint has been unreachable for ~${downSeconds}s — check the serve and re-run attach`,
+      };
+    }
+    return {
+      kind: "retry",
+      warn: `[fastagent] round failed (down ~${downSeconds}s, limit ${limitMs / 1000}s): ${String(outcome.error)}`,
+    };
+  }
+  // Local: changed credentials mean a restarted serve — reattach BEFORE any 401 verdict (a fresh
+  // boot mints a fresh token, so this round's 401 may already be stale).
+  if (outcome.discovery === "changed" && outcome.fresh) return { kind: "try-reattach", fresh: outcome.fresh };
+  // 401 with UNCHANGED control.json is reachable-and-rejecting — the file may belong to another
+  // (or dead) serve on this port — and must exit with that fact, not burn budget toward "unreachable".
+  if (outcome.isAuth && outcome.discovery === "unchanged") {
+    return {
+      kind: "exit",
+      message:
+        "the endpoint rejected the token though control.json is unchanged — the file may belong to " +
+        "another (or dead) serve on this port; restart the serve and re-run attach",
+    };
+  }
+  if (ctx.downMs >= limitMs) {
+    return {
+      kind: "exit",
+      message: `the serve has been unreachable for ~${downSeconds}s — it may have crashed (stale control.json) or shut down; restart it and re-run attach`,
+    };
+  }
+  return {
+    kind: "retry",
+    warn: `[fastagent] round failed (down ~${downSeconds}s, limit ${limitMs / 1000}s): ${String(outcome.error)}`,
+  };
 }
 
 const isAuthError = (error: unknown): boolean => error instanceof ControlRequestError && error.status === 401;

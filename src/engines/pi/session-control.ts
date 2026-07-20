@@ -360,12 +360,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           if (!run) {
             // Run/compaction symmetry: an in-flight manual compaction is a model call too, and
             // `abort` is its only door — interrupting the harness converges through the detached
-            // task's catch into `compaction_finished{error}` with the lease released; answering
+            // task's catch into `compaction_finished{aborted}` with the lease released; answering
             // no_active_run against a state() that says "compacting" would be a lie.
             const comp = command.type === "abort" ? compacting.get(session) : undefined;
             if (comp) {
               comp.abort();
-              return { ok: true }; // no runId — the outcome travels as compaction_finished{error}
+              return { ok: true }; // no runId — the outcome travels as compaction_finished{aborted}
             }
             // Rejected BEFORE acceptance: no run exists, nothing happened. retryable: false —
             // as-is retry fails again; re-dispatch after state() shows an active run.
@@ -494,7 +494,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // the dispatch open until it finishes made acceptance = outcome, the one exception to
             // §5.2, and broke remote clients whose request timeouts are sized for control calls.
             // The dispatch answers once the work is ADMITTED (lease held, harness built); the
-            // outcome travels as compaction_finished{summary|error}, the bounds contract watchers
+            // outcome travels as compaction_finished{summary|error|aborted}, the bounds contract watchers
             // already rely on. Pre-acceptance failures (the harness build) still reject here.
             // The harness build stays the admission step: it is the ONE canonical resolution of
             // session overrides + auth (resolveHarnessOverrides inside the factory). The

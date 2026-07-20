@@ -47,7 +47,7 @@ export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
 /** Stable `SessionResult.error.code` for a run-modulating command (`steer`/`follow_up`/`abort`)
  *  dispatched while the session has no active run — and, for `abort`, no in-flight manual
  *  compaction either (`abort` is also the door out of a `compacting` state; the outcome then
- *  travels as `compaction_finished{error}`). `retryable: false` — re-dispatching as-is fails
+ *  travels as `compaction_finished{aborted}`). `retryable: false` — re-dispatching as-is fails
  *  again; re-dispatch only after `state()` shows an active run. */
 export const NO_ACTIVE_RUN_CODE = "no_active_run";
 
@@ -64,7 +64,7 @@ export const NO_SUCH_SESSION_CODE = "no_such_session";
 
 /** Stable `SessionResult.error.code` for a boundary mutation rejected BEFORE acceptance with
  *  nothing durable landed — a failed override append, or compact's setup (the harness build).
- *  Post-acceptance compaction outcomes travel as `compaction_finished{summary|error}` events
+ *  Post-acceptance compaction outcomes travel as `compaction_finished{summary|error|aborted}` events
  *  (compact is accept-fast: a summarization is a full model call, and holding the dispatch open
  *  for it would make acceptance = outcome). The same command may succeed on retry. */
 export const BOUNDARY_COMMAND_FAILED_CODE = "boundary_command_failed";
