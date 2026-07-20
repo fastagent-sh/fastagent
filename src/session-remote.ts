@@ -18,27 +18,41 @@ import { SSE_HEARTBEAT_MS } from "./channels/http.ts";
 import { abortFirstIterator } from "./collect.ts";
 import type { WireEvent } from "./channels/control.ts";
 
-/** Dead-connection watchdog for SSE reads: the server heartbeats every SSE_HEARTBEAT_MS, so this
- *  many missed beats (bytes of ANY kind count — comments included) means the connection is a black
- *  hole. The stream is aborted and THROWS, so a consumer's failure budget ticks instead of hanging
- *  forever; quiet-but-alive streams (a long tool call) keep heartbeating and never trip this. */
+/** Dead-connection watchdog for SSE reads: the server heartbeats every SSE_HEARTBEAT_MS, so a
+ *  PENDING READ seeing no bytes (of ANY kind — comments included) for this many missed beats
+ *  means the connection is a black hole. The stream is aborted and surfaced as an error, so a
+ *  consumer's failure budget ticks instead of hanging forever. Quiet-but-alive streams (a long
+ *  tool call) keep heartbeating and never trip this. */
 const SSE_IDLE_LIMIT_MS = 3 * SSE_HEARTBEAT_MS;
 
-/** Wrap an SSE read loop with the idle watchdog. `armed()` reports whether the abort that ended
- *  the stream was the watchdog's own (→ the caller throws a dead-connection error) rather than the
- *  consumer walking away (→ clean end). */
-function idleWatchdog(abort: AbortController): { onByte: () => void; stale: () => boolean; stop: () => void } {
-  let lastByteAt = Date.now();
+/** The watchdog counts only while ARMED — armed means "a read is actually pending" (the connect
+ *  awaiting headers, a body read awaiting bytes). It measures connection liveness, NOT consumer
+ *  pull progress: a generator parked at `yield` (a slow or paused consumer — rate-limited
+ *  rendering, a debugger) is disarmed and never misdiagnosed as a dead connection; killing a
+ *  healthy invoke stream would cancel the run it drives. `stale()` reports whether the abort that
+ *  ended the stream was the watchdog's own (→ dead-connection error) rather than the consumer
+ *  walking away (→ clean end). */
+interface ReadWatch {
+  arm(): void;
+  disarm(): void;
+  stale(): boolean;
+  stop(): void;
+}
+function idleWatchdog(abort: AbortController): ReadWatch {
+  let armedAt: number | undefined;
   let stale = false;
   const timer = setInterval(() => {
-    if (Date.now() - lastByteAt > SSE_IDLE_LIMIT_MS) {
+    if (armedAt !== undefined && Date.now() - armedAt > SSE_IDLE_LIMIT_MS) {
       stale = true;
       abort.abort();
     }
   }, SSE_HEARTBEAT_MS);
   return {
-    onByte: () => {
-      lastByteAt = Date.now();
+    arm: () => {
+      armedAt ??= Date.now();
+    },
+    disarm: () => {
+      armedAt = undefined;
     },
     stale: () => stale,
     stop: () => clearInterval(timer),
@@ -134,16 +148,17 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
           // endpoint) is otherwise a window no timeout covers — the same watchdog terminates it,
           // with headers-arrival counting as the first sign of life.
           const watchdog = idleWatchdog(abort);
+          watchdog.arm(); // the connect await is a pending read
           try {
             const res = await fetchFn(`${base}/control/events?session=${encodeURIComponent(session)}`, {
               headers,
               signal: abort.signal,
             });
-            watchdog.onByte(); // headers arrived
+            watchdog.disarm(); // headers arrived
             if (!res.ok) throw new ControlRequestError(res.status, await res.text());
             if (!res.body) throw new Error("control events: response has no body");
             let nextSeq = 0;
-            for await (const data of sseData(res.body, watchdog.onByte)) {
+            for await (const data of sseData(res.body, watchdog)) {
               // Parse discipline, same as the other two wire planes (dispatch parses, invoke
               // classifies drift): a non-JSON or non-envelope payload is PROTOCOL MISMATCH —
               // thrown, so a consumer's failure budget applies — never misdiagnosed as an
@@ -248,8 +263,9 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
           // (server died mid-run) must be closed with a failed — never a terminal-less end.
           let terminalSeen = false;
           // Armed BEFORE the fetch — the run's driver must not hang on a black-holed connect
-          // either (headers-arrival counts as the first sign of life).
+          // either (the connect await is a pending read; headers arriving disarm it).
           const watchdog = idleWatchdog(abort);
+          watchdog.arm();
           try {
             const res = await fetchFn(`${base}/control/invoke`, {
               method: "POST",
@@ -257,7 +273,7 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
               body: JSON.stringify({ session: scope.session, text: prompt.text }),
               signal: abort.signal,
             });
-            watchdog.onByte(); // headers arrived
+            watchdog.disarm(); // headers arrived
             if (!res.ok) {
               yield toFailed(new ControlRequestError(res.status, await res.text()));
               return;
@@ -266,7 +282,7 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
               yield { type: "failed", details: "remote invoke: response has no body", retryable: true };
               return;
             }
-            for await (const data of sseData(res.body, watchdog.onByte)) {
+            for await (const data of sseData(res.body, watchdog)) {
               let event: AgentEvent;
               try {
                 event = JSON.parse(data) as AgentEvent;
@@ -332,26 +348,37 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
   };
 }
 
-/** Minimal SSE reader: yields each `data:` payload; ignores comments (heartbeats) and other fields. */
-async function* sseData(body: ReadableStream<Uint8Array>, onByte?: () => void): AsyncGenerator<string> {
+/** Minimal SSE reader: yields each `data:` payload; ignores comments (heartbeats) and other
+ *  fields. The explicit reader loop (not for-await) exists for the watchdog: armed strictly
+ *  around each pending read, so only "we are listening and nothing arrives" counts as idle — a
+ *  consumer pausing at a yield leaves the watch disarmed (see {@link ReadWatch}). */
+async function* sseData(body: ReadableStream<Uint8Array>, watch?: ReadWatch): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   let buffer = "";
-  for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
-    onByte?.(); // ANY bytes — heartbeats included — mean the connection is alive
-    // SSE permits CRLF line endings (proxies/other servers may produce them); normalize AFTER
-    // appending so a \r\n split across chunks still collapses once its second half arrives.
-    buffer = (buffer + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, "\n");
-    let sep = buffer.indexOf("\n\n");
-    while (sep !== -1) {
-      const block = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      const data = block
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n");
-      if (data !== "") yield data;
-      sep = buffer.indexOf("\n\n");
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      watch?.arm(); // a read is pending — the idle clock may run
+      const { done, value } = await reader.read();
+      watch?.disarm(); // bytes (ANY bytes — heartbeats included) or a clean end arrived
+      if (done) return;
+      // SSE permits CRLF line endings (proxies/other servers may produce them); normalize AFTER
+      // appending so a \r\n split across chunks still collapses once its second half arrives.
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+      let sep = buffer.indexOf("\n\n");
+      while (sep !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const data = block
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (data !== "") yield data;
+        sep = buffer.indexOf("\n\n");
+      }
     }
+  } finally {
+    reader.releaseLock();
   }
 }

@@ -319,6 +319,44 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("a paused consumer never trips the watchdog — it measures pending reads, not pull progress", async () => {
+    // A generator parked at yield (rate-limited rendering, a debugger) has NO pending read; the
+    // healthy connection must not be misdiagnosed as dead — on the invoke plane that abort would
+    // cancel the run the stream drives.
+    const fakeTimers = await import("vitest").then((m) => m.vi);
+    const enc = new TextEncoder();
+    let feed!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        feed = c;
+      },
+    });
+    const fetchFn = (async (input: string | URL | Request) => {
+      if (String(input).includes("/control/capabilities")) {
+        return new Response("{}", { headers: { "content-type": "application/json" } });
+      }
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const wire = (seq: number, event: object) =>
+      enc.encode(`data: ${JSON.stringify({ sessionId: "s", epoch: "e", seq, event })}\n\n`);
+    fakeTimers.useFakeTimers();
+    try {
+      const remote = await connectSessionControl({ url: "http://x", token: "t", fetchFn });
+      const iterator = remote.events("s")[Symbol.asyncIterator]();
+      feed.enqueue(wire(0, { type: "run_started", timestamp: 1, data: {} }));
+      expect(((await iterator.next()).value as SessionEvent).type).toBe("run_started");
+      // The consumer pauses far past the idle limit — no pending read, watchdog disarmed.
+      await fakeTimers.advanceTimersByTimeAsync(4 * 30_000);
+      // Resume: the connection was never killed; the next event flows.
+      const resumed = iterator.next();
+      feed.enqueue(wire(1, { type: "run_settled", timestamp: 2, data: { status: "completed" } }));
+      expect(((await resumed).value as SessionEvent).type).toBe("run_settled");
+      await iterator.return?.(undefined);
+    } finally {
+      fakeTimers.useRealTimers();
+    }
+  });
+
   it("quiet-but-alive streams EMIT heartbeats on both SSE routes — the watchdog's other half", async () => {
     // The client watchdog (90s no bytes → kill) assumes the server pings every 30s; a regression
     // on the emission side would misdiagnose every long tool call as a dead connection. Handlers
