@@ -173,7 +173,9 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         if (result.ok) {
           console.log(`[${command.type} accepted]`);
         } else if (command.type === "steer" && result.error.code === "no_active_run") {
-          console.log("[no active run — starting one]");
+          // The invoke stream attach holds IS this run's driver (design: disconnect = cancel), so
+          // unlike channel-started runs, this one dies with the attach. Say so up front.
+          console.log("[no active run — starting one; detaching (Ctrl+C) will cancel it]");
           void startRun(trimmed).catch((error) => console.log(`[prompt failed: ${String(error)}]`));
         } else {
           console.log(`[${command.type} rejected: ${result.error.code} — ${result.error.message}]`);
@@ -269,8 +271,24 @@ export async function attachRound(
   // backfill failure must close it before propagating, or the caller's retry round would stack a
   // second concurrent stream interleaving the same session's output.
   const iterator = control.events(session)[Symbol.asyncIterator]();
+  // Live output is BUFFERED while the replay block prints, then flushed — the drain runs
+  // concurrently with the backfill, and interleaving raw deltas into the labeled replay would make
+  // both unreadable; the [end of replay] label is only honest if the block is contiguous.
+  let hold = true;
+  const pending: (() => void)[] = [];
+  const release = (): void => {
+    hold = false;
+    for (const emit of pending) emit();
+    pending.length = 0;
+  };
+  const liveIo: AttachIo = {
+    println: (line) => (hold ? void pending.push(() => io.println(line)) : io.println(line)),
+    write: (chunk) => (hold ? void pending.push(() => io.write(chunk)) : io.write(chunk)),
+    warn: io.warn,
+    settleMs: io.settleMs,
+  };
   let authError: unknown;
-  const draining = drainEvents(iterator, io).catch((error) => {
+  const draining = drainEvents(iterator, liveIo).catch((error) => {
     if (isAuthError(error)) {
       authError = error;
       return;
@@ -303,10 +321,12 @@ export async function attachRound(
     const now = await control.state(session);
     io.println(`[live — ${now.status}${now.activeRunId ? ` (run ${now.activeRunId})` : ""}]`);
   } catch (error) {
+    release(); // buffered live output must not be lost on the failure path
     await iterator.return?.(undefined)?.catch?.(() => {});
     await draining;
     throw error;
   }
+  release();
   await draining;
   if (authError) throw authError; // the stream's 401 is the round's 401
   return next;

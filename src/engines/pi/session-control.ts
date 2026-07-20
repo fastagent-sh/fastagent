@@ -103,6 +103,13 @@ const SUBSCRIBER_BUFFER_CAP = 10_000;
  *  pending pull — an async generator suspended on a quiet stream cannot be ended by `return()`
  *  alone (it queues behind the never-settling await), so teardown needs this explicit door. */
 class Subscriber {
+  /** For the overflow diagnostic only — a warn without the session is not actionable on a
+   *  multi-session serve. (Explicit assignment: TS parameter properties break Node's strip-only
+   *  type erasure, which the CLI runs under.) */
+  private readonly session: string;
+  constructor(session: string) {
+    this.session = session;
+  }
   private buffer: SessionEvent[] = [];
   // A QUEUE of waiters, not a single slot: concurrent next() calls are contract-legal (any wrapper
   // may poll twice), and a single `wake` field would let the second await overwrite the first's
@@ -120,7 +127,9 @@ class Subscriber {
   push(event: SessionEvent): void {
     if (this.closed) return;
     if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP) {
-      log.warn(`[fastagent] session-control subscriber ${SUBSCRIBER_BUFFER_CAP} events behind — closing its stream`);
+      log.warn(
+        `[fastagent] session-control subscriber for session "${this.session}" is ${SUBSCRIBER_BUFFER_CAP} events behind — closing its stream`,
+      );
       this.close();
       return;
     }
@@ -310,7 +319,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             async next() {
               if (finished) return { done: true, value: undefined };
               if (!sub) {
-                sub = new Subscriber();
+                sub = new Subscriber(session);
                 let set = subscribers.get(session);
                 if (!set) {
                   set = new Set();
