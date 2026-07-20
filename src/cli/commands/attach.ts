@@ -144,6 +144,24 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
               : (error as Error),
           );
         }
+        // Mirror of the round loop's discipline: a 401 with UNCHANGED credentials is
+        // reachable-and-rejecting (the file may belong to another/dead serve on this port) — exit
+        // with the accurate diagnosis now, not after burning the budget toward "unreachable".
+        if (isAuthError(error)) {
+          try {
+            const fresh = discover(dir);
+            if (fresh.url === endpoint.url && fresh.token === endpoint.token) {
+              exitWith(
+                new Error(
+                  "the endpoint rejected the token though control.json is unchanged — the file may belong to " +
+                    "another (or dead) serve on this port; restart the serve and re-run attach",
+                ),
+              );
+            }
+          } catch {
+            // Absent or torn — possibly mid-restart; fall through to the budget.
+          }
+        }
         if (Date.now() - startedAt >= STARTUP_GRACE_MS) {
           exitWith(
             new Error(

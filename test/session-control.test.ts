@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
-import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
+import { SUBSCRIBER_BUFFER_CAP, createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
 import { createPiAgentFromWorkspace } from "../src/engines/pi/workspace.ts";
 import {
@@ -581,7 +581,7 @@ describe("session control (Phase 2a): run modulation", () => {
     const first = iterator.next(); // registration is synchronous at next() entry; the pull now stalls
     observer("sSlow", { type: "run_started", timestamp: 0, runId: "r", data: {} });
     await first; // the first event flows; the consumer never pulls again after this
-    for (let i = 0; i < 10_001; i++) {
+    for (let i = 0; i < SUBSCRIBER_BUFFER_CAP + 1; i++) {
       observer("sSlow", { type: "message_delta", timestamp: i, runId: "r", data: { channel: "text", delta: "x" } });
     }
     // The stream was closed by the cap: draining reaches done instead of 10k+ buffered events.
@@ -592,7 +592,13 @@ describe("session control (Phase 2a): run modulation", () => {
       drained++;
       if (drained > 20_000) throw new Error("cap did not close the stream");
     }
-    expect(drained).toBeLessThanOrEqual(10_000);
+    expect(drained).toBeLessThanOrEqual(SUBSCRIBER_BUFFER_CAP);
+    // Released, not wedged: a FRESH subscription on the same session works and receives new events.
+    const fresh = control.events("sSlow")[Symbol.asyncIterator]();
+    const next = fresh.next();
+    observer("sSlow", { type: "run_settled", timestamp: 1, runId: "r", data: { status: "completed" } });
+    expect(((await next) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_settled");
+    await fresh.return?.(undefined);
   }, 10_000);
 
   it("every iteration of one events iterable is a FRESH subscription (isomorphic with remote)", async () => {

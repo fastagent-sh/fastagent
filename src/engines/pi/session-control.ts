@@ -97,7 +97,7 @@ function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
  *  is CLOSED instead of growing server memory without bound; ending the stream is semantically
  *  lossless — the client runs the same reconnect+backfill it runs for any drop. ≈10k small events
  *  ≈ a few MB worst case per stuck connection. */
-const SUBSCRIBER_BUFFER_CAP = 10_000;
+export const SUBSCRIBER_BUFFER_CAP = 10_000;
 
 /** One subscriber's push→pull queue, capped at {@link SUBSCRIBER_BUFFER_CAP}. `close()` settles a
  *  pending pull — an async generator suspended on a quiet stream cannot be ended by `return()`
