@@ -78,15 +78,10 @@ export async function reportAuth(modelSpec: string, authPath: string): Promise<v
  * it stays quiet and lets the caller raise its own clear error (`missing model`, or deploy's
  * model-travel gate). The pick is exported to FASTAGENT_MODEL so a spawned `dev` worker inherits it,
  * and best-effort written back to the config so the next run is quiet.
- *
- * `pickOnly` drops the credential dimension entirely — a plain catalog, no ready/login annotations,
- * no inline login — for commands whose auth does NOT live in fastagent's credential file (`chat`
- * authenticates through pi's own `~/.pi` store): annotations judged against fastagent's store would
- * lie there, in both directions.
  */
 export async function resolveFirstRunModel(
   workspaceDir: string,
-  options: { model?: string; authPath?: string; input?: boolean; pickOnly?: boolean } = {},
+  options: { model?: string; authPath?: string; input?: boolean } = {},
 ): Promise<void> {
   const { config, path: configPath } = await loadConfig(workspaceDir).catch(failStartup);
   if (resolveModelSpec(options.model, config)) return; // already set (flag > FASTAGENT_MODEL > config)
@@ -95,20 +90,10 @@ export async function resolveFirstRunModel(
 
   const authPath = resolveAuthPath(workspaceDir, options.authPath);
   const models = createPiModels({ authPath });
-  const chosen = options.pickOnly
-    ? await promptModelChoice(listModels(models).map((s) => ({ value: s, label: s })))
-    : await pickWithCredentials(workspaceDir, models, authPath);
+  const chosen = await pickWithCredentials(workspaceDir, models, authPath);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
   await persistModelChoice(workspaceDir, configPath, chosen);
-}
-
-/** The one picker prompt — both modes share the message and the cancel semantics (undefined). */
-async function promptModelChoice(
-  options: Array<{ value: string; label: string; hint?: string }>,
-): Promise<string | undefined> {
-  const r = await autocomplete({ message: "Choose a model for this agent", options });
-  return isCancel(r) ? undefined : (r as string);
 }
 
 /**
@@ -132,8 +117,12 @@ async function pickWithCredentials(
     log.warn(`[fastagent] could not probe provider auth: ${(error as Error).message}`);
     return undefined;
   }
-  const chosen = await promptModelChoice(buildModelPickerOptions(listModels(models), statuses));
-  if (chosen === undefined) return undefined;
+  const r = await autocomplete({
+    message: "Choose a model for this agent",
+    options: buildModelPickerOptions(listModels(models), statuses),
+  });
+  if (isCancel(r)) return undefined; // cancelled: the caller raises its clear missing-model error
+  const chosen = r as string;
   const provider = providerOf(chosen);
   const status = statuses.get(provider);
   if (status?.state === "ready") return chosen; // usable now — nothing to fix

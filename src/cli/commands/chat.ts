@@ -9,10 +9,10 @@ export async function runChat(dirArg: string, opts: { model?: string; authPath?:
   const dir = resolve(dirArg);
   loadDotEnv(dir);
   installProxyFetch(); // model calls (and the login dialog) must go through the proxy too
-  // First-run funnel, CHOICE ONLY (pickOnly): chat authenticates through pi's own ~/.pi store (see
-  // engines/pi/chat.ts AUTH note), so the picker shows a plain catalog — credential annotations or an
-  // inline login judged against fastagent's store would lie here. pi's TUI handles login natively.
-  await resolveFirstRunModel(dir, { model: opts.model, pickOnly: true });
+  // First-run funnel, FULL picker: chat authenticates through fastagent's credential store like every
+  // other command (the shared session builder injects it — see engines/pi/session-builder.ts), so the
+  // credential-annotated catalog and inline login apply here too.
+  await resolveFirstRunModel(dir, { model: opts.model, authPath: opts.authPath });
   // Run the chat process IN the workspace: pi resolves a session's cwd as `header.cwd ?? process.cwd()`,
   // so aligning process.cwd() with the workspace keeps a cwd-less session on the workspace. `dir` is absolute.
   process.chdir(dir);
