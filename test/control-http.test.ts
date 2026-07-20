@@ -197,12 +197,17 @@ describe("session control over HTTP (Phase 3)", () => {
       expect(events.at(-1)).toEqual({ type: "completed" });
       await watching;
       expect(seen.map((e) => e.type)).toContain("run_started");
-      // Auth applies to the data plane too, and images fail visibly rather than silently dropping.
+      // A REAL Agent: failures are terminal failed EVENTS, never iteration throws (SPEC MUST 2).
       const wrong = connectAgent({ url: served.url, token: "wrong" });
-      await expect(drain(wrong.invoke({ session: "x" }, { text: "hi" }))).rejects.toThrow(/401/);
-      await expect(
-        drain(remoteAgent.invoke({ session: "x" }, { text: "hi", images: [{ mimeType: "image/png", data: "x" }] })),
-      ).rejects.toThrow(/images/);
+      const unauthorized = await drain(wrong.invoke({ session: "x" }, { text: "hi" }));
+      expect(unauthorized).toHaveLength(1);
+      expect(unauthorized[0]).toMatchObject({ type: "failed", retryable: false });
+      expect((unauthorized[0] as { details: string }).details).toContain("401");
+      const withImages = await drain(
+        remoteAgent.invoke({ session: "x" }, { text: "hi", images: [{ mimeType: "image/png", data: "x" }] }),
+      );
+      expect(withImages).toEqual([expect.objectContaining({ type: "failed", retryable: false })]);
+      expect((withImages[0] as { details: string }).details).toContain("images");
     } finally {
       served.close();
     }

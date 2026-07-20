@@ -143,35 +143,66 @@ export async function connectSessionControl(options: ConnectSessionControlOption
 /**
  * The remote DATA plane: an `Agent` whose `invoke` drives `POST /control/invoke` on a serving
  * process — paired with {@link connectSessionControl}, a client holds a full remote fastagent
- * instance through the same two contracts local code uses. The invoke stream is the run's driver:
- * breaking out of iteration disconnects the request, which cancels the run (SPEC cancellation
- * semantics travel the wire). Text prompts only for now — the wire handler does not carry images;
- * a prompt with images fails visibly instead of silently dropping them.
+ * instance through the same two contracts local code uses. A REAL Agent, failure discipline
+ * included: SPEC MUST 2 forbids iteration throws, so every failure — transport (401/refused/
+ * dropped mid-stream), protocol, and the images precheck — becomes a terminal `failed` event
+ * (`retryable` from the HTTP status where one exists; network trouble is retryable). Breaking out
+ * of iteration disconnects the request, which cancels the run (SPEC cancellation semantics travel
+ * the wire). The invoke wire is text-only for now: a prompt with images fails visibly instead of
+ * silently dropping them (steer/follow_up on the control plane carry full Prompts).
  */
 export function connectAgent(options: ConnectSessionControlOptions): Agent {
   const { url, token, fetchFn = fetch } = options;
   const base = url.replace(/\/$/, "");
+  const toFailed = (error: unknown): AgentEvent => {
+    if (error instanceof ControlRequestError) {
+      return { type: "failed", details: error.message, retryable: error.status === 429 || error.status >= 500 };
+    }
+    return { type: "failed", details: String(error), retryable: true }; // network-class: worth re-sending
+  };
   return {
     invoke(scope, prompt): AsyncIterable<AgentEvent> {
       const abort = new AbortController();
       const openStream = () =>
         (async function* iterate(): AsyncGenerator<AgentEvent> {
           if (prompt.images && prompt.images.length > 0) {
-            throw new Error("remote invoke does not carry images yet — send text, or invoke in-process");
+            yield {
+              type: "failed",
+              details: "remote invoke does not carry images yet — send text, or invoke in-process",
+              retryable: false,
+            };
+            return;
           }
-          const res = await fetchFn(`${base}/control/invoke`, {
-            method: "POST",
-            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-            body: JSON.stringify({ session: scope.session, text: prompt.text }),
-            signal: abort.signal,
-          });
-          if (!res.ok) throw new ControlRequestError(res.status, await res.text());
-          if (!res.body) throw new Error("remote invoke: response has no body");
+          // Exactly-one-terminal discipline across the wire: a drop AFTER the server's terminal
+          // must not append a second one (catch included), and a stream that ends WITHOUT one
+          // (server died mid-run) must be closed with a failed — never a terminal-less end.
+          let terminalSeen = false;
           try {
-            for await (const data of sseData(res.body)) yield JSON.parse(data) as AgentEvent;
+            const res = await fetchFn(`${base}/control/invoke`, {
+              method: "POST",
+              headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+              body: JSON.stringify({ session: scope.session, text: prompt.text }),
+              signal: abort.signal,
+            });
+            if (!res.ok) {
+              yield toFailed(new ControlRequestError(res.status, await res.text()));
+              return;
+            }
+            if (!res.body) {
+              yield { type: "failed", details: "remote invoke: response has no body", retryable: true };
+              return;
+            }
+            for await (const data of sseData(res.body)) {
+              const event = JSON.parse(data) as AgentEvent;
+              if (event.type === "completed" || event.type === "failed") terminalSeen = true;
+              yield event;
+            }
+            if (!terminalSeen) {
+              yield { type: "failed", details: "remote invoke: stream ended without a terminal", retryable: true };
+            }
           } catch (error) {
             if (abort.signal.aborted) return; // the consumer walked away — cancellation, not an error
-            throw error;
+            if (!terminalSeen) yield toFailed(error);
           }
         })();
       // ONE stream per invoke, like a local async generator (which is its own iterator): a second
