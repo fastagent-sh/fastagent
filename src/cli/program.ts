@@ -104,9 +104,10 @@ const attach: CommandSpec = {
   summary: "watch a session's live events from a running serve and steer it",
   description:
     "Attach to a session served by a running dev/start with `sessionControl: true` in the config: " +
-    "stream its live events (text, tools, run boundaries), steer the active run by typing, /abort to " +
-    "stop it. Discovers the local endpoint from <stateRoot>/control.json; --url/--token reach a " +
-    "remote serve. The same wire protocol a Web panel or desktop app uses.",
+    "stream its live events (text, tools, run boundaries), steer the active run by typing — or, with " +
+    "no run active, start one (detaching cancels a run YOU started) — /abort to stop a run. Discovers " +
+    "the local endpoint from <stateRoot>/control.json; --url/--token reach a remote serve. The same " +
+    "wire protocol a Web panel or desktop app uses.",
   args: [{ name: "<session>", description: "the session id to attach to" }, DIR_ARG],
   flags: [
     { flags: "--url <url>", description: "control endpoint (skip control.json discovery)" },

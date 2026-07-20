@@ -314,7 +314,12 @@ describe("session control over HTTP (Phase 3)", () => {
     }) as typeof fetch;
     const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn });
     const seen: string[] = [];
-    for await (const ev of remote.events("s")) seen.push(ev.type); // must END, not throw or yield past the gap
+    // The gap THROWS (same discipline as protocol mismatch) after yielding everything before it:
+    // the consumer's failure path owns the diagnostic and its budget ticks.
+    const iterate = async () => {
+      for await (const ev of remote.events("s")) seen.push(ev.type);
+    };
+    await expect(iterate()).rejects.toThrow(/sequence gap/);
     expect(seen).toEqual(["run_started"]);
   });
 

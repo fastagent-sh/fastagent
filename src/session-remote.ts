@@ -14,7 +14,6 @@
  * request as a rejected promise.
  */
 import type { Agent, AgentEvent, Prompt, Scope } from "./agent.ts";
-import { log } from "./log.ts";
 import type { WireEvent } from "./channels/control.ts";
 import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
 
@@ -121,15 +120,15 @@ export async function connectSessionControl(options: ConnectSessionControlOption
                   "control events: malformed envelope — the endpoint does not speak this protocol version",
                 );
               }
-              // Envelope checks — consumed HERE, surfaced only as iterator termination. (epoch is
-              // not compared: it cannot change within one connection — see the header note.)
+              // Envelope checks — consumed HERE. (epoch is not compared: it cannot change within
+              // one connection — see the header note.) A gap THROWS like a protocol mismatch: the
+              // consumer's failure path (budget, its own io) owns the diagnostic — a library-level
+              // log would bypass consumer output discipline, and a silent clean end would be
+              // indistinguishable from the server closing normally.
               if (wire.seq !== nextSeq) {
-                // Fail visibly: a gap-terminated stream must be distinguishable from a clean end in
-                // the diagnostics, even though both surface as iterator termination + resync.
-                log.warn(
-                  `[fastagent] control events: sequence gap (expected ${nextSeq}, got ${wire.seq}) — ending the stream for resync`,
+                throw new Error(
+                  `control events: sequence gap (expected ${nextSeq}, got ${wire.seq}) — events were lost in transit; resync via entries()`,
                 );
-                return;
               }
               nextSeq = wire.seq + 1;
               yield wire.event;

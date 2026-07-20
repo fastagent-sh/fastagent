@@ -369,18 +369,27 @@ same lease. Engine-specific records (pi JSONL, message classes) never cross the 
 
 ## 13. Transport and envelope
 
-The embedded contract is semantic-only. Crossing a process boundary, a codec adds the envelope:
+The embedded contract is semantic-only; wire concerns exist only at the transport. As SHIPPED
+(HTTP+SSE, `controlRoutes`/`connectSessionControl`):
 
-```ts
-interface WireCommand { id: string; sessionId: string; command: SessionCommand }
-interface WireEvent   { sessionId: string; epoch: string; seq: number; event: SessionEvent }
-```
+- **Commands** ride plain HTTP request/response — the request correlation the design once sketched
+  as a `WireCommand.id` is implicit in HTTP itself; the dispatch body is `{ session, command }`,
+  parsed field by field at the boundary (never cast through).
+- **Events** carry the one explicit envelope:
 
-`id` restores promise correlation; `seq` detects loss; `epoch` detects serving-process restarts and
-fences stale events. A remote adapter consumes the envelope internally and re-exposes the same
-`SessionControl` interface — gap or epoch change surfaces to the client as iterator termination
-plus the normal reconnect steps ([§7](#7-state-and-durable-recovery)). Local and remote consumers
-are isomorphic; that is the entire payoff of keeping the envelope out of the API.
+  ```ts
+  interface WireEvent { sessionId: string; epoch: string; seq: number; event: SessionEvent }
+  ```
+
+  `seq` detects loss in transit on one connection — a gap throws in the client (the consumer's
+  failure budget and diagnostics own it) into the normal reconnect steps
+  ([§7](#7-state-and-durable-recovery)). `epoch` is INFORMATIONAL for consumers correlating across
+  connections: within one connection it cannot change, so the client does not compare it — a
+  serving-process restart surfaces as its connections dropping.
+
+The remote adapter consumes the envelope internally and re-exposes the same `SessionControl`
+interface (and `connectAgent` does the same for the data plane's `Agent`). Local and remote
+consumers are isomorphic; that is the entire payoff of keeping the envelope out of the API.
 
 ## 14. Security boundary
 
