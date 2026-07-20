@@ -13,7 +13,7 @@
  * Nothing here retries silently: a broken stream is visible as a terminated iterator, a failed
  * request as a rejected promise.
  */
-import type { Agent, AgentEvent, Prompt } from "./agent.ts";
+import type { Agent, AgentEvent, Prompt, Scope } from "./agent.ts";
 import { log } from "./log.ts";
 import type { WireEvent } from "./channels/control.ts";
 import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
@@ -190,6 +190,9 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
   // (carry it or reject it), never vanish on the wire while the client believes it was sent.
   const _invokeDriftGuard: Record<Exclude<keyof Prompt, "text" | "images">, never> = {};
   void _invokeDriftGuard;
+  // Same guard for Scope: the body carries session only — a new Scope field must force a decision.
+  const _scopeDriftGuard: Record<Exclude<keyof Scope, "session">, never> = {};
+  void _scopeDriftGuard;
   return {
     invoke(scope, prompt): AsyncIterable<AgentEvent> {
       const abort = new AbortController();

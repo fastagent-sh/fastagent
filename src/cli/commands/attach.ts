@@ -256,8 +256,10 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         `the control endpoint rejected the token (${String(error)}) — the serve likely restarted with a new one; re-run attach`,
       ),
     );
-  // `state` already carries the cursor — fetching the FULL record just to read leafEntryId would
-  // download the whole history of a long session for nothing.
+  // Initial cursor: `state.leafEntryId` is the ACTIVE-PATH leaf, not an append-order position —
+  // an approximation of "now" that avoids downloading the whole history just to find the tail. In
+  // a branched record (compaction leaves abandoned branches) the first replay may include a few
+  // post-leaf appends; advancement below is append-order, so it does not repeat.
   let cursor = state.leafEntryId;
   // LIVENESS IS PROBED, NEVER INFERRED FROM THE FILE: control.json is advisory — briefly absent
   // during a dev-watch restart (unlink → new worker rewrites seconds later) and stale after a
@@ -411,7 +413,10 @@ export async function attachRound(
   let next = cursor;
   try {
     const backfill = await control.entries(session, cursor !== undefined ? { since: cursor } : undefined);
-    next = backfill.leafEntryId ?? cursor;
+    // Advance by APPEND ORDER (the last returned record), never by leafEntryId: `since` is an
+    // append-position cursor (design §7), and a leaf that sits before later appends (abandoned
+    // branches) would make every reconnect permanently replay the same tail.
+    next = backfill.entries.at(-1)?.id ?? cursor;
     if (backfill.entries.length > 0) {
       io.println("[replaying the record since the last sync (may overlap what you saw live)]");
       for (const entry of backfill.entries) {
