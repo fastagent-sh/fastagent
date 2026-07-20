@@ -241,6 +241,19 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
                 }
                 return;
               }
+              // Shape check, same discipline as the events plane: `data: null` / `data: 42` is
+              // valid JSON but protocol drift — it must not TypeError into the catch below and be
+              // misclassified as retryable network trouble.
+              if (typeof event !== "object" || event === null || typeof event.type !== "string") {
+                if (!terminalSeen) {
+                  yield {
+                    type: "failed",
+                    details: "remote invoke: non-event data on the stream — protocol mismatch?",
+                    retryable: false,
+                  };
+                }
+                return;
+              }
               if (event.type === "completed" || event.type === "failed") terminalSeen = true;
               yield event;
             }

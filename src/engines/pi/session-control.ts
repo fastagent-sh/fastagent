@@ -128,7 +128,7 @@ class Subscriber {
     if (this.closed) return;
     if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP) {
       log.warn(
-        `[fastagent] session-control subscriber for session "${this.session}" is ${SUBSCRIBER_BUFFER_CAP} events behind — closing its stream`,
+        `[fastagent] session-control subscriber for session "${this.session}" is ${SUBSCRIBER_BUFFER_CAP} events behind — buffer frozen; its stream ends at the next pull or connection death`,
       );
       this.close();
       return;

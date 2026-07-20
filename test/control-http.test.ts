@@ -292,7 +292,7 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
-  it("a seq gap ends the events iterator cleanly (the one envelope behavior the client owns)", async () => {
+  it("a seq gap throws to the consumer, after yielding everything before it", async () => {
     // Injected fetch: capabilities → JSON; events → an SSE body whose second message skips seq 1.
     const sse = [
       `data: ${JSON.stringify({ sessionId: "s", epoch: "e1", seq: 0, event: { type: "run_started", timestamp: 1, runId: "r", data: {} } })}\n\n`,

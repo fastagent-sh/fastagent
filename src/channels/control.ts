@@ -13,7 +13,7 @@
  * the token guards the routes: the serve binds ALL interfaces (containers require it), so the port
  * is LAN-reachable and the mount warns accordingly.
  */
-import type { Prompt } from "../agent.ts";
+import type { ImageRef, Prompt } from "../agent.ts";
 import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
@@ -79,6 +79,10 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
   // the wire while the client believes it was sent.
   const _promptDriftGuard: Record<Exclude<keyof Prompt, keyof ReturnType<typeof rebuildPrompt>>, never> = {};
   void _promptDriftGuard;
+  // Same guard one level down: the image whitelist ({data, mimeType}) must break when ImageRef
+  // grows a field — top-level coverage alone would let element fields vanish silently.
+  const _imageDriftGuard: Record<Exclude<keyof ImageRef, "data" | "mimeType">, never> = {};
+  void _imageDriftGuard;
   switch (c.type) {
     case "steer":
     case "follow_up":
