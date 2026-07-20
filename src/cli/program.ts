@@ -377,6 +377,7 @@ const deploy: CommandSpec = {
     },
     MODEL,
     AUTH_PATH,
+    NO_INPUT,
   ],
   examples: [
     { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
@@ -397,6 +398,7 @@ const deploy: CommandSpec = {
       intoLinked: f.intoLinked === true,
       model: f.model as string | undefined,
       authPath: f.authPath as string | undefined,
+      input: f.input !== false,
     }),
 };
 

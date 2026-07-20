@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -28,6 +28,23 @@ describe("config: resolveSessionsDirOverride (start's sessions precedence)", () 
     expect(resolveSessionsDirOverride(undefined, env)).toBe(resolve("envdir")); // env when no flag
     expect(resolveSessionsDirOverride(undefined, {} as NodeJS.ProcessEnv)).toBeUndefined(); // neither → opener default
     expect(resolveSessionsDirOverride("/mnt/vol", {} as NodeJS.ProcessEnv)).toBe("/mnt/vol"); // absolute kept as-is
+  });
+});
+
+describe("config: loadConfig rereads a config rewritten in-process (ESM cache-bust)", () => {
+  it("a write-back (the first-run picker) is visible to the next loadConfig — not the cached module", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-config-fresh-"));
+    const path = join(dir, "fastagent.config.mjs");
+    await writeFile(path, "export default {\n};\n");
+    expect((await loadConfig(dir)).config.model).toBeUndefined();
+    // Simulate persistModelChoice: rewrite the file AFTER it was imported once. Without the mtime
+    // cache-buster the second load returns the stale cached module and deploy's model-travel gate
+    // contradicts the "saved model" line it just printed.
+    await writeFile(path, 'export default {\n  model: "prov/m1",\n};\n');
+    // Push mtime past any fs timestamp granularity — the assertion targets the cache-bust, not the fs.
+    const t = new Date((await stat(path)).mtimeMs + 2000);
+    await utimes(path, t, t);
+    expect((await loadConfig(dir)).config.model).toBe("prov/m1");
   });
 });
 
