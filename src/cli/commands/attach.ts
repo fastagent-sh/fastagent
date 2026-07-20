@@ -5,7 +5,9 @@
  * panel or desktop app uses (`connectSessionControl`).
  *
  * Typed lines dispatch as `steer` while a run is active; `/abort` aborts it. Reconnect-on-drop is
- * the standard client loop: backfill via `entries({ since })`, re-check `state()`, resubscribe.
+ * the standard client loop, one round per connection: resubscribe → backfill via `entries({ since })`
+ * → re-check `state()` (rendered — status changes that happened while away are live-only events and
+ * would otherwise be invisible) → drain live.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -241,8 +243,12 @@ export async function attachRound(
       }
       if (line !== undefined) io.println(line);
     }
-    io.println("[end of replay — live]");
+    io.println("[end of replay]");
   }
+  // The protocol's reconnect step the replay cannot cover: status changes while away are LIVE-only
+  // events (state_changed before a restart is neither replayed nor re-emitted) — re-check and show.
+  const now = await control.state(session);
+  io.println(`[live — ${now.status}${now.activeRunId ? ` (run ${now.activeRunId})` : ""}]`);
   await draining;
   if (authError) throw authError; // the stream's 401 is the round's 401
   return next;

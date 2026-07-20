@@ -575,6 +575,26 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(events.at(-1)).toMatchObject({ type: "failed" }); // the data plane failed visibly too
   });
 
+  it("a subscriber far behind is closed instead of buffering without bound", async () => {
+    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const iterator = control.events("sSlow")[Symbol.asyncIterator]();
+    const first = iterator.next(); // registration is synchronous at next() entry; the pull now stalls
+    observer("sSlow", { type: "run_started", timestamp: 0, runId: "r", data: {} });
+    await first; // the first event flows; the consumer never pulls again after this
+    for (let i = 0; i < 10_001; i++) {
+      observer("sSlow", { type: "message_delta", timestamp: i, runId: "r", data: { channel: "text", delta: "x" } });
+    }
+    // The stream was closed by the cap: draining reaches done instead of 10k+ buffered events.
+    let drained = 0;
+    for (;;) {
+      const r = await iterator.next();
+      if (r.done) break;
+      drained++;
+      if (drained > 20_000) throw new Error("cap did not close the stream");
+    }
+    expect(drained).toBeLessThanOrEqual(10_000);
+  }, 10_000);
+
   it("the hub's own last line: an unknown command type (in-process misuse) answers invalid_command", async () => {
     // The transport's parseWireCommand intercepts wire input first; this default branch is the
     // LAST line for in-process callers casting past the union — it must answer, never undefined.

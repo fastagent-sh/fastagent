@@ -92,9 +92,16 @@ function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
 
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
 
-/** One subscriber's unbounded push→pull queue. `close()` settles a pending pull — an async
- *  generator suspended on a quiet stream cannot be ended by `return()` alone (it queues behind the
- *  never-settling await), so teardown needs this explicit door. */
+/** Ceiling for one subscriber's unconsumed backlog. A consumer this far behind (a stalled remote
+ *  connection — the wire's ReadableStream backpressure stops pulling while invokes keep pushing)
+ *  is CLOSED instead of growing server memory without bound; ending the stream is semantically
+ *  lossless — the client runs the same reconnect+backfill it runs for any drop. ≈10k small events
+ *  ≈ a few MB worst case per stuck connection. */
+const SUBSCRIBER_BUFFER_CAP = 10_000;
+
+/** One subscriber's push→pull queue, capped at {@link SUBSCRIBER_BUFFER_CAP}. `close()` settles a
+ *  pending pull — an async generator suspended on a quiet stream cannot be ended by `return()`
+ *  alone (it queues behind the never-settling await), so teardown needs this explicit door. */
 class Subscriber {
   private buffer: SessionEvent[] = [];
   private wake?: () => void;
@@ -102,6 +109,11 @@ class Subscriber {
 
   push(event: SessionEvent): void {
     if (this.closed) return;
+    if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP) {
+      log.warn(`[fastagent] session-control subscriber ${SUBSCRIBER_BUFFER_CAP} events behind — closing its stream`);
+      this.close();
+      return;
+    }
     this.buffer.push(event);
     const wake = this.wake;
     this.wake = undefined;

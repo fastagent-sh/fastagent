@@ -154,7 +154,8 @@ describe("session control over HTTP (Phase 3)", () => {
       // The old failure mode on both sides was a permanent hang here (generator return queued
       // behind a never-settling read) — a resolved return within the timeout IS the assertion.
       await iterator.return?.(undefined);
-      void first;
+      // The full promise of the name: the PENDING next() settles too (done), never hangs.
+      await expect(first).resolves.toMatchObject({ done: true });
       expect((await remote.state("sL")).status).toBe("idle");
     } finally {
       served.close();
@@ -269,7 +270,8 @@ describe("session control over HTTP (Phase 3)", () => {
       "[replaying the record since the last sync (may overlap what you saw live)]",
       "> question",
       "answer",
-      "[end of replay — live]",
+      "[end of replay]",
+      "[live — idle]", // the reconnect protocol's state re-check, rendered
     ]);
 
     // A 401 from the stream is the round's 401 — thrown, not warn-and-retried.
