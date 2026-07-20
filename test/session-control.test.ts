@@ -575,6 +575,15 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(events.at(-1)).toMatchObject({ type: "failed" }); // the data plane failed visibly too
   });
 
+  it("the hub's own last line: an unknown command type (in-process misuse) answers invalid_command", async () => {
+    // The transport's parseWireCommand intercepts wire input first; this default branch is the
+    // LAST line for in-process callers casting past the union — it must answer, never undefined.
+    const { control } = makeObserved([]);
+    const result = await control.dispatch("sD", { type: "make_coffee" } as never);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe(INVALID_COMMAND_CODE);
+  });
+
   it("an observation-only run (no controls) rejects with unsupported_capability, not a run code", async () => {
     const sessions = inMemorySessionStore();
     const { control, observer } = createPiSessionControl({ sessions });

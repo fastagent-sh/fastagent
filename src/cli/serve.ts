@@ -3,7 +3,7 @@
  * channels/, the Node host binding, the scheduler lifecycle, and the optional Cloudflare quick
  * tunnel. Bodies moved verbatim from cli.ts; `values.tunnel` became a parameter.
  */
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Agent } from "../agent.ts";
 import { controlRoutes } from "../channels/control.ts";
@@ -70,6 +70,7 @@ export function mountSessionControl(
   routes: Routes,
   control: SessionControl | undefined,
   stateRoot: string,
+  options: { tunnel?: boolean } = {},
 ): { routes: Routes; announce: (boundPort: number) => void } {
   if (!control) return { routes, announce: () => {} };
   const token = crypto.randomUUID();
@@ -84,6 +85,27 @@ export function mountSessionControl(
       writeFileSync(path, `${JSON.stringify({ url: `http://127.0.0.1:${boundPort}`, token })}\n`, { mode: 0o600 });
       chmodSync(path, 0o600); // an existing file keeps its old mode on rewrite — pin it
       log.info(`[fastagent] session control on /control/* (token in ${path})`);
+      if (options.tunnel) {
+        // The safety narrative is "loopback + file permissions"; --tunnel breaks it for the whole
+        // port. The operator asked for the tunnel (webhooks), but must not DISCOVER the control
+        // plane went public with it — say it loudly.
+        log.warn(
+          "[fastagent] --tunnel exposes /control/* (steer/abort/set_model) at the public tunnel URL, " +
+            "protected ONLY by the bearer token — wrap it with real auth before sharing that URL (docs: design §14)",
+        );
+      }
+      // Best-effort lifecycle end: a clean exit removes the discovery file so a later `attach`
+      // fails with "cannot read" (accurate) instead of a stale token's misleading 401/ECONNREFUSED.
+      const unlinkOnce = (): void => {
+        try {
+          rmSync(path, { force: true });
+        } catch {
+          /* the file is advisory — exit must not fail on it */
+        }
+      };
+      process.once("SIGINT", unlinkOnce);
+      process.once("SIGTERM", unlinkOnce);
+      process.once("exit", unlinkOnce);
     },
   };
 }

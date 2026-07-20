@@ -95,7 +95,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
   const traced = logAgentLoop(agent);
   const routed = await routesFor(agentDir, traced, stateRoot).catch(failStartup);
-  const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot);
+  const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, { tunnel: opts.tunnel ?? false });
   await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false);
   serve(
     { ...routed, routes: withControl.routes },

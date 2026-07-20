@@ -78,7 +78,14 @@ async function watch(control: SessionControl, session: string): Promise<void> {
       process.stdout.write("\n");
       continue;
     }
-    const line = render(event);
+    // A remote (or version-skewed) serve may send data shapes this renderer does not expect — a
+    // rendering surprise degrades to the generic line, never breaks the watch loop.
+    let line: string | undefined;
+    try {
+      line = render(event);
+    } catch {
+      line = `[${event.type}]`;
+    }
     if (line !== undefined) console.log(line);
   }
 }
@@ -98,7 +105,17 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   } catch (error) {
     failStartup(error as Error); // a user-fixable startup problem: one line, not a stack trace
   }
-  const control = await connectSessionControl(endpoint).catch(failStartup);
+  const discovered = !(opts.url && opts.token);
+  const control = await connectSessionControl(endpoint).catch((error: Error) =>
+    failStartup(
+      discovered
+        ? new Error(
+            `${error.message} — <stateRoot>/control.json may be stale (the serve that wrote it is gone); ` +
+              `restart the serve or delete the file`,
+          )
+        : error,
+    ),
+  );
 
   const state = await control.state(sessionArg);
   log.info(`[fastagent] attached to ${sessionArg} @ ${endpoint.url} — ${state.status}`);
@@ -138,7 +155,12 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       if (backfill.entries.length > 0) {
         console.log("[replaying the record since the last sync (may overlap what you saw live)]");
         for (const entry of backfill.entries) {
-          const line = renderEntry(entry);
+          let line: string | undefined;
+          try {
+            line = renderEntry(entry);
+          } catch {
+            line = `[${entry.kind}]`;
+          }
           if (line !== undefined) console.log(line);
         }
         console.log("[end of replay — live]");

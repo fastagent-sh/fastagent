@@ -47,11 +47,19 @@ const DISPATCH_BODY_LIMIT = 1 << 20;
 function parseWireCommand(raw: unknown): SessionCommand | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const c = raw as Record<string, unknown>;
-  const promptOk = (p: unknown): p is { text: string } =>
-    typeof p === "object" &&
-    p !== null &&
-    typeof (p as { text?: unknown }).text === "string" &&
-    ((p as { images?: unknown }).images === undefined || Array.isArray((p as { images?: unknown }).images));
+  const imageOk = (i: unknown): boolean =>
+    typeof i === "object" &&
+    i !== null &&
+    typeof (i as { data?: unknown }).data === "string" &&
+    typeof (i as { mimeType?: unknown }).mimeType === "string";
+  const promptOk = (p: unknown): p is { text: string } => {
+    if (typeof p !== "object" || p === null) return false;
+    if (typeof (p as { text?: unknown }).text !== "string") return false;
+    const images = (p as { images?: unknown }).images;
+    // Element-level: `images: [42]` reaching the engine would resurface exactly the misclassified
+    // failure this parser exists to prevent (ImageRef shape from src/session.ts's Prompt).
+    return images === undefined || (Array.isArray(images) && images.every(imageOk));
+  };
   switch (c.type) {
     case "steer":
     case "follow_up":

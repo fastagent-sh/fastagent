@@ -70,7 +70,9 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
   const routed = await routesFor(a.agentDir, traced, a.stateRoot).catch(failStartup);
-  const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot);
+  const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot, {
+    tunnel: opts.tunnel ?? false,
+  });
   await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
   serve({ ...routed, routes: withControl.routes }, portFlag ?? a.config.http?.port ?? 8787, (p) => {
     withControl.announce(p);
