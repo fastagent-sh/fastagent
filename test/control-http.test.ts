@@ -7,8 +7,8 @@
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { Type, fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { Type, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { afterAll, describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { controlRoutes } from "../src/channels/control.ts";
 import { createPiAgentFromHarness, inProcessLease } from "../src/engines/pi/invoke.ts";
@@ -19,6 +19,7 @@ import { router, serveNode } from "../src/host/node.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
 import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
 import { makeFaux } from "./faux.ts";
+import { describeSpecConformance } from "./spec-conformance.ts";
 
 const TOKEN = "test-token";
 
@@ -162,28 +163,43 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   }, 5_000);
 
-  it("steer carries a full Prompt (images included) over the wire; malformed images reject", async () => {
-    const served = await serveControl();
+  it("steer CARRIES a full Prompt over the wire: the exact images reach the run's controls, junk stripped", async () => {
+    // A hub with a registered fake run whose controls RECORD what arrives — proving delivery
+    // through transport → parser → rebuild → controls, not merely parser acceptance.
+    const sessions = inMemorySessionStore();
+    const { control, observer } = createPiSessionControl({ sessions });
+    const received: unknown[] = [];
+    observer(
+      "sImg",
+      { type: "run_started", timestamp: Date.now(), runId: "r1", data: {} },
+      {
+        steer: async (prompt) => {
+          received.push(prompt);
+        },
+        followUp: async () => {},
+        abort: async () => {},
+      },
+    );
+    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const port = await server.listening;
     try {
-      // No active run — the command is rejected at the hub, but ONLY IF the wire parser accepted
-      // the shape first: no_active_run proves the images passed parsing; invalid_command proves a
-      // malformed element did not.
       const post = (command: unknown) =>
-        fetch(`${served.url}/control/dispatch`, {
+        fetch(`http://127.0.0.1:${port}/control/dispatch`, {
           method: "POST",
           headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
           body: JSON.stringify({ session: "sImg", command }),
         }).then((r) => r.json() as Promise<{ ok: boolean; error?: { code: string } }>);
-      const withImages = await post({
+      const result = await post({
         type: "steer",
-        prompt: { text: "look", images: [{ data: "aGk=", mimeType: "image/png" }] },
+        prompt: { text: "look", images: [{ data: "aGk=", mimeType: "image/png", junk: "stripped" }], extra: 1 },
       });
-      expect(withImages.ok).toBe(false);
-      expect(withImages.error?.code).toBe("no_active_run"); // parsed fine, rejected downstream
+      expect(result.ok).toBe(true);
+      // Construction, not assertion: exactly the contract fields — image content intact, junk gone.
+      expect(received).toEqual([{ text: "look", images: [{ data: "aGk=", mimeType: "image/png" }] }]);
       const badImage = await post({ type: "steer", prompt: { text: "look", images: [42] } });
       expect(badImage.error?.code).toBe("invalid_command"); // element-level parse rejection
     } finally {
-      served.close();
+      server.close();
     }
   });
 
@@ -515,4 +531,78 @@ describe("session control over HTTP (Phase 3)", () => {
     const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
     expect(() => controlRoutes(control, { token: "" })).toThrow(/token is required/);
   });
+});
+
+// ── SPEC conformance for the REMOTE Agent ────────────────────────────────────
+// connectAgent claims to be "a REAL Agent, failure discipline included" — so it runs the same
+// executable SPEC the reference engine does. Each posture serves a real HTTP server; the wire is in
+// the loop for every MUST (incl. MUST 3: a consumer break must abort the fetch AND release the
+// server-side engine work).
+
+const conformanceServers: Array<() => void> = [];
+afterAll(() => {
+  for (const close of conformanceServers) close();
+});
+
+/** A served agent in a caller-chosen posture, plus its remote client. */
+async function serveRemoteAgent(opts: {
+  responses?: Parameters<ReturnType<typeof makeFaux>["faux"]["setResponses"]>[0];
+  tools?: AgentTool[];
+  harnessFactory?: Parameters<typeof createPiAgentFromHarness>[0]["harnessFactory"];
+}): Promise<ReturnType<typeof connectAgent>> {
+  const { faux, models } = makeFaux();
+  if (opts.responses) faux.setResponses(opts.responses);
+  const sessions = inMemorySessionStore();
+  const lease = inProcessLease();
+  const factory =
+    opts.harnessFactory ??
+    piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      tools: opts.tools ?? [],
+      systemPrompt: "test",
+    });
+  const { control, observer } = createPiSessionControl({ sessions });
+  const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+  const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
+  const port = await server.listening;
+  conformanceServers.push(() => server.close());
+  return connectAgent({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+}
+
+describeSpecConformance("remote agent over /control/invoke", {
+  completing: () => serveRemoteAgent({ responses: [fauxAssistantMessage("spec ok")] }),
+  failing: () =>
+    serveRemoteAgent({
+      harnessFactory: async () => {
+        throw new Error("engine setup exploded");
+      },
+    }),
+  hanging: (onCleanup) => {
+    const hangTool: AgentTool = {
+      name: "hang",
+      label: "h",
+      description: "hangs until aborted",
+      parameters: Type.Object({}),
+      async execute(_id, _params, signal) {
+        await new Promise<never>((_, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              onCleanup(); // the engine's in-flight work was actually released
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        return { content: [], details: {} };
+      },
+    };
+    return serveRemoteAgent({
+      responses: [fauxAssistantMessage(fauxToolCall("hang", {}, { id: "h1" }))],
+      tools: [hangTool],
+    });
+  },
 });

@@ -402,7 +402,42 @@ export interface CreatePiAgentFromHarnessOptions {
 export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOptions): Agent {
   const { harnessFactory, lease = inProcessLease(), observer } = options;
 
-  async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+  function invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+    // The cancellation DOOR: a generator suspended on a quiet stream (a tool mid-execution, no
+    // events flowing) parks inside an await — `gen.return()` queues behind that pending next()
+    // FOREVER (async-generator semantics), so a consumer's cancel would deadlock and the run would
+    // never be released (SPEC MUST 3). The wrapper's return() first aborts the engine work (which
+    // settles the run and releases the suspension), then delegates. The local for-await pattern
+    // never hit this (it breaks at a yield boundary); pull-driven consumers (the SSE handler's
+    // eager reads) do.
+    let externalCancel: (() => void) | undefined;
+    const gen = turn(scope, prompt, (cancel) => {
+      externalCancel = cancel;
+    });
+    return {
+      [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
+        return {
+          next: () => gen.next(),
+          async return(value?: unknown) {
+            externalCancel?.();
+            await gen.return(value as never).catch(() => {});
+            return { done: true as const, value: undefined };
+          },
+          async throw(error?: unknown): Promise<IteratorResult<AgentEvent>> {
+            externalCancel?.();
+            await gen.return(undefined as never).catch(() => {});
+            throw error;
+          },
+        };
+      },
+    };
+  }
+
+  async function* turn(
+    scope: Scope,
+    prompt: Prompt,
+    onCancelReady: (cancel: () => void) => void,
+  ): AsyncGenerator<AgentEvent> {
     const release = lease.tryAcquire(scope.session);
     if (!release) {
       // Rejected BEFORE acceptance: no run exists, so the observer sees nothing (replay-safe).
@@ -507,6 +542,11 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       }
 
       harnessReady(harness);
+      // Arm the cancellation door (see invoke's wrapper): aborting the harness settles the run,
+      // releasing any await the generator is parked on so a queued return() can reach the finally.
+      onCancelReady(() => {
+        void harness.abort().catch(() => {});
+      });
       const queue = new EventQueue<AgentEvent>();
       const unsub = harness.subscribe((pe) => {
         const rich = toSessionEvent(pe, runId);
