@@ -319,6 +319,55 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("attachRound buffers live output during the replay block and flushes it after, failure path included", async () => {
+    const { attachRound } = await import("../src/cli/commands/attach.ts");
+    const lines: string[] = [];
+    const io = {
+      println: (l: string) => lines.push(l),
+      write: (c: string) => lines.push(`D:${c}`),
+      warn: (l: string) => lines.push(`W:${l}`),
+    };
+    // The events stream produces IMMEDIATELY — before the backfill prints — then ends.
+    const eagerEvents = () => ({
+      [Symbol.asyncIterator]: async function* (): AsyncGenerator<SessionEvent> {
+        yield { type: "run_started", timestamp: 0, runId: "rL", data: {} };
+      },
+    });
+    const fake = {
+      capabilities: () => ({}) as never,
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
+      entries: async () =>
+        ({
+          entries: [{ id: "e1", timestamp: 1, kind: "assistant", data: { text: "replayed" } }],
+          leafEntryId: "e1",
+        }) as never,
+      events: eagerEvents,
+      dispatch: async () => ({ ok: true }) as never,
+    };
+    await attachRound(fake as never, "s", undefined, io, 25);
+    // Contiguity: the whole replay block (and the state line) precede the buffered live output.
+    expect(lines).toEqual([
+      "[replaying the record since the last sync (may overlap what you saw live)]",
+      "replayed",
+      "[end of replay]",
+      "[live — idle]",
+      "── run rL started ──",
+    ]);
+
+    // Failure path: buffered live output is released, not lost, before the error propagates.
+    const lines2: string[] = [];
+    const io2 = { ...io, println: (l: string) => lines2.push(l), warn: (l: string) => lines2.push(`W:${l}`) };
+    const failing = {
+      ...fake,
+      entries: async () => {
+        await new Promise((r) => setTimeout(r, 30)); // let the eager event land in the buffer first
+        throw new Error("backfill 500");
+      },
+    };
+    await expect(attachRound(failing as never, "s", undefined, io2, 1)).rejects.toThrow(/backfill 500/);
+    expect(lines2).toContain("── run rL started ──");
+  });
+
   it("attachRound: renders the backfill, advances the cursor, and surfaces a 401 instead of retrying", async () => {
     const { attachRound } = await import("../src/cli/commands/attach.ts");
     const { ControlRequestError } = await import("../src/session-remote.ts");

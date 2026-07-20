@@ -30,7 +30,13 @@ export interface AttachOptions {
 function discover(dir: string): { url: string; token: string } {
   const path = join(resolveStateRoot(dir), "control.json");
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as { url: string; token: string };
+    // Parse-don't-validate: the file is external input (hand-edited, older format, partial write).
+    // A missing token would otherwise become `Bearer undefined` → 401 → a misleading diagnosis.
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { url?: unknown; token?: unknown };
+    if (typeof parsed.url !== "string" || typeof parsed.token !== "string") {
+      throw new Error("missing url/token fields");
+    }
+    return { url: parsed.url, token: parsed.token };
   } catch (error) {
     throw new Error(
       `cannot read ${path} (${(error as Error).message}) — is a serve with "sessionControl: true" running here? ` +
@@ -280,6 +286,16 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
               // Mid-restart (file written, port not bound yet): the budget keeps us patient.
               log.warn(`[fastagent] serve restarting? reattach not ready: ${String(reconnectError)}`);
             }
+          } else if (isAuthError(error)) {
+            // 401 with UNCHANGED credentials is reachable-and-rejecting, not unreachable — the
+            // file likely belongs to another (or dead) serve on this port. Burning the budget
+            // with an \"unreachable\" diagnosis would send the user to check the wrong thing.
+            exitWith(
+              new Error(
+                "the endpoint rejected the token though control.json is unchanged — the file may belong to " +
+                  "another (or dead) serve on this port; restart the serve and re-run attach",
+              ),
+            );
           }
         } catch {
           // Absent or torn — possibly mid-restart; the budget below decides, never this read alone.
@@ -392,7 +408,9 @@ export async function attachRound(
     release(); // buffered live output must not be lost on the failure path
     await iterator.return?.(undefined)?.catch?.(() => {});
     await draining;
-    throw error;
+    // The stream's 401 outranks this round's transient sync error (restart window: old connection
+    // rejected while the port is still unbound) — auth facts must not degrade to transients.
+    throw authError ?? error;
   }
   release();
   await draining;
