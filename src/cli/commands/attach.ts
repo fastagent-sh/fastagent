@@ -17,7 +17,7 @@ import { resolveStateRoot } from "../../engines/pi/config.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import { ControlRequestError, connectAgent, connectSessionControl } from "../../session-remote.ts";
-import type { SessionControl, SessionEntry, SessionEvent } from "../../session.ts";
+import type { SessionControl, SessionEntry, SessionEvent, SessionState } from "../../session.ts";
 import { failStartup } from "../fail.ts";
 
 export interface AttachOptions {
@@ -114,26 +114,46 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     failStartup(error as Error); // a user-fixable startup problem: one line, not a stack trace
   }
   const discovered = !remote;
-  let control = await connectSessionControl(endpoint).catch((error: Error) =>
-    failStartup(
-      discovered
-        ? new Error(
-            `${error.message} — <stateRoot>/control.json may be stale (the serve that wrote it is gone); ` +
-              `restart the serve or delete the file`,
-          )
-        : error,
-    ),
-  );
-
-  const state = await control
-    .state(sessionArg)
-    .catch((error: unknown) =>
-      exitWith(
-        isAuthError(error)
-          ? new Error(`the control endpoint rejected the token (${String(error)}) — re-run attach`)
-          : (error as Error),
-      ),
-    );
+  // The SAME patience the round loop applies, at startup: `attach` during a dev-watch restart's
+  // 1–2s window (port not bound / control.json mid-rewrite) must wait it out, not exit with a
+  // misleading "stale file" diagnosis while the serve is seconds from ready. Each retry re-reads
+  // discovery (a restart mints fresh credentials mid-window). --url fails immediately — its
+  // endpoint lifecycle is the operator's.
+  const STARTUP_GRACE = 10; // ≈ 10s
+  const connectWithGrace = async (): Promise<{ control: SessionControl; state: SessionState }> => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const connected = await connectSessionControl(endpoint);
+        return { control: connected, state: await connected.state(sessionArg) };
+      } catch (error) {
+        if (!discovered) {
+          exitWith(
+            isAuthError(error)
+              ? new Error(`the control endpoint rejected the token (${String(error)}) — check --token`)
+              : (error as Error),
+          );
+        }
+        if (attempt >= STARTUP_GRACE) {
+          exitWith(
+            new Error(
+              `${String(error)} — the serve is unreachable; it may be down, or <stateRoot>/control.json is stale. ` +
+                `Start (or restart) the serve and re-run attach.`,
+            ),
+          );
+        }
+        try {
+          endpoint = discover(dir);
+        } catch {
+          // Absent or torn — possibly mid-restart; the budget decides, never this read alone.
+        }
+        log.warn(`[fastagent] serve not ready (${attempt}/${STARTUP_GRACE}) — retrying…`);
+        await new Promise((r) => setTimeout(r, 1_000));
+      }
+    }
+  };
+  const startup = await connectWithGrace();
+  let control = startup.control;
+  const state = startup.state;
   log.info(`[fastagent] attached to ${sessionArg} @ ${endpoint.url} — ${state.status}`);
   if (state.leafEntryId === undefined && state.status === "idle") {
     // A typo'd id and a fresh session render identically otherwise (sessions are lazily created by
