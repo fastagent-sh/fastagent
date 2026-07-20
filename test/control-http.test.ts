@@ -219,6 +219,17 @@ describe("session control over HTTP (Phase 3)", () => {
         body: "{}",
       });
       expect(res.status).toBe(404);
+      // A boundary-less hub still speaks the protocol on the wire: a boundary command answers
+      // HTTP 200 + unsupported_capability, never a transport error.
+      const dispatch = await fetch(`http://127.0.0.1:${port}/control/dispatch`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ session: "s", command: { type: "compact" } }),
+      });
+      expect(dispatch.status).toBe(200);
+      const result = (await dispatch.json()) as { ok: boolean; error?: { code: string } };
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
     } finally {
       server.close();
     }
@@ -393,7 +404,5 @@ describe("session control over HTTP (Phase 3)", () => {
   it("controlRoutes refuses to mount without a token", () => {
     const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
     expect(() => controlRoutes(control, { token: "" })).toThrow(/token is required/);
-    // And a boundary-less hub still speaks the protocol: unsupported, not a transport error.
-    void UNSUPPORTED_CAPABILITY_CODE;
   });
 });

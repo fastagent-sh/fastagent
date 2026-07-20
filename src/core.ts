@@ -11,6 +11,7 @@ export { createInvokeHandler, nodeListener } from "./channels/http.ts";
 export { controlRoutes, type ControlRoutesOptions, type WireEvent } from "./channels/control.ts";
 export {
   ControlRequestError,
+  connectAgent,
   connectSessionControl,
   type ConnectSessionControlOptions,
 } from "./session-remote.ts";
