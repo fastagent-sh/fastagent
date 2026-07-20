@@ -8,8 +8,8 @@ updated: 2026-07-19
 
 # Session control plane
 
-This document is the serving-extension design for FastAgent. Phases 0–2a (§15) are implemented;
-Phases 2b–3 remain proposed. It is a companion to, not a replacement
+This document is the serving-extension design for FastAgent. Phases 0–2 (§15) are implemented;
+Phase 3 (transport) remains proposed. It is a companion to, not a replacement
 for, the locked [Agent Handler SPEC v0.1](../SPEC.md).
 
 The whole design reduces to one sentence: **`invoke` is the only data plane; the session control
@@ -397,7 +397,7 @@ safe for untrusted users; `ExecutionEnv` is still not a complete sandbox boundar
 | 0 | **Done.** The definition-aware session builder is extracted (`session-builder.ts`); the TUI-only `~/.pi` auth divergence is eliminated in place; `runPiChat` is one consumer. | Chat assembly semantics unchanged; auth source and `thinkingLevel` deliberately converged to serving; builder independently instantiable. |
 | 1 | **Done.** Observation plane: pi events translate ONCE to `SessionEvent` inside the invoke path (`toSessionEvent`), `AgentEvent` is its projection (`projectAgentEvent`); the `session` subpath types + pi `createPiSessionControl` (`state`/`entries`/`events` over a read-only `PiSessionReader`); conformance tests for projection fidelity, run boundaries (incl. cancellation → exactly-one `run_settled{aborted}`), reconnect, and single-writer. | An L0 client can watch and reconnect to any invoke-driven run. |
 | 2a | **Done.** Run modulation: `dispatch` routes `steer`/`follow_up`/`abort` to the live run via {@link RunControls} registered with `run_started`; the settle window spans steered/queued continuations inside one invoke (pi's agent loop drains both queues within one `prompt()`); `queue_changed` + live `pending` in state; a control-plane abort terminates as `failed{code: "aborted"}` / `run_settled{aborted}`; idle-session run commands reject `no_active_run` before acceptance. | L1 clients. |
-| 2b | Boundary mutations (`compact`, `set_model`, `set_thinking`) under the lease, with `state_changed`/`compaction_*` events. Requires per-session model-override persistence in the fresh-harness architecture (harness.ts resolve semantics — see §3 of core.md for the active-tools precedent). | L2 clients. |
+| 2b | **Done.** Boundary mutations under the lease: `set_model`/`set_thinking` append durable session overrides (validated against the registry / pi's thinking scale; `invalid_command` before acceptance) and the fresh-harness resolve (`resolveHarnessOverrides`, the active-tools precedent) applies them on every later turn — a registry change across deploys falls back to the default with a deduped warn instead of bricking the session. `compact` builds the session's harness and summarizes, bounded by `compaction_started/finished`; failures reject `boundary_command_failed` with nothing durable landed. Mutations contend on the SAME lease as runs (`session_busy` when busy); capabilities report `allowedModels`/`allowedLevels` from the live wiring (`PiBoundaryWiring`, a lazy thunk — the hub exists before the assembly that produces the parts). | L2 clients. |
 | 3 | Transport codec and a remote/subprocess adapter (the envelope is born here); product runners add authentication, idempotency, event persistence, and routing. | Remote `SessionControl` is isomorphic to local. |
 
 Phase 1 modifies the existing invoke pipeline incrementally (translation + projection); it does not

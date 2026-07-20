@@ -14,7 +14,7 @@ import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { AgentTool, ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
-import type { Provider } from "@earendil-works/pi-ai";
+import type { Models, Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel, resolveStateRoot } from "./config.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
@@ -32,7 +32,7 @@ import {
   mergeDiscoveredTools,
 } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
-import { type Lease, type SessionObserver, createPiAgentFromHarness } from "./invoke.ts";
+import { type Lease, type SessionObserver, createPiAgentFromHarness, inProcessLease } from "./invoke.ts";
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
@@ -204,24 +204,38 @@ function buildPiAgent(opts: {
   env?: ExecutionEnv;
   lease?: Lease;
   observer?: SessionObserver;
+  onAssembly?: OnAssembly;
 }): Agent {
   const models = createPiModels({ providers: opts.providers, authPath: opts.authPath });
-  return createPiAgentFromHarness({
-    lease: opts.lease,
-    observer: opts.observer,
-    harnessFactory: piHarnessFactory({
-      sessions: opts.sessions ?? inMemorySessionStore(),
-      env: opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() }),
-      models,
-      model: resolveModel(models, opts.model),
-      thinkingLevel: opts.thinkingLevel,
-      systemPrompt: opts.systemPrompt,
-      tools: opts.tools,
-      skills: opts.skills,
-      live: opts.live,
-    }),
+  // Materialized here (not defaulted inside createPiAgentFromHarness) so the exposed parts carry
+  // the SAME lease instance the agent runs under — boundary mutations must contend on it.
+  const lease = opts.lease ?? inProcessLease();
+  const harnessFactory = piHarnessFactory({
+    sessions: opts.sessions ?? inMemorySessionStore(),
+    env: opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() }),
+    models,
+    model: resolveModel(models, opts.model),
+    thinkingLevel: opts.thinkingLevel,
+    systemPrompt: opts.systemPrompt,
+    tools: opts.tools,
+    skills: opts.skills,
+    live: opts.live,
   });
+  opts.onAssembly?.({ models, harnessFactory, lease });
+  return createPiAgentFromHarness({ lease, observer: opts.observer, harnessFactory });
 }
+
+/**
+ * INTERNAL seam (workspace ↔ assembly): hands the hub-wiring consumer the assembly's live parts —
+ * the SAME models collection, harness factory, and lease the agent runs with — so boundary
+ * mutations (session-control.ts) contend on the real lease and validate against the real registry.
+ * Called synchronously, exactly once, before the agent is returned. Not part of the public surface.
+ */
+export type OnAssembly = (parts: {
+  models: Models;
+  harnessFactory: ReturnType<typeof piHarnessFactory>;
+  lease: Lease;
+}) => void;
 
 /**
  * L1 system prompt: `instructions` ARE the prompt (no engine base, no wrapping); the skills listing
@@ -336,6 +350,8 @@ export interface CreatePiAgentFromDefinitionOptions {
   lease?: Lease;
   /** Observation-plane tap; see {@link CreatePiAgentOptions.observer}. */
   observer?: SessionObserver;
+  /** INTERNAL seam for hub wiring; see {@link OnAssembly}. */
+  onAssembly?: OnAssembly;
 }
 
 /** Stable identity of a definition's non-fatal findings, for change-detection in `live` (dedup only). */
@@ -409,6 +425,7 @@ export async function createPiAgentFromDefinition(
     env,
     lease: options.lease,
     observer: options.observer,
+    onAssembly: options.onAssembly,
   });
   return { agent, definition };
 }

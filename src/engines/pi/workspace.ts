@@ -24,7 +24,7 @@ import {
 import type { SessionControl } from "../../session.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
 import type { SessionObserver } from "./invoke.ts";
-import { createPiSessionControl } from "./session-control.ts";
+import { type PiBoundaryWiring, createPiSessionControl } from "./session-control.ts";
 import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
@@ -193,14 +193,18 @@ export async function createPiAgentFromWorkspace(
   await mkdir(sessionsDir, { recursive: true });
   const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: dir });
   // The hub is wired HERE because the store is created here: chicken-and-egg otherwise (the hub
-  // needs the store; the agent needs the hub's observer). An extra caller observer composes after it.
-  const hub = options.sessionControl ? createPiSessionControl({ sessions }) : undefined;
+  // needs the store; the agent needs the hub's observer). Boundary parts (models/factory/lease)
+  // only exist after the assembly below — the hub takes them as a lazy thunk, filled by the
+  // assembly's onAssembly callback (assembly completes before this function returns, so every
+  // dispatch sees them). An extra caller observer composes after the hub's (TRUSTED seam).
+  let boundaryParts: PiBoundaryWiring | undefined;
+  const hub = options.sessionControl ? createPiSessionControl({ sessions, boundary: () => boundaryParts }) : undefined;
   const caller = options.observer;
   const observer: SessionObserver | undefined = hub
     ? caller
-      ? (session, event) => {
-          hub.observer(session, event);
-          caller(session, event);
+      ? (session, event, run) => {
+          hub.observer(session, event, run);
+          caller(session, event, run);
         }
       : hub.observer
     : caller;
@@ -213,6 +217,16 @@ export async function createPiAgentFromWorkspace(
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
     observer,
+    onAssembly: hub
+      ? (parts) => {
+          boundaryParts = {
+            store: sessions,
+            lease: parts.lease,
+            models: parts.models,
+            harnessFactory: parts.harnessFactory,
+          };
+        }
+      : undefined,
   });
   return {
     agent,

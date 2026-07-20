@@ -118,6 +118,60 @@ const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
  * (like L2's findings memo), not session state — the resolve stays derived from the session.
  */
 const warnedRestores = new Set<string>();
+
+/** pi's ThinkingLevel union as a checkable set — a session entry stores a plain string. */
+const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * Resolve the session's model/thinking OVERRIDES for a fresh harness — same shape as the
+ * active-tools resolve above: pi writes `model_change`/`thinking_level_change` entries on explicit
+ * setModel/setThinkingLevel (the control plane's `set_model`/`set_thinking` append them directly)
+ * but a fresh harness never reads them back. The LAST entry of each kind wins; absent → the
+ * assembly default. A recorded model no longer in this deployment's registry falls back to the
+ * default with a deduped warn (fail visibly without bricking the session — the conversation must
+ * survive a registry change across deploys); an unknown thinking level likewise.
+ */
+export function resolveHarnessOverrides(
+  entries: { type: string; provider?: string; modelId?: string; thinkingLevel?: string }[],
+  models: Models,
+  defaults: { model: AnyModel; thinkingLevel: ThinkingLevel },
+  sessionId: string,
+): { model: AnyModel; thinkingLevel: ThinkingLevel } {
+  let model = defaults.model;
+  let thinkingLevel = defaults.thinkingLevel;
+  const warnOnce = (key: string, message: string) => {
+    const emit = warnedRestores.has(key) ? log.debug : log.warn;
+    warnedRestores.add(key);
+    emit(message);
+  };
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e?.type !== "model_change") continue;
+    const recorded = e.provider !== undefined && e.modelId !== undefined && models.getModel(e.provider, e.modelId);
+    if (recorded) model = recorded as AnyModel;
+    else {
+      warnOnce(
+        `${sessionId}\u0000model\u0000${e.provider}/${e.modelId}`,
+        `[fastagent] session ${sessionId}: recorded model override ${e.provider}/${e.modelId} is not in this deployment's registry — using the configured default`,
+      );
+    }
+    break;
+  }
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e?.type !== "thinking_level_change") continue;
+    if (e.thinkingLevel !== undefined && THINKING_LEVELS.has(e.thinkingLevel as ThinkingLevel)) {
+      thinkingLevel = e.thinkingLevel as ThinkingLevel;
+    } else {
+      warnOnce(
+        `${sessionId}\u0000thinking\u0000${e.thinkingLevel}`,
+        `[fastagent] session ${sessionId}: recorded thinking level "${e.thinkingLevel}" is unknown — using the configured default`,
+      );
+    }
+    break;
+  }
+  return { model, thinkingLevel };
+}
 export function resolveHarnessActiveToolNames(
   recorded: string[] | null,
   tools: AgentTool[],
@@ -154,12 +208,19 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
     const { systemPrompt } = options;
     const prompt = fresh ? fresh.systemPrompt : typeof systemPrompt === "function" ? systemPrompt() : systemPrompt;
     const skills = fresh ? fresh.skills : options.skills;
+    // Session overrides (set_model / set_thinking) win over the assembly defaults — same entry walk.
+    const overrides = resolveHarnessOverrides(
+      entries as Parameters<typeof resolveHarnessOverrides>[0],
+      options.models,
+      { model: options.model, thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL },
+      sessionId,
+    );
     const harness = new AgentHarness({
       env: options.env,
       session,
       models: options.models,
-      model: options.model,
-      thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+      model: overrides.model,
+      thinkingLevel: overrides.thinkingLevel,
       tools: options.tools,
       activeToolNames: resolveHarnessActiveToolNames(
         activated.length > 0 ? activated : null,

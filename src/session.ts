@@ -49,6 +49,16 @@ export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
  *  fails again; re-dispatch only after `state()` shows an active run. */
 export const NO_ACTIVE_RUN_CODE = "no_active_run";
 
+/** Stable `SessionResult.error.code` for a command whose PAYLOAD is invalid for this runtime — an
+ *  unknown model spec, an unsupported thinking level. Permanent for that payload; a different value
+ *  may succeed. Rejected before acceptance. */
+export const INVALID_COMMAND_CODE = "invalid_command";
+
+/** Stable `SessionResult.error.code` for a boundary mutation (`compact`) that was admitted but
+ *  failed before any durable change landed (e.g. the summarization model call failed). Nothing took
+ *  effect; the same command may succeed on retry. */
+export const BOUNDARY_COMMAND_FAILED_CODE = "boundary_command_failed";
+
 /** Stable `SessionResult.error.code` for a run command that reached an active run but could not
  *  take effect because the run raced to settlement (or the engine refused it). Distinct from
  *  {@link NO_ACTIVE_RUN_CODE}: the run existed — and TRANSIENT: the session's next run can be
@@ -163,6 +173,15 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
   runId: string;
 };
 
+/** A boundary mutation changed durable session state (L2; no runId — boundary mutations happen
+ *  between runs). */
+export type StateChangedEvent = SessionEvent<"state_changed", { model?: string; thinkingLevel?: string }>;
+
+/** Manual compaction bounds (L2). Automatic overflow compaction stays inside its run's activity
+ *  window and does not emit these. */
+export type CompactionStartedEvent = SessionEvent<"compaction_started", Record<never, never>>;
+export type CompactionFinishedEvent = SessionEvent<"compaction_finished", { summary: string }>;
+
 /**
  * The serving process failed outside a normal run outcome (fail visibly). Emitted by TRANSPORT
  * adapters (design §13) when they lose the backend before ending a remote stream — an in-process
@@ -171,9 +190,9 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
  */
 export type ServingErrorEvent = SessionEvent<"serving_error", { message: string }>;
 
-/** Every event the in-process observation plane emits today: the L0 vocabulary plus L1
- *  `queue_changed`. L2 events (turn_*, compaction_*, retry_*, state_changed) arrive with boundary
- *  mutations; {@link ServingErrorEvent} arrives with the transport adapter. */
+/** Every event the in-process observation plane emits today: L0, L1 `queue_changed`, and the L2
+ *  boundary-mutation events (`state_changed`, `compaction_*`). Remaining L2 events (turn_*,
+ *  retry_*) are future vocabulary; {@link ServingErrorEvent} arrives with the transport adapter. */
 export type KnownSessionEvent =
   | RunStartedEvent
   | RunSettledEvent
@@ -183,4 +202,7 @@ export type KnownSessionEvent =
   | ToolStartedEvent
   | ToolProgressEvent
   | ToolFinishedEvent
-  | QueueChangedEvent;
+  | QueueChangedEvent
+  | StateChangedEvent
+  | CompactionStartedEvent
+  | CompactionFinishedEvent;
