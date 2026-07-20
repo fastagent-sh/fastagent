@@ -99,6 +99,27 @@ const dev: CommandSpec = {
     }),
 };
 
+const attach: CommandSpec = {
+  name: "attach",
+  summary: "watch a session's live events from a running serve and steer it",
+  description:
+    "Attach to a session served by a running dev/start with `sessionControl: true` in the config: " +
+    "stream its live events (text, tools, run boundaries), steer the active run by typing, /abort to " +
+    "stop it. Discovers the local endpoint from <stateRoot>/control.json; --url/--token reach a " +
+    "remote serve. The same wire protocol a Web panel or desktop app uses.",
+  args: [{ name: "<session>", description: "the session id to attach to" }, DIR_ARG],
+  flags: [
+    { flags: "--url <url>", description: "control endpoint (skip control.json discovery)" },
+    { flags: "--token <token>", description: "bearer token for --url" },
+  ],
+  examples: [{ cmd: "fastagent attach tg-chat-42" }],
+  run: async (args, f) =>
+    (await import("./commands/attach.ts")).runAttach(args[0] as string, args[1] as string | undefined, {
+      url: f.url as string | undefined,
+      token: f.token as string | undefined,
+    }),
+};
+
 const chat: CommandSpec = {
   name: "chat",
   summary: "open the SAME assembled agent in pi's interactive TUI",
@@ -485,6 +506,7 @@ export const specs: readonly CommandSpec[] = [
   schedule,
   dev,
   chat,
+  attach,
   start,
   add,
   deploy,

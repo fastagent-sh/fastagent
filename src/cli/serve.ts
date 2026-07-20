@@ -3,8 +3,12 @@
  * channels/, the Node host binding, the scheduler lifecycle, and the optional Cloudflare quick
  * tunnel. Bodies moved verbatim from cli.ts; `values.tunnel` became a parameter.
  */
+import { chmodSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Agent } from "../agent.ts";
+import { controlRoutes } from "../channels/control.ts";
 import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
+import type { SessionControl } from "../session.ts";
 import { text } from "../channels/respond.ts";
 import { loadChannels } from "../engines/pi/channel.ts";
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
@@ -51,6 +55,36 @@ export async function routesFor(
   return {
     routes: healthCovered ? channels : { "GET /health": () => text("ok\n", 200), ...channels },
     builtinInvoke,
+  };
+}
+
+/**
+ * Mount the session control plane (`/control/*`) when the workspace enabled it
+ * (`config.sessionControl`): merge the bearer-authenticated routes and return an announcer that
+ * writes `<stateRoot>/control.json` — `{ url, token }`, 0600 — once the port is known. The file is
+ * the LOCAL discovery channel (`fastagent attach`, a local desktop app); filesystem permissions are
+ * its trust boundary, and each boot overwrites it with a fresh per-boot token. Control routes are
+ * merged LAST: a user channel colliding on `/control/*` loses, loudly.
+ */
+export function mountSessionControl(
+  routes: Routes,
+  control: SessionControl | undefined,
+  stateRoot: string,
+): { routes: Routes; announce: (boundPort: number) => void } {
+  if (!control) return { routes, announce: () => {} };
+  const token = crypto.randomUUID();
+  const mounted = controlRoutes(control, { token });
+  for (const key of Object.keys(mounted)) {
+    if (key in routes) console.error(`[fastagent] warn: channel route "${key}" is shadowed by the control plane`);
+  }
+  return {
+    routes: { ...routes, ...mounted },
+    announce: (boundPort) => {
+      const path = join(stateRoot, "control.json");
+      writeFileSync(path, `${JSON.stringify({ url: `http://127.0.0.1:${boundPort}`, token })}\n`, { mode: 0o600 });
+      chmodSync(path, 0o600); // an existing file keeps its old mode on rewrite — pin it
+      log.info(`[fastagent] session control on /control/* (token in ${path})`);
+    },
   };
 }
 

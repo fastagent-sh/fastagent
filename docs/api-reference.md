@@ -454,6 +454,27 @@ For workspace assembly the store lives inside the opener, so ask the opener to w
 const { agent, sessionControl } = await createPiAgentFromWorkspace(dir, { sessionControl: true });
 ```
 
+### Remote (HTTP + SSE)
+
+The same contract over the wire — for a Web panel, a desktop app, or `fastagent attach`. Server
+side, mount the bearer-authenticated routes (dev/start do this automatically when the config sets
+`sessionControl: true`, minting a per-boot token into `<stateRoot>/control.json`):
+
+```ts
+import { controlRoutes, connectSessionControl } from "@fastagent-sh/fastagent/core";
+
+const routes = controlRoutes(sessionControl, { token }); // GET/POST /control/*, SSE at /control/events
+
+// Client side — the SAME SessionControl interface, isomorphic to local:
+const remote = await connectSessionControl({ url: "http://127.0.0.1:8787", token });
+for await (const ev of remote.events("s1")) console.log(ev.type);
+```
+
+The transport envelope (`epoch`/`seq` per SSE message) is consumed inside the client: a sequence
+gap or a server restart ends the events iterator, and the consumer runs the standard reconnect
+steps. Exposing the port beyond loopback exposes a remote-control surface — wrap it with real
+authentication and authorization ([design §14](design/session-control.md)).
+
 ## Subpath exports
 
 ```ts
