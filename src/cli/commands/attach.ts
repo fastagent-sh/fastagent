@@ -126,6 +126,26 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   // discovery (a restart mints fresh credentials mid-window). --url fails immediately at startup:
   // nothing has ever succeeded on that endpoint, so a wrong --url is likelier than a transient
   // (once attached, drops get a bounded retry budget instead).
+  // The shared local-401 diagnosis (startup grace + round loop): a 401 with UNCHANGED
+  // control.json is reachable-and-rejecting — the file may belong to another/dead serve on this
+  // port — and must exit with that fact, not burn a budget toward "unreachable". A changed or
+  // unreadable file returns to the caller (reattach / budget decides).
+  const exitIfLocal401Unchanged = (error: unknown): void => {
+    if (!isAuthError(error)) return;
+    try {
+      const fresh = discover(dir);
+      if (fresh.url === endpoint.url && fresh.token === endpoint.token) {
+        exitWith(
+          new Error(
+            "the endpoint rejected the token though control.json is unchanged — the file may belong to " +
+              "another (or dead) serve on this port; restart the serve and re-run attach",
+          ),
+        );
+      }
+    } catch {
+      // Absent or torn — possibly mid-restart; the caller's budget decides.
+    }
+  };
   // Budgets are WALL-CLOCK, not round counts: a round's duration varies by an order of magnitude
   // (fast ECONNREFUSED ≈ 1s vs the 10s black-hole timeout), so counting rounds would make the
   // user-facing "~Ns" claims false exactly in the black-hole case the timeouts exist for.
@@ -144,24 +164,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
               : (error as Error),
           );
         }
-        // Mirror of the round loop's discipline: a 401 with UNCHANGED credentials is
-        // reachable-and-rejecting (the file may belong to another/dead serve on this port) — exit
-        // with the accurate diagnosis now, not after burning the budget toward "unreachable".
-        if (isAuthError(error)) {
-          try {
-            const fresh = discover(dir);
-            if (fresh.url === endpoint.url && fresh.token === endpoint.token) {
-              exitWith(
-                new Error(
-                  "the endpoint rejected the token though control.json is unchanged — the file may belong to " +
-                    "another (or dead) serve on this port; restart the serve and re-run attach",
-                ),
-              );
-            }
-          } catch {
-            // Absent or torn — possibly mid-restart; fall through to the budget.
-          }
-        }
+        exitIfLocal401Unchanged(error);
         if (Date.now() - startedAt >= STARTUP_GRACE_MS) {
           exitWith(
             new Error(
@@ -312,21 +315,12 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
               // Mid-restart (file written, port not bound yet): the budget keeps us patient.
               log.warn(`[fastagent] serve restarting? reattach not ready: ${String(reconnectError)}`);
             }
-          } else if (isAuthError(error)) {
-            // 401 with UNCHANGED credentials is reachable-and-rejecting, not unreachable — the
-            // file likely belongs to another (or dead) serve on this port. Burning the budget
-            // with an \"unreachable\" diagnosis would send the user to check the wrong thing.
-            exitWith(
-              new Error(
-                "the endpoint rejected the token though control.json is unchanged — the file may belong to " +
-                  "another (or dead) serve on this port; restart the serve and re-run attach",
-              ),
-            );
           }
         } catch {
           // Absent or torn — possibly mid-restart; the budget below decides, never this read alone.
         }
         if (reattached) continue; // straight into the next round, no pause
+        exitIfLocal401Unchanged(error); // reachable-and-rejecting exits with the accurate diagnosis
         if (Date.now() - since >= LOCAL_GRACE_MS) {
           exitWith(
             new Error(

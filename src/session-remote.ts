@@ -15,6 +15,7 @@
  */
 import type { Agent, AgentEvent, Prompt } from "./agent.ts";
 import { log } from "./log.ts";
+import type { WireEvent } from "./channels/control.ts";
 import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
 
 /** A control request the server answered with a non-2xx status. Carries the STRUCTURED status so a
@@ -101,7 +102,9 @@ export async function connectSessionControl(options: ConnectSessionControlOption
             if (!res.body) throw new Error("control events: response has no body");
             let nextSeq = 0;
             for await (const data of sseData(res.body)) {
-              const wire = JSON.parse(data) as { sessionId: string; epoch: string; seq: number; event: SessionEvent };
+              // The ONE envelope type (control.ts's WireEvent) — an inline shape here would let the
+              // envelope drift server-side while this cast silently kept the old fields.
+              const wire = JSON.parse(data) as WireEvent;
               // Envelope checks — consumed HERE, surfaced only as iterator termination. (epoch is not
               // compared: it cannot change within one connection — see the header note.)
               if (wire.seq !== nextSeq) {
@@ -204,7 +207,22 @@ export function connectAgent(options: ConnectSessionControlOptions): Agent {
               return;
             }
             for await (const data of sseData(res.body)) {
-              const event = JSON.parse(data) as AgentEvent;
+              let event: AgentEvent;
+              try {
+                event = JSON.parse(data) as AgentEvent;
+              } catch (parseError) {
+                // Protocol drift (version skew, non-SSE middlebox), NOT transport trouble:
+                // re-sending the same prompt cannot fix an unparseable stream — retryable: false.
+                // (Guarded by terminalSeen: garbage AFTER the terminal must not add a second one.)
+                if (!terminalSeen) {
+                  yield {
+                    type: "failed",
+                    details: `remote invoke: unparseable event on the stream (${String(parseError)})`,
+                    retryable: false,
+                  };
+                }
+                return;
+              }
               if (event.type === "completed" || event.type === "failed") terminalSeen = true;
               yield event;
             }
