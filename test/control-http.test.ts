@@ -297,14 +297,19 @@ describe("session control over HTTP (Phase 3)", () => {
     fakeTimers.useFakeTimers();
     try {
       const remote = await connectSessionControl({ url: "http://hole", token: "t", fetchFn: blackHole });
-      const eventsAttempt = (async () => {
-        for await (const _ of remote.events("s")) void _;
-      })();
+      // The rejection assertion attaches AT CREATION: the promise rejects while timers advance,
+      // and a handler attached only afterwards would leave an unhandled-rejection window vitest
+      // reports as a run-level error — noise that trains everyone to ignore the real ones.
+      const eventsAttempt = expect(
+        (async () => {
+          for await (const _ of remote.events("s")) void _;
+        })(),
+      ).rejects.toThrow(/dead connection/);
       const agentAttempt = drain(
         connectAgent({ url: "http://hole", token: "t", fetchFn: blackHole }).invoke({ session: "s" }, { text: "hi" }),
       );
       await fakeTimers.advanceTimersByTimeAsync(4 * 30_000); // past SSE_IDLE_LIMIT_MS
-      await expect(eventsAttempt).rejects.toThrow(/dead connection/);
+      await eventsAttempt;
       const agentEvents = await agentAttempt;
       expect(agentEvents).toEqual([
         expect.objectContaining({ type: "failed", retryable: true, details: expect.stringContaining("no bytes") }),
