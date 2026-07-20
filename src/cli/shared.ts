@@ -264,7 +264,8 @@ export function terminalLoginIO(): LoginIO {
 async function persistModelChoice(workspaceDir: string, configPath: string | undefined, spec: string): Promise<void> {
   const hint = (): void =>
     console.error(
-      `[fastagent] using ${spec} for this run; set \`model: ${JSON.stringify(spec)}\` in your config to persist`,
+      // No "using it for this run" promise: deploy's model-travel gate rightly ignores the un-persisted pick.
+      `[fastagent] picked ${spec} — set \`model: ${JSON.stringify(spec)}\` in your config to persist`,
     );
   if (!configPath) return hint();
   try {

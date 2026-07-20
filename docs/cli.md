@@ -115,8 +115,8 @@ live next turn, no restart); a supervisor restarts the worker on edits to the co
 With no model set and a terminal attached, `dev` first shows the full model catalog — models whose
 provider already has credentials are listed first and annotated with the source (e.g. `ready —
 OPENAI_API_KEY`); picking one that needs auth runs the login flow inline — then writes the choice
-back to the config (same for `start` / `invoke` / `fire` / `deploy`; `chat` prompts too, without the
-credential dimension — see its section). Pass `--model` or set `FASTAGENT_MODEL` to skip the prompt.
+back to the config (same for `start` / `invoke` / `fire` / `chat` / `deploy`). Pass `--model` or set
+`FASTAGENT_MODEL` to skip the prompt.
 
 Options:
 
