@@ -99,18 +99,21 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
   setLogLevel("info");
   const dir = resolve(dirArg ?? ".");
   loadDotEnv(dir);
-  // --url and --token travel together: a lone --url silently falling back to the LOCAL control.json
-  // would attach (and steer!) a same-named local session while the user believes they are remote.
-  if ((opts.url === undefined) !== (opts.token === undefined)) {
-    failStartup(new Error("--url and --token must be given together (one without the other is ambiguous)"));
+  // --url and --token travel together, and BOTH must be non-empty: a lone --url (or an empty
+  // token) silently falling back to the LOCAL control.json would attach (and steer!) a same-named
+  // local session while the user believes they are remote. One predicate decides — the guard and
+  // the endpoint selection must never disagree on what "given" means.
+  const remote = opts.url !== undefined || opts.token !== undefined;
+  if (remote && !(opts.url && opts.token)) {
+    failStartup(new Error("--url and --token must be given together and non-empty"));
   }
   let endpoint: { url: string; token: string };
   try {
-    endpoint = opts.url && opts.token ? { url: opts.url, token: opts.token } : discover(dir);
+    endpoint = remote ? { url: opts.url as string, token: opts.token as string } : discover(dir);
   } catch (error) {
     failStartup(error as Error); // a user-fixable startup problem: one line, not a stack trace
   }
-  const discovered = !(opts.url && opts.token);
+  const discovered = !remote;
   const control = await connectSessionControl(endpoint).catch((error: Error) =>
     failStartup(
       discovered
