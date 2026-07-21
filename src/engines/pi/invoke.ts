@@ -583,6 +583,13 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       }
       const queue = new EventQueue<AgentEvent>();
       const unsub = harness.subscribe((pe) => {
+        // Summarization retries (auto-compaction / branch summaries, pi ≥0.81.1) have no SPEC
+        // projection — without this, up to ~14s of backoff at the turn's tail reads as a hang.
+        if (pe.type === "retry_scheduled") {
+          log.warn(
+            `[fastagent] ${pe.operation} retry ${pe.attempt}/${pe.maxAttempts} in ${pe.delayMs}ms (session ${scope.session}): ${pe.errorMessage}`,
+          );
+        }
         const rich = toSessionEvent(pe, runId);
         if (!rich) return;
         observe(rich);
