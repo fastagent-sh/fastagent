@@ -6,7 +6,7 @@
  * An errored tool inside an otherwise-completed turn still surfaces (the diagnostic the operator
  * needs); tool_ended carries no name, so it is remembered from the matching tool_started.
  */
-import type { AgentEvent } from "./agent.ts";
+import type { AgentEvent } from "../agent.ts";
 
 export async function runInvokeStream(
   events: AsyncIterable<AgentEvent>,

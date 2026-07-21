@@ -1,6 +1,6 @@
 /**
  * `fastagent add feishu|lark` app onboarding — the cloud-facing half of runAdd, kept out of cli.ts
- * (which self-executes on import), mirroring cli-models.ts/cli-auth.ts. The POLICY already lives in
+ * (which self-executes on import), mirroring models-view.ts/auth-view.ts. The POLICY already lives in
  * testable modules (register-app.ts, bootstrap-token.ts, lark/onboard.ts); this layer is the terminal
  * wiring: clack prompts, .env staging, browser opens, progress lines.
  *
@@ -12,26 +12,26 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isCancel, log as clackLog, password, text as clackText } from "@clack/prompts";
-import { bootstrapFeishuVerificationToken } from "./channels/feishu/bootstrap-token.ts";
+import { bootstrapFeishuVerificationToken } from "../channels/feishu/bootstrap-token.ts";
 import {
   FEISHU_GROUP_CONTEXT_SCOPE,
   type FeishuGroupBehavior,
   type FeishuSubscriptionMode,
   type GroupBehaviorChoice,
-} from "./channels/feishu/setup-mode.ts";
-import { cloudFor } from "./channels/feishu/cloud.ts";
+} from "../channels/feishu/setup-mode.ts";
+import { cloudFor } from "../channels/feishu/cloud.ts";
 import {
   createFeishuApi,
   type FeishuApi,
   isFeishuConfigApiMissing,
   isTransientFeishuRegistrationError,
-} from "./channels/feishu/feishu-api.ts";
-import { registerFeishuApp } from "./channels/feishu/register-app.ts";
-import { onboardLarkApp } from "./channels/lark/onboard.ts";
-import { parseEnvContent } from "./env.ts";
-import { openExternalUrl } from "./open-url.ts";
-import { appendChannelDotEnv } from "./scaffold/add-channel.ts";
-import { startCloudflareTunnel } from "./tunnel.ts";
+} from "../channels/feishu/feishu-api.ts";
+import { registerFeishuApp } from "../channels/feishu/register-app.ts";
+import { onboardLarkApp } from "../channels/lark/onboard.ts";
+import { parseEnvContent } from "../env.ts";
+import { openExternalUrl } from "../open-url.ts";
+import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
+import { startCloudflareTunnel } from "../tunnel.ts";
 
 export interface GroupBehaviorSetup {
   /** Safe to proceed to version publishing now; false means Permissions still needs manual/admin work. */

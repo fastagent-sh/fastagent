@@ -77,7 +77,7 @@ describe("engine neutrality: the core subpath + channel/host spine import no eng
     "core.ts",
     "agent.ts",
     "collect.ts",
-    "invoke-stream.ts",
+    "cli/invoke-stream.ts",
     "channels/http.ts",
     "channels/body.ts",
     "channels/respond.ts",

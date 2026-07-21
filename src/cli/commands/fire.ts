@@ -9,7 +9,7 @@ import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
-import { runInvokeStream } from "../../invoke-stream.ts";
+import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { scheduleSession } from "../../schedule/scheduler.ts";

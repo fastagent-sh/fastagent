@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
-import { runInvokeStream } from "../src/invoke-stream.ts";
+import { runInvokeStream } from "../src/cli/invoke-stream.ts";
 
 async function* stream(...events: AgentEvent[]): AsyncIterable<AgentEvent> {
   for (const e of events) yield e;

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
-import { runInvokeStream } from "../../invoke-stream.ts";
+import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup } from "../fail.ts";
 import { reportAuth, resolveFirstRunModel } from "../shared.ts";

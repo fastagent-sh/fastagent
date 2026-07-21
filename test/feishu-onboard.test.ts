@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { configureGroupBehavior } from "../src/cli-add-feishu.ts";
+import { configureGroupBehavior } from "../src/cli/add-feishu.ts";
 import type { FeishuAppScope, FeishuApi } from "../src/channels/feishu/feishu-api.ts";
 
 function fixture(scopes: FeishuAppScope[] = []): {

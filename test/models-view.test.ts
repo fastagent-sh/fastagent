@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildModelPickerOptions, formatModelsCommand } from "../src/cli-models.ts";
+import { buildModelPickerOptions, formatModelsCommand } from "../src/cli/models-view.ts";
 import type { ProviderAuthStatus } from "../src/engines/pi/models.ts";
 
-describe("cli-models: formatModelsCommand (`fastagent models [search]` stdout/stderr)", () => {
+describe("models-view: formatModelsCommand (`fastagent models [search]` stdout/stderr)", () => {
   it("no search → all lines; a substring filters; a miss → empty lines + an stderr diagnostic", () => {
     const specs = ["openai/gpt-5", "anthropic/claude", "openai/o3"];
     expect(formatModelsCommand(specs)).toEqual({ lines: specs }); // no search → all, no error

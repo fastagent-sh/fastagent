@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatAuthReport } from "../src/cli-auth.ts";
+import { formatAuthReport } from "../src/cli/auth-view.ts";
 
 // The #5 fix: an expired/revoked login must NOT report the contradictory "(none found)". This pins the
 // three-branch decision so flipping stored/none (or a probe/store contract change) can't silently regress.
-describe("cli-auth: formatAuthReport", () => {
+describe("auth-view: formatAuthReport", () => {
   const P = "anthropic";
   const PATH = "/x/auth.json";
 
