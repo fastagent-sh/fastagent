@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -72,17 +72,44 @@ function message(ts: string, input: Partial<NonNullable<SlackEventEnvelope["even
   };
 }
 
-function mount(agent: Agent, options: Partial<SlackChannelOptions> = {}) {
-  const stateRoot = root();
+function slackBodies(fetchMock: ReturnType<typeof okFetch>, method: string): Record<string, unknown>[] {
+  return fetchMock.mock.calls
+    .filter(([input]) => String(input).endsWith(`/${method}`))
+    .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+}
+
+function writeTurns(stateRoot: string, turns: Record<string, unknown>): void {
+  const home = join(stateRoot, "channels", "slack");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "turns.json"), JSON.stringify(turns));
+}
+
+function storedTurn(id: string, seq: number, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id,
+    seq,
+    session: "recovery-session",
+    baseText: id,
+    bufferKey: "T1:C1",
+    teamId: "T1",
+    channelId: "C1",
+    threadTs: "1.0",
+    fileIds: [],
+    attempts: 0,
+    ...extra,
+  };
+}
+
+function mount(agent: Agent, options: Partial<SlackChannelOptions> = {}, stateRoot = root()) {
   const handler = slackChannel({
     botToken: "xoxb-test",
     signingSecret: SECRET,
     apiBaseUrl: API,
     ...options,
   })({ agent, stateRoot })["POST /slack"]!;
-  const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
-  if (idle) idles.add(idle);
-  return { handler, stateRoot };
+  const turnsIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
+  idles.add(turnsIdle);
+  return { handler, stateRoot, turnsIdle };
 }
 
 async function settle(): Promise<void> {
@@ -277,5 +304,138 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(turns).toContain('"fileIds":["F1"]');
     expect(turns).not.toContain("temporary.example");
     release();
+  });
+
+  it("replays a crash-surviving turn on a second mount without a new Slack event", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const stateRoot = root();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const firstCalls: { scope: Scope; prompt: Prompt }[] = [];
+    const interruptedAgent: Agent = {
+      async *invoke(scope, prompt): AsyncIterable<AgentEvent> {
+        firstCalls.push({ scope, prompt });
+        await gate;
+        yield { type: "completed" };
+      },
+    };
+    const first = mount(interruptedAgent, {}, stateRoot);
+    await first.handler(
+      signedRequest(message("5.0", { type: "app_mention", text: "<@UBOT> recover this exact request" })),
+    );
+    const turnsPath = join(stateRoot, "channels", "slack", "turns.json");
+    const crashSnapshot = readFileSync(turnsPath, "utf8");
+
+    release();
+    await first.turnsIdle();
+    writeFileSync(turnsPath, crashSnapshot);
+
+    const replayed = replyingAgent("recovered");
+    const second = mount(replayed.agent, {}, stateRoot);
+    await second.turnsIdle();
+
+    expect(replayed.calls).toHaveLength(1);
+    expect(replayed.calls[0]).toEqual(firstCalls[0]);
+    expect(replayed.calls[0]?.prompt.text).toContain("recover this exact request");
+    expect(JSON.parse(readFileSync(turnsPath, "utf8"))).toEqual({});
+  });
+
+  it("recovers in seq order and allocates new seq above the recovered maximum", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const stateRoot = root();
+    writeTurns(stateRoot, {
+      late: storedTurn("late", 9, { baseText: "recovered late" }),
+      early: storedTurn("early", 4, { baseText: "recovered early" }),
+    });
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const calls: { scope: Scope; prompt: Prompt }[] = [];
+    let invocation = 0;
+    const agent: Agent = {
+      async *invoke(scope, prompt): AsyncIterable<AgentEvent> {
+        calls.push({ scope, prompt });
+        if (++invocation === 1) await gate;
+        yield { type: "completed" };
+      },
+    };
+    const { handler, turnsIdle } = mount(
+      agent,
+      { route: () => ({ session: "recovery-session", text: "fresh request" }) },
+      stateRoot,
+    );
+
+    await handler(signedRequest(message("30.0", { text: "new event after restart" })));
+    const during = JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8")) as Record<
+      string,
+      { seq?: number }
+    >;
+    expect(during["T1:C1:30.0"]?.seq).toBe(10);
+
+    release();
+    await turnsIdle();
+    expect(calls.map((call) => call.prompt.text)).toEqual([
+      expect.stringContaining("recovered early"),
+      expect.stringContaining("recovered late"),
+      expect.stringContaining("fresh request"),
+    ]);
+  });
+
+  it("drops a recovered turn over the execution ceiling and notifies the asker", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const stateRoot = root();
+    writeTurns(stateRoot, {
+      poison: storedTurn("poison", 1, { baseText: "must not run", attempts: 3 }),
+    });
+    const { agent, calls } = replyingAgent("should not run");
+    const { turnsIdle } = mount(agent, {}, stateRoot);
+
+    await turnsIdle();
+    expect(calls).toHaveLength(0);
+    await vi.waitFor(() => {
+      expect(
+        slackBodies(fetchMock, "chat.postMessage").some((body) =>
+          String(body.text).includes("couldn’t complete an earlier request"),
+        ),
+      ).toBe(true);
+    });
+    expect(JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8"))).toEqual({});
+  });
+
+  it("defers recovered turns when the attempt bump cannot persist and settles an existing queue preview", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const stateRoot = root();
+    writeTurns(stateRoot, {
+      first: storedTurn("first", 1, { baseText: "first deferred" }),
+      second: storedTurn("second", 2, { baseText: "second deferred" }),
+    });
+    const { agent, calls } = replyingAgent("should not run");
+    const { turnsIdle } = mount(agent, {}, stateRoot);
+    mkdirSync(join(stateRoot, "channels", "slack", "turns.json.tmp"));
+
+    await turnsIdle();
+    expect(calls).toHaveLength(0);
+    const onDisk = JSON.parse(readFileSync(join(stateRoot, "channels", "slack", "turns.json"), "utf8")) as Record<
+      string,
+      { attempts?: number }
+    >;
+    expect(Object.keys(onDisk)).toEqual(["first", "second"]);
+    expect(Object.values(onDisk).map((turn) => turn.attempts)).toEqual([0, 0]);
+    await vi.waitFor(() => {
+      expect(
+        slackBodies(fetchMock, "chat.update").some((body) =>
+          String(body.text).includes("Delayed by a temporary system issue"),
+        ),
+      ).toBe(true);
+    });
+    const customerText = [...slackBodies(fetchMock, "chat.postMessage"), ...slackBodies(fetchMock, "chat.update")]
+      .map((body) => String(body.text))
+      .join("\n");
+    expect(customerText).not.toContain("complete an earlier request");
   });
 });
