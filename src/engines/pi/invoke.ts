@@ -27,7 +27,7 @@ import { abortFirstIterator } from "../../collect.ts";
 import type { RunSettledEvent, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
 import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
-import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
+import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 
 // ── §1 Lease: single-writer concurrency floor ───────────────────────────────
 //
@@ -266,6 +266,20 @@ export function errorToTerminal(error: unknown): Extract<AgentEvent, { type: "fa
 
 type PiHarness = Awaited<ReturnType<PiHarnessFactory>>;
 
+/** Bind the concrete pi-agent-core Session behind FastAgent's tool-runtime manager port. */
+function toolSessionManager(sessionId: string, harness: PiHarness): ReadonlySessionManager | undefined {
+  const session = harnessSession(harness);
+  if (!session) return undefined;
+  return {
+    getSessionId: () => sessionId,
+    async getHeader() {
+      const metadata = await session.getMetadata();
+      return { id: sessionId, timestamp: metadata.createdAt };
+    },
+    getBranch: () => session.getBranch(),
+  };
+}
+
 /**
  * The turn's {@link ToolActivation} over the live harness. `activate` is additive and filters to the
  * registered names first — pi's `setActiveTools` THROWS on unknown names, and a loader must get a
@@ -397,6 +411,8 @@ export interface CreatePiAgentFromHarnessOptions {
   /** Observation-plane tap (see {@link SessionObserver}). Optional; invoke behavior is identical
    *  with or without it — the SPEC stream is a projection of what the observer sees. */
   observer?: SessionObserver;
+  /** Working directory exposed to FastAgent-defined tools. Defaults to process.cwd(). */
+  cwd?: string;
 }
 
 /** "From a harness factory": engine wired by the caller; adds only the concurrency/stream shell. */
@@ -575,12 +591,15 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       });
       let completed: AssistantMessage | undefined; // the assistant message of a cleanly completed turn
       try {
-        // Run the turn inside the session context so a tool's `execute` can read which session it is in
-        // (turnContext / ToolContext.session). prompt() starts the async work synchronously here, so the
-        // store propagates to the tool calls awaited within it.
+        // Bind current cwd/session/activation capabilities for every FastAgent-defined tool.
         const opts = await toPiPromptOptions(prompt);
-        const run = turnContext.run({ session: scope.session, tools: toolActivation(harness) }, () =>
-          harness.prompt(prompt.text, opts),
+        const run = turnContext.run(
+          {
+            cwd: options.cwd ?? process.cwd(),
+            sessionManager: toolSessionManager(scope.session, harness),
+            tools: toolActivation(harness),
+          },
+          () => harness.prompt(prompt.text, opts),
         );
         yield* queue.drainUntil(run);
         let terminal: AgentEvent;

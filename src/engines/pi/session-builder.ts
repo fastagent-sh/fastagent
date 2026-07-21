@@ -27,6 +27,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSession,
@@ -44,9 +45,24 @@ import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts"
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
-import { type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
+import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 import { resolveWorkspaceAssembly } from "./workspace.ts";
+
+/** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
+function toolChatSessionManager(session: AgentSession): ReadonlySessionManager {
+  return {
+    getSessionId: () => session.sessionManager.getSessionId(),
+    async getHeader() {
+      const header = session.sessionManager.getHeader();
+      if (!header) throw new Error("chat session has no metadata header");
+      return { id: header.id, timestamp: header.timestamp };
+    },
+    async getBranch() {
+      return session.sessionManager.getBranch() as SessionTreeEntry[];
+    },
+  };
+}
 
 export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -155,7 +171,7 @@ export async function buildWorkspaceSessionRuntime(
         // session-lifecycle invariant as a normal out-of-turn call (fail visibly).
         if (!bound) throw new Error("tool executed before its session was built (lifecycle invariant broken)");
         return turnContext.run(
-          { session: bound.session.sessionId, tools: bound.activation },
+          { cwd, sessionManager: bound.sessionManager, tools: bound.activation },
           () => t.execute(id, params, signal) as Promise<unknown>,
         );
       },
@@ -194,7 +210,9 @@ export async function buildWorkspaceSessionRuntime(
   // parallel batches: pi wraps SDK customTools in its own before/after active-set diff, so an
   // activating tool must carry `executionMode: "sequential"` (the builtin loader does) — pi then runs
   // the whole batch serially and the outer diff sees correct snapshots.
-  const sessionRef: { current?: { session: AgentSession; activation: ToolActivation } } = {};
+  const sessionRef: {
+    current?: { session: AgentSession; sessionManager: ReadonlySessionManager; activation: ToolActivation };
+  } = {};
   let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
   const assemblyFor = (cwd: string) => {
     // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would
@@ -264,7 +282,11 @@ export async function buildWorkspaceSessionRuntime(
       tools: [...defaultNames, ...customTools.map((t) => t.name)],
       customTools: customToolDefs,
     });
-    sessionRef.current = { session: result.session, activation: sessionToolActivation(result.session) };
+    sessionRef.current = {
+      session: result.session,
+      sessionManager: toolChatSessionManager(result.session),
+      activation: sessionToolActivation(result.session),
+    };
     // Deferral emulation: pi's session starts with everything active — narrow it by SUBTRACTING
     // the deferred names from whatever is active (robust to pi mounting tools of its own; an
     // exact-set-equality gate would silently stop narrowing the day pi adds one). Applied on EVERY

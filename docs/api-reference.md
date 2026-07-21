@@ -191,11 +191,28 @@ export default defineTool({
 
 `tools/<name>.ts` files are discovered with `loadTools(dir)`, and the filename becomes the tool name.
 
-The second `execute` argument is a `ToolContext`: `{ signal?, session?, tools? }`. `session` is the id of
-the current turn's conversation (undefined outside a turn, e.g. a bare `fastagent tool` run) — a per-turn
-value carried via `AsyncLocalStorage`, not a closure (a tool is built once and reused across sessions).
-The built-in **`wake`** tool uses it to self-schedule: `wake({ in, prompt })` records a one-shot wake-up
-that the scheduler fires back into THIS session after the delay (see [Schedule authoring](#schedule-authoring)).
+The second `execute` argument is a `ToolContext`:
+
+```ts
+interface ToolContext {
+  cwd: string;
+  signal?: AbortSignal;
+  sessionManager?: ReadonlySessionManager;
+  tools?: ToolActivation;
+}
+
+interface ReadonlySessionManager {
+  getSessionId(): string;
+  getHeader(): Promise<{ id: string; timestamp: string }>;
+  getBranch(): Promise<SessionTreeEntry[]>;
+}
+```
+
+During serving and `fastagent chat`, `sessionManager` is FastAgent's read-only adapter over the current
+conversation. It is undefined in a sessionless direct call such as `fastagent tool`. Current bindings
+ride `AsyncLocalStorage`, not definition closures, because a tool is built once and reused across turns.
+The built-in **`wake`** tool uses `sessionManager.getSessionId()` to schedule a follow-up in the same
+conversation.
 
 ### Deferred tools
 
@@ -337,7 +354,7 @@ one-shot `invoke`/`fire`) mounts a built-in **`wake`** tool so the agent can sch
 records a one-shot wake-up — or `wake({ cron: "0 9 * * *", tz?, prompt })` a RECURRING one — persisted under
 `<stateRoot>/schedule/`, polled by the scheduler and fired back into the SAME session, so the agent resumes
 the conversation — the woken turn's prompt is enveloped with the wake-up's id and origin ("YOUR
-self-scheduled turn, not a user message"), so the model can tell its own alarm from the user speaking. It reads the current session from `ToolContext.session`; guardrails cap the minimum delay,
+self-scheduled turn, not a user message"), so the model can tell its own alarm from the user speaking. It reads the current session through `ToolContext.sessionManager`; guardrails cap the minimum delay,
 the recurring frequency (≥10 min between fires), and the per-session pending count. The agent cancels its own
 with `unwake({ id })` (session-scoped); the operator with `fastagent schedule cancel <id>` (`schedule list`
 shows ids).

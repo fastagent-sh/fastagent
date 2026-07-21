@@ -14,9 +14,16 @@ export {
   type ToolCollision,
   type ToolContext,
 } from "./engines/pi/tool.ts";
-export type { ToolActivation } from "./engines/pi/tool-context.ts";
+export type { ReadonlySessionManager, ToolActivation } from "./engines/pi/tool-context.ts";
 export { z } from "zod";
-export type { AgentTool, ExecutionEnv, Session, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
+export type {
+  AgentTool,
+  ExecutionEnv,
+  Session,
+  SessionTreeEntry,
+  Skill,
+  SkillDiagnostic,
+} from "@earendil-works/pi-agent-core";
 
 export { loadChannels, type ChannelCollision } from "./engines/pi/channel.ts";
 export {

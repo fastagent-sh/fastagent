@@ -20,6 +20,14 @@ import { turnContext } from "../src/engines/pi/tool-context.ts";
 const root = (): Promise<string> => mkdtemp(join(tmpdir(), "fa-wake-"));
 const NOW = new Date("2026-07-07T12:00:00Z");
 const at = (ms: number): Date => new Date(NOW.getTime() + ms);
+const contextFor = (session: string) => ({
+  cwd: process.cwd(),
+  sessionManager: {
+    getSessionId: () => session,
+    getHeader: async () => ({ id: session, timestamp: NOW.toISOString() }),
+    getBranch: async () => [],
+  },
+});
 
 type RawExecute = (id: string, params: unknown, signal?: AbortSignal) => Promise<unknown>;
 const exec = (tool: { execute?: unknown }, params: unknown): Promise<unknown> =>
@@ -160,7 +168,7 @@ describe("schedule/wake-tool", () => {
   it("the wake tool records a wake-up into the CURRENT session", async () => {
     const r = await root();
     const tool = makeWakeTool(r, () => NOW);
-    await turnContext.run({ session: "conv-1" }, () => exec(tool, { in: "30m", prompt: "resume the check" }));
+    await turnContext.run(contextFor("conv-1"), () => exec(tool, { in: "30m", prompt: "resume the check" }));
     expect(listWakeups(r)).toHaveLength(1);
     expect(listWakeups(r)[0]).toMatchObject({ session: "conv-1", prompt: "resume the check" });
   });
@@ -177,7 +185,7 @@ describe("schedule/wake-tool", () => {
   it("a below-minimum delay is a guardrail message, records nothing", async () => {
     const r = await root();
     const tool = makeWakeTool(r, () => NOW);
-    await turnContext.run({ session: "s" }, () => exec(tool, { in: "1s", prompt: "x" }));
+    await turnContext.run(contextFor("s"), () => exec(tool, { in: "1s", prompt: "x" }));
     expect(listWakeups(r)).toHaveLength(0);
   });
 });

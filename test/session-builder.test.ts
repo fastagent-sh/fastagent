@@ -11,6 +11,55 @@ import { buildWorkspaceSessionRuntime } from "../src/engines/pi/session-builder.
 // TTY. In-memory sessions keep the test from writing to the machine's pi session store. A raw
 // AgentTool via `config.tools` lets the custom-tool path be tested without installing the package.
 describe("session builder: buildWorkspaceSessionRuntime injects fastagent's assembled agent into pi's session", () => {
+  it("binds the chat session manager to ordinary configured defineTool tools", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-chat-session-tool-"));
+    const observedKey = "__fastagent_chat_tool_session_test__";
+    const piUrl = new URL("../src/pi.ts", import.meta.url).href;
+    try {
+      await writeFile(
+        join(dir, "fastagent.config.mjs"),
+        `import { defineTool, z } from ${JSON.stringify(piUrl)};
+         export default {
+           model: "openai-codex/gpt-5.5",
+           tools: [defineTool({
+             name: "inspect_session",
+             description: "Inspect this session.",
+             input: z.object({}),
+             execute: async (_input, ctx) => {
+               globalThis[${JSON.stringify(observedKey)}] = {
+                 sessionId: ctx.sessionManager.getSessionId(),
+                 header: await ctx.sessionManager.getHeader(),
+                 branch: await ctx.sessionManager.getBranch(),
+               };
+               return "ok";
+             },
+           })],
+         };\n`,
+      );
+      const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        rt.session.sessionManager.appendMessage({ role: "user", content: "history marker", timestamp: Date.now() });
+        const tool = rt.session.agent.state.tools.find((candidate) => candidate.name === "inspect_session");
+        expect(tool).toBeDefined();
+        await tool!.execute("inspect-1", {});
+        const observed = (globalThis as Record<string, unknown>)[observedKey] as {
+          sessionId: string;
+          header: { id: string; timestamp: string };
+          branch: unknown[];
+        };
+        expect(observed.sessionId).toBe(rt.session.sessionId);
+        expect(observed.header.id).toBe(rt.session.sessionId);
+        expect(observed.header.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+        expect(JSON.stringify(observed.branch)).toContain("history marker");
+      } finally {
+        delete (globalThis as Record<string, unknown>)[observedKey];
+        await rt.dispose();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("emulates deferral: deferred tools start inactive, search_tools mounts and activates via pi's session", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-chat-defer-"));
     try {
