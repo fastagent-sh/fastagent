@@ -5,7 +5,7 @@ import {
   truncateCodePointSuffix,
   truncateUtf8,
   utf8Prefix,
-} from "../src/channels/feishu/text.ts";
+} from "../src/channels/text.ts";
 
 const isWellFormed = (text: string): boolean => Buffer.from(text, "utf8").toString("utf8") === text;
 

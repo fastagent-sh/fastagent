@@ -1,4 +1,4 @@
-/** Pure Unicode-safe text slicing helpers shared by Feishu/Lark rendering paths. JavaScript string
+/** Pure Unicode-safe text slicing helpers shared by channel rendering paths (Feishu/Lark cards, the preview kit). JavaScript string
  * indexes are UTF-16 code units, so direct `slice()` can tear a surrogate pair and send replacement
  * characters after JSON/UTF-8 encoding. These helpers only cut at Unicode code-point boundaries. */
 

@@ -23,7 +23,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ImageRef } from "../../agent.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
-import { utf8Prefix } from "./text.ts";
+import { utf8Prefix } from "../text.ts";
 
 /** Per-attempt timeout for a JSON API call — small JSON round-trips, so 30s is generous. */
 const API_TIMEOUT_MS = 30_000;

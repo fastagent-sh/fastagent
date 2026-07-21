@@ -5,20 +5,14 @@
  * carry unbalanced HTML); on completion the same message is edited into the final answer as HTML. One
  * message, works in groups and private (unlike sendMessageDraft, which is private/forum-topic only).
  */
-import type { AgentEvent, Json } from "../../agent.ts";
+import type { AgentEvent } from "../../agent.ts";
+import { type ChannelFailure, defaultErrorMessage, summarizeToolArgs } from "../preview-kit.ts";
 import { log } from "../../log.ts";
 import { TELEGRAM_MAX_TEXT, type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 
-/** A terminal failure, as the channel hands it to `onError`. */
-export interface TelegramFailure {
-  details: string;
-  retryable: boolean;
-}
-
-/** The customer-facing default: neutral, no leaked internals; differentiate only on whether to retry. */
-export function defaultErrorMessage(failed: TelegramFailure): string {
-  return failed.retryable ? "⚠️ Temporary problem — please try again." : "⚠️ Sorry, something went wrong.";
-}
+/** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
+export type TelegramFailure = ChannelFailure;
+export { defaultErrorMessage };
 
 /** How often (ms) to edit the live-preview message; tool events still flush on the next loop. Edits to
  *  one message are rate-limited tighter than sends, so pace them ~1.5s (vs every token). Doubles as the
@@ -26,30 +20,8 @@ export function defaultErrorMessage(failed: TelegramFailure): string {
  *  this long — one knob, same order of magnitude. */
 const EDIT_THROTTLE_MS = 1500;
 
-/** Max length of a tool's arg preview in the live view. */
-const TOOL_ARG_MAX = 48;
-
 /** How much of the (growing) reasoning to peek at in the live view — the most recent tail. */
 const THINKING_PREVIEW = 280;
-
-/** One-line, truncated: collapse whitespace so a multi-line command/arg stays on one line. */
-function clip(s: string): string {
-  const one = s.replace(/\s+/g, " ").trim();
-  return one.length > TOOL_ARG_MAX ? `${one.slice(0, TOOL_ARG_MAX - 1)}…` : one;
-}
-
-/**
- * A compact, human-readable preview of a tool call's args so the live view reads `🔧 read AGENTS.md`
- * rather than just `🔧 read`. Generic (the channel knows no tool schemas): show the salient value — the
- * first primitive field, conventionally the subject (path / command / query / url) — else compact JSON.
- */
-function summarizeArgs(args: Json): string {
-  if (args === null || typeof args !== "object" || Array.isArray(args)) return clip(String(args));
-  const values = Object.values(args);
-  const primary = values.find((v) => typeof v === "string" || typeof v === "number");
-  if (primary !== undefined) return clip(String(primary));
-  return values.length > 0 ? clip(JSON.stringify(args)) : "";
-}
 
 /**
  * The terminal-write POLICY: resolve the single preview message into `text`. streamReply owns the
@@ -238,7 +210,7 @@ export async function streamReply(
         thinking += e.delta;
         touch();
       } else if (e.type === "tool_started") {
-        const arg = summarizeArgs(e.args);
+        const arg = summarizeToolArgs(e.args);
         toolIndexById.set(e.id, tools.length);
         tools.push({ label: arg ? `${e.name} ${arg}` : e.name, status: "running" });
         touch();

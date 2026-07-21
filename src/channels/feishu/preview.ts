@@ -20,7 +20,7 @@
  * settle/delete+send/suppress).
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import type { AgentEvent, Json } from "../../agent.ts";
+import type { AgentEvent } from "../../agent.ts";
 import { log } from "../../log.ts";
 import {
   ANSWER_ELEMENT_ID,
@@ -30,18 +30,12 @@ import {
   streamingCardJson,
 } from "./card.ts";
 import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
-import { truncateCodePointPrefix, truncateCodePointSuffix, truncateUtf8 } from "./text.ts";
+import { type ChannelFailure, defaultErrorMessage, summarizeToolArgs } from "../preview-kit.ts";
+import { truncateCodePointSuffix, truncateUtf8 } from "../text.ts";
 
-/** A terminal failure, as the channel hands it to `onError`. */
-export interface FeishuFailure {
-  details: string;
-  retryable: boolean;
-}
-
-/** The customer-facing default: neutral, no leaked internals; differentiate only on whether to retry. */
-export function defaultErrorMessage(failed: FeishuFailure): string {
-  return failed.retryable ? "⚠️ Temporary problem — please try again." : "⚠️ Sorry, something went wrong.";
-}
+/** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
+export type FeishuFailure = ChannelFailure;
+export { defaultErrorMessage };
 
 /** How often (ms) to push a live-preview snapshot; tool events still flush on the next loop. Cardkit
  *  allows 10 QPS per card entity (50 per app), but one snapshot a second reads smoothly (the client
@@ -49,33 +43,11 @@ export function defaultErrorMessage(failed: FeishuFailure): string {
  *  Doubles as the answer-preview aging window (see answerView). */
 const STREAM_THROTTLE_MS = 1000;
 
-/** Max length of a tool's arg preview in the live view. */
-const TOOL_ARG_MAX = 48;
-
 /** How much of the (growing) reasoning to peek at in the live view — the most recent tail. */
 const THINKING_PREVIEW = 280;
 
 /** The placeholder shown before any reasoning/tool/text arrives. */
 const THINKING_PLACEHOLDER = "💭 Thinking…";
-
-/** One-line, truncated: collapse whitespace so a multi-line command/arg stays on one line. */
-function clip(s: string): string {
-  const one = s.replace(/\s+/g, " ").trim();
-  return truncateCodePointPrefix(one, TOOL_ARG_MAX);
-}
-
-/**
- * A compact, human-readable preview of a tool call's args so the live view reads `🔧 read AGENTS.md`
- * rather than just `🔧 read`. Generic (the channel knows no tool schemas): show the salient value — the
- * first primitive field, conventionally the subject (path / command / query / url) — else compact JSON.
- */
-function summarizeArgs(args: Json): string {
-  if (args === null || typeof args !== "object" || Array.isArray(args)) return clip(String(args));
-  const values = Object.values(args);
-  const primary = values.find((v) => typeof v === "string" || typeof v === "number");
-  if (primary !== undefined) return clip(String(primary));
-  return values.length > 0 ? clip(JSON.stringify(args)) : "";
-}
 
 /** Cap a live view to the card budget, PREFIX-STABLE: the streaming client animates only when the old
  *  text is a prefix of the new, so an over-budget view freezes at its head rather than sliding a tail
@@ -366,7 +338,7 @@ export async function streamFeishuReply(
         thinking += e.delta;
         touch();
       } else if (e.type === "tool_started") {
-        const arg = summarizeArgs(e.args);
+        const arg = summarizeToolArgs(e.args);
         toolIndexById.set(e.id, tools.length);
         tools.push({ label: arg ? `${e.name} ${arg}` : e.name, status: "running" });
         touch();

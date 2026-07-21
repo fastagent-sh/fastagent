@@ -16,7 +16,7 @@ import { log } from "../../log.ts";
 import type { FeishuBufferedRef } from "./context-buffer.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
-import { codePointPrefix } from "./text.ts";
+import { codePointPrefix } from "../text.ts";
 
 /** Appended to the prompt (not the system prompt): the channel renders the reply in a card, and the
  *  card's markdown element is the natural fit for LLM output — steer away from HTML/plain. */
