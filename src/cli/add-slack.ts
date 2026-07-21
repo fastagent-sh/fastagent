@@ -172,7 +172,7 @@ export async function onboardSlackInternalApp(input: {
     if (!(await waitForHealth(`${tunnel.url}/health`, 45_000, 500))) {
       throw new Error("the temporary Slack setup tunnel did not become reachable; no app was created");
     }
-    const result = await onboardSlackApp(
+    await onboardSlackApp(
       { stateRoot: input.stateRoot, state, requestUrl, redirectUrl },
       {
         note: (message) => clackLog.info(message),
@@ -189,10 +189,7 @@ export async function onboardSlackInternalApp(input: {
         },
       },
     );
-    console.error(
-      `[fastagent] Slack app installed → ${result.oauth.teamName ?? result.oauth.teamId}; ` +
-        "Bot Token and Signing Secret written to .env",
-    );
+    console.error("[fastagent] Slack app installed; Bot Token and Signing Secret written to .env");
     console.error(
       `[fastagent] run \`fastagent dev --tunnel\` next — FastAgent will rotate the config token and ` +
         "replace the temporary Events API URL automatically",

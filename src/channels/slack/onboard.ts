@@ -1,11 +1,5 @@
 import { randomBytes } from "node:crypto";
-import {
-  createSlackApp,
-  exchangeSlackOAuthCode,
-  SlackConfigApiError,
-  updateSlackAppManifest,
-  type SlackOAuthResult,
-} from "./config-api.ts";
+import { createSlackApp, exchangeSlackOAuthCode, SlackConfigApiError, updateSlackAppManifest } from "./config-api.ts";
 import { buildSlackManifest, slackBotScopes, type SlackGroupBehavior } from "./manifest.ts";
 import { currentSlackConfigToken, type SlackOnboardingState, writeSlackOnboardingState } from "./onboarding-state.ts";
 
@@ -34,7 +28,7 @@ export async function onboardSlackApp(
     updateManifest?: typeof updateSlackAppManifest;
     exchangeCode?: typeof exchangeSlackOAuthCode;
   } = {},
-): Promise<{ state: SlackOnboardingState; oauth: SlackOAuthResult }> {
+): Promise<SlackOnboardingState> {
   let state = input.state;
   const current = await currentSlackConfigToken(input.stateRoot, state);
   state = current.state;
@@ -113,7 +107,7 @@ export async function onboardSlackApp(
   io.openUrl(authorize.toString());
 
   const callback = await io.waitForOAuth();
-  if (callback.error) throw new Error(`Slack OAuth was not approved: ${callback.error}`);
+  if (callback.error) throw new Error("Slack OAuth installation was not approved");
   if (!callback.code) throw new Error("Slack OAuth callback carried no authorization code");
   if (!callback.state || callback.state !== oauthState) throw new Error("Slack OAuth callback state mismatch");
 
@@ -123,12 +117,9 @@ export async function onboardSlackApp(
     code: callback.code,
     redirectUrl: input.redirectUrl,
   });
-  if (oauth.appId !== state.appId) {
-    throw new Error(`Slack OAuth installed app ${oauth.appId}, expected ${state.appId}`);
-  }
-  const missing = slackBotScopes(state.groupBehavior).filter((scope) => !oauth.scopes.includes(scope));
-  if (missing.length > 0) {
-    throw new Error(`Slack OAuth completed without required bot scopes: ${missing.join(", ")}`);
+  if (oauth.appId !== state.appId) throw new Error("Slack OAuth installed a different app than the manifest app");
+  if (slackBotScopes(state.groupBehavior).some((scope) => !oauth.scopes.includes(scope))) {
+    throw new Error("Slack OAuth completed without all required bot scopes; re-run fastagent add slack to reinstall");
   }
   await io.writeRuntimeSecrets({ botToken: oauth.botToken });
   state = {
@@ -139,7 +130,7 @@ export async function onboardSlackApp(
     installedAt: new Date().toISOString(),
   };
   await writeSlackOnboardingState(input.stateRoot, state);
-  return { state, oauth };
+  return state;
 }
 
 export function newSlackOnboardingState(input: {

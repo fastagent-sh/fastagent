@@ -101,6 +101,29 @@ describe("Slack internal-app manifest and control API", () => {
     });
     expect(String(oauthInit?.body)).not.toContain("secret");
   });
+
+  it("never includes OAuth response fields in a rejected exchange error", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json(
+        {
+          ok: false,
+          error: "bad_client_secret",
+          access_token: "xoxb-must-not-escape",
+          team: { id: "T1", name: "Private Workspace" },
+        },
+        { status: 401 },
+      ),
+    );
+
+    const error = await exchangeSlackOAuthCode(
+      { clientId: "C1", clientSecret: "secret", code: "code", redirectUrl: "https://agent.test/oauth" },
+      { fetch: fetchMock },
+    ).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/rejected the app client secret.*HTTP 401/);
+    expect((error as Error).message).not.toMatch(/xoxb|Private Workspace|T1/);
+  });
 });
 
 describe("Slack internal-app onboarding", () => {
@@ -151,8 +174,8 @@ describe("Slack internal-app onboarding", () => {
     );
 
     expect(secrets).toEqual([{ signingSecret: "signing-secret" }, { botToken: "xoxb-bot" }]);
-    expect(result.state).toMatchObject({ appId: "A1", teamId: "T1", teamName: "Acme" });
-    expect(result.state.clientSecret).toBeUndefined();
+    expect(result).toMatchObject({ appId: "A1", teamId: "T1", teamName: "Acme" });
+    expect(result.clientSecret).toBeUndefined();
     const persisted = await readSlackOnboardingState(stateRoot);
     expect(persisted?.clientSecret).toBeUndefined();
     expect(persisted?.installedAt).toBeTruthy();

@@ -45,7 +45,7 @@ async function slackJson<T>(
     });
     raw = await response.text();
   } catch (error) {
-    throw new Error(`Slack ${method} request failed: ${String(error)}`, { cause: error });
+    throw new Error(`Slack ${method} request failed before receiving a response`, { cause: error });
   }
   let data: SlackErrorShape & T;
   try {
@@ -153,6 +153,29 @@ export interface SlackOAuthResult {
   scopes: string[];
 }
 
+function slackOAuthFailure(status: number, code: unknown): Error {
+  const reason = (() => {
+    switch (code) {
+      case "bad_client_secret":
+        return "Slack rejected the app client secret";
+      case "invalid_client_id":
+        return "Slack rejected the app client ID";
+      case "bad_redirect_uri":
+      case "invalid_redirect_uri":
+        return "Slack rejected the temporary OAuth redirect URL";
+      case "invalid_code":
+        return "Slack rejected the authorization code";
+      case "code_already_used":
+        return "the Slack authorization code was already used";
+      case "access_denied":
+        return "the Slack installation was not approved";
+      default:
+        return "Slack rejected the OAuth exchange";
+    }
+  })();
+  return new Error(`${reason} (HTTP ${status}); re-run fastagent add slack to resume installation`);
+}
+
 export async function exchangeSlackOAuthCode(
   input: { clientId: string; clientSecret: string; code: string; redirectUrl: string },
   options: { apiBaseUrl?: string; fetch?: typeof fetch } = {},
@@ -173,7 +196,7 @@ export async function exchangeSlackOAuthCode(
     });
     raw = await response.text();
   } catch (error) {
-    throw new Error(`Slack oauth.v2.access request failed: ${String(error)}`, { cause: error });
+    throw new Error("Slack oauth.v2.access request failed before receiving a response", { cause: error });
   }
   let data: SlackErrorShape & {
     access_token?: string;
@@ -187,14 +210,7 @@ export async function exchangeSlackOAuthCode(
   } catch {
     throw new Error(`Slack oauth.v2.access failed: HTTP ${response.status} returned non-JSON`);
   }
-  if (!response.ok || data.ok !== true) {
-    throw new SlackConfigApiError(
-      "oauth.v2.access",
-      response.status,
-      data,
-      raw.trim().slice(0, 200) || "unknown_error",
-    );
-  }
+  if (!response.ok || data.ok !== true) throw slackOAuthFailure(response.status, data.error);
   if (!data.access_token || !data.app_id || !data.team?.id) {
     throw new Error("Slack oauth.v2.access succeeded but returned no bot token/app/workspace identity");
   }
