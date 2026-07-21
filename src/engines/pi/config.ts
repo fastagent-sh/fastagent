@@ -13,20 +13,11 @@ import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { FastagentTool } from "./tool.ts";
 import type { Models } from "@earendil-works/pi-ai";
-import type { AnyModel } from "./harness.ts";
+import { THINKING_LEVELS, type AnyModel } from "./harness.ts";
 import { moduleLoadHint } from "../../loader.ts";
 
-/** pi's thinking levels (types.d.ts `ThinkingLevel`), as a runtime list for config validation — pi
- *  exports only the type. A level the selected model does not support is clamped by pi per model. */
-export const THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const satisfies readonly ThinkingLevel[];
+// pi's thinking levels as a runtime value live in harness.ts (THE single source, with the
+// exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
 
 export interface FastagentConfig {
   /** "provider/modelId". Precedence: CLI --model > FASTAGENT_MODEL > config. */
@@ -161,8 +152,8 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   if (c.sessionControl !== undefined && typeof c.sessionControl !== "boolean") {
     throw new Error(`${path}: "sessionControl" must be a boolean`);
   }
-  if (c.thinkingLevel !== undefined && !(THINKING_LEVELS as readonly string[]).includes(c.thinkingLevel as string)) {
-    throw new Error(`${path}: "thinkingLevel" must be one of ${THINKING_LEVELS.join(", ")}`);
+  if (c.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(c.thinkingLevel as string)) {
+    throw new Error(`${path}: "thinkingLevel" must be one of ${[...THINKING_LEVELS].join(", ")}`);
   }
   if (c.agentDir !== undefined && typeof c.agentDir !== "string") {
     throw new Error(`${path}: "agentDir" must be a string (a subdirectory relative to the config file)`);
