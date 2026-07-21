@@ -484,9 +484,11 @@ Prompts, images included — within the dispatch body cap (1 MiB, with base64 in
 oversized bodies get a 413 naming the limit).
 
 The transport envelope (`epoch`/`seq` per SSE message) is consumed inside the client: a sequence
-gap or a server restart ends the events iterator, and the consumer runs the standard reconnect
-steps. Exposing the port beyond loopback exposes a remote-control surface — wrap it with real
-authentication and authorization ([design §14](design/session-control.md)).
+gap — and any mid-stream transport failure, a server restart included — throws from the events
+iterator so the consumer's failure handling owns it (only the consumer's own detach reads as a
+clean end); recovery is the standard reconnect steps. Exposing the port beyond loopback exposes a
+remote-control surface — wrap it with real authentication and authorization
+([design §14](design/session-control.md)).
 
 ## Subpath exports
 

@@ -198,6 +198,21 @@ describe("session control over HTTP (Phase 3)", () => {
       expect(received).toEqual([{ text: "look", images: [{ data: "aGk=", mimeType: "image/png" }] }]);
       const badImage = await post({ type: "steer", prompt: { text: "look", images: [42] } });
       expect(badImage.error?.code).toBe("invalid_command"); // element-level parse rejection
+      // Every command variant's malformed shape answers protocol-level invalid_command — removing
+      // any parseWireCommand check line must turn one of these red.
+      const malformed: unknown[] = [
+        { type: "steer" }, // prompt missing
+        { type: "steer", prompt: { text: 42 } }, // text not a string
+        { type: "follow_up", prompt: "hi" }, // prompt not an object
+        { type: "compact", instructions: 42 }, // instructions not a string
+        { type: "set_model", model: 42 }, // model not a string
+        { type: "set_thinking", level: 42 }, // level not a string
+      ];
+      for (const command of malformed) {
+        const rejected = await post(command);
+        expect(rejected.ok).toBe(false);
+        expect(rejected.error?.code).toBe("invalid_command");
+      }
     } finally {
       server.close();
     }

@@ -5,13 +5,14 @@
  * local and remote consumers are isomorphic — client code does not change when the agent moves out
  * of process.
  *
- * Envelope consumption is internal: a seq gap (loss in transit on this connection) ENDS the events
- * iterator — the consumer then runs the standard reconnect steps (`entries({ since })` → `state()`
- * → resubscribe), exactly as after any disconnect. A server RESTART is covered by the same rule
- * (its connections drop); the envelope's `epoch` is informational for consumers that correlate
- * ACROSS connections — within one connection it cannot change, so this client does not compare it.
- * Nothing here retries silently: a broken stream is visible as a terminated iterator, a failed
- * request as a rejected promise.
+ * Envelope consumption is internal: a seq gap (loss in transit on this connection) — and any
+ * mid-stream transport failure, a server restart included (its connections drop) — THROWS from
+ * the events iterator, so the consumer's failure handling and budget own it; only the consumer's
+ * own detach reads as a clean end. Recovery is the standard reconnect steps (`entries({ since })`
+ * → `state()` → resubscribe), exactly as after any disconnect. The envelope's `epoch` is
+ * informational for consumers that correlate ACROSS connections — within one connection it cannot
+ * change, so this client does not compare it. Nothing here retries silently: a broken stream is
+ * visible as a thrown iteration error, a failed request as a rejected promise.
  */
 import type { Agent, AgentEvent, Prompt, Scope } from "./agent.ts";
 import { SSE_HEARTBEAT_MS } from "./channels/http.ts";
