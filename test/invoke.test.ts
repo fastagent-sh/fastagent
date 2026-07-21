@@ -265,6 +265,44 @@ describe("lease + setup robustness", () => {
     expect((events[0] as any).details).toContain("cannot open session");
   });
 
+  it("cancel during the harness build never starts the model call — the latch is checked at arming", async () => {
+    // The door (harness.abort) arms only after the build; a knock before prompt() would be a
+    // no-op on an idle harness and the LATER run would ignore it — so the latched cancel must
+    // instead prevent the run from starting at all, settling as aborted.
+    const { faux, models } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("unreachable")]);
+    const sessions = inMemorySessionStore();
+    const inner = piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      systemPrompt: "test",
+    });
+    let releaseBuild!: () => void;
+    const gate = new Promise<void>((r) => {
+      releaseBuild = r;
+    });
+    let settled: unknown;
+    const agent = createPiAgentFromHarness({
+      harnessFactory: async (s) => {
+        await gate; // the consumer cancels while the build is in flight
+        return inner(s);
+      },
+      observer: (_s, event) => {
+        if (event.type === "run_settled") settled = event.data;
+      },
+    });
+    const iterator = agent.invoke({ session: "sBuildCancel" }, { text: "hi" })[Symbol.asyncIterator]();
+    const first = iterator.next(); // parks inside the build
+    const ret = iterator.return?.(undefined); // cancel during the build window
+    releaseBuild();
+    expect((await first).done).toBe(true); // no deadlock, no events — the run never started
+    await ret;
+    expect(settled).toMatchObject({ status: "aborted" });
+    expect(faux.state.callCount).toBe(0); // the model was never called
+  });
+
   it("createPiAgentFromHarness wraps invoke with the injected lease (acquire…release)", async () => {
     const calls: string[] = [];
     const { faux, models } = makeFaux();

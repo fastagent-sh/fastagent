@@ -12,7 +12,7 @@ import { log, setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { failStartup } from "../fail.ts";
-import { maybeTunnel, routesFor, serve, startSchedules } from "../serve.ts";
+import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import { parsePort, reportAuth, resolveFirstRunModel } from "../shared.ts";
 
 export interface DevOptions {
@@ -70,10 +70,15 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
   const routed = await routesFor(a.agentDir, traced, a.stateRoot).catch(failStartup);
+  const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot, {
+    tunnel: opts.tunnel ?? false,
+    agent: traced, // the remote data plane (POST /control/invoke) drives the SAME traced agent
+  });
   await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
-  serve(routed, portFlag ?? a.config.http?.port ?? 8787, (p) =>
-    maybeTunnel(a.agentDir, routed.routeChannels, p, opts.tunnel ?? false),
-  );
+  serve({ ...routed, routes: withControl.routes }, portFlag ?? a.config.http?.port ?? 8787, (p) => {
+    withControl.announce(p);
+    maybeTunnel(a.agentDir, routed.routeChannels, p, opts.tunnel ?? false);
+  });
 }
 
 type Assembled = Awaited<ReturnType<typeof createPiAgentFromWorkspace>>;

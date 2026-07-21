@@ -11,11 +11,12 @@ import { describe, expect, it } from "vitest";
 import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
-import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
+import { SUBSCRIBER_BUFFER_CAP, createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
 import { createPiAgentFromWorkspace } from "../src/engines/pi/workspace.ts";
 import {
   BOUNDARY_COMMAND_FAILED_CODE,
+  NOTHING_TO_COMPACT_CODE,
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
   NO_SUCH_SESSION_CODE,
@@ -575,6 +576,71 @@ describe("session control (Phase 2a): run modulation", () => {
     expect(events.at(-1)).toMatchObject({ type: "failed" }); // the data plane failed visibly too
   });
 
+  it("a subscriber far behind is closed instead of buffering without bound", async () => {
+    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const iterator = control.events("sSlow")[Symbol.asyncIterator]();
+    const first = iterator.next(); // registration is synchronous at next() entry; the pull now stalls
+    observer("sSlow", { type: "run_started", timestamp: 0, runId: "r", data: {} });
+    await first; // the first event flows; the consumer never pulls again after this
+    for (let i = 0; i < SUBSCRIBER_BUFFER_CAP + 1; i++) {
+      observer("sSlow", { type: "message_delta", timestamp: i, runId: "r", data: { channel: "text", delta: "x" } });
+    }
+    // The stream was closed by the cap: draining reaches done instead of 10k+ buffered events.
+    let drained = 0;
+    for (;;) {
+      const r = await iterator.next();
+      if (r.done) break;
+      drained++;
+      if (drained > 20_000) throw new Error("cap did not close the stream");
+    }
+    expect(drained).toBeLessThanOrEqual(SUBSCRIBER_BUFFER_CAP);
+    // Released, not wedged: a FRESH subscription on the same session works and receives new events.
+    const fresh = control.events("sSlow")[Symbol.asyncIterator]();
+    const next = fresh.next();
+    observer("sSlow", { type: "run_settled", timestamp: 1, runId: "r", data: { status: "completed" } });
+    expect(((await next) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_settled");
+    await fresh.return?.(undefined);
+  }, 10_000);
+
+  it("every iteration of one events iterable is a FRESH subscription (isomorphic with remote)", async () => {
+    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const iterable = control.events("sReIter");
+    // First iteration: consume one event, then walk away.
+    const first = iterable[Symbol.asyncIterator]();
+    const p1 = first.next();
+    observer("sReIter", { type: "run_started", timestamp: 0, runId: "r1", data: {} });
+    expect(((await p1) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_started");
+    await first.return?.(undefined);
+    // Second iteration of the SAME iterable: a fresh subscription, not a poisoned/shared one.
+    const second = iterable[Symbol.asyncIterator]();
+    const p2 = second.next();
+    observer("sReIter", { type: "run_settled", timestamp: 1, runId: "r1", data: { status: "completed" } });
+    expect(((await p2) as IteratorYieldResult<SessionEvent>).value.type).toBe("run_settled");
+    await second.return?.(undefined);
+  }, 5_000);
+
+  it("concurrent next() calls on one events subscription both settle", async () => {
+    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const iterator = control.events("sConc")[Symbol.asyncIterator]();
+    const n1 = iterator.next(); // registers synchronously, then awaits
+    const n2 = iterator.next(); // a second pending pull — must not overwrite the first's waiter
+    observer("sConc", { type: "run_started", timestamp: 0, runId: "rA", data: {} });
+    observer("sConc", { type: "run_settled", timestamp: 1, runId: "rA", data: { status: "completed" } });
+    const [r1, r2] = await Promise.all([n1, n2]); // the old bug: one of these hung forever
+    const types = [r1, r2].map((r) => (r.done ? "done" : r.value.type)).sort();
+    expect(types).toEqual(["run_settled", "run_started"].sort());
+    await iterator.return?.(undefined);
+  }, 5_000);
+
+  it("the hub's own last line: an unknown command type (in-process misuse) answers invalid_command", async () => {
+    // The transport's parseWireCommand intercepts wire input first; this default branch is the
+    // LAST line for in-process callers casting past the union — it must answer, never undefined.
+    const { control } = makeObserved([]);
+    const result = await control.dispatch("sD", { type: "make_coffee" } as never);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe(INVALID_COMMAND_CODE);
+  });
+
   it("an observation-only run (no controls) rejects with unsupported_capability, not a run code", async () => {
     const sessions = inMemorySessionStore();
     const { control, observer } = createPiSessionControl({ sessions });
@@ -806,7 +872,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sB3", { type: "set_model", model: spec })).toEqual({ ok: true });
   });
 
-  it("compact summarizes under the lease: compaction events, durable compaction entry, ok:true", async () => {
+  it("compact is accept-fast: ok on admission, outcome via compaction_finished, then lease free", async () => {
     const { agent, control } = makeBoundary([
       fauxAssistantMessage("a long answer worth compacting"),
       fauxAssistantMessage("summary of the conversation"), // consumed by harness.compact()
@@ -819,20 +885,129 @@ describe("session control (Phase 2b): boundary mutations", () => {
         if (ev.type === "compaction_finished") break;
       }
     })();
+    // Acceptance is not outcome: the dispatch answers on ADMISSION (a compaction is a full model
+    // call — a remote client's request timeout must not race it).
     const result = await control.dispatch("sB4", { type: "compact" });
     expect(result).toEqual({ ok: true });
     await watching;
     expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
     const finished = seen.at(-1)?.data as { summary: string };
     expect(finished.summary).toBeTruthy();
+    // finished ⇒ the lease is free and the record is durable — the ordering the server guarantees.
     const kinds = (await control.entries("sB4")).entries.map((e) => e.kind);
     expect(kinds).toContain("compaction");
-    expect((await control.state("sB4")).status).toBe("idle"); // lease released, not stuck compacting
+    expect((await control.state("sB4")).status).toBe("idle");
   });
 
-  it("a failing compaction is closed and non-durable: boundary_command_failed, finished{error}, clean state", async () => {
+  it("while a compaction is in flight the lease is held: state() compacting, dispatch session_busy", async () => {
+    // The accept-fast window is the refactor's new invariant: ok returned, lease still held.
+    let releaseSummary: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      releaseSummary = r;
+    });
+    const { agent, control } = makeBoundary([
+      fauxAssistantMessage("seed"),
+      (async (_c: unknown, _o: unknown, _s: unknown, _m: unknown) => {
+        await gate; // the summarization model call hangs until the test releases it
+        return fauxAssistantMessage("the summary");
+      }) as never,
+    ]);
+    await drain(agent.invoke({ session: "sB8" }, { text: "hi" }));
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB8")) {
+        seen.push(ev);
+        if (ev.type === "compaction_finished") break;
+      }
+    })();
+    expect(await control.dispatch("sB8", { type: "compact" })).toEqual({ ok: true });
+    // In flight: status reports compacting and the lease rejects other boundary work.
+    for (let i = 0; i < 100 && (await control.state("sB8")).status !== "compacting"; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect((await control.state("sB8")).status).toBe("compacting");
+    const busy = await control.dispatch("sB8", { type: "set_thinking", level: "low" });
+    expect(busy.ok).toBe(false);
+    if (!busy.ok) expect(busy.error.code).toBe(SESSION_BUSY_CODE);
+    releaseSummary();
+    await watching;
+    // finished ⇒ lease free and status recovered.
+    expect((await control.state("sB8")).status).toBe("idle");
+    expect(await control.dispatch("sB8", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
+  });
+
+  it("nothing-to-compact is a pre-acceptance rejection, not a finished{error} dressed as failure", async () => {
+    // The preparation is a cheap local computation — it belongs to admission: the client gets the
+    // answer in the dispatch, and started/finished never fire for work that never begins.
+    const { control, sessions } = makeBoundary([]);
+    await sessions.openOrCreate("sEmpty"); // exists but has no compactable history
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sEmpty")) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break; // the sentinel dispatched after the rejection
+      }
+    })();
+    const result = await control.dispatch("sEmpty", { type: "compact" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Its OWN code (not boundary_command_failed): a client must machine-distinguish "give up"
+      // from "re-dispatch once the session grows" without parsing prose.
+      expect(result.error.code).toBe(NOTHING_TO_COMPACT_CODE);
+      expect(result.error.retryable).toBe(false); // state-dependent: succeeds once the session grows
+    }
+    expect((await control.state("sEmpty")).status).toBe("idle");
+    // Lease free (the sentinel): a boundary mutation succeeds right after the rejection…
+    expect(await control.dispatch("sEmpty", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
+    await watching;
+    // …and the event stream carries ONLY it — no compaction bounds ever fired.
+    expect(seen.map((e) => e.type)).toEqual(["state_changed"]);
+  });
+
+  it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {
+    // Both are model calls a client must be able to stop: `abort` is the door out of `compacting`.
+    const { agent, control } = makeBoundary([
+      fauxAssistantMessage("seed"),
+      (async (_c: unknown, o: { signal?: AbortSignal } | undefined) => {
+        // The summarization call hangs until aborted — the only way this test's compaction ends.
+        // Checked up front too: the abort may land BEFORE this factory runs, and an
+        // already-aborted signal never fires its "abort" event again.
+        await new Promise<never>((_resolve, reject) => {
+          const bail = () => reject(new Error("summarization aborted"));
+          if (o?.signal?.aborted) return bail();
+          o?.signal?.addEventListener("abort", bail, { once: true });
+        });
+        return fauxAssistantMessage("unreachable");
+      }) as never,
+    ]);
+    await drain(agent.invoke({ session: "sB9" }, { text: "hi" }));
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB9")) {
+        seen.push(ev);
+        if (ev.type === "compaction_finished") break;
+      }
+    })();
+    expect(await control.dispatch("sB9", { type: "compact" })).toEqual({ ok: true });
+    for (let i = 0; i < 100 && (await control.state("sB9")).status !== "compacting"; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    // The door: abort routes to the compaction's harness — answering no_active_run against a
+    // state() that says "compacting" would be a lie.
+    expect(await control.dispatch("sB9", { type: "abort" })).toEqual({ ok: true });
+    await watching;
+    expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
+    // A deliberate stop reads as aborted, NOT error — the same vocabulary split as
+    // run_settled{status: "aborted"}; a client's own abort must not render as a failure.
+    expect(seen.at(-1)?.data).toEqual({ aborted: true });
+    // Converged: lease free, status recovered, nothing stuck.
+    expect((await control.state("sB9")).status).toBe("idle");
+    expect(await control.dispatch("sB9", { type: "set_thinking", level: "low" })).toEqual({ ok: true });
+  });
+
+  it("a failing compaction is ACCEPTED then closed with finished{error}; nothing durable, lease free", async () => {
     // ONE response seeds the conversation; the compaction's summarization call then finds the faux
-    // queue empty and throws — the deterministic model-call failure.
+    // queue empty and throws — the deterministic model-call failure, AFTER acceptance.
     const { agent, control } = makeBoundary([fauxAssistantMessage("seed")]);
     await drain(agent.invoke({ session: "sB6" }, { text: "hi" }));
     const seen: SessionEvent[] = [];
@@ -843,11 +1018,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       }
     })();
     const result = await control.dispatch("sB6", { type: "compact" });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
-      expect(result.error.retryable).toBe(true);
-    }
+    expect(result).toEqual({ ok: true }); // accept-fast: admission succeeded; the OUTCOME fails
     await watching;
     expect(seen.map((e) => e.type)).toEqual(["compaction_started", "compaction_finished"]);
     const closed = seen.at(-1)?.data as { error?: string };
@@ -858,6 +1029,24 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect((await control.state("sB6")).status).toBe("idle");
     const retry = await control.dispatch("sB6", { type: "set_thinking", level: "low" });
     expect(retry.ok).toBe(true); // the lease was released
+
+    // PRE-acceptance failure (the harness build) still rejects with boundary_command_failed —
+    // and releases the lease.
+    const sessions = inMemorySessionStore();
+    await sessions.openOrCreate("sPre"); // must exist, or no_such_session wins
+    const lease = inProcessLease();
+    const boundary: PiBoundaryWiring = {
+      lease,
+      models: makeFaux().models,
+      harnessFactory: async () => {
+        throw new Error("no harness for you");
+      },
+    };
+    const { control: broken } = createPiSessionControl({ sessions, boundary: () => boundary });
+    const pre = await broken.dispatch("sPre", { type: "compact" });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) expect(pre.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
+    expect(lease.tryAcquire("sPre")).not.toBeNull(); // released on the pre-acceptance path
   });
 
   it("state() reports the durable overrides for a reconnecting client", async () => {
@@ -904,6 +1093,24 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const second = await drain(agent.invoke({ session: "sE2E" }, { text: "again" }));
     expect(second.map((e) => (e.type === "text" ? (e as { delta: string }).delta : "")).join("")).toContain("faux-b");
   });
+
+  it("events(): detaching from a quiet stream resolves promptly and releases the subscription", async () => {
+    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const iterator = control.events("sQuiet")[Symbol.asyncIterator]();
+    const pending = iterator.next(); // registers; the stream never produces
+    await new Promise((r) => setTimeout(r, 20));
+    await iterator.return?.(undefined); // the old bug: this hung forever behind the quiet pull
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
+    // Released: a later event for that session finds no subscriber to buffer into — push must not
+    // throw, and a NEW subscription starts empty (nothing buffered against the dead one).
+    observer("sQuiet", { type: "run_started", timestamp: Date.now(), runId: "r9", data: {} });
+    const fresh = control.events("sQuiet")[Symbol.asyncIterator]();
+    const race = await Promise.race([fresh.next(), new Promise((r) => setTimeout(() => r("empty"), 50))]);
+    expect(race).toBe("empty"); // the pre-subscription event was not buffered anywhere
+    await fresh.return?.(undefined);
+    // done is TERMINAL: a post-return next() answers done — it must not silently re-register.
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  }, 5_000);
 
   it("a workspace caller observer receives the full vocabulary, boundary events included", async () => {
     const { mkdtemp, rm, writeFile } = await import("node:fs/promises");

@@ -3,13 +3,13 @@ title: Session control plane
 description: "An engine-neutral serving extension beside Agent Handler: observe and modulate live runs. invoke stays the only data plane; there is no second way to start work."
 type: design-doc
 status: current
-updated: 2026-07-19
+updated: 2026-07-20
 ---
 
 # Session control plane
 
-This document is the serving-extension design for FastAgent. Phases 0–2 (§15) are implemented;
-Phase 3 (transport) remains proposed. It is a companion to, not a replacement
+This document is the serving-extension design for FastAgent. Phases 0–3 (§15) are implemented
+(Phase 3's subprocess adapter stays demand-driven). It is a companion to, not a replacement
 for, the locked [Agent Handler SPEC v0.1](../SPEC.md).
 
 The whole design reduces to one sentence: **`invoke` is the only data plane; the session control
@@ -298,7 +298,7 @@ compare. The vocabulary, grouped by the client maturity level that needs it:
 | transport | `serving_error` | A transport adapter lost the serving process outside a normal run outcome (fail visibly). Not emittable in-process — a dead process has no one left to emit. |
 | L1 | `queue_changed { steering, followUp }` | Normalized queue depths. |
 | L2 | `turn_started`, `turn_finished` | Group tool activity under one assistant turn. |
-| L2 | `compaction_started/finished` | Manual compaction bounds: between runs, no `runId`; every started is closed (`summary` or `error`). Automatic overflow compaction stays inside its run and does not emit these. |
+| L2 | `compaction_started/finished` | Manual compaction bounds: between runs, no `runId`; every started is closed (`summary`, `error`, or `aborted` — a deliberate stop is not a failure). Automatic overflow compaction stays inside its run and does not emit these. |
 | L2 | `retry_scheduled/finished` | Explain why a run is alive with no tokens flowing (future vocabulary — not yet emitted). |
 | L2 | `state_changed { model?, thinkingLevel? }` | Material state changes. |
 
@@ -369,18 +369,27 @@ same lease. Engine-specific records (pi JSONL, message classes) never cross the 
 
 ## 13. Transport and envelope
 
-The embedded contract is semantic-only. Crossing a process boundary, a codec adds the envelope:
+The embedded contract is semantic-only; wire concerns exist only at the transport. As SHIPPED
+(HTTP+SSE, `controlRoutes`/`connectSessionControl`):
 
-```ts
-interface WireCommand { id: string; sessionId: string; command: SessionCommand }
-interface WireEvent   { sessionId: string; epoch: string; seq: number; event: SessionEvent }
-```
+- **Commands** ride plain HTTP request/response — the request correlation the design once sketched
+  as a `WireCommand.id` is implicit in HTTP itself; the dispatch body is `{ session, command }`,
+  parsed field by field at the boundary (never cast through).
+- **Events** carry the one explicit envelope:
 
-`id` restores promise correlation; `seq` detects loss; `epoch` detects serving-process restarts and
-fences stale events. A remote adapter consumes the envelope internally and re-exposes the same
-`SessionControl` interface — gap or epoch change surfaces to the client as iterator termination
-plus the normal reconnect steps ([§7](#7-state-and-durable-recovery)). Local and remote consumers
-are isomorphic; that is the entire payoff of keeping the envelope out of the API.
+  ```ts
+  interface WireEvent { sessionId: string; epoch: string; seq: number; event: SessionEvent }
+  ```
+
+  `seq` detects loss in transit on one connection — a gap throws in the client (the consumer's
+  failure budget and diagnostics own it) into the normal reconnect steps
+  ([§7](#7-state-and-durable-recovery)). `epoch` is INFORMATIONAL for consumers correlating across
+  connections: within one connection it cannot change, so the client does not compare it — a
+  serving-process restart surfaces as its connections dropping.
+
+The remote adapter consumes the envelope internally and re-exposes the same `SessionControl`
+interface (and `connectAgent` does the same for the data plane's `Agent`). Local and remote
+consumers are isomorphic; that is the entire payoff of keeping the envelope out of the API.
 
 ## 14. Security boundary
 
@@ -398,8 +407,8 @@ safe for untrusted users; `ExecutionEnv` is still not a complete sandbox boundar
 | 0 | **Done.** The definition-aware session builder is extracted (`session-builder.ts`); the TUI-only `~/.pi` auth divergence is eliminated in place; `runPiChat` is one consumer. | Chat assembly semantics unchanged; auth source and `thinkingLevel` deliberately converged to serving; builder independently instantiable. |
 | 1 | **Done.** Observation plane: pi events translate ONCE to `SessionEvent` inside the invoke path (`toSessionEvent`), `AgentEvent` is its projection (`projectAgentEvent`); the `session` subpath types + pi `createPiSessionControl` (`state`/`entries`/`events` over a read-only `PiSessionReader`); conformance tests for projection fidelity, run boundaries (incl. cancellation → exactly-one `run_settled{aborted}`), reconnect, and single-writer. | An L0 client can watch and reconnect to any invoke-driven run. |
 | 2a | **Done.** Run modulation: `dispatch` routes `steer`/`follow_up`/`abort` to the live run via {@link RunControls} registered with `run_started`; the settle window spans steered/queued continuations inside one invoke (pi's agent loop drains both queues within one `prompt()`); `queue_changed` + live `pending` in state; a control-plane abort terminates as `failed{code: "aborted"}` / `run_settled{aborted}`; idle-session run commands reject `no_active_run` before acceptance. | L1 clients. |
-| 2b | **Done.** Boundary mutations under the lease: `set_model`/`set_thinking` append durable session overrides (validated against the registry / pi's thinking scale; `invalid_command` before acceptance) and the fresh-harness resolve (`resolveHarnessOverrides`, the active-tools precedent) applies them on every later turn — a registry change across deploys falls back to the default with a deduped warn instead of bricking the session. `compact` builds the session's harness and summarizes, bounded by `compaction_started/finished`; failures reject `boundary_command_failed` with nothing durable landed. Mutations contend on the SAME lease as runs (`session_busy` when busy); capabilities report `allowedModels`/`allowedLevels` from the live wiring (`PiBoundaryWiring`, a lazy thunk — the hub exists before the assembly that produces the parts). | L2 clients. |
-| 3 | Transport codec and a remote/subprocess adapter (the envelope is born here); product runners add authentication, idempotency, event persistence, and routing. | Remote `SessionControl` is isomorphic to local. |
+| 2b | **Done.** Boundary mutations under the lease: `set_model`/`set_thinking` append durable session overrides (validated against the registry / pi's thinking scale; `invalid_command` before acceptance) and the fresh-harness resolve (`resolveHarnessOverrides`, the active-tools precedent) applies them on every later turn — a registry change across deploys falls back to the default with a deduped warn instead of bricking the session. `compact` is ACCEPT-FAST (§5.2 has no exceptions: a summarization is a full model call, so the dispatch answers on admission — lease held, harness built — and the outcome travels as `compaction_finished{summary|error|aborted}`, emitted after the lease frees); pre-acceptance failures (the harness build and the local preparation — admission ends where the work becomes a model call) reject `boundary_command_failed` with nothing durable landed, and a session with no compactable history rejects `nothing_to_compact` (a no-op, not a failure — the `no_active_run` pattern: re-dispatch once the session grows); an in-flight compaction is abortable — `abort` during `compacting` aborts the summarization's controller (run/compaction symmetry: both are model calls a client must be able to stop) and converges as `compaction_finished{aborted}` with the lease released, mirroring `run_settled{aborted}`. Mutations contend on the SAME lease as runs (`session_busy` when busy); capabilities report `allowedModels`/`allowedLevels` from the live wiring (`PiBoundaryWiring`, a lazy thunk — the hub exists before the assembly that produces the parts). | L2 clients. |
+| 3 | **Done** (HTTP+SSE; subprocess adapter stays demand-driven). One transport serves every remote consumer — Web panel, desktop app, `fastagent attach`: `controlRoutes` (engine-neutral, bearer-token REQUIRED) serves `/control/capabilities\|state\|entries\|dispatch\|events`, with the envelope born at the wire (`{sessionId, epoch, seq, event}` per SSE message; HTTP itself is the request correlation). `connectSessionControl` re-exposes the SAME `SessionControl` interface and consumes the envelope internally — a seq gap ends the iterator into the standard reconnect steps; a server restart is covered by the same rule (its connections drop), and `epoch` is informational for consumers correlating ACROSS connections — within one connection it cannot change, so the client does not compare it. The DATA plane travels too: `POST /control/invoke` (the standard invoke handler behind the same token, mounted when the serve wires an agent) + `connectAgent` client-side — a remote consumer holds a full fastagent instance through the same two contracts local code uses. Serve wiring: `config.sessionControl: true` → dev/start mount the routes, mint a per-boot token, and write `<stateRoot>/control.json` (0600) for local discovery; product runners still own real authentication, idempotency, event persistence, and routing (§14). | Remote `SessionControl` is isomorphic to local (conformance-tested). |
 
 Phase 1 modifies the existing invoke pipeline incrementally (translation + projection); it does not
 build a parallel runtime that later needs reconciling. Demand-driven follow-ons, explicitly not

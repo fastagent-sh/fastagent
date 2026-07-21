@@ -23,6 +23,7 @@ import {
   type Scope,
   SESSION_BUSY_CODE,
 } from "../../agent.ts";
+import { abortFirstIterator } from "../../collect.ts";
 import type { RunSettledEvent, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
 import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
@@ -402,7 +403,45 @@ export interface CreatePiAgentFromHarnessOptions {
 export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOptions): Agent {
   const { harnessFactory, lease = inProcessLease(), observer } = options;
 
-  async function* invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+  function invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+    // The cancellation DOOR (SPEC MUST 3), via the shared abort-first protocol (see
+    // abortFirstIterator): cancel aborts the engine work, which settles the run and releases a
+    // generator suspended on a quiet stream (a tool mid-execution). The local for-await pattern
+    // never hit the underlying deadlock (it breaks at a yield boundary); pull-driven consumers
+    // (the SSE handler's eager reads) do.
+    // The cancel intent is LATCHED: a consumer may cancel while the generator is still inside
+    // the harness build (the door not yet armed) — abortFirstIterator knocks exactly once, and a
+    // knock before prompt() starts would be a no-op on an idle harness (the LATER run would
+    // ignore it). So turn consults the latch right after arming and, when the consumer already
+    // walked away, never starts the model call at all.
+    let externalCancel: (() => void) | undefined;
+    let cancelled = false;
+    const gen = turn(
+      scope,
+      prompt,
+      (cancel) => {
+        externalCancel = cancel;
+      },
+      () => cancelled,
+    );
+    const iterator = abortFirstIterator(gen, () => {
+      cancelled = true;
+      externalCancel?.();
+    });
+    return {
+      [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
+        return iterator;
+      },
+    };
+  }
+
+  async function* turn(
+    scope: Scope,
+    prompt: Prompt,
+    onCancelReady: (cancel: () => void) => void,
+    /** The consumer's cancel latch (see invoke's wrapper) — checked once at arming. */
+    wasCancelled: () => boolean,
+  ): AsyncGenerator<AgentEvent> {
     const release = lease.tryAcquire(scope.session);
     if (!release) {
       // Rejected BEFORE acceptance: no run exists, so the observer sees nothing (replay-safe).
@@ -507,6 +546,25 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       }
 
       harnessReady(harness);
+      // Arm the cancellation door (see invoke's wrapper): aborting the harness settles the run,
+      // releasing any await the generator is parked on so a queued return() can reach the finally.
+      onCancelReady(() => {
+        void harness.abort().catch(() => {});
+      });
+      // The consumer cancelled DURING the build (latched — the door above came too late to be
+      // knocked): never start the model call; settle as aborted and let the queued return()
+      // finish the generator. Same synchronous tick as the arming — a cancel from here on
+      // reaches the armed door instead.
+      if (wasCancelled()) {
+        outcome = { status: "aborted" };
+        runSettled = true;
+        try {
+          await harness.abort(); // teardown — fresh-harness discipline
+        } catch (error) {
+          log.warn(`[fastagent] harness abort failed during cleanup: ${String(error)}`);
+        }
+        return; // → outer finally emits the settlement
+      }
       const queue = new EventQueue<AgentEvent>();
       const unsub = harness.subscribe((pe) => {
         const rich = toSessionEvent(pe, runId);

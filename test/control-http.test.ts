@@ -1,0 +1,823 @@
+/**
+ * Phase 3 transport conformance — docs/design/session-control.md §13: the HTTP+SSE wire protocol
+ * (`controlRoutes`) and the remote client (`connectSessionControl`) are exercised TOGETHER over a
+ * real node:http server against a real hub + faux agent: local and remote `SessionControl` must be
+ * isomorphic (same interface, same answers), the envelope must be consumed internally (epoch/seq
+ * never reach the consumer), and auth must fail closed.
+ */
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { Type, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { afterAll, describe, expect, it } from "vitest";
+import type { AgentEvent } from "../src/agent.ts";
+import { controlRoutes } from "../src/channels/control.ts";
+import { createPiAgentFromHarness, inProcessLease } from "../src/engines/pi/invoke.ts";
+import { piHarnessFactory } from "../src/engines/pi/harness.ts";
+import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
+import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
+import { router, serveNode } from "../src/host/node.ts";
+import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
+import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
+import { makeFaux } from "./faux.ts";
+import { describeSpecConformance } from "./spec-conformance.ts";
+
+const TOKEN = "test-token";
+
+/** A served control plane over a real HTTP server + the agent driving it. */
+async function serveControl() {
+  const { faux, models } = makeFaux();
+  faux.setResponses([fauxAssistantMessage("hello over the wire")]);
+  const sessions = inMemorySessionStore();
+  const lease = inProcessLease();
+  const gate: AgentTool = {
+    name: "noop",
+    label: "n",
+    description: "n",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [], details: {} };
+    },
+  };
+  const factory = piHarnessFactory({
+    sessions,
+    env: new NodeExecutionEnv({ cwd: process.cwd() }),
+    models,
+    model: faux.getModel(),
+    tools: [gate],
+    systemPrompt: "test",
+  });
+  const { control, observer } = createPiSessionControl({
+    sessions,
+    boundary: () => ({ lease, models, harnessFactory: factory }),
+  });
+  const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+  const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
+  const port = await server.listening;
+  return {
+    agent,
+    localControl: control,
+    url: `http://127.0.0.1:${port}`,
+    close: () => server.close(),
+    spec: `${faux.getModel().provider}/${faux.getModel().id}`,
+  };
+}
+
+async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
+  const out: AgentEvent[] = [];
+  for await (const e of events) out.push(e);
+  return out;
+}
+
+describe("session control over HTTP (Phase 3)", () => {
+  it("fails closed: no/wrong token is 401 on every route, and connect() rejects", async () => {
+    const served = await serveControl();
+    try {
+      for (const path of ["/control/capabilities", "/control/state?session=s", "/control/events?session=s"]) {
+        expect((await fetch(`${served.url}${path}`)).status).toBe(401);
+        expect((await fetch(`${served.url}${path}`, { headers: { authorization: "Bearer wrong" } })).status).toBe(401);
+      }
+      const dispatch = await fetch(`${served.url}/control/dispatch`, { method: "POST", body: "{}" });
+      expect(dispatch.status).toBe(401);
+      await expect(connectSessionControl({ url: served.url, token: "wrong" })).rejects.toThrow(/401/);
+    } finally {
+      served.close();
+    }
+  });
+
+  it("local and remote are isomorphic: capabilities/state/entries/dispatch answer identically", async () => {
+    const served = await serveControl();
+    try {
+      await drain(served.agent.invoke({ session: "sW" }, { text: "hi" }));
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+
+      expect(remote.capabilities()).toEqual(served.localControl.capabilities());
+      expect(await remote.state("sW")).toEqual(await served.localControl.state("sW"));
+      const [remoteEntries, localEntries] = [await remote.entries("sW"), await served.localControl.entries("sW")];
+      expect(remoteEntries).toEqual(localEntries);
+      // Cursor round-trips through the query string.
+      const since = localEntries.entries[0]?.id as string;
+      expect(await remote.entries("sW", { since })).toEqual(await served.localControl.entries("sW", { since }));
+
+      // dispatch round-trips SessionResult — including the pre-acceptance rejection shape.
+      const bad = await remote.dispatch("sW", { type: "steer", prompt: { text: "x" } });
+      expect(bad.ok).toBe(false);
+      if (!bad.ok) expect(bad.error.code).toBeTruthy();
+      const applied = await remote.dispatch("sW", { type: "set_thinking", level: "low" });
+      expect(applied).toEqual({ ok: true });
+      expect((await remote.state("sW")).thinkingLevel).toBe("low");
+    } finally {
+      served.close();
+    }
+  });
+
+  it("events stream live over SSE; the envelope is consumed internally", async () => {
+    const served = await serveControl();
+    try {
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const seen: SessionEvent[] = [];
+      const watching = (async () => {
+        for await (const ev of remote.events("sE")) {
+          seen.push(ev);
+          if (ev.type === "run_settled") break;
+        }
+      })();
+      // Subscription races the run start: give the SSE connection a beat to establish.
+      await new Promise((r) => setTimeout(r, 100));
+      await drain(served.agent.invoke({ session: "sE" }, { text: "hi" }));
+      await watching;
+
+      const types = seen.map((e) => e.type);
+      expect(types[0]).toBe("run_started");
+      expect(types.at(-1)).toBe("run_settled");
+      const text = seen
+        .filter((e) => e.type === "message_delta")
+        .map((e) => (e.data as { delta: string }).delta)
+        .join("");
+      expect(text).toBe("hello over the wire");
+      // Envelope fields never leak into the semantic event.
+      for (const e of seen) {
+        expect(e).not.toHaveProperty("epoch");
+        expect(e).not.toHaveProperty("seq");
+        expect(e).not.toHaveProperty("sessionId");
+      }
+    } finally {
+      served.close();
+    }
+  });
+
+  it("detaching from a QUIET stream resolves promptly end to end (no hang, server survives)", async () => {
+    const served = await serveControl();
+    try {
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const iterator = remote.events("sL")[Symbol.asyncIterator]();
+      const first = iterator.next(); // establishes the connection; the stream never produces
+      await new Promise((r) => setTimeout(r, 100));
+      // The old failure mode on both sides was a permanent hang here (generator return queued
+      // behind a never-settling read) — a resolved return within the timeout IS the assertion.
+      await iterator.return?.(undefined);
+      // The full promise of the name: the PENDING next() settles too (done), never hangs.
+      await expect(first).resolves.toMatchObject({ done: true });
+      expect((await remote.state("sL")).status).toBe("idle");
+    } finally {
+      served.close();
+    }
+  }, 5_000);
+
+  it("steer CARRIES a full Prompt over the wire: the exact images reach the run's controls, junk stripped", async () => {
+    // A hub with a registered fake run whose controls RECORD what arrives — proving delivery
+    // through transport → parser → rebuild → controls, not merely parser acceptance.
+    const sessions = inMemorySessionStore();
+    const { control, observer } = createPiSessionControl({ sessions });
+    const received: unknown[] = [];
+    observer(
+      "sImg",
+      { type: "run_started", timestamp: Date.now(), runId: "r1", data: {} },
+      {
+        steer: async (prompt) => {
+          received.push(prompt);
+        },
+        followUp: async () => {},
+        abort: async () => {},
+      },
+    );
+    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const port = await server.listening;
+    try {
+      const post = (command: unknown) =>
+        fetch(`http://127.0.0.1:${port}/control/dispatch`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+          body: JSON.stringify({ session: "sImg", command }),
+        }).then((r) => r.json() as Promise<{ ok: boolean; error?: { code: string } }>);
+      const result = await post({
+        type: "steer",
+        prompt: { text: "look", images: [{ data: "aGk=", mimeType: "image/png", junk: "stripped" }], extra: 1 },
+      });
+      expect(result.ok).toBe(true);
+      // Construction, not assertion: exactly the contract fields — image content intact, junk gone.
+      expect(received).toEqual([{ text: "look", images: [{ data: "aGk=", mimeType: "image/png" }] }]);
+      const badImage = await post({ type: "steer", prompt: { text: "look", images: [42] } });
+      expect(badImage.error?.code).toBe("invalid_command"); // element-level parse rejection
+      // Every command variant's malformed shape answers protocol-level invalid_command — removing
+      // any parseWireCommand check line must turn one of these red.
+      const malformed: unknown[] = [
+        { type: "steer" }, // prompt missing
+        { type: "steer", prompt: { text: 42 } }, // text not a string
+        { type: "follow_up", prompt: "hi" }, // prompt not an object
+        { type: "compact", instructions: 42 }, // instructions not a string
+        { type: "set_model", model: 42 }, // model not a string
+        { type: "set_thinking", level: 42 }, // level not a string
+      ];
+      for (const command of malformed) {
+        const rejected = await post(command);
+        expect(rejected.ok).toBe(false);
+        expect(rejected.error?.code).toBe("invalid_command");
+      }
+    } finally {
+      server.close();
+    }
+  });
+
+  it("an unknown wire command type gets a protocol-level invalid_command, not a broken body", async () => {
+    const served = await serveControl();
+    try {
+      const res = await fetch(`${served.url}/control/dispatch`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ session: "sX", command: { type: "make_coffee" } }),
+      });
+      expect(res.status).toBe(200);
+      const result = (await res.json()) as { ok: boolean; error?: { code: string } };
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe("invalid_command");
+    } finally {
+      served.close();
+    }
+  });
+
+  it("the remote data plane: connectAgent drives a run through /control/invoke, observed via events", async () => {
+    const served = await serveControl();
+    try {
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      const remoteAgent = connectAgent({ url: served.url, token: TOKEN });
+      const seen: SessionEvent[] = [];
+      const watching = (async () => {
+        for await (const ev of remote.events("sRD")) {
+          seen.push(ev);
+          if (ev.type === "run_settled") break;
+        }
+      })();
+      await new Promise((r) => setTimeout(r, 100));
+      // The full remote instance: the DATA plane starts the run, the control plane watches it.
+      const events = await drain(remoteAgent.invoke({ session: "sRD" }, { text: "hi" }));
+      expect(events.at(-1)).toEqual({ type: "completed" });
+      await watching;
+      expect(seen.map((e) => e.type)).toContain("run_started");
+      // A REAL Agent: failures are terminal failed EVENTS, never iteration throws (SPEC MUST 2).
+      const wrong = connectAgent({ url: served.url, token: "wrong" });
+      const unauthorized = await drain(wrong.invoke({ session: "x" }, { text: "hi" }));
+      expect(unauthorized).toHaveLength(1);
+      expect(unauthorized[0]).toMatchObject({ type: "failed", retryable: false });
+      expect((unauthorized[0] as { details: string }).details).toContain("401");
+      const withImages = await drain(
+        remoteAgent.invoke({ session: "x" }, { text: "hi", images: [{ mimeType: "image/png", data: "x" }] }),
+      );
+      expect(withImages).toEqual([expect.objectContaining({ type: "failed", retryable: false })]);
+      expect((withImages[0] as { details: string }).details).toContain("images");
+    } finally {
+      served.close();
+    }
+  });
+
+  it("without an agent, /control/invoke is not mounted", async () => {
+    const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const port = await server.listening;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/control/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        body: "{}",
+      });
+      expect(res.status).toBe(404);
+      // A boundary-less hub still speaks the protocol on the wire: a boundary command answers
+      // HTTP 200 + unsupported_capability, never a transport error.
+      const dispatch = await fetch(`http://127.0.0.1:${port}/control/dispatch`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ session: "s", command: { type: "compact" } }),
+      });
+      expect(dispatch.status).toBe(200);
+      const result = (await dispatch.json()) as { ok: boolean; error?: { code: string } };
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("a black-holed CONNECT is terminated by the watchdog on both streaming planes", async () => {
+    // fetch never resolves unless aborted — the connect-phase window no request timeout covers.
+    const blackHole = ((_input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        if (String(_input).includes("/control/capabilities")) {
+          resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+          return;
+        }
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+          once: true,
+        });
+      })) as typeof fetch;
+    const fakeTimers = await import("vitest").then((m) => m.vi);
+    fakeTimers.useFakeTimers();
+    try {
+      const remote = await connectSessionControl({ url: "http://hole", token: "t", fetchFn: blackHole });
+      // The rejection assertion attaches AT CREATION: the promise rejects while timers advance,
+      // and a handler attached only afterwards would leave an unhandled-rejection window vitest
+      // reports as a run-level error — noise that trains everyone to ignore the real ones.
+      const eventsAttempt = expect(
+        (async () => {
+          for await (const _ of remote.events("s")) void _;
+        })(),
+      ).rejects.toThrow(/dead connection/);
+      const agentAttempt = drain(
+        connectAgent({ url: "http://hole", token: "t", fetchFn: blackHole }).invoke({ session: "s" }, { text: "hi" }),
+      );
+      await fakeTimers.advanceTimersByTimeAsync(4 * 30_000); // past SSE_IDLE_LIMIT_MS
+      await eventsAttempt;
+      const agentEvents = await agentAttempt;
+      expect(agentEvents).toEqual([
+        expect.objectContaining({ type: "failed", retryable: true, details: expect.stringContaining("no bytes") }),
+      ]);
+    } finally {
+      fakeTimers.useRealTimers();
+    }
+  });
+
+  it("a paused consumer never trips the watchdog — it measures pending reads, not pull progress", async () => {
+    // A generator parked at yield (rate-limited rendering, a debugger) has NO pending read; the
+    // healthy connection must not be misdiagnosed as dead — on the invoke plane that abort would
+    // cancel the run the stream drives.
+    const fakeTimers = await import("vitest").then((m) => m.vi);
+    const enc = new TextEncoder();
+    let feed!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        feed = c;
+      },
+    });
+    const fetchFn = (async (input: string | URL | Request) => {
+      if (String(input).includes("/control/capabilities")) {
+        return new Response("{}", { headers: { "content-type": "application/json" } });
+      }
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const wire = (seq: number, event: object) =>
+      enc.encode(`data: ${JSON.stringify({ sessionId: "s", epoch: "e", seq, event })}\n\n`);
+    fakeTimers.useFakeTimers();
+    try {
+      const remote = await connectSessionControl({ url: "http://x", token: "t", fetchFn });
+      const iterator = remote.events("s")[Symbol.asyncIterator]();
+      feed.enqueue(wire(0, { type: "run_started", timestamp: 1, data: {} }));
+      expect(((await iterator.next()).value as SessionEvent).type).toBe("run_started");
+      // The consumer pauses far past the idle limit — no pending read, watchdog disarmed.
+      await fakeTimers.advanceTimersByTimeAsync(4 * 30_000);
+      // Resume: the connection was never killed; the next event flows.
+      const resumed = iterator.next();
+      feed.enqueue(wire(1, { type: "run_settled", timestamp: 2, data: { status: "completed" } }));
+      expect(((await resumed).value as SessionEvent).type).toBe("run_settled");
+      await iterator.return?.(undefined);
+    } finally {
+      fakeTimers.useRealTimers();
+    }
+  });
+
+  it("quiet-but-alive streams EMIT heartbeats on both SSE routes — the watchdog's other half", async () => {
+    // The client watchdog (90s no bytes → kill) assumes the server pings every 30s; a regression
+    // on the emission side would misdiagnose every long tool call as a dead connection. Handlers
+    // are called directly (no socket) so fake timers drive the interval.
+    const fakeTimers = await import("vitest").then((m) => m.vi);
+    const hang = () => new Promise<never>(() => {}); // a stream with no events — quiet, alive
+    const quietControl = {
+      events: () => ({ [Symbol.asyncIterator]: () => ({ next: hang, return: async () => ({ done: true }) }) }),
+    } as never;
+    const quietAgent = {
+      invoke: () => ({ [Symbol.asyncIterator]: () => ({ next: hang, return: async () => ({ done: true }) }) }),
+    } as never;
+    const routes = controlRoutes(quietControl, { token: TOKEN, agent: quietAgent });
+    const auth = { authorization: `Bearer ${TOKEN}` };
+    fakeTimers.useFakeTimers();
+    try {
+      const eventsRoute = routes["GET /control/events"];
+      const invokeRoute = routes["POST /control/invoke"];
+      if (!eventsRoute || !invokeRoute) throw new Error("routes missing");
+      for (const [name, res] of [
+        ["events", await eventsRoute(new Request("http://x/control/events?session=s", { headers: auth }))],
+        [
+          "invoke",
+          await invokeRoute(
+            new Request("http://x/control/invoke", {
+              method: "POST",
+              headers: { ...auth, "content-type": "application/json" },
+              body: JSON.stringify({ session: "s", text: "hi" }),
+            }),
+          ),
+        ],
+      ] as const) {
+        const reader = (res as Response).body?.getReader();
+        if (!reader) throw new Error(`${name}: no body`);
+        const read = reader.read();
+        await fakeTimers.advanceTimersByTimeAsync(30_000);
+        const chunk = await read;
+        expect(new TextDecoder().decode(chunk.value)).toBe(": ping\n\n");
+        await reader.cancel();
+      }
+      // cancel() tears the intervals down — no timer may leak past the streams' death.
+      expect(fakeTimers.getTimerCount()).toBe(0);
+    } finally {
+      fakeTimers.useRealTimers();
+    }
+  });
+
+  it("non-envelope stream data is protocol mismatch — thrown, not misdiagnosed as a gap", async () => {
+    const makeFetch = (body: string) =>
+      (async (input: string | URL | Request) => {
+        if (String(input).includes("/control/capabilities")) {
+          return new Response("{}", { headers: { "content-type": "application/json" } });
+        }
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode(body));
+              c.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }) as typeof fetch;
+    // Valid JSON, wrong shape (a foreign SSE endpoint) — and plain non-JSON: both THROW so a
+    // consumer's failure budget applies; reconnecting can never fix a protocol mismatch.
+    for (const body of ['data: {"hello":"world"}\n\n', "data: not json at all\n\n"]) {
+      const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn: makeFetch(body) });
+      const iterate = async () => {
+        for await (const _ of remote.events("s")) void _;
+      };
+      await expect(iterate()).rejects.toThrow(/protocol/);
+    }
+  });
+
+  it("a seq gap throws to the consumer, after yielding everything before it", async () => {
+    // Injected fetch: capabilities → JSON; events → an SSE body whose second message skips seq 1.
+    const sse = [
+      `data: ${JSON.stringify({ sessionId: "s", epoch: "e1", seq: 0, event: { type: "run_started", timestamp: 1, runId: "r", data: {} } })}\n\n`,
+      `data: ${JSON.stringify({ sessionId: "s", epoch: "e1", seq: 2, event: { type: "run_settled", timestamp: 2, runId: "r", data: { status: "completed" } } })}\n\n`,
+    ];
+    const fetchFn = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/control/capabilities")) {
+        return new Response("{}", { headers: { "content-type": "application/json" } });
+      }
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enc = new TextEncoder();
+          for (const block of sse) controller.enqueue(enc.encode(block));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const remote = await connectSessionControl({ url: "http://fake", token: "t", fetchFn });
+    const seen: string[] = [];
+    // The gap THROWS (same discipline as protocol mismatch) after yielding everything before it:
+    // the consumer's failure path owns the diagnostic and its budget ticks.
+    const iterate = async () => {
+      for await (const ev of remote.events("s")) seen.push(ev.type);
+    };
+    await expect(iterate()).rejects.toThrow(/sequence gap/);
+    expect(seen).toEqual(["run_started"]);
+  });
+
+  it("mountSessionControl merges routes and announce writes the 0600 discovery file", async () => {
+    const { mkdtemp, rm, readFile, stat } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { mountSessionControl } = await import("../src/cli/serve.ts");
+    const root = await mkdtemp(join(tmpdir(), "fa-ctl-mount-"));
+    const stateRoot = join(root, "nested", ".fastagent"); // deliberately not pre-created
+    try {
+      const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+      const base = { "GET /health": () => new Response("ok") };
+      const mounted = mountSessionControl(base, control, stateRoot);
+      expect(Object.keys(mounted.routes)).toEqual(expect.arrayContaining(["GET /health", "GET /control/state"]));
+      // Collision is PATH-level, matching the router's semantics: an any-method channel key would
+      // dodge an exact-key check yet still shadow the method-qualified control route at match time.
+      expect(() => mountSessionControl({ "/control/dispatch": () => new Response("x") }, control, stateRoot)).toThrow(
+        /collide with the session control plane/,
+      );
+      mounted.announce(12345);
+      const file = JSON.parse(await readFile(join(stateRoot, "control.json"), "utf8")) as {
+        url: string;
+        token: string;
+      };
+      expect(file.url).toBe("http://127.0.0.1:12345");
+      expect(file.token).toBeTruthy();
+      expect((await stat(join(stateRoot, "control.json"))).mode & 0o777).toBe(0o600);
+      // Without a hub: passthrough, no file side effects.
+      const off = mountSessionControl(base, undefined, stateRoot);
+      expect(off.routes).toBe(base);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("decideRound: every reconnect-loop diagnosis and budget claim, pinned", async () => {
+    const { decideRound } = await import("../src/cli/commands/attach.ts");
+    const err = (over: Partial<Parameters<typeof decideRound>[0] & { type: "error" }> = {}) =>
+      ({ type: "error", error: new Error("boom"), isAuth: false, discovery: "unavailable", ...over }) as never;
+    // progress resets the budget.
+    expect(decideRound({ type: "progress" }, { discovered: true, downMs: 999_999 })).toEqual({ kind: "reset" });
+    // 401 + UNCHANGED control.json (local) → the reachable-and-rejecting diagnosis, not a budget burn.
+    expect(decideRound(err({ isAuth: true, discovery: "unchanged" }), { discovered: true, downMs: 0 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("control.json is unchanged"),
+    });
+    // CHANGED credentials → reattach, even when the round's error was a 401 (a fresh boot mints a
+    // fresh token, so this round's 401 may already be stale) and even past the budget.
+    const fresh = { url: "http://x", token: "t2" };
+    expect(
+      decideRound(err({ isAuth: true, discovery: "changed", fresh }), { discovered: true, downMs: 999_999 }),
+    ).toEqual({ kind: "try-reattach", fresh });
+    // Local budget: below 30s → retry with the countdown; at 30s → exit with the crash diagnosis.
+    expect(decideRound(err(), { discovered: true, downMs: 29_000 })).toMatchObject({
+      kind: "retry",
+      warn: expect.stringContaining("limit 30s"),
+    });
+    expect(decideRound(err(), { discovered: true, downMs: 30_000 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("crashed"),
+    });
+    // Remote: 401 exits immediately with the --token remedy; budget is 120s.
+    expect(decideRound(err({ isAuth: true }), { discovered: false, downMs: 0 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("--token"),
+    });
+    expect(decideRound(err(), { discovered: false, downMs: 119_000 })).toMatchObject({ kind: "retry" });
+    expect(decideRound(err(), { discovered: false, downMs: 120_000 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("unreachable"),
+    });
+    // Startup phase: the same policy with startup priors — the 401-unchanged diagnosis and
+    // reattach-on-changed hold identically; budgets and remedies differ.
+    expect(
+      decideRound(err({ isAuth: true, discovery: "unchanged" }), { discovered: true, downMs: 0, phase: "startup" }),
+    ).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("control.json is unchanged"),
+    });
+    expect(
+      decideRound(err({ discovery: "changed", fresh }), { discovered: true, downMs: 0, phase: "startup" }),
+    ).toEqual({ kind: "try-reattach", fresh });
+    expect(decideRound(err({ isAuth: true }), { discovered: false, downMs: 0, phase: "startup" })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("check --token"),
+    });
+    // Remote non-auth at startup fails fast: nothing has ever succeeded on that endpoint.
+    expect(decideRound(err(), { discovered: false, downMs: 0, phase: "startup" })).toMatchObject({ kind: "exit" });
+    // Local startup grace: 15s of patience for the dev-watch restart window, then the honest exit.
+    expect(decideRound(err(), { discovered: true, downMs: 14_000, phase: "startup" })).toMatchObject({
+      kind: "retry",
+      warn: expect.stringContaining("serve not ready"),
+    });
+    expect(decideRound(err(), { discovered: true, downMs: 15_000, phase: "startup" })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("not yet started"),
+    });
+    // Empty clean rounds tick the same budget — a half-dead proxy must not loop forever.
+    expect(decideRound({ type: "empty" }, { discovered: true, downMs: 0 })).toMatchObject({ kind: "retry" });
+    expect(decideRound({ type: "empty" }, { discovered: true, downMs: 30_000 })).toMatchObject({
+      kind: "exit",
+      message: expect.stringContaining("nothing delivered"),
+    });
+  });
+
+  it("attachRound buffers live output during the replay block and flushes it after, failure path included", async () => {
+    const { attachRound } = await import("../src/cli/commands/attach.ts");
+    const lines: string[] = [];
+    const io = {
+      println: (l: string) => lines.push(l),
+      write: (c: string) => lines.push(`D:${c}`),
+      warn: (l: string) => lines.push(`W:${l}`),
+    };
+    // The events stream produces IMMEDIATELY — before the backfill prints — then ends.
+    const eagerEvents = () => ({
+      [Symbol.asyncIterator]: async function* (): AsyncGenerator<SessionEvent> {
+        yield { type: "run_started", timestamp: 0, runId: "rL", data: {} };
+      },
+    });
+    const fake = {
+      capabilities: () => ({}) as never,
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
+      entries: async () =>
+        ({
+          entries: [{ id: "e1", timestamp: 1, kind: "assistant", data: { text: "replayed" } }],
+          leafEntryId: "e1",
+        }) as never,
+      events: eagerEvents,
+      dispatch: async () => ({ ok: true }) as never,
+    };
+    const buffered = await attachRound(fake as never, "s", undefined, io, 25);
+    expect(buffered.sawProgress).toBe(true); // a live event arrived
+    // Contiguity: the whole replay block (and the state line) precede the buffered live output.
+    expect(lines).toEqual([
+      "[replaying the record since the last sync (may overlap what you saw live)]",
+      "replayed",
+      "[end of replay]",
+      "[live — idle]",
+      "── run rL started ──",
+    ]);
+
+    // Failure path: buffered live output is released, not lost, before the error propagates.
+    const lines2: string[] = [];
+    const io2 = { ...io, println: (l: string) => lines2.push(l), warn: (l: string) => lines2.push(`W:${l}`) };
+    const failing = {
+      ...fake,
+      entries: async () => {
+        await new Promise((r) => setTimeout(r, 30)); // let the eager event land in the buffer first
+        throw new Error("backfill 500");
+      },
+    };
+    await expect(attachRound(failing as never, "s", undefined, io2, 1)).rejects.toThrow(/backfill 500/);
+    expect(lines2).toContain("── run rL started ──");
+  });
+
+  it("attachRound: renders the backfill, advances the cursor, and surfaces a 401 instead of retrying", async () => {
+    const { attachRound } = await import("../src/cli/commands/attach.ts");
+    const { ControlRequestError } = await import("../src/session-remote.ts");
+    const lines: string[] = [];
+    const io = {
+      println: (l: string) => lines.push(l),
+      write: (c: string) => lines.push(`D:${c}`),
+      warn: (l: string) => lines.push(`W:${l}`),
+    };
+    const entriesPage = {
+      entries: [
+        { id: "e2", timestamp: 1, kind: "user", data: { text: "question" } },
+        { id: "e3", timestamp: 2, kind: "assistant", data: { text: "answer" } },
+      ],
+      leafEntryId: "e3",
+    };
+    const quietEvents = (): AsyncIterable<never> => ({
+      // biome-ignore lint/correctness/useYield: an intentionally empty stream
+      [Symbol.asyncIterator]: async function* () {},
+    });
+    const fake = {
+      capabilities: () => ({}) as never,
+      state: async () => ({ status: "idle", pending: { steering: 0, followUp: 0 } }) as never,
+      entries: async (_s: string, opts?: { since?: string }) => {
+        expect(opts?.since).toBe("e1"); // the cursor travels into the backfill
+        return entriesPage as never;
+      },
+      events: quietEvents,
+      dispatch: async () => ({ ok: true }) as never,
+    };
+    const round = await attachRound(fake as never, "s", "e1", io, 1);
+    expect(round.cursor).toBe("e3"); // advanced by append order
+    expect(round.sawProgress).toBe(true); // the backfill delivered records
+    expect(lines).toEqual([
+      "[replaying the record since the last sync (may overlap what you saw live)]",
+      "> question",
+      "answer",
+      "[end of replay]",
+      "[live — idle]", // the reconnect protocol's state re-check, rendered
+    ]);
+
+    // A 401 from the stream is the round's 401 — thrown, not warn-and-retried.
+    const auth = new ControlRequestError(401, "unauthorized");
+    const failing = {
+      ...fake,
+      entries: async () => ({ entries: [] }) as never,
+      events: () => ({
+        [Symbol.asyncIterator]: () => ({
+          next: (): Promise<IteratorResult<never>> => Promise.reject(auth),
+        }),
+      }),
+    };
+    await expect(attachRound(failing as never, "s", undefined, io, 1)).rejects.toBe(auth);
+
+    // A backfill failure closes the round's OWN subscription before propagating — a retrying
+    // caller must never stack a second concurrent stream.
+    let returned = false;
+    const leaky = {
+      ...fake,
+      entries: async () => {
+        throw new Error("transient 500");
+      },
+      events: () => {
+        // A quiet stream whose return() settles the pending next() — as the real client/hub do.
+        let settle: ((r: IteratorResult<never>) => void) | undefined;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () =>
+              new Promise<IteratorResult<never>>((res) => {
+                settle = res;
+              }),
+            return: async () => {
+              returned = true;
+              settle?.({ done: true, value: undefined });
+              return { done: true as const, value: undefined };
+            },
+          }),
+        };
+      },
+    };
+    await expect(attachRound(leaky as never, "s", undefined, io, 1)).rejects.toThrow(/transient 500/);
+    expect(returned).toBe(true);
+
+    // The SAME discipline for a state() re-check failure — the round's stream must close too.
+    let returned2 = false;
+    const stateFails = {
+      ...fake,
+      entries: async () => ({ entries: [] }) as never,
+      state: async () => {
+        throw new Error("state 500");
+      },
+      events: () => {
+        let settle: ((r: IteratorResult<never>) => void) | undefined;
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () =>
+              new Promise<IteratorResult<never>>((res) => {
+                settle = res;
+              }),
+            return: async () => {
+              returned2 = true;
+              settle?.({ done: true, value: undefined });
+              return { done: true as const, value: undefined };
+            },
+          }),
+        };
+      },
+    };
+    await expect(attachRound(stateFails as never, "s", undefined, io, 1)).rejects.toThrow(/state 500/);
+    expect(returned2).toBe(true);
+  });
+
+  it("controlRoutes refuses to mount without a token", () => {
+    const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    expect(() => controlRoutes(control, { token: "" })).toThrow(/token is required/);
+  });
+});
+
+// ── SPEC conformance for the REMOTE Agent ────────────────────────────────────
+// connectAgent claims to be "a REAL Agent, failure discipline included" — so it runs the same
+// executable SPEC the reference engine does. Each posture serves a real HTTP server; the wire is in
+// the loop for every MUST (incl. MUST 3: a consumer break must abort the fetch AND release the
+// server-side engine work).
+
+const conformanceServers: Array<() => void> = [];
+afterAll(() => {
+  for (const close of conformanceServers) close();
+});
+
+/** A served agent in a caller-chosen posture, plus its remote client. */
+async function serveRemoteAgent(opts: {
+  responses?: Parameters<ReturnType<typeof makeFaux>["faux"]["setResponses"]>[0];
+  tools?: AgentTool[];
+  harnessFactory?: Parameters<typeof createPiAgentFromHarness>[0]["harnessFactory"];
+}): Promise<ReturnType<typeof connectAgent>> {
+  const { faux, models } = makeFaux();
+  if (opts.responses) faux.setResponses(opts.responses);
+  const sessions = inMemorySessionStore();
+  const lease = inProcessLease();
+  const factory =
+    opts.harnessFactory ??
+    piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      tools: opts.tools ?? [],
+      systemPrompt: "test",
+    });
+  const { control, observer } = createPiSessionControl({ sessions });
+  const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+  const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
+  const port = await server.listening;
+  conformanceServers.push(() => server.close());
+  return connectAgent({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+}
+
+describeSpecConformance("remote agent over /control/invoke", {
+  completing: () => serveRemoteAgent({ responses: [fauxAssistantMessage("spec ok")] }),
+  failing: () =>
+    serveRemoteAgent({
+      harnessFactory: async () => {
+        throw new Error("engine setup exploded");
+      },
+    }),
+  hanging: (onCleanup) => {
+    const hangTool: AgentTool = {
+      name: "hang",
+      label: "h",
+      description: "hangs until aborted",
+      parameters: Type.Object({}),
+      async execute(_id, _params, signal) {
+        await new Promise<never>((_, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              onCleanup(); // the engine's in-flight work was actually released
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        return { content: [], details: {} };
+      },
+    };
+    return serveRemoteAgent({
+      responses: [fauxAssistantMessage(fauxToolCall("hang", {}, { id: "h1" }))],
+      tools: [hangTool],
+    });
+  },
+});

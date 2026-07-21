@@ -15,7 +15,7 @@ import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../scaffold/init.ts";
 import { failStartup } from "../fail.ts";
-import { maybeTunnel, routesFor, serve, startSchedules } from "../serve.ts";
+import { maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import { parsePort, reportAuth, resolveFirstRunModel } from "../shared.ts";
 
 export interface StartOptions {
@@ -56,6 +56,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     deferredToolNames,
     toolCollisions,
     toolFailures,
+    sessionControl,
   } = await createPiAgentFromWorkspace(dir, {
     model: opts.model,
     sessionsDir: sessionsDirOverride,
@@ -94,9 +95,18 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // Same debug turn trace as dev; gated out here by the info level (see dev.ts serveOnce).
   const traced = logAgentLoop(agent);
   const routed = await routesFor(agentDir, traced, stateRoot).catch(failStartup);
+  const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
+    tunnel: opts.tunnel ?? false,
+    agent: traced,
+  });
   await startSchedules(agentDir, traced, stateRoot, config.selfSchedule ?? false);
-  serve(routed, portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, (p) =>
-    maybeTunnel(agentDir, routed.routeChannels, p, opts.tunnel ?? false),
+  serve(
+    { ...routed, routes: withControl.routes },
+    portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787,
+    (p) => {
+      withControl.announce(p);
+      maybeTunnel(agentDir, routed.routeChannels, p, opts.tunnel ?? false);
+    },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an
   // in-flight turn is LOST depends on the channel: the Telegram channel persists turn intent pre-ACK

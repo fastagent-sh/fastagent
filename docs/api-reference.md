@@ -77,7 +77,10 @@ Fetch-shaped HTTP/SSE handler. Accepts `POST` JSON:
 { "session": "s1", "text": "hello" }
 ```
 
-Returns Server-Sent Events with one JSON `AgentEvent` per `data:` line.
+Returns Server-Sent Events with one JSON `AgentEvent` per `data:` line. The stream also carries
+SSE comment heartbeats (`: ping`, every 30s) so remote consumers can distinguish a quiet run from
+a dead connection — parse per the SSE spec (only `data:` lines carry events), not line-by-line
+JSON.
 
 ```ts
 function nodeListener(handler: (req: Request) => Promise<Response>): (req, res) => void;
@@ -455,7 +458,9 @@ retryable at idle):
 ```ts
 await control.dispatch("s1", { type: "set_model", model: "anthropic/claude-sonnet-4-5" }); // durable per-session override
 await control.dispatch("s1", { type: "set_thinking", level: "high" });
-await control.dispatch("s1", { type: "compact", instructions: "keep the decisions" }); // compaction_started/finished
+await control.dispatch("s1", { type: "compact", instructions: "keep the decisions" }); // accept-fast: ok on
+// admission; the outcome arrives as compaction_finished{summary|error|aborted} (emitted after the
+// lease frees; aborted = a deliberate stop via dispatch(abort) — not a failure)
 ```
 
 Overrides persist in the session record and every later turn's fresh harness applies them — on any
@@ -471,6 +476,37 @@ For workspace assembly the store lives inside the opener, so ask the opener to w
 ```ts
 const { agent, sessionControl } = await createPiAgentFromWorkspace(dir, { sessionControl: true });
 ```
+
+### Remote (HTTP + SSE)
+
+The same contract over the wire — for a Web panel, a desktop app, or `fastagent attach`. Server
+side, mount the bearer-authenticated routes (dev/start do this automatically when the config sets
+`sessionControl: true`, minting a per-boot token into `<stateRoot>/control.json`):
+
+```ts
+import { controlRoutes, connectSessionControl } from "@fastagent-sh/fastagent/core";
+
+const routes = controlRoutes(sessionControl, { token }); // GET/POST /control/*, SSE at /control/events
+
+// Client side — the SAME SessionControl interface, isomorphic to local:
+const remote = await connectSessionControl({ url: "http://127.0.0.1:8787", token });
+for await (const ev of remote.events("s1")) console.log(ev.type);
+```
+
+The DATA plane travels the same wire: `connectAgent({ url, token })` returns an `Agent` whose
+`invoke` drives `POST /control/invoke` (mounted when the serve wires an agent — dev/start do) —
+paired with `connectSessionControl`, a client holds a full remote fastagent instance through the
+same two contracts local code uses. Disconnecting the invoke stream cancels the run. The invoke wire is
+text-only for now (images fail visibly there); `steer`/`follow_up` via `dispatch` carry full
+Prompts, images included — within the dispatch body cap (1 MiB, with base64 inflation counted;
+oversized bodies get a 413 naming the limit).
+
+The transport envelope (`epoch`/`seq` per SSE message) is consumed inside the client: a sequence
+gap — and any mid-stream transport failure, a server restart included — throws from the events
+iterator so the consumer's failure handling owns it (only the consumer's own detach reads as a
+clean end); recovery is the standard reconnect steps. Exposing the port beyond loopback exposes a
+remote-control surface — wrap it with real authentication and authorization
+([design §14](design/session-control.md)).
 
 ## Subpath exports
 

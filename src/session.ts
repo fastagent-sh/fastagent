@@ -45,8 +45,10 @@ export interface SessionCapabilities {
 export const UNSUPPORTED_CAPABILITY_CODE = "unsupported_capability";
 
 /** Stable `SessionResult.error.code` for a run-modulating command (`steer`/`follow_up`/`abort`)
- *  dispatched while the session has no active run. `retryable: false` — re-dispatching as-is
- *  fails again; re-dispatch only after `state()` shows an active run. */
+ *  dispatched while the session has no active run — and, for `abort`, no in-flight manual
+ *  compaction either (`abort` is also the door out of a `compacting` state; the outcome then
+ *  travels as `compaction_finished{aborted}`). `retryable: false` — re-dispatching as-is fails
+ *  again; re-dispatch only after `state()` shows an active run. */
 export const NO_ACTIVE_RUN_CODE = "no_active_run";
 
 /** Stable `SessionResult.error.code` for a command whose PAYLOAD is invalid for this runtime — an
@@ -60,10 +62,20 @@ export const INVALID_COMMAND_CODE = "invalid_command";
  *  before acceptance; retry after the session's first turn exists. */
 export const NO_SUCH_SESSION_CODE = "no_such_session";
 
-/** Stable `SessionResult.error.code` for a boundary mutation (`compact`) that was admitted but
- *  failed before any durable change landed (e.g. the summarization model call failed). Nothing took
- *  effect; the same command may succeed on retry. */
+/** Stable `SessionResult.error.code` for a boundary mutation rejected BEFORE acceptance with
+ *  nothing durable landed — a failed override append, or compact's admission failing (the harness
+ *  build, the local preparation). Acceptance sits where the work becomes asynchronous and
+ *  expensive: the model call — compact is accept-fast (holding the dispatch open for a full model
+ *  call would make acceptance = outcome), and post-acceptance outcomes travel as
+ *  `compaction_finished{summary|error|aborted}` events. `retryable: true` throughout: the same
+ *  command may succeed on retry (the state-dependent "nothing to compact" has its own code,
+ *  {@link NOTHING_TO_COMPACT_CODE}). */
 export const BOUNDARY_COMMAND_FAILED_CODE = "boundary_command_failed";
+
+/** Stable `SessionResult.error.code` for `compact` on a session with no compactable history yet —
+ *  a no-op, not a failure, rejected before acceptance. The {@link NO_ACTIVE_RUN_CODE} pattern:
+ *  `retryable: false` (as-is retry fails now), re-dispatch once the session has grown. */
+export const NOTHING_TO_COMPACT_CODE = "nothing_to_compact";
 
 /** Stable `SessionResult.error.code` for a run command that reached an active run but could not
  *  take effect because the run raced to settlement (or the engine refused it). Distinct from
@@ -186,10 +198,15 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
 export type StateChangedEvent = SessionEvent<"state_changed", { model?: string; thinkingLevel?: string }>;
 
 /** Manual compaction bounds (L2): every `compaction_started` is closed by exactly one
- *  `compaction_finished` — `summary` on success, `error` on failure (nothing durable landed).
- *  Automatic overflow compaction stays inside its run's activity window and does not emit these. */
+ *  `compaction_finished` — `summary` on success, `error` on failure, `aborted: true` on a
+ *  deliberate stop (run/compaction symmetry with `run_settled{status: "aborted"}`: a client's own
+ *  abort is not a failure). In the failure and aborted cases nothing durable landed. Automatic
+ *  overflow compaction stays inside its run's activity window and does not emit these. */
 export type CompactionStartedEvent = SessionEvent<"compaction_started", Record<never, never>>;
-export type CompactionFinishedEvent = SessionEvent<"compaction_finished", { summary?: string; error?: string }>;
+export type CompactionFinishedEvent = SessionEvent<
+  "compaction_finished",
+  { summary?: string; error?: string; aborted?: boolean }
+>;
 
 /**
  * The serving process failed outside a normal run outcome (fail visibly). Emitted by TRANSPORT

@@ -8,9 +8,11 @@
  * stays in the session repository (read via {@link PiSessionReader}), live truth in the events the
  * data plane emits, modulation in the controls the data plane registers.
  *
- * Phase 2b (boundary mutations: compact/set_model/set_thinking) is still rejected before acceptance
- * with `unsupported_capability` — a client gating on `capabilities()` never sends them.
+ * Boundary mutations (Phase 2b: compact/set_model/set_thinking) take the same lease as runs;
+ * without boundary wiring they are rejected before acceptance with `unsupported_capability` — a
+ * client gating on `capabilities()` never sends them.
  */
+import { DEFAULT_COMPACTION_SETTINGS, compact, prepareCompaction } from "@earendil-works/pi-agent-core";
 import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import type { Models } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
@@ -18,6 +20,7 @@ import {
   BOUNDARY_COMMAND_FAILED_CODE,
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
+  NOTHING_TO_COMPACT_CODE,
   NO_SUCH_SESSION_CODE,
   RUN_COMMAND_FAILED_CODE,
   type SessionCapabilities,
@@ -32,7 +35,7 @@ import {
 } from "../../session.ts";
 import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
-import { type PiHarnessFactory, THINKING_LEVELS, lastOverrideEntries } from "./harness.ts";
+import { type PiHarnessFactory, THINKING_LEVELS, harnessSession, lastOverrideEntries } from "./harness.ts";
 import { log } from "../../log.ts";
 import type { PiSessionReader } from "./sessions.ts";
 
@@ -92,23 +95,65 @@ function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
 
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
 
-/** One subscriber's unbounded push→pull queue. Ends only when the CONSUMER stops iterating. */
-class Subscriber {
-  private buffer: SessionEvent[] = [];
-  private wake?: () => void;
+/** Ceiling for one subscriber's unconsumed backlog. A consumer this far behind (a stalled remote
+ *  connection — the wire's ReadableStream backpressure stops pulling while invokes keep pushing)
+ *  has its buffer FROZEN at the cap (memory bounded — the actual goal: ≈10k small events ≈ a few
+ *  MB worst case per stuck connection) and its subscription marked closed. The close is observed
+ *  via pulls — which a stalled connection by definition does not make — so a consumer that RESUMES
+ *  pulling first drains the frozen backlog, then gets done (no buffered event dropped), while a
+ *  permanently stalled one holds the frozen buffer until its TCP connection dies. Recovery either
+ *  way is the standard reconnect+backfill, semantically lossless. */
+export const SUBSCRIBER_BUFFER_CAP = 10_000;
 
-  push(event: SessionEvent): void {
-    this.buffer.push(event);
-    const wake = this.wake;
-    this.wake = undefined;
-    wake?.();
+/** One subscriber's push→pull queue, capped at {@link SUBSCRIBER_BUFFER_CAP}. `close()` settles a
+ *  pending pull — an async generator suspended on a quiet stream cannot be ended by `return()`
+ *  alone (it queues behind the never-settling await), so teardown needs this explicit door. */
+class Subscriber {
+  /** For the overflow diagnostic only — a warn without the session is not actionable on a
+   *  multi-session serve. (Explicit assignment: TS parameter properties break Node's strip-only
+   *  type erasure, which the CLI runs under.) */
+  private readonly session: string;
+  constructor(session: string) {
+    this.session = session;
+  }
+  private buffer: SessionEvent[] = [];
+  // A QUEUE of waiters, not a single slot: concurrent next() calls are contract-legal (any wrapper
+  // may poll twice), and a single `wake` field would let the second await overwrite the first's
+  // resolver — hanging the first next() forever. Every wake flushes all waiters; each re-checks the
+  // buffer and re-queues if another consumer won the event.
+  private wakes: (() => void)[] = [];
+  private closed = false;
+
+  private flush(): void {
+    const wakes = this.wakes;
+    this.wakes = [];
+    for (const wake of wakes) wake();
   }
 
-  async *iterate(): AsyncGenerator<SessionEvent> {
+  push(event: SessionEvent): void {
+    if (this.closed) return;
+    if (this.buffer.length >= SUBSCRIBER_BUFFER_CAP) {
+      log.warn(
+        `[fastagent] session-control subscriber for session "${this.session}" is ${SUBSCRIBER_BUFFER_CAP} events behind — no further events buffered; its stream ends after draining the backlog (or at connection death), then the client resyncs via entries()`,
+      );
+      this.close();
+      return;
+    }
+    this.buffer.push(event);
+    this.flush();
+  }
+
+  close(): void {
+    this.closed = true;
+    this.flush();
+  }
+
+  async next(): Promise<IteratorResult<SessionEvent>> {
     while (true) {
-      while (this.buffer.length > 0) yield this.buffer.shift() as SessionEvent;
+      if (this.buffer.length > 0) return { done: false, value: this.buffer.shift() as SessionEvent };
+      if (this.closed) return { done: true, value: undefined };
       await new Promise<void>((resolve) => {
-        this.wake = resolve;
+        this.wakes.push(resolve);
       });
     }
   }
@@ -162,8 +207,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     { runId: string; controls?: RunControls; pending: { steering: number; followUp: number } }
   >();
   const subscribers = new Map<string, Set<Subscriber>>();
-  /** Sessions with a manual compaction in flight — reported as `status: "compacting"`. */
-  const compacting = new Set<string>();
+  /** Sessions with a manual compaction in flight — reported as `status: "compacting"`, keyed to
+   *  the summarization's AbortController so `abort` has a door into it (run/compaction symmetry:
+   *  both are model calls a client must be able to stop). Set at ADMISSION, cleared by the
+   *  detached task before `compaction_finished`. */
+  const compacting = new Map<string, AbortController>();
 
   /** Fan an event out to this session's subscribers — shared by the observer (run events) and the
    *  boundary mutations (session-level events, no runId). */
@@ -252,25 +300,56 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     },
 
     events(session): AsyncIterable<SessionEvent> {
-      // Registration happens INSIDE the generator body (on first next()), not at call time:
-      // subscription semantics = you are subscribed while you iterate. An iterable that is obtained
-      // but never iterated must not register — it would buffer the session's events forever with no
-      // way to release them (the only unregistration path is the generator's own finally).
-      return (async function* iterate(): AsyncGenerator<SessionEvent> {
-        const sub = new Subscriber();
-        let set = subscribers.get(session);
-        if (!set) {
-          set = new Set();
-          subscribers.set(session, set);
-        }
-        set.add(sub);
-        try {
-          yield* sub.iterate();
-        } finally {
-          set.delete(sub);
-          if (set.size === 0) subscribers.delete(session);
-        }
-      })();
+      // EVERY ITERATION IS A FRESH SUBSCRIPTION — the per-subscription state lives inside
+      // asyncIterator(), matching the remote client (one connection per iteration): two concurrent
+      // iterations each get the full stream, and one iteration's end does not poison the next.
+      // Registration happens on the FIRST next(), not at iterator creation: subscription semantics
+      // = you are subscribed while you iterate; an iterator obtained but never driven must not
+      // buffer. Teardown goes through Subscriber.close() so a `return()` on a QUIET stream
+      // resolves promptly instead of queueing behind a never-settling pull — without it every
+      // attach/detach against an idle session would leak a permanently registered subscriber.
+      return {
+        [Symbol.asyncIterator](): AsyncIterator<SessionEvent> {
+          let sub: Subscriber | undefined;
+          // `finished` is its own state: `sub === undefined` alone would conflate "not yet
+          // registered" with "terminated", and a post-done next() would silently REGISTER A FRESH
+          // subscription — the exact ghost-subscriber leak this class exists to prevent, reachable
+          // by any wrapper that polls one extra time. done is terminal, per the iterator protocol.
+          let finished = false;
+          const cleanup = (): void => {
+            finished = true;
+            if (!sub) return;
+            sub.close();
+            const set = subscribers.get(session);
+            if (set) {
+              set.delete(sub);
+              if (set.size === 0) subscribers.delete(session);
+            }
+            sub = undefined;
+          };
+          return {
+            async next() {
+              if (finished) return { done: true, value: undefined };
+              if (!sub) {
+                sub = new Subscriber(session);
+                let set = subscribers.get(session);
+                if (!set) {
+                  set = new Set();
+                  subscribers.set(session, set);
+                }
+                set.add(sub);
+              }
+              const result = await sub.next();
+              if (result.done) cleanup();
+              return result;
+            },
+            async return(value?: unknown) {
+              cleanup();
+              return { done: true as const, value: value as undefined };
+            },
+          };
+        },
+      };
     },
 
     async dispatch(session, command: SessionCommand): Promise<SessionResult> {
@@ -280,6 +359,15 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         case "abort": {
           const run = active.get(session);
           if (!run) {
+            // Run/compaction symmetry: an in-flight manual compaction is a model call too, and
+            // `abort` is its only door — interrupting the harness converges through the detached
+            // task's catch into `compaction_finished{aborted}` with the lease released; answering
+            // no_active_run against a state() that says "compacting" would be a lie.
+            const comp = command.type === "abort" ? compacting.get(session) : undefined;
+            if (comp) {
+              comp.abort();
+              return { ok: true }; // no runId — the outcome travels as compaction_finished{aborted}
+            }
             // Rejected BEFORE acceptance: no run exists, nothing happened. retryable: false —
             // as-is retry fails again; re-dispatch after state() shows an active run.
             return {
@@ -402,73 +490,153 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               },
             };
           }
-          try {
-            if (command.type === "compact") {
-              compacting.add(session);
-              // Compaction is a model call: build the session's full harness (the factory applies
-              // the session's own model/thinking overrides) and tear it down after. `started` is
-              // emitted only once the harness EXISTS — a factory failure rejects with no started
-              // at all — and every started is then CLOSED: success → finished{summary}; failure →
-              // finished{error} (the bounds contract — an events-only watcher must never hang on
-              // an open compaction).
-              const harness = await b.harnessFactory(session);
-              emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
+          if (command.type === "compact") {
+            // ACCEPT-FAST: compaction is a full model call (tens of seconds is normal) — holding
+            // the dispatch open until it finishes made acceptance = outcome, the one exception to
+            // §5.2, and broke remote clients whose request timeouts are sized for control calls.
+            // The dispatch answers once the work is ADMITTED (lease held, harness built); the
+            // outcome travels as compaction_finished{summary|error|aborted}, the bounds contract watchers
+            // already rely on. Pre-acceptance failures (the harness build) still reject here.
+            // The admission step is EVERYTHING cheap and local: the harness build (the ONE
+            // canonical resolution of session overrides + auth) plus the compaction PREPARATION
+            // (a pure branch-read computation) — the boundary between "reject the dispatch" and
+            // "outcome travels as an event" sits where the work becomes asynchronous and
+            // expensive: the model call. "Nothing to compact" is thus a pre-acceptance answer,
+            // never a finished{error} dressed as a failure. The summarization runs through pi's
+            // compaction primitives instead of harness.compact() for exactly one reason: the
+            // harness surface passes no signal to its model call, so an in-flight compaction
+            // would be uncancellable — and `abort` needs a real door (run/compaction symmetry).
+            let harness: Awaited<ReturnType<typeof b.harnessFactory>>;
+            try {
+              harness = await b.harnessFactory(session);
+            } catch (error) {
+              release();
+              return {
+                ok: false,
+                error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+              };
+            }
+            const teardown = async () => {
               try {
-                const result = await harness.compact(command.instructions);
-                emitOwn(session, {
-                  type: "compaction_finished",
-                  timestamp: Date.now(),
-                  data: { summary: result.summary },
-                });
+                await harness.abort(); // fresh-harness discipline
               } catch (error) {
-                emitOwn(session, {
-                  type: "compaction_finished",
-                  timestamp: Date.now(),
-                  data: { error: String(error) },
-                });
-                throw error; // → the shared catch below returns boundary_command_failed
-              } finally {
-                try {
-                  await harness.abort(); // teardown — fresh-harness discipline (never throws past here)
-                } catch (error) {
-                  log.warn(`[fastagent] compaction harness teardown failed: ${String(error)}`);
-                }
+                log.warn(`[fastagent] compaction harness teardown failed: ${String(error)}`);
               }
-            } else {
-              // The WRITE handle is opened UNDER the lease: a handle from before tryAcquire could
-              // be a stale snapshot of a run that completed in the window — appending to it would
-              // hang the override off an outdated leaf.
-              const fresh = await sessions.openIfExists(session);
-              if (!fresh) {
-                // Same real condition as the pre-lease check (the session vanished in the window):
-                // same code, same disposition — not a retryable internal error.
+            };
+            let record: NonNullable<ReturnType<typeof harnessSession>>;
+            let preparation: Parameters<typeof compact>[0];
+            try {
+              const bound = harnessSession(harness);
+              if (!bound) throw new Error("harness has no bound session (factory invariant broken)");
+              record = bound;
+              const prep = prepareCompaction(await record.getBranch(), DEFAULT_COMPACTION_SETTINGS);
+              if (!prep.ok) throw prep.error;
+              if (!prep.value) {
+                await teardown();
+                release();
+                // A no-op, not a failure — its OWN code (the NO_ACTIVE_RUN pattern): a client must
+                // machine-distinguish "give up" from "re-dispatch once the session grows", and
+                // branching on message prose is forbidden by contract.
                 return {
                   ok: false,
                   error: {
-                    code: NO_SUCH_SESSION_CODE,
-                    message: `session "${session}" does not exist — sessions are created by invoke, not by boundary mutations`,
+                    code: NOTHING_TO_COMPACT_CODE,
+                    message: "nothing to compact — the session has no compactable history yet; retry after more turns",
                     retryable: false,
                   },
                 };
               }
-              // Unreachable by construction: only set_model/set_thinking reach this branch, and
-              // both assign `apply` in validation. Throw rather than silently skip (fail visibly).
-              if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
-              emitOwn(session, await apply(fresh));
+              preparation = prep.value;
+            } catch (error) {
+              await teardown();
+              release();
+              return {
+                ok: false,
+                error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+              };
             }
+            const door = new AbortController();
+            compacting.set(session, door); // admission complete: from here `abort` reaches the model call
+            emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
+            void (async () => {
+              let outcome: { summary: string } | { error: string } | { aborted: true };
+              try {
+                const done = await compact(
+                  preparation,
+                  b.models,
+                  harness.getModel(),
+                  command.instructions,
+                  door.signal,
+                  harness.getThinkingLevel(),
+                );
+                if (!done.ok) throw done.error;
+                await record.appendCompaction(
+                  done.value.summary,
+                  done.value.firstKeptEntryId,
+                  done.value.tokensBefore,
+                  done.value.details,
+                );
+                outcome = { summary: done.value.summary };
+              } catch (error) {
+                // A deliberate stop is not a failure — run/compaction symmetry with
+                // run_settled{aborted}: the door's signal is the classification, same discipline
+                // as run abort attribution (a racing real failure still reads as aborted — the
+                // intent was live while the work resolved).
+                outcome = door.signal.aborted ? { aborted: true } : { error: String(error) };
+              }
+              await teardown();
+              // Release BEFORE emitting finished: a watcher seeing finished may dispatch next —
+              // "finished ⇒ the lease is free and status is no longer compacting" must hold.
+              compacting.delete(session);
+              release();
+              emitOwn(session, { type: "compaction_finished", timestamp: Date.now(), data: outcome });
+            })();
+            return { ok: true };
+          }
+          try {
+            // The WRITE handle is opened UNDER the lease: a handle from before tryAcquire could
+            // be a stale snapshot of a run that completed in the window — appending to it would
+            // hang the override off an outdated leaf.
+            const fresh = await sessions.openIfExists(session);
+            if (!fresh) {
+              // Same real condition as the pre-lease check (the session vanished in the window):
+              // same code, same disposition — not a retryable internal error.
+              return {
+                ok: false,
+                error: {
+                  code: NO_SUCH_SESSION_CODE,
+                  message: `session "${session}" does not exist — sessions are created by invoke, not by boundary mutations`,
+                  retryable: false,
+                },
+              };
+            }
+            // Unreachable by construction: only set_model/set_thinking reach this branch, and
+            // both assign `apply` in validation. Throw rather than silently skip (fail visibly).
+            if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
+            emitOwn(session, await apply(fresh));
           } catch (error) {
-            // Admitted but nothing durable landed (pi appends the compaction entry only at the
-            // end): still "nothing took effect" — the same command may succeed on retry.
+            // The append failed before anything durable landed — "nothing took effect"; the same
+            // command may succeed on retry.
             return {
               ok: false,
               error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
             };
           } finally {
-            compacting.delete(session);
             release();
           }
           return { ok: true };
         }
+        default:
+          // Wire input bypasses the TS union (a remote client can send any `type`): a protocol-
+          // level answer, never an undefined body — the transport promises `ok: false` shapes.
+          return {
+            ok: false,
+            error: {
+              code: INVALID_COMMAND_CODE,
+              message: `unknown command type "${String((command as { type?: unknown }).type)}"`,
+              retryable: false,
+            },
+          };
       }
     },
   };

@@ -11,6 +11,7 @@ export default {
   http: { port: 8787 },
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
   //                     // ("check the deploy in 10 min"). Cron jobs need no opt-in — drop a schedules/<name>.ts.
+  // sessionControl: true, // serve /control/* for remote observation + steering (fastagent attach / Web panel)
   // deploy: what the agent needs on the box (so `fastagent deploy` doesn't need a hand-written Dockerfile
   // or hand-set host variables). Uncomment as needed:
   // deploy: {

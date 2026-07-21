@@ -51,6 +51,15 @@ export interface FastagentConfig {
    *  Off by default — self-scheduling is an autonomy capability, opt in when you want it. Only takes
    *  effect on the serving path (`dev`/`start`, where the scheduler poller honors a wake-up). */
   selfSchedule?: boolean;
+  /**
+   * Serve the session control plane over HTTP (`/control/*`: state/entries/events + dispatch —
+   * steer/abort/compact/set_model…) for remote consumers: a Web panel, a desktop app, `fastagent
+   * attach`. Default off (it is a remote-control surface). When on, `dev`/`start` generate a
+   * per-boot bearer token and write `<stateRoot>/control.json` for local discovery. The serve
+   * binds all interfaces, so the routes are LAN-reachable with the token as the only protection —
+   * firewall the port, or wrap it for real exposure (design §14).
+   */
+  sessionControl?: boolean;
   /** Deploy-time declarations for what the agent needs on the box, so real agents don't hand-write a
    *  Dockerfile / hand-set variables. */
   deploy?: {
@@ -138,15 +147,19 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
       key !== "tools" &&
       key !== "http" &&
       key !== "deploy" &&
-      key !== "selfSchedule"
+      key !== "selfSchedule" &&
+      key !== "sessionControl"
     ) {
       throw new Error(
-        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, agentDir, tools, http, deploy, selfSchedule)`,
+        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, agentDir, tools, http, deploy, selfSchedule, sessionControl)`,
       );
     }
   }
   if (c.model !== undefined && typeof c.model !== "string") {
     throw new Error(`${path}: "model" must be a "provider/modelId" string`);
+  }
+  if (c.sessionControl !== undefined && typeof c.sessionControl !== "boolean") {
+    throw new Error(`${path}: "sessionControl" must be a boolean`);
   }
   if (c.thinkingLevel !== undefined && !(THINKING_LEVELS as readonly string[]).includes(c.thinkingLevel as string)) {
     throw new Error(`${path}: "thinkingLevel" must be one of ${THINKING_LEVELS.join(", ")}`);
