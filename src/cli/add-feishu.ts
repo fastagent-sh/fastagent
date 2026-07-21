@@ -12,26 +12,26 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isCancel, log as clackLog, password, text as clackText } from "@clack/prompts";
-import { bootstrapFeishuVerificationToken } from "./channels/feishu/bootstrap-token.ts";
+import { bootstrapFeishuVerificationToken } from "../channels/feishu/bootstrap-token.ts";
 import {
   FEISHU_GROUP_CONTEXT_SCOPE,
   type FeishuGroupBehavior,
   type FeishuSubscriptionMode,
   type GroupBehaviorChoice,
-} from "./channels/feishu/setup-mode.ts";
-import { cloudFor } from "./channels/feishu/cloud.ts";
+} from "../channels/feishu/setup-mode.ts";
+import { cloudFor } from "../channels/feishu/cloud.ts";
 import {
   createFeishuApi,
   type FeishuApi,
   isFeishuConfigApiMissing,
   isTransientFeishuRegistrationError,
-} from "./channels/feishu/feishu-api.ts";
-import { registerFeishuApp } from "./channels/feishu/register-app.ts";
-import { onboardLarkApp } from "./channels/lark/onboard.ts";
-import { parseEnvContent } from "./env.ts";
-import { openExternalUrl } from "./open-url.ts";
-import { appendChannelDotEnv } from "./scaffold/add-channel.ts";
-import { startCloudflareTunnel } from "./tunnel.ts";
+} from "../channels/feishu/feishu-api.ts";
+import { registerFeishuApp } from "../channels/feishu/register-app.ts";
+import { onboardLarkApp } from "../channels/lark/onboard.ts";
+import { parseEnvContent } from "../env.ts";
+import { openExternalUrl } from "../open-url.ts";
+import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
+import { startCloudflareTunnel } from "../tunnel.ts";
 
 export interface GroupBehaviorSetup {
   /** Safe to proceed to version publishing now; false means Permissions still needs manual/admin work. */

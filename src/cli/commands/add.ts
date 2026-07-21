@@ -1,12 +1,12 @@
 /**
  * `fastagent add <channel>|skill` — scaffold channel glue (`channels/<kind>.ts`) or vendor an Agent
- * Skills skill. feishu/lark additionally CREATE OR RESUME the platform app (cli-add-feishu.ts).
+ * Skills skill. feishu/lark additionally CREATE OR RESUME the platform app (add-feishu.ts).
  */
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { isCancel, select } from "@clack/prompts";
-import { onboardFeishuCloudApp } from "../../cli-add-feishu.ts";
+import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type {
   FeishuGroupBehavior,
   FeishuSubscriptionMode,
@@ -84,7 +84,7 @@ export async function runAddChannel(
       `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
     );
   }
-  // `add feishu`/`add lark` = scaffold + CREATE OR RESUME the app (cli-add-feishu.ts): feishu persists
+  // `add feishu`/`add lark` = scaffold + CREATE OR RESUME the app (add-feishu.ts): feishu persists
   // its irreversible App ID/Secret boundary internally; lark returns guided credentials for the
   // generic .env write below.
   let created: Record<string, string> | undefined;
@@ -97,7 +97,7 @@ export async function runAddChannel(
   );
   // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
   // the same class of value as telegram's); guided Lark credentials ride the same write as overwrites.
-  // Feishu's irreversible credentials were already staged inside cli-add-feishu.ts before bootstrap.
+  // Feishu's irreversible credentials were already staged inside add-feishu.ts before bootstrap.
   const dotEnv = envIgnored
     ? await appendChannelDotEnv(
         target,

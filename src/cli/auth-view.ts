@@ -1,7 +1,7 @@
 /**
  * CLI presenter for the auth-status line `reportAuth` prints (invoke/dev/start). Kept out of cli.ts —
  * which self-executes on import — so the expired-vs-missing DECISION is unit-testable without a real
- * credential round-trip, mirroring cli-models.ts.
+ * credential round-trip, mirroring models-view.ts.
  */
 
 /** A stored credential as `reportAuth` needs it: just its kind, for the status line. */

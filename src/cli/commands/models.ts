@@ -3,7 +3,7 @@
  * substring. This module pulls the pi model catalog (heavy) — it is lazy-imported by the spec, so
  * only an actual `models` invocation pays for it.
  */
-import { formatModelsCommand } from "../../cli-models.ts";
+import { formatModelsCommand } from "../models-view.ts";
 import { listModels } from "../../engines/pi/config.ts";
 import { createPiModels } from "../../engines/pi/models.ts";
 

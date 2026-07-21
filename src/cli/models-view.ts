@@ -4,9 +4,9 @@
  * model resolution / listModels), so this process-boundary behavior is unit-testable without
  * spawning the CLI.
  */
-import { providerOf } from "./engines/pi/config.ts";
-import type { InteractiveLoginKind } from "./engines/pi/login.ts";
-import type { ProviderAuthStatus } from "./engines/pi/models.ts";
+import { providerOf } from "../engines/pi/config.ts";
+import type { InteractiveLoginKind } from "../engines/pi/login.ts";
+import type { ProviderAuthStatus } from "../engines/pi/models.ts";
 
 /** One first-run picker entry (@clack/prompts option shape). */
 export interface ModelPickerOption {
