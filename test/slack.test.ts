@@ -202,7 +202,7 @@ describe("Slack sessions, context, and managed threads", () => {
       markdown_text: expect.stringContaining("hello back"),
       task_display_mode: "dense",
     });
-    expect(JSON.stringify(JSON.parse(String(start?.[1]?.body)))).toContain("AI-generated content");
+    expect(JSON.stringify(JSON.parse(String(start?.[1]?.body)))).not.toContain("AI-generated content");
   });
 
   it("renders safe native task updates without exposing reasoning or tool arguments", async () => {
@@ -219,7 +219,7 @@ describe("Slack sessions, context, and managed threads", () => {
         yield { type: "completed" };
       },
     };
-    const { handler } = mount(agent);
+    const { handler } = mount(agent, { aiDisclaimer: "Custom policy footer." });
     await handler(
       signedRequest(
         message("1.5", {
@@ -242,6 +242,7 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(outbound).not.toContain("tool-secret");
     expect(outbound).not.toContain("<!channel>");
     expect(outbound).toContain("&lt;!channel>");
+    expect(outbound).toContain("Custom policy footer.");
     expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({
       chunks: [{ type: "task_update", id: "t1", title: "search", status: "in_progress" }],
     });

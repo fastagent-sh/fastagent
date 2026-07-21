@@ -21,7 +21,7 @@ export default slackChannel({
     : undefined,
   groupBehavior: "context", // default; use "mentions" only for an explicit least-privilege setup
   rendering: "native", // Slack Agent streams + task timeline; use "classic" only for compatibility
-  // Successful replies include a short AI-accuracy footer by default. To override: aiDisclaimer: false,
+  // Optional per-reply footer, if your policy requires one: aiDisclaimer: "AI-generated; verify important information.",
   // Direct and group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",

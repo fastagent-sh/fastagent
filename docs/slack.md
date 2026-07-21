@@ -111,7 +111,7 @@ export default slackChannel({
     : undefined,
   groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
   rendering: "native", // native Agent streams/tasks; "classic" is the compatibility renderer
-  // aiDisclaimer: false, // successful replies include a short AI-accuracy footer by default
+  // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // Direct and group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",
@@ -210,8 +210,8 @@ usable only when Slack exposes authenticated downloadable bytes.
 Raw model `thinking` and generic tool arguments are never customer-facing. The former is represented by
 Slack's loading state; task cards carry only the tool name and completion state. Agent replies also
 neutralize Slack notification controls such as `<!channel>`; deliberate outbound mentions belong in the
-explicit `slack-send` tool. Successful replies end with a short AI-accuracy disclaimer unless
-`aiDisclaimer: false` is configured. Native channel streams carry the triggering user/team recipient IDs required by Slack. DM `app_context` entities are included in
+explicit `slack-send` tool. Successful replies omit repetitive disclaimers by default; configure an
+`aiDisclaimer` string only when workspace policy requires a per-message footer. Native channel streams carry the triggering user/team recipient IDs required by Slack. DM `app_context` entities are included in
 the Agent prompt when Slack supplies them.
 
 Standard Markdown—not Slack-specific `mrkdwn`—is the output contract. Each API write stays below Slack's

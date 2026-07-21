@@ -113,7 +113,7 @@ export interface SlackChannelOptions {
    * explicit continuous/custom policy necessarily uses the classic renderer because Slack streams
    * require a parent user message. */
   rendering?: SlackRendering;
-  /** Footer for successful Agent replies. Defaults to a short AI-accuracy disclaimer; `false` disables it. */
+  /** Optional footer for successful Agent replies. Omitted or `false` sends no repetitive disclaimer. */
   aiDisclaimer?: string | false;
   /** Custom route policy. Providing it disables the default managed-thread/context admission policy. */
   route?: (envelope: SlackEventEnvelope) => SlackRoute | null;

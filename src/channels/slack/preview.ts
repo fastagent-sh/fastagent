@@ -19,7 +19,6 @@ export { defaultErrorMessage };
 const CLASSIC_UPDATE_INTERVAL_MS = 3_000;
 const NATIVE_APPEND_INTERVAL_MS = 750;
 const GENERIC_FAILURE = "⚠️ The response stream stopped unexpectedly. Please try again.";
-const DEFAULT_AI_DISCLAIMER = "AI-generated content can be inaccurate. Verify important information.";
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -31,8 +30,7 @@ function sanitizeSlackMarkdown(markdown: string): string {
 
 function withDisclaimer(markdown: string, disclaimer: string | false | undefined): string {
   const body = markdown.trim() || "(no reply)";
-  const notice = disclaimer === undefined ? DEFAULT_AI_DISCLAIMER : disclaimer;
-  return notice === false || !notice.trim() ? body : `${body}\n\n_${notice.trim()}_`;
+  return disclaimer === false || !disclaimer?.trim() ? body : `${body}\n\n_${disclaimer.trim()}_`;
 }
 
 async function settleClassic(

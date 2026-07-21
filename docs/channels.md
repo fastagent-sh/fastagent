@@ -157,7 +157,7 @@ export default slackChannel({
     : undefined,
   groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
   rendering: "native", // Slack Agent streams/tasks; "classic" for compatibility
-  // aiDisclaimer: false, // successful replies include a short AI-accuracy footer by default
+  // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // Direct/group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",
