@@ -10,7 +10,13 @@ import { fauxAssistantMessage, fauxThinking, fauxToolCall, Type, type FauxRespon
 import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
 import { defineTool, inMemorySessionStore, inProcessLease, type AgentEvent, z } from "../src/index.ts";
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
-import { classifyRetryable, createPiAgentFromHarness, errorToTerminal, toTerminal } from "../src/engines/pi/invoke.ts";
+import {
+  classifyRetryable,
+  createPiAgentFromHarness,
+  errorToTerminal,
+  toSessionEvent,
+  toTerminal,
+} from "../src/engines/pi/invoke.ts";
 import { type PiHarnessFactory, piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -534,6 +540,33 @@ describe("invoke: auto-compaction", () => {
     expect(events.at(-1)).toEqual({ type: "completed" }); // turn still completed
     expect(compact).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/auto-compaction failed/));
+  });
+});
+
+describe("toSessionEvent retry projection", () => {
+  it("projects harness retry_scheduled into the session vocabulary (errorMessage → error)", () => {
+    const se = toSessionEvent(
+      {
+        type: "retry_scheduled",
+        operation: "compaction",
+        attempt: 2,
+        maxAttempts: 4,
+        delayMs: 4000,
+        errorMessage: "503 upstream",
+      },
+      "run-1",
+    );
+    expect(se).toEqual({
+      type: "retry_scheduled",
+      timestamp: expect.any(Number),
+      runId: "run-1",
+      data: { operation: "compaction", attempt: 2, maxAttempts: 4, delayMs: 4000, error: "503 upstream" },
+    });
+  });
+
+  it("drops retry_attempt_start and retry_finished (no outcome to forward)", () => {
+    expect(toSessionEvent({ type: "retry_attempt_start", operation: "compaction" }, "run-1")).toBeNull();
+    expect(toSessionEvent({ type: "retry_finished", operation: "branch_summary" }, "run-1")).toBeNull();
   });
 });
 

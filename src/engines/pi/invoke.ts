@@ -24,7 +24,7 @@ import {
   SESSION_BUSY_CODE,
 } from "../../agent.ts";
 import { abortFirstIterator } from "../../collect.ts";
-import type { RunSettledEvent, SessionEvent } from "../../session.ts";
+import type { RetryScheduledEvent, RunSettledEvent, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
 import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
 import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
@@ -143,7 +143,7 @@ function messageSignal(message: AssistantMessage): { status?: number; code?: unk
  * translation plus one projection, never two parallel translations). pi events with no session
  * vocabulary yet (turn_start, agent_start, …) are dropped.
  */
-function toSessionEvent(pe: AgentHarnessEvent, runId: string): SessionEvent | null {
+export function toSessionEvent(pe: AgentHarnessEvent, runId: string): SessionEvent | null {
   const at = Date.now();
   switch (pe.type) {
     case "queue_update":
@@ -191,6 +191,26 @@ function toSessionEvent(pe: AgentHarnessEvent, runId: string): SessionEvent | nu
         runId,
         data: { id: pe.toolCallId, isError: pe.isError, content: pe.result as Json },
       };
+    case "retry_scheduled": {
+      // Summarization retry backoff (auto-compaction / branch summary, pi ≥0.81.1) — without it,
+      // up to ~14s of backoff at the turn's tail reads as a hang. `retry_attempt_start`/
+      // `retry_finished` stay dropped: they carry no outcome, and the next event is the closure.
+      // Typed against the vocabulary (as is the second construction site, session-control's
+      // manual-compact callback) so a payload change breaks both at compile time.
+      const event: RetryScheduledEvent = {
+        type: "retry_scheduled",
+        timestamp: at,
+        runId,
+        data: {
+          operation: pe.operation,
+          attempt: pe.attempt,
+          maxAttempts: pe.maxAttempts,
+          delayMs: pe.delayMs,
+          error: pe.errorMessage,
+        },
+      };
+      return event;
+    }
     default:
       return null;
   }
@@ -583,8 +603,8 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       }
       const queue = new EventQueue<AgentEvent>();
       const unsub = harness.subscribe((pe) => {
-        // Summarization retries (auto-compaction / branch summaries, pi ≥0.81.1) have no SPEC
-        // projection — without this, up to ~14s of backoff at the turn's tail reads as a hang.
+        // Summarization retries also warn to server logs: the session `retry_scheduled` event only
+        // reaches attached observers, and an operator tailing logs must see the backoff too.
         if (pe.type === "retry_scheduled") {
           log.warn(
             `[fastagent] ${pe.operation} retry ${pe.attempt}/${pe.maxAttempts} in ${pe.delayMs}ms (session ${scope.session}): ${pe.errorMessage}`,
