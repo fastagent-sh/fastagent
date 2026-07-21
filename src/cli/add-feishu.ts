@@ -1,6 +1,6 @@
 /**
  * `fastagent add feishu|lark` app onboarding — the cloud-facing half of runAdd, kept out of cli.ts
- * (which self-executes on import), mirroring cli-models.ts/cli-auth.ts. The POLICY already lives in
+ * (which self-executes on import), mirroring models-view.ts/auth-view.ts. The POLICY already lives in
  * testable modules (register-app.ts, bootstrap-token.ts, lark/onboard.ts); this layer is the terminal
  * wiring: clack prompts, .env staging, browser opens, progress lines.
  *
