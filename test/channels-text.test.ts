@@ -9,7 +9,7 @@ import {
 
 const isWellFormed = (text: string): boolean => Buffer.from(text, "utf8").toString("utf8") === text;
 
-describe("Feishu Unicode-safe text truncation", () => {
+describe("channel Unicode-safe text truncation", () => {
   it("takes and ellipsizes by code point rather than UTF-16 code unit", () => {
     expect(codePointPrefix("a😀b", 2)).toBe("a😀");
     expect(truncateCodePointPrefix(`${"a".repeat(46)}😀xy`, 48)).toBe(`${"a".repeat(46)}😀…`);
