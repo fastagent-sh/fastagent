@@ -23,6 +23,11 @@ export interface SlackTarget {
   recipientTeamId?: string;
 }
 
+export interface SlackMarkdownTextChunk {
+  type: "markdown_text";
+  text: string;
+}
+
 export interface SlackTaskUpdateChunk {
   type: "task_update";
   id: string;
@@ -30,7 +35,7 @@ export interface SlackTaskUpdateChunk {
   status: "pending" | "in_progress" | "complete" | "error";
 }
 
-export type SlackStreamChunk = SlackTaskUpdateChunk;
+export type SlackStreamChunk = SlackMarkdownTextChunk | SlackTaskUpdateChunk;
 
 export interface SlackStreamContent {
   markdownText?: string;
@@ -160,6 +165,15 @@ export function chunkSlackMarkdown(markdown: string, maxPoints = SLACK_MAX_MARKD
     output.push(`${prefix}${raw}${suffix}`);
   }
   return output;
+}
+
+/** Slack locks a stream to top-level `markdown_text` or `chunks` mode on its first write. Tasks need
+ * chunks, so encode text as markdown chunks too; mixing the two modes yields `streaming_mode_mismatch`. */
+function streamChunks(content: SlackStreamContent): SlackStreamChunk[] {
+  return [
+    ...(content.markdownText ? ([{ type: "markdown_text", text: content.markdownText }] as const) : []),
+    ...(content.chunks ?? []),
+  ];
 }
 
 function safeFileName(file: SlackFile): string {
@@ -377,31 +391,31 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       if (!target.channelId.startsWith("D") && (!target.recipientUserId || !target.recipientTeamId)) {
         throw new Error("Slack native channel streams require recipient user and team IDs");
       }
+      const chunks = streamChunks(content);
       const data = await call<SlackBody & { ts?: string }>("chat.startStream", {
         channel: target.channelId,
         thread_ts: target.threadTs,
         task_display_mode: "dense",
         ...channelRecipient,
-        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
-        ...(content.chunks?.length ? { chunks: content.chunks } : {}),
+        ...(chunks.length ? { chunks } : {}),
       });
       if (!data.ts) throw new SlackApiError("chat.startStream", 200, "response carried no ts");
       return data.ts;
     },
     async appendStream(channelId, ts, content) {
+      const chunks = streamChunks(content);
       await call("chat.appendStream", {
         channel: channelId,
         ts,
-        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
-        ...(content.chunks?.length ? { chunks: content.chunks } : {}),
+        ...(chunks.length ? { chunks } : {}),
       });
     },
     async stopStream(channelId, ts, content = {}) {
+      const chunks = streamChunks(content);
       await call("chat.stopStream", {
         channel: channelId,
         ts,
-        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
-        ...(content.chunks?.length ? { chunks: content.chunks } : {}),
+        ...(chunks.length ? { chunks } : {}),
       });
     },
     async setThreadStatus(target, status) {

@@ -199,7 +199,7 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(JSON.parse(String(start?.[1]?.body))).toMatchObject({
       channel: "D1",
       thread_ts: "1.0",
-      markdown_text: expect.stringContaining("hello back"),
+      chunks: [{ type: "markdown_text", text: expect.stringContaining("hello back") }],
       task_display_mode: "dense",
     });
     expect(JSON.stringify(JSON.parse(String(start?.[1]?.body)))).not.toContain("AI-generated content");
@@ -251,7 +251,9 @@ describe("Slack sessions, context, and managed threads", () => {
         expect.objectContaining({
           chunks: [{ type: "task_update", id: "t1", title: "search", status: "complete" }],
         }),
-        expect.objectContaining({ markdown_text: expect.stringContaining("# Safe answer") }),
+        expect.objectContaining({
+          chunks: [{ type: "markdown_text", text: expect.stringContaining("# Safe answer") }],
+        }),
       ]),
     );
   });

@@ -83,12 +83,15 @@ describe("Slack Web API transport", () => {
     expect(calls[1]).toMatchObject({
       method: "chat.startStream",
       body: {
-        markdown_text: "# Answer",
+        chunks: [{ type: "markdown_text", text: "# Answer" }],
         thread_ts: "9.0",
         recipient_user_id: "U1",
         recipient_team_id: "T1",
         task_display_mode: "dense",
       },
+    });
+    expect(calls[2]?.body).toMatchObject({
+      chunks: [{ type: "task_update", id: "tool-1", title: "search", status: "in_progress" }],
     });
     expect(calls.map((call) => call.method)).toEqual([
       "chat.postMessage",
