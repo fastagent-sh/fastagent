@@ -2,6 +2,13 @@ import { defineTool, z } from "@fastagent-sh/fastagent";
 import { open, stat } from "node:fs/promises";
 import { basename } from "node:path";
 
+// Send a message or upload a local file to Slack. In a CHAT turn the channel delivers the reply
+// itself — do NOT call this to answer a normal chat turn (that posts the message twice). This tool is
+// for file uploads, and for turns NO channel is carrying: a scheduled turn (schedules/<name>.ts) or a
+// self-scheduled wake-up, whose plain reply is not delivered anywhere. The channelId/threadTs come
+// from the [slack: …] context line in a chat turn; a scheduled/woken turn has no such line, so its
+// prompt must name the target channel id. tools/ is auto-discovered.
+
 const API = "https://slack.com/api";
 const MAX_TEXT = 10_000;
 const RETRIES = 3;
@@ -82,8 +89,11 @@ function trustedUploadUrl(value: string): URL {
 
 export default defineTool({
   description:
-    "Send a Slack message or upload one local file. Use channelId/threadTs from the [slack: …] context " +
-    "line for a chat turn; a scheduled/woken turn must be told its destination.",
+    "Upload one local file to Slack (`path`), or send a message (`text`) for a turn NO channel is " +
+    "carrying — a scheduled or self-scheduled (wake) turn. In a normal chat turn the channel already " +
+    "delivers your reply, so do NOT call this to answer (it would post the message twice). Pass exactly " +
+    "one of `text`/`path`. channelId/threadTs come from the [slack: …] context line in a chat turn; a " +
+    "scheduled/woken turn has no context line, so name the destination in your instruction.",
   input: z.object({
     channelId: z.string().describe("target Slack channel ID"),
     text: z.string().optional().describe("standard Markdown message text"),

@@ -5,11 +5,14 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
 let execute: (params: unknown) => Promise<{ details: unknown }>;
+let description: string;
 
 beforeAll(async () => {
   const path = new URL("../src/channels/slack/scaffold/slack-send.ts", import.meta.url).pathname;
   const mod = (await import(path)) as { default: unknown };
-  execute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
+  const tool = mod.default as { execute: RawExecute; description: string };
+  execute = (params) => tool.execute("call-1", params);
+  description = tool.description;
 });
 
 afterEach(() => {
@@ -18,6 +21,11 @@ afterEach(() => {
 });
 
 describe("scaffold slack-send", () => {
+  it("steers the model away from using it to answer a normal chat turn (the channel already delivers)", () => {
+    expect(description).toMatch(/do not call this to answer/i);
+    expect(description).toMatch(/post the message twice/i);
+  });
+
   it("posts standard Markdown to the selected channel/thread", async () => {
     vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
     const calls: { url: string; body: unknown }[] = [];
