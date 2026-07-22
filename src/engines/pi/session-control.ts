@@ -23,6 +23,7 @@ import {
   NOTHING_TO_COMPACT_CODE,
   NO_SUCH_SESSION_CODE,
   RUN_COMMAND_FAILED_CODE,
+  type RetryScheduledEvent,
   type SessionCapabilities,
   type SessionCommand,
   type SessionControl,
@@ -35,7 +36,13 @@ import {
 } from "../../session.ts";
 import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
-import { type PiHarnessFactory, THINKING_LEVELS, harnessSession, lastOverrideEntries } from "./harness.ts";
+import {
+  SUMMARIZATION_RETRY_POLICY,
+  type PiHarnessFactory,
+  THINKING_LEVELS,
+  harnessSession,
+  lastOverrideEntries,
+} from "./harness.ts";
 import { log } from "../../log.ts";
 import type { PiSessionReader } from "./sessions.ts";
 
@@ -568,6 +575,22 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                   command.instructions,
                   door.signal,
                   harness.getThinkingLevel(),
+                  SUMMARIZATION_RETRY_POLICY,
+                  {
+                    // Retries are otherwise invisible between compaction_started and _finished —
+                    // surface each backoff so a long gap is diagnosable (not confusable with a
+                    // hang): as a session event for attached observers, as a warn for server logs.
+                    onRetryScheduled: (attempt, maxAttempts, delayMs, errorMessage) => {
+                      log.warn(
+                        `[fastagent] compaction retry ${attempt}/${maxAttempts} in ${delayMs}ms (session ${session}): ${errorMessage}`,
+                      );
+                      emitOwn(session, {
+                        type: "retry_scheduled",
+                        timestamp: Date.now(),
+                        data: { operation: "compaction", attempt, maxAttempts, delayMs, error: errorMessage },
+                      } satisfies RetryScheduledEvent);
+                    },
+                  },
                 );
                 if (!done.ok) throw done.error;
                 await record.appendCompaction(

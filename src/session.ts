@@ -208,6 +208,16 @@ export type CompactionFinishedEvent = SessionEvent<
   { summary?: string; error?: string; aborted?: boolean }
 >;
 
+/** A transient provider failure scheduled a summarization retry backoff (auto-compaction /
+ *  branch summaries inside a run — `runId` present — or a manual `compact` at a boundary — no
+ *  `runId`). Explains a quiet gap that would otherwise read as a hang. Deliberately unclosed:
+ *  the next event (message_*, `run_settled`, `compaction_finished`) is the closure, and the
+ *  engine's `retry_finished` carries no outcome to forward. */
+export type RetryScheduledEvent = SessionEvent<
+  "retry_scheduled",
+  { operation: "compaction" | "branch_summary"; attempt: number; maxAttempts: number; delayMs: number; error: string }
+>;
+
 /**
  * The serving process failed outside a normal run outcome (fail visibly). Emitted by TRANSPORT
  * adapters (design §13) when they lose the backend before ending a remote stream — an in-process
@@ -217,8 +227,8 @@ export type CompactionFinishedEvent = SessionEvent<
 export type ServingErrorEvent = SessionEvent<"serving_error", { message: string }>;
 
 /** Every event the in-process observation plane emits today: L0, L1 `queue_changed`, and the L2
- *  boundary-mutation events (`state_changed`, `compaction_*`). Remaining L2 events (turn_*,
- *  retry_*) are future vocabulary; {@link ServingErrorEvent} arrives with the transport adapter. */
+ *  events (`state_changed`, `compaction_*`, `retry_scheduled`). Remaining L2 events (turn_*) are
+ *  future vocabulary; {@link ServingErrorEvent} arrives with the transport adapter. */
 export type KnownSessionEvent =
   | RunStartedEvent
   | RunSettledEvent
@@ -231,4 +241,5 @@ export type KnownSessionEvent =
   | QueueChangedEvent
   | StateChangedEvent
   | CompactionStartedEvent
-  | CompactionFinishedEvent;
+  | CompactionFinishedEvent
+  | RetryScheduledEvent;

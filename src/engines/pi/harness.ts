@@ -87,6 +87,14 @@ export interface PiHarnessFactoryOptions {
 const PROVIDER_MAX_RETRIES = 2;
 
 /**
+ * Retry policy for generated compaction/branch-summary model calls (pi ≥0.81.1, #6901). OPT-IN
+ * upstream — an undefined policy means no retries — so both compaction paths pass it explicitly:
+ * the harness config (auto-compaction inside a run) and the manual `compact()` dispatch in
+ * session-control. Values mirror pi's own app defaults (maxRetries 3, base 2s exponential).
+ */
+export const SUMMARIZATION_RETRY_POLICY = { enabled: true, maxRetries: 3, baseDelayMs: 2000 } as const;
+
+/**
  * The serving default for reasoning effort, pinned to what pi's TUI defaults to (its
  * DEFAULT_THINKING_LEVEL) — NOT inherited from the bare harness, whose own fallback is "off": an
  * author vibes at "medium" in pi and must get "medium" when served (fidelity), and pinning the value
@@ -275,6 +283,7 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       systemPrompt: prompt,
       resources: skills ? { skills } : undefined,
       streamOptions: { maxRetries: PROVIDER_MAX_RETRIES },
+      retry: SUMMARIZATION_RETRY_POLICY,
     });
     harnessSessions.set(harness, session);
     return harness;
