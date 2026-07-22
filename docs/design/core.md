@@ -140,6 +140,13 @@ Workspace tools are merged in this order:
 3. discovered `tools/*.ts|js|mjs`.
 
 Earlier names win and collisions are reported. Broken discovered tools are reported and skipped.
+Reusable integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting; package
+origin does not create a second tool runtime.
+
+Every `defineTool` execution receives the same generic runtime context. Serving adapts its fresh
+pi-agent-core `Session`; chat adapts pi coding agent's resident `SessionManager`; both expose the
+FastAgent-owned read-only port (`getSessionId`, `getHeader`, `getBranch`). Sessionless direct execution
+provides cwd but no manager.
 
 **Deferred tools** (`defineTool({ deferred: true })`) are registered but not initially active: their
 schemas stay out of the request — and the model's sight — until the built-in `search_tools` loader

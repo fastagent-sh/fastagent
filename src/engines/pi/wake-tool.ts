@@ -2,7 +2,7 @@
  * The built-in `wake` tool: the agent's self-scheduling surface. Calling it records a one-shot wake-up
  * (wakeups.ts); the scheduler fires it back into the SAME session, so the agent resumes THIS
  * conversation after a delay ("check the deploy in 10 minutes"). The session comes from the turn
- * context (ToolContext.session, set around the harness turn); the state root is closed over at build
+ * context (ToolContext.sessionManager, set around the harness turn); the state root is closed over at build
  * time (where it is known — the workspace opener), never read from the turn.
  *
  * Mounted by the opener ONLY when `config.selfSchedule` is on AND on the serving path (`dev`/`start`, where
@@ -68,17 +68,14 @@ export function makeWakeTool(stateRoot: string, now: () => Date = () => new Date
       prompt: z.string().min(1).describe("the instruction for the woken turn (runs in this same conversation)"),
     }),
     execute(input, ctx) {
-      if (!ctx.session) return "wake is only available inside a conversation (there is no session to resume).";
+      const session = ctx.sessionManager?.getSessionId();
+      if (!session) return "wake is only available inside a conversation (there is no session to resume).";
       if ((input.in === undefined) === (input.cron === undefined)) {
         return "pass exactly one of `in` (one-shot) or `cron` (recurring).";
       }
       if (input.cron !== undefined) {
         // addWakeup validates the cron and DERIVES the first instant itself — one computation, one truth.
-        const r = addWakeup(
-          stateRoot,
-          { session: ctx.session, prompt: input.prompt, cron: input.cron, tz: input.tz },
-          now(),
-        );
+        const r = addWakeup(stateRoot, { session, prompt: input.prompt, cron: input.cron, tz: input.tz }, now());
         if (!r.ok) return r.error; // guardrail message the model can act on
         return `OK — recurring wake ${r.id} (cron "${input.cron}"${input.tz ? ` ${input.tz}` : ""}), first at ${r.fireAt}: ${input.prompt}. Use unwake({ id: "${r.id}" }) to stop it.`;
       }
@@ -87,7 +84,7 @@ export function makeWakeTool(stateRoot: string, now: () => Date = () => new Date
         return `couldn't parse "in" (${JSON.stringify(input.in)}) — use a unit like "30m" / "2h" / "1d", or a number of seconds (a bare number as text like "120" is rejected).`;
       }
       const at = new Date(now().getTime() + ms);
-      const r = addWakeup(stateRoot, { session: ctx.session, prompt: input.prompt, fireAt: at }, now());
+      const r = addWakeup(stateRoot, { session, prompt: input.prompt, fireAt: at }, now());
       if (!r.ok) return r.error; // guardrail message the model can act on
       return `OK — I'll wake up at ${r.fireAt} (id ${r.id}) to: ${input.prompt}. Use unwake({ id: "${r.id}" }) if it becomes unnecessary.`;
     },
@@ -104,8 +101,9 @@ export function makeUnwakeTool(stateRoot: string): AgentTool {
       "a scheduled follow-up is no longer needed — especially to stop a recurring wake once its job is done.",
     input: z.object({ id: z.string().min(1).describe("the wake-up id (returned by `wake`)") }),
     execute(input, ctx) {
-      if (!ctx.session) return "unwake is only available inside a conversation.";
-      return removeWakeup(stateRoot, input.id, ctx.session)
+      const session = ctx.sessionManager?.getSessionId();
+      if (!session) return "unwake is only available inside a conversation.";
+      return removeWakeup(stateRoot, input.id, session)
         ? `OK — wake-up ${input.id} cancelled.`
         : `no pending wake-up ${input.id} in this conversation (already fired, or not yours).`;
     },

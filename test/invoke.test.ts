@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { AgentHarness, InMemorySessionRepo, type AgentTool } from "@earendil-works/pi-agent-core";
+import {
+  AgentHarness,
+  InMemorySessionRepo,
+  type AgentTool,
+  type SessionTreeEntry,
+} from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, fauxThinking, fauxToolCall, Type, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
-import { inMemorySessionStore, inProcessLease, type AgentEvent } from "../src/index.ts";
+import { defineTool, inMemorySessionStore, inProcessLease, type AgentEvent, z } from "../src/index.ts";
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
 import { classifyRetryable, createPiAgentFromHarness, errorToTerminal, toTerminal } from "../src/engines/pi/invoke.ts";
 import { type PiHarnessFactory, piHarnessFactory } from "../src/engines/pi/harness.ts";
@@ -80,6 +85,45 @@ describe("invoke fan-in", () => {
 
     expect(thinking).toContain("let me think");
     expect(text).toBe("the answer"); // reasoning is not folded into the answer
+  });
+
+  it("binds the current read-only session manager to ordinary defineTool tools", async () => {
+    let observed: { id: string; branch: SessionTreeEntry[] } | undefined;
+    const inspectSession = defineTool({
+      name: "inspect_session",
+      description: "Inspect the current session.",
+      input: z.object({}),
+      async execute(_input, ctx) {
+        if (!ctx.sessionManager) throw new Error("missing current session manager");
+        observed = {
+          id: ctx.sessionManager.getSessionId(),
+          branch: await ctx.sessionManager.getBranch(),
+        };
+        return "inspected";
+      },
+    });
+    const { faux, models } = makeFaux();
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("inspect_session", {}, { id: "inspect-1" })),
+      fauxAssistantMessage("done"),
+    ]);
+    const agent = createPiAgentFromHarness({
+      cwd: process.cwd(),
+      harnessFactory: piHarnessFactory({
+        sessions: inMemorySessionStore(),
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+        models,
+        model: faux.getModel(),
+        tools: [inspectSession],
+        systemPrompt: "test",
+      }),
+    });
+
+    await drain(agent.invoke({ session: "history-session" }, { text: "inspect this conversation" }));
+
+    expect(observed?.id).toBe("history-session");
+    expect(JSON.stringify(observed?.branch)).toContain("inspect this conversation");
+    expect(JSON.stringify(observed?.branch)).toContain("inspect_session");
   });
 
   it("preserves text → tool → completed order", async () => {

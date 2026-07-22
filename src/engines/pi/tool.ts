@@ -14,17 +14,15 @@ import { join } from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
-import { type ToolActivation, turnContext } from "./tool-context.ts";
+import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
 
 export interface ToolContext {
+  /** Working directory for this execution. */
+  cwd: string;
   /** Abort signal for the current turn — honor it to cancel in-flight work on cancellation. */
   signal?: AbortSignal;
-  /** The session id of the current turn — which conversation this tool is running in. A general tool
-   *  capability: partition per-conversation data, tag logs, scope state. Undefined outside a turn (a bare
-   *  `fastagent tool` run, or any call with no session). (The built-in `wake` tool is one consumer — it
-   *  fires a later turn back into this same session.) In a `fastagent chat` turn this is pi's LOCAL
-   *  chat session id, not a served session — serving-coupled consumers like wake are not mounted there. */
-  session?: string;
+  /** Current conversation manager. Present during serving/chat; absent for sessionless direct calls. */
+  sessionManager?: ReadonlySessionManager;
   /** Tool activation for the current turn (a loader tool activates {@link DefineToolOptions.deferred}
    *  tools with it — the built-in `search_tools` is one consumer). Provided by both the serving path
    *  (invoke.ts, over the harness) and chat (over pi's AgentSession); undefined only outside any turn
@@ -55,7 +53,9 @@ export interface DefineToolOptions<I extends z.ZodType> {
 /** An AgentTool with fastagent's deferral marker — the type for raw tools handed to fastagent
  *  (`config.tools`, L1/L2 `tools`): plain `AgentTool` has no `deferred`, so an object literal with the
  *  marker would fail excess-property checking against upstream's type. `defineTool` produces it. */
-export type FastagentTool = AgentTool & { deferred?: boolean };
+export type FastagentTool = AgentTool & {
+  deferred?: boolean;
+};
 
 /** Read the {@link DefineToolOptions.deferred} marker off a mounted tool (extra property on the
  *  AgentTool object — pi ignores it). */
@@ -80,7 +80,7 @@ function wrapResult(value: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details: value };
 }
 
-export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): AgentTool {
+export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): FastagentTool {
   const { $schema: _drop, ...parameters } = z.toJSONSchema(options.input) as Record<string, unknown>;
   const tool = {
     name: options.name ?? "",
@@ -114,7 +114,14 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
             },
           }
         : undefined;
-      const result = wrapResult(await options.execute(parsed.data, { signal, session: store?.session, tools }));
+      const result = wrapResult(
+        await options.execute(parsed.data, {
+          cwd: store?.cwd ?? process.cwd(),
+          signal,
+          sessionManager: store?.sessionManager,
+          tools,
+        }),
+      );
       if (added.length > 0) {
         // A copy, not a mutation: wrapResult passes a full AgentToolResult through by REFERENCE, and an
         // author may legally return a shared/frozen result object — stamping in place would corrupt it
@@ -124,7 +131,7 @@ export function defineTool<I extends z.ZodType>(options: DefineToolOptions<I>): 
       return result;
     },
   };
-  return tool as unknown as AgentTool;
+  return tool as unknown as FastagentTool;
 }
 
 /** A discarded same-name tool (within `tools/`, or against an existing tool). Surfaced, never silent. */

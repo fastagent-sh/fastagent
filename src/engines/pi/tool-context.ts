@@ -1,15 +1,18 @@
 /**
- * The per-turn context a tool's `execute` can read (beyond its abort signal): the SESSION the current
- * turn runs in. A `defineTool` tool is built ONCE and reused across sessions, so the session can't be a
- * closure — it rides an AsyncLocalStorage set around the harness turn (invoke.ts) and read inside
- * `execute` (tool.ts). Undefined outside a turn (e.g. `fastagent tool`, which runs a tool with no
- * session). This is what lets a tool know which conversation it is in — the mechanism the agent's
- * self-scheduling `wake` tool needs to fire a later turn back into the SAME session.
- *
- * Only `session` lives here (a per-turn runtime value). Deploy-time ambients a tool closes over at
- * build time (e.g. a stateRoot) do NOT belong here — pass them via the tool's own closure.
+ * Per-turn capabilities shared by every FastAgent-defined tool. A tool is built once and reused across
+ * turns, so current cwd/session/activation bindings ride AsyncLocalStorage rather than definition
+ * closures. Deploy-time ambients a tool closes over at build time do NOT belong here.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
+
+/** FastAgent's read-only port over the current conversation manager. Serving and chat adapt their
+ * different concrete session implementations to this one tool-runtime contract. */
+export interface ReadonlySessionManager {
+  getSessionId(): string;
+  getHeader(): Promise<{ id: string; timestamp: string }>;
+  getBranch(): Promise<SessionTreeEntry[]>;
+}
 
 /**
  * The turn's tool-activation bridge — narrow closures over the CURRENT harness (invoke.ts builds it
@@ -30,8 +33,10 @@ export interface ToolActivation {
 }
 
 export interface TurnContext {
-  /** The session id of the current turn. */
-  session: string;
+  /** Working directory for this execution. Falls back to process.cwd() only for an unbound direct call. */
+  cwd?: string;
+  /** Current conversation manager. Absent outside a FastAgent-managed agent turn. */
+  sessionManager?: ReadonlySessionManager;
   /** Tool activation for the current turn. Two producers, one consumer surface: invoke.ts bridges the
    *  serving harness; chat.ts bridges pi's AgentSession (chat emulates deferral — same loader, same
    *  semantics). Absent only outside any turn (a bare `fastagent tool` run). */
