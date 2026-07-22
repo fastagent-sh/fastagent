@@ -17,6 +17,8 @@ function fakeApi(overrides: Partial<SlackApi> = {}): SlackApi {
     stopStream: async () => {},
     setThreadStatus: async () => {},
     setThreadTitle: async () => {},
+    addReaction: async () => {},
+    removeReaction: async () => {},
     fileInfo: async (id) => ({
       id,
       name: `${id}.txt`,

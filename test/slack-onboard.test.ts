@@ -36,6 +36,7 @@ describe("Slack internal-app manifest and control API", () => {
       "files:read",
       "files:write",
       "im:history",
+      "reactions:write",
     ]);
     expect(slackBotEvents("mentions")).toEqual(["app_context_changed", "app_home_opened", "app_mention", "message.im"]);
     expect(slackBotScopes("context")).toEqual(

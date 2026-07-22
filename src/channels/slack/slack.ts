@@ -38,6 +38,7 @@ import {
   settleSlackPreview,
   streamSlackReply,
 } from "./preview.ts";
+import { resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
 import { type SlackTarget, type SlackTaskDisplayMode, createSlackApi } from "./slack-api.ts";
 import { createWelcomedUsers } from "./welcomed.ts";
 
@@ -125,6 +126,10 @@ export interface SlackChannelOptions {
    * `tab: "messages"`). A string customizes it; `false` disables it. Plain Markdown only — no interactive
    * buttons until an interactivity endpoint exists. Defaults to a generic greeting. */
   welcome?: string | false;
+  /** Lightweight emoji ack on the user's triggering message: 👀 while working, ✅ when done. `false`
+   * disables it; an object overrides either emoji name. Requires the `reactions:write` scope; a missing
+   * scope degrades to no ack. */
+  reactionAck?: false | { processing?: string; completed?: string };
   /** Custom route policy. Providing it disables the default managed-thread/context admission policy. */
   route?: (envelope: SlackEventEnvelope) => SlackRoute | null;
   /** Customer-facing failure formatter; full details always remain in operator logs. */
@@ -151,6 +156,13 @@ export function verifySlackSignature(
   return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
+/** The (channel, ts) of the user's triggering message, encoded in the logical turn id `team:channel:ts`
+ *  (Slack ids never contain a colon, so a 3-part split is exact). Used to place the reaction ack. */
+function messageRefOf(turnId: string): { channelId: string; ts: string } | undefined {
+  const parts = turnId.split(":");
+  return parts.length === 3 && parts[1] && parts[2] ? { channelId: parts[1], ts: parts[2] } : undefined;
+}
+
 export function slackChannel({
   botToken,
   signingSecret,
@@ -165,6 +177,7 @@ export function slackChannel({
   taskDisplay = "plan",
   aiDisclaimer,
   welcome = DEFAULT_WELCOME,
+  reactionAck = {},
   route,
   onError,
   apiBaseUrl = "https://slack.com/api",
@@ -187,6 +200,7 @@ export function slackChannel({
   if (welcome !== false && typeof welcome !== "string") {
     throw new Error("slackChannel welcome must be a string or false");
   }
+  const reactionEmojis = resolveReactionEmojis(reactionAck);
 
   return ({ agent, stateRoot }) => {
     if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
@@ -322,6 +336,17 @@ export function slackChannel({
         const { text: recent, consumed } = buffer.peek(turn.bufferKey);
         const prompt = recent ? `[recent group discussion:\n${recent}\n]\n\n${turn.baseText}` : turn.baseText;
         const buffered = collectSlackBufferedFiles(consumed, new Set(turn.fileIds));
+        const messageRef = messageRefOf(turn.id);
+        const reaction =
+          reactionEmojis && messageRef
+            ? await startSlackReaction({
+                api,
+                channelId: messageRef.channelId,
+                ts: messageRef.ts,
+                emojis: reactionEmojis,
+                label,
+              })
+            : undefined;
         try {
           await streamSlackReply(
             invokeSlackTurn(
@@ -348,8 +373,10 @@ export function slackChannel({
             },
           );
           log.info(`${label} turn done: turn=${turn.id} session=${turn.session} (${Date.now() - startedAt}ms)`);
+          await reaction?.complete();
         } catch (error) {
           log.error(`${label} turn failed: turn=${turn.id} session=${turn.session}: ${String(error)}`);
+          await reaction?.remove();
         } finally {
           store.remove(turn.id);
         }
@@ -495,7 +522,8 @@ export function slackChannel({
       const body = welcome.trim();
       if (!body) return;
       const event = envelope.event;
-      if (!event || event.type !== "app_home_opened" || event.tab !== "messages") return;
+      if (!event) return;
+      if (event.type !== "app_home_opened" || event.tab !== "messages") return;
       const userId = event.user;
       const channelId = event.channel;
       if (!userId || !channelId) return;

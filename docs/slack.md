@@ -84,6 +84,7 @@ chat:write
 im:history
 files:read
 files:write
+reactions:write
 ```
 
 Context mode additionally needs `channels:history`, `groups:history`, and `mpim:history`. Native mode
@@ -114,6 +115,7 @@ export default slackChannel({
   // taskDisplay: "plan", // native task-card layout: "plan" (default) | "timeline" | "dense"
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
+  // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
   // Direct and group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",
@@ -127,6 +129,10 @@ import-safe while a live endpoint never runs without verification.
 On a user's first DM open (`app_home_opened` with `tab: "messages"`), the channel posts a one-time
 plain-Markdown welcome. Set `welcome` to customize the text or `false` to disable it. No interactive
 buttons are used yet, so the message stays plain until an interactivity endpoint exists.
+
+While a turn runs, the channel adds a 👀 reaction to the user's triggering message and swaps it for ✅ on
+completion. Set `reactionAck` to override the emoji names or `false` to disable it. This needs the
+`reactions:write` scope; a missing scope degrades to no ack (the reply is unaffected).
 
 ## Routing and sessions
 

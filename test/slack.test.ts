@@ -128,6 +128,77 @@ afterEach(async () => {
   for (const value of roots.splice(0)) rmSync(value, { recursive: true, force: true });
 });
 
+describe("Slack reaction ack", () => {
+  const reactionCalls = (
+    fetchMock: ReturnType<typeof okFetch>,
+  ): { method: string | undefined; name: unknown; channel: unknown; timestamp: unknown }[] =>
+    fetchMock.mock.calls
+      .filter(([url]) => /\/reactions\.(add|remove)$/.test(String(url)))
+      .map(([url, init]) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return {
+          method: String(url).split("/").pop(),
+          name: body.name,
+          channel: body.channel,
+          timestamp: body.timestamp,
+        };
+      });
+
+  it("adds the processing reaction on the triggering message and swaps it for completed on success", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { handler } = mount(replyingAgent("hello back").agent);
+    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
+    await settle();
+    expect(reactionCalls(fetchMock)).toEqual([
+      { method: "reactions.add", name: "eyes", channel: "D1", timestamp: "1.0" },
+      { method: "reactions.remove", name: "eyes", channel: "D1", timestamp: "1.0" },
+      { method: "reactions.add", name: "white_check_mark", channel: "D1", timestamp: "1.0" },
+    ]);
+  });
+
+  it("honors reactionAck:false and custom emoji names", async () => {
+    const off = okFetch();
+    vi.stubGlobal("fetch", off);
+    const disabled = mount(replyingAgent().agent, { reactionAck: false });
+    await disabled.handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
+    await settle();
+    expect(reactionCalls(off)).toHaveLength(0);
+
+    const custom = okFetch();
+    vi.stubGlobal("fetch", custom);
+    const { handler } = mount(replyingAgent().agent, {
+      reactionAck: { processing: ":hourglass_flowing_sand:", completed: "heavy_check_mark" },
+    });
+    await handler(signedRequest(message("1.5", { channel: "D1", channel_type: "im", text: "hi" })));
+    await settle();
+    expect(reactionCalls(custom).map((call) => call.name)).toEqual([
+      "hourglass_flowing_sand",
+      "hourglass_flowing_sand",
+      "heavy_check_mark",
+    ]);
+  });
+
+  it("keeps the turn's reply when the reaction API fails", async () => {
+    let ts = 100;
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/auth.test")) return Response.json({ ok: true, team_id: "T1", user_id: "UBOT" });
+      if (url.endsWith("/reactions.add")) return Response.json({ ok: false, error: "missing_scope" });
+      if (url.endsWith("/chat.postMessage") || url.endsWith("/chat.startStream")) {
+        return Response.json({ ok: true, ts: String(ts++) });
+      }
+      return Response.json({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { handler } = mount(replyingAgent("still replies").agent);
+    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
+    await settle();
+    const methods = fetchMock.mock.calls.map(([url]) => String(url).split("/").pop());
+    expect(methods).toContain("chat.startStream");
+  });
+});
+
 describe("Slack first-run welcome", () => {
   const appHome = (input: Partial<NonNullable<SlackEventEnvelope["event"]>> = {}): SlackEventEnvelope => ({
     type: "event_callback",
@@ -206,7 +277,7 @@ describe("Slack signed ingress", () => {
     expect(verifySlackSignature(SECRET, timestamp, signature, body, 1_700_001_000_000)).toBe(false);
   });
 
-  it("rejects invalid session, rendering, and task-display policies at construction", () => {
+  it("rejects invalid session, rendering, task-display, and reaction policies at construction", () => {
     expect(() =>
       slackChannel({
         botToken: "xoxb-test",
@@ -228,6 +299,13 @@ describe("Slack signed ingress", () => {
         taskDisplay: "invalid" as "dense",
       }),
     ).toThrow(/taskDisplay/);
+    expect(() =>
+      slackChannel({
+        botToken: "xoxb-test",
+        signingSecret: SECRET,
+        reactionAck: { processing: "not valid!" },
+      }),
+    ).toThrow(/reactionAck/);
   });
 
   it("refuses to ACK work when auth.test proves the bot token is unusable", async () => {

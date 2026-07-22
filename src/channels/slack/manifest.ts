@@ -7,6 +7,7 @@ export const SLACK_BASE_BOT_SCOPES = [
   "files:read",
   "files:write",
   "im:history",
+  "reactions:write",
 ] as const;
 export const SLACK_CONTEXT_BOT_SCOPES = ["channels:history", "groups:history", "mpim:history"] as const;
 export const SLACK_BASE_BOT_EVENTS = ["app_context_changed", "app_home_opened", "app_mention", "message.im"] as const;

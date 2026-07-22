@@ -24,6 +24,7 @@ export default slackChannel({
   // taskDisplay: "plan", // native task-card layout: "plan" (default) | "timeline" | "dense"
   // Optional per-reply footer, if your policy requires one: aiDisclaimer: "AI-generated; verify important information.",
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: a generic greeting)
+  // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
   // Direct and group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
   // groupMessageSession: "continuous",

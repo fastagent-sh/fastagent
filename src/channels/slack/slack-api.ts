@@ -118,6 +118,8 @@ export interface SlackApi {
   stopStream(channelId: string, ts: string, content?: SlackStreamContent): Promise<void>;
   setThreadStatus(target: SlackTarget, status: string): Promise<void>;
   setThreadTitle(target: SlackTarget, title: string): Promise<void>;
+  addReaction(channelId: string, timestamp: string, emoji: string): Promise<void>;
+  removeReaction(channelId: string, timestamp: string, emoji: string): Promise<void>;
   fileInfo(fileId: string): Promise<SlackFile>;
   fetchImage(file: SlackFile): Promise<ImageRef>;
   fetchFile(file: SlackFile, channelId: string, filesDir: string): Promise<DownloadedSlackFile>;
@@ -442,6 +444,22 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
         thread_ts: target.threadTs,
         title,
       });
+    },
+    async addReaction(channelId, timestamp, emoji) {
+      try {
+        await call("reactions.add", { channel: channelId, timestamp, name: emoji });
+      } catch (error) {
+        if (error instanceof SlackApiError && error.slackError === "already_reacted") return;
+        throw error;
+      }
+    },
+    async removeReaction(channelId, timestamp, emoji) {
+      try {
+        await call("reactions.remove", { channel: channelId, timestamp, name: emoji });
+      } catch (error) {
+        if (error instanceof SlackApiError && error.slackError === "no_reaction") return;
+        throw error;
+      }
     },
     async fileInfo(fileId) {
       const data = await call<SlackBody & { file?: SlackFile }>("files.info", { file: fileId }, "GET");

@@ -17,6 +17,8 @@ function fakeApi(): SlackApi {
     stopStream: vi.fn(async () => {}),
     setThreadStatus: vi.fn(async () => {}),
     setThreadTitle: vi.fn(async () => {}),
+    addReaction: vi.fn(async () => {}),
+    removeReaction: vi.fn(async () => {}),
     fileInfo: vi.fn(async (id) => ({ id })),
     fetchImage: vi.fn(async () => ({ mimeType: "image/png", data: "aW1n" })),
     fetchFile: vi.fn(async (file) => ({ path: `/tmp/${file.id}`, name: String(file.id), size: 1 })),
