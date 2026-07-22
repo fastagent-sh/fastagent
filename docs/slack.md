@@ -94,7 +94,9 @@ a manually configured classic-only app may omit those two Agent capabilities. Su
 `message.channels`, `message.groups`, and `message.mpim`. Set `https://<host>/slack` under Event
 Subscriptions while FastAgent is running,
 then put the Bot Token and Signing Secret in `.env`. Without local onboarding state, tunnel/deploy commands
-print this manual Request URL instead of claiming registration succeeded.
+print this manual Request URL instead of claiming registration succeeded. On the machine that onboarded the
+app, `fastagent add slack --replace-config` replaces an expired or revoked App Configuration token pair
+without touching the installed app or its runtime credentials.
 
 ## Scaffolded channel
 

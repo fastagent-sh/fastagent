@@ -28,6 +28,8 @@ export async function onboardSlackInternalApp(input: {
   stateRoot: string;
   envIgnored: boolean;
   groupBehavior: GroupBehaviorChoice;
+  /** `--replace-config`: go straight to replacing the local App Configuration token pair. */
+  replaceConfig?: boolean;
 }): Promise<void> {
   installProxyFetch();
   if (!input.envIgnored) {
@@ -46,6 +48,12 @@ export async function onboardSlackInternalApp(input: {
   await ensureStateRootSelfIgnored(input.target, input.stateRoot);
   let state = await readSlackOnboardingState(input.stateRoot);
   const resumed = state !== undefined;
+  if (input.replaceConfig && !state) {
+    throw new Error(
+      "--replace-config found no local Slack onboarding state on this machine — nothing to replace. " +
+        "Run `fastagent add slack` to onboard, or update the Request URL manually in the Slack console",
+    );
+  }
   if (state?.installedAt) {
     const env = await readFile(join(input.target, ".env"), "utf8")
       .then(parseEnvContent)
@@ -73,19 +81,23 @@ export async function onboardSlackInternalApp(input: {
           "OAuth scopes is a migration. Keep the existing choice, or remove the app + Slack onboarding state and create a new app",
       );
     }
-    const action = await select<"keep" | "replace-config">({
-      message: `Slack app ${state.appId ?? "(unknown)"} is already installed${state.teamName ? ` in ${state.teamName}` : ""}`,
-      initialValue: "keep",
-      options: [
-        { value: "keep", label: "Keep the installed app" },
-        {
-          value: "replace-config",
-          label: "Replace App Configuration tokens",
-          hint: "repair automatic dev/deploy Request URL updates",
-        },
-      ],
-    });
-    if (isCancel(action)) throw new Error("Slack onboarding cancelled");
+    let action: "keep" | "replace-config" = "replace-config";
+    if (!input.replaceConfig) {
+      const answer = await select<"keep" | "replace-config">({
+        message: `Slack app ${state.appId ?? "(unknown)"} is already installed${state.teamName ? ` in ${state.teamName}` : ""}`,
+        initialValue: "keep",
+        options: [
+          { value: "keep", label: "Keep the installed app" },
+          {
+            value: "replace-config",
+            label: "Replace App Configuration tokens",
+            hint: "repair automatic dev/deploy Request URL updates",
+          },
+        ],
+      });
+      if (isCancel(answer)) throw new Error("Slack onboarding cancelled");
+      action = answer;
+    }
     if (action === "replace-config") {
       console.error(`[fastagent] generate a fresh App Configuration Token pair at ${CONFIG_TOKEN_URL}`);
       openExternalUrl(CONFIG_TOKEN_URL);
@@ -138,16 +150,22 @@ export async function onboardSlackInternalApp(input: {
         `inspect ${CONFIG_TOKEN_URL}; delete any incomplete app and ${input.stateRoot}/channels/slack/onboarding.json before retrying`,
     );
   }
-  if (resumed && !state.appId) {
-    const action = await select<"keep" | "replace-config">({
-      message: "Resume Slack onboarding with which App Configuration tokens?",
-      initialValue: "keep",
-      options: [
-        { value: "keep", label: "Use the saved token pair" },
-        { value: "replace-config", label: "Paste a fresh token pair" },
-      ],
-    });
-    if (isCancel(action)) throw new Error("Slack onboarding cancelled");
+  // `--replace-config` also covers the created-but-not-installed state, where a revoked token would
+  // otherwise strand the resume (rotation fails and no menu offers replacement).
+  if (resumed && (!state.appId || input.replaceConfig)) {
+    let action: "keep" | "replace-config" = "replace-config";
+    if (!input.replaceConfig) {
+      const answer = await select<"keep" | "replace-config">({
+        message: "Resume Slack onboarding with which App Configuration tokens?",
+        initialValue: "keep",
+        options: [
+          { value: "keep", label: "Use the saved token pair" },
+          { value: "replace-config", label: "Paste a fresh token pair" },
+        ],
+      });
+      if (isCancel(answer)) throw new Error("Slack onboarding cancelled");
+      action = answer;
+    }
     if (action === "replace-config") {
       openExternalUrl(CONFIG_TOKEN_URL);
       state = {
