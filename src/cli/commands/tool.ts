@@ -4,6 +4,7 @@ import { loadDotEnv } from "../../env.ts";
 import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
 import { resolveWorkspaceTools } from "../../engines/pi/create.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
+import { turnContext } from "../../engines/pi/tool-context.ts";
 import { failStartup, failUsage } from "../fail.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
@@ -33,7 +34,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   } catch {
     failUsage(`invalid JSON args: ${argsJson}`); // malformed input syntax = usage error, exit 2
   }
-  const result = await tool.execute(`cli-${name}`, args).catch(failStartup);
+  const result = await turnContext.run({ cwd: toolDir }, () => tool.execute(`cli-${name}`, args)).catch(failStartup);
   const out =
     result?.details !== undefined
       ? result.details

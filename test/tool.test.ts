@@ -31,6 +31,23 @@ describe("defineTool", () => {
     expect(JSON.stringify(bad)).toMatch(/Invalid arguments|expected number/);
   });
 
+  it("uses the unified ToolContext without a duplicate session id", async () => {
+    let context: Record<string, unknown> | undefined;
+    const tool = defineTool({
+      name: "ordinary",
+      description: "ordinary",
+      input: z.object({}),
+      execute(_input, ctx) {
+        context = ctx as unknown as Record<string, unknown>;
+        return "ok";
+      },
+    });
+    await tool.execute("c", {});
+    expect(context?.cwd).toBe(process.cwd());
+    expect(context?.sessionManager).toBeUndefined();
+    expect(context).not.toHaveProperty("session");
+  });
+
   it("passes a full {content,details} result through unchanged", async () => {
     const tool = defineTool({
       name: "raw",

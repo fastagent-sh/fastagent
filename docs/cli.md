@@ -218,7 +218,8 @@ session-scoped).
 fastagent tool <name> '<json-args>' [dir]
 ```
 
-Runs one discovered or configured tool directly, without a model or server.
+Runs one discovered or configured tool directly, without a model or server. The call receives its
+workspace cwd but no session manager; a session-dependent tool reports that requirement itself.
 
 Example:
 

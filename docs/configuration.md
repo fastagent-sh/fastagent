@@ -150,7 +150,20 @@ There are two ways to add tools:
 tools/lookup-order.ts  ->  lookup-order
 ```
 
-`config.tools` are appended after the default pi tools. Discovered `tools/` are appended after those. Name collisions are surfaced as warnings; existing tools win.
+`config.tools` are appended after the default pi tools. Discovered `tools/` are appended after those.
+Name collisions are surfaced as warnings; existing tools win. Reusable packages do not need a separate
+plugin contract: export ordinary `FastagentTool[]` and mount them explicitly:
+
+```ts
+import { integrationTools } from "@acme/fastagent-tools";
+
+export default defineConfig({
+  tools: integrationTools({ apiKey: process.env.ACME_API_KEY! }),
+});
+```
+
+Package tools receive the same `ToolContext` as definition-local `defineTool` tools, including the
+optional read-only `sessionManager` during serving/chat turns.
 
 ### When the repo already owns `tools/` or `channels/`
 

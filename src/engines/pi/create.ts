@@ -207,12 +207,13 @@ function buildPiAgent(opts: {
   onAssembly?: OnAssembly;
 }): Agent {
   const models = createPiModels({ providers: opts.providers, authPath: opts.authPath });
+  const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
   // Materialized here (not defaulted inside createPiAgentFromHarness) so the exposed parts carry
   // the SAME lease instance the agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
   const harnessFactory = piHarnessFactory({
     sessions: opts.sessions ?? inMemorySessionStore(),
-    env: opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() }),
+    env,
     models,
     model: resolveModel(models, opts.model),
     thinkingLevel: opts.thinkingLevel,
@@ -222,7 +223,7 @@ function buildPiAgent(opts: {
     live: opts.live,
   });
   opts.onAssembly?.({ models, harnessFactory, lease });
-  return createPiAgentFromHarness({ lease, observer: opts.observer, harnessFactory });
+  return createPiAgentFromHarness({ lease, observer: opts.observer, cwd: env.cwd, harnessFactory });
 }
 
 /**
