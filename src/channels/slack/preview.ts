@@ -24,10 +24,12 @@ const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(
 
 /** LLM output uses standard Markdown, never Slack's notification control syntax. Keep explicit sends in
  * the slack-send tool, where the Agent has to choose a side-effecting delivery action deliberately.
- * The pattern is deliberately a single `>`-bounded repetition: it stays linear on adversarial input (no
- * polynomial backtracking) while still neutralizing every `<@…>` / `<!…>` control sequence. */
+ * The inner class excludes BOTH `<` and `>` on purpose: bounding each run by the next delimiter keeps
+ * the scan linear even on adversarial input like `(<!)^n` (a `>`-only bound would still be polynomial
+ * across the many `<` start positions), while still neutralizing every `<@…>` / `<!…>` control sequence
+ * (real Slack controls never contain a `<`). */
 export function sanitizeSlackMarkdown(markdown: string): string {
-  return markdown.replace(/<[@!][^>]*>/g, (control) => `&lt;${control.slice(1)}`);
+  return markdown.replace(/<[@!][^<>]*>/g, (control) => `&lt;${control.slice(1)}`);
 }
 
 function withDisclaimer(markdown: string, disclaimer: string | false | undefined): string {
