@@ -251,6 +251,10 @@ creates a new internal app with `agent_view`, native streams/tasks, and suggeste
 through OAuth, and writes rotating bot credentials + the Signing Secret to the gitignored `.env`. The configuration refresh token stays owner-readable
 under `<state root>/channels/slack/` and is used locally by `dev --tunnel` / `deploy --run` to update the
 Events API URL; it never travels to the host. `--no-onboard` preserves the manual scaffold-only path.
+`--replace-config` skips the menu and directly replaces the local App Configuration token pair — the
+repair when automatic Request URL updates fail because the tokens expired or were revoked. It works only
+on the machine that onboarded the app (the pair lives in its local state); other machines set the Request
+URL manually in the Slack console.
 
 See:
 

@@ -31,9 +31,12 @@ import { failStartup, failUsage } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean },
+  opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
   const target = resolve(dirArg);
+  if (opts.replaceConfig && opts.onboard === false) {
+    failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
+  }
   loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
   // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
   // and only path there). The retired --create-app spelling gets a pointer, not silence.
@@ -102,6 +105,7 @@ export async function runAddChannel(
       stateRoot: resolveStateRoot(target),
       envIgnored,
       groupBehavior,
+      replaceConfig: opts.replaceConfig,
     })
       .then(() => undefined)
       .catch(failStartup);

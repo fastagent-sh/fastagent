@@ -28,7 +28,9 @@ export async function registerSlackWebhook(
   }
   if (!state?.appId || !state.installedAt) {
     note(
-      `[fastagent] slack: no completed local onboarding state — set Event Subscriptions → Request URL = ${publicBaseUrl}/slack manually, or re-run \`fastagent add slack\` interactively`,
+      `[fastagent] slack: no completed local onboarding state on this machine — the config credential lives only where \`fastagent add slack\` ran. ` +
+        `Set Event Subscriptions → Request URL = ${publicBaseUrl}/slack manually in the Slack console, or re-run this command from the onboarding machine ` +
+        `(repair its expired/revoked tokens with \`fastagent add slack --replace-config\`)`,
     );
     return "manual";
   }
@@ -60,7 +62,7 @@ export async function registerSlackWebhook(
   } catch (error) {
     note(
       `[fastagent] slack: automatic Request URL registration failed: ${String(error)} — ` +
-        `re-run \`fastagent add slack\` to repair onboarding, or set ${publicBaseUrl}/slack in the Slack console`,
+        `re-run \`fastagent add slack --replace-config\` to repair the configuration tokens, or set ${publicBaseUrl}/slack in the Slack console`,
     );
     return "failed";
   }
