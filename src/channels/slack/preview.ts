@@ -23,9 +23,11 @@ const GENERIC_FAILURE = "⚠️ The response stream stopped unexpectedly. Please
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** LLM output uses standard Markdown, never Slack's notification control syntax. Keep explicit sends in
- * the slack-send tool, where the Agent has to choose a side-effecting delivery action deliberately. */
-function sanitizeSlackMarkdown(markdown: string): string {
-  return markdown.replace(/<(?:@[A-Z0-9]+|![^>\s]+)(?:\|[^>]*)?>/gi, (control) => `&lt;${control.slice(1)}`);
+ * the slack-send tool, where the Agent has to choose a side-effecting delivery action deliberately.
+ * The pattern is deliberately a single `>`-bounded repetition: it stays linear on adversarial input (no
+ * polynomial backtracking) while still neutralizing every `<@…>` / `<!…>` control sequence. */
+export function sanitizeSlackMarkdown(markdown: string): string {
+  return markdown.replace(/<[@!][^>]*>/g, (control) => `&lt;${control.slice(1)}`);
 }
 
 function withDisclaimer(markdown: string, disclaimer: string | false | undefined): string {

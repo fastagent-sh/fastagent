@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
-import { streamSlackReply } from "../src/channels/slack/preview.ts";
+import { sanitizeSlackMarkdown, streamSlackReply } from "../src/channels/slack/preview.ts";
 import { type SlackApi, SlackApiError } from "../src/channels/slack/slack-api.ts";
 
 function fakeApi(): SlackApi {
@@ -83,5 +83,25 @@ describe("Slack reply rendering", () => {
     await pending;
     expect(api.updateMarkdown).toHaveBeenCalledWith("D1", "1.0", "**answer**");
     expect(JSON.stringify(vi.mocked(api.postMarkdown).mock.calls)).not.toContain("private reasoning");
+  });
+});
+
+describe("sanitizeSlackMarkdown", () => {
+  it("neutralizes Slack control mentions and preserves ordinary autolinks", () => {
+    expect(sanitizeSlackMarkdown("ping <!channel> now")).toBe("ping &lt;!channel> now");
+    expect(sanitizeSlackMarkdown("hi <@U123>")).toBe("hi &lt;@U123>");
+    expect(sanitizeSlackMarkdown("<@U1|Bob> and <!subteam^S1|team>")).toBe("&lt;@U1|Bob> and &lt;!subteam^S1|team>");
+    expect(sanitizeSlackMarkdown("see <https://example.com>")).toBe("see <https://example.com>");
+  });
+
+  it("stays linear on adversarial input (ReDoS regression)", () => {
+    const unterminatedBang = `<!${"!".repeat(200_000)}`;
+    const unterminatedPipes = `<@0|${"!|".repeat(200_000)}`;
+    const start = Date.now();
+    // No closing '>', so nothing matches and the input is returned unchanged — the point is that this
+    // completes fast instead of triggering polynomial backtracking.
+    expect(sanitizeSlackMarkdown(unterminatedBang)).toBe(unterminatedBang);
+    expect(sanitizeSlackMarkdown(unterminatedPipes)).toBe(unterminatedPipes);
+    expect(Date.now() - start).toBeLessThan(1_000);
   });
 });
