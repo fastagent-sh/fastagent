@@ -1054,7 +1054,7 @@ describe("telegram channel", () => {
     const edits = callsTo(fetchMock, "editMessageText").map((c) => bodyOf(c).text as string);
     // a mid-turn frame shows the reasoning + tool activity (process), edited into the one preview message
     expect(
-      edits.some((t) => /💭/.test(t) && /weighing options/.test(t) && /word-count the quick brown fox/.test(t)),
+      edits.some((t) => /💭/.test(t) && /weighing options/.test(t) && /Word count the quick brown fox/.test(t)),
     ).toBe(true);
     expect(edits.at(-1)).toBe("4 words"); // …but the final message is the answer alone, no thinking/tool noise
     expect(callsTo(fetchMock, "sendMessage")).toHaveLength(1); // one preview message, not per-step spam

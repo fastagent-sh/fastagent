@@ -6,7 +6,7 @@
  * message, works in groups and private (unlike sendMessageDraft, which is private/forum-topic only).
  */
 import type { AgentEvent } from "../../agent.ts";
-import { type ChannelFailure, defaultErrorMessage, summarizeToolArgs } from "../preview-kit.ts";
+import { type ChannelFailure, defaultErrorMessage, humanizeToolName, summarizeToolArgs } from "../preview-kit.ts";
 import { log } from "../../log.ts";
 import { TELEGRAM_MAX_TEXT, type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 
@@ -212,7 +212,8 @@ export async function streamReply(
       } else if (e.type === "tool_started") {
         const arg = summarizeToolArgs(e.args);
         toolIndexById.set(e.id, tools.length);
-        tools.push({ label: arg ? `${e.name} ${arg}` : e.name, status: "running" });
+        const name = humanizeToolName(e.name);
+        tools.push({ label: arg ? `${name} ${arg}` : name, status: "running" });
         touch();
       } else if (e.type === "tool_ended") {
         const i = toolIndexById.get(e.id);

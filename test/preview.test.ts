@@ -193,7 +193,7 @@ describe("streamReply answer preview (direct)", () => {
     await vi.advanceTimersByTimeAsync(0);
     src.push({ type: "tool_started", id: "t1", name: "read", args: { path: "AGENTS.md" } });
     await vi.advanceTimersByTimeAsync(0);
-    expect(edits).toEqual(["🔧 read AGENTS.md …"]);
+    expect(edits).toEqual(["🔧 Read AGENTS.md …"]);
     src.push({ type: "completed" });
     src.end();
     await turn;

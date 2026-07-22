@@ -30,7 +30,7 @@ import {
   streamingCardJson,
 } from "./card.ts";
 import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
-import { type ChannelFailure, defaultErrorMessage, summarizeToolArgs } from "../preview-kit.ts";
+import { type ChannelFailure, defaultErrorMessage, humanizeToolName, summarizeToolArgs } from "../preview-kit.ts";
 import { truncateCodePointSuffix, truncateUtf8 } from "../text.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
@@ -340,7 +340,8 @@ export async function streamFeishuReply(
       } else if (e.type === "tool_started") {
         const arg = summarizeToolArgs(e.args);
         toolIndexById.set(e.id, tools.length);
-        tools.push({ label: arg ? `${e.name} ${arg}` : e.name, status: "running" });
+        const name = humanizeToolName(e.name);
+        tools.push({ label: arg ? `${name} ${arg}` : name, status: "running" });
         touch();
       } else if (e.type === "tool_ended") {
         const i = toolIndexById.get(e.id);
