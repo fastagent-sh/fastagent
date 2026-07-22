@@ -111,6 +111,7 @@ export default slackChannel({
     : undefined,
   groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
   rendering: "native", // native Agent streams/tasks; "classic" is the compatibility renderer
+  // taskDisplay: "plan", // native task-card layout: "plan" (default) | "timeline" | "dense"
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // Direct and group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",
@@ -204,7 +205,10 @@ usable only when Slack exposes authenticated downloadable bytes.
 1. sets the Slack Agent loading status (and a title for a new DM thread);
 2. starts a native stream with `chat.startStream`;
 3. appends standard Markdown with `chat.appendStream`;
-4. maps `tool_started` / `tool_ended` to `task_update` chunks in Slack's dense task display;
+4. maps `tool_started` / `tool_ended` to `task_update` chunks, humanizing each tool's identifier into a
+   plain-language label (`mcp__github__create_issue` → `Github: create issue`) without exposing arguments;
+   the layout follows `taskDisplay` — `plan` (default) groups steps under one collapsible heading,
+   `timeline` lists each step, `dense` collapses consecutive tool calls;
 5. closes the stream with `chat.stopStream`.
 
 Raw model `thinking` and generic tool arguments are never customer-facing. The former is represented by

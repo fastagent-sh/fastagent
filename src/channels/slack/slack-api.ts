@@ -42,6 +42,11 @@ export interface SlackStreamContent {
   chunks?: SlackStreamChunk[];
 }
 
+/** How Slack lays out task cards in a native stream (chat.startStream `task_display_mode`): `timeline`
+ *  lists steps sequentially, `plan` groups them under one heading, `dense` collapses consecutive tool
+ *  calls into one summarized card. */
+export type SlackTaskDisplayMode = "timeline" | "plan" | "dense";
+
 export interface DownloadedSlackFile {
   path: string;
   name: string;
@@ -104,7 +109,11 @@ export interface SlackApi {
   updateMarkdown(channelId: string, ts: string, markdown: string): Promise<void>;
   deleteMessage(channelId: string, ts: string): Promise<void>;
   sendMarkdown(target: SlackTarget, markdown: string): Promise<string | undefined>;
-  startStream(target: SlackTarget, content?: SlackStreamContent): Promise<string>;
+  startStream(
+    target: SlackTarget,
+    content?: SlackStreamContent,
+    taskDisplayMode?: SlackTaskDisplayMode,
+  ): Promise<string>;
   appendStream(channelId: string, ts: string, content: SlackStreamContent): Promise<void>;
   stopStream(channelId: string, ts: string, content?: SlackStreamContent): Promise<void>;
   setThreadStatus(target: SlackTarget, status: string): Promise<void>;
@@ -380,7 +389,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       }
       return first;
     },
-    async startStream(target, content = {}) {
+    async startStream(target, content = {}, taskDisplayMode = "plan") {
       if (!target.threadTs) throw new Error("Slack native streams require a parent thread timestamp");
       const channelRecipient = target.channelId.startsWith("D")
         ? {}
@@ -395,7 +404,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       const data = await call<SlackBody & { ts?: string }>("chat.startStream", {
         channel: target.channelId,
         thread_ts: target.threadTs,
-        task_display_mode: "dense",
+        task_display_mode: taskDisplayMode,
         ...channelRecipient,
         ...(chunks.length ? { chunks } : {}),
       });

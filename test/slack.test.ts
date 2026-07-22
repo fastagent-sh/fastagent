@@ -138,7 +138,7 @@ describe("Slack signed ingress", () => {
     expect(verifySlackSignature(SECRET, timestamp, signature, body, 1_700_001_000_000)).toBe(false);
   });
 
-  it("rejects invalid session and rendering policies at construction", () => {
+  it("rejects invalid session, rendering, and task-display policies at construction", () => {
     expect(() =>
       slackChannel({
         botToken: "xoxb-test",
@@ -153,6 +153,13 @@ describe("Slack signed ingress", () => {
         rendering: "invalid" as "native",
       }),
     ).toThrow(/rendering/);
+    expect(() =>
+      slackChannel({
+        botToken: "xoxb-test",
+        signingSecret: SECRET,
+        taskDisplay: "invalid" as "dense",
+      }),
+    ).toThrow(/taskDisplay/);
   });
 
   it("refuses to ACK work when auth.test proves the bot token is unusable", async () => {
@@ -200,9 +207,20 @@ describe("Slack sessions, context, and managed threads", () => {
       channel: "D1",
       thread_ts: "1.0",
       chunks: [{ type: "markdown_text", text: expect.stringContaining("hello back") }],
-      task_display_mode: "dense",
+      task_display_mode: "plan",
     });
     expect(JSON.stringify(JSON.parse(String(start?.[1]?.body)))).not.toContain("AI-generated content");
+  });
+
+  it("routes the configured taskDisplay into the native stream's task_display_mode", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("hello back");
+    const { handler } = mount(agent, { taskDisplay: "timeline" });
+    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
+    await settle();
+
+    expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({ task_display_mode: "timeline" });
   });
 
   it("renders safe native task updates without exposing reasoning or tool arguments", async () => {
@@ -244,12 +262,12 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(outbound).toContain("&lt;!channel>");
     expect(outbound).toContain("Custom policy footer.");
     expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({
-      chunks: [{ type: "task_update", id: "t1", title: "search", status: "in_progress" }],
+      chunks: [{ type: "task_update", id: "t1", title: "Search", status: "in_progress" }],
     });
     expect(slackBodies(fetchMock, "chat.appendStream")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          chunks: [{ type: "task_update", id: "t1", title: "search", status: "complete" }],
+          chunks: [{ type: "task_update", id: "t1", title: "Search", status: "complete" }],
         }),
         expect.objectContaining({
           chunks: [{ type: "markdown_text", text: expect.stringContaining("# Safe answer") }],

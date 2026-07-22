@@ -87,7 +87,7 @@ describe("Slack Web API transport", () => {
         thread_ts: "9.0",
         recipient_user_id: "U1",
         recipient_team_id: "T1",
-        task_display_mode: "dense",
+        task_display_mode: "plan",
       },
     });
     expect(calls[2]?.body).toMatchObject({

@@ -38,7 +38,7 @@ import {
   settleSlackPreview,
   streamSlackReply,
 } from "./preview.ts";
-import { type SlackTarget, createSlackApi } from "./slack-api.ts";
+import { type SlackTarget, type SlackTaskDisplayMode, createSlackApi } from "./slack-api.ts";
 
 export { defaultSlackRoute, slackEnvelope };
 export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, SlackRendering, SlackRoute };
@@ -113,6 +113,10 @@ export interface SlackChannelOptions {
    * explicit continuous/custom policy necessarily uses the classic renderer because Slack streams
    * require a parent user message. */
   rendering?: SlackRendering;
+  /** Native task-card layout (`chat.startStream` `task_display_mode`): `plan` (default) groups steps
+   * under a single collapsible heading, `timeline` lists each step sequentially, `dense` collapses
+   * consecutive tool calls into one summarized card. Applies to the native renderer only. */
+  taskDisplay?: SlackTaskDisplayMode;
   /** Optional footer for successful Agent replies. Omitted or `false` sends no repetitive disclaimer. */
   aiDisclaimer?: string | false;
   /** Custom route policy. Providing it disables the default managed-thread/context admission policy. */
@@ -152,6 +156,7 @@ export function slackChannel({
   groupMessageSession = "threaded",
   groupBehavior = "context",
   rendering = "native",
+  taskDisplay = "plan",
   aiDisclaimer,
   route,
   onError,
@@ -168,6 +173,9 @@ export function slackChannel({
   }
   if (!(["native", "classic"] as const).includes(rendering)) {
     throw new Error('slackChannel rendering must be "native" or "classic"');
+  }
+  if (!(["timeline", "plan", "dense"] as const).includes(taskDisplay)) {
+    throw new Error('slackChannel taskDisplay must be "timeline", "plan", or "dense"');
   }
 
   return ({ agent, stateRoot }) => {
@@ -324,6 +332,7 @@ export function slackChannel({
               initialPreviewTs: turn.previewTs,
               threadTitle: turn.threadTitle,
               disclaimer: aiDisclaimer,
+              taskDisplay,
               label,
             },
           );

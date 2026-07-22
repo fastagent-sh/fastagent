@@ -1,12 +1,12 @@
 /** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
 import type { AgentEvent } from "../../agent.ts";
 import { log } from "../../log.ts";
-import { type ChannelFailure, defaultErrorMessage } from "../preview-kit.ts";
-import { codePointPrefix } from "../text.ts";
+import { type ChannelFailure, defaultErrorMessage, humanizeToolName } from "../preview-kit.ts";
 import {
   type SlackApi,
   type SlackStreamChunk,
   type SlackTarget,
+  type SlackTaskDisplayMode,
   chunkSlackMarkdown,
   chunkSlackText,
   isSlackNativeUnavailable,
@@ -179,7 +179,7 @@ async function streamClassicSlackReply(
         touch();
       } else if (event.type === "tool_started") {
         toolIndex.set(event.id, tools.length);
-        tools.push({ name: event.name, status: "running" });
+        tools.push({ name: humanizeToolName(event.name), status: "running" });
         touch();
       } else if (event.type === "tool_ended") {
         const index = toolIndex.get(event.id);
@@ -221,6 +221,7 @@ async function streamNativeSlackReply(
   threadTitle: string | undefined,
   disclaimer: string | false | undefined,
   label: string,
+  taskDisplayMode: SlackTaskDisplayMode,
 ): Promise<void> {
   if (initialPreviewTs) {
     await api
@@ -266,7 +267,7 @@ async function streamNativeSlackReply(
     if (streamTs) {
       await api.appendStream(target.channelId, streamTs, content);
     } else {
-      streamTs = await api.startStream(target, content);
+      streamTs = await api.startStream(target, content, taskDisplayMode);
     }
   };
   const flushText = (final = false): void => {
@@ -318,7 +319,7 @@ async function streamNativeSlackReply(
       }
       throw renderError;
     }
-    if (!streamTs) streamTs = await api.startStream(target, { markdownText: safeTerminal });
+    if (!streamTs) streamTs = await api.startStream(target, { markdownText: safeTerminal }, taskDisplayMode);
     await api.stopStream(target.channelId, streamTs);
   };
 
@@ -331,7 +332,7 @@ async function streamNativeSlackReply(
       } else if (event.type === "thinking") {
         // Slack's native loading status represents private reasoning without exposing it.
       } else if (event.type === "tool_started") {
-        const title = codePointPrefix(event.name, 256);
+        const title = humanizeToolName(event.name);
         toolNames.set(event.id, title);
         sendTask({ type: "task_update", id: event.id, title, status: "in_progress" });
       } else if (event.type === "tool_ended") {
@@ -388,12 +389,30 @@ export async function streamSlackReply(
     initialPreviewTs?: string;
     threadTitle?: string;
     disclaimer?: string | false;
+    taskDisplay?: SlackTaskDisplayMode;
     label?: string;
   } = {},
 ): Promise<void> {
-  const { rendering = "native", initialPreviewTs, threadTitle, disclaimer, label = "[slack]" } = options;
+  const {
+    rendering = "native",
+    initialPreviewTs,
+    threadTitle,
+    disclaimer,
+    taskDisplay = "plan",
+    label = "[slack]",
+  } = options;
   if (rendering === "native" && target.threadTs) {
-    return streamNativeSlackReply(events, api, target, formatError, initialPreviewTs, threadTitle, disclaimer, label);
+    return streamNativeSlackReply(
+      events,
+      api,
+      target,
+      formatError,
+      initialPreviewTs,
+      threadTitle,
+      disclaimer,
+      label,
+      taskDisplay,
+    );
   }
   if (rendering === "native") {
     log.info(`${label} native streaming needs a thread target — using the classic renderer for this turn`);
