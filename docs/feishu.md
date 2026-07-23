@@ -309,6 +309,10 @@ Two audiences, like the Telegram channel:
 - **Operator log**: always receives the full diagnostic details.
 - **Chat user**: every answered turn receives `onError(failed)` if provided, otherwise a neutral default keyed on `retryable`.
 
+When the serve runs with `sessionControl: true`, a summon whose whole message is "stop" or "cancel"
+aborts the session's active turn instead of becoming a turn (queued asks keep running; without
+session control it answers with a visible "not enabled" notice).
+
 ## Files and images
 
 Message payloads are resolved by the channel before the agent turn runs — all as **primary** inputs (a load failure becomes a `failed` event, never a silent drop):

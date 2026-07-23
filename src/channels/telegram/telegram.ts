@@ -47,6 +47,7 @@ import {
 } from "./parse.ts";
 import { type TelegramFailure, defaultErrorMessage, streamReply } from "./preview.ts";
 import { ensureStateHome } from "../state.ts";
+import { dispatchStop } from "../stop-command.ts";
 import { type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { type StoredTurn, createTurnStore } from "./turn-store.ts";
@@ -124,7 +125,7 @@ export function telegramChannel({
   botUsername,
   apiBaseUrl = "https://api.telegram.org",
 }: TelegramChannelOptions): ChannelModule {
-  return ({ agent, stateRoot }) => {
+  return ({ agent, stateRoot, control }) => {
     // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
     if (!secretToken) {
       throw new Error(
@@ -407,6 +408,22 @@ export function telegramChannel({
         // that explicitly returns the same chat/thread still quotes.
         const threadId = r.threadId ?? m.message_thread_id;
         const sameTarget = String(chatId) === String(m.chat.id) && threadId === m.message_thread_id;
+        // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the
+        // run it stops. `/stop@otherbot` is not ours; a bare `/stop` always is. Awaited before the ACK:
+        // dispatch + one sendMessage is fast, and a delivery failure logs instead of failing the webhook.
+        const stopMatch = /^\/stop(?:@([A-Za-z0-9_]+))?$/i.exec(messageText(m).trim());
+        if (stopMatch && (!stopMatch[1] || stopMatch[1].toLowerCase() === mentionName?.toLowerCase())) {
+          const feedback = await dispatchStop(control, session, "[telegram]");
+          const target: Target = {
+            chatId,
+            threadId,
+            replyTo: m.chat.type !== "private" && sameTarget ? m.message_id : undefined,
+          };
+          await sendMessage(apiBaseUrl, botToken, target, feedback, { html: false }).catch((e) =>
+            log.warn(`[telegram] stop feedback failed: ${String(e)}`),
+          );
+          return new Response(null, { status: 200 });
+        }
         const baseText = r.text ?? telegramEnvelope(m);
         const imageFileIds = extractImages(m);
         const fileIds = extractFiles(m);
