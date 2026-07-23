@@ -1,7 +1,18 @@
 /** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
 import type { AgentEvent } from "../../agent.ts";
 import { log } from "../../log.ts";
-import { RETRY_NOTICE, type ChannelFailure, defaultErrorMessage, humanizeToolName } from "../preview-kit.ts";
+import {
+  RETRY_NOTICE,
+  THINKING_PLACEHOLDER,
+  type ChannelFailure,
+  applyTurnEvent,
+  composeTurnBody,
+  createTurnView,
+  defaultErrorMessage,
+  humanizeToolName,
+  revealedAnswer,
+  toolLines,
+} from "../preview-kit.ts";
 import {
   type SlackApi,
   type SlackStreamChunk,
@@ -89,12 +100,10 @@ async function streamClassicSlackReply(
   disclaimer: string | false | undefined,
   label: string,
 ): Promise<void> {
-  const tools: { name: string; status: "running" | "ok" | "error" }[] = [];
-  const toolIndex = new Map<string, number>();
-  let answer = "";
-  let retryNotice = false;
-  let answerVisible = false;
-  let answerTimer: ReturnType<typeof setTimeout> | undefined;
+  // Event → view-state reduction is the shared machine (preview-kit); this renderer owns mrkdwn
+  // sanitizing and delivery. Reasoning stays a static "Thinking…" here: raw chain-of-thought is not
+  // customer-facing on Slack, so the reducer accumulates it but this view never reads it.
+  const turn = createTurnView();
   let previewTs = initialPreviewTs;
   let previewAttempted = previewTs !== undefined;
   let finalized = false;
@@ -106,13 +115,13 @@ async function streamClassicSlackReply(
   let pumpDone: Promise<void> | undefined;
   let previewErrorLogged = false;
 
-  const toolView = (): string =>
-    tools.map((tool) => `🔧 ${tool.name} ${{ running: "…", ok: "✓", error: "✗" }[tool.status]}`).join("\n");
   const view = (): string =>
-    ["💭 Thinking…", toolView(), retryNotice ? RETRY_NOTICE : "", answerVisible ? sanitizeSlackMarkdown(answer) : ""]
-      .filter((value) => value.trim())
-      .join("\n\n")
-      .trim();
+    composeTurnBody([
+      THINKING_PLACEHOLDER,
+      toolLines(turn),
+      turn.retrying ? RETRY_NOTICE : "",
+      sanitizeSlackMarkdown(revealedAnswer(turn, CLASSIC_UPDATE_INTERVAL_MS)),
+    ]);
   const waitForMutationSlot = async (): Promise<void> => {
     const remaining = lastMutationAt + CLASSIC_UPDATE_INTERVAL_MS - Date.now();
     if (remaining > 0) await wait(remaining);
@@ -123,7 +132,7 @@ async function streamClassicSlackReply(
     lastMutationAt = Date.now();
   };
   const flushPreview = async (): Promise<void> => {
-    const markdown = chunkSlackText(view())[0] ?? "💭 Thinking…";
+    const markdown = chunkSlackText(view())[0] ?? THINKING_PLACEHOLDER;
     if (markdown === lastSent) return;
     if (previewTs) {
       await updateRateSafe(previewTs, markdown);
@@ -159,7 +168,6 @@ async function streamClassicSlackReply(
   };
   const finishPump = async (): Promise<void> => {
     stopped = true;
-    if (answerTimer) clearTimeout(answerTimer);
     await pumpDone?.catch(() => {});
   };
   const finalize = async (markdown: string): Promise<void> => {
@@ -168,40 +176,13 @@ async function streamClassicSlackReply(
 
   try {
     for await (const event of events) {
-      if (event.type !== "retrying") retryNotice = false; // any progress closes the advisory backoff notice
-      if (event.type === "text") {
-        answer += event.delta;
-        if (!answerVisible && answerTimer === undefined) {
-          answerTimer = setTimeout(() => {
-            answerVisible = true;
-            answerTimer = undefined;
-            touch();
-          }, CLASSIC_UPDATE_INTERVAL_MS);
-        } else if (answerVisible) {
-          touch();
-        }
-      } else if (event.type === "thinking") {
-        // Raw model reasoning is not customer-facing. A static loading state communicates progress
-        // without leaking chain-of-thought or prompt data.
-        touch();
-      } else if (event.type === "tool_started") {
-        toolIndex.set(event.id, tools.length);
-        tools.push({ name: humanizeToolName(event.name), status: "running" });
-        touch();
-      } else if (event.type === "tool_ended") {
-        const index = toolIndex.get(event.id);
-        if (index !== undefined && tools[index]) tools[index].status = event.isError ? "error" : "ok";
-        touch();
-      } else if (event.type === "retrying") {
-        // Summarization retry backoff — up to ~14s of quiet that would otherwise read as a hang.
-        retryNotice = true;
-        touch();
-      } else if (event.type === "completed") {
+      if (event.type === "completed") {
         await finishPump();
         finalized = true;
-        await finalize(withDisclaimer(answer, disclaimer));
+        await finalize(withDisclaimer(turn.answer, disclaimer));
         return;
-      } else if (event.type === "failed") {
+      }
+      if (event.type === "failed") {
         await finishPump();
         finalized = true;
         const notice = formatError({ details: event.details, retryable: event.retryable }) ?? "";
@@ -210,6 +191,11 @@ async function streamClassicSlackReply(
         );
         throw new Error(`agent failed: ${event.details} (retryable=${event.retryable})`);
       }
+      const changed = applyTurnEvent(turn, event);
+      // A young (hidden) answer must not trigger the first frame: unlike telegram/feishu, classic
+      // rendering never posts an upfront placeholder, so a text-only fast turn delivers ONE final
+      // post instead of placeholder → 3s-rate-limited edit. Thinking/tool activity still paints.
+      if (changed && (event.type !== "text" || revealedAnswer(turn, CLASSIC_UPDATE_INTERVAL_MS) !== "")) touch();
     }
     throw new Error("stream ended without a terminal event");
   } finally {

@@ -32,12 +32,18 @@ import {
 import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
 import {
   RETRY_NOTICE,
+  THINKING_PLACEHOLDER,
   type ChannelFailure,
+  applyTurnEvent,
+  composeTurnBody,
+  createPreviewPump,
+  createTurnView,
   defaultErrorMessage,
-  humanizeToolName,
-  summarizeToolArgs,
+  revealedAnswer,
+  thinkingLine,
+  toolLines,
 } from "../preview-kit.ts";
-import { truncateCodePointSuffix, truncateUtf8 } from "../text.ts";
+import { truncateUtf8 } from "../text.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
 export type FeishuFailure = ChannelFailure;
@@ -51,9 +57,6 @@ const STREAM_THROTTLE_MS = 1000;
 
 /** How much of the (growing) reasoning to peek at in the live view — the most recent tail. */
 const THINKING_PREVIEW = 280;
-
-/** The placeholder shown before any reasoning/tool/text arrives. */
-const THINKING_PLACEHOLDER = "💭 Thinking…";
 
 /** Cap a live view to the card budget, PREFIX-STABLE: the streaming client animates only when the old
  *  text is a prefix of the new, so an over-budget view freezes at its head rather than sliding a tail
@@ -201,35 +204,16 @@ export async function streamFeishuReply(
   initialPreview?: MountedFeishuPreview,
   label = "[feishu]",
 ): Promise<void> {
-  const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
-  const toolIndexById = new Map<string, number>();
-  let thinking = "";
-  let answer = "";
-  let answerPreviewSince: number | undefined;
-  let retryNotice = false;
-
-  const mark = { running: "…", ok: "✓", error: "✗" } as const;
-  const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
-  // Reasoning is process, not the answer: shown (capped to its tail) in the live preview only, never
-  // in the settled final card (which is `answer` alone).
-  const thinkingView = (): string => {
-    const t = thinking.replace(/\s+/g, " ").trim();
-    if (t === "") return "";
-    return `💭 ${truncateCodePointSuffix(t, THINKING_PREVIEW)}`;
-  };
-  // The answer is hidden until its first delta has aged one STREAM_THROTTLE_MS: the pump's leading-edge
-  // flush would otherwise turn the very first content delta (often a lone character) into its own frame
-  // — the short-reply flicker. Aging is anchored at delta ARRIVAL (set in the event loop, not here) so
-  // an in-flight update can't skew the clock; a turn completing within the window settles directly.
-  const answerView = (): string => {
-    if (answer.trim() === "" || answerPreviewSince === undefined) return "";
-    return Date.now() - answerPreviewSince >= STREAM_THROTTLE_MS ? answer : "";
-  };
+  // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
+  // policy, the card-budget cap, and delivery below.
+  const turn = createTurnView();
   const view = (): string => {
-    const v = [thinkingView(), toolView(), retryNotice ? RETRY_NOTICE : "", answerView()]
-      .filter((s) => s.trim() !== "")
-      .join("\n\n")
-      .trim();
+    const v = composeTurnBody([
+      thinkingLine(turn, THINKING_PREVIEW),
+      toolLines(turn),
+      turn.retrying ? RETRY_NOTICE : "",
+      revealedAnswer(turn, STREAM_THROTTLE_MS),
+    ]);
     return capBytes(v === "" ? THINKING_PLACEHOLDER : v, CARD_MARKDOWN_MAX_BYTES);
   };
 
@@ -270,65 +254,15 @@ export async function streamFeishuReply(
     }
   };
 
-  // ── Live-preview pump: a SINGLE serialized writer. ──────────────────────────────────────────
-  // Events mutate state (thinking / tools / answer) and mark the preview dirty; the pump pushes the
-  // LATEST view() with at most ONE update in flight, paced by a throttle. One-in-flight also guarantees
-  // the card's strictly-increasing `sequence` lands in order (no concurrent frames).
-  let dirty = false;
-  let pumping = false;
-  let stopped = false;
-  let previewErrLogged = false;
-  let pumpDone: Promise<void> | undefined;
-  let wakeThrottle: (() => void) | undefined; // set while the pump is mid-throttle; finish() cuts it short
-
-  const runPump = async (): Promise<void> => {
-    pumping = true;
-    try {
-      while (dirty && !stopped) {
-        dirty = false;
-        try {
-          await flushPreview();
-        } catch (e) {
-          // Best-effort preview (the final write is authoritative), but a failing update must be visible —
-          // log once per turn so a never-rendering preview is diagnosable, not silent.
-          if (!previewErrLogged) {
-            previewErrLogged = true;
-            log.warn(`${label} live preview failed (final reply still sends): ${String(e)}`);
-          }
-        }
-        if (dirty && !stopped) {
-          // Pace + coalesce a burst into one snapshot. Interruptible: finish() cuts this short so the
-          // final write is not delayed by up to STREAM_THROTTLE_MS after the turn completes.
-          await new Promise<void>((resolve) => {
-            const t = setTimeout(resolve, STREAM_THROTTLE_MS);
-            wakeThrottle = () => {
-              clearTimeout(t);
-              resolve();
-            };
-          });
-          wakeThrottle = undefined;
-        }
-      }
-    } finally {
-      pumping = false;
-    }
-  };
-  // Mark the preview dirty and ensure the single writer is running (an update already in flight picks
-  // up the new state on its next loop). Synchronous — callers never await a network write.
-  const touch = (): void => {
-    dirty = true;
-    if (!pumping) pumpDone = runPump();
-  };
+  // The shared single-writer pump (preview-kit) serializes snapshots to the one preview — which also
+  // guarantees the card's strictly-increasing `sequence` lands in order (no concurrent frames).
+  const { touch, finish } = createPreviewPump({
+    flush: flushPreview,
+    throttleMs: STREAM_THROTTLE_MS,
+    onError: (e) => log.warn(`${label} live preview failed (final reply still sends): ${String(e)}`),
+  });
 
   touch(); // mount the "💭 Thinking…" preview immediately
-
-  // Stop the pump and await any in-flight update, so the final write below is strictly the LAST one to
-  // the preview (no stale frame landing after the answer).
-  const finish = async (): Promise<void> => {
-    stopped = true;
-    wakeThrottle?.(); // cut an in-flight throttle so the final write is not delayed up to STREAM_THROTTLE_MS
-    await pumpDone?.catch(() => {});
-  };
 
   /** Terminal write, whatever tier the preview reached. */
   const settle = async (text: string): Promise<void> => {
@@ -337,39 +271,17 @@ export async function streamFeishuReply(
 
   try {
     for await (const e of events) {
-      if (e.type !== "retrying") retryNotice = false; // any progress closes the advisory backoff notice
-      if (e.type === "text") {
-        answer += e.delta;
-        if (answerPreviewSince === undefined && answer.trim() !== "") answerPreviewSince = Date.now();
-        touch();
-      } else if (e.type === "thinking") {
-        thinking += e.delta;
-        touch();
-      } else if (e.type === "tool_started") {
-        const arg = summarizeToolArgs(e.args);
-        toolIndexById.set(e.id, tools.length);
-        const name = humanizeToolName(e.name);
-        tools.push({ label: arg ? `${name} ${arg}` : name, status: "running" });
-        touch();
-      } else if (e.type === "tool_ended") {
-        const i = toolIndexById.get(e.id);
-        const t = i === undefined ? undefined : tools[i];
-        if (t) t.status = e.isError ? "error" : "ok";
-        touch();
-      } else if (e.type === "retrying") {
-        // Summarization retry backoff — up to ~14s of quiet that would otherwise read as a hang.
-        retryNotice = true;
-        touch();
-      } else if (e.type === "completed") {
+      if (e.type === "completed") {
         await finish();
         // Settle the preview into the final answer; the persisted card is the answer alone — the
         // process (thinking/tools) was preview-only. Mark finalized BEFORE delivering: the terminal was
         // reached, so a delivery failure here is a plain failure, not an "abnormal exit" (which would
         // wrongly fire the finally's neutral-notice fallback = double delivery + wrong text).
         finalized = true;
-        await settle(answer.trim() !== "" ? answer : "(no reply)");
+        await settle(turn.answer.trim() !== "" ? turn.answer : "(no reply)");
         return;
-      } else if (e.type === "failed") {
+      }
+      if (e.type === "failed") {
         await finish();
         // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
         // log (dev-facing — the full details, via the throw below + the handler's catch). Same terminal
@@ -388,6 +300,7 @@ export async function streamFeishuReply(
         }
         throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
       }
+      if (applyTurnEvent(turn, e)) touch();
     }
     throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
   } finally {
