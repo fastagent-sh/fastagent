@@ -426,6 +426,14 @@ channels' design center. Any future adoption must first give steered messages th
 treatment (which is exactly the opt-in policy sketched above — an events consumer at message
 boundaries — not a replacement of the queue).
 
+Shipped from that list — **the user-facing stop command**: `ChannelContext.control?` hands channels
+the hub for DISPATCH only (observation stays on the data plane — the `retrying` event precedent),
+and the chat channels map an explicit user stop (Telegram `/stop`; a bare "stop"/"cancel" summon on
+Slack/Feishu/Lark) onto `abort`. Decisions: the hub stays gated by `config.sessionControl` (no
+hub → a visible "not enabled" notice, never a silent ignore); the stop message is a control action,
+never a turn (it must not queue behind the run it stops); only the ACTIVE run is aborted — queued
+durable turns are independent asks and keep their at-least-once floor.
+
 ## 16. Invariants
 
 Implementation review should reject changes that violate these:

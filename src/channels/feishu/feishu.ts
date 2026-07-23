@@ -15,6 +15,7 @@ import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createSeenRing } from "../seen.ts";
 import { ensureStateHome } from "../state.ts";
+import { dispatchStop, isStopText } from "../stop-command.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
@@ -216,7 +217,7 @@ function createFeishuRuntimeFactory(
   const baseUrl = opts.apiBaseUrl ?? opts.baseUrl ?? profile.apiBase;
   const { kind } = profile;
   const label = `[${kind}]`;
-  return ({ agent, stateRoot }) => {
+  return ({ agent, stateRoot, control }) => {
     // Credential checks run when serving starts, not while the authored module is imported: deployment
     // can inspect the module shape before secrets exist, while serving still fails before ready.
     if (!appId || !appSecret) {
@@ -273,6 +274,7 @@ function createFeishuRuntimeFactory(
       order: (a, b) => a.seq - b.seq,
     });
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
+    const stops = new Set<Promise<void>>();
     const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
       const { preview: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
       return { ...intent, attempts: 0 };
@@ -515,6 +517,20 @@ function createFeishuRuntimeFactory(
       const replyInThread =
         replyTo !== undefined && (threadedConversation || m.thread_id !== undefined) ? true : undefined;
       const queueReplyTo = sameTarget ? m.message_id : undefined;
+      // Explicit user stop: a control action, never a turn — it must not queue behind the run it
+      // stops. Mentions arrive as @name tokens; strip them before matching the bare word. Record the
+      // message id so a platform re-push doesn't double-abort or double-notify.
+      if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
+        seen.add(m.message_id);
+        const stop: Promise<void> = dispatchStop(control, session, label)
+          .then((feedback) => api.sendText({ chatId, replyTo, replyInThread }, feedback).then(() => undefined))
+          .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`))
+          .finally(() => {
+            stops.delete(stop);
+          });
+        stops.add(stop);
+        return;
+      }
       const resources = normalized.content.resources;
       const images = resources
         .filter((resource) => resource.kind === "image")
@@ -547,7 +563,9 @@ function createFeishuRuntimeFactory(
       );
     };
 
-    return { acceptEvent, turnsIdle: () => queue.idle() };
+    // Stop feedback is fire-and-forget for the ingress path but must be drained on shutdown —
+    // otherwise a stop's "⏹ Stopped." reply can be dropped when the process exits right after it.
+    return { acceptEvent, turnsIdle: () => Promise.all([queue.idle(), ...stops]).then(() => undefined) };
   };
 }
 

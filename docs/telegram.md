@@ -166,6 +166,13 @@ Failures have two audiences:
 
 For development bots, surfacing `failed.details` is useful. For public bots, prefer a neutral user-facing message.
 
+## Stopping a running turn
+
+When the serve runs with `sessionControl: true` (fastagent.config), `/stop` aborts the chat's active
+turn (queued asks are independent and keep running — send `/stop` again when one starts). Without
+session control the command answers with a visible "not enabled" notice. `/stop@<bot>` addressed to
+another bot is ignored.
+
 ## Files and images
 
 Telegram media are handled by the channel before the agent turn runs.

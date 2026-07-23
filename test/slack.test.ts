@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/agent.ts";
+import { NO_ACTIVE_RUN_CODE, type SessionCommand, type SessionControl } from "../src/session.ts";
 import { type SlackChannelOptions, type SlackEventEnvelope, slackChannel, verifySlackSignature } from "../src/slack.ts";
 
 const SECRET = "slack-signing-secret";
@@ -103,13 +104,13 @@ function storedTurn(id: string, seq: number, extra: Record<string, unknown> = {}
   };
 }
 
-function mount(agent: Agent, options: Partial<SlackChannelOptions> = {}, stateRoot = root()) {
+function mount(agent: Agent, options: Partial<SlackChannelOptions> = {}, stateRoot = root(), control?: SessionControl) {
   const handler = slackChannel({
     botToken: "xoxb-test",
     signingSecret: SECRET,
     apiBaseUrl: API,
     ...options,
-  })({ agent, stateRoot })["POST /slack"]!;
+  })({ agent, stateRoot, control })["POST /slack"]!;
   const turnsIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
   idles.add(turnsIdle);
   return { handler, stateRoot, turnsIdle };
@@ -687,5 +688,58 @@ describe("Slack sessions, context, and managed threads", () => {
       .map((body) => String(body.text))
       .join("\n");
     expect(customerText).not.toContain("complete an earlier request");
+  });
+});
+
+describe("Slack stop command", () => {
+  const fakeControl = (result: { ok: true } | { code: string }) => {
+    const dispatched: { session: string; command: SessionCommand }[] = [];
+    const control = {
+      dispatch: async (session: string, command: SessionCommand) => {
+        dispatched.push({ session, command });
+        return "ok" in result
+          ? { ok: true as const }
+          : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
+      },
+    } as unknown as SessionControl;
+    return { control, dispatched };
+  };
+  const invoked: string[] = [];
+  const agent: Agent = {
+    async *invoke(_scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+      invoked.push(prompt.text);
+      yield { type: "completed" };
+    },
+  };
+
+  it("aborts the routed session, notifies, and never submits a turn", async () => {
+    invoked.length = 0;
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { control, dispatched } = fakeControl({ ok: true });
+    const { handler, turnsIdle } = mount(agent, {}, root(), control);
+    const res = await handler(signedRequest(message("10.0", { channel: "D1", channel_type: "im", text: "Stop!" })));
+    expect(res.status).toBe(200);
+    await turnsIdle();
+    expect(dispatched).toEqual([{ session: "slack:T1:D1:10.0", command: { type: "abort" } }]);
+    expect(invoked).toEqual([]); // a control action, never a turn
+    expect(slackBodies(fetchMock, "chat.postMessage").map((b) => b.text)).toEqual(["⏹ Stopped."]);
+  });
+
+  it("maps no_active_run to the idle notice and degrades visibly without a control hub", async () => {
+    invoked.length = 0;
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { control } = fakeControl({ code: NO_ACTIVE_RUN_CODE });
+    const withHub = mount(agent, {}, root(), control);
+    await withHub.handler(signedRequest(message("11.0", { channel: "D1", channel_type: "im", text: "cancel" })));
+    await withHub.turnsIdle();
+    const noHub = mount(agent, {}, root());
+    await noHub.handler(signedRequest(message("12.0", { channel: "D1", channel_type: "im", text: "stop" })));
+    await noHub.turnsIdle();
+    expect(invoked).toEqual([]);
+    const texts = slackBodies(fetchMock, "chat.postMessage").map((b) => String(b.text));
+    expect(texts[0]).toBe("Nothing is running.");
+    expect(texts[1]).toContain("Stop isn't enabled");
   });
 });
