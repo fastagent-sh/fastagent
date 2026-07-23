@@ -281,6 +281,12 @@ const NO_ONBOARD: FlagSpec = {
   flags: "--no-onboard",
   description: "Slack: scaffold only; skip internal-app creation/OAuth",
 };
+const REPLACE_CONFIG: FlagSpec = {
+  flags: "--replace-config",
+  description:
+    "Slack: replace the local App Configuration token pair (repairs automatic dev/deploy Request URL " +
+    "updates after the tokens expire or are revoked; runs on the machine that onboarded the app)",
+};
 
 const channelSub = (
   kind: "github" | "telegram" | "slack" | "feishu" | "lark",
@@ -297,7 +303,7 @@ const channelSub = (
     ...(kind === "feishu" || kind === "lark"
       ? [INGRESS, GROUP_BEHAVIOR]
       : kind === "slack"
-        ? [GROUP_BEHAVIOR, NO_ONBOARD]
+        ? [GROUP_BEHAVIOR, NO_ONBOARD, REPLACE_CONFIG]
         : []),
   ],
   examples: [{ cmd: `fastagent add ${kind}` }],
@@ -308,6 +314,7 @@ const channelSub = (
       ingress: f.ingress as string | undefined,
       groupBehavior: f.groupBehavior as string | undefined,
       onboard: f.onboard !== false,
+      replaceConfig: f.replaceConfig === true,
     }),
 });
 
