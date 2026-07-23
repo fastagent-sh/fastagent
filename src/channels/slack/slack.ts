@@ -100,7 +100,7 @@ export interface SlackChannelOptions {
   botRefreshToken?: string;
   clientId?: string;
   clientSecret?: string;
-  tokenExpiresAt?: number;
+  botTokenExpiresAt?: number;
   /** Direct-message policy. `threaded` (default) gives every top-level DM its own session/thread;
    * `continuous` keeps one linear session per DM channel. */
   directMessageSession?: "continuous" | "threaded";
@@ -169,7 +169,7 @@ export function slackChannel({
   botRefreshToken,
   clientId,
   clientSecret,
-  tokenExpiresAt,
+  botTokenExpiresAt,
   directMessageSession = "threaded",
   groupMessageSession = "threaded",
   groupBehavior = "context",
@@ -218,7 +218,7 @@ export function slackChannel({
       botRefreshToken,
       clientId,
       clientSecret,
-      tokenExpiresAt,
+      botTokenExpiresAt,
       apiBaseUrl,
     });
     const api = createSlackApi({ botToken: currentBotToken, baseUrl: apiBaseUrl });

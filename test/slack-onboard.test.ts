@@ -180,7 +180,7 @@ describe("Slack internal-app onboarding", () => {
         exchangeCode: async () => ({
           botToken: "xoxe.xoxb-bot",
           botRefreshToken: "xoxe-bot-refresh",
-          tokenExpiresAt: 2_000_000_000_000,
+          botTokenExpiresAt: 2_000_000_000_000,
           appId: "A1",
           teamId: "T1",
           teamName: "Acme",

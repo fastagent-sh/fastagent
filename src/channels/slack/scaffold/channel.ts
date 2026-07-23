@@ -16,7 +16,7 @@ export default slackChannel({
   botRefreshToken: process.env.SLACK_BOT_REFRESH_TOKEN || undefined,
   clientId: process.env.SLACK_CLIENT_ID || undefined,
   clientSecret: process.env.SLACK_CLIENT_SECRET || undefined,
-  tokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
+  botTokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
     ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
     : undefined,
   groupBehavior: "context", // default; use "mentions" only for an explicit least-privilege setup

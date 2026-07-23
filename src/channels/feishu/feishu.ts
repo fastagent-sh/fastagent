@@ -148,7 +148,10 @@ interface FeishuChannelBaseOptions {
    *  on `retryable`. A developer's own bot can surface the raw details, e.g. `(f) => `⚠️ ${f.details}``. */
   onError?: (failed: FeishuFailure) => string | undefined;
   /** API origin override (tests / self-hosted gateways). Feishu factories default to
-   *  `https://open.feishu.cn`; Lark factories default to `https://open.larksuite.com`. */
+   *  `https://open.feishu.cn`; Lark factories default to `https://open.larksuite.com`. Named to match
+   *  the other channels (telegram/slack). */
+  apiBaseUrl?: string;
+  /** @deprecated Alias of {@link apiBaseUrl}; kept for existing feishu/lark channel files. */
   baseUrl?: string;
   /** How long (ms) a turn waits before its reply-quoted "⏳ Queued" card mounts. Defaults to 0
    *  (immediate); the same card is later taken over by the live preview/final answer. */
@@ -208,9 +211,9 @@ function createFeishuRuntimeFactory(
     groupMessageSession = "threaded",
     route,
     onError,
-    baseUrl = profile.apiBase,
     queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS,
   } = opts;
+  const baseUrl = opts.apiBaseUrl ?? opts.baseUrl ?? profile.apiBase;
   const { kind } = profile;
   const label = `[${kind}]`;
   return ({ agent, stateRoot }) => {
@@ -665,7 +668,7 @@ export function buildFeishuWebSocketChannel(
           kind: profile.kind,
           appId: opts.appId,
           appSecret: opts.appSecret,
-          domain: opts.baseUrl ?? profile.apiBase,
+          domain: opts.apiBaseUrl ?? opts.baseUrl ?? profile.apiBase,
           onEvent: runtime.acceptEvent,
         },
         signal,

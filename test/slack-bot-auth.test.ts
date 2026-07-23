@@ -38,7 +38,7 @@ describe("Slack rotating bot credentials", () => {
       botRefreshToken: "xoxe-old-refresh",
       clientId: "client",
       clientSecret: "secret",
-      tokenExpiresAt: Date.now() - 1,
+      botTokenExpiresAt: Date.now() - 1,
       apiBaseUrl: "https://slack.test/api",
       fetch: fetchMock,
     });
@@ -65,7 +65,7 @@ describe("Slack rotating bot credentials", () => {
       botRefreshToken: "stale-env-refresh",
       clientId: "client",
       clientSecret: "secret",
-      tokenExpiresAt: Date.now() - 1,
+      botTokenExpiresAt: Date.now() - 1,
       fetch: vi.fn(() => Promise.reject(new Error("must not refresh"))),
     });
     await expect(afterRestart()).resolves.toBe("xoxe.xoxb-new");
@@ -76,7 +76,7 @@ describe("Slack rotating bot credentials", () => {
       botRefreshToken: "xoxe-deploy-refresh",
       clientId: "client",
       clientSecret: "secret",
-      tokenExpiresAt: Date.now() + 2 * 24 * 60 * 60_000,
+      botTokenExpiresAt: Date.now() + 2 * 24 * 60 * 60_000,
     });
     await expect(newerDeployPair()).resolves.toBe("xoxe.xoxb-from-deploy");
   });
@@ -92,6 +92,6 @@ describe("Slack rotating bot credentials", () => {
         botToken: "xoxe.xoxb-access",
         botRefreshToken: "xoxe-refresh",
       }),
-    ).toThrow(/requires botRefreshToken, clientId, clientSecret, and tokenExpiresAt together/);
+    ).toThrow(/requires botRefreshToken, clientId, clientSecret, and botTokenExpiresAt together/);
   });
 });

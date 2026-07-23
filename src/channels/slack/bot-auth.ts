@@ -116,7 +116,7 @@ export interface SlackBotTokenProviderOptions {
   botRefreshToken?: string;
   clientId?: string;
   clientSecret?: string;
-  tokenExpiresAt?: number;
+  botTokenExpiresAt?: number;
   apiBaseUrl?: string;
   fetch?: typeof fetch;
 }
@@ -136,15 +136,15 @@ export function readSlackBotAuthEnv(statePath: string): Record<string, string> {
 
 /** Resolve the current bot token, refreshing once per process when it approaches expiry. */
 export function createSlackBotTokenProvider(options: SlackBotTokenProviderOptions): () => Promise<string> {
-  const rotatingFields = [options.botRefreshToken, options.clientId, options.clientSecret, options.tokenExpiresAt];
+  const rotatingFields = [options.botRefreshToken, options.clientId, options.clientSecret, options.botTokenExpiresAt];
   const rotating = rotatingFields.some((value) => value !== undefined);
   if (rotating && rotatingFields.some((value) => value === undefined || value === "")) {
     throw new Error(
-      "Slack token rotation requires botRefreshToken, clientId, clientSecret, and tokenExpiresAt together",
+      "Slack token rotation requires botRefreshToken, clientId, clientSecret, and botTokenExpiresAt together",
     );
   }
-  if (rotating && (!Number.isFinite(options.tokenExpiresAt) || (options.tokenExpiresAt as number) <= 0)) {
-    throw new Error("Slack tokenExpiresAt must be a positive epoch-millisecond value");
+  if (rotating && (!Number.isFinite(options.botTokenExpiresAt) || (options.botTokenExpiresAt as number) <= 0)) {
+    throw new Error("Slack botTokenExpiresAt must be a positive epoch-millisecond value");
   }
   if (!rotating) return async () => options.botToken;
 
@@ -152,7 +152,7 @@ export function createSlackBotTokenProvider(options: SlackBotTokenProviderOption
     version: 1,
     accessToken: options.botToken,
     refreshToken: options.botRefreshToken as string,
-    expiresAt: options.tokenExpiresAt as number,
+    expiresAt: options.botTokenExpiresAt as number,
   } satisfies SlackBotAuthState;
   const persisted = load(options.statePath);
   // Deploy may carry a newer pair from the owner machine onto an existing remote volume; ordinary

@@ -147,7 +147,7 @@ export async function rotateSlackConfigToken(
 export interface SlackOAuthResult {
   botToken: string;
   botRefreshToken: string;
-  tokenExpiresAt: number;
+  botTokenExpiresAt: number;
   appId: string;
   teamId: string;
   teamName?: string;
@@ -227,7 +227,7 @@ export async function exchangeSlackOAuthCode(
   return {
     botToken: data.access_token,
     botRefreshToken: data.refresh_token,
-    tokenExpiresAt: Date.now() + data.expires_in * 1_000,
+    botTokenExpiresAt: Date.now() + data.expires_in * 1_000,
     appId: data.app_id,
     teamId: data.team.id,
     teamName: data.team.name,

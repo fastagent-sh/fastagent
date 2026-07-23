@@ -131,7 +131,7 @@ export async function onboardSlackApp(
   await io.writeRuntimeSecrets({
     botToken: oauth.botToken,
     botRefreshToken: oauth.botRefreshToken,
-    botTokenExpiresAt: oauth.tokenExpiresAt,
+    botTokenExpiresAt: oauth.botTokenExpiresAt,
     clientId: state.clientId,
     clientSecret: state.clientSecret,
   });
