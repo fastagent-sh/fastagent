@@ -274,6 +274,7 @@ function createFeishuRuntimeFactory(
       order: (a, b) => a.seq - b.seq,
     });
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
+    const stops = new Set<Promise<void>>();
     const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
       const { preview: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
       return { ...intent, attempts: 0 };
@@ -521,9 +522,13 @@ function createFeishuRuntimeFactory(
       // message id so a platform re-push doesn't double-abort or double-notify.
       if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
         seen.add(m.message_id);
-        void dispatchStop(control, session, label)
-          .then((feedback) => api.sendText({ chatId, replyTo, replyInThread }, feedback))
-          .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`));
+        const stop: Promise<void> = dispatchStop(control, session, label)
+          .then((feedback) => api.sendText({ chatId, replyTo, replyInThread }, feedback).then(() => undefined))
+          .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`))
+          .finally(() => {
+            stops.delete(stop);
+          });
+        stops.add(stop);
         return;
       }
       const resources = normalized.content.resources;
@@ -558,7 +563,9 @@ function createFeishuRuntimeFactory(
       );
     };
 
-    return { acceptEvent, turnsIdle: () => queue.idle() };
+    // Stop feedback is fire-and-forget for the ingress path but must be drained on shutdown —
+    // otherwise a stop's "⏹ Stopped." reply can be dropped when the process exits right after it.
+    return { acceptEvent, turnsIdle: () => Promise.all([queue.idle(), ...stops]).then(() => undefined) };
   };
 }
 
