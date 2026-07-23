@@ -8,10 +8,14 @@
 import type { AgentEvent } from "../../agent.ts";
 import {
   RETRY_NOTICE,
+  THINKING_PLACEHOLDER,
   type ChannelFailure,
+  applyTurnEvent,
+  composeTurnBody,
+  createTurnView,
   defaultErrorMessage,
-  humanizeToolName,
-  summarizeToolArgs,
+  thinkingLine,
+  toolLines,
 } from "../preview-kit.ts";
 import { log } from "../../log.ts";
 import { TELEGRAM_MAX_TEXT, type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
@@ -84,39 +88,28 @@ export async function streamReply(
   formatError: (failed: TelegramFailure) => string | undefined,
   previewId?: number,
 ): Promise<void> {
-  const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
-  const toolIndexById = new Map<string, number>();
-  let thinking = "";
-  let answer = "";
-  let answerPreviewSince: number | undefined;
-  let retryNotice = false;
-
-  const mark = { running: "…", ok: "✓", error: "✗" } as const;
-  const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
-  // Reasoning is process, not the answer: shown (capped to its tail) in the live preview only, never
-  // in the persisted final message (which is `answer` alone).
-  const thinkingView = (): string => {
-    const t = thinking.replace(/\s+/g, " ").trim();
-    if (t === "") return "";
-    return `💭 ${t.length > THINKING_PREVIEW ? `…${t.slice(t.length - THINKING_PREVIEW + 1)}` : t}`;
-  };
+  // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
+  // policy, formatting, and delivery below.
+  const turn = createTurnView();
   // The answer is hidden until its first delta has aged one EDIT_THROTTLE_MS: the pump's leading-edge
   // flush would otherwise turn the very first content delta (often a lone character or unbalanced markup)
   // into its own Telegram edit — the short-reply flicker (placeholder → "O" → "OK."). Aging is anchored
-  // at delta ARRIVAL (set in the event loop, not here) so an in-flight edit can't skew the clock, and
+  // at delta ARRIVAL (answerSince, set by the reducer) so an in-flight edit can't skew the clock, and
   // there is deliberately NO timer at the boundary: a young answer surfaces on the next content-driven
   // preview pass, so a turn completing within the window sends the final answer edit only.
   const answerView = (): string => {
-    if (answer.trim() === "" || answerPreviewSince === undefined) return "";
-    return Date.now() - answerPreviewSince >= EDIT_THROTTLE_MS ? answer : "";
+    if (turn.answer.trim() === "" || turn.answerSince === undefined) return "";
+    return Date.now() - turn.answerSince >= EDIT_THROTTLE_MS ? turn.answer : "";
   };
   const view = (): string => {
-    const v = [thinkingView(), toolView(), retryNotice ? RETRY_NOTICE : "", answerView()]
-      .filter((s) => s.trim() !== "")
-      .join("\n\n")
-      .trim();
+    const v = composeTurnBody([
+      thinkingLine(turn, THINKING_PREVIEW),
+      toolLines(turn),
+      turn.retrying ? RETRY_NOTICE : "",
+      answerView(),
+    ]);
     // Before any reasoning/tool/text arrives, show an explicit placeholder rather than an empty edit.
-    return v === "" ? "💭 Thinking…" : v;
+    return v === "" ? THINKING_PLACEHOLDER : v;
   };
 
   // The live preview is ONE real message: sent once (capturing its id + threading under the asker),
@@ -209,39 +202,17 @@ export async function streamReply(
 
   try {
     for await (const e of events) {
-      if (e.type !== "retrying") retryNotice = false; // any progress closes the advisory backoff notice
-      if (e.type === "text") {
-        answer += e.delta;
-        if (answerPreviewSince === undefined && answer.trim() !== "") answerPreviewSince = Date.now();
-        touch();
-      } else if (e.type === "thinking") {
-        thinking += e.delta;
-        touch();
-      } else if (e.type === "tool_started") {
-        const arg = summarizeToolArgs(e.args);
-        toolIndexById.set(e.id, tools.length);
-        const name = humanizeToolName(e.name);
-        tools.push({ label: arg ? `${name} ${arg}` : name, status: "running" });
-        touch();
-      } else if (e.type === "tool_ended") {
-        const i = toolIndexById.get(e.id);
-        const t = i === undefined ? undefined : tools[i];
-        if (t) t.status = e.isError ? "error" : "ok";
-        touch();
-      } else if (e.type === "retrying") {
-        // Summarization retry backoff — up to ~14s of quiet that would otherwise read as a hang.
-        retryNotice = true;
-        touch();
-      } else if (e.type === "completed") {
+      if (e.type === "completed") {
         await finish();
         // Edit the preview into the final answer (HTML, plain fallback); the persisted message is the
         // answer alone — the process (thinking/tools) was preview-only. Mark finalized BEFORE delivering:
         // the terminal was reached, so a delivery failure here is a plain failure, not an "abnormal exit"
         // (which would wrongly fire the finally's neutral-notice fallback = double delivery + wrong text).
         finalized = true;
-        await finalize(api, botToken, target, messageId, answer.trim() !== "" ? answer : "(no reply)");
+        await finalize(api, botToken, target, messageId, turn.answer.trim() !== "" ? turn.answer : "(no reply)");
         return;
-      } else if (e.type === "failed") {
+      }
+      if (e.type === "failed") {
         await finish();
         // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
         // log (dev-facing — the full details, via the throw below + the handler's catch). Same terminal
@@ -256,6 +227,7 @@ export async function streamReply(
         }
         throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
       }
+      if (applyTurnEvent(turn, e)) touch();
     }
     throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
   } finally {

@@ -6,6 +6,7 @@ import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createSeenRing } from "../seen.ts";
+import { createTaskTracker } from "../tasks.ts";
 import { ensureStateHome } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
 import { codePointPrefix } from "../text.ts";
@@ -484,13 +485,11 @@ export function slackChannel({
       if (isStopText((event.text ?? "").replace(/<@[A-Z0-9]+>/gi, " "))) {
         seen.add(logicalId);
         const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
-        const stop: Promise<void> = dispatchStop(control, routed.session ?? defaultSession, label)
-          .then((feedback) => api.postMessage(target, feedback).then(() => undefined))
-          .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`))
-          .finally(() => {
-            stops.delete(stop);
-          });
-        stops.add(stop);
+        sideTasks.track(
+          dispatchStop(control, routed.session ?? defaultSession, label)
+            .then((feedback) => api.postMessage(target, feedback).then(() => undefined))
+            .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`)),
+        );
         return;
       }
       const fileIds = slackFileIds(event);
@@ -537,11 +536,11 @@ export function slackChannel({
       );
     };
 
-    const stops = new Set<Promise<void>>();
+    // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle.
+    const sideTasks = createTaskTracker();
 
     // First-run DM welcome: app_home_opened(tab="messages") signals a DM open. Post once per user.
     const welcomeInFlight = new Set<string>();
-    const welcomes = new Set<Promise<void>>();
     const maybeWelcome = (envelope: SlackEventEnvelope): void => {
       if (welcome === false) return;
       const body = welcome.trim();
@@ -559,20 +558,20 @@ export function slackChannel({
       // Reserve in-memory so rapid re-opens don't double-post; persist to the durable set only on a
       // successful post, so a failed post simply retries on the next open.
       welcomeInFlight.add(id);
-      const promise = api
-        .postMarkdown({ channelId }, body)
-        .then(() => {
-          welcomed.add(teamId, userId);
-          log.info(`${label} sent first-run welcome to ${id}`);
-        })
-        .catch((error) =>
-          log.warn(`${label} could not send first-run welcome (retries on next open): ${String(error)}`),
-        )
-        .finally(() => {
-          welcomeInFlight.delete(id);
-          welcomes.delete(promise);
-        });
-      welcomes.add(promise);
+      sideTasks.track(
+        api
+          .postMarkdown({ channelId }, body)
+          .then(() => {
+            welcomed.add(teamId, userId);
+            log.info(`${label} sent first-run welcome to ${id}`);
+          })
+          .catch((error) =>
+            log.warn(`${label} could not send first-run welcome (retries on next open): ${String(error)}`),
+          )
+          .finally(() => {
+            welcomeInFlight.delete(id);
+          }),
+      );
     };
 
     const handler = async (request: Request): Promise<Response> => {
@@ -608,7 +607,7 @@ export function slackChannel({
       return new Response(null, { status: 200 });
     };
     (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () =>
-      Promise.all([queue.idle(), ...welcomes, ...stops]).then(() => undefined);
+      Promise.all([queue.idle(), sideTasks.drain()]).then(() => undefined);
     return { "POST /slack": handler };
   };
 }

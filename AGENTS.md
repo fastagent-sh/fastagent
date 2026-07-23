@@ -45,7 +45,8 @@ src/
 │   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
-│   ├── preview-kit.ts       # SHARED preview policies: ChannelFailure + customer-facing default error + tool-arg summary
+│   ├── preview-kit.ts       # SHARED turn-view reducer (event → view state + line renderers) + preview policies (ChannelFailure, wording)
+│   ├── tasks.ts             # SHARED fire-and-forget side-task tracking — channels drain it in turnsIdle
 │   ├── text.ts              # SHARED Unicode-safe code-point slicing (cards, preview kit)
 │   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + slack + feishu)
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel

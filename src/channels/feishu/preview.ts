@@ -32,12 +32,16 @@ import {
 import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
 import {
   RETRY_NOTICE,
+  THINKING_PLACEHOLDER,
   type ChannelFailure,
+  applyTurnEvent,
+  composeTurnBody,
+  createTurnView,
   defaultErrorMessage,
-  humanizeToolName,
-  summarizeToolArgs,
+  thinkingLine,
+  toolLines,
 } from "../preview-kit.ts";
-import { truncateCodePointSuffix, truncateUtf8 } from "../text.ts";
+import { truncateUtf8 } from "../text.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
 export type FeishuFailure = ChannelFailure;
@@ -51,9 +55,6 @@ const STREAM_THROTTLE_MS = 1000;
 
 /** How much of the (growing) reasoning to peek at in the live view — the most recent tail. */
 const THINKING_PREVIEW = 280;
-
-/** The placeholder shown before any reasoning/tool/text arrives. */
-const THINKING_PLACEHOLDER = "💭 Thinking…";
 
 /** Cap a live view to the card budget, PREFIX-STABLE: the streaming client animates only when the old
  *  text is a prefix of the new, so an over-budget view freezes at its head rather than sliding a tail
@@ -201,35 +202,24 @@ export async function streamFeishuReply(
   initialPreview?: MountedFeishuPreview,
   label = "[feishu]",
 ): Promise<void> {
-  const tools: { label: string; status: "running" | "ok" | "error" }[] = [];
-  const toolIndexById = new Map<string, number>();
-  let thinking = "";
-  let answer = "";
-  let answerPreviewSince: number | undefined;
-  let retryNotice = false;
-
-  const mark = { running: "…", ok: "✓", error: "✗" } as const;
-  const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
-  // Reasoning is process, not the answer: shown (capped to its tail) in the live preview only, never
-  // in the settled final card (which is `answer` alone).
-  const thinkingView = (): string => {
-    const t = thinking.replace(/\s+/g, " ").trim();
-    if (t === "") return "";
-    return `💭 ${truncateCodePointSuffix(t, THINKING_PREVIEW)}`;
-  };
+  // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
+  // policy, the card-budget cap, and delivery below.
+  const turn = createTurnView();
   // The answer is hidden until its first delta has aged one STREAM_THROTTLE_MS: the pump's leading-edge
   // flush would otherwise turn the very first content delta (often a lone character) into its own frame
-  // — the short-reply flicker. Aging is anchored at delta ARRIVAL (set in the event loop, not here) so
+  // — the short-reply flicker. Aging is anchored at delta ARRIVAL (answerSince, set by the reducer) so
   // an in-flight update can't skew the clock; a turn completing within the window settles directly.
   const answerView = (): string => {
-    if (answer.trim() === "" || answerPreviewSince === undefined) return "";
-    return Date.now() - answerPreviewSince >= STREAM_THROTTLE_MS ? answer : "";
+    if (turn.answer.trim() === "" || turn.answerSince === undefined) return "";
+    return Date.now() - turn.answerSince >= STREAM_THROTTLE_MS ? turn.answer : "";
   };
   const view = (): string => {
-    const v = [thinkingView(), toolView(), retryNotice ? RETRY_NOTICE : "", answerView()]
-      .filter((s) => s.trim() !== "")
-      .join("\n\n")
-      .trim();
+    const v = composeTurnBody([
+      thinkingLine(turn, THINKING_PREVIEW),
+      toolLines(turn),
+      turn.retrying ? RETRY_NOTICE : "",
+      answerView(),
+    ]);
     return capBytes(v === "" ? THINKING_PLACEHOLDER : v, CARD_MARKDOWN_MAX_BYTES);
   };
 
@@ -337,39 +327,17 @@ export async function streamFeishuReply(
 
   try {
     for await (const e of events) {
-      if (e.type !== "retrying") retryNotice = false; // any progress closes the advisory backoff notice
-      if (e.type === "text") {
-        answer += e.delta;
-        if (answerPreviewSince === undefined && answer.trim() !== "") answerPreviewSince = Date.now();
-        touch();
-      } else if (e.type === "thinking") {
-        thinking += e.delta;
-        touch();
-      } else if (e.type === "tool_started") {
-        const arg = summarizeToolArgs(e.args);
-        toolIndexById.set(e.id, tools.length);
-        const name = humanizeToolName(e.name);
-        tools.push({ label: arg ? `${name} ${arg}` : name, status: "running" });
-        touch();
-      } else if (e.type === "tool_ended") {
-        const i = toolIndexById.get(e.id);
-        const t = i === undefined ? undefined : tools[i];
-        if (t) t.status = e.isError ? "error" : "ok";
-        touch();
-      } else if (e.type === "retrying") {
-        // Summarization retry backoff — up to ~14s of quiet that would otherwise read as a hang.
-        retryNotice = true;
-        touch();
-      } else if (e.type === "completed") {
+      if (e.type === "completed") {
         await finish();
         // Settle the preview into the final answer; the persisted card is the answer alone — the
         // process (thinking/tools) was preview-only. Mark finalized BEFORE delivering: the terminal was
         // reached, so a delivery failure here is a plain failure, not an "abnormal exit" (which would
         // wrongly fire the finally's neutral-notice fallback = double delivery + wrong text).
         finalized = true;
-        await settle(answer.trim() !== "" ? answer : "(no reply)");
+        await settle(turn.answer.trim() !== "" ? turn.answer : "(no reply)");
         return;
-      } else if (e.type === "failed") {
+      }
+      if (e.type === "failed") {
         await finish();
         // Two audiences: the chat (customer-facing — formatError, neutral by default) and the operator
         // log (dev-facing — the full details, via the throw below + the handler's catch). Same terminal
@@ -388,6 +356,7 @@ export async function streamFeishuReply(
         }
         throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);
       }
+      if (applyTurnEvent(turn, e)) touch();
     }
     throw new Error("stream ended without a terminal event"); // violates SPEC MUST 1
   } finally {
