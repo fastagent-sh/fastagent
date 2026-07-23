@@ -30,7 +30,13 @@ import {
   streamingCardJson,
 } from "./card.ts";
 import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
-import { type ChannelFailure, defaultErrorMessage, humanizeToolName, summarizeToolArgs } from "../preview-kit.ts";
+import {
+  RETRY_NOTICE,
+  type ChannelFailure,
+  defaultErrorMessage,
+  humanizeToolName,
+  summarizeToolArgs,
+} from "../preview-kit.ts";
 import { truncateCodePointSuffix, truncateUtf8 } from "../text.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
@@ -200,6 +206,7 @@ export async function streamFeishuReply(
   let thinking = "";
   let answer = "";
   let answerPreviewSince: number | undefined;
+  let retryNotice = false;
 
   const mark = { running: "…", ok: "✓", error: "✗" } as const;
   const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
@@ -219,7 +226,7 @@ export async function streamFeishuReply(
     return Date.now() - answerPreviewSince >= STREAM_THROTTLE_MS ? answer : "";
   };
   const view = (): string => {
-    const v = [thinkingView(), toolView(), answerView()]
+    const v = [thinkingView(), toolView(), retryNotice ? RETRY_NOTICE : "", answerView()]
       .filter((s) => s.trim() !== "")
       .join("\n\n")
       .trim();
@@ -330,6 +337,7 @@ export async function streamFeishuReply(
 
   try {
     for await (const e of events) {
+      if (e.type !== "retrying") retryNotice = false; // any progress closes the advisory backoff notice
       if (e.type === "text") {
         answer += e.delta;
         if (answerPreviewSince === undefined && answer.trim() !== "") answerPreviewSince = Date.now();
@@ -347,6 +355,10 @@ export async function streamFeishuReply(
         const i = toolIndexById.get(e.id);
         const t = i === undefined ? undefined : tools[i];
         if (t) t.status = e.isError ? "error" : "ok";
+        touch();
+      } else if (e.type === "retrying") {
+        // Summarization retry backoff — up to ~14s of quiet that would otherwise read as a hang.
+        retryNotice = true;
         touch();
       } else if (e.type === "completed") {
         await finish();

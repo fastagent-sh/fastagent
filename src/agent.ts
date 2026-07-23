@@ -29,6 +29,11 @@ export type AgentEvent =
   | { type: "thinking"; delta: string }
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
+  /** Advisory, non-terminal (engines MAY emit it): a transient internal failure scheduled a retry
+   *  with backoff — the turn is still alive. Explains a quiet gap that would otherwise read as a
+   *  hang; deliberately unclosed — the next event is its closure. Terminal consumers ignore it
+   *  (SPEC MUST 4). */
+  | { type: "retrying"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
   /** Terminal: success. `data` is attached only when the engine produces a structured result. */
   | { type: "completed"; data?: Json }
   /** Terminal: failure. `retryable` means it is worth re-sending with the same session. `code` is the
