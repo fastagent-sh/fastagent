@@ -1,6 +1,6 @@
 {
   "name": "@fastagent-sh/fastagent",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Vibe first. Then FastAgent: turn a local agent directory into a live service in your app, on GitHub, Telegram, Slack, or behind any channel.",
   "keywords": [
     "agent",
