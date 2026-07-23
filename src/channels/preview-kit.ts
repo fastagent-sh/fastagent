@@ -25,6 +25,10 @@ export function defaultErrorMessage(failed: ChannelFailure): string {
     : "⚠️ Sorry, something went wrong. Try rephrasing, or check I have access to what you need.";
 }
 
+/** Customer-facing live-preview line for an engine-internal retry backoff (the advisory `retrying`
+ *  event): neutral, no leaked internals — the reason stays in operator logs. */
+export const RETRY_NOTICE = "⏳ Temporary problem — retrying…";
+
 /** Max length (code points) of a tool's arg preview in the live view. */
 const TOOL_ARG_MAX = 48;
 

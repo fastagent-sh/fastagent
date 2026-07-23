@@ -1,7 +1,7 @@
 /** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
 import type { AgentEvent } from "../../agent.ts";
 import { log } from "../../log.ts";
-import { type ChannelFailure, defaultErrorMessage, humanizeToolName } from "../preview-kit.ts";
+import { RETRY_NOTICE, type ChannelFailure, defaultErrorMessage, humanizeToolName } from "../preview-kit.ts";
 import {
   type SlackApi,
   type SlackStreamChunk,
@@ -18,6 +18,7 @@ export { defaultErrorMessage };
 
 const CLASSIC_UPDATE_INTERVAL_MS = 3_000;
 const NATIVE_APPEND_INTERVAL_MS = 750;
+const WORKING_STATUS = "is working on your request…";
 const GENERIC_FAILURE = "⚠️ The response stream stopped unexpectedly. Please try again.";
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -91,6 +92,7 @@ async function streamClassicSlackReply(
   const tools: { name: string; status: "running" | "ok" | "error" }[] = [];
   const toolIndex = new Map<string, number>();
   let answer = "";
+  let retryNotice = false;
   let answerVisible = false;
   let answerTimer: ReturnType<typeof setTimeout> | undefined;
   let previewTs = initialPreviewTs;
@@ -107,7 +109,7 @@ async function streamClassicSlackReply(
   const toolView = (): string =>
     tools.map((tool) => `🔧 ${tool.name} ${{ running: "…", ok: "✓", error: "✗" }[tool.status]}`).join("\n");
   const view = (): string =>
-    ["💭 Thinking…", toolView(), answerVisible ? sanitizeSlackMarkdown(answer) : ""]
+    ["💭 Thinking…", toolView(), retryNotice ? RETRY_NOTICE : "", answerVisible ? sanitizeSlackMarkdown(answer) : ""]
       .filter((value) => value.trim())
       .join("\n\n")
       .trim();
@@ -166,6 +168,7 @@ async function streamClassicSlackReply(
 
   try {
     for await (const event of events) {
+      if (event.type !== "retrying") retryNotice = false; // any progress closes the advisory backoff notice
       if (event.type === "text") {
         answer += event.delta;
         if (!answerVisible && answerTimer === undefined) {
@@ -188,6 +191,10 @@ async function streamClassicSlackReply(
       } else if (event.type === "tool_ended") {
         const index = toolIndex.get(event.id);
         if (index !== undefined && tools[index]) tools[index].status = event.isError ? "error" : "ok";
+        touch();
+      } else if (event.type === "retrying") {
+        // Summarization retry backoff — up to ~14s of quiet that would otherwise read as a hang.
+        retryNotice = true;
         touch();
       } else if (event.type === "completed") {
         await finishPump();
@@ -237,7 +244,7 @@ async function streamNativeSlackReply(
   if (target.channelId.startsWith("D")) {
     await Promise.all([
       api
-        .setThreadStatus(target, "is working on your request…")
+        .setThreadStatus(target, WORKING_STATUS)
         .catch((error) => log.warn(`${label} could not set Slack Agent status: ${String(error)}`)),
       threadTitle
         ? api
@@ -248,6 +255,7 @@ async function streamNativeSlackReply(
   }
 
   let streamTs: string | undefined;
+  let retryStatusShown = false;
   const toolNames = new Map<string, string>();
   let pendingText = "";
   let fullAnswer = "";
@@ -329,12 +337,29 @@ async function streamNativeSlackReply(
 
   try {
     for await (const event of events) {
+      if (event.type !== "retrying" && retryStatusShown) {
+        // Progress after a retry notice: restore the normal working status so the stale line doesn't
+        // contradict a visibly streaming answer.
+        retryStatusShown = false;
+        void api
+          .setThreadStatus(target, WORKING_STATUS)
+          .catch((error) => log.warn(`${label} could not restore the working status: ${String(error)}`));
+      }
       if (event.type === "text") {
         pendingText += event.delta;
         fullAnswer += event.delta;
         scheduleText();
       } else if (event.type === "thinking") {
         // Slack's native loading status represents private reasoning without exposing it.
+      } else if (event.type === "retrying") {
+        // A summarization retry backoff pauses the stream (~14s worst case). Channels have no per-run
+        // status surface in native mode; DMs get the explicit Agent status line, restored on progress.
+        if (target.channelId.startsWith("D")) {
+          retryStatusShown = true;
+          void api
+            .setThreadStatus(target, "hit a temporary problem — retrying…")
+            .catch((error) => log.warn(`${label} could not set the retry status: ${String(error)}`));
+        }
       } else if (event.type === "tool_started") {
         const title = humanizeToolName(event.name);
         toolNames.set(event.id, title);

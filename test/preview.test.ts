@@ -183,6 +183,23 @@ describe("streamReply answer preview (direct)", () => {
     expect(edits.at(-1)).toBe("answer");
   });
 
+  it("a retrying event shows the backoff notice; the next progress event clears it", async () => {
+    vi.useFakeTimers();
+    const { edits } = recordingFetch();
+    const src = eventSource();
+    const turn = streamReply(src.iterable, API, "BOT", { chatId: 1 }, neutral);
+    await vi.advanceTimersByTimeAsync(0); // placeholder sent
+    src.push({ type: "retrying", attempt: 1, maxAttempts: 3, delayMs: 2000, reason: "503 upstream" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(edits).toEqual(["⏳ Temporary problem — retrying…"]);
+    src.push({ type: "tool_started", id: "t1", name: "read", args: {} });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(edits.at(-1)).toBe("🔧 read …"); // notice closed by progress, no stale retry line
+    src.push({ type: "completed" });
+    src.end();
+    await turn;
+  });
+
   it("tool previews do not leak pending short answer text", async () => {
     vi.useFakeTimers();
     const { edits } = recordingFetch();

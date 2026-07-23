@@ -39,6 +39,8 @@ export function logAgentLoop(agent: Agent, sink: (line: string) => void = (line)
           sink(`[agent]   tool → ${e.name}(${preview(e.args)})`);
         } else if (e.type === "tool_ended") {
           sink(`[agent]   tool ${e.isError ? "✗" : "✓"} ${toolName.get(e.id) ?? e.id} → ${preview(e.content)}`);
+        } else if (e.type === "retrying") {
+          sink(`[agent]   retrying (${e.attempt}/${e.maxAttempts} in ${e.delayMs}ms): ${oneLine(e.reason)}`);
         } else if (e.type === "completed") {
           if (thinking.trim() !== "") sink(`[agent]   thinking: ${oneLine(thinking)}`);
           sink(`[agent]   reply: ${oneLine(reply) || "(empty)"}`);

@@ -27,6 +27,12 @@ export async function runInvokeStream(
       case "tool_ended":
         if (event.isError) err(`[tool] ${toolName.get(event.id) ?? event.id} failed`);
         break;
+      case "retrying":
+        // Operator-facing: include the reason (channels show a neutral customer line instead).
+        err(
+          `[fastagent] transient failure — retrying (${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms): ${event.reason}`,
+        );
+        break;
       case "failed":
         err(`[fastagent] failed: ${event.details}${event.retryable ? " (retryable)" : ""}`);
         exitCode = 1;

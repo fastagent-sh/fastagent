@@ -6,7 +6,7 @@
  * message, works in groups and private (unlike sendMessageDraft, which is private/forum-topic only).
  */
 import type { AgentEvent } from "../../agent.ts";
-import { type ChannelFailure, defaultErrorMessage, summarizeToolArgs } from "../preview-kit.ts";
+import { RETRY_NOTICE, type ChannelFailure, defaultErrorMessage, summarizeToolArgs } from "../preview-kit.ts";
 import { log } from "../../log.ts";
 import { TELEGRAM_MAX_TEXT, type Target, callApi, editMessageText, sendMessage } from "./telegram-api.ts";
 
@@ -83,6 +83,7 @@ export async function streamReply(
   let thinking = "";
   let answer = "";
   let answerPreviewSince: number | undefined;
+  let retryNotice = false;
 
   const mark = { running: "…", ok: "✓", error: "✗" } as const;
   const toolView = (): string => tools.map((t) => `🔧 ${t.label} ${mark[t.status]}`).join("\n");
@@ -104,7 +105,7 @@ export async function streamReply(
     return Date.now() - answerPreviewSince >= EDIT_THROTTLE_MS ? answer : "";
   };
   const view = (): string => {
-    const v = [thinkingView(), toolView(), answerView()]
+    const v = [thinkingView(), toolView(), retryNotice ? RETRY_NOTICE : "", answerView()]
       .filter((s) => s.trim() !== "")
       .join("\n\n")
       .trim();
@@ -202,6 +203,7 @@ export async function streamReply(
 
   try {
     for await (const e of events) {
+      if (e.type !== "retrying") retryNotice = false; // any progress closes the advisory backoff notice
       if (e.type === "text") {
         answer += e.delta;
         if (answerPreviewSince === undefined && answer.trim() !== "") answerPreviewSince = Date.now();
@@ -218,6 +220,10 @@ export async function streamReply(
         const i = toolIndexById.get(e.id);
         const t = i === undefined ? undefined : tools[i];
         if (t) t.status = e.isError ? "error" : "ok";
+        touch();
+      } else if (e.type === "retrying") {
+        // Summarization retry backoff — up to ~14s of quiet that would otherwise read as a hang.
+        retryNotice = true;
         touch();
       } else if (e.type === "completed") {
         await finish();
