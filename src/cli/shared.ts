@@ -238,7 +238,7 @@ async function verifyApiKeyLogin(
 
 /** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. Shared
  *  by the `login` command and the first-run picker's inline login. */
-export function terminalLoginIO(): LoginIO {
+function terminalLoginIO(): LoginIO {
   return {
     async select(message, options) {
       const r = await (options.length > 7 ? autocomplete : select)({ message, options });

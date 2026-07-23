@@ -7,13 +7,13 @@
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "../state.ts";
 
-export interface OwnedFeishuThread {
+interface OwnedFeishuThread {
   rootId: string;
   chatId: string;
   createdAt: number;
 }
 
-export interface OwnedFeishuThreads {
+interface OwnedFeishuThreads {
   has(chatId: string, rootId: string): boolean;
   /** Idempotent, synchronous, pre-ACK persistence. A failed write throws so the platform redelivers. */
   add(chatId: string, rootId: string): void;

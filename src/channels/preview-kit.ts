@@ -35,7 +35,7 @@ export const RETRY_NOTICE = "⏳ Temporary problem — retrying…";
 export const THINKING_PLACEHOLDER = "💭 Thinking…";
 
 /** One tool call's line in the live view. */
-export interface ToolLine {
+interface ToolLine {
   label: string;
   status: "running" | "ok" | "error";
 }
@@ -228,7 +228,7 @@ function clip(s: string): string {
  * rather than just `🔧 read`. Generic (a channel knows no tool schemas): show the salient value — the
  * first primitive field, conventionally the subject (path / command / query / url) — else compact JSON.
  */
-export function summarizeToolArgs(args: Json): string {
+function summarizeToolArgs(args: Json): string {
   if (args === null || typeof args !== "object" || Array.isArray(args)) return clip(String(args));
   const values = Object.values(args);
   const primary = values.find((v) => typeof v === "string" || typeof v === "number");

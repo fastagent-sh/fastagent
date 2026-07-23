@@ -1,23 +1,14 @@
 /**
- * Group-context buffer: recent UN-summoned messages per Telegram "place" (chat[:thread]), kept under a
- * char budget and folded into the next answered turn's prompt, so a summoned agent has the discussion
- * it didn't see turn-by-turn. Bucketed by place (not session): an un-summoned message has no route
- * session, and the flush feeds whatever turn answers that place.
- *
- * DURABLE: persisted synchronously before the webhook 200 (Telegram never redelivers an ACKed update,
- * so ACK-then-persist would be a silent-loss window) and reloaded on start. The consume protocol is
- * peek → (turn completes) → commit: peek renders WITHOUT clearing and snapshots exactly which entries
- * it consumed; commit removes only those, by object identity — so a failure or crash before the turn's
- * `completed` leaves them intact for the next summon, and a message that arrives while the turn runs
- * survives for the next answered turn (a whole-bucket delete would lose it).
+ * Telegram's half of the shared context buffer (mechanics + consume protocol: ../context-buffer.ts):
+ * the entry shape, its fold-line rendering, and buffered-attachment selection. Bucketed by Telegram
+ * "place" (chat[:thread]), not session: an un-summoned message has no route session, and the flush
+ * feeds whatever turn answers that place.
  */
-import { log } from "../../log.ts";
-import { loadStateFile, saveStateFile } from "../state.ts";
-
-/** Char budget for the per-place buffer — bounds the cost of folding it into a prompt; when exceeded
- *  the OLDEST un-summoned messages are dropped (not a time window: a quiet group keeps its
- *  sparse-but-relevant lines, a busy burst is capped). */
-const BUFFER_MAX_CHARS = 4000;
+import {
+  BUFFER_ATTACH_MAX,
+  type ContextBuffer as GenericContextBuffer,
+  createContextBuffer as createGenericContextBuffer,
+} from "../context-buffer.ts";
 
 /** One buffered un-summoned message (object identity is the commit key). Besides the sender label and
  *  one-line body, it carries what a LATER summon needs to resolve references into the discussion:
@@ -45,14 +36,6 @@ export interface BufferedRef {
   msg?: number;
 }
 
-/** How many buffered files and images (each, most recent first) a summon pulls in with the folded
- *  discussion — bounds the latency/token cost of "summarize the file from earlier" against a chatty
- *  group posting many attachments between summons. Skipped ones are counted into the prompt note, so
- *  the model never sees an attachment reference it silently cannot open. */
-const BUFFER_ATTACH_MAX = 3;
-
-/** One fold line. ALSO the eviction cost basis: the budget must price what the fold actually renders
- *  (sender + body + the msg/reply meta), or the fold would systematically overrun BUFFER_MAX_CHARS. */
 function bufferLine(e: BufferEntry): string {
   const meta = [
     e.messageId !== undefined ? `msg ${e.messageId}` : undefined,
@@ -97,23 +80,8 @@ export function collectAttachments(
   };
 }
 
-export interface ContextBuffer {
-  /** Record an un-summoned message. Persists BEFORE returning (pre-ACK: a throw becomes the webhook's
-   *  500, and Telegram redelivers once the disk recovers) — staged on a copy and rolled back on a
-   *  failed write, so the redelivery does not double-append the entry already in memory. */
-  push(placeKey: string, entry: BufferEntry): void;
-  /** Render the fold text and snapshot the consumed entries (see the module header's consume protocol). */
-  peek(placeKey: string): { text: string; consumed: BufferEntry[] };
-  /** Remove exactly `consumed` (by identity) — call on the turn's `completed` event, when the folded
-   *  discussion provably lives in the durable session. Consumes entries WHOLE, including ones whose
-   *  attachments failed to load or were cap-skipped: their text is in the session (keeping them would
-   *  re-fold duplicate text), and the prompt note said what is missing; re-post an attachment to use
-   *  it. Post-ACK: a failed write is logged, never thrown (it must not abort the turn's delivery). */
-  commit(placeKey: string, consumed: BufferEntry[]): void;
-}
+export type ContextBuffer = GenericContextBuffer<BufferEntry>;
 
-/** State files are an IO boundary: valid JSON of the WRONG SHAPE (hand-edited, version drift) must
- *  degrade exactly like a corrupt file — warn + empty — not flow in as trusted data. */
 function isBufferEntry(e: unknown): e is BufferEntry {
   const t = e as BufferEntry;
   const strings = (v: unknown): boolean =>
@@ -129,57 +97,5 @@ function isBufferEntry(e: unknown): e is BufferEntry {
 }
 
 export function createContextBuffer(path: string): ContextBuffer {
-  const load = (): Map<string, BufferEntry[]> => {
-    const raw = loadStateFile(path);
-    if (raw === undefined) return new Map();
-    if (
-      typeof raw === "object" &&
-      raw !== null &&
-      !Array.isArray(raw) &&
-      Object.values(raw).every((v) => Array.isArray(v) && v.every(isBufferEntry))
-    ) {
-      return new Map(Object.entries(raw as Record<string, BufferEntry[]>));
-    }
-    log.warn(`[telegram] unexpected shape in ${path} — starting with an empty buffer`);
-    return new Map();
-  };
-  const buffers = load();
-  const persist = (): void => saveStateFile(path, Object.fromEntries(buffers));
-
-  return {
-    push(placeKey, entry) {
-      const prev = buffers.get(placeKey);
-      const buf = prev ? [...prev] : [];
-      buf.push(entry);
-      let total = buf.reduce((n, e) => n + bufferLine(e).length + 1, 0);
-      while (buf.length > 1 && total > BUFFER_MAX_CHARS) {
-        const dropped = buf.shift();
-        if (dropped) total -= bufferLine(dropped).length + 1;
-      }
-      buffers.set(placeKey, buf);
-      try {
-        persist();
-      } catch (e) {
-        if (prev) buffers.set(placeKey, prev);
-        else buffers.delete(placeKey);
-        throw e;
-      }
-    },
-    peek(placeKey) {
-      const buf = buffers.get(placeKey) ?? [];
-      return { text: buf.map(bufferLine).join("\n"), consumed: [...buf] };
-    },
-    commit(placeKey, consumed) {
-      const buf = buffers.get(placeKey);
-      if (!buf) return;
-      const remaining = buf.filter((e) => !consumed.includes(e));
-      if (remaining.length === 0) buffers.delete(placeKey);
-      else buffers.set(placeKey, remaining);
-      try {
-        persist();
-      } catch (e) {
-        log.error(`[telegram] buffer write failed post-ACK (a restart may re-fold answered discussion): ${String(e)}`);
-      }
-    },
-  };
+  return createGenericContextBuffer({ path, label: "[telegram]", isEntry: isBufferEntry, line: bufferLine });
 }

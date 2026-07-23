@@ -2,14 +2,14 @@
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "../state.ts";
 
-export interface OwnedSlackThread {
+interface OwnedSlackThread {
   teamId: string;
   channelId: string;
   rootTs: string;
   createdAt: number;
 }
 
-export interface OwnedSlackThreads {
+interface OwnedSlackThreads {
   has(teamId: string, channelId: string, rootTs: string): boolean;
   add(teamId: string, channelId: string, rootTs: string): void;
 }

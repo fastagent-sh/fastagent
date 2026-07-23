@@ -23,7 +23,7 @@ export interface LarkOnboardIO {
   prompt(message: string, opts?: { hidden?: boolean }): Promise<string | undefined>;
 }
 
-export interface LarkBootstrapResult {
+interface LarkBootstrapResult {
   /** Challenge-captured token: the PATCH also switched Subscription mode to webhook. */
   token?: string;
   /** Present only for a definitive config-route 404; tells the user why the manual path is active. */

@@ -207,7 +207,7 @@ export interface FeishuApi {
 
 /** The platform caps a text-message request body at 150 KB; stay well under it (the content is a JSON
  *  envelope around the text, and multi-byte characters inflate the byte count). */
-export const FEISHU_MAX_TEXT_BYTES = 100 * 1024;
+const FEISHU_MAX_TEXT_BYTES = 100 * 1024;
 
 /** Split text into chunks whose UTF-8 size fits the message cap, preferring a newline boundary. */
 export function chunkFeishuText(text: string, maxBytes: number = FEISHU_MAX_TEXT_BYTES): string[] {

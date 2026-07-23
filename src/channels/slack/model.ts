@@ -16,7 +16,7 @@ export interface SlackFile {
   url_private_download?: string;
 }
 
-export interface SlackAppContextEntity {
+interface SlackAppContextEntity {
   type?: string;
   value?: string;
   team_id?: string;

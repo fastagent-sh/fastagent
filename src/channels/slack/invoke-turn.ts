@@ -1,6 +1,15 @@
 /** Resolve Slack file IDs at dequeue, then stream one engine-neutral Agent turn. */
-import { type Agent, type AgentEvent, type ImageRef, SESSION_BUSY_CODE } from "../../agent.ts";
+import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
+import {
+  type BusyRetry,
+  DEFAULT_BUSY_RETRY,
+  attachedFilesManifest,
+  attributedFileName,
+  backgroundImagesManifest,
+  missingAttachmentsNote,
+  streamTurnWithBusyRetry,
+} from "../invoke-turn-kit.ts";
 import type { SlackBufferedFileRef } from "./context-buffer.ts";
 import type { DownloadedSlackFile, SlackApi } from "./slack-api.ts";
 
@@ -63,42 +72,24 @@ async function resolveInputs(
     }
   }
 
-  const missing = lost + attachments.buffered.skipped;
-  const missingNote =
-    missing > 0
-      ? `\n[note: ${missing} file(s) from the earlier discussion are not loaded (deleted, inaccessible, or older than the recent-file cap)]`
-      : "";
-  const imageManifest = backgroundImages.length
-    ? `\n\n[background vision images from earlier discussion — appended after ${images.length} primary image(s):\n${backgroundImages
-        .map(({ ref }, index) => `- vision image ${images.length + index + 1}: from ${ref.from}, msg ${ref.messageId}`)
-        .join("\n")}\n]`
-    : "";
+  const missingNote = missingAttachmentsNote(lost + attachments.buffered.skipped);
+  const imageManifest = backgroundImagesManifest(
+    images.length,
+    backgroundImages.map(({ ref }) => ref),
+  );
   const allFiles = [
     ...files,
     ...backgroundFiles.map(({ file, ref }) => ({
       ...file,
-      name: `${file.name} (from ${ref.from}, msg ${ref.messageId}, earlier discussion)`,
+      name: attributedFileName(file.name, ref.from, ref.messageId),
     })),
   ];
-  const fileManifest = allFiles.length
-    ? `\n\n[attached files — read them with your tools:\n${allFiles
-        .map((file) => `- ${file.name} (${file.size} bytes) → ${file.path}`)
-        .join("\n")}\n]`
-    : "";
+  const allImages = [...images, ...backgroundImages.map(({ image }) => image)];
   return {
-    images: [...images, ...backgroundImages.map(({ image }) => image)].length
-      ? [...images, ...backgroundImages.map(({ image }) => image)]
-      : undefined,
-    promptSuffix: `${missingNote}${imageManifest}${fileManifest}`,
+    images: allImages.length ? allImages : undefined,
+    promptSuffix: `${missingNote}${imageManifest}${attachedFilesManifest(allFiles)}`,
   };
 }
-
-export interface SlackBusyRetry {
-  delayMs: number;
-  maxWaitMs: number;
-}
-
-const DEFAULT_BUSY_RETRY: SlackBusyRetry = { delayMs: 5_000, maxWaitMs: 600_000 };
 
 export async function* invokeSlackTurn(
   agent: Agent,
@@ -107,7 +98,7 @@ export async function* invokeSlackTurn(
   transport: SlackTurnTransport,
   attachments: SlackTurnAttachments,
   onCompleted?: () => void,
-  busyRetry: SlackBusyRetry = DEFAULT_BUSY_RETRY,
+  busyRetry: BusyRetry = DEFAULT_BUSY_RETRY,
 ): AsyncIterable<AgentEvent> {
   let resolved: ResolvedInputs;
   try {
@@ -117,26 +108,5 @@ export async function* invokeSlackTurn(
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };
-  const deadline = Date.now() + busyRetry.maxWaitMs;
-  for (;;) {
-    let retryBusy = false;
-    let first = true;
-    for await (const event of agent.invoke({ session }, prompt)) {
-      if (
-        first &&
-        event.type === "failed" &&
-        event.code === SESSION_BUSY_CODE &&
-        Date.now() + busyRetry.delayMs < deadline
-      ) {
-        retryBusy = true;
-        break;
-      }
-      first = false;
-      if (event.type === "completed") onCompleted?.();
-      yield event;
-    }
-    if (!retryBusy) return;
-    log.info(`${transport.label} session ${session} is busy — retrying in ${busyRetry.delayMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, busyRetry.delayMs));
-  }
+  yield* streamTurnWithBusyRetry(agent, session, prompt, { label: transport.label, onCompleted, busyRetry });
 }

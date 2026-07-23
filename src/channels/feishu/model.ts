@@ -73,7 +73,7 @@ export type FeishuResourceKind = "image" | "file" | "audio" | "video";
  * A resource locator. User-sent resources are scoped by BOTH their carrying message id and resource
  * key; a bare file_key/image_key is insufficient for the message-resource download API.
  */
-export interface FeishuResourceRef {
+interface FeishuResourceRef {
   kind: FeishuResourceKind;
   messageId: string;
   key: string;

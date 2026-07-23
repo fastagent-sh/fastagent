@@ -1,6 +1,6 @@
 export type SlackGroupBehavior = "context" | "mentions";
 
-export const SLACK_BASE_BOT_SCOPES = [
+const SLACK_BASE_BOT_SCOPES = [
   "app_mentions:read",
   "assistant:write",
   "chat:write",
@@ -9,9 +9,9 @@ export const SLACK_BASE_BOT_SCOPES = [
   "im:history",
   "reactions:write",
 ] as const;
-export const SLACK_CONTEXT_BOT_SCOPES = ["channels:history", "groups:history", "mpim:history"] as const;
-export const SLACK_BASE_BOT_EVENTS = ["app_context_changed", "app_home_opened", "app_mention", "message.im"] as const;
-export const SLACK_CONTEXT_BOT_EVENTS = ["message.channels", "message.groups", "message.mpim"] as const;
+const SLACK_CONTEXT_BOT_SCOPES = ["channels:history", "groups:history", "mpim:history"] as const;
+const SLACK_BASE_BOT_EVENTS = ["app_context_changed", "app_home_opened", "app_mention", "message.im"] as const;
+const SLACK_CONTEXT_BOT_EVENTS = ["message.channels", "message.groups", "message.mpim"] as const;
 
 export interface SlackAppManifest {
   display_information: {
@@ -52,7 +52,7 @@ export function slackBotEvents(groupBehavior: SlackGroupBehavior): string[] {
 }
 
 /** Slack's bot display name is more restrictive than the app name. */
-export function slackBotDisplayName(name: string): string {
+function slackBotDisplayName(name: string): string {
   const normalized = name
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")

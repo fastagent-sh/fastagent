@@ -122,6 +122,6 @@ describe("Slack turn attachment resolution", () => {
     );
 
     expect(prompt?.text).toContain("/state/OK.txt");
-    expect(prompt?.text).toContain("2 file(s) from the earlier discussion are not loaded");
+    expect(prompt?.text).toContain("2 attachment(s) from the earlier discussion are not loaded");
   });
 });

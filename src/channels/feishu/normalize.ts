@@ -11,7 +11,7 @@ import type {
   NormalizedFeishuMessage,
 } from "./model.ts";
 
-export interface DecodedFeishuResource {
+interface DecodedFeishuResource {
   kind: FeishuResourceKind;
   key: string;
   name?: string;

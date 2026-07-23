@@ -91,9 +91,10 @@
     "prepack": "npm run build",
     "test": "vitest --run",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src test && node scripts/check-doc-links.mjs",
+    "lint": "biome check src test && node scripts/check-doc-links.mjs && knip",
     "format": "biome check --write src test",
-    "postbuild": "node scripts/copy-scaffold-assets.mjs"
+    "postbuild": "node scripts/copy-scaffold-assets.mjs",
+    "knip": "knip"
   },
   "dependencies": {
     "@clack/prompts": "^1.6.0",
@@ -115,6 +116,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
     "@types/proper-lockfile": "^4.1.4",
+    "knip": "^6.29.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   }

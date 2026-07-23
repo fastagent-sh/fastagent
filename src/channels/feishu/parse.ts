@@ -12,7 +12,7 @@ export type { FeishuMention, FeishuMessage, FeishuMessageEvent, FeishuRoute, Fei
 
 /** Legacy compatibility shape returned by {@link parseContent}. New internal code consumes normalized
  * resource refs, which retain resource kind + carrying message id. */
-export interface FeishuAttachmentRef {
+interface FeishuAttachmentRef {
   key: string;
   name?: string;
 }

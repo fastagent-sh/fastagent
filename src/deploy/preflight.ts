@@ -23,13 +23,13 @@ import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). Host-neutral advisories. */
-export interface DeployMessage {
+interface DeployMessage {
   level: "warn" | "note";
   text: string;
 }
 
 /** The resolved facts every host plan needs (the container shape, channels, model auth, ports/secrets). */
-export interface DeployFacts {
+interface DeployFacts {
   messages: DeployMessage[];
   channels: ChannelKind[];
   /** Every structurally detected HTTP-route channel basename, including custom channels. */

@@ -232,7 +232,7 @@ function buildPiAgent(opts: {
  * mutations (session-control.ts) contend on the real lease and validate against the real registry.
  * Called synchronously, exactly once, before the agent is returned. Not part of the public surface.
  */
-export type OnAssembly = (parts: {
+type OnAssembly = (parts: {
   models: Models;
   harnessFactory: ReturnType<typeof piHarnessFactory>;
   lease: Lease;

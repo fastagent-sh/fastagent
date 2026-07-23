@@ -1,0 +1,23 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  // `entry` MIRRORS package.json "exports" (plus the CLI bin) — knip can't read them itself
+  // because they point at dist/. Adding a subpath export? Add its src entry here too; `npm run
+  // lint` runs knip, so a forgotten entry surfaces as its whole tree reported dead.
+  "entry": [
+    "src/cli.ts",
+    "src/index.ts",
+    "src/core.ts",
+    "src/session.ts",
+    "src/pi.ts",
+    "src/github.ts",
+    "src/telegram.ts",
+    "src/slack.ts",
+    "src/feishu.ts",
+    "src/lark.ts",
+    "test/**/*.test.ts"
+  ],
+  "project": ["src/**/*.ts", "test/**/*.ts"],
+  // Scaffold bundles/templates are copied as files at scaffold time, never imported; fixtures are test data.
+  "ignore": ["src/channels/*/scaffold/**", "src/scaffold/templates/**", "test/fixtures/**"],
+  "ignoreBinaries": ["fastagent", "cloudflared"]
+}

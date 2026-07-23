@@ -50,6 +50,8 @@ src/
 │   ├── text.ts              # SHARED Unicode-safe code-point slicing (cards, preview kit)
 │   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + slack + feishu)
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
+│   ├── context-buffer.ts    # SHARED: generic durable un-summoned-discussion buffer (peek→completed→commit) — entry shape/validator/line injected per channel
+│   ├── invoke-turn-kit.ts   # SHARED: busy-retry stream loop around agent.invoke (onCompleted commit point) + prompt-suffix wording (manifests/notes)
 │   ├── state.ts, seen.ts    # SHARED: atomic channel state + bounded durable delivery dedup
 │   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
 │   ├── registration.ts      # SHARED: registrar outcome type (registered|manual|failed) — registrars report facts, deploy owns gate policy
@@ -59,7 +61,7 @@ src/
 │   │   ├── parse.ts         # pure protocol parsing: field extraction, prompt envelope, summon/route policy (no state/IO)
 │   │   ├── invoke-turn.ts   # run one turn: assemble inputs (resolve attachments: download/vision) + stream agent.invoke
 │   │   ├── turn-store.ts    # telegram's record + update_id arrival order over the shared generic store
-│   │   ├── context-buffer.ts# un-summoned group discussion (durable, commit-on-completed)
+│   │   ├── context-buffer.ts# telegram's entry shape + attachment selection over the shared generic buffer
 │   │   ├── preview.ts       # live-preview pump + terminal-write policy
 │   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
@@ -71,7 +73,7 @@ src/
 │   │   ├── model.ts, normalize.ts, parse.ts, crypto.ts, card.ts # protocol model/content normalization/policy + security/card
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + streaming-card delivery
 │   │   ├── owned-threads.ts # durable index of Agent-created group threads (admits bare continuations)
-│   │   ├── context-buffer.ts# unsummoned group/thread discussion (durable, commit-on-completed)
+│   │   ├── context-buffer.ts# feishu's entry shape + resource selection over the shared generic buffer
 │   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)
 │   │   ├── register-app.ts  # `add feishu`: scan-to-create device flow
 │   │   ├── register-webhook.ts, bootstrap-token.ts # event URL + token automation

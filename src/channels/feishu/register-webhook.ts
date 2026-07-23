@@ -32,7 +32,7 @@ import { createFeishuApi, isFeishuConfigApiMissing, isTransientFeishuRegistratio
  *
  * Reports its outcome as a {@link RegistrationOutcome} fact; gating policy belongs to the caller.
  */
-export interface FeishuManualRegistration {
+interface FeishuManualRegistration {
   consoleUrl: string;
   requestUrl: string;
 }

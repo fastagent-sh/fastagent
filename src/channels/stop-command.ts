@@ -14,9 +14,9 @@ export function isStopText(text: string): boolean {
   return /^(stop|cancel)[.!]?$/i.test(text.trim());
 }
 
-export const STOPPED_NOTICE = "⏹ Stopped.";
-export const NOTHING_RUNNING_NOTICE = "Nothing is running.";
-export const STOP_UNAVAILABLE_NOTICE =
+const STOPPED_NOTICE = "⏹ Stopped.";
+const NOTHING_RUNNING_NOTICE = "Nothing is running.";
+const STOP_UNAVAILABLE_NOTICE =
   "⚠️ Stop isn't enabled on this deployment (set sessionControl: true in fastagent.config).";
 
 /** Dispatch `abort` for the session and map the outcome to the customer-facing line. Never throws;

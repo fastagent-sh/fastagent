@@ -240,10 +240,10 @@ Telegram is the stateful channel reference. Its modules separate:
 | Module | Responsibility |
 |---|---|
 | `parse.ts` | pure update/message parsing and summon policy |
-| `invoke-turn.ts` | attachment resolution and one Agent invocation |
+| `invoke-turn.ts` | attachment resolution and one Agent invocation (busy-retry loop + manifest wording shared via `../invoke-turn-kit.ts`) |
 | `../turn-queue.ts` | per-session FIFO, different sessions concurrent (shared with Feishu) |
 | `turn-store.ts` | telegram's record + ordering over the shared generic `../turn-store.ts` (pre-ACK persisted turn intent, crash replay) |
-| `context-buffer.ts` | durable un-summoned group context |
+| `context-buffer.ts` | telegram's entry shape + attachment selection over the shared generic `../context-buffer.ts` (durable un-summoned group context, peek→completed→commit) |
 | `preview.ts` | live preview and terminal write policy |
 | `telegram-api.ts` | Bot API timeouts/retries and HTML-aware splitting |
 | `../state.ts` | atomic small JSON state files (shared with Feishu) |
@@ -254,7 +254,8 @@ window can run a delivery twice. Exactly-once execution needs a different backen
 ### Slack
 
 Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It keeps the neutral
-`Agent.invoke` boundary and reuses shared `turn-queue`, generic `turn-store`, `state`, `seen`, and the
+`Agent.invoke` boundary and reuses shared `turn-queue`, generic `turn-store`, generic `context-buffer`,
+the invoke-turn kit (busy retry + manifest wording), `state`, `seen`, and the
 shared turn-view reducer + preview policies (`preview-kit`). Platform-specific modules own signature verification/event acceptance, message subtype policy,
 managed roots/context, private-file resolution, Slack Web API transport, and dual native-stream /
 rate-limited edited-message rendering.
@@ -298,8 +299,8 @@ implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` p
 `invoke-turn.ts` IO assembly, `preview.ts` delivery,
 `owned-threads.ts` durable managed-root routing, shared `../seen.ts` bounded delivery dedup,
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
-automation. Shared mechanisms (`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one
-level up.
+automation. Shared mechanisms (`turn-queue` / generic `turn-store` / generic `context-buffer` /
+`invoke-turn-kit` / `state` / `wait-health`) remain one level up.
 
 **Feishu is the design center; Lark is a compatibility profile.** The clouds share event/card/crypto
 wire formats, but Lark international trails Feishu in app creation and application-config APIs.

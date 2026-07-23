@@ -5,8 +5,16 @@
  * pure) because this half touches the Bot API + disk; split from telegram.ts so the factory keeps only
  * wiring and the per-turn lifecycle.
  */
-import { type Agent, type AgentEvent, type ImageRef, SESSION_BUSY_CODE } from "../../agent.ts";
+import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
+import {
+  type BusyRetry,
+  DEFAULT_BUSY_RETRY,
+  attachedFilesManifest,
+  attributedFileName,
+  missingAttachmentsNote,
+  streamTurnWithBusyRetry,
+} from "../invoke-turn-kit.ts";
 import type { BufferedRef } from "./context-buffer.ts";
 import { type DownloadedFile, resolveFiles, resolveImages } from "./telegram-api.ts";
 
@@ -77,11 +85,7 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
       log.warn(`[telegram] could not load an earlier (buffered) attachment: ${String(r.reason)}`);
     }
   }
-  const missing = lost + buffered.skipped;
-  const bufferedNote =
-    missing > 0
-      ? `\n[note: ${missing} attachment(s) from the earlier discussion are not loaded (expired, or older than the most recent few)]`
-      : "";
+  const missingNote = missingAttachmentsNote(lost + buffered.skipped);
   // PRIMARY first, background after — consistent with "primary wins": what the user pointed at this
   // turn leads. Buffered file entries are attributed like the fold's text lines ("the file Bob sent"
   // resolves); buffered PHOTOS cannot be (ImageRef carries no label), so their attribution stops at
@@ -89,47 +93,19 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
   // documented limit.
   const allFiles = [
     ...(files ?? []),
-    ...bufferedFiles.map(({ file, ref }) => ({
-      ...file,
-      name: `${file.name} (from ${ref.from}${ref.msg !== undefined ? `, msg ${ref.msg}` : ""}, earlier discussion)`,
-    })),
+    ...bufferedFiles.map(({ file, ref }) => ({ ...file, name: attributedFileName(file.name, ref.from, ref.msg) })),
   ];
-  const manifest = allFiles.length
-    ? `\n\n[attached files — read them with your tools:\n${allFiles.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
-    : "";
   const allImages = [...(images ?? []), ...bufferedImages];
-  return { images: allImages.length ? allImages : undefined, promptSuffix: `${bufferedNote}${manifest}` };
+  return {
+    images: allImages.length ? allImages : undefined,
+    promptSuffix: `${missingNote}${attachedFilesManifest(allFiles)}`,
+  };
 }
-
-/** How the busy-wait paces: retry the invoke every `delayMs` while the session's lease is held by an
- *  EXTERNAL turn (a self-scheduled wake, a concurrent embedder invoke), up to `maxWaitMs` total. The
- *  channel's own turns never collide (the turn-queue serializes per session), so a busy reject here is
- *  always an outside holder — wait for it like a queued turn, instead of erroring at the user. */
-export interface BusyRetry {
-  delayMs: number;
-  maxWaitMs: number;
-}
-// Each retry is a lease-check-level reject (tryAcquire runs before harness assembly) — waiting is nearly
-// free, and the loop exits within one delay of the holder finishing. So the cap is sized to outlast a
-// real tool-using wake turn (minutes), not to be short: 10 min. CEILING: a holder that runs longer than
-// this still surfaces the busy error to the user — the bound exists so a stuck lease can't hang a chat
-// turn forever.
-const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_000 };
 
 /**
- * Run one turn: resolve its attachments, then stream agent.invoke. A primary-attachment failure surfaces
- * as a `failed` event (never a silent drop). `onCompleted` (if given) fires on the turn's `completed`
- * event — the durable-commit point: only then does the folded discussion provably live in the session,
- * so a failure or crash at ANY earlier point leaves the buffer intact for the next summon (a re-folded
- * block beats lost context). The caller uses it to remove the turn intent AND commit the context buffer,
- * in that order (see the call site) so a crash between the two clears cannot replay a context-stripped turn.
- *
- * BUSY-WAIT: a `failed{code: session_busy}` FIRST event means an external turn (e.g. a self-scheduled
- * wake) holds this session's lease and OUR turn never started — replay-safe. Retry (bounded) instead of
- * yielding it: the user sees the "Thinking…" placeholder while waiting (the mirror of the scheduler
- * deferring a wake INTO a busy session), and only an exhausted wait surfaces the busy failure. Only a
- * FIRST-event busy retries — attachments are already resolved, and a fail-fast reject is the only shape
- * the engine emits it in, so nothing that started is ever re-run.
+ * Run one turn: resolve its attachments, then stream agent.invoke with the shared busy-wait
+ * (invoke-turn-kit — `onCompleted` is the durable-commit point; see streamTurnWithBusyRetry). A
+ * primary-attachment failure surfaces as a `failed` event (never a silent drop).
  */
 export async function* invokeTurn(
   agent: Agent,
@@ -148,21 +124,5 @@ export async function* invokeTurn(
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images };
-  const deadline = Date.now() + busyRetry.maxWaitMs;
-  for (;;) {
-    let retryBusy = false;
-    let first = true;
-    for await (const e of agent.invoke({ session }, prompt)) {
-      if (first && e.type === "failed" && e.code === SESSION_BUSY_CODE && Date.now() + busyRetry.delayMs < deadline) {
-        retryBusy = true; // fail-fast reject — the stream ends after this event; wait and re-invoke
-        break;
-      }
-      first = false;
-      if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
-      yield e;
-    }
-    if (!retryBusy) return;
-    log.info(`[telegram] session ${session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`);
-    await new Promise((r) => setTimeout(r, busyRetry.delayMs));
-  }
+  yield* streamTurnWithBusyRetry(agent, session, prompt, { label: "[telegram]", onCompleted, busyRetry });
 }

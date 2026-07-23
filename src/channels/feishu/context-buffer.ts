@@ -1,15 +1,15 @@
 /**
- * Durable context buffer for human group messages that do NOT currently summon the Feishu/Lark Agent.
- * Entries are bucketed by conversation place (main chat, or one concrete thread root) and folded into
- * the next answered turn in that place. The consume protocol mirrors Telegram: peek without clearing,
- * then commit exactly that snapshot only after the Agent emits `completed`.
+ * Feishu/Lark's half of the shared context buffer (mechanics + consume protocol:
+ * ../context-buffer.ts): the entry shape, its fold-line rendering, place-key derivation, and
+ * buffered-resource selection. Entries are bucketed by conversation place (main chat, or one
+ * concrete thread root) and folded into the next answered turn in that place.
  */
-import { log } from "../../log.ts";
-import { loadStateFile, saveStateFile } from "../state.ts";
+import {
+  BUFFER_ATTACH_MAX,
+  type ContextBuffer,
+  createContextBuffer as createGenericContextBuffer,
+} from "../context-buffer.ts";
 import type { NormalizedFeishuMessage } from "./model.ts";
-
-const BUFFER_MAX_CHARS = 4000;
-const BUFFER_ATTACH_MAX = 3;
 
 export interface FeishuBufferedResource {
   messageId: string;
@@ -89,14 +89,7 @@ export function collectFeishuBufferedAttachments(
   };
 }
 
-export interface FeishuContextBuffer {
-  /** Persist before webhook ACK. A failed write throws and rolls memory back for safe redelivery. */
-  push(placeKey: string, entry: FeishuBufferEntry): void;
-  /** Render and snapshot without clearing. */
-  peek(placeKey: string): { text: string; consumed: FeishuBufferEntry[] };
-  /** Remove only the consumed snapshot after `completed`; a post-ACK write failure is logged. */
-  commit(placeKey: string, consumed: FeishuBufferEntry[]): void;
-}
+export type FeishuContextBuffer = ContextBuffer<FeishuBufferEntry>;
 
 function isResource(value: unknown): value is FeishuBufferedResource {
   const resource = value as FeishuBufferedResource;
@@ -122,59 +115,5 @@ function isEntry(value: unknown): value is FeishuBufferEntry {
 }
 
 export function createFeishuContextBuffer(path: string, label: string): FeishuContextBuffer {
-  const load = (): Map<string, FeishuBufferEntry[]> => {
-    const raw = loadStateFile(path);
-    if (raw === undefined) return new Map();
-    if (
-      typeof raw === "object" &&
-      raw !== null &&
-      !Array.isArray(raw) &&
-      Object.values(raw).every((entries) => Array.isArray(entries) && entries.every(isEntry))
-    ) {
-      return new Map(Object.entries(raw as Record<string, FeishuBufferEntry[]>));
-    }
-    log.warn(`${label} unexpected shape in ${path} — starting with an empty context buffer`);
-    return new Map();
-  };
-  const buffers = load();
-  const persist = (): void => saveStateFile(path, Object.fromEntries(buffers));
-
-  return {
-    push(placeKey, entry) {
-      const previous = buffers.get(placeKey);
-      const entries = previous ? [...previous] : [];
-      entries.push(entry);
-      let total = entries.reduce((sum, candidate) => sum + bufferLine(candidate).length + 1, 0);
-      while (entries.length > 1 && total > BUFFER_MAX_CHARS) {
-        const dropped = entries.shift();
-        if (dropped) total -= bufferLine(dropped).length + 1;
-      }
-      buffers.set(placeKey, entries);
-      try {
-        persist();
-      } catch (error) {
-        if (previous) buffers.set(placeKey, previous);
-        else buffers.delete(placeKey);
-        throw error;
-      }
-    },
-    peek(placeKey) {
-      const entries = buffers.get(placeKey) ?? [];
-      return { text: entries.map(bufferLine).join("\n"), consumed: [...entries] };
-    },
-    commit(placeKey, consumed) {
-      const entries = buffers.get(placeKey);
-      if (!entries) return;
-      const remaining = entries.filter((entry) => !consumed.includes(entry));
-      if (remaining.length === 0) buffers.delete(placeKey);
-      else buffers.set(placeKey, remaining);
-      try {
-        persist();
-      } catch (error) {
-        log.error(
-          `${label} context-buffer write failed post-ACK (a restart may re-fold answered discussion): ${String(error)}`,
-        );
-      }
-    },
-  };
+  return createGenericContextBuffer({ path, label, isEntry, line: bufferLine });
 }

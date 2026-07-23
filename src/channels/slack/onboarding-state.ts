@@ -23,7 +23,7 @@ export interface SlackOnboardingState {
   installedAt?: string;
 }
 
-export function slackOnboardingStatePath(stateRoot: string): string {
+function slackOnboardingStatePath(stateRoot: string): string {
   return join(stateRoot, "channels", "slack", "onboarding.json");
 }
 

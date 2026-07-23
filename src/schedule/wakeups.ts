@@ -46,7 +46,7 @@ export const MAX_PENDING_WAKEUPS = 20;
 export const MAX_WAKE_ATTEMPTS = 120;
 /** The minimum gap between two consecutive fires of a RECURRING wake — stricter than the one-shot floor:
  *  a recurring runs forever, so a tight cron is a permanent token burner, not a one-time mistake. */
-export const MIN_RECURRING_GAP_MS = 10 * 60_000; // 10 minutes
+const MIN_RECURRING_GAP_MS = 10 * 60_000; // 10 minutes
 
 /** A stored entry is a real Wakeup: the fields are present and `fireAt` is a parseable date. A malformed
  *  one (bad/missing fireAt) would compare NaN <= now = false forever — never due, never cleared, but still

@@ -32,7 +32,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
  * encoding (JSON → gzip → base64url) follow the official SDKs (provenance: node-sdk
  * scene/registration); item names unknown to the platform catalog are silently dropped by the page.
  */
-export interface FeishuAppAddons {
+interface FeishuAppAddons {
   scopes?: { tenant?: string[]; user?: string[] };
   events?: { items?: { tenant?: string[]; user?: string[] } };
   callbacks?: { items?: string[] };

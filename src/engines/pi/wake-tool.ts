@@ -93,7 +93,7 @@ export function makeWakeTool(stateRoot: string, now: () => Date = () => new Date
 
 /** Build the `unwake` tool: cancel one of THIS conversation's pending wake-ups by id (a wake/recurring
  *  that is no longer needed). Session-scoped — a conversation can never cancel another's. */
-export function makeUnwakeTool(stateRoot: string): AgentTool {
+function makeUnwakeTool(stateRoot: string): AgentTool {
   return defineTool({
     name: "unwake",
     description:

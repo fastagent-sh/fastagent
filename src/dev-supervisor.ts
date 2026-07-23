@@ -20,7 +20,7 @@ import { openExternalUrl } from "./open-url.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (workspace-relative): the process-bound code inputs only. */
-export const WATCHED_HINT = "tools/, channels/, package.json (agent dir), fastagent.config.*, .env (run root)";
+const WATCHED_HINT = "tools/, channels/, package.json (agent dir), fastagent.config.*, .env (run root)";
 
 /**
  * chokidar `ignored` matcher for the narrow watch scope (true = ignore). Ignoring a directory prunes

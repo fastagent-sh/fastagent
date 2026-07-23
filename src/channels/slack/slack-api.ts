@@ -13,7 +13,7 @@ const MAX_RETRY_AFTER_S = 30;
 const MAX_REDIRECTS = 3;
 /** Slack's standard-Markdown fields cap each call at 12,000 characters. Keep headroom for
  * code-fence balancing and future server-side transformations. */
-export const SLACK_MAX_MARKDOWN = 10_000;
+const SLACK_MAX_MARKDOWN = 10_000;
 
 export interface SlackTarget {
   channelId: string;
@@ -23,12 +23,12 @@ export interface SlackTarget {
   recipientTeamId?: string;
 }
 
-export interface SlackMarkdownTextChunk {
+interface SlackMarkdownTextChunk {
   type: "markdown_text";
   text: string;
 }
 
-export interface SlackTaskUpdateChunk {
+interface SlackTaskUpdateChunk {
   type: "task_update";
   id: string;
   title: string;
@@ -37,7 +37,7 @@ export interface SlackTaskUpdateChunk {
 
 export type SlackStreamChunk = SlackMarkdownTextChunk | SlackTaskUpdateChunk;
 
-export interface SlackStreamContent {
+interface SlackStreamContent {
   markdownText?: string;
   chunks?: SlackStreamChunk[];
 }

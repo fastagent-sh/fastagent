@@ -364,7 +364,7 @@ export function resolveAuthPathOverride(
  * The IN-TREE default state root, `<dir>/.fastagent` — what {@link resolveStateRoot} falls back to when
  * `FASTAGENT_STATE_DIR` moves state nowhere. THE single definition of that path segment.
  */
-export function projectStateDir(dir: string): string {
+function projectStateDir(dir: string): string {
   return join(dir, ".fastagent");
 }
 

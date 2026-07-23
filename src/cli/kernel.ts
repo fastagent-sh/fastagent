@@ -15,7 +15,7 @@ import { Argument, Command, Help, InvalidArgumentError, Option } from "commander
 import { errorPrefix } from "./fail.ts";
 
 /** One positional argument, in commander syntax: `<name>` required, `[dir]` optional. */
-export interface ArgSpec {
+interface ArgSpec {
   name: string;
   description: string;
   default?: string;
@@ -33,7 +33,7 @@ export interface FlagSpec {
   conflicts?: string[];
 }
 
-export interface ExampleSpec {
+interface ExampleSpec {
   cmd: string;
   note?: string;
 }

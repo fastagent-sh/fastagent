@@ -5,7 +5,7 @@
  */
 import { spawn } from "node:child_process";
 
-export interface RunResult {
+interface RunResult {
   code: number;
   /** Captured stdout (for `--json` queries); empty when the command streamed to the terminal. The CLI's
    *  stderr is always inherited straight to the terminal, so it is not a field here. */

@@ -11,8 +11,17 @@
  * BUFFERED resources come from earlier un-summoned thread/group discussion and degrade per attachment:
  * one expired background file must not block the current ask or hide its still-readable siblings.
  */
-import { type Agent, type AgentEvent, type ImageRef, SESSION_BUSY_CODE } from "../../agent.ts";
+import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
+import {
+  type BusyRetry,
+  DEFAULT_BUSY_RETRY,
+  attachedFilesManifest,
+  attributedFileName,
+  backgroundImagesManifest,
+  missingAttachmentsNote,
+  streamTurnWithBusyRetry,
+} from "../invoke-turn-kit.ts";
 import type { FeishuBufferedRef } from "./context-buffer.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
@@ -32,7 +41,7 @@ export interface FeishuTurnTransport {
 
 /** An attachment reference: the resource key inside its CARRYING message (the resource API addresses
  *  bytes by message_id + key, so the pair travels together through the turn record). */
-export interface FeishuAttachmentInput {
+interface FeishuAttachmentInput {
   msg: string;
   key: string;
   name?: string;
@@ -126,59 +135,29 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       log.warn(`${t.label} could not load an earlier (buffered) attachment: ${String(result.reason)}`);
     }
   }
-  const missing = lost + attachments.buffered.skipped;
-  const bufferedNote =
-    missing > 0
-      ? `\n[note: ${missing} attachment(s) from the earlier discussion are not loaded (expired, or older than the most recent few)]`
-      : "";
-  const backgroundImageManifest = backgroundImages.length
-    ? `\n\n[background vision images from earlier discussion — appended after ${imageRefs.length} primary image(s):\n${backgroundImages
-        .map(
-          ({ ref }, index) => `- vision image ${imageRefs.length + index + 1}: from ${ref.from}, msg ${ref.messageId}`,
-        )
-        .join("\n")}\n]`
-    : "";
+  const missingNote = missingAttachmentsNote(lost + attachments.buffered.skipped);
+  const backgroundImageManifest = backgroundImagesManifest(
+    imageRefs.length,
+    backgroundImages.map(({ ref }) => ref),
+  );
   const allFiles = [
     ...downloaded,
     ...backgroundFiles.map(({ file, ref }) => ({
       ...file,
-      name: `${file.name} (from ${ref.from}, msg ${ref.messageId}, earlier discussion)`,
+      name: attributedFileName(file.name, ref.from, ref.messageId),
     })),
   ];
-  const manifest = allFiles.length
-    ? `\n\n[attached files — read them with your tools:\n${allFiles.map((file) => `- ${file.name} (${file.size} bytes) → ${file.path}`).join("\n")}\n]`
-    : "";
   const allImages = [...imageRefs, ...backgroundImages.map(({ image }) => image)];
   return {
     images: allImages.length ? allImages : undefined,
-    promptSuffix: `${referentBlock}${bufferedNote}${backgroundImageManifest}${manifest}`,
+    promptSuffix: `${referentBlock}${missingNote}${backgroundImageManifest}${attachedFilesManifest(allFiles)}`,
   };
 }
 
-/** How the busy-wait paces: retry the invoke every `delayMs` while the session's lease is held by an
- *  EXTERNAL turn (a self-scheduled wake, a concurrent embedder invoke), up to `maxWaitMs` total. The
- *  channel's own turns never collide (the turn-queue serializes per session), so a busy reject here is
- *  always an outside holder — wait for it like a queued turn, instead of erroring at the user. */
-export interface BusyRetry {
-  delayMs: number;
-  maxWaitMs: number;
-}
-// Each retry is a lease-check-level reject (tryAcquire runs before harness assembly) — waiting is nearly
-// free, and the loop exits within one delay of the holder finishing. The cap is sized to outlast a real
-// tool-using wake turn (minutes); a holder that runs longer still surfaces the busy error to the user.
-const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_000 };
-
 /**
- * Run one turn: resolve its inputs, then stream agent.invoke. A primary-input failure surfaces as a
- * `failed` event (never a silent drop). `onCompleted` (if given) fires on the `completed` event — the
- * durable-commit point; the caller uses it to remove the turn intent (turn-store L1) at the earliest
- * moment the turn provably lives in the session.
- *
- * BUSY-WAIT: a `failed{code: session_busy}` FIRST event means an external turn holds this session's
- * lease and OUR turn never started — replay-safe. Retry (bounded) instead of yielding it: the user sees
- * the "Thinking…" preview while waiting, and only an exhausted wait surfaces the busy failure. Only a
- * FIRST-event busy retries — inputs are already resolved, and a fail-fast reject is the only shape the
- * engine emits it in, so nothing that started is ever re-run.
+ * Run one turn: resolve its inputs, then stream agent.invoke with the shared busy-wait
+ * (invoke-turn-kit — `onCompleted` is the durable-commit point; see streamTurnWithBusyRetry). A
+ * primary-input failure surfaces as a `failed` event (never a silent drop).
  */
 export async function* invokeFeishuTurn(
   agent: Agent,
@@ -197,23 +176,5 @@ export async function* invokeFeishuTurn(
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };
-  const deadline = Date.now() + busyRetry.maxWaitMs;
-  for (;;) {
-    let retryBusy = false;
-    let first = true;
-    for await (const e of agent.invoke({ session }, prompt)) {
-      if (first && e.type === "failed" && e.code === SESSION_BUSY_CODE && Date.now() + busyRetry.delayMs < deadline) {
-        retryBusy = true; // fail-fast reject — the stream ends after this event; wait and re-invoke
-        break;
-      }
-      first = false;
-      if (e.type === "completed") onCompleted?.(); // the turn is durably in the session — commit point
-      yield e;
-    }
-    if (!retryBusy) return;
-    log.info(
-      `${transport.label} session ${session} is busy (an external turn holds it) — retrying in ${busyRetry.delayMs}ms`,
-    );
-    await new Promise((r) => setTimeout(r, busyRetry.delayMs));
-  }
+  yield* streamTurnWithBusyRetry(agent, session, prompt, { label: transport.label, onCompleted, busyRetry });
 }

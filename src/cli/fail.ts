@@ -1,5 +1,5 @@
 /** stderr renders color: a color TTY, with Node's `hasColors()` carrying the NO_COLOR/TERM=dumb veto. */
-export function stderrHasColors(): boolean {
+function stderrHasColors(): boolean {
   return process.stderr.isTTY === true && (process.stderr.hasColors?.() ?? false);
 }
 
