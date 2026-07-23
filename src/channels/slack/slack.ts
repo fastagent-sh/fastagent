@@ -7,6 +7,7 @@ import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createSeenRing } from "../seen.ts";
 import { ensureStateHome } from "../state.ts";
+import { dispatchStop, isStopText } from "../stop-command.ts";
 import { codePointPrefix } from "../text.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
@@ -202,7 +203,7 @@ export function slackChannel({
   }
   const reactionEmojis = resolveReactionEmojis(reactionAck);
 
-  return ({ agent, stateRoot }) => {
+  return ({ agent, stateRoot, control }) => {
     if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
     if (!signingSecret)
       throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
@@ -477,6 +478,21 @@ export function slackChannel({
         : groupMessageSession === "continuous" && continuousTopLevel
           ? `slack:${teamId}:${event.channel}`
           : `slack:${teamId}:${event.channel}:${rootTs}`;
+      // Explicit user stop: a control action, never a turn — it must not queue behind the run it
+      // stops. Match the bare word after stripping the bot mention; record the logical id so a Slack
+      // redelivery doesn't double-abort or double-notify.
+      if (isStopText((event.text ?? "").replace(/<@[A-Z0-9]+>/gi, " "))) {
+        seen.add(logicalId);
+        const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
+        const stop: Promise<void> = dispatchStop(control, routed.session ?? defaultSession, label)
+          .then((feedback) => api.postMessage(target, feedback).then(() => undefined))
+          .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`))
+          .finally(() => {
+            stops.delete(stop);
+          });
+        stops.add(stop);
+        return;
+      }
       const fileIds = slackFileIds(event);
       const baseText = routed.text ?? slackEnvelope(envelope);
       if (!baseText.trim() && fileIds.length === 0) return;
@@ -520,6 +536,8 @@ export function slackChannel({
         true,
       );
     };
+
+    const stops = new Set<Promise<void>>();
 
     // First-run DM welcome: app_home_opened(tab="messages") signals a DM open. Post once per user.
     const welcomeInFlight = new Set<string>();
@@ -590,7 +608,7 @@ export function slackChannel({
       return new Response(null, { status: 200 });
     };
     (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () =>
-      Promise.all([queue.idle(), ...welcomes]).then(() => undefined);
+      Promise.all([queue.idle(), ...welcomes, ...stops]).then(() => undefined);
     return { "POST /slack": handler };
   };
 }
