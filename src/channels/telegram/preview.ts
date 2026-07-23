@@ -14,6 +14,7 @@ import {
   composeTurnBody,
   createTurnView,
   defaultErrorMessage,
+  revealedAnswer,
   thinkingLine,
   toolLines,
 } from "../preview-kit.ts";
@@ -91,22 +92,12 @@ export async function streamReply(
   // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
   // policy, formatting, and delivery below.
   const turn = createTurnView();
-  // The answer is hidden until its first delta has aged one EDIT_THROTTLE_MS: the pump's leading-edge
-  // flush would otherwise turn the very first content delta (often a lone character or unbalanced markup)
-  // into its own Telegram edit — the short-reply flicker (placeholder → "O" → "OK."). Aging is anchored
-  // at delta ARRIVAL (answerSince, set by the reducer) so an in-flight edit can't skew the clock, and
-  // there is deliberately NO timer at the boundary: a young answer surfaces on the next content-driven
-  // preview pass, so a turn completing within the window sends the final answer edit only.
-  const answerView = (): string => {
-    if (turn.answer.trim() === "" || turn.answerSince === undefined) return "";
-    return Date.now() - turn.answerSince >= EDIT_THROTTLE_MS ? turn.answer : "";
-  };
   const view = (): string => {
     const v = composeTurnBody([
       thinkingLine(turn, THINKING_PREVIEW),
       toolLines(turn),
       turn.retrying ? RETRY_NOTICE : "",
-      answerView(),
+      revealedAnswer(turn, EDIT_THROTTLE_MS),
     ]);
     // Before any reasoning/tool/text arrives, show an explicit placeholder rather than an empty edit.
     return v === "" ? THINKING_PLACEHOLDER : v;
