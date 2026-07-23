@@ -6,6 +6,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Agent } from "../agent.ts";
+import type { SessionControl } from "../session.ts";
 import { nodeListener } from "../channels/http.ts";
 import { text } from "../channels/respond.ts";
 
@@ -25,6 +26,9 @@ export type Routes = Record<string, ChannelHandler>;
 export interface ChannelContext {
   agent: Agent;
   stateRoot: string;
+  /** The serving session-control hub, when the serve wires one (`config.sessionControl`). Channels
+   *  use it for DISPATCH only (the user-facing stop command); observation stays on the data plane. */
+  control?: SessionControl;
 }
 
 /** A `channels/<name>.ts` route channel: receives mount context and returns its HTTP routes. */

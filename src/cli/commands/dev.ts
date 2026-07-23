@@ -69,7 +69,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
-  const routed = await routesFor(a.agentDir, traced, a.stateRoot).catch(failStartup);
+  const routed = await routesFor(a.agentDir, traced, a.stateRoot, a.sessionControl).catch(failStartup);
   const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot, {
     tunnel: opts.tunnel ?? false,
     agent: traced, // the remote data plane (POST /control/invoke) drives the SAME traced agent

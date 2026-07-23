@@ -33,10 +33,16 @@ export interface ServingSurface {
  * The surface this deployment serves: default `GET /health` plus discovered channels, or the default
  * POST `/invoke` only when neither a route nor a long-connection channel was declared.
  */
-export async function routesFor(workspaceDir: string, agent: Agent, stateRoot: string): Promise<ServingSurface> {
+export async function routesFor(
+  workspaceDir: string,
+  agent: Agent,
+  stateRoot: string,
+  control?: SessionControl,
+): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(workspaceDir, {
     agent,
     stateRoot,
+    control,
   });
   for (const c of collisions) {
     console.error(

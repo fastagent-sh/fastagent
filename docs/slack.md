@@ -251,6 +251,13 @@ files.getUploadURLExternal
 at-least-once: if Slack commits completion but the network response is lost, an explicit retry may post a
 duplicate. The tool does not hide that uncertainty with an automatic final-step retry.
 
+## Stopping a running turn
+
+When the serve runs with `sessionControl: true` (fastagent.config), a DM or @mention whose whole
+message is "stop" or "cancel" aborts that conversation's active turn instead of becoming a turn.
+Queued asks are independent and keep running — stop the next one when it starts. Without session
+control the command answers with a visible "not enabled" notice.
+
 ## Durability and state
 
 Slack state lives under:

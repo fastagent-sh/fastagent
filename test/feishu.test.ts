@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/index.ts";
+import type { SessionCommand, SessionControl } from "../src/session.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../src/feishu.ts";
 import { larkChannel } from "../src/lark.ts";
 import { eventSignature } from "../src/channels/feishu/crypto.ts";
@@ -98,7 +99,11 @@ function feishuFetch(overrides: Partial<Record<string, (url: string, init: Reque
 }
 
 /** Build a channel on a temp state root; returns the handler + the recorded agent + the state home. */
-function buildChannel(opts: Partial<FeishuChannelOptions> = {}, agentReply = "the answer") {
+function buildChannel(
+  opts: Partial<FeishuChannelOptions> & { control?: SessionControl } = {},
+  agentReply = "the answer",
+) {
+  const { control, ...channelOpts } = opts;
   const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
   tempRoots.push(root);
   const { agent, calls } = replyingAgent(agentReply);
@@ -107,8 +112,8 @@ function buildChannel(opts: Partial<FeishuChannelOptions> = {}, agentReply = "th
     appSecret: "secret",
     verificationToken: TOKEN,
     baseUrl: BASE,
-    ...opts,
-  })({ agent: opts2Agent(opts) ?? agent, stateRoot: root });
+    ...channelOpts,
+  })({ agent: opts2Agent(opts) ?? agent, stateRoot: root, control });
   const handler = routes["POST /feishu"];
   if (!handler) throw new Error("expected POST /feishu");
   const maybeIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
@@ -1603,5 +1608,44 @@ describe("cardSummary: the settled card's chat-list/notification preview", () =>
     expect(emojiBoundary).toContain("😀");
     expect(Buffer.from(emojiBoundary, "utf8").toString("utf8")).toBe(emojiBoundary);
     expect(cardSummary("   \n  ")).toBe("");
+  });
+});
+
+describe("feishu stop command", () => {
+  const fakeControl = (result: { ok: true } | { code: string }) => {
+    const dispatched: { session: string; command: SessionCommand }[] = [];
+    const control = {
+      dispatch: async (session: string, command: SessionCommand) => {
+        dispatched.push({ session, command });
+        return "ok" in result
+          ? { ok: true as const }
+          : { ok: false as const, error: { code: result.code, message: "no run", retryable: false } };
+      },
+    } as unknown as SessionControl;
+    return { control, dispatched };
+  };
+
+  it("aborts the session, replies, and never submits a turn (mention-stripped match)", async () => {
+    feishuFetch();
+    const { control, dispatched } = fakeControl({ ok: true });
+    const { handler, calls, idle } = buildChannel({ control });
+    const evt = messageEvent({ id: "om_stop", text: "Stop." });
+    expect((await handler(feishuRequest(evt))).status).toBe(200);
+    await flush();
+    await idle();
+    expect(dispatched).toEqual([{ session: "feishu:om_stop", command: { type: "abort" } }]);
+    expect(calls).toHaveLength(0); // a control action, never a turn
+  });
+
+  it("no hub degrades to the visible not-enabled notice; 'stop it' stays a normal turn", async () => {
+    const net = feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    expect((await handler(feishuRequest(messageEvent({ id: "om_s1", text: "stop" })))).status).toBe(200);
+    expect((await handler(feishuRequest(messageEvent({ id: "om_s2", text: "stop it" })))).status).toBe(200);
+    await flush();
+    await idle();
+    expect(calls).toHaveLength(1); // only "stop it" became a turn
+    const bodies = net.calls("/im/v1/messages", "POST").map((c) => JSON.stringify(c.body));
+    expect(bodies.some((b) => b.includes("Stop isn't enabled"))).toBe(true);
   });
 });
