@@ -233,6 +233,12 @@ export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
       const d = se.data as { id: string; isError: boolean; content: Json };
       return { type: "tool_ended", id: d.id, isError: d.isError, content: d.content };
     }
+    case "retry_scheduled": {
+      // `operation` (compaction | branch_summary) stays session-plane vocabulary — a turn renderer
+      // only needs "transient failure, retrying"; the engine detail lives in the control plane.
+      const d = se.data as { attempt: number; maxAttempts: number; delayMs: number; error: string };
+      return { type: "retrying", attempt: d.attempt, maxAttempts: d.maxAttempts, delayMs: d.delayMs, reason: d.error };
+    }
     default:
       return null;
   }

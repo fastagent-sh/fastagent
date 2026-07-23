@@ -14,6 +14,7 @@ import {
   classifyRetryable,
   createPiAgentFromHarness,
   errorToTerminal,
+  projectAgentEvent,
   toSessionEvent,
   toTerminal,
 } from "../src/engines/pi/invoke.ts";
@@ -567,6 +568,16 @@ describe("toSessionEvent retry projection", () => {
   it("drops retry_attempt_start and retry_finished (no outcome to forward)", () => {
     expect(toSessionEvent({ type: "retry_attempt_start", operation: "compaction" }, "run-1")).toBeNull();
     expect(toSessionEvent({ type: "retry_finished", operation: "branch_summary" }, "run-1")).toBeNull();
+  });
+
+  it("projects retry_scheduled into the SPEC `retrying` event (operation stays session-plane)", () => {
+    const projected = projectAgentEvent({
+      type: "retry_scheduled",
+      timestamp: 1,
+      runId: "run-1",
+      data: { operation: "compaction", attempt: 2, maxAttempts: 4, delayMs: 4000, error: "503 upstream" },
+    });
+    expect(projected).toEqual({ type: "retrying", attempt: 2, maxAttempts: 4, delayMs: 4000, reason: "503 upstream" });
   });
 });
 

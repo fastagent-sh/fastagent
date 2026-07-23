@@ -28,6 +28,7 @@ type AgentEvent =
   | { type: "thinking"; delta: string }
   | { type: "tool_started"; id: string; name: string; args: Json }
   | { type: "tool_ended"; id: string; isError: boolean; content: Json }
+  | { type: "retrying"; attempt: number; maxAttempts: number; delayMs: number; reason: string } // advisory: internal retry backoff
   | { type: "completed"; data?: Json }    // terminal: success
   | { type: "failed"; details: string; retryable: boolean; code?: string };  // terminal: failure
 ```
