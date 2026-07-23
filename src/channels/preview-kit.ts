@@ -1,13 +1,14 @@
 /**
  * Channel-neutral live-preview pieces shared by every messaging channel's preview renderer
- * (telegram/preview.ts, feishu/preview.ts, slack/preview.ts): the terminal-failure shape a channel hands to its
- * `onError`, the customer-facing default message for it, and the compact tool-arg summary and
- * humanized tool label for the live view. The preview LIFECYCLES stay per-platform (message edits vs streaming cards) — only
- * these platform-independent policies live here, so the customer-facing wording cannot drift
- * between channels.
+ * (telegram/preview.ts, feishu/preview.ts, slack/preview.ts): the turn-view REDUCER (the one
+ * event → view-state machine every renderer consumes), its line renderers, the terminal-failure
+ * shape a channel hands to its `onError`, and the customer-facing wording for it. The preview
+ * LIFECYCLES stay per-platform — pumps, throttles, and delivery (message edits vs streaming cards
+ * vs chat.update) are real platform differences — but everything platform-independent lives here,
+ * so a new event type or a wording change lands in ONE place instead of one hunk per channel.
  */
-import type { Json } from "../agent.ts";
-import { truncateCodePointPrefix } from "./text.ts";
+import type { AgentEvent, Json } from "../agent.ts";
+import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
 
 /** A terminal failure, as a channel hands it to its `onError`. */
 export interface ChannelFailure {
@@ -28,6 +29,97 @@ export function defaultErrorMessage(failed: ChannelFailure): string {
 /** Customer-facing live-preview line for an engine-internal retry backoff (the advisory `retrying`
  *  event): neutral, no leaked internals — the reason stays in operator logs. */
 export const RETRY_NOTICE = "⏳ Temporary problem — retrying…";
+
+/** The placeholder shown before any reasoning/tool/text arrives. */
+export const THINKING_PLACEHOLDER = "💭 Thinking…";
+
+/** One tool call's line in the live view. */
+export interface ToolLine {
+  label: string;
+  status: "running" | "ok" | "error";
+}
+
+/**
+ * The channel-neutral view STATE of one in-flight turn. Renderers own everything after this state:
+ * when to reveal the young answer (age vs timer), how to format (HTML / card markdown / mrkdwn),
+ * and how to deliver frames. Terminal events are deliberately NOT view state — completed/failed
+ * resolve the preview into a final write, which is each platform's terminal-write policy.
+ */
+export interface TurnView {
+  thinking: string;
+  tools: ToolLine[];
+  /** tool-call id → its line, for `tool_ended` status flips (bookkeeping; renderers read `tools`). */
+  toolById: Map<string, ToolLine>;
+  answer: string;
+  /** Arrival time of the first non-empty answer delta; age-based reveal policies read it. */
+  answerSince?: number;
+  /** An advisory retry backoff is in progress (closed again by any subsequent progress event). */
+  retrying: boolean;
+}
+
+export function createTurnView(): TurnView {
+  return { thinking: "", tools: [], toolById: new Map(), answer: "", retrying: false };
+}
+
+/**
+ * Apply one event to the view state. Returns true when the view changed (the caller repaints).
+ * This is the ONE place the shared view rules live: tool labels are humanized with a compact arg
+ * summary, and any progress event closes an open retry notice (a stale "retrying" line must never
+ * outlive actual progress). Terminal events only close the notice — they are the caller's business.
+ */
+export function applyTurnEvent(view: TurnView, e: AgentEvent): boolean {
+  const closedRetry = view.retrying && e.type !== "retrying";
+  if (closedRetry) view.retrying = false;
+  switch (e.type) {
+    case "text":
+      view.answer += e.delta;
+      if (view.answerSince === undefined && view.answer.trim() !== "") view.answerSince = Date.now();
+      return true;
+    case "thinking":
+      view.thinking += e.delta;
+      return true;
+    case "tool_started": {
+      const arg = summarizeToolArgs(e.args);
+      const name = humanizeToolName(e.name);
+      const line: ToolLine = { label: arg ? `${name} ${arg}` : name, status: "running" };
+      view.tools.push(line);
+      view.toolById.set(e.id, line);
+      return true;
+    }
+    case "tool_ended": {
+      const line = view.toolById.get(e.id);
+      if (line) line.status = e.isError ? "error" : "ok";
+      return true;
+    }
+    case "retrying":
+      view.retrying = true;
+      return true;
+    default:
+      return closedRetry;
+  }
+}
+
+const TOOL_MARK = { running: "…", ok: "✓", error: "✗" } as const;
+
+/** The tool-activity block: one `🔧 label …/✓/✗` line per call, in call order. */
+export function toolLines(view: TurnView): string {
+  return view.tools.map((t) => `🔧 ${t.label} ${TOOL_MARK[t.status]}`).join("\n");
+}
+
+/** The reasoning peek: the most recent tail of the (growing) reasoning, one line, code-point safe.
+ *  Process, not the answer — renderers show it live only, never in the persisted final message. */
+export function thinkingLine(view: TurnView, maxTail: number): string {
+  const t = view.thinking.replace(/\s+/g, " ").trim();
+  return t === "" ? "" : `💭 ${truncateCodePointSuffix(t, maxTail)}`;
+}
+
+/** Compose body parts (thinking/tools/retry/answer) into one frame: skip empties, blank-line joins. */
+export function composeTurnBody(parts: readonly string[]): string {
+  return parts
+    .filter((s) => s.trim() !== "")
+    .join("\n\n")
+    .trim();
+}
 
 /** Max length (code points) of a tool's arg preview in the live view. */
 const TOOL_ARG_MAX = 48;

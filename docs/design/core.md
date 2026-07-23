@@ -254,8 +254,8 @@ window can run a delivery twice. Exactly-once execution needs a different backen
 ### Slack
 
 Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It keeps the neutral
-`Agent.invoke` boundary and reuses shared `turn-queue`, generic `turn-store`, `state`, `seen`, and preview
-policies. Platform-specific modules own signature verification/event acceptance, message subtype policy,
+`Agent.invoke` boundary and reuses shared `turn-queue`, generic `turn-store`, `state`, `seen`, and the
+shared turn-view reducer + preview policies (`preview-kit`). Platform-specific modules own signature verification/event acceptance, message subtype policy,
 managed roots/context, private-file resolution, Slack Web API transport, and dual native-stream /
 rate-limited edited-message rendering.
 

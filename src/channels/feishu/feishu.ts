@@ -14,6 +14,7 @@ import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createSeenRing } from "../seen.ts";
+import { createTaskTracker } from "../tasks.ts";
 import { ensureStateHome } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
 import { createTurnQueue } from "../turn-queue.ts";
@@ -274,7 +275,8 @@ function createFeishuRuntimeFactory(
       order: (a, b) => a.seq - b.seq,
     });
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
-    const stops = new Set<Promise<void>>();
+    // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
+    const sideTasks = createTaskTracker();
     const toStored = (r: PendingFeishuTurn): StoredFeishuTurn => {
       const { preview: _live, ...intent } = r; // drop the live-only field; TS enforces the rest is complete
       return { ...intent, attempts: 0 };
@@ -522,13 +524,11 @@ function createFeishuRuntimeFactory(
       // message id so a platform re-push doesn't double-abort or double-notify.
       if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
         seen.add(m.message_id);
-        const stop: Promise<void> = dispatchStop(control, session, label)
-          .then((feedback) => api.sendText({ chatId, replyTo, replyInThread }, feedback).then(() => undefined))
-          .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`))
-          .finally(() => {
-            stops.delete(stop);
-          });
-        stops.add(stop);
+        sideTasks.track(
+          dispatchStop(control, session, label)
+            .then((feedback) => api.sendText({ chatId, replyTo, replyInThread }, feedback).then(() => undefined))
+            .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`)),
+        );
         return;
       }
       const resources = normalized.content.resources;
@@ -563,9 +563,7 @@ function createFeishuRuntimeFactory(
       );
     };
 
-    // Stop feedback is fire-and-forget for the ingress path but must be drained on shutdown —
-    // otherwise a stop's "⏹ Stopped." reply can be dropped when the process exits right after it.
-    return { acceptEvent, turnsIdle: () => Promise.all([queue.idle(), ...stops]).then(() => undefined) };
+    return { acceptEvent, turnsIdle: () => Promise.all([queue.idle(), sideTasks.drain()]).then(() => undefined) };
   };
 }
 
