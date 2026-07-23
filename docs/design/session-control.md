@@ -418,6 +418,14 @@ for message-boundary delivery (enabling an opt-in follow_up/steer policy for mid
 once interactions exist, an interaction responder (e.g. Telegram inline keyboards). The extension
 unlocks those options; it does not mandate them.
 
+Considered and rejected — **replacing the chat channels' queued-turn path with `steer`/`follow_up`**:
+the stateful channels persist each accepted turn intent BEFORE the transport ACK (L1, at-least-once,
+crash replay); a message folded into a live run as a steer exists only in that run's in-memory queue,
+so a process crash silently loses it. Trading the durability floor for lower latency inverts the
+channels' design center. Any future adoption must first give steered messages the same durable-intent
+treatment (which is exactly the opt-in policy sketched above — an events consumer at message
+boundaries — not a replacement of the queue).
+
 ## 16. Invariants
 
 Implementation review should reject changes that violate these:
