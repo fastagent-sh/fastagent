@@ -86,6 +86,75 @@ describe("Slack reply rendering", () => {
   });
 });
 
+describe("native DM Agent status around a retry backoff", () => {
+  function eventSource() {
+    const queue: AgentEvent[] = [];
+    let notify: (() => void) | undefined;
+    let done = false;
+    return {
+      push(e: AgentEvent) {
+        queue.push(e);
+        notify?.();
+      },
+      end() {
+        done = true;
+        notify?.();
+      },
+      iterable: (async function* (): AsyncIterable<AgentEvent> {
+        while (true) {
+          const next = queue.shift();
+          if (next) {
+            yield next;
+            continue;
+          }
+          if (done) return;
+          await new Promise<void>((resolve) => (notify = resolve));
+        }
+      })(),
+    };
+  }
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("serializes status writes so a slow retry status cannot land after its restore", async () => {
+    const api = fakeApi();
+    const gates: Array<() => void> = [];
+    vi.mocked(api.setThreadStatus).mockImplementation(() => new Promise<void>((resolve) => gates.push(resolve)));
+    const statuses = () => vi.mocked(api.setThreadStatus).mock.calls.map((c) => c[1]);
+
+    const src = eventSource();
+    const turn = streamSlackReply(src.iterable, api, { channelId: "D1", threadTs: "1.0" }, () => undefined, {
+      rendering: "native",
+      disclaimer: false,
+    });
+    await flush();
+    gates.shift()?.(); // initial "is working…" status (awaited before the loop)
+    await flush();
+
+    src.push({ type: "text", delta: "a" });
+    src.push({ type: "retrying", attempt: 1, maxAttempts: 4, delayMs: 2_000, reason: "503" });
+    await flush();
+    expect(statuses().at(-1)).toContain("retrying");
+
+    // Progress while the retry-status write is still in flight: the restore must QUEUE behind it,
+    // not race it — otherwise the stale "retrying" line could land last.
+    src.push({ type: "text", delta: "b" });
+    await flush();
+    expect(statuses()).toHaveLength(2);
+    gates.shift()?.(); // retry status delivered
+    await flush();
+    expect(statuses()).toHaveLength(3);
+    expect(statuses().at(-1)).toBe("is working on your request…");
+
+    src.push({ type: "completed" });
+    src.end();
+    gates.shift()?.(); // restore delivered
+    await flush();
+    gates.shift()?.(); // final clear delivered
+    await turn;
+    expect(statuses().at(-1)).toBe(""); // the clear is last, after every queued write
+  });
+});
+
 describe("sanitizeSlackMarkdown", () => {
   it("neutralizes Slack control mentions and preserves ordinary autolinks", () => {
     expect(sanitizeSlackMarkdown("ping <!channel> now")).toBe("ping &lt;!channel> now");

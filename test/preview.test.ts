@@ -194,7 +194,7 @@ describe("streamReply answer preview (direct)", () => {
     expect(edits).toEqual(["⏳ Temporary problem — retrying…"]);
     src.push({ type: "tool_started", id: "t1", name: "read", args: {} });
     await vi.advanceTimersByTimeAsync(0);
-    expect(edits.at(-1)).toBe("🔧 read …"); // notice closed by progress, no stale retry line
+    expect(edits.at(-1)).toBe("🔧 Read …"); // notice closed by progress, no stale retry line
     src.push({ type: "completed" });
     src.end();
     await turn;
