@@ -12,6 +12,7 @@ import {
   type ChannelFailure,
   applyTurnEvent,
   composeTurnBody,
+  createPreviewPump,
   createTurnView,
   defaultErrorMessage,
   revealedAnswer,
@@ -129,67 +130,15 @@ export async function streamReply(
       throw new Error("telegram sendMessage returned ok without a message_id — live preview disabled for this turn");
   };
 
-  // ── Live-preview pump: a SINGLE serialized writer. ──────────────────────────────────────────
-  // Events mutate state (thinking / tools / answer) and mark the preview dirty; the pump edits the
-  // message to the LATEST view() with at most ONE edit in flight, paced by a throttle. One-in-flight is
-  // the whole point: concurrent edits can reach Telegram out of order — an older frame landing over a
-  // newer one is the "shows 3-4 steps, blanks, re-fills" flicker. Serializing keeps frames monotonic.
-  // (No keepalive: a real message does not expire, unlike a Bot API `sendMessageDraft` (30s window).)
-  let dirty = false;
-  let pumping = false;
-  let stopped = false;
-  let previewErrLogged = false;
-  let pumpDone: Promise<void> | undefined;
-  let wakeThrottle: (() => void) | undefined; // set while the pump is mid-throttle; finish() cuts it short
-
-  const runPump = async (): Promise<void> => {
-    pumping = true;
-    try {
-      while (dirty && !stopped) {
-        dirty = false;
-        try {
-          await flushPreview();
-        } catch (e) {
-          // Best-effort preview (the final write is authoritative), but a failing edit must be visible —
-          // log once per turn so a never-rendering preview is diagnosable, not silent.
-          if (!previewErrLogged) {
-            previewErrLogged = true;
-            log.warn(`[telegram] live preview failed (final reply still sends): ${String(e)}`);
-          }
-        }
-        if (dirty && !stopped) {
-          // Pace + coalesce a burst into one edit. Interruptible: finish() cuts this short so the final
-          // write is not delayed by up to EDIT_THROTTLE_MS after the turn completes.
-          await new Promise<void>((resolve) => {
-            const t = setTimeout(resolve, EDIT_THROTTLE_MS);
-            wakeThrottle = () => {
-              clearTimeout(t);
-              resolve();
-            };
-          });
-          wakeThrottle = undefined;
-        }
-      }
-    } finally {
-      pumping = false;
-    }
-  };
-  // Mark the preview dirty and ensure the single writer is running (an edit already in flight picks up
-  // the new state on its next loop). Synchronous — callers never await a network write.
-  const touch = (): void => {
-    dirty = true;
-    if (!pumping) pumpDone = runPump();
-  };
+  // The shared single-writer pump (preview-kit) serializes edits to the one preview message. (No
+  // keepalive: a real message does not expire, unlike a Bot API `sendMessageDraft` (30s window).)
+  const { touch, finish } = createPreviewPump({
+    flush: flushPreview,
+    throttleMs: EDIT_THROTTLE_MS,
+    onError: (e) => log.warn(`[telegram] live preview failed (final reply still sends): ${String(e)}`),
+  });
 
   touch(); // send the "💭 Thinking…" placeholder immediately
-
-  // Stop the pump and await any in-flight edit, so the final write below is strictly the LAST one to the
-  // preview message (no stale frame landing after the answer).
-  const finish = async (): Promise<void> => {
-    stopped = true;
-    wakeThrottle?.(); // cut an in-flight throttle so the final write is not delayed up to EDIT_THROTTLE_MS
-    await pumpDone?.catch(() => {});
-  };
 
   try {
     for await (const e of events) {

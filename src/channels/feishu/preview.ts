@@ -36,6 +36,7 @@ import {
   type ChannelFailure,
   applyTurnEvent,
   composeTurnBody,
+  createPreviewPump,
   createTurnView,
   defaultErrorMessage,
   revealedAnswer,
@@ -253,65 +254,15 @@ export async function streamFeishuReply(
     }
   };
 
-  // ── Live-preview pump: a SINGLE serialized writer. ──────────────────────────────────────────
-  // Events mutate state (thinking / tools / answer) and mark the preview dirty; the pump pushes the
-  // LATEST view() with at most ONE update in flight, paced by a throttle. One-in-flight also guarantees
-  // the card's strictly-increasing `sequence` lands in order (no concurrent frames).
-  let dirty = false;
-  let pumping = false;
-  let stopped = false;
-  let previewErrLogged = false;
-  let pumpDone: Promise<void> | undefined;
-  let wakeThrottle: (() => void) | undefined; // set while the pump is mid-throttle; finish() cuts it short
-
-  const runPump = async (): Promise<void> => {
-    pumping = true;
-    try {
-      while (dirty && !stopped) {
-        dirty = false;
-        try {
-          await flushPreview();
-        } catch (e) {
-          // Best-effort preview (the final write is authoritative), but a failing update must be visible —
-          // log once per turn so a never-rendering preview is diagnosable, not silent.
-          if (!previewErrLogged) {
-            previewErrLogged = true;
-            log.warn(`${label} live preview failed (final reply still sends): ${String(e)}`);
-          }
-        }
-        if (dirty && !stopped) {
-          // Pace + coalesce a burst into one snapshot. Interruptible: finish() cuts this short so the
-          // final write is not delayed by up to STREAM_THROTTLE_MS after the turn completes.
-          await new Promise<void>((resolve) => {
-            const t = setTimeout(resolve, STREAM_THROTTLE_MS);
-            wakeThrottle = () => {
-              clearTimeout(t);
-              resolve();
-            };
-          });
-          wakeThrottle = undefined;
-        }
-      }
-    } finally {
-      pumping = false;
-    }
-  };
-  // Mark the preview dirty and ensure the single writer is running (an update already in flight picks
-  // up the new state on its next loop). Synchronous — callers never await a network write.
-  const touch = (): void => {
-    dirty = true;
-    if (!pumping) pumpDone = runPump();
-  };
+  // The shared single-writer pump (preview-kit) serializes snapshots to the one preview — which also
+  // guarantees the card's strictly-increasing `sequence` lands in order (no concurrent frames).
+  const { touch, finish } = createPreviewPump({
+    flush: flushPreview,
+    throttleMs: STREAM_THROTTLE_MS,
+    onError: (e) => log.warn(`${label} live preview failed (final reply still sends): ${String(e)}`),
+  });
 
   touch(); // mount the "💭 Thinking…" preview immediately
-
-  // Stop the pump and await any in-flight update, so the final write below is strictly the LAST one to
-  // the preview (no stale frame landing after the answer).
-  const finish = async (): Promise<void> => {
-    stopped = true;
-    wakeThrottle?.(); // cut an in-flight throttle so the final write is not delayed up to STREAM_THROTTLE_MS
-    await pumpDone?.catch(() => {});
-  };
 
   /** Terminal write, whatever tier the preview reached. */
   const settle = async (text: string): Promise<void> => {
