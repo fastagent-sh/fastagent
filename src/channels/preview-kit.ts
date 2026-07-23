@@ -113,6 +113,20 @@ export function thinkingLine(view: TurnView, maxTail: number): string {
   return t === "" ? "" : `💭 ${truncateCodePointSuffix(t, maxTail)}`;
 }
 
+/**
+ * The shared answer-reveal policy: the answer stays hidden until its first delta has aged one
+ * throttle window (`ageMs` — each platform passes its own pacing constant). The pump's leading-edge
+ * flush would otherwise turn the very first content delta (often a lone character or unbalanced
+ * markup) into its own frame — the short-reply flicker (placeholder → "O" → "OK."). Aging is
+ * anchored at delta ARRIVAL (`answerSince`, set by the reducer) so an in-flight write can't skew the
+ * clock, and there is deliberately NO timer at the boundary: a young answer surfaces on the next
+ * content-driven pass, so a turn completing within the window delivers the final answer only.
+ */
+export function revealedAnswer(view: TurnView, ageMs: number): string {
+  if (view.answer.trim() === "" || view.answerSince === undefined) return "";
+  return Date.now() - view.answerSince >= ageMs ? view.answer : "";
+}
+
 /** Compose body parts (thinking/tools/retry/answer) into one frame: skip empties, blank-line joins. */
 export function composeTurnBody(parts: readonly string[]): string {
   return parts

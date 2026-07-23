@@ -38,6 +38,7 @@ import {
   composeTurnBody,
   createTurnView,
   defaultErrorMessage,
+  revealedAnswer,
   thinkingLine,
   toolLines,
 } from "../preview-kit.ts";
@@ -205,20 +206,12 @@ export async function streamFeishuReply(
   // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
   // policy, the card-budget cap, and delivery below.
   const turn = createTurnView();
-  // The answer is hidden until its first delta has aged one STREAM_THROTTLE_MS: the pump's leading-edge
-  // flush would otherwise turn the very first content delta (often a lone character) into its own frame
-  // — the short-reply flicker. Aging is anchored at delta ARRIVAL (answerSince, set by the reducer) so
-  // an in-flight update can't skew the clock; a turn completing within the window settles directly.
-  const answerView = (): string => {
-    if (turn.answer.trim() === "" || turn.answerSince === undefined) return "";
-    return Date.now() - turn.answerSince >= STREAM_THROTTLE_MS ? turn.answer : "";
-  };
   const view = (): string => {
     const v = composeTurnBody([
       thinkingLine(turn, THINKING_PREVIEW),
       toolLines(turn),
       turn.retrying ? RETRY_NOTICE : "",
-      answerView(),
+      revealedAnswer(turn, STREAM_THROTTLE_MS),
     ]);
     return capBytes(v === "" ? THINKING_PLACEHOLDER : v, CARD_MARKDOWN_MAX_BYTES);
   };

@@ -10,6 +10,7 @@ import {
   createTurnView,
   defaultErrorMessage,
   humanizeToolName,
+  revealedAnswer,
   toolLines,
 } from "../preview-kit.ts";
 import {
@@ -99,13 +100,10 @@ async function streamClassicSlackReply(
   disclaimer: string | false | undefined,
   label: string,
 ): Promise<void> {
-  // Event → view-state reduction is the shared machine (preview-kit); this renderer owns the reveal
-  // policy (timer-based — chat.update has no per-frame pacing beyond the 3s interval), mrkdwn
-  // sanitizing, and delivery. Reasoning stays a static "Thinking…" here: raw chain-of-thought is not
+  // Event → view-state reduction is the shared machine (preview-kit); this renderer owns mrkdwn
+  // sanitizing and delivery. Reasoning stays a static "Thinking…" here: raw chain-of-thought is not
   // customer-facing on Slack, so the reducer accumulates it but this view never reads it.
   const turn = createTurnView();
-  let answerVisible = false;
-  let answerTimer: ReturnType<typeof setTimeout> | undefined;
   let previewTs = initialPreviewTs;
   let previewAttempted = previewTs !== undefined;
   let finalized = false;
@@ -122,7 +120,7 @@ async function streamClassicSlackReply(
       THINKING_PLACEHOLDER,
       toolLines(turn),
       turn.retrying ? RETRY_NOTICE : "",
-      answerVisible ? sanitizeSlackMarkdown(turn.answer) : "",
+      sanitizeSlackMarkdown(revealedAnswer(turn, CLASSIC_UPDATE_INTERVAL_MS)),
     ]);
   const waitForMutationSlot = async (): Promise<void> => {
     const remaining = lastMutationAt + CLASSIC_UPDATE_INTERVAL_MS - Date.now();
@@ -170,7 +168,6 @@ async function streamClassicSlackReply(
   };
   const finishPump = async (): Promise<void> => {
     stopped = true;
-    if (answerTimer) clearTimeout(answerTimer);
     await pumpDone?.catch(() => {});
   };
   const finalize = async (markdown: string): Promise<void> => {
@@ -195,19 +192,10 @@ async function streamClassicSlackReply(
         throw new Error(`agent failed: ${event.details} (retryable=${event.retryable})`);
       }
       const changed = applyTurnEvent(turn, event);
-      if (event.type === "text" && !answerVisible) {
-        // Reveal-on-timer: the first delta arms a one-shot that flips the answer visible and repaints;
-        // hidden deltas need no repaint of their own.
-        if (answerTimer === undefined) {
-          answerTimer = setTimeout(() => {
-            answerVisible = true;
-            answerTimer = undefined;
-            touch();
-          }, CLASSIC_UPDATE_INTERVAL_MS);
-        }
-      } else if (changed) {
-        touch();
-      }
+      // A young (hidden) answer must not trigger the first frame: unlike telegram/feishu, classic
+      // rendering never posts an upfront placeholder, so a text-only fast turn delivers ONE final
+      // post instead of placeholder → 3s-rate-limited edit. Thinking/tool activity still paints.
+      if (changed && (event.type !== "text" || revealedAnswer(turn, CLASSIC_UPDATE_INTERVAL_MS) !== "")) touch();
     }
     throw new Error("stream ended without a terminal event");
   } finally {
