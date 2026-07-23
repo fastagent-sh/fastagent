@@ -6,7 +6,7 @@ status: current
 
 # Channel development
 
-This guide is for developers building a new FastAgent channel adapter, either inside one workspace (`channels/<name>.ts`) or as a reusable package such as `fastagent-channel-slack`.
+This guide is for developers building a new FastAgent channel adapter, either inside one workspace (`channels/<name>.ts`) or as a reusable package such as `fastagent-channel-acme`.
 
 A channel is an ingress adapter. It receives an external event, decides whether to invoke the agent, and returns an HTTP response appropriate for that external system.
 
@@ -21,7 +21,7 @@ Every channel has two layers:
 | Adapter | reusable package or first-party module | verify signature, parse body, ACK/retry rules, SDK calls |
 | Glue | the agent workspace | map an event to a session and prompt |
 
-For first-party channels, the adapter is `@fastagent-sh/fastagent/github`, `@fastagent-sh/fastagent/telegram`, `@fastagent-sh/fastagent/feishu`, or `@fastagent-sh/fastagent/lark`, and the glue is the scaffolded `channels/*.ts` file.
+For first-party channels, the adapter is `@fastagent-sh/fastagent/github`, `@fastagent-sh/fastagent/telegram`, `@fastagent-sh/fastagent/slack`, `@fastagent-sh/fastagent/feishu`, or `@fastagent-sh/fastagent/lark`, and the glue is the scaffolded `channels/*.ts` file.
 
 For a community channel, publish the adapter as a separate package and keep the user's glue in their workspace.
 

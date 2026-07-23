@@ -187,8 +187,8 @@ The core lease allows one in-flight turn per session. A collision yields:
 { type: "failed", code: "session_busy", retryable: true, details: "…" }
 ```
 
-Queueing is channel policy. Telegram serializes its own turns per session; HTTP and GitHub use the
-core fail-fast behavior.
+Queueing is channel policy. Telegram, Slack, and Feishu/Lark serialize their own turns per session;
+HTTP and GitHub use the core fail-fast behavior.
 
 ## 7. Channels and hosting
 
@@ -251,13 +251,52 @@ Telegram is the stateful channel reference. Its modules separate:
 Telegram turn replay is at-least-once. A crash can re-run side-effecting tools, and a narrow pre-ACK
 window can run a delivery twice. Exactly-once execution needs a different backend/resume model.
 
+### Slack
+
+Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It keeps the neutral
+`Agent.invoke` boundary and reuses shared `turn-queue`, generic `turn-store`, `state`, `seen`, and preview
+policies. Platform-specific modules own signature verification/event acceptance, message subtype policy,
+managed roots/context, private-file resolution, Slack Web API transport, and dual native-stream /
+rate-limited edited-message rendering.
+
+The request boundary verifies Slack's `v0` HMAC over the capped raw body and a five-minute timestamp,
+then persists a turn/context/root before returning 200. Logical dedup uses `(team, channel, ts)` because
+`app_mention` and `message.*` subscriptions may overlap; `event_id` alone does not identify that shared
+message. `context` group mode subscribes to channel/private-channel/MPIM message streams, admits bare
+human replies only in durably owned roots, and folds other discussion with the same peek→completed→commit
+invariant as Telegram/Feishu. Direct and group sessions default to independent platform threads, with
+separate `continuous` compatibility options. As in Feishu/Lark, only a top-level group summon creates an
+owned root; an explicit summon inside an existing human thread does not adopt it. `mentions` keeps the
+least-privilege explicit-summon surface.
+
+File events persist IDs only. Dequeue-time `files.info` resolves current metadata; authenticated downloads
+are host-restricted, timeout/cap guarded, and translated to vision images or absolute local paths. Primary
+files fail visibly; buffered files degrade individually. Outbound file delivery uses Slack's external
+upload three-step protocol and remains at-least-once across an ambiguous completion response.
+
+Newly onboarded apps use Slack's `agent_view`, `assistant:write`, token rotation, suggested prompts, Agent
+status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Standard Markdown text events append to
+the stream; engine-neutral tool lifecycle events become dense `task_update` chunks. Raw model thinking and
+generic tool arguments stay private. The compatibility renderer retains one edited message with a strict
+three-second mutation interval; explicit continuous/custom top-level routes select it because native
+streams require a parent user message. HTTP Events API remains the production transport; Socket Mode is a
+separate future boundary rather than entering `ChannelModule` indirectly.
+
+`add slack` owns a single-workspace internal-app control plane outside `ChannelModule`: a temporary
+unguessable challenge/OAuth responder, mode-specific App Manifest creation, OAuth-v2 code exchange, and
+irreversible-boundary recovery state. Runtime rotating bot credentials + Signing Secret go to `.env` and rotate into owner-only durable channel
+state; the more powerful user/workspace App Configuration refresh token remains owner-local and never
+enters deployment secrets. `dev --tunnel` and `deploy --run` rotate it locally and update the Request URL through
+`apps.manifest.update`; missing onboarding state remains a truthful manual registration outcome. This is
+not Marketplace/multi-workspace installation storage.
+
 ### Feishu (canonical) / Lark (compatibility)
 
 Feishu is the second stateful chat-channel reference, shaped as a sibling of Telegram. Its canonical
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
 `model.ts` / `normalize.ts` content decoding + message-scoped resource normalization,
 `invoke-turn.ts` IO assembly, `preview.ts` delivery,
-`owned-threads.ts` durable managed-root routing, `seen.ts` bounded delivery dedup,
+`owned-threads.ts` durable managed-root routing, shared `../seen.ts` bounded delivery dedup,
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / `state` / `wait-health`) remain one
 level up.
@@ -359,6 +398,7 @@ would silently miss clock events.
 ├── auth.json
 ├── sessions/
 ├── channels/telegram/
+├── channels/slack/
 ├── channels/feishu/
 └── schedule/
 ```
@@ -380,7 +420,7 @@ The following are explicit limits, not implied capabilities:
 
 - pi is the reference implementation; additional engine bindings can implement the same Agent contract;
 - `ExecutionEnv` alone is not a complete sandbox for directory agents;
-- GitHub post-ACK work has no replay; Telegram and Feishu replay is at-least-once;
+- GitHub post-ACK work has no replay; Telegram, Slack, and Feishu/Lark replay is at-least-once;
 - file-backed state is single-process;
 - the repo-as-workspace deploy path is experimental;
 - observability is logs/traces, without an OpenTelemetry exporter.

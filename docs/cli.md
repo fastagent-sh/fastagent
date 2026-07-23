@@ -30,9 +30,9 @@ Most commands take an optional workspace directory. When omitted, the current di
 | `schedule list [dir] [--json]` | Everything that will fire: static schedules (next instant) + pending wake-ups. |
 | `schedule cancel <id> [dir]` | Remove a pending wake-up (operator kill switch). |
 | `tool <name> <json> [dir]` | Run one discovered tool directly. |
-| `add github|telegram|feishu|lark [dir]` | Scaffold a first-party channel. Feishu is the canonical implementation; Lark international is its protocol-compatible, control-plane-degraded profile. `add feishu` scan-creates/configures the app, persists ID/Secret before Token bootstrap, and resumes a stored pair instead of creating twice. `add lark` opens the intl launcher only for a new/partial pair, validates the App-scoped credentials, probes Feishu's webhook/token automation, and falls back to manual mode/URL setup on the known config-route 404. |
+| `add github|telegram|slack|feishu|lark [dir]` | Scaffold a first-party channel. `add slack` creates a single-workspace internal app through the Manifest API + OAuth (or `--no-onboard`), with context-aware or mention-only policy. `add feishu` scan-creates/configures the canonical app and resumes partial state. `add lark` guides/validates international credentials and falls back on its known config-route gap. |
 | `add skill <source> [dir]` | Vendor an Agent Skills skill into `skills/`. |
-| `deploy docker [dir]` | Generate `fastagent.compose.yml` + the portable `Dockerfile`/`.dockerignore` for local Docker: one `agent` service, loopback port, `/data` state volume, and exact env-var names. `--tunnel` adds a pinned Cloudflare Quick Tunnel service to Compose but still performs no Docker action; combine it with `--run` to start app+tunnel, read the ephemeral URL, and auto-register Telegram/Feishu/Lark webhooks. Existing files stay authoritative unless `--force`; durable ingress/proxy/DNS/TLS remain operator-owned. |
+| `deploy docker [dir]` | Generate `fastagent.compose.yml` + the portable `Dockerfile`/`.dockerignore` for local Docker: one `agent` service, loopback port, `/data` state volume, and exact env-var names. `--tunnel --run` starts app+tunnel, reads the ephemeral URL, and auto-registers Telegram, locally onboarded Slack, and Feishu/Lark webhooks. Existing files stay authoritative unless `--force`; durable ingress/proxy/DNS/TLS remain operator-owned. |
 | `deploy fly [dir]` | Generate Fly.io artifacts (`fly.toml`/`Dockerfile`/`.dockerignore`, autostop=suspend, state→volume) and print a flyctl runbook + webhook step. `--run` drives flyctl to completion (idempotent, resumable; carries your local credential; needs flyctl). `--stop` (stop instead of suspend), `--no-scale-to-zero` (keep one machine up), `--force` (overwrite artifacts). |
 | `deploy railway [dir]` | Generate Railway artifacts (`railway.json` with `healthcheckPath=/health`, plus the shared `Dockerfile`/`.dockerignore`) and print a `railway` runbook: init a project, create a service (`railway add --service`), attach a `/data` volume, set the state root + secrets as variables (`railway variables set`, before the first deploy), `railway up`, then mint a domain (`railway domain`) and register the webhook. Scale-to-zero (App Sleeping) is a dashboard-only step the runbook states. `--run` drives the railway CLI to completion on an UNLINKED dir (auth → init/add/volume → variables → `railway up` → mint domain → telegram webhook; carries your local credential; needs the railway CLI); a dir already linked to a project is refused unless `--into-linked` (provision into it) — a routine redeploy is just `railway up`. `--force` overwrites artifacts. |
 | `start [dir]` | Serve without watch. |
@@ -227,11 +227,12 @@ Example:
 fastagent tool fetch-url '{"url":"https://example.com"}'
 ```
 
-## `fastagent add github|telegram|feishu|lark`
+## `fastagent add github|telegram|slack|feishu|lark`
 
 ```bash
 fastagent add github [dir]
 fastagent add telegram [dir]
+fastagent add slack [dir]      # create/install an internal app; --no-onboard scaffolds only
 fastagent add feishu [dir]   # 飞书 (open.feishu.cn) — also CREATES the app (scan-to-create; credentials → .env)
 fastagent add lark [dir]     # Lark intl — opens console + collects/validates credentials
 ```
@@ -242,10 +243,20 @@ An enabled `channels/*.ts|*.js|*.mjs` file must load successfully or `dev` / `st
 intentionally disable one, rename it to e.g. `channels/telegram.ts.disabled`; channel files, not config,
 are the enable/disable source of truth.
 
+Slack scaffolds `channels/slack.ts` plus `tools/slack-send.ts`; `--group-behavior context|mentions`
+selects both runtime policy and manifest scopes/events, defaulting to context-aware `context`; choose
+`mentions` explicitly for least privilege. By default it opens Slack's App Configuration Token page,
+creates a new internal app with `agent_view`, native streams/tasks, and suggested prompts through
+`apps.manifest.create`, installs it
+through OAuth, and writes rotating bot credentials + the Signing Secret to the gitignored `.env`. The configuration refresh token stays owner-readable
+under `<state root>/channels/slack/` and is used locally by `dev --tunnel` / `deploy --run` to update the
+Events API URL; it never travels to the host. `--no-onboard` preserves the manual scaffold-only path.
+
 See:
 
 - [GitHub channel](github.md)
 - [Telegram channel](telegram.md)
+- [Slack channel](slack.md)
 - [Feishu channel (Lark compatibility)](feishu.md)
 
 ## `fastagent add skill`

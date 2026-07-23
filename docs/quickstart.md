@@ -168,6 +168,7 @@ Add a first-party channel:
 ```bash
 fastagent add github
 fastagent add telegram
+fastagent add slack
 fastagent add feishu     # 飞书 (open.feishu.cn)
 fastagent add lark       # Lark international
 ```
@@ -178,7 +179,7 @@ Then run locally with a public tunnel for webhook testing:
 fastagent dev --tunnel
 ```
 
-Read [Channels](channels.md) for the channel model, [GitHub channel](github.md) for GitHub webhooks, [Telegram channel](telegram.md) for Telegram bots, and [Feishu channel (Lark compatibility)](feishu.md) for Feishu and Lark bots.
+Read [Channels](channels.md) for the channel model, [GitHub channel](github.md) for GitHub webhooks, [Telegram channel](telegram.md) for Telegram bots, [Slack channel](slack.md) for Slack apps, and [Feishu channel (Lark compatibility)](feishu.md) for Feishu and Lark bots.
 
 ## 8. Run on a clock
 

@@ -10,6 +10,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { registerFeishuWebhook } from "../../channels/feishu/register-webhook.ts";
+import { readSlackBotAuthEnv } from "../../channels/slack/bot-auth.ts";
+import { registerSlackWebhook } from "../../channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "../../channels/telegram/register-webhook.ts";
 import { isGeneratedDockerfile } from "../../deploy/container.ts";
 import {
@@ -34,7 +36,7 @@ import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir, resolveModelSpec } from "../../engines/pi/config.ts";
+import { loadConfig, resolveAgentDir, resolveModelSpec, resolveStateRoot } from "../../engines/pi/config.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
@@ -144,7 +146,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     if (opts.run) {
       return runDeployDocker({
         target,
-        agentDir,
         composeFile: plan.composePath,
         port,
         requireTunnel: requestedTunnel,
@@ -342,6 +343,12 @@ async function writeArtifacts(
   }
 }
 
+function deployEnvironment(target: string, channels: ChannelKind[]): NodeJS.ProcessEnv {
+  if (!channels.includes("slack")) return process.env;
+  const latest = readSlackBotAuthEnv(join(resolveStateRoot(target), "channels", "slack", "bot-auth.json"));
+  return { ...process.env, ...latest };
+}
+
 /**
  * `deploy docker --run`: carry local credentials into Compose's child environment, then reconcile the
  * user-owned local topology. Docker owns container/network/volume lifecycle. A Compose tunnel service,
@@ -349,7 +356,6 @@ async function writeArtifacts(
  */
 async function runDeployDocker(params: {
   target: string;
-  agentDir: string;
   composeFile: string;
   port: number;
   requireTunnel: boolean;
@@ -361,7 +367,6 @@ async function runDeployDocker(params: {
 }): Promise<void> {
   const {
     target,
-    agentDir,
     composeFile,
     port,
     requireTunnel,
@@ -377,7 +382,7 @@ async function runDeployDocker(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: process.env,
+    env: deployEnvironment(target, channels),
   });
   const outcome = await deployDockerRun(
     { composeFile, port, secrets, missingSecrets, needsModelCredential, requireTunnel },
@@ -394,9 +399,10 @@ async function runDeployDocker(params: {
     // Docker Desktop commonly injects a host proxy. The Quick Tunnel hostname may be resolvable only
     // through it, exactly like provider/channel APIs; use the same Node dispatcher as dev/start/login.
     installProxyFetch();
-    await announceWebhooks(agentDir, outcome.tunnelUrl, {
+    await announceWebhooks(target, outcome.tunnelUrl, {
       openUrl: openExternalUrl,
       routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
+      stateRoot: resolveStateRoot(target),
     });
     console.error(
       `[fastagent] note: Quick Tunnel URLs are ephemeral — after the tunnel container/Docker daemon ` +
@@ -444,7 +450,7 @@ async function runDeployFly(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: process.env,
+    env: deployEnvironment(target, channels),
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env) — gate it
   // here, not through missingSecrets, so the message isn't a contradictory mash of both.
@@ -462,6 +468,7 @@ async function runDeployFly(params: {
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
     (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
+    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(target) }),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
@@ -497,7 +504,7 @@ async function runDeployRailway(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: process.env,
+    env: deployEnvironment(target, channels),
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env).
   if (needsModelCredential) {
@@ -514,6 +521,7 @@ async function runDeployRailway(params: {
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
     (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
+    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(target) }),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);

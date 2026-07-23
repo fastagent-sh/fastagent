@@ -63,7 +63,7 @@ fastagent deploy docker --tunnel --run  # generate + start
 fastagent deploy docker --run           # starts the existing app+tunnel topology
 ```
 
-`--run` checks Docker/Compose and the daemon, gates missing credentials/secrets before building, runs `docker compose up -d --build`, verifies the configured services, and waits for the app's `/health` when a host port is published. With a `tunnel` service, it then reads the assigned `*.trycloudflare.com` URL from Compose logs and reuses the same webhook registration as `dev --tunnel`: route-based Telegram and Feishu/Lark register automatically; WebSocket long-connection channels are skipped; GitHub prints the URL to configure. API-key and channel values travel through the child environment, not argv; OAuth/stored auth travels through `FASTAGENT_AUTH_SEED` into the state volume.
+`--run` checks Docker/Compose and the daemon, gates missing credentials/secrets before building, runs `docker compose up -d --build`, verifies the configured services, and waits for the app's `/health` when a host port is published. With a `tunnel` service, it then reads the assigned `*.trycloudflare.com` URL from Compose logs and reuses the same webhook registration as `dev --tunnel`: route-based Telegram, locally onboarded Slack, and Feishu/Lark register automatically; WebSocket long-connection channels are skipped; GitHub and scaffold-only/manual Slack print their console URLs. API-key and channel values travel through the child environment, not argv; OAuth/stored auth travels through `FASTAGENT_AUTH_SEED` into the state volume.
 
 The Quick Tunnel URL is ephemeral. Its service deliberately has no restart policy: restarting that container or the Docker daemon creates a new URL that cannot silently replace the old webhook. Re-run `fastagent deploy docker --tunnel --run` to start it and register the new URL. For a fixed/restart-stable endpoint, edit the user-owned Compose topology to use your own named tunnel or reverse proxy.
 
@@ -103,7 +103,7 @@ Generates `fly.toml`, `Dockerfile`, `.dockerignore`, then prints a first-deploy 
 2. `fly volumes create data --region <region> --size 1` — one-time; the region **must** match `primary_region` in `fly.toml`.
 3. `fly secrets set …` — the model key + each channel's secrets, with `<value>` placeholders to fill.
 4. `fly deploy` — build and ship. **A redeploy is this step alone.**
-5. Register each route channel's webhook at the live URL. WebSocket long-connection channels make no registration call.
+5. Register each route channel's webhook at the live URL. Locally onboarded Slack updates its App Manifest from the builder machine; scaffold-only/manual Slack prints the console URL. WebSocket long-connection channels make no registration call.
 
 Or let the CLI do all of it:
 
@@ -130,7 +130,7 @@ Generates `railway.json` (with `healthcheckPath=/health`), `Dockerfile`, `.docke
 3. `railway volume add --mount-path /data` — persistent state.
 4. `railway variables set FASTAGENT_STATE_DIR=/data <SECRETS>` — **before** the first deploy, or the box boots without them.
 5. `railway up` — upload + build the Dockerfile on Railway (no local Docker). **A redeploy is this step alone.**
-6. `railway domain` — mint the public URL, then register route-channel webhooks; long-connection channels are skipped.
+6. `railway domain` — mint the public URL, then register route-channel webhooks; locally onboarded Slack updates from local state, manual Slack prints its URL, and long-connection channels are skipped.
 
 Or:
 

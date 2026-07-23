@@ -116,9 +116,9 @@ export function parseHasVolume(stdout: string, mountPath: string): boolean {
 }
 
 /**
- * Run the deploy through `railway`. `log` reports progress; `registerTelegram(baseUrl)` /
- * `registerFeishu(baseUrl, kind)` perform the post-deploy webhook steps (the CLI passes its canonical
- * Feishu registrar, which also serves the Lark compatibility profile). Absent, the manual console
+ * Run the deploy through `railway`. `log` reports progress; the injected Telegram/Feishu/Slack
+ * registrars perform post-deploy webhook steps from the builder machine (Slack's control credential
+ * never travels to the host). Absent, the manual console
  * instruction is printed. Every gate is fail-visible.
  */
 export async function deployRailwayRun(
@@ -127,6 +127,7 @@ export async function deployRailwayRun(
   log: (msg: string) => void,
   registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
   registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
+  registerSlack?: (baseUrl: string) => Promise<RegistrationOutcome>,
 ): Promise<RailwayRunOutcome> {
   const gate = (g: string): RailwayRunOutcome => ({ ok: false, gate: g });
   // Every --service below targets plan.name — the name this tool gives BOTH the project and the service
@@ -253,6 +254,15 @@ export async function deployRailwayRun(
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → ${url}/webhook`);
     reg.track("github", "manual"); // always a human step — re-surface it after the registrar output
+  }
+  if (plan.channels.includes("slack")) {
+    if (registerSlack) {
+      log("registering slack event URL…");
+      reg.track("slack", await registerSlack(url));
+    } else {
+      log(`slack: set Event Subscriptions → Request URL → ${url}/slack`);
+      reg.track("slack", "manual");
+    }
   }
   for (const kind of ["feishu", "lark"] as const) {
     if (!plan.channels.includes(kind) || plan.longConnectionChannels?.includes(kind)) continue;

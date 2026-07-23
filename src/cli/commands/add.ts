@@ -1,21 +1,20 @@
 /**
  * `fastagent add <channel>|skill` — scaffold channel glue (`channels/<kind>.ts`) or vendor an Agent
- * Skills skill. feishu/lark additionally CREATE OR RESUME the platform app (add-feishu.ts).
+ * Skills skill. slack/feishu/lark additionally CREATE OR RESUME the platform app.
  */
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
-import type {
-  FeishuGroupBehavior,
-  FeishuSubscriptionMode,
-  GroupBehaviorChoice,
-} from "../../channels/feishu/setup-mode.ts";
-import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
+import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
+import { loadDotEnv } from "../../env.ts";
+import { loadConfig, resolveAgentDir, resolveStateRoot } from "../../engines/pi/config.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
+  type GroupBehavior,
+  type GroupBehaviorChoice,
   appendChannelDotEnv,
   appendChannelEnv,
   assertChannelReady,
@@ -23,6 +22,7 @@ import {
   channelSetup,
   scaffoldChannel,
 } from "../../scaffold/add-channel.ts";
+import { exists } from "../../scaffold/init.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
 import { loadRootIgnore } from "../../workspace.ts";
 import { failStartup, failUsage } from "../fail.ts";
@@ -31,9 +31,10 @@ import { failStartup, failUsage } from "../fail.ts";
 export async function runAddChannel(
   channelKind: ChannelKind,
   dirArg: string,
-  opts: { createApp?: boolean; ingress?: string; groupBehavior?: string },
+  opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean },
 ): Promise<void> {
   const target = resolve(dirArg);
+  loadDotEnv(target); // onboarding state follows the same FASTAGENT_STATE_DIR as serving/deploy
   // App creation is not a flag — it is what `add feishu` IS (the scan-to-create flow is the default
   // and only path there). The retired --create-app spelling gets a pointer, not silence.
   if (opts.createApp) {
@@ -54,22 +55,29 @@ export async function runAddChannel(
   // hygiene stay at the run root, where .env is actually read.
   const { config: addConfig } = await loadConfig(target).catch(failStartup);
   const channelHome = resolveAgentDir(target, addConfig);
-  // Preconditions before the write, so a refusal is side-effect-free. feishu/lark are exceptions:
+  // Preconditions before the write, so a refusal is side-effect-free. slack/feishu/lark are exceptions:
   // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
-  // failed or cancelled scan/paste flow must be re-runnable without hand-deleting glue); never touch it.
+  // failed/cancelled app or OAuth flow must be re-runnable without hand-deleting authored glue).
   const file = join(channelHome, "channels", `${channelKind}.ts`);
+  const slackToolFile = join(channelHome, "tools", "slack-send.ts");
+  const slackToolExisted = channelKind === "slack" ? await exists(slackToolFile) : false;
   const existsAlready = await channelExists(channelHome, channelKind).catch(failStartup);
   const ingress = await resolveIngress(channelKind, file, existsAlready, opts.ingress);
   const groupBehavior = await resolveGroupBehavior(channelKind, opts.groupBehavior);
   if (existsAlready) {
-    if (channelKind !== "feishu" && channelKind !== "lark") {
+    if (channelKind !== "slack" && channelKind !== "feishu" && channelKind !== "lark") {
       failStartup(new Error(`${relative(target, file)} already exists — edit it, or remove it to re-scaffold`));
     }
     console.error(`[fastagent] ${relative(target, file)} already exists — keeping it`);
   } else {
     await assertChannelReady(channelHome).catch(failStartup);
-    await scaffoldChannel(channelHome, channelKind, { ingress }).catch(failStartup);
+    await scaffoldChannel(channelHome, channelKind, { ingress, groupBehavior: groupBehavior.behavior }).catch(
+      failStartup,
+    );
     console.error(`[fastagent] created ${relative(target, file)}`);
+    if (channelKind === "slack") {
+      console.error(`[fastagent] ${slackToolExisted ? "kept existing" : "created"} ${relative(target, slackToolFile)}`);
+    }
   }
   if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
     console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
@@ -84,14 +92,33 @@ export async function runAddChannel(
       `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
     );
   }
-  // `add feishu`/`add lark` = scaffold + CREATE OR RESUME the app (add-feishu.ts): feishu persists
-  // its irreversible App ID/Secret boundary internally; lark returns guided credentials for the
-  // generic .env write below.
+  // Stateful app onboarding is re-runnable after the scaffold boundary. Slack's internal-app path
+  // persists its manifest/OAuth recovery state separately and writes runtime secrets directly.
   let created: Record<string, string> | undefined;
-  if (channelKind === "feishu" || channelKind === "lark") {
+  if (channelKind === "slack" && opts.onboard !== false) {
+    const { onboardSlackInternalApp } = await import("../add-slack.ts");
+    created = await onboardSlackInternalApp({
+      target,
+      stateRoot: resolveStateRoot(target),
+      envIgnored,
+      groupBehavior,
+    })
+      .then(() => undefined)
+      .catch(failStartup);
+  } else if (channelKind === "feishu" || channelKind === "lark") {
     created = await onboardFeishuCloudApp(target, channelKind, envIgnored, ingress, groupBehavior).catch(failStartup);
   }
-  const { env, steps } = channelSetup(channelKind, ingress, groupBehavior.behavior);
+  const setup = channelSetup(channelKind, ingress, groupBehavior.behavior);
+  const env = setup.env;
+  const steps =
+    channelKind === "slack" && opts.onboard !== false
+      ? [
+          "Slack internal app created/configured/installed through OAuth; runtime credentials are in .env",
+          "run fastagent dev --tunnel to replace the temporary Events API URL automatically",
+          "invite the app to every channel it should read",
+          "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
+        ]
+      : setup.steps;
   const generated = Object.fromEntries(
     env.filter((e) => e.generate).map((e) => [e.name, randomBytes(24).toString("hex")]),
   );
@@ -136,11 +163,17 @@ export async function runAddChannel(
   }
   if (ingress === "websocket") {
     console.error(`    fastagent dev            # no public URL or tunnel required`);
+  } else if (channelKind === "slack") {
+    console.error(
+      `    fastagent dev --tunnel   # serve locally; ${opts.onboard === false ? "print the Request URL for manual Slack setup" : "auto-update the onboarded Slack Request URL"}`,
+    );
+  } else if (channelKind === "github") {
+    console.error(`    fastagent dev --tunnel   # serve locally + print the URL for manual GitHub webhook setup`);
   } else if (channelKind !== "lark") {
     console.error(`    fastagent dev --tunnel   # serve locally + a public URL, auto-registering the webhook`);
   }
-  // The app-creation flow leaves keep-alive sockets behind (platform API fetches, the throwaway tunnel's
-  // health probes) that would hold the event loop open for a while — the work is done, exit crisply.
+  // App-creation flows leave platform/tunnel sockets behind that would otherwise hold the one-shot
+  // scaffold command open after all durable boundaries have completed — exit crisply.
   process.exit(0);
 }
 
@@ -211,30 +244,34 @@ async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined):
   if (raw !== undefined && raw !== "context" && raw !== "mentions") {
     failUsage(`--group-behavior must be "context" or "mentions", got "${raw}"`);
   }
-  if (kind !== "feishu" && kind !== "lark") return { behavior: "context", explicit: false };
+  if (kind !== "feishu" && kind !== "lark" && kind !== "slack") return { behavior: "context", explicit: false };
   if (raw !== undefined) return { behavior: raw, explicit: true };
+  const defaultBehavior: GroupBehavior = "context";
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
-    // A defaulted choice inspects and reports only; the sensitive-scope write needs the explicit flag.
     console.error(
-      `[fastagent] no interactive terminal — assuming ${kind} group behavior context-aware; pass --group-behavior context to request the group-message scope (or mentions for least privilege)`,
+      `[fastagent] no interactive terminal — assuming ${kind} group behavior ${defaultBehavior}; pass --group-behavior explicitly to override`,
     );
-    return { behavior: "context", explicit: false };
+    return { behavior: defaultBehavior, explicit: false };
   }
-  const answer = await select<FeishuGroupBehavior>({
+  const choices = [
+    {
+      value: "context" as const,
+      label: "Context-aware groups (recommended)",
+      hint:
+        kind === "slack"
+          ? "bare managed-thread replies + buffer; requires channel/group/mpim history scopes"
+          : "bare managed-thread replies + buffer; im:message.group_msg delivers all group messages",
+    },
+    {
+      value: "mentions" as const,
+      label: "Mention-only (least privilege)",
+      hint: "only explicit @Agent messages; no group-wide message permission",
+    },
+  ];
+  const answer = await select<GroupBehavior>({
     message: "Choose group-chat behavior",
-    initialValue: "context",
-    options: [
-      {
-        value: "context",
-        label: "Context-aware groups (recommended)",
-        hint: "bare managed-thread replies + buffer; im:message.group_msg delivers all group messages",
-      },
-      {
-        value: "mentions",
-        label: "Mention-only (least privilege)",
-        hint: "only explicit @Agent messages; no group-wide message permission",
-      },
-    ],
+    initialValue: defaultBehavior,
+    options: choices,
   });
   if (isCancel(answer)) failStartup(new Error(`${kind} onboarding cancelled`));
   return { behavior: answer, explicit: true };

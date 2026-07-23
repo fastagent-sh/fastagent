@@ -93,19 +93,32 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.messages.some((m) => /fastagent\.config/.test(m.text))).toBe(false);
   });
 
+  it("recognizes Slack as a first-party route channel for secrets/deploy guidance", async () => {
+    const dir = await workspace();
+    await mkdir(join(dir, "channels"), { recursive: true });
+    await writeFile(join(dir, "channels", "slack.mjs"), "export default () => ({ '/slack': () => new Response() });\n");
+    const pre = await call(dir, { model: "openai/gpt-4o-mini" });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.channels).toEqual(["slack"]);
+      expect(pre.routeChannels).toEqual(["slack"]);
+      expect(pre.messages.some((message) => message.text.includes('channel "slack" is custom'))).toBe(false);
+    }
+  });
+
   it("notes a custom channel (its secrets/webhook are the author's to wire)", async () => {
     const dir = await workspace();
     const { mkdir } = await import("node:fs/promises");
     await mkdir(join(dir, "channels"), { recursive: true });
-    await writeFile(join(dir, "channels", "slack.ts"), "export default () => ({});\n");
+    await writeFile(join(dir, "channels", "discord.ts"), "export default () => ({});\n");
     const pre = await call(dir, { model: "openai/gpt-4o-mini" });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
-      expect(pre.routeChannels).toEqual(["slack"]);
+      expect(pre.routeChannels).toEqual(["discord"]);
       expect(pre.longConnectionChannels).toEqual([]);
       expect(pre.messages).toContainEqual({
         level: "note",
-        text: expect.stringContaining('route channel "slack" is custom'),
+        text: expect.stringContaining('route channel "discord" is custom'),
       });
     }
   });

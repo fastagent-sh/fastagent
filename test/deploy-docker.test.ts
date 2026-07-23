@@ -57,7 +57,7 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).toContain('restart: "no"');
     const dockerfile = plan.artifacts.find((artifact) => artifact.path.endsWith("Dockerfile"))!.content;
     expect(dockerfile).not.toContain("cloudflared");
-    expect(runbook(plan)).toContain("Telegram/Feishu/Lark channels auto-register");
+    expect(runbook(plan)).toContain("locally onboarded Slack auto-register");
   });
 
   it("omits webhook-only secrets and public paths for long-connection Feishu", () => {
@@ -134,9 +134,10 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(composeHasTunnelService("services:\n    tunnel:\n        image: cloudflare/cloudflared\n")).toBe(true);
     expect(composeHasTunnelService("services:\n\ttunnel:\n\t\timage: cloudflare/cloudflared\n")).toBe(true);
     expect(composeHasTunnelService("services:\n  agent:\n")).toBe(false);
-    expect(dockerWebhookPaths(["telegram", "github", "feishu", "lark"])).toEqual([
+    expect(dockerWebhookPaths(["telegram", "github", "slack", "feishu", "lark"])).toEqual([
       "/telegram",
       "/webhook",
+      "/slack",
       "/feishu",
       "/lark",
     ]);

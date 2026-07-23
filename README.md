@@ -145,7 +145,7 @@ const agent = createPiAgent({
 | [Embedding](https://fastagent.sh/docs/embedding/) | Use FastAgent as a library inside your own app |
 | [Channels](https://fastagent.sh/docs/channels/) | Add webhook/bot channels |
 | [Deploy](https://fastagent.sh/docs/deploy/) | Ship the directory to Fly, Railway, or any Docker host |
-| [GitHub](https://fastagent.sh/docs/github/) / [Telegram](https://fastagent.sh/docs/telegram/) / [Feishu and Lark](https://fastagent.sh/docs/feishu/) | First-party channel guides |
+| [GitHub](https://fastagent.sh/docs/github/) / [Telegram](https://fastagent.sh/docs/telegram/) / [Slack](https://fastagent.sh/docs/slack/) / [Feishu and Lark](https://fastagent.sh/docs/feishu/) | First-party channel guides |
 | [Channel development](https://fastagent.sh/docs/channel-development/) | Build custom channel adapters |
 | [API reference](https://fastagent.sh/docs/api-reference/) | Public TypeScript API reference |
 | [Troubleshooting](https://fastagent.sh/docs/troubleshooting/) | Common setup/runtime issues |
@@ -194,7 +194,7 @@ FastAgent is pre-1.0. The stable design center is the Agent Handler contract in 
 
 The neutral contract leaves room for capabilities that are not complete product features yet:
 
-- **Durable execution**: Telegram and Feishu accepted turns replay at least once today; general durability and exactly-once execution remain future backend work.
+- **Durable execution**: Telegram, Slack, and Feishu/Lark accepted turns replay at least once today; general durability and exactly-once execution remain future backend work.
 - **Sandboxed execution** — `ExecutionEnv` is an assembly seam, but the pi coding tools and project-context loader are still local; a complete sandbox adapter is future work.
 - **Observability export** — leveled logs and per-turn traces exist today; an OpenTelemetry exporter does not.
 - **More harness bindings and channels** — pi is the built-in harness; another harness can implement the Agent contract, and community channels can use the channel kit.

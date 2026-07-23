@@ -96,6 +96,23 @@ export function assembleSecrets(input: {
       }
     }
   }
+  // Slack bot-token rotation is an all-or-nothing credential bundle. Its fields remain optional so a
+  // manually configured long-lived token works, but a partial bundle must gate before the container
+  // reaches slackChannel construction.
+  if (input.channels.includes("slack")) {
+    const rotation = [
+      "SLACK_BOT_REFRESH_TOKEN",
+      "SLACK_BOT_TOKEN_EXPIRES_AT",
+      "SLACK_CLIENT_ID",
+      "SLACK_CLIENT_SECRET",
+    ];
+    if (rotation.some((name) => !!input.env[name])) {
+      for (const name of rotation) {
+        if (!input.env[name] && !missingSecrets.includes(name)) missingSecrets.push(name);
+      }
+    }
+  }
+
   for (const name of input.extraSecrets ?? []) {
     if (name in secrets || missingSecrets.includes(name)) continue; // already covered by model/channel — no dup
     const v = input.env[name];

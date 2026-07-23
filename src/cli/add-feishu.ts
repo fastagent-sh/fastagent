@@ -17,7 +17,6 @@ import {
   FEISHU_GROUP_CONTEXT_SCOPE,
   type FeishuGroupBehavior,
   type FeishuSubscriptionMode,
-  type GroupBehaviorChoice,
 } from "../channels/feishu/setup-mode.ts";
 import { cloudFor } from "../channels/feishu/cloud.ts";
 import {
@@ -30,7 +29,7 @@ import { registerFeishuApp } from "../channels/feishu/register-app.ts";
 import { onboardLarkApp } from "../channels/lark/onboard.ts";
 import { parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
-import { appendChannelDotEnv } from "../scaffold/add-channel.ts";
+import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
 
 export interface GroupBehaviorSetup {

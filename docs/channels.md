@@ -1,6 +1,6 @@
 ---
 title: Channels
-description: "How channels turn external events into agent invocations: discovery, route tables, the GitHub and Telegram adapters, and local webhook tunneling."
+description: "How channels turn external events into agent invocations: discovery, route tables, first-party chat/webhook adapters, and local tunneling."
 status: current
 ---
 
@@ -112,6 +112,7 @@ FastAgent ships lightweight first-party adapters as subpath exports.
 |---|---|---|---|
 | GitHub webhook | `@fastagent-sh/fastagent/github` | [GitHub channel](github.md) | `fastagent add github` |
 | Telegram bot | `@fastagent-sh/fastagent/telegram` | [Telegram channel](telegram.md) | `fastagent add telegram` |
+| Slack app | `@fastagent-sh/fastagent/slack` | [Slack channel](slack.md) | `fastagent add slack` |
 | Feishu bot (飞书) | `@fastagent-sh/fastagent/feishu` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add feishu` |
 | Lark bot (international) | `@fastagent-sh/fastagent/lark` | [Feishu channel (Lark compatibility)](feishu.md) | `fastagent add lark` |
 
@@ -140,6 +141,29 @@ export default telegramChannel({
 });
 ```
 
+Example Slack glue:
+
+```ts
+import { slackChannel } from "@fastagent-sh/fastagent/slack";
+
+export default slackChannel({
+  botToken: process.env.SLACK_BOT_TOKEN ?? "",
+  signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
+  botRefreshToken: process.env.SLACK_BOT_REFRESH_TOKEN || undefined,
+  clientId: process.env.SLACK_CLIENT_ID || undefined,
+  clientSecret: process.env.SLACK_CLIENT_SECRET || undefined,
+  botTokenExpiresAt: process.env.SLACK_BOT_TOKEN_EXPIRES_AT
+    ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
+    : undefined,
+  groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
+  rendering: "native", // Slack Agent streams/tasks; "classic" for compatibility
+  // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
+  // Direct/group asks default to independent sessions + Slack threads; opt out independently:
+  // directMessageSession: "continuous",
+  // groupMessageSession: "continuous",
+});
+```
+
 Example canonical Feishu glue (Lark international exposes a branded `larkChannel` compatibility
 adapter over this engine and reads `LARK_*`):
 
@@ -160,7 +184,7 @@ export default feishuChannel({
 A route-adapter call returns a `ChannelModule`; a WebSocket adapter such as
 `feishuWebSocketChannel` returns a `LongConnectionChannelModule`. In either form the glue holds only
 policy (secrets from env, `on`/`route`), while `agent` and the state root flow from the framework to the adapter without transiting your code.
-The adapter owns its default route (`POST /webhook`, `POST /telegram`, `POST /feishu`, `POST /lark`);
+The adapter owns its default route (`POST /webhook`, `POST /telegram`, `POST /slack`, `POST /feishu`, `POST /lark`);
 wrap it in your own `ChannelModule` to remap.
 
 ## Adapter + glue
@@ -186,6 +210,7 @@ When `cloudflared` is installed, FastAgent opens a Cloudflare quick tunnel, prin
 
 - Telegram: calls `setWebhook` using `.env` values.
 - GitHub: prints the Payload URL to paste into repo settings.
+- Slack: for an app created by `add slack`, rotates its owner-local Configuration Token and updates the App Manifest Request URL; scaffold-only/manual apps receive the URL to paste.
 - Feishu: PATCHes the app's event subscription to the tunnel URL via the reference cloud's config API.
 - Lark compatibility: probes the same Feishu mechanism; its lagging config route currently falls back
   to opening the app console and printing the Request URL.
@@ -198,19 +223,19 @@ Heavy or long-tail adapters should live outside `@fastagent-sh/fastagent`:
 
 ```jsonc
 {
-  "name": "fastagent-channel-slack",
+  "name": "fastagent-channel-acme",
   "peerDependencies": { "@fastagent-sh/fastagent": "^0.x" },
-  "dependencies": { "@slack/web-api": "^7" }
+  "dependencies": { "@acme/sdk": "^1" }
 }
 ```
 
 The user's workspace installs the adapter and wires it with a channel file:
 
 ```ts
-import { slackChannel } from "fastagent-channel-slack";
+import { acmeChannel } from "fastagent-channel-acme";
 
-export default slackChannel({
-  signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
+export default acmeChannel({
+  secret: process.env.ACME_SECRET ?? "",
   on: (event) => ({ session: event.user, text: event.text }),
 });
 ```
@@ -228,6 +253,7 @@ Read [Channel development](channel-development.md) for adapter design, packaging
 
 - [GitHub channel](github.md)
 - [Telegram channel](telegram.md)
+- [Slack channel](slack.md)
 - [Feishu channel (Lark compatibility)](feishu.md)
 - [Channel development](channel-development.md)
 - [Embedding](embedding.md)

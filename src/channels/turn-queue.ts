@@ -5,7 +5,7 @@
  * instead of colliding on the lease and being dropped as "busy").
  *
  * Channel-neutral (records are opaque beyond a `session` key), shared by the stateful chat channels
- * (telegram, Feishu; Lark reuses Feishu). Durability is layered ON TOP by the caller: turn-store.ts
+ * (Telegram, Feishu/Lark, Slack). Durability is layered ON TOP by the caller: turn-store.ts
  * persists an accepted turn's intent pre-ACK and replays a crash-surviving one on the next start (L1,
  * process-crash recovery, at-least-once). Exactly-once / deterministic step-replay (L2) is the K-axis
  * backend — an external queue with distributed locking (SPEC §11) — not this in-memory queue.

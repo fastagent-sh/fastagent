@@ -1,7 +1,7 @@
 /**
  * `--tunnel`: expose the local dev server on a public HTTPS URL via a Cloudflare quick tunnel, then
- * auto-register the first-party webhook channels against it (Telegram setWebhook; Feishu/Lark
- * application-config PATCH; GitHub prints the URL to paste into repo settings). This closes the
+ * auto-register the first-party webhook channels against it (Telegram setWebhook; onboarded Slack
+ * App Manifest update; Feishu/Lark application-config PATCH; GitHub/manual Slack print URLs). This closes the
  * "local dev → public URL" gap webhooks need.
  *
  * Process orchestration, not assembly — lives outside the engine, beside dev-supervisor.ts.
@@ -10,8 +10,10 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
+import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
 import { loadDotEnv } from "./env.ts";
+import { resolveStateRoot } from "./engines/pi/config.ts";
 import { log } from "./log.ts";
 
 export interface Tunnel {
@@ -139,13 +141,14 @@ function channelBasenames(dir: string): string[] {
 }
 
 /**
- * Print the public URL and wire up the first-party webhook channels found under `dir`: Telegram and
- * Feishu/Lark auto-register using credentials from .env; GitHub prints the URL to add in repo settings.
+ * Print the public URL and wire up first-party webhook channels found under `dir`: Telegram and
+ * Feishu/Lark use runtime credentials; onboarded Slack uses its owner-local config token; GitHub and a
+ * manually scaffolded Slack app receive explicit console URLs.
  */
 export async function announceWebhooks(
   dir: string,
   baseUrl: string,
-  opts: { openUrl?: (url: string) => void; routeChannels?: string[] } = {},
+  opts: { openUrl?: (url: string) => void; routeChannels?: string[]; stateRoot?: string } = {},
 ): Promise<void> {
   log.info(`[fastagent] public URL: ${baseUrl}`);
   try {
@@ -170,6 +173,12 @@ export async function announceWebhooks(
     log.info(
       `[fastagent] github: add a webhook in your repo (Settings → Webhooks): Payload URL = ${baseUrl}/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
+  }
+  if (routeChannels.includes("slack")) {
+    await registerSlackWebhook(baseUrl, {
+      stateRoot: opts.stateRoot ?? resolveStateRoot(dir),
+      log: (message) => log.info(message),
+    });
   }
   // feishu/lark register programmatically too (application-v7 config PATCH — telegram-setWebhook
   // parity), once per mounted kind (each kind is its own app with its own credentials); the registrar

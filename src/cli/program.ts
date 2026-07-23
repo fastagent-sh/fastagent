@@ -29,7 +29,7 @@ const TUNNEL: FlagSpec = {
   flags: "--tunnel",
   description:
     "expose a public HTTPS URL via a Cloudflare quick tunnel (needs cloudflared) and auto-register " +
-    "webhook channels (telegram, feishu, lark; github prints the URL) — for hosting a bot from your " +
+    "webhook channels (telegram, onboarded slack, feishu, lark; github/manual slack print the URL) — for hosting a bot from your " +
     "own box without deploying (the quick-tunnel URL is ephemeral, not for production)",
 };
 
@@ -86,7 +86,7 @@ const dev: CommandSpec = {
   ],
   examples: [
     { cmd: "fastagent dev" },
-    { cmd: "fastagent dev --tunnel", note: "public URL + auto-registered webhooks" },
+    { cmd: "fastagent dev --tunnel", note: "public URL + registered/guided webhooks" },
   ],
   run: async (args, f) =>
     (await import("./commands/dev.ts")).runDev(args[0] as string, {
@@ -275,11 +275,15 @@ const INGRESS: FlagSpec = {
 };
 const GROUP_BEHAVIOR: FlagSpec = {
   flags: "--group-behavior <behavior>",
-  description: "Feishu/Lark groups: context (recommended) or mentions (least privilege)",
+  description: "Slack/Feishu/Lark groups: context (recommended) or mentions (least privilege)",
+};
+const NO_ONBOARD: FlagSpec = {
+  flags: "--no-onboard",
+  description: "Slack: scaffold only; skip internal-app creation/OAuth",
 };
 
 const channelSub = (
-  kind: "github" | "telegram" | "feishu" | "lark",
+  kind: "github" | "telegram" | "slack" | "feishu" | "lark",
   summary: string,
   description: string,
   notes?: string,
@@ -288,7 +292,14 @@ const channelSub = (
   summary,
   description,
   args: [DIR_ARG],
-  flags: [CREATE_APP, ...(kind === "feishu" || kind === "lark" ? [INGRESS, GROUP_BEHAVIOR] : [])],
+  flags: [
+    CREATE_APP,
+    ...(kind === "feishu" || kind === "lark"
+      ? [INGRESS, GROUP_BEHAVIOR]
+      : kind === "slack"
+        ? [GROUP_BEHAVIOR, NO_ONBOARD]
+        : []),
+  ],
   examples: [{ cmd: `fastagent add ${kind}` }],
   ...(notes ? { notes } : {}),
   run: async (args, f) =>
@@ -296,15 +307,16 @@ const channelSub = (
       createApp: f.createApp === true,
       ingress: f.ingress as string | undefined,
       groupBehavior: f.groupBehavior as string | undefined,
+      onboard: f.onboard !== false,
     }),
 });
 
 const add: CommandSpec = {
   name: "add",
-  summary: "connect a channel (github, telegram, feishu, lark) or vendor a skill",
+  summary: "connect a channel (github, telegram, slack, feishu, lark) or vendor a skill",
   description:
-    "Scaffold channels/<kind>.ts — third-party adapter glue with the policy to edit (github maps " +
-    "events in on(); telegram/feishu/lark route in the optional route()) — or vendor an Agent Skills " +
+    "Scaffold channels/<kind>.ts — first-party adapter glue with the policy to edit (github maps " +
+    "events in on(); telegram/slack/feishu/lark route in the optional route()) — or vendor an Agent Skills " +
     "skill into skills/<name>/.",
   subcommands: [
     channelSub(
@@ -318,6 +330,16 @@ const add: CommandSpec = {
       "scaffold the Telegram bot channel (durable turns, live preview)",
       "Scaffold channels/telegram.ts — the Telegram bot channel with durable turns, a live-preview " +
         "message pump, and an optional route() policy.",
+    ),
+    channelSub(
+      "slack",
+      "scaffold the Slack Events API channel (files, threads, context, live preview)",
+      "Choose group visibility, scaffold channels/slack.ts plus slack-send.ts, create a single-workspace " +
+        "internal Slack app from a manifest, and install it through OAuth. The channel provides signed " +
+        "Events API ingress, durable turns, files, managed threads, context, and an edited live preview.",
+      "Automated onboarding requires Slack App Configuration access + refresh tokens and a temporary " +
+        "cloudflared tunnel. They stay in owner-readable local state and are never deployed; --no-onboard " +
+        "keeps the explicit manual/scaffold-only path.",
     ),
     channelSub(
       "feishu",

@@ -67,6 +67,7 @@ export function dockerWebhookPaths(channels: ChannelKind[]): string[] {
   const path: Record<ChannelKind, string> = {
     github: "/webhook",
     telegram: "/telegram",
+    slack: "/slack",
     feishu: "/feishu",
     lark: "/lark",
   };
@@ -201,7 +202,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     runbook.push(
       ``,
       `# Quick Tunnel: \`--run\` starts the Compose tunnel service and reads its ephemeral public URL.`,
-      `# Detected Telegram/Feishu/Lark channels auto-register; GitHub prints the URL. Re-run after the`,
+      `# Telegram/Feishu/Lark and locally onboarded Slack auto-register; GitHub/manual Slack print console URLs. Re-run after the`,
       `# tunnel container/Docker daemon restarts: a new Quick Tunnel URL must replace the old webhook URL.`,
       `${compose} logs -f tunnel`,
     );

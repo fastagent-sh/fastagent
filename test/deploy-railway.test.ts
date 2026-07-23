@@ -122,6 +122,13 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(out).not.toContain(".fly.dev");
   });
 
+  it("mints a domain and prints Slack's manual Events API Request URL", () => {
+    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["slack"] }));
+    expect(out).toContain("railway domain");
+    expect(out).toContain("SLACK_BOT_TOKEN=<value>");
+    expect(out).toContain("https://<your-domain>/slack");
+  });
+
   it("mints a domain and prints the Feishu Request URL for a feishu-only agent", () => {
     const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: ["feishu"] }));
     expect(out).toContain("railway domain");

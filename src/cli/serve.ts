@@ -255,11 +255,17 @@ export function serve(surface: ServingSurface, port: number, onListening?: (boun
 }
 
 /** Start a Cloudflare tunnel for route channels only. */
-export function maybeTunnel(workspaceDir: string, routeChannels: string[], boundPort: number, tunnel: boolean): void {
+export function maybeTunnel(
+  workspaceDir: string,
+  routeChannels: string[],
+  boundPort: number,
+  tunnel: boolean,
+  stateRoot?: string,
+): void {
   if (!tunnel || process.env.FASTAGENT_DEV_WORKER === "1") return;
   void startCloudflareTunnel(boundPort).then((instance) => {
     if (!instance) return;
-    void announceWebhooks(workspaceDir, instance.url, { openUrl: openExternalUrl, routeChannels });
+    void announceWebhooks(workspaceDir, instance.url, { openUrl: openExternalUrl, routeChannels, stateRoot });
     const cleanup = (): void => instance.close();
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);

@@ -128,6 +128,39 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
     expect(logs.at(-1)).toMatch(/lark: webhook registration needs a one-time manual step/);
   });
 
+  it("dispatches Slack registration through the local onboarding seam", async () => {
+    const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
+    const registerSlack = vi.fn(async (_baseUrl: string): Promise<RegistrationOutcome> => "registered");
+
+    const out = await deployFlyRun(
+      plan({ channels: ["slack"] }),
+      fly,
+      () => {},
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      undefined,
+      registerSlack,
+    );
+
+    expect(out).toEqual({ ok: true });
+    expect(registerSlack).toHaveBeenCalledWith("https://bot.fly.dev");
+  });
+
+  it("reports Slack's Events API URL as a manual non-gating registration step", async () => {
+    const { fly } = fakeFly((args) => (args[0] === "apps" || args[0] === "volumes" ? { stdout: "[]" } : {}));
+    const logs: string[] = [];
+
+    const out = await deployFlyRun(
+      plan({ channels: ["slack"] }),
+      fly,
+      (message) => logs.push(message),
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+    );
+
+    expect(out).toEqual({ ok: true });
+    expect(logs.join("\n")).toContain("https://bot.fly.dev/slack");
+    expect(logs.at(-1)).toMatch(/slack: webhook registration needs a one-time manual step/);
+  });
+
   it("mixed outcomes: manual notices are logged AND the failed channels still gate", async () => {
     const { fly } = fakeFly((a) => (a[0] === "apps" || a[0] === "volumes" ? { stdout: "[]" } : {}));
     const logs: string[] = [];
@@ -257,6 +290,50 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     });
     expect(r.missingSecrets).toEqual(["GITHUB_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
     expect(r.secrets).toEqual({ OPENAI_API_KEY: "k" }); // no minted values
+  });
+
+  it("Slack rotation credentials are optional for manual apps and travel together when onboarded", () => {
+    const base = {
+      OPENAI_API_KEY: "k",
+      SLACK_BOT_TOKEN: "access",
+      SLACK_SIGNING_SECRET: "signing",
+    };
+    const manual = assembleSecrets({
+      modelAuth: "OPENAI_API_KEY",
+      authFile: undefined,
+      channels: ["slack"],
+      env: base,
+    });
+    expect(manual.missingSecrets).toEqual([]);
+    expect(manual.secrets.SLACK_BOT_REFRESH_TOKEN).toBeUndefined();
+
+    const rotating = assembleSecrets({
+      modelAuth: "OPENAI_API_KEY",
+      authFile: undefined,
+      channels: ["slack"],
+      env: {
+        ...base,
+        SLACK_BOT_REFRESH_TOKEN: "refresh",
+        SLACK_BOT_TOKEN_EXPIRES_AT: "2000000000000",
+        SLACK_CLIENT_ID: "client",
+        SLACK_CLIENT_SECRET: "secret",
+      },
+    });
+    expect(rotating.missingSecrets).toEqual([]);
+    expect(rotating.secrets).toMatchObject({
+      SLACK_BOT_REFRESH_TOKEN: "refresh",
+      SLACK_BOT_TOKEN_EXPIRES_AT: "2000000000000",
+      SLACK_CLIENT_ID: "client",
+      SLACK_CLIENT_SECRET: "secret",
+    });
+
+    const partial = assembleSecrets({
+      modelAuth: "OPENAI_API_KEY",
+      authFile: undefined,
+      channels: ["slack"],
+      env: { ...base, SLACK_BOT_REFRESH_TOKEN: "refresh" },
+    });
+    expect(partial.missingSecrets).toEqual(["SLACK_BOT_TOKEN_EXPIRES_AT", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET"]);
   });
 
   it("Feishu/Lark Encrypt Keys are optional: absent never gates deploy; present values still travel", () => {

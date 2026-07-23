@@ -77,7 +77,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   await startSchedules(a.agentDir, traced, a.stateRoot, a.config.selfSchedule ?? false);
   serve({ ...routed, routes: withControl.routes }, portFlag ?? a.config.http?.port ?? 8787, (p) => {
     withControl.announce(p);
-    maybeTunnel(a.agentDir, routed.routeChannels, p, opts.tunnel ?? false);
+    maybeTunnel(dir, routed.routeChannels, p, opts.tunnel ?? false, a.stateRoot);
   });
 }
 

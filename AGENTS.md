@@ -47,9 +47,9 @@ src/
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
 │   ├── preview-kit.ts       # SHARED preview policies: ChannelFailure + customer-facing default error + tool-arg summary
 │   ├── text.ts              # SHARED Unicode-safe code-point slicing (cards, preview kit)
-│   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + feishu)
+│   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + slack + feishu)
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
-│   ├── state.ts             # SHARED: atomic state files under <stateRoot>/channels/<kind>/
+│   ├── state.ts, seen.ts    # SHARED: atomic channel state + bounded durable delivery dedup
 │   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
 │   ├── registration.ts      # SHARED: registrar outcome type (registered|manual|failed) — registrars report facts, deploy owns gate policy
 │   ├── github/              # github channel (+ scaffold/ bundle)
@@ -63,11 +63,12 @@ src/
 │   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
 │   │   └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
+│   ├── slack/               # Slack Agent: native streams/tasks, rotating bot auth, signed Events API ingress, durable threads/context, files + onboarding/scaffold
 │   ├── feishu/              # CANONICAL Feishu channel engine — see docs/design/core.md
 │   │   ├── feishu.ts        # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
 │   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles
 │   │   ├── model.ts, normalize.ts, parse.ts, crypto.ts, card.ts # protocol model/content normalization/policy + security/card
-│   │   ├── invoke-turn.ts, preview.ts, seen.ts # turn IO, streaming-card delivery, delivery dedup
+│   │   ├── invoke-turn.ts, preview.ts # turn IO + streaming-card delivery
 │   │   ├── owned-threads.ts # durable index of Agent-created group threads (admits bare continuations)
 │   │   ├── context-buffer.ts# unsummoned group/thread discussion (durable, commit-on-completed)
 │   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)

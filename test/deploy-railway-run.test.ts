@@ -125,6 +125,47 @@ describe("deploy/railway/run: the coding-agent deploy journey (benchmark)", () =
     ]);
   });
 
+  it("dispatches Slack registration through the local onboarding seam", async () => {
+    const { railway } = fakeRailway((args) => {
+      if (args[0] === "status") return { stdout: "" };
+      if (args[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const registerSlack = vi.fn(async (_baseUrl: string): Promise<RegistrationOutcome> => "registered");
+
+    const out = await deployRailwayRun(
+      plan({ channels: ["slack"] }),
+      railway,
+      () => {},
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+      undefined,
+      registerSlack,
+    );
+
+    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
+    expect(registerSlack).toHaveBeenCalledWith("https://bot-production.up.railway.app");
+  });
+
+  it("reports Slack's Events API URL as a manual non-gating registration step", async () => {
+    const { railway } = fakeRailway((args) => {
+      if (args[0] === "status") return { stdout: "" };
+      if (args[0] === "domain") return { stdout: DOMAIN_JSON };
+      return {};
+    });
+    const logs: string[] = [];
+
+    const out = await deployRailwayRun(
+      plan({ channels: ["slack"] }),
+      railway,
+      (message) => logs.push(message),
+      vi.fn(async (): Promise<RegistrationOutcome> => "registered"),
+    );
+
+    expect(out).toEqual({ ok: true, url: "https://bot-production.up.railway.app" });
+    expect(logs.join("\n")).toContain("https://bot-production.up.railway.app/slack");
+    expect(logs.at(-1)).toMatch(/slack: webhook registration needs a one-time manual step/);
+  });
+
   it("does not register a long-connection Lark channel as a webhook", async () => {
     const { railway } = fakeRailway((args) => {
       if (args[0] === "status") return { stdout: "" };

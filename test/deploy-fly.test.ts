@@ -102,6 +102,14 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(out).toContain("# fly secrets set --app bot FEISHU_ENCRYPT_KEY=<value> LARK_ENCRYPT_KEY=<value>");
   });
 
+  it("includes Slack secrets and its manual Events API Request URL", () => {
+    const out = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["slack"] }));
+    expect(out).toContain("SLACK_BOT_TOKEN=<value>");
+    expect(out).toContain("SLACK_SIGNING_SECRET=<value>");
+    expect(out).toContain("POST /slack");
+    expect(out).toContain("https://bot.fly.dev/slack");
+  });
+
   it("prints one event Request URL for each mounted Feishu-cloud kind", () => {
     const feishu = runbook(planFlyDeploy({ ...base, modelAuth: undefined, channels: ["feishu"] }));
     expect(feishu).toContain("POST /feishu");

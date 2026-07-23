@@ -6,7 +6,7 @@ status: current
 
 # Documentation
 
-FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and serves it as a live service: embedded in your app, connected to Telegram, handling GitHub/webhook events, exposed as an API endpoint, or running behind your own channel. `persona.md` is recommended for identity (an `AGENTS.md` is project context the agent reads), but the directory is the unit.
+FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and serves it as a live service: embedded in your app, connected to Telegram or Slack, handling GitHub/webhook events, exposed as an API endpoint, or running behind your own channel. `persona.md` is recommended for identity (an `AGENTS.md` is project context the agent reads), but the directory is the unit.
 
 ## Recommended path
 
@@ -27,7 +27,7 @@ Using a coding agent? Give it the repository's [`ai-start.md`](ai-start.md) for 
 | Scaffold, run locally, add a tool, and start | [Quickstart](quickstart.md) |
 | Configure model, auth, ports, sessions, tools, and channels | [Configuration](configuration.md) |
 | Embed an agent in an existing app or route | [Embedding](embedding.md) |
-| Connect GitHub, Telegram, or another channel | [Channels](channels.md) |
+| Connect GitHub, Telegram, Slack, or another channel | [Channels](channels.md) |
 | Run the agent on a cron, or let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [API reference](api-reference.md#schedule-authoring) |
 | Ship the agent to a host | [Deploy](deploy.md) |
 
@@ -37,6 +37,7 @@ Using a coding agent? Give it the repository's [`ai-start.md`](ai-start.md) for 
 |---|---|
 | Use GitHub webhooks | [GitHub channel](github.md) |
 | Use a Telegram bot | [Telegram channel](telegram.md) |
+| Use a Slack app | [Slack channel](slack.md) |
 | Use Feishu or its Lark compatibility profile | [Feishu channel (Lark compatibility)](feishu.md) |
 | Build a custom channel adapter | [Channel development](channel-development.md) |
 

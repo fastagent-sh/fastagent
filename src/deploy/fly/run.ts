@@ -62,9 +62,9 @@ function listHasName(stdout: string, name: string): boolean {
 }
 
 /**
- * Run the deploy through `fly`. `log` reports progress; `registerTelegram(baseUrl)` /
- * `registerFeishu(baseUrl, kind)` perform the post-deploy webhook steps (the CLI passes its canonical
- * Feishu registrar, which also serves the Lark compatibility profile). Absent, the manual console
+ * Run the deploy through `fly`. `log` reports progress; the injected Telegram/Feishu/Slack registrars
+ * perform post-deploy webhook steps from the builder machine (Slack's control credential never travels
+ * to the host). Absent, the manual console
  * instruction is printed. Every gate is fail-visible.
  */
 export async function deployFlyRun(
@@ -73,6 +73,7 @@ export async function deployFlyRun(
   log: (msg: string) => void,
   registerTelegram: (baseUrl: string) => Promise<RegistrationOutcome>,
   registerFeishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>,
+  registerSlack?: (baseUrl: string) => Promise<RegistrationOutcome>,
 ): Promise<FlyRunOutcome> {
   const gate = (g: string): FlyRunOutcome => ({ ok: false, gate: g });
 
@@ -150,6 +151,16 @@ export async function deployFlyRun(
   if (plan.channels.includes("github")) {
     log(`github: set the webhook in the repo (Settings → Webhooks) → https://${plan.appName}.fly.dev/webhook`);
     reg.track("github", "manual"); // always a human step — re-surface it after the registrar output
+  }
+  if (plan.channels.includes("slack")) {
+    const baseUrl = `https://${plan.appName}.fly.dev`;
+    if (registerSlack) {
+      log("registering slack event URL…");
+      reg.track("slack", await registerSlack(baseUrl));
+    } else {
+      log(`slack: set Event Subscriptions → Request URL → ${baseUrl}/slack`);
+      reg.track("slack", "manual");
+    }
   }
   for (const kind of ["feishu", "lark"] as const) {
     if (!plan.channels.includes(kind) || plan.longConnectionChannels?.includes(kind)) continue;

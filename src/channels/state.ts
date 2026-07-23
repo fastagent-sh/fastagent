@@ -4,7 +4,7 @@
  * atomically (tmp + rename), so a crash leaves the previous version on disk, never a torn file.
  * Writes are synchronous: the files are KB-sized and a write that completes BEFORE the transport ACK
  * is what makes the state actually durable (an ACKed delivery is not redelivered).
- * Channel-neutral: every stateful channel (telegram, Feishu; Lark compatibility) derives its home from the ctx state root
+ * Channel-neutral: every stateful channel (Telegram, Feishu/Lark, Slack) derives its home from the ctx state root
  * and persists through these three primitives.
  *
  * Failure split: a CORRUPT file (bad JSON) degrades visibly — log.warn + start empty — because channel

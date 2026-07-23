@@ -30,7 +30,7 @@ agent/
 2. **A contract** — [Agent Handler SPEC](SPEC.md), centered on `invoke(scope, prompt) => AsyncIterable<AgentEvent>`.
 3. **A reference implementation** — pi-based assembly for `persona.md`, `AGENTS.md` context, Agent Skills, code tools, sessions, auth, and model selection.
 4. **Developer workflow** — `init`, `info`, `dev`, `chat`, `tool`, `invoke`, `fire`, `schedule`, `start`, `login`, `models`, channel scaffolding, and `deploy`.
-5. **Composable adapters**: GitHub, Telegram, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
+5. **Composable adapters**: GitHub, Telegram, Slack, Feishu with Lark compatibility, the default local invoke channel, and a small public kit for third-party channels.
 6. **Time triggers** — cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit (`fastagent schedule history`).
 
 ## Design choices
@@ -74,7 +74,7 @@ export const POST = createInvokeHandler(agent);
 
 Your app still owns auth, database, routing, and deployment.
 
-### Run it for GitHub or Telegram
+### Run it for GitHub, Telegram, or Slack
 
 Use the CLI:
 
@@ -85,11 +85,12 @@ fastagent dev
 fastagent start
 ```
 
-Add GitHub, Telegram, Feishu, or Lark when the agent should review PRs or help chat users:
+Add GitHub, Telegram, Slack, Feishu, or Lark when the agent should review PRs or help chat users:
 
 ```bash
 fastagent add github
 fastagent add telegram
+fastagent add slack
 fastagent add feishu   # 飞书; Lark international: fastagent add lark
 ```
 
@@ -107,6 +108,7 @@ fastagent add feishu   # 飞书; Lark international: fastagent add lark
 | Ship to Fly, Railway, or any Docker host | [Deploy](deploy.md) |
 | Use GitHub webhooks | [GitHub channel](github.md) |
 | Use Telegram bots | [Telegram channel](telegram.md) |
+| Use Slack apps | [Slack channel](slack.md) |
 | Use Feishu bots / Lark compatibility | [Feishu channel (Lark compatibility)](feishu.md) |
 | Build a channel adapter | [Channel development](channel-development.md) |
 | Look up public TypeScript exports | [API reference](api-reference.md) |
@@ -121,7 +123,7 @@ Implemented today:
 - Agent Handler v0.1 reference implementation over pi.
 - Directory assembly from `persona.md`, `AGENTS.md` project context, `skills/`, discovered `tools/`, and `fastagent.config.*`.
 - HTTP/SSE invoke channel.
-- GitHub, Telegram, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
+- GitHub, Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
 - Cron schedules (`schedules/` files) and opt-in agent self-scheduling (the `wake` tool), with a per-run audit.
 - `dev`, `chat`, `invoke`, `tool`, `info`, `fire`, `schedule`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` (`--run` drives Docker Compose or the host CLI end-to-end).
 - jsonl session persistence with restart continuity.
@@ -129,6 +131,6 @@ Implemented today:
 
 Not implemented yet:
 
-- General durable post-ACK execution for every webhook channel (Telegram and Feishu have an at-least-once intent layer; GitHub does not).
+- General durable post-ACK execution for every webhook channel (Telegram, Slack, and Feishu/Lark have an at-least-once intent layer; GitHub does not).
 - Multi-instance session/lease/auth backends out of the box (the single-machine tier is the shipped scope).
 - Additional engine reference bindings beyond pi.

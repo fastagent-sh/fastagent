@@ -13,7 +13,7 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { type FastagentConfig, loadConfig, resolveAgentDir } from "./engines/pi/config.ts";
+import { type FastagentConfig, loadConfig, resolveAgentDir, resolveStateRoot } from "./engines/pi/config.ts";
 import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { openExternalUrl } from "./open-url.ts";
@@ -96,9 +96,10 @@ export async function runDevSupervisor(dir: string, options: { tunnel?: boolean 
         void startCloudflareTunnel(m.port).then((t) => {
           if (t) {
             tunnel = t;
-            void announceWebhooks(agentDir, t.url, {
+            void announceWebhooks(dir, t.url, {
               openUrl: openExternalUrl,
               routeChannels: m.routeChannels,
+              stateRoot: resolveStateRoot(dir),
             });
           }
         });

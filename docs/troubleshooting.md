@@ -158,7 +158,7 @@ Check:
 
 - `cloudflared` is installed,
 - the public URL printed by FastAgent is the one configured in the provider,
-- the route path matches the channel (`/webhook` for the GitHub scaffold, `/telegram` for Telegram, `/feishu` for Feishu, `/lark` for Lark),
+- the route path matches the channel (`/webhook` for GitHub, `/telegram` for Telegram, `/slack` for Slack, `/feishu` for Feishu, `/lark` for Lark),
 - the provider secret matches your `.env`,
 - your `.env` is loaded from the workspace directory.
 
@@ -184,16 +184,41 @@ Check:
 - model credentials are configured,
 - the operator log for a `failed` event or Bot API error.
 
+## Slack requests return 401 or no events arrive
+
+For 401 responses, `SLACK_SIGNING_SECRET` must match **Basic Information → App Credentials → Signing
+Secret**. Slack signs the exact raw body and timestamp; a proxy must not rewrite the body. Requests older
+than five minutes are rejected to prevent replay.
+
+For missing events, check that the app is installed/reinstalled after scope changes, invited to the
+channel, and subscribed to `app_mention` plus `message.im`. Context mode additionally requires the
+matching `message.channels` / `message.groups` / `message.mpim` subscriptions and
+`channels:history` / `groups:history` / `mpim:history` scopes. The Request URL must be the currently
+running `https://…/slack`; Quick Tunnel URLs are ephemeral.
+
+For an app created by `fastagent add slack`, `dev --tunnel` and `deploy --run` update that URL through
+the owner-local App Configuration refresh token in `<state root>/channels/slack/onboarding.json`. If
+rotation/update fails, re-run `fastagent add slack` and choose **Replace App Configuration tokens**; this
+does not replace the installed Bot Token. A scaffold created with `--no-onboard`, or a missing onboarding
+state file, deliberately falls back to printing the manual Slack console URL.
+
+## Slack file input fails
+
+The app needs `files:read`. Slack Connect, deleted files, Canvas/remote files without downloadable bytes,
+workspace policy, and the channel's 20 MB cap can still make a file unavailable. A current-message file
+fails the turn visibly; earlier buffered files degrade individually. See [Slack channel](slack.md).
+
 ## Images are ignored or fail
 
-Telegram photos become `prompt.images`. The selected model must support vision. If it does not, choose a vision-capable model or route image messages differently.
+Telegram and Slack images become `prompt.images`. The selected model must support vision. If it does not, choose a vision-capable model or route image messages differently.
 
 ## Files are not found by the agent
 
-Telegram documents/audio/video are downloaded under:
+Telegram documents/audio/video and Slack files are downloaded under:
 
 ```txt
 <state root>/channels/telegram/files/<chat>/
+<state root>/channels/slack/files/<channel>/
 ```
 
 The path is appended to the prompt. Make sure the agent has filesystem tools enabled and the file still exists. Long-running bots should mount or clean this directory deliberately.

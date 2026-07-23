@@ -26,7 +26,7 @@ All three paths continue with the same steps below: inspect, authenticate, initi
 
 - The directory is the agent: optional `persona.md` for identity, `skills/`, `tools/`, `channels/`, `schedules/`, markdown context, and `AGENTS.md` for project context.
 - An `AGENTS.md` does not make a directory a FastAgent workspace. A `fastagent.config.*` file does.
-- FastAgent can run the directory locally, embed it in an app, connect it to GitHub or Telegram, expose it over HTTP, or put it behind a custom channel.
+- FastAgent can run the directory locally, embed it in an app, connect it to GitHub, Telegram, or Slack, expose it over HTTP, or put it behind a custom channel.
 - Do not invent a new project layout unless the user asks. Prefer the existing directory.
 
 ## Inspect before changing anything

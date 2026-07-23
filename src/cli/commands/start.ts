@@ -105,7 +105,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787,
     (p) => {
       withControl.announce(p);
-      maybeTunnel(agentDir, routed.routeChannels, p, opts.tunnel ?? false);
+      maybeTunnel(dir, routed.routeChannels, p, opts.tunnel ?? false, stateRoot);
     },
   );
   // No graceful drain: webhook turns run fire-and-forget; SIGTERM just exits mid-turn. Whether an

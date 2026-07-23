@@ -227,6 +227,14 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       `#   Payload URL = https://${appName}.fly.dev/webhook, content type application/json, secret = GITHUB_WEBHOOK_SECRET`,
     );
   }
+  if (channels.includes("slack")) {
+    post.push(
+      `# After deploy — set Slack Event Subscriptions → Request URL. Path assumes POST /slack;`,
+      `# Slack verifies the running endpoint with a challenge:`,
+      `#   Request URL = https://${appName}.fly.dev/slack`,
+      `# Ensure OAuth scopes + message.* subscriptions match the groupBehavior in channels/slack.ts.`,
+    );
+  }
   for (const kind of ["feishu", "lark"] as const) {
     if (!channels.includes(kind) || input.longConnectionChannels?.includes(kind)) continue;
     const label = kind === "feishu" ? "Feishu" : "Lark";
