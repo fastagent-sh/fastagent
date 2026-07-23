@@ -256,6 +256,17 @@ async function streamNativeSlackReply(
 
   let streamTs: string | undefined;
   let retryStatusShown = false;
+  // DM Agent-status writes are fire-and-forget for the render loop, but must reach Slack in order:
+  // an out-of-order pair would leave a stale "retrying" line after progress (or after the final
+  // clear). One promise chain serializes them; each link swallows its own delivery error.
+  let statusChain = Promise.resolve();
+  const setStatus = (status: string): void => {
+    statusChain = statusChain.then(() =>
+      api
+        .setThreadStatus(target, status)
+        .catch((error) => log.warn(`${label} could not set Slack Agent status: ${String(error)}`)),
+    );
+  };
   const toolNames = new Map<string, string>();
   let pendingText = "";
   let fullAnswer = "";
@@ -341,9 +352,7 @@ async function streamNativeSlackReply(
         // Progress after a retry notice: restore the normal working status so the stale line doesn't
         // contradict a visibly streaming answer.
         retryStatusShown = false;
-        void api
-          .setThreadStatus(target, WORKING_STATUS)
-          .catch((error) => log.warn(`${label} could not restore the working status: ${String(error)}`));
+        setStatus(WORKING_STATUS);
       }
       if (event.type === "text") {
         pendingText += event.delta;
@@ -356,9 +365,7 @@ async function streamNativeSlackReply(
         // status surface in native mode; DMs get the explicit Agent status line, restored on progress.
         if (target.channelId.startsWith("D")) {
           retryStatusShown = true;
-          void api
-            .setThreadStatus(target, "hit a temporary problem — retrying…")
-            .catch((error) => log.warn(`${label} could not set the retry status: ${String(error)}`));
+          setStatus("hit a temporary problem — retrying…");
         }
       } else if (event.type === "tool_started") {
         const title = humanizeToolName(event.name);
@@ -401,9 +408,8 @@ async function streamNativeSlackReply(
       );
     }
     if (target.channelId.startsWith("D")) {
-      await api
-        .setThreadStatus(target, "")
-        .catch((error) => log.warn(`${label} could not clear Slack Agent status: ${String(error)}`));
+      setStatus("");
+      await statusChain;
     }
   }
 }
