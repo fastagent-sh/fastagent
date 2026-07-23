@@ -1,8 +1,10 @@
 /**
  * The shared definition-aware session builder: open a workspace's assembled agent as a resident pi
- * `AgentSessionRuntime`. Extracted from chat.ts (session-control Phase 0) so the TUI is ONE consumer
- * of it and the future serving session-control plane is another — both must run the SAME agent that
- * `dev`/`start` serve.
+ * `AgentSessionRuntime`. Extracted from chat.ts (session-control Phase 0) as the proof of the
+ * assembly seam — independently instantiable, running the SAME agent that `dev`/`start` serve. The
+ * TUI (chat.ts) is its one consumer: the session control plane (Phases 1–3) was built on the invoke
+ * pipeline instead of this resident runtime, so control-plane observation covers invoke-driven runs
+ * and deliberately not chat sessions (design §10/§15).
  *
  * FIDELITY: pi's vanilla discovery (AGENTS.md walk to repo root, machine-global skills/extensions)
  * is suppressed; fastagent's assembly is INJECTED into pi's session:
