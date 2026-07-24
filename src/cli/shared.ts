@@ -17,10 +17,10 @@ import {
   resolveAuthPath,
   resolveModel,
   resolveModelSpec,
-  resolveStateRoot,
+  resolveSecretsDir,
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
-import { ensureStateRootSelfIgnored, isUnderDir } from "../engines/pi/definition.ts";
+import { ensureSecretsDirSelfIgnored, isUnderDir } from "../engines/pi/definition.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
 import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
@@ -77,7 +77,8 @@ export async function reportAuth(modelSpec: string, authPath: string): Promise<v
  * already set; on a non-TTY (CI, a piped stdin), with `--no-input`, on cancel, or on a failed login
  * it stays quiet and lets the caller raise its own clear error (`missing model`, or deploy's
  * model-travel gate). The pick is exported to FASTAGENT_MODEL so a spawned `dev` worker inherits it,
- * and best-effort written back to the config so the next run is quiet.
+ * and best-effort written back to the config so the next run is quiet. `workspaceDir` is the resolved
+ * workspace ROOT (resolveWorkspace().root) — config and auth both live there.
  */
 export async function resolveFirstRunModel(
   workspaceDir: string,
@@ -141,10 +142,10 @@ async function pickWithCredentials(
     return chosen;
   }
 
-  // Inline login. Same leak guard as `login`: self-ignore the state root BEFORE a credential
+  // Inline login. Same leak guard as `login`: self-ignore the secrets dir BEFORE a credential
   // can land in-tree, so the secret is never untracked-but-committable.
-  const stateRoot = resolveStateRoot(workspaceDir);
-  if (isUnderDir(authPath, stateRoot)) await ensureStateRootSelfIgnored(workspaceDir, stateRoot);
+  const secretsDir = resolveSecretsDir(workspaceDir);
+  if (isUnderDir(authPath, secretsDir)) await ensureSecretsDirSelfIgnored(workspaceDir, secretsDir);
   try {
     // Verified against the CHOSEN model — the exact request the agent is about to make; a rejected
     // key re-prompts inside the loop, so reaching here means a usable (or at worst unverifiable) key.

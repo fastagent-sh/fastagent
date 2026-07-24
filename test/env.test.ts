@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadDotEnv, loadEnvFile } from "../src/env.ts";
+import { dotEnvPath, loadDotEnv, loadEnvFile } from "../src/env.ts";
+
+describe("dotEnvPath (follows the resolved secrets dir)", () => {
+  it("default <root>/.secrets/.env; FASTAGENT_SECRETS_DIR moves it together with auth.json", () => {
+    expect(dotEnvPath("/w", {} as NodeJS.ProcessEnv)).toBe(join("/w", ".secrets", ".env"));
+    expect(dotEnvPath("/w", { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv)).toBe(
+      join("/data/.secrets", ".env"),
+    );
+  });
+});
 
 // A portable .env loader (Node has process.loadEnvFile; Bun does not — same parse must run on both).
 describe("loadEnvFile", () => {
@@ -75,7 +84,7 @@ describe("loadEnvFile", () => {
   });
 });
 
-describe("loadDotEnv (workspace <dir>/.env, missing is normal)", () => {
+describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () => {
   it("a dir with no .env is a no-op, not a throw", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-"));
     expect(() => loadDotEnv(dir)).not.toThrow(); // ENOENT swallowed
@@ -84,7 +93,7 @@ describe("loadDotEnv (workspace <dir>/.env, missing is normal)", () => {
   it("a NON-ENOENT read error propagates (a corrupt/unreadable .env fails visibly, never silently)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-bad-"));
     // A directory AT the .env path makes readFileSync throw EISDIR — a non-ENOENT error that must surface.
-    await mkdir(join(dir, ".env"));
+    await mkdir(join(dir, ".secrets", ".env"), { recursive: true });
     expect(() => loadDotEnv(dir)).toThrow(expect.objectContaining({ code: "EISDIR" }));
   });
 });

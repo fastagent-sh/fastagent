@@ -34,10 +34,10 @@ Engine-neutral consumers use `/core`.
 
 ## 2. Workspace shape and prompt assembly
 
-A flat workspace uses one root for both the run directory and the agent definition:
+There is ONE workspace shape, with two placements. The shape:
 
 ```txt
-workspace/
+<workspace root>/
 ├── persona.md              # optional identity
 ├── AGENTS.md               # optional project context
 ├── skills/
@@ -45,30 +45,39 @@ workspace/
 ├── channels/
 ├── schedules/
 ├── fastagent.config.mjs
-└── .fastagent/             # machine state, gitignored
+├── .secrets/               # fastagent-managed secrets: .env + auth.json (self-gitignored;
+│                           # .env.example travels)
+├── .state/                 # mutable machine state: sessions, channel state, schedule state
+└── .cache/                 # reserved: re-derivable content
 ```
 
-When an existing repository already owns names such as `tools/` or has its own build/deploy files,
-`config.agentDir` moves the agent surface into a subdirectory while the repository remains the working
-directory:
+**Flat** places it directly in the directory ("a directory is an agent"): root = workbench.
+**Embedded** nests the identical shape into `<dir>/.fastagent/` — the host tree gets ZERO writes;
+the parent directory is the WORKBENCH (the agent's cwd, whose `AGENTS.md` ancestors are ② context):
 
 ```txt
-repo/
-├── AGENTS.md
-├── fastagent.config.mjs    # { agentDir: "./agent" }
-└── agent/
+repo/                       # the workbench — what the agent works ON, untouched
+├── AGENTS.md               # host project context, read as ②
+└── .fastagent/             # the WHOLE workspace — the flat shape, nested one level down
     ├── persona.md
-    ├── skills/
-    ├── tools/
-    └── channels/
+    ├── skills/  tools/  channels/  schedules/
+    ├── fastagent.config.mjs
+    ├── .secrets/  .state/
+    └── package.json
 ```
+
+Layout is STRUCTURAL, never configured: `resolveWorkspace(dir)` finds a `fastagent.config.*` at the
+dir root (flat) or under `<dir>/.fastagent/` (embedded); both at once is a refused ambiguity. The
+machinery dirs map onto deploy lifecycles: `.secrets/` travels through the host's secret store (never
+an image), `.state/` through a volume (`FASTAGENT_STATE_DIR`/`FASTAGENT_SECRETS_DIR` point both at it
+in a container), `.cache/` is re-derivable.
 
 The pi reference prompt has four segments:
 
 | Segment | Source |
 |---|---|
 | ① engine base + identity | `piBasePrompt`; `persona.md` replaces its default identity line |
-| ② project context | `AGENTS.md` files loaded by pi from `agentDir` and the cwd ancestor walk |
+| ② project context | `AGENTS.md` files loaded by pi from the workspace root and the workbench ancestor walk |
 | ③ skills listing | definition-local Agent Skills |
 | ④ runtime context | cwd only — no date, deliberately: a date line would invalidate the provider prefix cache at every day boundary (mirrors pi ≥0.80.7) |
 
@@ -89,9 +98,9 @@ The pi reference implementation has three reusable rungs:
 | L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
-`createPiAgentFromWorkspace` sits above L2. It loads config, resolves `agentDir`, model, auth, tools,
-sessions, and state paths. `dev`, `start`, `invoke`, and `fire` share this assembly rather than carrying
-parallel implementations.
+`createPiAgentFromWorkspace` sits above L2. It resolves the layout (`resolveWorkspace`), config,
+model, auth, tools, sessions, and machinery paths. `dev`, `start`, `invoke`, and `fire` share this
+assembly rather than carrying parallel implementations.
 
 Each invocation builds a fresh harness for its session and discards it after the turn. Conversation
 continuity comes from `PiSessionStore`, not a resident harness. Reopening is faithful to the whole
@@ -395,14 +404,17 @@ would silently miss clock events.
 `FASTAGENT_STATE_DIR` selects the one machine-state root:
 
 ```txt
-<stateRoot>/
-├── auth.json
+<stateRoot>/                # <workspace root>/.state (FASTAGENT_STATE_DIR overrides)
 ├── sessions/
 ├── channels/telegram/
 ├── channels/slack/
 ├── channels/feishu/
 └── schedule/
 ```
+
+Credentials live separately, under `<workspace root>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides):
+a different deploy lifecycle — secrets ride the host's secret store / the auth seed, state rides the
+volume; a deployed box points both env knobs at its volume so a rotated OAuth credential persists.
 
 The shipped file-backed implementations are single-process. Multiple instances require shared session,
 lease, credential, and channel-state backends; sharing one local state directory between processes is
@@ -412,8 +424,15 @@ unsupported.
 required secret names, and a runbook. Docker adds a user-owned `fastagent.compose.yml` with one app
 service; `--tunnel` can add a separate ephemeral cloudflared service, while durable ingress remains
 operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topology it also reads the
-Quick Tunnel URL and registers webhooks. The `agentDir` repo-as-workspace recipe remains experimental;
-`--run` stays gated for every target pending explicit end-to-end validation of that layout.
+Quick Tunnel URL and registers webhooks. Both layouts deploy through ONE semantic — bake the workbench
+as the image (WYSIWYG: what you see is what ships, git or not, clean or not). Embedded namespaces
+every artifact under `.fastagent/` (Dockerfile, fly.toml, compose, railway.json); the single host-tree
+write is the root `.dockerignore` the host CLIs' context packers require (kept if the host owns one;
+preflight then checks it — missing secret excludes or a rule dropping `.fastagent` from the context
+gate `--run`, else warn). `.git`
+ships by default: freshness (pull) and write-back (commit/push) are the AGENT's runtime behavior, not
+deploy machinery — the git binary is baked in exactly when the workbench ships a `.git`; a non-git
+workbench adds it via `config.deploy.apt`.
 
 ## 10. Current boundaries
 
@@ -423,7 +442,6 @@ The following are explicit limits, not implied capabilities:
 - `ExecutionEnv` alone is not a complete sandbox for directory agents;
 - GitHub post-ACK work has no replay; Telegram, Slack, and Feishu/Lark replay is at-least-once;
 - file-backed state is single-process;
-- the repo-as-workspace deploy path is experimental;
 - observability is logs/traces, without an OpenTelemetry exporter.
 
 Keep new implementations behind the existing contract rather than adding speculative concepts to it.

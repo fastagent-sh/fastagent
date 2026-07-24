@@ -31,18 +31,18 @@ import {
 } from "../../deploy/fly/plan.ts";
 import { deployFlyRun } from "../../deploy/fly/run.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { planRailwayDeploy } from "../../deploy/railway/plan.ts";
+import { EMBEDDED_DOCKERFILE_PATH_VAR, planRailwayDeploy } from "../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir, resolveModelSpec, resolveStateRoot } from "../../engines/pi/config.ts";
+import { loadConfig, resolveModelSpec, resolveStateRoot, resolveWorkspace } from "../../engines/pi/config.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { exists } from "../../scaffold/init.ts";
 import type { ChannelKind } from "../../scaffold/add-channel.ts";
 import { announceWebhooks } from "../../tunnel.ts";
-import { failStartup, failUsage } from "../fail.ts";
+import { failStartup, failStartupOn, failUsage } from "../fail.ts";
 import { resolveFirstRunModel } from "../shared.ts";
 
 export type DeployHost = "docker" | "fly" | "railway";
@@ -62,27 +62,31 @@ export interface DeployOptions {
 }
 
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
-  const target = resolve(dirArg);
+  // ONE deploy semantic for both layouts: bake the WORKBENCH (WYSIWYG). Artifacts land at the
+  // workspace root (= the workbench when flat; `.fastagent/` when embedded — plus the one root
+  // `.dockerignore` the packers require); host CLIs run from the workbench (the build context).
+  const { root, workbench, layout } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
+  const embedded = layout === "embedded";
   if (opts.tunnel && host !== "docker") {
     // A flag/host combination the parser cannot see (host is an argument) — usage class, exit 2.
     failUsage(`deploy stopped: --tunnel is supported only by the local Docker target`);
   }
-  loadDotEnv(target); // a custom provider/tool may read a key at config load
+  loadDotEnv(root); // a custom provider/tool may read a key at config load
   installProxyFetch(); // post-deploy channel API calls must honor HTTP(S)_PROXY under Node
   // First-run funnel, FULL picker: the write-back lands the model in fastagent.config.* — exactly what
   // the model-travel gate below requires (--model/env don't reach the deployed box) — and an inline
   // login stores the credential `--run` then carries. Runs BEFORE loadConfig; the read-back sees the
   // rewritten file because loadConfig cache-busts on mtime (a failed write-back still gates, correctly).
-  await resolveFirstRunModel(target, { model: opts.model, authPath: opts.authPath, input: opts.input });
-  const { config } = await loadConfig(target).catch(failStartup);
-  const agentDir = resolveAgentDir(target, config);
+  await resolveFirstRunModel(root, { model: opts.model, authPath: opts.authPath, input: opts.input });
+  const { config } = await loadConfig(root).catch(failStartup);
   const modelSpec = resolveModelSpec(opts.model, config);
   // The host-neutral pre-flight (model-travel gate, channel discovery, model-auth probe, container facts +
   // their warnings) lives in deploy/preflight.ts — testable in isolation. The CLI prints its messages and
   // stops on its gate; the host branch below adds only the host-specific artifacts + runbook + run drive.
   const pre = await preflightDeploy({
-    target,
-    agentDir,
+    root,
+    workbench,
+    embedded,
     config,
     modelSpec,
     run: !!opts.run,
@@ -113,7 +117,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     if (opts.intoLinked) {
       console.error(`[fastagent] warn: --into-linked is Railway-only — ignored for local Docker`);
     }
-    const projectName = toDockerProjectName(basename(target));
+    const projectName = toDockerProjectName(basename(workbench));
     const dockerPlan = (tunnel: boolean) =>
       planDockerDeploy({
         projectName,
@@ -132,20 +136,21 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     let plan = dockerPlan(requestedTunnel);
     // An existing Compose file is authoritative: shape its comparison/runbook from the topology on disk,
     // regardless of the current flag. `--force` is the explicit reset to the requested generated shape.
-    const composeFile = join(target, plan.composePath);
+    const composeFile = join(workbench, plan.composePath);
     let keptWithoutRequestedTunnel = false;
     if (!opts.force && (await exists(composeFile))) {
       const existingHasTunnel = composeHasTunnelService(await readFile(composeFile, "utf8"));
       plan = dockerPlan(existingHasTunnel);
       keptWithoutRequestedTunnel = requestedTunnel && !existingHasTunnel;
     }
-    await writeArtifacts(target, plan.artifacts, {
+    await writeArtifacts(workbench, plan.artifacts, {
       force: !!opts.force,
-      neverForce: container.kitDir ? [".dockerignore"] : [],
+      neverForce: embedded ? [".dockerignore"] : [],
     });
     if (opts.run) {
       return runDeployDocker({
-        target,
+        root,
+        workbench,
         composeFile: plan.composePath,
         port,
         requireTunnel: requestedTunnel,
@@ -178,7 +183,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     // Railway service names are project-scoped (not globally unique like a Fly app); slug the dir
     // basename so a name with spaces/odd chars can't break the `railway add --service <name>` command.
     const serviceName =
-      basename(target)
+      basename(workbench)
         .replace(/[^a-zA-Z0-9-]+/g, "-")
         .replace(/^-+|-+$/g, "") || "agent";
     const plan = planRailwayDeploy({
@@ -190,13 +195,25 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       hasTimeTriggers,
       ...container,
     });
-    await writeArtifacts(target, plan.artifacts, {
+    await writeArtifacts(workbench, plan.artifacts, {
       force: !!opts.force,
-      neverForce: container.kitDir ? [".dockerignore"] : [],
+      neverForce: embedded ? [".dockerignore"] : [],
     });
     if (opts.run) {
+      if (embedded) {
+        // The BUILD entry is guaranteed by the RAILWAY_DOCKERFILE_PATH service variable the runner
+        // sets (Railway's documented non-root-Dockerfile route), and Railway's default restart policy
+        // already equals the file's ON_FAILURE — the dashboard-only Config-as-code pointer only adds
+        // the /health deploy gate (boot-crash visibility), so it is an OPTIONAL note, not a gate.
+        console.error(
+          `[fastagent] note: optional — point the service at .fastagent/railway.json (Service → Settings → ` +
+            `Config-as-code, dashboard-only) so the /health healthcheck marks a boot-crashing deploy as FAILED; ` +
+            `the build already uses .fastagent/Dockerfile via the RAILWAY_DOCKERFILE_PATH variable`,
+        );
+      }
       return runDeployRailway({
-        target,
+        root,
+        workbench,
         name: serviceName,
         modelAuth,
         authPath,
@@ -204,6 +221,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         longConnectionChannels,
         extraSecrets,
         intoLinked: !!opts.intoLinked,
+        dockerfilePath: embedded ? EMBEDDED_DOCKERFILE_PATH_VAR : undefined,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -229,12 +247,12 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
   // and the runbook reads its `app=` (Fly app names are globally unique, so the basename guess may be
   // taken and the user renamed it). --force: the template is authoritative — the WHOLE fly.toml resets
   // (app→basename, region→iad, vm→defaults), so we do NOT round-trip `app` and warn that hand edits go.
-  // Kit layout: fly.toml lives under the kit (agent/fly.toml) — the host repo's own fly.toml (if any)
-  // belongs to the host's product deploy and is never read or written here.
-  const flyTomlPath = container.kitDir ? join(target, container.kitDir, "fly.toml") : join(target, "fly.toml");
+  // Embedded: fly.toml lives at the workspace root (.fastagent/fly.toml) — the host repo's own
+  // fly.toml (if any) belongs to the host's product deploy and is never read or written here.
+  const flyTomlPath = join(root, "fly.toml");
   const flyTomlExists = await exists(flyTomlPath);
   const keptApp = flyTomlExists && !opts.force ? parseFlyAppName(await readFile(flyTomlPath, "utf8")) : undefined;
-  const appName = keptApp ?? toFlyAppName(basename(target));
+  const appName = keptApp ?? toFlyAppName(basename(workbench));
   if (keptApp) console.error(`[fastagent] app: ${keptApp} (from fly.toml)`);
   if (flyTomlExists && opts.force) {
     console.error(`[fastagent] warn: --force resets fly.toml to defaults (app, region, vm) — re-apply any hand edits`);
@@ -280,13 +298,15 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     autostop: opts.stop ? "stop" : "suspend",
     scaleToZero: opts.scaleToZero !== false,
   });
-  await writeArtifacts(target, plan.artifacts, {
+  await writeArtifacts(workbench, plan.artifacts, {
     force: !!opts.force,
-    neverForce: container.kitDir ? [".dockerignore"] : [],
+    neverForce: embedded ? [".dockerignore"] : [],
   });
   if (opts.run) {
     return runDeployFly({
-      target,
+      root,
+      workbench,
+      embedded,
       appName,
       modelAuth,
       authPath,
@@ -313,7 +333,7 @@ async function writeArtifacts(
 ): Promise<void> {
   for (const a of artifacts) {
     const abs = join(target, a.path);
-    // Host-owned paths (the root .dockerignore in the agentDir layout): --force means "MY generated
+    // Host-owned paths (the root .dockerignore in the embedded layout): --force means "MY generated
     // artifact is authoritative", which never licenses clobbering the HOST's file — keep it always.
     if (options.neverForce?.includes(a.path) && (await exists(abs))) {
       console.error(
@@ -337,15 +357,15 @@ async function writeArtifacts(
       }
       continue;
     }
-    await mkdir(dirname(abs), { recursive: true }); // kit-layout artifacts live under agent/
+    await mkdir(dirname(abs), { recursive: true }); // embedded artifacts live under .fastagent/
     await writeFile(abs, a.content);
     console.error(`[fastagent] wrote ${a.path}`);
   }
 }
 
-function deployEnvironment(target: string, channels: ChannelKind[]): NodeJS.ProcessEnv {
+function deployEnvironment(root: string, channels: ChannelKind[]): NodeJS.ProcessEnv {
   if (!channels.includes("slack")) return process.env;
-  const latest = readSlackBotAuthEnv(join(resolveStateRoot(target), "channels", "slack", "bot-auth.json"));
+  const latest = readSlackBotAuthEnv(join(resolveStateRoot(root), "channels", "slack", "bot-auth.json"));
   return { ...process.env, ...latest };
 }
 
@@ -355,7 +375,8 @@ function deployEnvironment(target: string, channels: ChannelKind[]): NodeJS.Proc
  * when present, yields an ephemeral URL that reuses the same webhook announcer as `dev --tunnel`.
  */
 async function runDeployDocker(params: {
-  target: string;
+  root: string;
+  workbench: string;
   composeFile: string;
   port: number;
   requireTunnel: boolean;
@@ -366,7 +387,8 @@ async function runDeployDocker(params: {
   extraSecrets: string[];
 }): Promise<void> {
   const {
-    target,
+    root,
+    workbench,
     composeFile,
     port,
     requireTunnel,
@@ -382,11 +404,11 @@ async function runDeployDocker(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: deployEnvironment(target, channels),
+    env: deployEnvironment(root, channels),
   });
   const outcome = await deployDockerRun(
     { composeFile, port, secrets, missingSecrets, needsModelCredential, requireTunnel },
-    spawnRunner("docker", target),
+    spawnRunner("docker", workbench),
     (message) => console.error(`[fastagent] ${message}`),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
@@ -399,10 +421,10 @@ async function runDeployDocker(params: {
     // Docker Desktop commonly injects a host proxy. The Quick Tunnel hostname may be resolvable only
     // through it, exactly like provider/channel APIs; use the same Node dispatcher as dev/start/login.
     installProxyFetch();
-    await announceWebhooks(target, outcome.tunnelUrl, {
+    await announceWebhooks(root, outcome.tunnelUrl, {
       openUrl: openExternalUrl,
       routeChannels: channels.filter((kind) => !longConnectionChannels.includes(kind)),
-      stateRoot: resolveStateRoot(target),
+      stateRoot: resolveStateRoot(root),
     });
     console.error(
       `[fastagent] note: Quick Tunnel URLs are ephemeral — after the tunnel container/Docker daemon ` +
@@ -424,10 +446,12 @@ async function runDeployDocker(params: {
  * from the local env — the model key (env auth) or the whole auth.json as a `FASTAGENT_AUTH_SEED` seed
  * (OAuth/stored auth: the deployed box materializes it onto the /data volume on first boot, so a
  * personal deploy runs on the SAME subscription) plus channel secrets — then runs the flyctl steps
- * behind the shared {@link spawnRunner} seam (spawned `fly`, cwd = the workspace so the build context is the agent).
+ * behind the shared {@link spawnRunner} seam (spawned `fly`, cwd = the workbench so the build context is the agent).
  */
 async function runDeployFly(params: {
-  target: string;
+  root: string;
+  workbench: string;
+  embedded: boolean;
   appName: string;
   modelAuth: string | undefined;
   authPath: string;
@@ -436,8 +460,19 @@ async function runDeployFly(params: {
   flyTomlPath: string;
   extraSecrets: string[];
 }): Promise<void> {
-  const { target, appName, modelAuth, authPath, channels, longConnectionChannels, flyTomlPath, extraSecrets } = params;
-  const fly = spawnRunner("fly", target);
+  const {
+    root,
+    workbench,
+    embedded,
+    appName,
+    modelAuth,
+    authPath,
+    channels,
+    longConnectionChannels,
+    flyTomlPath,
+    extraSecrets,
+  } = params;
+  const fly = spawnRunner("fly", workbench);
   // Fail fast if flyctl is absent (spawn ENOENT → 127), with the install link — not a confusing auth gate.
   if ((await fly(["version"], { capture: true })).code === 127) {
     failStartup(new Error(`flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run`));
@@ -450,7 +485,7 @@ async function runDeployFly(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: deployEnvironment(target, channels),
+    env: deployEnvironment(root, channels),
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env) — gate it
   // here, not through missingSecrets, so the message isn't a contradictory mash of both.
@@ -463,12 +498,21 @@ async function runDeployFly(params: {
   }
 
   const outcome = await deployFlyRun(
-    { appName, region, secrets, missingSecrets, channels, longConnectionChannels, flyConfig: "fly.toml" },
+    {
+      appName,
+      region,
+      secrets,
+      missingSecrets,
+      channels,
+      longConnectionChannels,
+      flyConfig: embedded ? ".fastagent/fly.toml" : "fly.toml",
+      dockerfile: embedded ? ".fastagent/Dockerfile" : undefined,
+    },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
     (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(target) }),
+    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(root) }),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
@@ -482,7 +526,8 @@ async function runDeployFly(params: {
  * webhook) lives in {@link deployRailwayRun}; see there for why Railway differs from Fly.
  */
 async function runDeployRailway(params: {
-  target: string;
+  root: string;
+  workbench: string;
   name: string;
   modelAuth: string | undefined;
   authPath: string;
@@ -490,9 +535,22 @@ async function runDeployRailway(params: {
   longConnectionChannels: string[];
   extraSecrets: string[];
   intoLinked: boolean;
+  /** RAILWAY_DOCKERFILE_PATH for an embedded workspace; undefined for flat (root Dockerfile auto-detected). */
+  dockerfilePath?: string;
 }): Promise<void> {
-  const { target, name, modelAuth, authPath, channels, longConnectionChannels, extraSecrets, intoLinked } = params;
-  const railway = spawnRunner("railway", target);
+  const {
+    root,
+    workbench,
+    name,
+    modelAuth,
+    authPath,
+    channels,
+    longConnectionChannels,
+    extraSecrets,
+    intoLinked,
+    dockerfilePath,
+  } = params;
+  const railway = spawnRunner("railway", workbench);
   // Fail fast if the railway CLI is absent (spawn ENOENT → 127), with the install link.
   if ((await railway(["--version"], { capture: true })).code === 127) {
     failStartup(new Error(`railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run`));
@@ -504,7 +562,7 @@ async function runDeployRailway(params: {
     channels,
     longConnectionChannels,
     extraSecrets,
-    env: deployEnvironment(target, channels),
+    env: deployEnvironment(root, channels),
   });
   // Model credential has its OWN remediation (login), distinct from a missing secret's (.env).
   if (needsModelCredential) {
@@ -516,12 +574,12 @@ async function runDeployRailway(params: {
   }
 
   const outcome = await deployRailwayRun(
-    { name, mountPath: "/data", secrets, missingSecrets, channels, longConnectionChannels, intoLinked },
+    { name, mountPath: "/data", secrets, missingSecrets, channels, longConnectionChannels, intoLinked, dockerfilePath },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),
     (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind),
-    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(target) }),
+    (baseUrl) => registerSlackWebhook(baseUrl, { stateRoot: resolveStateRoot(root) }),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);

@@ -24,32 +24,45 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(json(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }))).not.toContain("FASTAGENT");
   });
 
-  it("kit layout (kitDir): railway.json namespaced + dockerfilePath into the kit + the dashboard config-path step", () => {
-    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [], kitDir: "agent" });
+  it("embedded: railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
+    const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [], embedded: true });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore",
-      "agent/Dockerfile",
-      "agent/Dockerfile.dockerignore",
-      "agent/railway.json",
+      ".fastagent/Dockerfile",
+      ".fastagent/Dockerfile.dockerignore",
+      ".fastagent/railway.json",
     ]);
-    const cfg = JSON.parse(p.artifacts.find((a) => a.path === "agent/railway.json")?.content ?? "{}");
-    expect(cfg.build.dockerfilePath).toBe("agent/Dockerfile"); // relative to the repo-root upload context
-    expect(runbook(p)).toMatch(/Config-as-code/); // the dashboard-only pointer step is stated
-    expect(runbook(p)).toMatch(/Write-back mechanics/);
+    const cfg = JSON.parse(p.artifacts.find((a) => a.path === ".fastagent/railway.json")?.content ?? "{}");
+    expect(cfg.build.dockerfilePath).toBe(".fastagent/Dockerfile"); // relative to the workbench upload context
+    // The BUILD entry is a scriptable service variable (pointing Railway at the namespaced config file
+    // is dashboard-only) — set in the same variables step as the machinery knobs, before the first up.
+    expect(runbook(p)).toMatch(
+      /railway variables set FASTAGENT_STATE_DIR=\/data\/\.state FASTAGENT_SECRETS_DIR=\/data\/\.secrets RAILWAY_DOCKERFILE_PATH=\/\.fastagent\/Dockerfile/,
+    );
+    // The dashboard config-as-code pointer is stated as OPTIONAL (adds the /health gate only).
+    expect(runbook(p)).toMatch(/OPTIONAL[\s\S]*Config-as-code/);
+    expect(runbook(p)).toMatch(/WYSIWYG snapshot/);
+  });
+
+  it("flat: no RAILWAY_DOCKERFILE_PATH (the root Dockerfile is auto-detected)", () => {
+    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    expect(out).not.toContain("RAILWAY_DOCKERFILE_PATH");
   });
 
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
     const artifacts = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }).artifacts;
     expect(artifacts.map((a) => a.path)).toEqual(["railway.json", "Dockerfile", ".dockerignore"]);
-    // .git must stay an EFFECTIVE ignore line (a size/secret contract), never fumbled into a `# .git`
-    // comment — that would silently ship the whole repo history into the image.
+    // .git is deliberately SHIPPED (the agent's pull/push loop needs it) — the exclusion must not
+    // creep back in silently; machinery/secret excludes are the hard contract instead.
     const dockerignore = artifacts.find((a) => a.path === ".dockerignore")!.content;
-    expect(dockerignore.split("\n")).toContain(".git");
+    expect(dockerignore.split("\n")).not.toContain(".git");
     // Recursive on purpose: dockerignore patterns are root-anchored, and a repo-as-agent can hold
     // nested projects — bare `node_modules`/`.env` would bake their build-machine deps and secrets
-    // into the image. `.git` stays root-anchored (asserted above) so nested repos' .git ships.
+    // into the image.
     expect(dockerignore).toMatch(/^\*\*\/node_modules$/m);
     expect(dockerignore).toMatch(/^\*\*\/\.env$/m);
+    expect(dockerignore).toMatch(/^\*\*\/\.secrets$/m);
+    expect(dockerignore).toMatch(/^\*\*\/\.state$/m);
     expect(dockerignore).not.toMatch(/^\*\*\/\.git$/m);
   });
 
@@ -57,7 +70,9 @@ describe("deploy/railway: planRailwayDeploy", () => {
     const out = runbook(planRailwayDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: ["telegram"] }));
     expect(out).toContain("railway volume add --mount-path /data");
     // `set` subcommand, NOT the deprecated `--set` legacy flag; secrets space-separated in one command.
-    expect(out).toContain("railway variables set FASTAGENT_STATE_DIR=/data");
+    expect(out).toContain(
+      "railway variables set FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets",
+    );
     expect(out).toContain(
       "railway variables set OPENAI_API_KEY=<value> TELEGRAM_BOT_TOKEN=<value> TELEGRAM_SECRET_TOKEN=<value>",
     );

@@ -1,21 +1,20 @@
 /** `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model. */
 import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
+import { loadConfig, resolveWorkspace } from "../../engines/pi/config.ts";
 import { resolveWorkspaceTools } from "../../engines/pi/create.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { turnContext } from "../../engines/pi/tool-context.ts";
-import { failStartup, failUsage } from "../fail.ts";
+import { failStartup, failStartupOn, failUsage } from "../fail.ts";
 
 export async function runTool(name: string, argsJson: string, dirArg: string): Promise<void> {
-  const toolDir = resolve(dirArg);
-  loadDotEnv(toolDir); // a tool may read a key from .env
-  const { config } = await loadConfig(toolDir).catch(failStartup);
+  const { root, workbench } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
+  loadDotEnv(root); // a tool may read a key from .env
+  const { config } = await loadConfig(root).catch(failStartup);
   // The same tool set dev/start mount (defaults + config.tools + discovered, deduped), so the runner
-  // exercises exactly what gets served — a shadowed tool is surfaced, not silently run. Resolve agentDir
-  // like the openers so `fastagent tool` finds the SAME tools/ as dev/start when config.agentDir is set.
-  const agentDir = resolveAgentDir(toolDir, config);
-  const { tools, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, agentDir, toolDir).catch(
+  // exercises exactly what gets served — a shadowed tool is surfaced, not silently run. Resolve the
+  // workspace like the openers so `fastagent tool` finds the SAME tools/ as dev/start when embedded.
+  const { tools, toolCollisions, toolFailures } = await resolveWorkspaceTools(config, root, workbench).catch(
     failStartup,
   );
   for (const c of toolCollisions) {
@@ -34,7 +33,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   } catch {
     failUsage(`invalid JSON args: ${argsJson}`); // malformed input syntax = usage error, exit 2
   }
-  const result = await turnContext.run({ cwd: toolDir }, () => tool.execute(`cli-${name}`, args)).catch(failStartup);
+  const result = await turnContext.run({ cwd: workbench }, () => tool.execute(`cli-${name}`, args)).catch(failStartup);
   const out =
     result?.details !== undefined
       ? result.details

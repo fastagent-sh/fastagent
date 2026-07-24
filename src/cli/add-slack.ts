@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 import { isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import { waitForHealth } from "../channels/wait-health.ts";
 import { ensureStateRootSelfIgnored } from "../engines/pi/definition.ts";
-import { parseEnvContent } from "../env.ts";
+import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { installProxyFetch } from "../proxy.ts";
 import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
@@ -24,20 +24,15 @@ async function promptValue(message: string, hidden = false, initialValue?: strin
 
 /** Interactive single-workspace internal-app creation + installation. Safe to re-run after interruption. */
 export async function onboardSlackInternalApp(input: {
+  /** The workspace ROOT — credentials land in `<target>/.secrets/.env` (the caller has already
+   *  ensured the secrets dir self-ignores). */
   target: string;
   stateRoot: string;
-  envIgnored: boolean;
   groupBehavior: GroupBehaviorChoice;
   /** `--replace-config`: go straight to replacing the local App Configuration token pair. */
   replaceConfig?: boolean;
 }): Promise<void> {
   installProxyFetch();
-  if (!input.envIgnored) {
-    throw new Error(
-      "`add slack` onboarding creates an app and writes real credentials to .env — " +
-        "add .env to .gitignore/.fastagentignore first, then re-run",
-    );
-  }
   if (!(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new Error(
       "`add slack` needs an interactive terminal for internal-app creation and OAuth — " +
@@ -55,7 +50,7 @@ export async function onboardSlackInternalApp(input: {
     );
   }
   if (state?.installedAt) {
-    const env = await readFile(join(input.target, ".env"), "utf8")
+    const env = await readFile(dotEnvPath(input.target), "utf8")
       .then(parseEnvContent)
       .catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return new Map<string, string>();
@@ -71,7 +66,7 @@ export async function onboardSlackInternalApp(input: {
     ].filter((name) => !((process.env[name] ?? env.get(name))?.trim() ?? ""));
     if (missingRuntime.length > 0) {
       throw new Error(
-        `Slack app ${state.appId ?? "(unknown)"} is installed but .env is missing ${missingRuntime.join(", ")} — ` +
+        `Slack app ${state.appId ?? "(unknown)"} is installed but .secrets/.env is missing ${missingRuntime.join(", ")} — ` +
           "restore them from the Slack app console, or delete the app + onboarding state and create a new one",
       );
     }
@@ -222,7 +217,9 @@ export async function onboardSlackInternalApp(input: {
         },
       },
     );
-    console.error("[fastagent] Slack app installed; rotating bot credentials and Signing Secret written to .env");
+    console.error(
+      "[fastagent] Slack app installed; rotating bot credentials and Signing Secret written to .secrets/.env",
+    );
     console.error(
       `[fastagent] run \`fastagent dev --tunnel\` next — FastAgent will rotate the config token and ` +
         "replace the temporary Events API URL automatically",

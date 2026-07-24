@@ -319,7 +319,7 @@ describe("tunnel: announceWebhooks", () => {
       errs.push(String(m));
     });
     const dir = await workspace([]); // no channels → returns right after the .env read
-    await mkdir(join(dir, ".env")); // a directory at the .env path → loadDotEnv throws EISDIR, not ENOENT
+    await mkdir(join(dir, ".secrets", ".env"), { recursive: true }); // a directory at the .env path → loadDotEnv throws EISDIR, not ENOENT
 
     await expect(announceWebhooks(dir, "https://x.trycloudflare.com")).resolves.toBeUndefined(); // no crash
     expect(errs.some((e) => /could not read/.test(e) && /\.env/.test(e))).toBe(true); // surfaced, not silent

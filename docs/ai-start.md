@@ -18,7 +18,7 @@ Decide which job this is before touching anything:
 
 1. **New agent, empty directory.** Nothing agent-shaped exists yet. Run `fastagent init <dir>` (or init the current directory), then flesh out `persona.md`, skills, and tools from what the user wants.
 2. **An existing directory becomes the agent.** The directory holds what the agent works on or with: `AGENTS.md`, markdown context, skills, tools — or just the projects the agent should manage (a parent directory of repos counts; it needs no agent-shaped files yet). Do not restructure it: run `fastagent init` in place; init never overwrites existing files and adopts them as the definition.
-3. **Embed an agent into an existing application.** The project is an app (framework config, routes, its own toolchain). Initialize — init chooses `./agent` with `config.agentDir` automatically when the root is claimed — then mount the agent in the app's own route with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
+3. **Embed an agent into an existing application.** The project is an app (framework config, routes, its own toolchain). Initialize — init chooses the embedded layout (the whole workspace in `./.fastagent/`) automatically when the root is claimed — then mount the agent in the app's own route with `createPiAgentFromDefinition` + `createInvokeHandler`. The app keeps auth, database, and deployment.
 
 All three paths continue with the same steps below: inspect, authenticate, initialize once, test, then connect channels or deploy.
 
@@ -31,8 +31,8 @@ All three paths continue with the same steps below: inspect, authenticate, initi
 
 ## Inspect before changing anything
 
-1. Check whether `fastagent.config.*` exists. If it does, the directory is already a workspace; read its `agentDir` when present.
-2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` at the root and under any configured `agentDir`.
+1. Check whether `fastagent.config.*` exists at the directory root or under `./.fastagent/`. If it does, the directory is already a workspace (flat or embedded).
+2. Check for `persona.md`, `AGENTS.md`, `skills/`, `tools/`, `channels/`, and `schedules/` at the workspace root (the directory itself, or `./.fastagent/` when embedded).
 3. If code tools are present, check whether `package.json` sets `"type": "module"`.
 4. Ask before choosing a model provider, adding credentials, or changing the existing layout.
 
@@ -41,11 +41,11 @@ All three paths continue with the same steps below: inspect, authenticate, initi
 You are non-interactive, so do not rely on prompts you cannot answer.
 
 - A model must be explicit. Without one, `dev`, `start`, `invoke`, `fire`, and `chat` open a picker on a TTY and fail in a non-TTY with `missing model`. `deploy` also opens the picker on a TTY, but non-interactively it does NOT say `missing model`: plan mode warns, and `--run` stops at the model-travel gate ("no model in fastagent.config.ts").
-- `fastagent login` is also interactive. Ask the user to run it in a terminal inside the workspace; it writes project-level `.fastagent/auth.json`, and credentials written in another directory are not visible here.
+- `fastagent login` is also interactive. Ask the user to run it in a terminal inside the workspace; it writes the project-level `.secrets/auth.json`, and credentials written in another directory are not visible here.
 - Alternatively, ask the user for a provider API key and put it in `.env` only with permission.
 - List available specifications with `fastagent models`.
 - Always pass `--model provider/id`, set `FASTAGENT_MODEL`, or write `model` in `fastagent.config.*`.
-- Never commit `.env`, credentials, sessions, or `.fastagent/` machine state.
+- Never commit secrets or machine state — `.secrets/` and `.state/` self-gitignore; do not undo that.
 
 ## Know which commands exit
 
@@ -68,7 +68,7 @@ Run:
 fastagent init <dir>
 ```
 
-Run `init` **in the directory the agent must see and act on** — its location sets the agent's working directory, project context, and what deploy bakes into the image. Never create a fresh subdirectory and init inside it: that scopes the agent to an empty folder, cut off from the projects around it. If a subdirectory layout is needed, init at the root and let init choose `./agent` + `config.agentDir` itself.
+Run `init` **in the directory the agent must see and act on** — its location sets the agent's working directory, project context, and what deploy bakes into the image. Never create a fresh subdirectory and init inside it: that scopes the agent to an empty folder, cut off from the projects around it. If a nested layout is needed, init at the root and let init choose the embedded `./.fastagent/` placement itself.
 
 The default directory is the current directory. `init`:
 
@@ -80,9 +80,9 @@ The default directory is the current directory. `init`:
 FastAgent chooses the layout on the first run:
 
 - flat by default;
-- `./agent` with `config.agentDir` when an existing toolchain or deployment already claims the root, including framework config, `tsconfig`, `go.mod`, `pyproject.toml`, `Cargo.toml`, Docker/Fly/Railway config, or occupied `tools/`, `channels/`, or `skills/` directories.
+- embedded (the whole workspace in `./.fastagent/`, zero files at the host root) when an existing toolchain or deployment already claims the root, including framework config, `tsconfig`, `go.mod`, `pyproject.toml`, `Cargo.toml`, Docker/Fly/Railway config, or occupied `tools/`, `channels/`, or `skills/` directories.
 
-Override only on the first run with `--flat` or `--agent-dir <name>`. To change it later, move the files and update or remove `config.agentDir`.
+Override only on the first run with `--flat` or `--embedded`. The layout is structural (never configured); to change it later, move the workspace files between the root and `./.fastagent/`.
 
 Then run:
 
@@ -227,7 +227,7 @@ Declare additional host secrets in `config.deploy.secrets`, then register channe
    ```
 
 4. Do not leave `dev` or `start` running in the foreground.
-5. Do not commit `.env`, credentials, sessions, or `.fastagent/` state.
+5. Do not commit secrets or machine state — `.secrets/` and `.state/` self-gitignore; do not undo that.
 6. If a command fails, read [Troubleshooting](troubleshooting.md) before guessing.
 
 ## References

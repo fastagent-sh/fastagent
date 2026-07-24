@@ -1,8 +1,8 @@
 /**
  * Auth for the pi engine: a read-WRITE {@link CredentialStore} over a fastagent credentials file,
  * consumed by the `Models` collection (models.ts). The path is project-level by default
- * (`<dir>/.fastagent/auth.json`, resolved by the opener); {@link GLOBAL_AUTH_PATH} is the global
- * location used as the override target / login default, not an implicit per-provider fallback.
+ * (`<workspaceRoot>/.secrets/auth.json`, resolved by the opener); {@link GLOBAL_AUTH_PATH} is the
+ * global location used as the override target / login default, not an implicit per-provider fallback.
  *
  * Project-level default + NO implicit project↔global fallback, for two reasons: (1) isolation — each
  * agent can use a different account/subscription; (2) fail-visibly — a missing credential surfaces at
@@ -33,14 +33,15 @@ import type { Credential, CredentialInfo, CredentialStore } from "@earendil-work
 import lockfile from "proper-lockfile";
 
 /**
- * The GLOBAL fastagent credentials file (distinct from pi's `~/.pi`). The project-level default is
- * `<dir>/.fastagent/auth.json` (computed by the opener and by `fastagent login`); this is only the
- * `loginFlow()` PROGRAMMATIC fallback (when a caller omits `authPath`) and the path to point
- * `--auth-path`/`FASTAGENT_AUTH_PATH` at to deliberately share ONE credential file across projects
- * (safe — one file, one lock-serialized refresh lifecycle). The `fastagent login` CLI is project-
- * level by default, never this.
+ * The GLOBAL fastagent credentials file (distinct from pi's `~/.pi`), under the user-global machinery
+ * home `~/.fastagent/` — which carries the same unified shape as a workspace (`.secrets/auth.json`).
+ * The project-level default is `<workspaceRoot>/.secrets/auth.json` (computed by the opener and by
+ * `fastagent login`); this is only the `loginFlow()` PROGRAMMATIC fallback (when a caller omits
+ * `authPath`) and the path to point `--auth-path`/`FASTAGENT_AUTH_PATH` at to deliberately share ONE
+ * credential file across projects (safe — one file, one lock-serialized refresh lifecycle). The
+ * `fastagent login` CLI is project-level by default, never this.
  */
-export const GLOBAL_AUTH_PATH = join(homedir(), ".fastagent", "auth.json");
+export const GLOBAL_AUTH_PATH = join(homedir(), ".fastagent", ".secrets", "auth.json");
 
 export interface FastagentAuthOptions {
   /** Sink for non-fatal auth anomalies (unreadable/corrupt file). Defaults to the process logger (warn). */
@@ -195,7 +196,7 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
 }
 
 /** A read-write `CredentialStore` backed by the given credentials file (default {@link GLOBAL_AUTH_PATH};
- *  the directory opener passes the project-level `<dir>/.fastagent/auth.json`). */
+ *  the directory opener passes the project-level `<root>/.secrets/auth.json`). */
 export function fastagentCredentialStore(
   authPath: string = GLOBAL_AUTH_PATH,
   options: FastagentAuthOptions = {},

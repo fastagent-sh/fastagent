@@ -1,16 +1,16 @@
 /**
  * `fastagent add <channel>`: drop a `channels/<kind>.ts` adapter-glue file (+ any companion tool, +
- * `.env.example` vars) into an existing workspace. `add` checks and guides; it never bootstraps a
- * workspace (that is `init`'s job). Each channel's template files live in its own bundle at
- * src/channels/<kind>/scaffold/, read here at scaffold time.
+ * `.secrets/.env.example` vars) into an existing workspace. `add` checks and guides; it never
+ * bootstraps a workspace (that is `init`'s job). Each channel's template files live in its own bundle
+ * at src/channels/<kind>/scaffold/, read here at scaffold time.
  */
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { detectRuntime } from "../runtime.ts";
 import { assertInsideWorkspace } from "../workspace.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { exists } from "./init.ts";
-import { parseEnvContent } from "../env.ts";
+import { dotEnvPath, envExamplePath, parseEnvContent } from "../env.ts";
 import type { FeishuSubscriptionMode } from "../channels/feishu/setup-mode.ts";
 
 export type ChannelKind = "github" | "telegram" | "slack" | "feishu" | "lark";
@@ -232,7 +232,7 @@ export async function appendChannelEnv(
   kind: ChannelKind,
   ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<boolean> {
-  const file = join(dir, ".env.example");
+  const file = envExamplePath(dir);
   let current: string;
   try {
     current = await readFile(file, "utf8");
@@ -272,8 +272,8 @@ function mentionsEnvName(content: string, name: string): boolean {
 }
 
 /**
- * Append generated channel secrets to the run-root `.env` (never `.env.example`) after the CLI has
- * verified that `.env` is gitignored. Existing non-empty values are kept — EXCEPT the names listed in
+ * Append generated channel secrets to the workspace `.env` (`.secrets/.env` — never `.env.example`)
+ * after the CLI has ensured `.secrets/` self-ignores. Existing non-empty values are kept — EXCEPT the names listed in
  * `overwrite`: those are authoritative (e.g. the credentials of an app `add feishu` JUST minted —
  * skipping them for a stale value would silently discard a fresh, unrecoverable secret). Manual values
  * (e.g. TELEGRAM_BOT_TOKEN from BotFather) are added only as commented placeholders, so the file is
@@ -286,7 +286,8 @@ export async function appendChannelDotEnv(
   overwrite: readonly string[] = [],
   ingress: FeishuSubscriptionMode = "webhook",
 ): Promise<DotEnvWriteResult> {
-  const file = join(dir, ".env");
+  const file = dotEnvPath(dir);
+  await mkdir(dirname(file), { recursive: true }); // .secrets/ may not exist yet (adapted workspace)
   let current = "";
   try {
     current = await readFile(file, "utf8");
@@ -437,8 +438,8 @@ export async function assertChannelReady(dir: string): Promise<void> {
     raw = await readFile(pkgPath, "utf8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      // `dir` is where the kit lives (agentDir when set) — "run init" is only the right advice when no
-      // workspace exists yet; a kit missing its manifest (e.g. a --minimal init) needs the manifest, not init.
+      // `dir` is the workspace root — "run init" is only the right advice when no workspace exists
+      // yet; a workspace missing its manifest (e.g. a --minimal init) needs the manifest, not init.
       throw new Error(
         `${dir}: no package.json — a channel adapter is code and needs the kit's own manifest. ` +
           `Run \`fastagent init\` for a fresh workspace, or add a package.json with @fastagent-sh/fastagent there ` +

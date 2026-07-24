@@ -31,7 +31,7 @@ Both ingress modes feed the same request/reply engine: the channel holds the app
 
 ## Add the channel
 
-From an agent workspace, first ensure `.env` is covered by `.gitignore` or `.fastagentignore` — both
+From an agent workspace, credentials land in `.secrets/.env` — the CLI makes the `.secrets/` dir self-gitignore before writing, so no ignore setup is needed; both
 commands refuse to write platform credentials into a committable file:
 
 ```bash
@@ -96,7 +96,7 @@ printed, so you can open it in the app or scan it as a QR code instead — and y
 creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
 pre-configured—and adds `im.message.receive_v1`. Onboarding requests
 `application:application:patch` when it must configure webhook mode or the recommended group-context
-scope. The CLI immediately persists App ID/Secret to the gitignored `.env` before starting later network
+scope. The CLI immediately persists App ID/Secret to the self-gitignored `.secrets/.env` before starting later network
 work.
 
 For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
@@ -126,7 +126,7 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
 3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose one mode:
    - **WebSocket:** choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
    - **Webhook:** choose webhook, copy the Verification Token, and optionally set an Encrypt Key.
-4. Put the matching credentials in the run-root `.env`:
+4. Put the matching credentials in the workspace `.secrets/.env`:
 
 ```bash
 # Both modes

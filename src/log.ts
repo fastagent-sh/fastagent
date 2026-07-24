@@ -22,7 +22,7 @@ const ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 const isLevel = (s: string): s is LogLevel => s in ORDER;
 const format = (level: LogLevel, msg: string): string => `${level.toUpperCase().padEnd(5)} ${msg}`;
 
-/** A standalone logger over an explicit sink — used in tests to assert level gating without the singleton. */
+/** An embedded logger over an explicit sink — used in tests to assert level gating without the singleton. */
 export function createLogger(opts: { level: LogLevel; sink?: (line: string) => void }): Logger {
   const sink = opts.sink ?? ((line) => console.error(line));
   const make =

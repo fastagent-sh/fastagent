@@ -57,14 +57,20 @@ export interface RailwayPlan {
 /** State root = the volume mount path, kept in lockstep. `/data` matches the Fly recipe. */
 const MOUNT = "/data";
 
+/** The `RAILWAY_DOCKERFILE_PATH` value for an embedded workspace — repo-root-anchored with a leading
+ *  slash, the form Railway's builds/dockerfiles docs use for a Dockerfile in another directory. The
+ *  config file's `dockerfilePath` spells it WITHOUT the slash (the config-as-code schema's own
+ *  convention); two mechanisms, two documented spellings, one exported fact each. */
+export const EMBEDDED_DOCKERFILE_PATH_VAR = "/.fastagent/Dockerfile";
+
 /** railway.json — build/deploy only (Railway's config-as-code scope). No env/volume/sleeping here: those
  *  are service settings the runbook applies via CLI. healthcheckPath gates routing on a live server. */
-function railwayJson(kitDir?: string): string {
+function railwayJson(embedded?: boolean): string {
   return `${JSON.stringify(
     {
       $schema: "https://railway.com/railway.schema.json",
-      // dockerfilePath is relative to the repo root (`railway up`'s upload context) in BOTH layouts.
-      build: { builder: "DOCKERFILE", dockerfilePath: kitDir ? `${kitDir}/Dockerfile` : "Dockerfile" },
+      // dockerfilePath is relative to the workbench root (`railway up`'s upload context) in BOTH layouts.
+      build: { builder: "DOCKERFILE", dockerfilePath: embedded ? ".fastagent/Dockerfile" : "Dockerfile" },
       deploy: { healthcheckPath: "/health", restartPolicyType: "ON_FAILURE" },
     },
     null,
@@ -75,12 +81,15 @@ function railwayJson(kitDir?: string): string {
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, modelAuth, channels } = input;
-  // Kit layout: railway.json is namespaced under the kit too (the host repo may carry its own
-  // railway.toml/json for the product). Railway reads config-as-code from the repo root by default,
-  // so the runbook adds the dashboard step that points the service at the kit's file (no CLI flag exists).
-  const configPath = input.kitDir ? `${input.kitDir}/railway.json` : "railway.json";
+  // Embedded: railway.json is namespaced under the workspace too (the host repo may carry its own
+  // railway.toml/json for the product). Railway reads config-as-code from the repo root by default and
+  // pointing it at a custom path is DASHBOARD-ONLY — so the BUILD entry travels as the scriptable
+  // RAILWAY_DOCKERFILE_PATH service variable instead (Railway's documented non-root-Dockerfile route),
+  // and the config-as-code pointer degrades to an OPTIONAL enhancement: the /health gate (Railway's
+  // default restart policy already matches the file's ON_FAILURE).
+  const configPath = input.embedded ? ".fastagent/railway.json" : "railway.json";
   const artifacts: Artifact[] = [
-    { path: configPath, content: railwayJson(input.kitDir) },
+    { path: configPath, content: railwayJson(input.embedded) },
     ...containerArtifacts(input),
   ];
 
@@ -109,11 +118,19 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# the later commands resolve it without --service (--run passes --service to stay non-interactive).`,
     `railway add --service ${serviceName}`,
     ``,
-    `# Persistent volume at ${MOUNT} — sessions, auth, channel state. FASTAGENT_STATE_DIR is set to match.`,
+    `# Persistent volume at ${MOUNT} — .state (sessions, channel state) + .secrets (seeded auth).`,
     `railway volume add --mount-path ${MOUNT}`,
     ``,
     `# Variables — set BEFORE the first deploy so the box boots with them. Railway injects PORT itself.`,
-    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}`,
+    ...(input.embedded
+      ? [
+          `# RAILWAY_DOCKERFILE_PATH points the build at the workspace's Dockerfile — a service variable,`,
+          `# Railway's documented route to a non-root Dockerfile (no dashboard step needed for the build).`,
+        ]
+      : []),
+    `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets${
+      input.embedded ? ` RAILWAY_DOCKERFILE_PATH=${EMBEDDED_DOCKERFILE_PATH_VAR}` : ""
+    }`,
   ];
 
   if (requiredSecrets.length > 0) {
@@ -142,12 +159,14 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     );
   }
 
-  if (input.kitDir) {
+  if (input.embedded) {
     runbook.push(
       ``,
-      `# Repo-as-workspace: point the service at the kit's config file BEFORE the first deploy —`,
-      `# dashboard-only, like App Sleeping (no CLI flag): Service → Settings → Config-as-code →`,
-      `# set the file path to ${configPath}. Without it Railway would read the repo root's own config.`,
+      `# OPTIONAL — embedded: the build already uses the workspace Dockerfile via RAILWAY_DOCKERFILE_PATH`,
+      `# (set above), and Railway's default restart policy equals what ${configPath} declares (ON_FAILURE).`,
+      `# Pointing the service at ${configPath} (Service → Settings → Config-as-code — dashboard-only) adds`,
+      `# the /health healthcheck gate: a boot-crashing deploy is marked FAILED instead of going live dead.`,
+      `# (Zero-downtime switching doesn't apply either way — the ${MOUNT} volume allows one active deployment.)`,
     );
   }
   runbook.push(
@@ -156,14 +175,22 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# also the ENTIRE redeploy: re-run \`railway up\` alone (the one-time setup above is not repeated).`,
     `railway up`,
   );
-  if (input.kitDir) {
+  if (input.shipsGit) {
     runbook.push(
       ``,
-      `# Write-back mechanics: git ships in the image and GH_TOKEN-style creds ride config.deploy.secrets;`,
-      `# the POLICY (push vs PR, identity, remote) lives in persona.md. CAVEAT — \`railway up\` is known to`,
-      `# strip .git from its upload, so expect NO baked history on the box: the agent should \`git clone\``,
-      `# its repo in the workspace (same token) before making changes. Un-pushed changes never survive a`,
-      `# redeploy — the image is a snapshot; durability lives in git.`,
+      `# The image is a WYSIWYG snapshot of this directory. Freshness/durability run through git, driven`,
+      `# by the agent itself (pull to freshen, commit/push to write back; creds ride config.deploy.secrets;`,
+      `# git is baked into the image). CAVEAT — \`railway up\` is known to strip .git from its upload:`,
+      `# expect NO baked history on the box; the agent should \`git clone\` its repo in the workbench`,
+      `# (same token) before making changes.`,
+      `# Un-pushed changes on the box never survive a redeploy; durability lives in git.`,
+    );
+  } else {
+    runbook.push(
+      ``,
+      `# The image is a WYSIWYG snapshot of this directory. No .git here, so no history ships and the`,
+      `# generated image does not install git — changes on the box are ephemeral and never survive a`,
+      `# redeploy. If the agent should clone/push repos as part of its work, add deploy: { apt: ["git"] }.`,
     );
   }
 

@@ -45,7 +45,7 @@ export default githubChannel({
 ## Configure GitHub
 
 1. Get a webhook secret. `fastagent add github` already generated one and wrote it to the run-root
-   `.env` when `.env` is gitignored; otherwise set one yourself:
+   `.secrets/.env` (the dir self-gitignores); otherwise set one yourself:
 
    ```bash
    GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 24)   # then put it in .env

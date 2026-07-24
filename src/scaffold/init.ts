@@ -1,17 +1,20 @@
 /**
  * Init: scaffold a runnable fastagent workspace, offline. Default = a COMPLETE agent (persona.md +
  * the writing-great-skills skill + a fetch-url code tool + fastagent.config.mjs + package.json +
- * .gitignore); `--minimal` drops the code tool and package.json. persona.md is the agent's identity
- * (prompt segment ①); an existing AGENTS.md is never written or touched — it is project context (②),
- * kept as-is. skills/ and tools/ are the agent's self-editable capabilities (re-read each turn).
+ * .gitignore + .secrets/); `--minimal` drops the code tool and package.json. persona.md is the agent's
+ * identity (prompt segment ①); an existing AGENTS.md is never written or touched — it is project
+ * context (②), kept as-is. skills/ and tools/ are the agent's self-editable capabilities (re-read each
+ * turn).
  *
- * Layout (the jurisdiction rule — core.md scenario grid): the agent kit goes FLAT into `dir` ("a
- * directory is an agent") UNLESS an existing system already CLAIMS the tree — a toolchain config that
- * sweeps files by pattern (tsconfig/framework configs), a deploy manifest (Dockerfile/fly/railway/…),
- * or fastagent's own convention names already occupied (non-empty tools//channels//skills/). Any such
- * signal → the kit defaults into `./agent` (its own namespace; `config.agentDir` points there), so the
- * host's toolchain and the agent's surface never sweep each other. {@link detectHostSignals} detects;
- * the CLI decides (flags override) and reports the reason.
+ * Layout (the jurisdiction rule — core.md scenario grid): ONE workspace shape, two placements. Flat:
+ * the shape lands directly in `dir` ("a directory is an agent"). Embedded: the WHOLE workspace —
+ * definition, config, `.secrets/`, machinery — nests into `<dir>/.fastagent/` and the host tree gets
+ * ZERO writes; the layout is structural (resolveWorkspace detects the `.fastagent/` root), never
+ * configured. Embedded is the default when an existing system already CLAIMS the tree — a toolchain
+ * config that sweeps files by pattern (tsconfig/framework configs), a deploy manifest
+ * (Dockerfile/fly/railway/…), or fastagent's own convention names already occupied (non-empty
+ * tools//channels//skills/). {@link detectHostSignals} detects; the CLI decides (flags override) and
+ * reports the reason.
  *
  * Scope: init is best-effort atomic for ORDINARY inputs — it never overwrites existing files,
  * preflights non-directory scaffold parents, and rolls back a partial write (one exception: the
@@ -22,11 +25,11 @@
  * this module writes are real templates under templates/, read through templates.ts.
  */
 import { access, appendFile, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
-import { WORKSPACE_CONFIG_NAMES } from "../engines/pi/config.ts";
+import { basename, dirname, join, relative } from "node:path";
+import { EMBEDDED_DIR, WORKSPACE_CONFIG_NAMES } from "../engines/pi/config.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { loadRootIgnore } from "../workspace.ts";
-import { baseTemplate, configTemplate, packageJson, personaTemplate, toPackageName } from "./templates.ts";
+import { baseTemplate, packageJson, personaTemplate, toPackageName } from "./templates.ts";
 import { fastagentVersion } from "../version.ts";
 
 interface ScaffoldFile {
@@ -38,25 +41,25 @@ export interface ScaffoldOptions {
   /** Scaffold the markdown-only unit (no package.json, no tool, no install) instead of a complete agent. */
   minimal?: boolean;
   /**
-   * Place the agent kit (persona.md/skills/tools/package.json) in this subdirectory (e.g. "./agent")
-   * instead of flat in `dir`; the config is written at the root with `agentDir` pointing there.
-   * Undefined = flat. The CLI decides (jurisdiction detection + flags); this stays mechanical.
+   * Nest the whole workspace into `<dir>/.fastagent/` (embedded) instead of flat in `dir`. The host
+   * tree gets ZERO writes. Undefined = flat. The CLI decides (jurisdiction detection + flags); this
+   * stays mechanical.
    */
-  agentDir?: string;
+  embedded?: boolean;
 }
 
 export interface ScaffoldResult {
   dir: string;
   /** Whether a complete (code-tool) agent was scaffolded (false for --minimal). */
   complete: boolean;
-  /** The kit subdirectory in effect (relative, e.g. "./agent"); undefined = flat. */
-  agentDir?: string;
+  embedded: boolean;
+  /** The workspace root relative to `dir`: "." (flat) or ".fastagent" (embedded). */
+  root: string;
   /** Files written by this run (relative paths). */
   created: string[];
   /** Files that already existed and were kept untouched (e.g. a pre-existing .gitignore). */
   skipped: string[];
-  /** Kept ignore files appended with missing fastagent excludes (root .gitignore: .env/.fastagent, plus
-   *  node_modules/ in the flat layout; kit .gitignore in the agentDir layout: node_modules/). */
+  /** Kept ignore files appended with missing fastagent excludes (flat only: node_modules/). */
   patched: string[];
   /** True if the target already had content before this run (init into an existing/non-empty dir). */
   intoNonEmpty: boolean;
@@ -74,15 +77,16 @@ const TOOLCHAIN_RE =
 const DEPLOY_RE = /^(Dockerfile|fly\.toml|railway\.toml|vercel\.json|netlify\.toml)$/;
 
 /**
- * Jurisdiction signals: evidence that an existing system already claims this tree, so a flat agent kit
+ * Jurisdiction signals: evidence that an existing system already claims this tree, so a flat workspace
  * would put each side's files under the other's jurisdiction (host tsc sweeps agent .ts; fastagent
  * scans host tools/). Three classes, derived from the actual failure modes — a toolchain config, a
- * deploy manifest, or fastagent's convention names already occupied. Any hit → the kit defaults into
- * `./agent`. Deliberately NOT signals: "dir is non-empty", "has package.json", "has src/" — markdown
- * and loose scripts are claimed by nobody, and "a directory is an agent" stays the default. Known
- * tradeoff, decided for visibility: a HAND-BUILT agent dir (skills//tools/ authored for the agent, no
- * config yet) also hits the occupation signal and defaults to ./agent — wrong for that case, but the
- * reason is printed and `--flat` overrides; the reverse default would silently mis-scan a host's dirs.
+ * deploy manifest, or fastagent's convention names already occupied. Any hit → the workspace defaults
+ * to embedded (`./.fastagent`). Deliberately NOT signals: "dir is non-empty", "has package.json",
+ * "has src/" — markdown and loose scripts are claimed by nobody, and "a directory is an agent" stays
+ * the default. Known tradeoff, decided for visibility: a HAND-BUILT agent dir (skills//tools/ authored
+ * for the agent, no config yet) also hits the occupation signal and defaults to embedded — wrong for
+ * that case, but the reason is printed and `--flat` overrides; the reverse default would silently
+ * mis-scan a host's dirs.
  */
 export async function detectHostSignals(dir: string): Promise<string[]> {
   // Only ENOENT/ENOTDIR mean "nothing there" (fresh dir → flat). A real IO failure (EACCES…) must
@@ -134,68 +138,70 @@ export async function exists(p: string): Promise<boolean> {
 /**
  * Scaffold a runnable workspace into {@link dir} (created if missing). Default is a complete agent
  * (persona.md + the writing-great-skills skill + a code tool + package.json); `--minimal` drops the
- * code tool and package.json. The kit goes flat into `dir`, or into {@link ScaffoldOptions.agentDir}
- * (config at the root pointing there). Refuses only an existing fastagent.config.* (the ownership
- * marker — already a workspace); every other pre-existing file (AGENTS.md, .gitignore, package.json)
- * is kept, never overwritten — an existing AGENTS.md is the project's context, adopted as-is.
+ * code tool and package.json. ONE workspace shape either way: flat lands it in `dir`, embedded nests
+ * the identical shape into `<dir>/.fastagent/` (zero host-tree writes). Refuses an existing
+ * fastagent.config.* at either root (the ownership marker — already a workspace); every other
+ * pre-existing file (AGENTS.md, .gitignore, package.json) is kept, never overwritten — an existing
+ * AGENTS.md is the project's context, adopted as-is.
  */
 export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
   const minimal = options.minimal ?? false;
-  const kit = options.agentDir ?? "."; // where the agent's own surface lands
+  const embedded = options.embedded ?? false;
+  const root = embedded ? EMBEDDED_DIR : ".";
   const skill = (name: string) => ({
-    rel: join(kit, "skills", "writing-great-skills", name),
+    rel: join(root, "skills", "writing-great-skills", name),
     content: baseTemplate(`skills/writing-great-skills/${name}`),
   });
   const files: ScaffoldFile[] = [
     // ① identity. AGENTS.md is deliberately NOT scaffolded: a fresh agent has no project context, and
-    // an existing repo already owns its AGENTS.md (kept untouched, read as ② context from cwd).
-    { rel: join(kit, "persona.md"), content: personaTemplate(options.agentDir) },
+    // an existing repo already owns its AGENTS.md (kept untouched, read as ② context from the workbench).
+    { rel: join(root, "persona.md"), content: personaTemplate(embedded) },
     // The example skill: how to author skills well — the core of self-iteration. Markdown, so it
     // ships in --minimal too. Vendored verbatim from mattpocock/skills (MIT); LICENSE sits beside it.
     skill("SKILL.md"),
     skill("GLOSSARY.md"),
     skill("LICENSE"),
-    // Run-root pieces: the config (carrying agentDir when the kit is a subdir), secrets hygiene, env template.
-    { rel: "fastagent.config.mjs", content: configTemplate(options.agentDir) },
-    { rel: ".gitignore", content: baseTemplate(options.agentDir ? "gitignore.agentdir-root" : "gitignore") },
-    { rel: ".env.example", content: baseTemplate("env.example") },
+    { rel: join(root, "fastagent.config.mjs"), content: baseTemplate("fastagent.config.mjs") },
+    { rel: join(root, ".gitignore"), content: baseTemplate("gitignore") },
+    // `.secrets/`: real values (.env, auth.json) live here, never committed; the template and the
+    // protection itself are un-ignored so both travel with the workspace (see templates).
+    { rel: join(root, ".secrets", ".env.example"), content: baseTemplate("env.example") },
+    { rel: join(root, ".secrets", ".gitignore"), content: baseTemplate("secrets.gitignore") },
   ];
   if (!minimal) {
     files.push(
-      { rel: join(kit, "tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") },
-      // The kit's own manifest: in the agentDir layout the agent self-contains its deps, so the host's
-      // package.json/lockfile is never touched. The name says WHOSE agent it is (the workspace's), not
-      // which subdirectory it happens to live in.
+      { rel: join(root, "tools", "fetch-url.ts"), content: baseTemplate("tools/fetch-url.ts") },
+      // The workspace's own manifest. The name says WHOSE agent it is (this directory's), not which
+      // subdirectory it happens to live in — an embedded workspace is named after its host dir.
       {
-        rel: join(kit, "package.json"),
-        content: packageJson(
-          options.agentDir ? `${toPackageName(dir)}-agent` : toPackageName(dir),
-          await fastagentVersion(),
-        ),
+        rel: join(root, "package.json"),
+        content: packageJson(embedded ? `${toPackageName(dir)}-agent` : toPackageName(dir), await fastagentVersion()),
       },
-      ...(options.agentDir ? [{ rel: join(kit, ".gitignore"), content: baseTemplate("gitignore.kit") }] : []),
     );
   }
 
-  // Guard on the ownership marker: a config means "already a fastagent workspace". Fail visibly
-  // rather than double-initialize. (AGENTS.md is NOT a marker — it is context, adopted untouched.)
+  // Guard on the ownership marker: a config at EITHER root means "already a fastagent workspace" —
+  // fail visibly rather than double-initialize or create the ambiguous both-roots shape.
+  // (AGENTS.md is NOT a marker — it is context, adopted untouched.)
   const conflicts: string[] = [];
-  for (const name of WORKSPACE_CONFIG_NAMES) if (await exists(join(dir, name))) conflicts.push(name);
+  for (const name of WORKSPACE_CONFIG_NAMES) {
+    if (await exists(join(dir, name))) conflicts.push(name);
+    if (await exists(join(dir, EMBEDDED_DIR, name))) conflicts.push(join(EMBEDDED_DIR, name));
+  }
   if (conflicts.length > 0) {
     throw new Error(`"${dir}" already has ${conflicts.join(", ")} — already a fastagent workspace`);
   }
 
-  // Never merge the kit into an existing NON-EMPTY directory (a host repo may own an unrelated `agent/`
-  // — common in AI products): wx would keep its files, but persona.md/skills/ landing inside someone
-  // else's code dir is a silent mix. Refuse with the way out. Dotfiles (.DS_Store, .gitkeep) don't
-  // count — same rule as detectHostSignals' occupation check. A SYMLINKED kit path slips past this
+  // Embedded: never merge into an existing NON-EMPTY `.fastagent/` — with no config inside it is
+  // either machine state from an older fastagent layout or something unrelated; landing persona.md
+  // beside it would be a silent mix. Refuse with the way out. A SYMLINKED `.fastagent` slips past this
   // readdir (it follows links) — deliberate: the parent preflight below lstat-rejects it before any write.
-  if (options.agentDir) {
-    const occupants = (await readdir(join(dir, kit)).catch(() => [] as string[])).filter((f) => !f.startsWith("."));
+  if (embedded) {
+    const occupants = (await readdir(join(dir, root)).catch(() => [] as string[])).filter((f) => f !== ".DS_Store");
     if (occupants.length > 0) {
       throw new Error(
-        `"${kit}" already exists and is not empty — if it is unrelated to the agent, pick another name ` +
-          `(--agent-dir <name>) or go flat (--flat); to adopt it as the kit, empty it first`,
+        `"${join(basename(dir), EMBEDDED_DIR)}" already exists and is not empty (state from an older ` +
+          `fastagent, or something unrelated) — move it away first, or scaffold flat elsewhere (--flat)`,
       );
     }
   }
@@ -244,51 +250,24 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
       }
     }
 
-    // Ignore ownership follows layout jurisdiction. Run-root state/secrets live at `dir`, so the ROOT
-    // .gitignore owns `.env` + `.fastagent`. The kit's npm deps live where the kit lives: flat → root
-    // `node_modules/`; agentDir → `<agentDir>/.gitignore` owns its own `node_modules/`. This avoids
-    // patching a host repo's root ignore with agent-internal dependency paths while still preventing the
-    // post-init 25k-file untracked flood.
-    const coveredBy = (ig: Awaited<ReturnType<typeof loadRootIgnore>> | undefined, p: string) =>
-      (ig?.ignores(p) ?? false) || (ig?.ignores(`${p}/`) ?? false);
-    const rootIgnore = await loadRootIgnore(dir);
-    const rootRequired = [
-      { path: ".env", pattern: ".env" },
-      { path: ".fastagent", pattern: ".fastagent" },
-      ...(!minimal && !options.agentDir ? [{ path: "node_modules", pattern: "node_modules/" }] : []),
-    ];
-    const rootNeed = rootRequired.filter((e) => !coveredBy(rootIgnore, e.path));
-    if (rootNeed.length > 0) {
-      await appendFile(join(dir, ".gitignore"), `\n# fastagent\n${rootNeed.map((e) => e.pattern).join("\n")}\n`);
-      patched.push(".gitignore");
-      // A .fastagentignore is applied LAST and can re-include what .gitignore excludes — the append
-      // cannot fix that, so re-check and keep it a visible warning instead of false assurance.
-      const after = await loadRootIgnore(dir);
-      const still = rootNeed.filter((e) => !coveredBy(after, e.path)).map((e) => e.path);
-      if (still.length > 0) {
-        warnings.push(
-          `your .gitignore/.fastagentignore does not exclude ${still.map((s) => `"${s}"`).join(", ")} — a deploy that copies the directory may ship secrets/state`,
-        );
-      }
-    }
-    if (!minimal && options.agentDir) {
-      // Deliberately checks ONLY the kit's own ignore, not the root: the kit is the portable agent
-      // directory, and its dependency ignore must travel WITH it (a fresh kit .gitignore carries
-      // node_modules/ unconditionally for the same reason) — a root-level `node_modules/` that happens
-      // to cover it today doesn't survive the kit being copied out of the host repo.
-      const kitIgnore = await loadRootIgnore(join(dir, kit));
-      if (!coveredBy(kitIgnore, "node_modules")) {
-        const rel = join(kit, ".gitignore");
-        await appendFile(join(dir, rel), `\n# fastagent\nnode_modules/\n`);
-        patched.push(rel);
+    // A KEPT workspace-root .gitignore (flat init into an adapted dir) may lack the dependency
+    // exclude — patch only what a complete agent actually needs (node_modules/). Machinery dirs need
+    // no root entries: `.secrets/` and `.state/` carry their own self-ignoring .gitignore (the ONE
+    // mechanism — see definition.ts), which git's nested-ignore precedence makes authoritative.
+    const rootAbs = join(dir, root);
+    const rootGitignoreRel = join(root, ".gitignore");
+    if (!minimal && skipped.includes(rootGitignoreRel)) {
+      const ig = await loadRootIgnore(rootAbs);
+      if (!(ig?.ignores("node_modules") || ig?.ignores("node_modules/"))) {
+        await appendFile(join(dir, rootGitignoreRel), `\n# fastagent\nnode_modules/\n`);
+        patched.push(rootGitignoreRel);
       }
     }
     // A kept package.json won't carry the tool's deps — the example tool would not resolve. The install
     // command matches the workspace's runtime (bun.lock → bun add).
-    const keptPkg = join(kit, "package.json");
+    const keptPkg = join(root, "package.json");
     if (!minimal && skipped.includes(keptPkg)) {
-      const kitAbs = join(dir, kit);
-      const add = detectRuntime(kitAbs, await readPackageJson(kitAbs)).runtime === "bun" ? "bun add" : "npm install";
+      const add = detectRuntime(rootAbs, await readPackageJson(rootAbs)).runtime === "bun" ? "bun add" : "npm install";
       warnings.push(
         `kept the existing ${keptPkg} — run \`${add} @fastagent-sh/fastagent\` there so the example tool resolves`,
       );
@@ -299,5 +278,5 @@ export async function scaffoldWorkspace(dir: string, options: ScaffoldOptions = 
     for (const rel of created.reverse()) await rm(join(dir, rel), { force: true }).catch(() => {});
     throw error;
   }
-  return { dir, complete: !minimal, agentDir: options.agentDir, created, skipped, patched, intoNonEmpty, warnings };
+  return { dir, complete: !minimal, embedded, root, created, skipped, patched, intoNonEmpty, warnings };
 }

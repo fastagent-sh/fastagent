@@ -56,13 +56,13 @@ fastagent info
 
 `info` is read-only. It prints the model, persona, context files (`AGENTS.md`), skills, discovered tools, channels, diagnostics, and session path without starting a server.
 
-**Initializing inside an existing project?** When the directory is already claimed by a toolchain or deploy setup (a `tsconfig.json`/framework config, a non-JS build manifest like `go.mod`/`pyproject.toml`/`Cargo.toml`, a `Dockerfile`/`fly.toml`/`railway.toml`, or occupied `tools/`, `channels/`, or `skills/`), `init` puts the agent kit into `./agent` instead of flat, writes `agentDir: "./agent"` into the config, and prints the reason — the host's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. Override with `--flat` or `--agent-dir <name>`.
+**Initializing inside an existing project?** When the directory is already claimed by a toolchain or deploy setup (a `tsconfig.json`/framework config, a non-JS build manifest like `go.mod`/`pyproject.toml`/`Cargo.toml`, a `Dockerfile`/`fly.toml`/`railway.toml`, or occupied `tools/`, `channels/`, or `skills/`), `init` nests the WHOLE workspace into `./.fastagent/` instead of flat (embedded — zero files at the host root; the layout is structural, detected from the directory shape, never configured) and prints the reason — the host's build and the agent's surface never sweep each other, and the repo's own `AGENTS.md` is read as project context. Override with `--flat` or `--embedded`.
 
 A fresh workspace presets no model. On the first `fastagent dev` (or `start` / `invoke`) in a
 terminal, FastAgent shows the full model catalog — models whose provider already has credentials (a
 stored login, or a provider API key in your env/`.env`) come first, annotated with the source; picking
 one that needs auth runs the login flow right there — and writes your pick back to
-`fastagent.config.mjs`. Credentials are stored per project (`<cwd>/.fastagent/auth.json`, no global
+`fastagent.config.mjs`. Credentials are stored per project (`<workspace>/.secrets/auth.json`, no global
 fallback), so a login from another directory is invisible here. To set the model non-interactively
 (or in CI/deploy, where there is no prompt):
 
@@ -98,7 +98,7 @@ data: {"type":"tool_ended","id":"tool-1","isError":false,"content":{"details":{"
 data: {"type":"completed"}
 ```
 
-Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `.fastagent/sessions`), so a dev restart keeps conversation history.
+Reuse the same `session` value to continue a conversation. Local sessions persist under `<state root>/sessions` (default `.state/sessions`), so a dev restart keeps conversation history.
 
 ## 4. Try authoring loops
 

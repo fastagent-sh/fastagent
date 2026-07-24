@@ -168,10 +168,10 @@ describe("invoke handler (Fetch/SSE)", () => {
   });
 });
 
-describe("nodeListener (standalone server bridge)", () => {
+describe("nodeListener (embedded server bridge)", () => {
   async function startServer(agent: Agent) {
     const handler = createInvokeHandler(agent);
-    // Mirror cli.ts serve(): standalone routing lives in the composition root.
+    // Mirror cli.ts serve(): embedded routing lives in the composition root.
     const server = createServer(
       nodeListener(async (req) => {
         if (new URL(req.url).pathname !== "/invoke") {

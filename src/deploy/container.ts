@@ -1,8 +1,15 @@
 /**
  * The portable container — Dockerfile + .dockerignore, host-neutral. Every deploy target ships these
  * unchanged; only the host config (fly.toml / railway.json) and the CLI sequence differ. The image
- * runs `fastagent start /app` on `$PORT` with state under `$FASTAGENT_STATE_DIR` — standard container
- * conventions, no host coupling. Extracted from the Fly plan when Railway became the second target.
+ * runs `fastagent start /app` on `$PORT` with machinery under `$FASTAGENT_STATE_DIR` /
+ * `$FASTAGENT_SECRETS_DIR` — standard container conventions, no host coupling.
+ *
+ * ONE deploy semantic for both layouts: bake the WORKBENCH as the image (`COPY . .` — what you see is
+ * what ships). Flat: workbench = the workspace. Embedded: workbench = the host tree, with the
+ * workspace at `./.fastagent` — the resolver in the image finds it exactly like dev does, so the two
+ * layouts share this generator end to end; the only differences are where deps install (`/app` vs
+ * `/app/.fastagent`) and where the Dockerfile itself lives (namespaced under `.fastagent/` so it never
+ * collides with the host repo's own).
  */
 
 export interface Artifact {
@@ -38,52 +45,14 @@ export interface ContainerInput {
   version: string;
   /** Extra apt packages (fastagent.config deploy.apt) baked in for the agent's tools — git, ripgrep, …. */
   apt?: string[];
-  /**
-   * Repo-as-workspace layout: the agent kit's subdirectory relative to the repo root (e.g. "agent" —
-   * `config.agentDir` resolved). When set, the image bakes the WHOLE repo as the agent's cwd (§11 bake
-   * decision), installs the KIT's deps (not the host's — the agent installs those in its workspace at
-   * runtime when its job needs them), ships `.git` (write-back via commit/push needs it), and the
-   * artifacts are namespaced under the kit so they never collide with the host repo's own
-   * Dockerfile/.dockerignore. The runtime facts (hasPackageJson/runtime/hasLockfile) describe the KIT.
-   */
-  kitDir?: string;
-}
-
-/** The repo-as-workspace Dockerfile: bake the repo as cwd, install the kit's deps, run from the kit. */
-function kitDockerfile(input: ContainerInput, kit: string): string {
-  const apt = aptLayer(input.apt);
-  if (!input.hasPackageJson) {
-    // Markdown-only kit: no deps to install — the pinned global CLI serves the repo directly.
-    return `${GENERATED_DOCKERFILE_MARKER}. Repo-as-workspace: the whole repo is the agent's cwd; the kit lives in ${kit}/.
-FROM node:22-slim
-${apt}WORKDIR /app
-RUN npm i -g @fastagent-sh/fastagent@${input.version}
-COPY . .
-CMD ["fastagent", "start", "/app"]
-`;
-  }
-  const isBun = input.runtime === "bun";
-  const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : "node:22-slim";
-  const head = `${GENERATED_DOCKERFILE_MARKER}. Repo-as-workspace: the whole repo is the agent's cwd; the kit lives in ${kit}/.
-# Only the KIT's deps are installed — the host repo's own deps are the agent's runtime concern (it can
-# install them in its workspace when its job needs them). .git IS shipped: write-back needs it.
-FROM ${base}
-${apt}WORKDIR /app
-`;
-  if (isBun) {
-    const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
-    return `${head}COPY ${kit}/package.json ${kit}/bun.lock* ./${kit}/
-RUN cd ${kit} && ${install}
-COPY . .
-CMD ["sh", "-c", "cd ${kit} && bun run fastagent start /app"]
-`;
-  }
-  const install = input.hasLockfile ? "npm ci" : "npm install";
-  return `${head}COPY ${kit}/package.json ${kit}/package-lock.json* ./${kit}/
-RUN cd ${kit} && ${install}
-COPY . .
-CMD ["./${kit}/node_modules/.bin/fastagent", "start", "/app"]
-`;
+  /** Embedded layout: the workspace lives at `./.fastagent` inside the baked workbench. The runtime
+   *  facts above (hasPackageJson/runtime/hasLockfile) describe THE WORKSPACE (its package.json drives
+   *  the image's install step), never the host repo's — whose manifest belongs to the host's own deploy. */
+  embedded?: boolean;
+  /** Whether the baked workbench ships a `.git` (preflight fact). When true, preflight has already
+   *  merged "git" into `apt` (the write-back loop needs history + binary together); the plans word
+   *  their runbook's freshness/write-back guidance from the same fact. */
+  shipsGit?: boolean;
 }
 
 /** The apt layer (cached right after FROM). Debian default repos only. */
@@ -97,6 +66,12 @@ function aptLayer(packages?: string[]): string {
 }
 
 function dockerfile(input: ContainerInput): string {
+  // The workspace prefix inside the image: deps install (and the local bin lives) here. undefined =
+  // flat (the workspace IS /app) — the emitted lines then carry no noisy "./." segments.
+  const ws = input.embedded ? ".fastagent" : undefined;
+  const layoutNote = input.embedded
+    ? `Embedded: the whole directory is the agent's workbench; the workspace lives in .fastagent/.`
+    : `The directory IS the agent — no build step.`;
   // apt layer right after FROM (cached across code changes): the agent's tools may shell out to git etc.,
   // which node:22-slim lacks. Debian default repos only — a package needing a custom repo (gh) or a
   // different base is the operator's own Dockerfile (kept if present). deploy.apt is package-name-validated.
@@ -107,7 +82,7 @@ function dockerfile(input: ContainerInput): string {
   // otherwise select a bun base here and crash the `npm i -g` build). input.runtime is meaningful only
   // for a code workspace, so the bun-vs-node base below is scoped to that path.
   if (!input.hasPackageJson) {
-    return `${GENERATED_DOCKERFILE_MARKER}. The directory IS the agent — no build step.
+    return `${GENERATED_DOCKERFILE_MARKER}. ${layoutNote}
 # npm-based (a markdown/skills agent installs the pinned CLI globally; node:22-slim has npm).
 FROM node:22-slim
 ${apt}WORKDIR /app
@@ -121,7 +96,7 @@ CMD ["fastagent", "start", "/app"]
   const note = isBun
     ? "# Bun-based (packageManager: bun / a bun lockfile detected). fastagent runs under Bun (bun run)."
     : "# npm-based — for pnpm/yarn, adapt the install line + the lockfile COPY (corepack enable, etc.).";
-  const head = `${GENERATED_DOCKERFILE_MARKER}. The directory IS the agent — no build step.
+  const head = `${GENERATED_DOCKERFILE_MARKER}. ${layoutNote}
 ${note}
 FROM ${base}
 ${apt}WORKDIR /app
@@ -129,6 +104,8 @@ ${apt}WORKDIR /app
   // Install ALL deps (no --omit=dev / --production): a repo-as-agent (e.g. an Astro site it operates on)
   // needs its full toolchain — the build/check tools that live in devDependencies — to do its work, and
   // we can't tell a repo-as-agent from a purpose-built workspace, so the safe default keeps everything.
+  // Embedded installs ONLY the workspace's deps — the host repo's own deps are the agent's runtime
+  // concern (it can install them in its workbench when its job needs them).
   if (isBun) {
     // `--frozen-lockfile` needs bun.lock and hard-fails without it; fall back to a plain `bun install`
     // (resolves at build time — not reproducible; the CLI warns to commit the lockfile).
@@ -136,6 +113,13 @@ ${apt}WORKDIR /app
     // `bunx fastagent` would fall back to installing the npm package named `fastagent`, which is an
     // unrelated third-party package (ours is the scoped @fastagent-sh/fastagent).
     const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
+    if (ws) {
+      return `${head}COPY ${ws}/package.json ${ws}/bun.lock* ./${ws}/
+RUN cd ${ws} && ${install}
+COPY . .
+CMD ["sh", "-c", "cd ${ws} && bun run fastagent start /app"]
+`;
+    }
     return `${head}COPY package.json bun.lock* ./
 RUN ${install}
 COPY . .
@@ -150,6 +134,13 @@ CMD ["bun", "run", "fastagent", "start", "/app"]
   // `fastagent` when the dep is absent — an unrelated third-party package (ours is scoped). The local
   // path fails fast and visibly instead.
   const install = input.hasLockfile ? "npm ci" : "npm install";
+  if (ws) {
+    return `${head}COPY ${ws}/package.json ${ws}/package-lock.json* ./${ws}/
+RUN cd ${ws} && ${install}
+COPY . .
+CMD ["./${ws}/node_modules/.bin/fastagent", "start", "/app"]
+`;
+  }
   return `${head}COPY package.json package-lock.json* ./
 RUN ${install}
 COPY . .
@@ -158,51 +149,45 @@ CMD ["./node_modules/.bin/fastagent", "start", "/app"]
 }
 
 /** Patterns are RECURSIVE (`**​/`) on purpose — dockerignore patterns are root-anchored (unlike
- *  .gitignore), and a repo-as-agent can hold nested projects: a bare `node_modules` would upload their
- *  build-machine deps (macOS binaries!) and a bare `.env` would bake their secrets into the image.
- *  `.git` stays root-anchored: nested projects' own `.git` ships (the agent's write-back needs it). */
+ *  .gitignore), and a baked workbench can hold nested projects: a bare `node_modules` would upload
+ *  their build-machine deps (macOS binaries!) and a bare `.env` would bake their secrets into the
+ *  image. `.secrets`/`.state`/`.cache` are fastagent machinery — secrets travel through the host's
+ *  secret store, state lives on the volume, cache is re-derivable; NONE of it may enter an image.
+ *  `.git` is deliberately SHIPPED: the deployed agent's write-back (pull/commit/push) needs the
+ *  repo's history+remote — the WYSIWYG bake's freshness/durability loop runs through git, driven by
+ *  the agent itself, not by deploy machinery. Shipping `.git` is only half of that loop: preflight
+ *  bakes the git BINARY into the generated image iff the workbench ships a `.git` (layout-neutral,
+ *  the `shipsGit` fact); a non-git workbench that still needs git declares config.deploy.apt. */
 const DOCKERIGNORE = `**/node_modules
-**/.fastagent
+**/.secrets
+**/.state
+**/.cache
 **/.env
 **/.env.*
 !**/.env.example
 **/*.log
-# .git is excluded to keep the image small. If your agent runs git on its OWN history
-# (git log/blame over the repo it ships in), delete the next line so that history is in the image.
-.git
-`;
-
-/** The kit-layout ignore: `.git` is deliberately NOT excluded (write-back wants it — though whether it
- *  survives is host-CLI-dependent; see containerArtifacts). Patterns are RECURSIVE (`**​/`) on purpose —
- *  dockerignore patterns are root-anchored (unlike .gitignore), so a bare `node_modules` would NOT
- *  exclude `agent/node_modules`: the build machine's kit deps (macOS binaries!) would be uploaded by
- *  `COPY . .` and clobber the image's freshly-installed linux ones. */
-const KIT_DOCKERIGNORE = `**/node_modules
-**/.fastagent
-**/.env
-**/.env.*
-!**/.env.example
-**/*.log
-# .git is DELIBERATELY shipped: the agent's write-back (commit/push) needs the repo's history+remote.
+# .git is deliberately shipped: the agent can pull to freshen content and push its work back
+# (the generated image installs the git binary when this directory ships a .git; otherwise
+# add deploy.apt ["git"]). For a smaller image with no git needs, add a ".git" line here.
 `;
 
 /**
- * The Dockerfile + ignore artifacts — spread into any host's artifact list. Kit layout ({@link
- * ContainerInput.kitDir}): the Dockerfile is namespaced under the kit (`agent/Dockerfile`) so it never
- * collides with the host repo's own. The ignore ships in TWO forms because context packing is
- * host-CLI-owned and inconsistent: (1) a ROOT `.dockerignore` — the only form flyctl/railway's own
- * context packers reliably read (kept if the host already has one — preflight then warns specifically
- * about a .git exclude / missing recursive node_modules) — and (2) a
- * per-Dockerfile `agent/Dockerfile.dockerignore` for plain docker/buildx builds. Whether `.git`
- * actually reaches the box is host-CLI-dependent (some strip it from the upload regardless of any
- * ignore file) — the runbook's write-back note carries the runtime-clone fallback.
+ * The Dockerfile + ignore artifacts — spread into any host's artifact list. Embedded: the Dockerfile
+ * is namespaced under the workspace (`.fastagent/Dockerfile`) so it never collides with the host
+ * repo's own. The ignore ships in TWO forms because context packing is host-CLI-owned and
+ * inconsistent: (1) a ROOT `.dockerignore` — the only form flyctl/railway's own context packers
+ * reliably read (kept if the host already has one — preflight then warns specifically about the
+ * machinery/secret excludes it must carry) — and (2) a per-Dockerfile
+ * `.fastagent/Dockerfile.dockerignore` for plain docker/buildx builds. This root file is the ONE
+ * host-tree write the embedded layout ever makes, and only at deploy time — without it the host
+ * CLI's packer would bake `.secrets/` into the image, which is never acceptable.
  */
 export function containerArtifacts(input: ContainerInput): Artifact[] {
-  if (input.kitDir) {
+  if (input.embedded) {
     return [
-      { path: `${input.kitDir}/Dockerfile`, content: kitDockerfile(input, input.kitDir) },
-      { path: ".dockerignore", content: KIT_DOCKERIGNORE },
-      { path: `${input.kitDir}/Dockerfile.dockerignore`, content: KIT_DOCKERIGNORE },
+      { path: ".fastagent/Dockerfile", content: dockerfile(input) },
+      { path: ".dockerignore", content: DOCKERIGNORE },
+      { path: ".fastagent/Dockerfile.dockerignore", content: DOCKERIGNORE },
     ];
   }
   return [

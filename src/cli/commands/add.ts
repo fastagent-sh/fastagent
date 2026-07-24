@@ -9,7 +9,8 @@ import { isCancel, select } from "@clack/prompts";
 import { onboardFeishuCloudApp } from "../add-feishu.ts";
 import type { FeishuSubscriptionMode } from "../../channels/feishu/setup-mode.ts";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir, resolveStateRoot } from "../../engines/pi/config.ts";
+import { resolveSecretsDir, resolveStateRoot, resolveWorkspace } from "../../engines/pi/config.ts";
+import { ensureSecretsDirSelfIgnored } from "../../engines/pi/definition.ts";
 import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
@@ -24,8 +25,7 @@ import {
 } from "../../scaffold/add-channel.ts";
 import { exists } from "../../scaffold/init.ts";
 import { vendorSkill } from "../../scaffold/vendor-skill.ts";
-import { loadRootIgnore } from "../../workspace.ts";
-import { failStartup, failUsage } from "../fail.ts";
+import { failStartup, failStartupOn, failUsage } from "../fail.ts";
 
 /** `fastagent add <kind> [dir]`: scaffold `channels/<kind>.ts` — the adapter import plus a starter `on()`. */
 export async function runAddChannel(
@@ -33,7 +33,9 @@ export async function runAddChannel(
   dirArg: string,
   opts: { createApp?: boolean; ingress?: string; groupBehavior?: string; onboard?: boolean; replaceConfig?: boolean },
 ): Promise<void> {
-  const target = resolve(dirArg);
+  // The channel (glue + companion tool + secrets) is workspace surface — everything lands at the
+  // workspace ROOT (`.fastagent/` when embedded), the same place dev/start discover channels/.
+  const { root: target } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
   if (opts.replaceConfig && opts.onboard === false) {
     failUsage("--replace-config replaces onboarding credentials; it cannot be combined with --no-onboard");
   }
@@ -53,11 +55,7 @@ export async function runAddChannel(
       failStartup(new Error("--create-app is retired — app creation is the default behavior of `add feishu`"));
     }
   }
-  // The channel (glue + companion tool) is agent surface — it lands in agentDir (config.agentDir, or
-  // target when flat), the same place dev/start discover channels/. .env(.example) and the secret
-  // hygiene stay at the run root, where .env is actually read.
-  const { config: addConfig } = await loadConfig(target).catch(failStartup);
-  const channelHome = resolveAgentDir(target, addConfig);
+  const channelHome = target;
   // Preconditions before the write, so a refusal is side-effect-free. slack/feishu/lark are exceptions:
   // their add is scaffold + ONBOARD THE APP, so an existing scaffold skips the write and continues (a
   // failed/cancelled app or OAuth flow must be re-runnable without hand-deleting authored glue).
@@ -83,18 +81,13 @@ export async function runAddChannel(
     }
   }
   if (await appendChannelEnv(target, channelKind, ingress).catch(failStartup)) {
-    console.error(`[fastagent] added ${channelKind} env vars to .env.example`);
+    console.error(`[fastagent] added ${channelKind} env vars to .secrets/.env.example`);
   }
   // Secret hygiene: a channel's GENERATED secret (a random string the user contributes nothing to) is
-  // written into `.env` — but only when `.env` is already gitignored: the CLI must never materialize a
-  // secret into a committable file. Warn, not refuse, when it is exposed — channel glue may read a real
-  // env var instead.
-  const envIgnored = (await loadRootIgnore(target).catch(failStartup))?.ignores(".env") ?? false;
-  if (!envIgnored) {
-    console.error(
-      `[fastagent] warn: .env is not gitignored — a deploy that copies the directory would ship a secret placed there; add .env to .gitignore/.fastagentignore, or use a real env var`,
-    );
-  }
+  // written into `.secrets/.env` — make the secrets dir exist and self-ignore FIRST, so the CLI never
+  // materializes a secret into a committable file (the nested .gitignore is authoritative over any
+  // root-level negation — git's nested-ignore precedence).
+  await ensureSecretsDirSelfIgnored(target, resolveSecretsDir(target)).catch(failStartup);
   // Stateful app onboarding is re-runnable after the scaffold boundary. Slack's internal-app path
   // persists its manifest/OAuth recovery state separately and writes runtime secrets directly.
   let created: Record<string, string> | undefined;
@@ -103,21 +96,20 @@ export async function runAddChannel(
     created = await onboardSlackInternalApp({
       target,
       stateRoot: resolveStateRoot(target),
-      envIgnored,
       groupBehavior,
       replaceConfig: opts.replaceConfig,
     })
       .then(() => undefined)
       .catch(failStartup);
   } else if (channelKind === "feishu" || channelKind === "lark") {
-    created = await onboardFeishuCloudApp(target, channelKind, envIgnored, ingress, groupBehavior).catch(failStartup);
+    created = await onboardFeishuCloudApp(target, channelKind, ingress, groupBehavior).catch(failStartup);
   }
   const setup = channelSetup(channelKind, ingress, groupBehavior.behavior);
   const env = setup.env;
   const steps =
     channelKind === "slack" && opts.onboard !== false
       ? [
-          "Slack internal app created/configured/installed through OAuth; runtime credentials are in .env",
+          "Slack internal app created/configured/installed through OAuth; runtime credentials are in .secrets/.env",
           "run fastagent dev --tunnel to replace the temporary Events API URL automatically",
           "invite the app to every channel it should read",
           "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
@@ -129,41 +121,36 @@ export async function runAddChannel(
   // Kind-neutral: every channel's generated secrets get the same treatment (github's webhook secret is
   // the same class of value as telegram's); guided Lark credentials ride the same write as overwrites.
   // Feishu's irreversible credentials were already staged inside add-feishu.ts before bootstrap.
-  const dotEnv = envIgnored
-    ? await appendChannelDotEnv(
-        target,
-        channelKind,
-        { ...generated, ...created },
-        Object.keys(created ?? {}),
-        ingress,
-      ).catch(failStartup)
-    : undefined;
-  if (dotEnv && dotEnv.written.length > 0) {
-    console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .env`);
+  const dotEnv = await appendChannelDotEnv(
+    target,
+    channelKind,
+    { ...generated, ...created },
+    Object.keys(created ?? {}),
+    ingress,
+  ).catch(failStartup);
+  if (dotEnv.written.length > 0) {
+    console.error(`[fastagent] wrote ${dotEnv.written.join(", ")} to .secrets/.env`);
   }
   const install =
     detectRuntime(channelHome, await readPackageJson(channelHome)).runtime === "bun" ? "bun install" : "npm install";
-  // The kit's manifest lives in channelHome (agentDir when set) — point the install there, not the run root.
-  const installCmd = channelHome === target ? install : `(cd ${relative(target, channelHome)} && ${install})`;
   console.error(`  next steps:`);
-  console.error(`    ${installCmd}                      # if @fastagent-sh/fastagent is not installed yet`);
+  console.error(`    ${install}                      # if @fastagent-sh/fastagent is not installed yet`);
   for (const e of env) {
-    if (dotEnv?.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
-    if (dotEnv?.written.includes(e.name)) {
+    if (dotEnv.alreadySet.includes(e.name)) continue; // the user already has it — nothing to do
+    if (dotEnv.written.includes(e.name)) {
       // Written, but its hint may still carry an action (github: paste the same value into the webhook
       // UI) — keep the variable visible instead of silently absorbing it.
-      console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to .env   # ${e.hint}`);
+      console.error(`    ${e.name} — ${e.generate ? "generated and " : ""}written to .secrets/.env   # ${e.hint}`);
       continue;
     }
     const value = e.generate ? `=${generated[e.name]}` : "";
     const action = e.required ? "set" : "optionally set";
-    console.error(`    ${action} ${e.name}${value} in .env${envIgnored ? " (gitignored)" : ""}   # ${e.hint}`);
+    console.error(`    ${action} ${e.name}${value} in .secrets/.env   # ${e.hint}`);
   }
   // Steps carry `{channel}`/`{tools}` path placeholders (their filenames are the scaffold's private
-  // knowledge) — resolve them to the real workspace-relative locations (agentDir-aware) here.
-  const kitPrefix = channelHome === target ? "" : `${relative(target, channelHome)}/`;
+  // knowledge) — resolve them to the real workspace-root-relative locations here.
   for (const s of steps) {
-    console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", `${kitPrefix}tools`)}`);
+    console.error(`    ${s.replace("{channel}", relative(target, file)).replace("{tools}", "tools")}`);
   }
   if (ingress === "websocket") {
     console.error(`    fastagent dev            # no public URL or tunnel required`);
@@ -287,7 +274,7 @@ export async function runAddSkill(
   dirArg: string,
   opts: { update?: boolean },
 ): Promise<void> {
-  const target = resolve(dirArg);
+  const { root: target } = failStartupOn(() => resolveWorkspace(resolve(dirArg)));
   if (!source) {
     // A missing source is a usage error (exit 2), but the guide is worth more than a bare
     // missing-argument line — the common path (writing your own skill) needs no command at all.
@@ -302,10 +289,8 @@ export async function runAddSkill(
         `     --update overwrites an existing skill (re-fetch from source); review with git diff`,
     );
   }
-  // Skills are agent surface — vendored into agentDir/skills (config.agentDir, or target when flat).
-  const { config: skillConfig } = await loadConfig(target).catch(failStartup);
-  const skillHome = resolveAgentDir(target, skillConfig);
-  const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(skillHome, source, {
+  // Skills are workspace surface — vendored into `<root>/skills` (`.fastagent/skills` when embedded).
+  const { name, description, dest, hasScripts, diagnostics, overwritten } = await vendorSkill(target, source, {
     update: opts.update ?? false,
   }).catch(failStartup);
   console.error(`[fastagent] ${overwritten ? "updated" : "vendored"} skill "${name}" → ${dest}/`);

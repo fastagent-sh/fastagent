@@ -215,28 +215,25 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
     }
   });
 
-  it("resolves config.agentDir: persona/tools from agentDir, ② context walked from cwd", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-chat-agentdir-"));
+  it("resolves the embedded layout: persona/tools from .fastagent/, ② context walked from the workbench", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-chat-embedded-"));
     try {
-      await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at cwd
+      await writeFile(join(dir, "AGENTS.md"), "HOST_CTX_MARKER. Repo conventions.\n"); // ② at the workbench
+      const root = join(dir, ".fastagent");
+      await mkdir(join(root, "tools"), { recursive: true });
+      await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
+      await writeFile(join(root, "persona.md"), "You are PERSONA_MARKER bot.\n"); // ① in the workspace root
       await writeFile(
-        join(dir, "fastagent.config.mjs"),
-        `export default { agentDir: "./agent", model: "openai-codex/gpt-5.5" };\n`,
-      );
-      const agentDir = join(dir, "agent");
-      await mkdir(join(agentDir, "tools"), { recursive: true });
-      await writeFile(join(agentDir, "persona.md"), "You are PERSONA_MARKER bot.\n"); // ① in agentDir
-      await writeFile(
-        join(agentDir, "tools", "foo.mjs"),
+        join(root, "tools", "foo.mjs"),
         `export default { description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: {} }) };`,
       );
 
       const rt = await buildWorkspaceSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         const sp = rt.session.agent.state.systemPrompt ?? "";
-        expect(sp).toContain("PERSONA_MARKER"); // ① persona from agentDir
-        expect(sp).toContain("HOST_CTX_MARKER"); // ② context walked from cwd (run root)
-        expect(rt.session.agent.state.tools.map((t) => t.name)).toContain("foo"); // tool from agentDir
+        expect(sp).toContain("PERSONA_MARKER"); // ① persona from the workspace root
+        expect(sp).toContain("HOST_CTX_MARKER"); // ② context walked from the workbench
+        expect(rt.session.agent.state.tools.map((t) => t.name)).toContain("foo"); // tool from the workspace root
       } finally {
         rt.session.dispose?.();
       }
@@ -273,14 +270,14 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
     }
   });
 
-  it("wires auth to the workspace credential file (not ~/.pi) and self-ignores the state root", async () => {
+  it("wires auth to the workspace credential file (not ~/.pi) and self-ignores the secrets dir", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sb-auth-"));
     try {
       await writeFile(join(dir, "fastagent.config.mjs"), `export default { model: "openai-codex/gpt-5.5" };\n`);
       // A credential in the PROJECT-level auth.json — the same file dev/start/login use.
-      await mkdir(join(dir, ".fastagent"), { recursive: true });
+      await mkdir(join(dir, ".secrets"), { recursive: true });
       await writeFile(
-        join(dir, ".fastagent", "auth.json"),
+        join(dir, ".secrets", "auth.json"),
         `${JSON.stringify({ openai: { type: "api_key", key: "sk-test" } })}\n`,
       );
 
@@ -289,9 +286,9 @@ describe("session builder: buildWorkspaceSessionRuntime injects fastagent's asse
         // The session's model hub reads the workspace store: the stored credential is visible.
         const creds = await rt.session.modelRuntime.listCredentials();
         expect(creds.some((c) => c.providerId === "openai" && c.type === "api_key")).toBe(true);
-        // The state root is leak-safe on this path too: pi's /login writes auth.json here, so the
+        // The secrets dir is leak-safe on this path too: pi's /login writes auth.json here, so the
         // shared front half must have self-ignored it (the serving opener's guard, now shared).
-        expect(existsSync(join(dir, ".fastagent", ".gitignore"))).toBe(true);
+        expect(existsSync(join(dir, ".secrets", ".gitignore"))).toBe(true);
       } finally {
         rt.session.dispose?.();
       }

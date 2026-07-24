@@ -18,7 +18,7 @@ export type Routes = Record<string, ChannelHandler>;
 
 /**
  * What the framework hands a channel at mount time: the assembled agent plus the resolved state ROOT
- * (absolute; `FASTAGENT_STATE_DIR` > `<dir>/.fastagent`). Channels derive their OWN durable home from
+ * (absolute; `FASTAGENT_STATE_DIR` > `<root>/.state`). Channels derive their OWN durable home from
  * it (`<stateRoot>/channels/<kind>/`) — they never anchor on `process.cwd()`. env is the OPERATOR
  * input plane; this context is how the resolved result reaches code (embedders without the workspace
  * opener construct it explicitly).

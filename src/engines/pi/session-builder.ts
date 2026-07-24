@@ -17,7 +17,7 @@
  *               the model surface equals serving's `createPiModels()` — pi's machine-global
  *               models.json does not leak in.
  *   - auth    → fastagent's credential store at the workspace auth path (same resolution as the
- *               serving opener: `--auth-path`/`FASTAGENT_AUTH_PATH`, else `<stateRoot>/auth.json`).
+ *               serving opener: `--auth-path`/`FASTAGENT_AUTH_PATH`, else `<root>/.secrets/auth.json`).
  *               pi's TUI `/login` writes through the injected store into the SAME file, so `fastagent
  *               login` and chat share one credential lifecycle. pi's `~/.pi` auth is not consulted.
  *
@@ -70,7 +70,7 @@ export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
   /** Credentials file override (the CLI --auth-path flag). Precedence: this > FASTAGENT_AUTH_PATH >
-   *  the workspace default `<stateRoot>/auth.json`. */
+   *  the workspace default `<root>/.secrets/auth.json`. */
   authPath?: string;
 }
 
@@ -118,7 +118,7 @@ export async function buildWorkspaceSessionRuntime(
   }
 
   async function resolveAssembly(cwd: string) {
-    // The shared front half — the SAME config/model-spec/agentDir/tool/auth resolution the serving
+    // The shared front half — the SAME layout/config/model-spec/tool/auth resolution the serving
     // opener uses (workspace.ts); those inputs cannot drift between the two consumption shapes.
     // (Definition→prompt assembly is NOT shared: serving re-reads live per invoke, this runtime is a
     // startup snapshot and pi appends skills/env itself — see the header.) `tools` arrives with
@@ -127,7 +127,7 @@ export async function buildWorkspaceSessionRuntime(
     // on the session in createRuntime — pi's session starts all-active), and the activation bridge
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
     // instead of fastagent's harness.
-    const { config, modelSpec, agentDir, authPath, tools, deferredToolNames, toolCollisions, toolFailures } =
+    const { config, modelSpec, root, authPath, tools, deferredToolNames, toolCollisions, toolFailures } =
       await resolveWorkspaceAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
@@ -150,7 +150,7 @@ export async function buildWorkspaceSessionRuntime(
     }
     const model = resolveModel(modelRuntime, modelSpec);
     const env = new NodeExecutionEnv({ cwd });
-    const definition = await loadAgentDefinition(agentDir, { cwd, env });
+    const definition = await loadAgentDefinition(root, { cwd, env });
     reportDefinitionWarnings(definition.collisions, definition.diagnostics);
     const defaultNames = piDefaultTools(cwd).map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));

@@ -89,7 +89,8 @@ primary_region = "iad"  # set your region (list: \`fly platform regions\`)
 [build]
 
 [env]
-  FASTAGENT_STATE_DIR = "/data"  # the ONE machine-state root — auth, sessions, channel state
+  FASTAGENT_STATE_DIR = "/data/.state"      # mutable machine state — sessions, channel state, schedule
+  FASTAGENT_SECRETS_DIR = "/data/.secrets"  # seeded (and rotated) credentials — must persist across restarts
   PORT = "${port}"
 
 [http_service]
@@ -101,7 +102,7 @@ ${min}
 
 [mounts]
   source = "data"
-  destination = "/data"            # FASTAGENT_STATE_DIR — persists across stop/suspend/redeploy
+  destination = "/data"            # .state + .secrets — persists across stop/suspend/redeploy
 
 [[vm]]
   size = "shared-cpu-1x"
@@ -111,11 +112,12 @@ ${min}
 
 /** Compute the Fly deploy plan from the resolved definition. */
 export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
-  const { appName, port, modelAuth, channels, kitDir } = input;
-  // Kit layout: every artifact is namespaced under the kit (agent/fly.toml, agent/Dockerfile) so the
-  // host repo's own deploy files are never touched; the runbook passes explicit -c/--dockerfile flags
-  // (unambiguous across flyctl versions — no reliance on config-relative path resolution).
-  const flyTomlPath = kitDir ? `${kitDir}/fly.toml` : "fly.toml";
+  const { appName, port, modelAuth, channels, embedded } = input;
+  // Embedded: every artifact is namespaced under the workspace (.fastagent/fly.toml,
+  // .fastagent/Dockerfile) so the host repo's own deploy files are never touched; the runbook passes
+  // explicit -c/--dockerfile flags (unambiguous across flyctl versions — no reliance on
+  // config-relative path resolution).
+  const flyTomlPath = embedded ? ".fastagent/fly.toml" : "fly.toml";
   const artifacts: Artifact[] = [
     {
       path: flyTomlPath,
@@ -140,8 +142,8 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
   const requiredSecrets = secrets.filter((secret) => secret.required);
   const optionalSecrets = secrets.filter((secret) => !secret.required);
 
-  const deployCmd = kitDir
-    ? `fly deploy . --config ${kitDir}/fly.toml --dockerfile ${kitDir}/Dockerfile --app ${appName}`
+  const deployCmd = embedded
+    ? `fly deploy . --config .fastagent/fly.toml --dockerfile .fastagent/Dockerfile --app ${appName}`
     : `fly deploy --app ${appName}`;
   const runbook: string[] = [
     `# Deploy "${appName}" to Fly.io. ${flyTomlPath} / Dockerfile(.dockerignore) are generated above.`,
@@ -151,7 +153,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     `# Fly app names are GLOBALLY unique: if this fails as taken, set a unique "app" in fly.toml and`,
     `# re-run \`fastagent deploy fly\` — the runbook follows fly.toml's app name.`,
     `fly apps create ${appName}`,
-    `# volume persists FASTAGENT_STATE_DIR=/data (sessions, auth, channel state) across stop/suspend/redeploy.`,
+    `# volume persists /data/.state (sessions, channel state) + /data/.secrets (seeded auth) across stop/suspend/redeploy.`,
     `# <region> MUST equal primary_region in fly.toml (a volume in another region can't mount) — fly.toml`,
     `# is the single source for the region; skip this if the volume exists (fly volumes list --app ${appName}):`,
     `fly volumes create data --app ${appName} --region <region> --size 1`,
@@ -173,24 +175,31 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       `# fly secrets set --app ${appName} ${optionalSecrets.map((s) => `${s.name}=<value>`).join(" ")}`,
     );
   }
-  if (kitDir) {
+  if (embedded) {
     runbook.push(
       ``,
-      `# Repo-as-workspace: the build context is the REPO ROOT (the whole repo is the agent's cwd); the`,
-      `# config/Dockerfile live under ${kitDir}/ so they never collide with the repo's own deploy files.`,
-      `# Run this from the repo root:`,
+      `# Embedded workspace: the build context is the WORKBENCH ROOT (the whole directory is baked as`,
+      `# the agent's cwd); the config/Dockerfile live under .fastagent/ so they never collide with the`,
+      `# host repo's own deploy files. Run this from the workbench root:`,
     );
   }
   runbook.push(deployCmd);
-  if (kitDir) {
+  if (input.shipsGit) {
     runbook.push(
       ``,
-      `# Write-back mechanics: git ships in the image and GH_TOKEN-style creds ride config.deploy.secrets;`,
-      `# the POLICY (push vs PR, identity, remote) lives in persona.md. CAVEAT — whether .git survives is`,
-      `# host-CLI-dependent (some context packers strip it from the upload): verify \`git status\` on the`,
-      `# box after the first deploy; if it is missing, have the agent \`git clone\` its repo in the`,
-      `# workspace instead (same token). Un-pushed changes never survive a redeploy — the image is a`,
-      `# snapshot; durability lives in git.`,
+      `# The image is a WYSIWYG snapshot of this directory. Freshness/durability run through git, driven`,
+      `# by the agent itself: .git ships in the image (see .dockerignore) and git is baked in, so the agent`,
+      `# can pull to freshen content and commit/push its work back (creds ride config.deploy.secrets; the`,
+      `# POLICY — push vs PR, identity — lives in persona.md). CAVEAT: whether .git survives the upload is`,
+      `# host-CLI-dependent — verify \`git status\` on the box; if missing, have the agent clone instead.`,
+      `# Un-pushed changes on the box never survive a redeploy; durability lives in git.`,
+    );
+  } else {
+    runbook.push(
+      ``,
+      `# The image is a WYSIWYG snapshot of this directory. No .git here, so no history ships and the`,
+      `# generated image does not install git — changes on the box are ephemeral and never survive a`,
+      `# redeploy. If the agent should clone/push repos as part of its work, add deploy: { apt: ["git"] }.`,
     );
   }
 
@@ -203,7 +212,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
       modelAuth === undefined
         ? `# Model auth: none found at the local auth path — a global \`fastagent login\` isn't read here; pass --auth-path <file> (e.g. ~/.fastagent/auth.json), or \`--run\` carries it automatically.`
         : `# Model auth: your local auth is "${modelAuth}" — the plan can't read its value to set as a secret.`,
-      `#   Set your provider API key as a Fly secret (fly secrets set KEY=...), OR place auth.json on the /data volume.`,
+      `#   Set your provider API key as a Fly secret (fly secrets set KEY=...), OR place auth.json at /data/.secrets/ on the volume.`,
     );
   }
 

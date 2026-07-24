@@ -23,6 +23,20 @@ export function failStartup(error: unknown): never {
 }
 
 /**
+ * Run a SYNC startup step under the startup-failure policy — the synchronous sibling of the
+ * `.catch(failStartup)` every async chain carries. Layout resolution (`resolveWorkspace`) runs before
+ * any promise exists; a bare call would surface its user-fixable refusal (the ambiguous-layout error)
+ * as a raw uncaught stack instead of the one-line `Error:` + exit 1 every other startup problem gets.
+ */
+export function failStartupOn<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (error) {
+    failStartup(error);
+  }
+}
+
+/**
  * A usage error the parser could not catch (a bad value shape, an invalid flag/argument combination
  * discovered in a command body): print the message and exit 2 — the same class as a parse error.
  * Exit codes follow responsibility, not the layer that happens to discover the problem.

@@ -4,7 +4,7 @@ import { devWatchIgnored } from "../src/dev-supervisor.ts";
 
 describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
   const root = join("/work", "agent");
-  const ignored = devWatchIgnored(root, root); // flat: agentDir === cwd
+  const ignored = devWatchIgnored(root);
 
   it("watches exactly the process-bound code inputs", () => {
     expect(ignored(root)).toBe(false); // the root itself must not be pruned
@@ -14,9 +14,15 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
     expect(ignored(join(root, "schedules", "daily.ts"))).toBe(false); // loaded once per worker — restart is the re-read
     expect(ignored(join(root, "package.json"))).toBe(false);
-    expect(ignored(join(root, ".env"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.mjs"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
+  });
+
+  it(".secrets/.env is a code input (credentials are process-bound); the rest of .secrets is not", () => {
+    expect(ignored(join(root, ".secrets"))).toBe(false); // the dir itself: descend, don't prune
+    expect(ignored(join(root, ".secrets", ".env"))).toBe(false); // the trigger
+    expect(ignored(join(root, ".secrets", "auth.json"))).toBe(true); // rewritten by refresh — no restart
+    expect(ignored(join(root, ".secrets", ".env.example"))).toBe(true);
   });
 
   it("ignores the definition (live-read per invoke) and anything the agent writes as work product", () => {
@@ -25,7 +31,7 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "skills", "house-style", "SKILL.md"))).toBe(true);
     expect(ignored(join(root, "report.md"))).toBe(true); // agent work product
     expect(ignored(join(root, "out"))).toBe(true); // pruned as a directory — its subtree costs nothing
-    expect(ignored(join(root, ".fastagent"))).toBe(true);
+    expect(ignored(join(root, ".state"))).toBe(true);
     expect(ignored(join(root, "node_modules"))).toBe(true);
     expect(ignored(join(root, ".git"))).toBe(true);
   });
@@ -35,20 +41,15 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "docs", ".env"))).toBe(true);
   });
 
-  it("agentDir subdir: the agent's tools/channels are watched; the host repo's own dirs are ignored", () => {
-    const cwd = "/repo";
-    const agentDir = join(cwd, "agent");
-    const ig = devWatchIgnored(cwd, agentDir);
-    expect(ig(agentDir)).toBe(false); // must descend into agentDir to reach its tools/
-    expect(ig(join(agentDir, "tools", "foo.ts"))).toBe(false); // the agent's tool → restart
-    expect(ig(join(agentDir, "channels", "telegram.ts"))).toBe(false);
-    expect(ig(join(agentDir, "schedules", "daily.ts"))).toBe(false);
-    expect(ig(join(agentDir, "package.json"))).toBe(false);
-    expect(ig(join(agentDir, "persona.md"))).toBe(true); // live-read, no restart
-    expect(ig(join(agentDir, "skills", "x", "SKILL.md"))).toBe(true);
-    expect(ig(join(cwd, "tools", "hostonly.ts"))).toBe(true); // the HOST repo's tools/, NOT the agent's
-    expect(ig(join(cwd, "src", "app.tsx"))).toBe(true); // host source ignored
-    expect(ig(join(cwd, ".env"))).toBe(false); // run-root .env still watched
-    expect(ig(join(cwd, "fastagent.config.mjs"))).toBe(false); // run-root config still watched
+  it("embedded: the watch root IS the workspace root — the host tree never enters the scope", () => {
+    // The supervisor watches resolveWorkspace().root (= <host>/.fastagent), so host files are
+    // structurally out of scope: they are never passed to the matcher at all. Within the root the
+    // same rules apply as flat — one shape, one matcher.
+    const embeddedRoot = join("/repo", ".fastagent");
+    const ig = devWatchIgnored(embeddedRoot);
+    expect(ig(embeddedRoot)).toBe(false);
+    expect(ig(join(embeddedRoot, "tools", "foo.ts"))).toBe(false);
+    expect(ig(join(embeddedRoot, "persona.md"))).toBe(true); // live-read, no restart
+    expect(ig(join(embeddedRoot, ".secrets", ".env"))).toBe(false);
   });
 });

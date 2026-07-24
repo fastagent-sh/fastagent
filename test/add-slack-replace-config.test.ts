@@ -3,7 +3,7 @@
  * (select is never shown), replace ONLY the local App Configuration token pair, and fail visibly
  * when there is no local onboarding state to repair.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,7 +54,8 @@ describe("add slack --replace-config", () => {
 
   beforeEach(async () => {
     target = await mkdtemp(join(tmpdir(), "fa-slack-rc-"));
-    stateRoot = join(target, ".fastagent");
+    stateRoot = join(target, ".state");
+    await mkdir(join(target, ".secrets"), { recursive: true });
     prompts.passwordAnswers.length = 0;
     prompts.select.mockClear();
     // isTTY is a plain data property (undefined under vitest) — assign, restore in afterEach.
@@ -73,7 +74,6 @@ describe("add slack --replace-config", () => {
     onboardSlackInternalApp({
       target,
       stateRoot,
-      envIgnored: true,
       groupBehavior: { behavior: "context", explicit: false },
       replaceConfig: true,
     });
@@ -87,7 +87,7 @@ describe("add slack --replace-config", () => {
   });
 
   it("installed app: skips the menu, replaces only the config token pair, leaves runtime credentials alone", async () => {
-    await writeFile(join(target, ".env"), RUNTIME_ENV);
+    await writeFile(join(target, ".secrets", ".env"), RUNTIME_ENV);
     await writeSlackOnboardingState(stateRoot, {
       version: 1,
       appName: "App",
@@ -107,11 +107,11 @@ describe("add slack --replace-config", () => {
     expect(state.configRefreshToken).toBe("xoxe-new");
     expect(state.appId).toBe("A1");
     expect(state.installedAt).toBe("2026-01-01T00:00:00.000Z");
-    expect(await readFile(join(target, ".env"), "utf8")).toBe(RUNTIME_ENV); // untouched
+    expect(await readFile(join(target, ".secrets", ".env"), "utf8")).toBe(RUNTIME_ENV); // untouched
   });
 
   it("installed app: rejects a token pair with the wrong prefixes", async () => {
-    await writeFile(join(target, ".env"), RUNTIME_ENV);
+    await writeFile(join(target, ".secrets", ".env"), RUNTIME_ENV);
     await writeSlackOnboardingState(stateRoot, {
       version: 1,
       appName: "App",

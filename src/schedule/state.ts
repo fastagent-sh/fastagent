@@ -3,7 +3,7 @@
  * files, atomic (tmp+rename) so a crash never leaves a torn file:
  *  - `fires.json` — schedule name → last-fired ISO (durability for the cron catch-up-once);
  *  - `wakeups.json` — the agent's pending self-scheduled one-shot wake-ups (wakeups.ts).
- * The root state dir already self-ignores (`.fastagent/.gitignore`), so no per-dir .gitignore.
+ * The root state dir already self-ignores (`.state/.gitignore`), so no per-dir .gitignore.
  *
  * ponytail: this atomic read/write duplicates channels/telegram/state.ts's primitive (both KB-JSON
  * tmp+rename). Extract a neutral src/state.ts and have both import it when a third consumer appears.

@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -71,14 +72,30 @@ describe("channel setup guidance", () => {
 });
 
 describe("appendChannelDotEnv", () => {
+  it("writes to the RESOLVED secrets dir — FASTAGENT_SECRETS_DIR moves the .env target with the protection", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-env-move-"));
+    const secrets = await mkdtemp(join(tmpdir(), "fa-env-external-"));
+    process.env.FASTAGENT_SECRETS_DIR = secrets;
+    try {
+      const r = await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "s" });
+      expect(r.written).toContain("GITHUB_WEBHOOK_SECRET");
+      expect(await readFile(join(secrets, ".env"), "utf8")).toContain("GITHUB_WEBHOOK_SECRET=s");
+      // Nothing lands at the workspace default — the write and the leak protection target ONE dir.
+      expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
+    } finally {
+      delete process.env.FASTAGENT_SECRETS_DIR;
+    }
+  });
+
   it("keeps existing values by default; overwrite names replace stale lines IN PLACE (fresh credentials must not lose)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-env-"));
-    await writeFile(join(dir, ".env"), "LARK_APP_ID=cli_old\nLARK_APP_SECRET=old_secret\n");
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "LARK_APP_ID=cli_old\nLARK_APP_SECRET=old_secret\n");
 
     // Default: existing non-empty values win, the new ones are dropped as alreadySet.
     let r = await appendChannelDotEnv(dir, "lark", { LARK_APP_ID: "cli_new", LARK_APP_SECRET: "s2" });
     expect(r.alreadySet).toEqual(expect.arrayContaining(["LARK_APP_ID", "LARK_APP_SECRET"]));
-    expect(await readFile(join(dir, ".env"), "utf8")).toContain("LARK_APP_ID=cli_old");
+    expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toContain("LARK_APP_ID=cli_old");
 
     // Overwrite: `add feishu`'s create flow just minted these — the stale line loses, in place (no duplicate
     // assignment that last-wins would then shadow).
@@ -87,7 +104,7 @@ describe("appendChannelDotEnv", () => {
       "LARK_APP_SECRET",
     ]);
     expect(r.written).toEqual(expect.arrayContaining(["LARK_APP_ID", "LARK_APP_SECRET"]));
-    const content = await readFile(join(dir, ".env"), "utf8");
+    const content = await readFile(join(dir, ".secrets", ".env"), "utf8");
     expect(content).toContain("LARK_APP_ID=cli_new");
     expect(content).toContain("LARK_APP_SECRET=s2");
     expect(content).not.toContain("cli_old");
@@ -96,7 +113,8 @@ describe("appendChannelDotEnv", () => {
 
   it("persists irreversible Feishu credentials in stages so an interrupted bootstrap can resume", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-env-staged-"));
-    await writeFile(join(dir, ".env"), "FEISHU_VERIFICATION_TOKEN=stale-other-app-token\n");
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "FEISHU_VERIFICATION_TOKEN=stale-other-app-token\n");
 
     await appendChannelDotEnv(
       dir,
@@ -108,14 +126,14 @@ describe("appendChannelDotEnv", () => {
       },
       ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
     );
-    const interrupted = await readFile(join(dir, ".env"), "utf8");
+    const interrupted = await readFile(join(dir, ".secrets", ".env"), "utf8");
     expect(interrupted).toContain("FEISHU_APP_ID=cli_new");
     expect(interrupted).toContain("FEISHU_APP_SECRET=one-time-secret");
     expect(interrupted).not.toContain("stale-other-app-token");
     expect(interrupted).not.toContain("FEISHU_VERIFICATION_TOKEN=token-1");
 
     await appendChannelDotEnv(dir, "feishu", { FEISHU_VERIFICATION_TOKEN: "token-1" }, ["FEISHU_VERIFICATION_TOKEN"]);
-    const completed = await readFile(join(dir, ".env"), "utf8");
+    const completed = await readFile(join(dir, ".secrets", ".env"), "utf8");
     expect(completed).toContain("FEISHU_APP_ID=cli_new");
     expect(completed).toContain("FEISHU_APP_SECRET=one-time-secret");
     expect(completed).toContain("FEISHU_VERIFICATION_TOKEN=token-1");

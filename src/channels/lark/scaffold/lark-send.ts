@@ -6,7 +6,7 @@ import { defineTool, z } from "@fastagent-sh/fastagent";
 // context line in a chat turn; a scheduled turn has no such line, so the schedule's prompt must name
 // the target chat id. tools/ is auto-discovered.
 
-// Standalone copy of the channel transport's discipline: a timeout so a wedged connection can't hang
+// Embedded copy of the channel transport's discipline: a timeout so a wedged connection can't hang
 // the tool call (and the turn), named errors, and success gated on the body's own code===0.
 // Deliberately NO rate-limit retry — a tool error goes back to the agent, which can decide to retry;
 // fail-fast beats a silently sleeping tool.

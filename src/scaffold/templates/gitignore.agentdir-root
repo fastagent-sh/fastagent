@@ -1,5 +1,0 @@
-# secrets — never commit (kept out of git and any deploy copy)
-.env
-
-# fastagent machine state (dev/start sessions + project-level auth.json credentials)
-.fastagent/

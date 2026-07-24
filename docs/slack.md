@@ -53,7 +53,7 @@ The command then:
 3. enables Slack's irreversible `agent_view`, native Agent streams/tasks, suggested prompts, the writable Messages tab, scopes, and Events API subscriptions;
 4. opens [Slack OAuth v2](https://docs.slack.dev/authentication/installing-with-oauth/), validates its `state`, exchanges the code, and installs into one workspace;
 5. writes the Signing Secret plus the rotating bot access/refresh token, expiry, OAuth client ID, and
-   client secret to the gitignored run-root `.env`.
+   client secret to the workspace `.secrets/.env`.
 
 App creation is an irreversible persisted boundary. If OAuth is cancelled or the process stops afterward,
 re-run `fastagent add slack`; it resumes the same App rather than creating another. Once installed, run:

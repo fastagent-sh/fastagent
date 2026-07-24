@@ -14,8 +14,9 @@ async function workspace(files: Record<string, string> = {}): Promise<string> {
 
 const call = (target: string, config: FastagentConfig, over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
   preflightDeploy({
-    target,
-    agentDir: target, // flat by default; a test overrides via `over` to exercise config.agentDir
+    root: target,
+    workbench: target, // flat by default; a test overrides via `over` to exercise the embedded layout
+    embedded: false,
     config,
     modelSpec: config.model,
     run: false,
@@ -33,45 +34,100 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (!pre.ok) expect(pre.gate).toMatch(/fastagent\.config/);
   });
 
-  it("agentDir layout: container facts come from the KIT, git is auto-baked, --run stays gated", async () => {
-    const dir = await workspace({ "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n` });
-    const agentDir = join(dir, "agent");
-    await mkdir(agentDir, { recursive: true });
-    await writeFile(
-      join(agentDir, "package.json"),
-      `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
+  it("embedded layout: container facts come from the WORKSPACE, git auto-baked (the workbench ships .git), --run works", async () => {
+    const host = await workspace();
+    await mkdir(join(host, ".git")); // the workbench is a git repo — the image gets the git binary
+    const root = join(host, ".fastagent");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+    await writeFile(join(root, "package.json"), `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`);
+
+    const ok = await call(
+      root,
+      { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } },
+      {
+        workbench: host,
+        embedded: true,
+        run: true, // embedded is a first-class layout — --run is NOT gated
+      },
     );
-
-    // The whole repo-as-workspace shape is experimental for every automated runner, including Docker.
-    const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { agentDir, run: true });
-    expect(gated.ok).toBe(false);
-    if (!gated.ok) expect(gated.gate).toMatch(/--run is not yet supported for the agentDir layout/);
-
-    // Generate mode remains supported: kit facts drive the image, git rides in apt, and the runbook is explicit.
-    const ok = await call(dir, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } }, { agentDir });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
-      expect(ok.container.kitDir).toBe("agent");
-      expect(ok.container.hasPackageJson).toBe(true); // the KIT's manifest, not the (absent) root one
-      expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git guaranteed, deploy.apt kept, deduped
-      expect(JSON.stringify(ok.messages)).toMatch(/repo-as-workspace/); // the layout note is stated
+      expect(ok.container.embedded).toBe(true);
+      expect(ok.container.hasPackageJson).toBe(true); // the WORKSPACE's manifest, not the (absent) host one
+      expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git baked (workbench ships .git), deploy.apt kept, deduped
+      expect(JSON.stringify(ok.messages)).toMatch(/embedded image/); // the layout note is stated
     }
   });
 
-  it("kit layout + a kept host .dockerignore: specific warns for a .git exclude and a missing **/node_modules", async () => {
-    const dir = await workspace({ "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n` });
-    const agentDir = join(dir, "agent");
-    await mkdir(agentDir, { recursive: true });
-    await writeFile(join(agentDir, "package.json"), `{"type":"module"}`);
-    await writeFile(join(dir, ".dockerignore"), ".git\nnode_modules\n"); // the host's own — kept, not ours
+  it("git is baked iff the baked workbench ships a .git — a non-git dir gets no silent git layer", async () => {
+    // No .git: only the author's declared packages reach the image (history without a binary is a
+    // dead loop; a binary without history is dead weight — deploy.apt is the explicit escape hatch).
+    const noGit = await workspace();
+    const pre = await call(noGit, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.container.shipsGit).toBe(false);
+      expect(pre.container.apt).toEqual(["ripgrep"]);
+    }
 
-    const pre = await call(dir, { model: "openai/gpt-4o-mini" }, { agentDir });
+    // .git present (flat layout too — the rule is layout-neutral): git rides in.
+    const gitDir = await workspace();
+    await mkdir(join(gitDir, ".git"));
+    const pre2 = await call(gitDir, { model: "openai/gpt-4o-mini" });
+    expect(pre2.ok).toBe(true);
+    if (pre2.ok) {
+      expect(pre2.container.shipsGit).toBe(true);
+      expect(pre2.container.apt).toEqual(["git"]);
+    }
+  });
+
+  it("a kept workbench .dockerignore: warns for missing secret/machinery excludes and **/node_modules; notes a .git exclude", async () => {
+    const host = await workspace();
+    const root = join(host, ".fastagent");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+    await writeFile(join(root, "package.json"), `{"type":"module"}`);
+    await writeFile(join(host, ".dockerignore"), ".git\nnode_modules\n"); // the host's own — kept, not ours
+
+    const pre = await call(root, { model: "openai/gpt-4o-mini" }, { workbench: host, embedded: true });
     expect(pre.ok).toBe(true);
     if (pre.ok) {
       const text = JSON.stringify(pre.messages);
-      expect(text).toMatch(/excludes \.git/); // write-back's baked copy is dead — named, not silent
+      expect(text).toMatch(/BAKE SECRETS INTO THE IMAGE/); // missing .secrets/.env excludes — the critical one
+      expect(text).toMatch(/lacks .{0,4}\*\*\/\.state/); // machine state would ship
       expect(text).toMatch(/lacks .{0,4}\*\*\/node_modules/); // the native-binary clobber hazard — named
+      expect(text).toMatch(/excludes \.git/); // pull\/push loop dead — named as a note
     }
+  });
+
+  it("--run gates on a kept .dockerignore that would bake secrets or drop the embedded workspace", async () => {
+    // Missing **/.secrets and **/.env excludes: warn generate-only (asserted above), GATE under --run —
+    // a full deploy must not push a secret-laden image (same discipline as the model-travel gate).
+    const host = await workspace();
+    const root = join(host, ".fastagent");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+    await writeFile(join(host, ".dockerignore"), "node_modules\n");
+    const gated = await call(root, { model: "openai/gpt-4o-mini" }, { workbench: host, embedded: true, run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/BAKE SECRETS/);
+
+    // A rule matching .fastagent on an embedded deploy: the context ships WITHOUT the agent — the
+    // whole deploy is meaningless (crash-loop with no persona/config), so gate regardless of where the
+    // rule came from (a legacy generated file carried `**/.fastagent`; a hand-written exclude hits the
+    // same wall).
+    await writeFile(join(host, ".dockerignore"), "**/.fastagent\n**/.secrets\n**/.env\n");
+    const noAgent = await call(root, { model: "openai/gpt-4o-mini" }, { workbench: host, embedded: true, run: true });
+    expect(noAgent.ok).toBe(false);
+    if (!noAgent.ok) expect(noAgent.gate).toMatch(/WITHOUT the agent workspace/);
+
+    // A later `!` negation defeats a matching exclude — the conservative matcher reads it as NOT
+    // covered (a false warn beats a false all-clear) → still gates.
+    await writeFile(join(host, ".dockerignore"), "**/.secrets\n!**/.secrets\n**/.env\n");
+    const negated = await call(root, { model: "openai/gpt-4o-mini" }, { workbench: host, embedded: true, run: true });
+    expect(negated.ok).toBe(false);
+    if (!negated.ok) expect(negated.gate).toMatch(/\*\*\/\.secrets/);
   });
 
   it("warns (not gates) about the same model issue without --run", async () => {

@@ -5,7 +5,7 @@
  * can read and override.
  */
 import { spawn } from "node:child_process";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { detectHostSignals, nextStepCd, scaffoldWorkspace } from "../../scaffold/init.ts";
 import { failStartup, failUsage } from "../fail.ts";
 
@@ -14,71 +14,62 @@ export interface InitOptions {
   /** false ⇔ `--no-install`. */
   install: boolean;
   flat: boolean;
-  agentDir?: string;
+  embedded: boolean;
 }
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
-  let agentDir: string | undefined;
+  if (opts.flat && opts.embedded) failUsage("--flat and --embedded are mutually exclusive");
+  let embedded = opts.embedded;
   let signals: string[] = [];
-  if (opts.agentDir) {
-    // Same containment contract loadConfig enforces on config.agentDir: an escaping value would write
-    // the kit outside the workspace AND produce a config that can never load — refuse up front.
-    // POSIX-normalized: this lands verbatim in the generated config (agentDir: "./a/b") and the persona
-    // locator note — a Windows `relative()` would write backslashes into both.
-    const rel = relative(dir, resolve(dir, opts.agentDir)).split(sep).join("/");
-    if (rel === "" || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) {
-      // An invalid flag VALUE is a usage error (exit 2), same class as a value the parser rejects.
-      failUsage(`--agent-dir ("${opts.agentDir}") must be a subdirectory of ${dir}`);
-    }
-    agentDir = `./${rel}`;
-  } else if (!opts.flat) {
+  if (!opts.flat && !opts.embedded) {
     signals = await detectHostSignals(dir).catch(failStartup);
-    if (signals.length > 0) agentDir = "./agent";
+    embedded = signals.length > 0;
   }
 
-  const { complete, created, skipped, patched, intoNonEmpty, warnings } = await scaffoldWorkspace(dir, {
+  const { complete, root, created, skipped, patched, intoNonEmpty, warnings } = await scaffoldWorkspace(dir, {
     minimal: opts.minimal,
-    agentDir,
+    embedded,
   }).catch(failStartup);
   // The layout reason prints only once the scaffold actually happened — an "already a workspace" refusal
   // must not be preceded by an announced decision that then never takes place.
   if (signals.length > 0) {
     console.error(
-      `[fastagent] found ${signals.join(", ")} — an existing toolchain/deploy claims this directory, so the agent kit goes into ./agent (its own namespace; config.agentDir points there). cwd stays this directory. Override: --flat`,
+      `[fastagent] found ${signals.join(", ")} — an existing toolchain/deploy claims this directory, so the ` +
+        `whole workspace goes into ./.fastagent/ (embedded; zero files at the host root). Override: --flat`,
     );
   }
   console.error(
-    `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"}${agentDir ? ` — agent kit in ${agentDir}` : ""}`,
+    `[fastagent] initialized ${dir}${complete ? "" : " (minimal)"}${embedded ? " — workspace in ./.fastagent/ (embedded)" : ""}`,
   );
   if (created.length > 0) console.error(`  created: ${created.join(", ")}`);
   if (skipped.length > 0) console.error(`  kept existing: ${skipped.join(", ")}`);
   if (patched.length > 0) console.error(`  updated: ${patched.join(", ")} (missing fastagent excludes appended)`);
-  if (intoNonEmpty && !agentDir) {
+  if (intoNonEmpty && !embedded) {
     console.error(
-      `  note: scaffolded flat into a non-empty directory (nothing claims it — the directory is the agent); use --agent-dir <name> to put the kit in a subdir instead`,
+      `  note: scaffolded flat into a non-empty directory (nothing claims it — the directory is the agent); use --embedded to nest the workspace in ./.fastagent/ instead`,
     );
   }
   for (const w of warnings) console.error(`[fastagent] warn: ${w}`);
 
   // Install deps only for a complete agent whose package.json we just wrote (a kept one is not ours).
-  // The manifest lives with the kit (agentDir when set), so the install runs there — never against a
-  // host repo's own package.json.
-  const kitDir = resolve(dir, agentDir ?? ".");
-  const willInstall = complete && opts.install && created.includes(join(agentDir ?? ".", "package.json"));
+  // The manifest lives at the workspace root (./.fastagent when embedded), so the install runs there
+  // — never against a host repo's own package.json.
+  const rootDir = resolve(dir, root);
+  const willInstall = complete && opts.install && created.includes(join(root, "package.json"));
   let installFailed = false;
   if (willInstall) {
-    console.error(`[fastagent] installing dependencies (npm install${agentDir ? ` in ${agentDir}` : ""})…`);
-    installFailed = (await npmInstall(kitDir)) !== 0;
+    console.error(`[fastagent] installing dependencies (npm install${embedded ? ` in ${root}` : ""})…`);
+    installFailed = (await npmInstall(rootDir)) !== 0;
     if (installFailed)
-      console.error(`[fastagent] warn: npm install failed — run it manually in ${kitDir} before \`fastagent dev\``);
+      console.error(`[fastagent] warn: npm install failed — run it manually in ${rootDir} before \`fastagent dev\``);
   }
 
   console.error(`  next steps:`);
   const cdTarget = nextStepCd(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
   if (complete && (!opts.install || installFailed))
-    console.error(`    ${agentDir ? `(cd ${agentDir} && npm install)` : "npm install"}`);
+    console.error(`    ${embedded ? `(cd ${root} && npm install)` : "npm install"}`);
   console.error(`    fastagent dev   # serve locally and iterate`);
   console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
 }

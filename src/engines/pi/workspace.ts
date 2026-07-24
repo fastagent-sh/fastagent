@@ -14,12 +14,14 @@ import type { Agent } from "../../agent.ts";
 import {
   type FastagentConfig,
   type LoadedConfig,
+  type WorkspaceLayout,
   defaultSessionsDir,
   loadConfig,
-  resolveAgentDir,
   resolveAuthPath,
   resolveModelSpec,
+  resolveSecretsDir,
   resolveStateRoot,
+  resolveWorkspace,
 } from "./config.ts";
 import type { SessionControl } from "../../session.ts";
 import { createPiAgentFromDefinition, resolveWorkspaceTools } from "./create.ts";
@@ -28,7 +30,7 @@ import { type PiBoundaryWiring, createPiSessionControl } from "./session-control
 import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import { type LoadedDefinition, ensureStateRootSelfIgnored } from "./definition.ts";
+import { type LoadedDefinition, ensureSecretsDirSelfIgnored, ensureStateRootSelfIgnored } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
 
@@ -36,15 +38,15 @@ export interface CreatePiAgentFromWorkspaceOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
   model?: string;
   /**
-   * Session store directory. Default `<dir>/.fastagent/sessions` (gitignored machine state). `start`
+   * Session store directory. Default `<root>/.state/sessions` (self-gitignored machine state). `start`
    * overrides it (--sessions-dir / FASTAGENT_SESSIONS_DIR / a mounted volume) so production continuity
    * survives redeploys.
    */
   sessionsDir?: string;
   /**
-   * Credentials file override. Default `<dir>/.fastagent/auth.json` (project-level, gitignored under
-   * the same `*`-ignored `.fastagent`). Override via --auth-path / FASTAGENT_AUTH_PATH; point it at
-   * `~/.fastagent/auth.json` to share one credential across projects.
+   * Credentials file override. Default `<root>/.secrets/auth.json` (project-level, under the
+   * self-gitignored `.secrets/`). Override via --auth-path / FASTAGENT_AUTH_PATH; point it at
+   * the global `~/.fastagent/.secrets/auth.json` to share one credential across projects.
    */
   authPath?: string;
   /**
@@ -71,8 +73,8 @@ export interface CreatePiAgentFromWorkspaceOptions {
 /**
  * The workspace assembly FRONT HALF — everything that is independent of how pi consumes the
  * definition (transient harness for serving vs resident AgentSession for chat / session control):
- * config → model spec → agentDir → the full tool surface ({@link resolveWorkspaceTools} — the ONE
- * place it is computed) → state root → auth path. Both {@link createPiAgentFromWorkspace} and the
+ * layout resolution → config → model spec → the full tool surface ({@link resolveWorkspaceTools} — the
+ * ONE place it is computed) → state root → auth path. Both {@link createPiAgentFromWorkspace} and the
  * session builder (session-builder.ts) consume this, so THESE inputs cannot drift between the two
  * consumption shapes. (Definition loading and prompt assembly stay per-consumer: serving re-reads
  * them live per invoke, the session builder snapshots at startup and lets pi append skills/env.)
@@ -82,11 +84,14 @@ export interface WorkspaceAssembly {
   configPath?: string;
   /** The resolved "provider/modelId" spec in use. */
   modelSpec: string;
-  /** Absolute agent-definition dir (config.agentDir resolved against dir; = dir when unset). */
-  agentDir: string;
-  /** Absolute state root (FASTAGENT_STATE_DIR > <dir>/.fastagent). */
+  /** Absolute workspace root — definition + config + machinery live here (resolveWorkspace().root). */
+  root: string;
+  /** Absolute workbench — the agent's cwd / ②-context walk start (= root when flat; the parent when embedded). */
+  workbench: string;
+  layout: WorkspaceLayout;
+  /** Absolute state root (FASTAGENT_STATE_DIR > <root>/.state). */
   stateRoot: string;
-  /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <stateRoot>/auth.json). */
+  /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <root>/.secrets/auth.json). */
   authPath: string;
   /** The full mounted tool surface (config.tools + discovered tools/, search_tools applied). */
   tools: AgentTool[];
@@ -100,38 +105,40 @@ export async function resolveWorkspaceAssembly(
   dir: string,
   options: { model?: string; authPath?: string } = {},
 ): Promise<WorkspaceAssembly> {
-  const { config, path: configPath }: LoadedConfig = await loadConfig(dir);
+  // Layout is structural (resolveWorkspace): the ROOT carries definition + config + machinery; the
+  // WORKBENCH (= root when flat, the parent when embedded) is what the agent works on — its cwd and
+  // the start of the ②-context walk (an embedded agent reads the host repo's AGENTS.md from there).
+  const { root, workbench, layout } = resolveWorkspace(dir);
+  const { config, path: configPath }: LoadedConfig = await loadConfig(root);
   const modelSpec = resolveModelSpec(options.model, config);
   if (!modelSpec) {
     throw new Error(
       `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai-codex/gpt-5.5")`,
     );
   }
-  // The run root is `dir` (cwd — where config lives, whose AGENTS.md is ② context); the agent's own
-  // surface (persona/skills/tools/channels) lives in `agentDir` (config.agentDir, or `dir` when flat).
-  const agentDir = resolveAgentDir(dir, config);
   const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures } = await resolveWorkspaceTools(
     config,
-    agentDir,
-    dir,
+    root,
+    workbench,
   );
-  // The state root: auth/sessions/channel state all derive from it, so FASTAGENT_STATE_DIR moves the
-  // whole machine-state home in one knob (a container mounts one volume); the finer overrides below
-  // still win for their specific path.
-  const stateRoot = resolveStateRoot(dir);
-  // The credentials file: project-level by default (under the state root); only resolved here, never
+  // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it
+  // in one knob — a container points it at its volume); the finer overrides below still win.
+  const stateRoot = resolveStateRoot(root);
+  // The credentials file: project-level by default (under `<root>/.secrets`); only resolved here, never
   // created (a missing file reads as not-configured — `fastagent login` creates it).
-  const authPath = resolveAuthPath(dir, options.authPath);
-  // Self-ignore the state root iff it lands in-tree — which covers everything under it (sessions, auth,
-  // every channel's `channels/<kind>` home). HERE, not in the serving opener: every consumer of this
-  // assembly can WRITE under the state root (serving: sessions/channels; the session builder: pi's
-  // `/login` writing auth.json), so resolving a workspace's state root must make it leak-safe.
-  await ensureStateRootSelfIgnored(dir, stateRoot);
+  const authPath = resolveAuthPath(root, options.authPath);
+  // Self-ignore the machinery dirs iff they land in-tree. HERE, not in the serving opener: every
+  // consumer of this assembly can WRITE under them (serving: sessions/channels; the session builder:
+  // pi's `/login` writing auth.json), so resolving a workspace must make them leak-safe.
+  await ensureStateRootSelfIgnored(root, stateRoot);
+  await ensureSecretsDirSelfIgnored(root, resolveSecretsDir(root));
   return {
     config,
     configPath,
     modelSpec,
-    agentDir,
+    root,
+    workbench,
+    layout,
     stateRoot,
     authPath,
     tools,
@@ -157,9 +164,12 @@ export async function createPiAgentFromWorkspace(
   configPath?: string;
   /** The resolved "provider/modelId" spec actually in use. */
   modelSpec: string;
-  /** Absolute agent-definition dir in use (config.agentDir resolved against dir; = dir when unset). Channels/tools/persona come from here. */
-  agentDir: string;
-  /** Absolute state root in use (FASTAGENT_STATE_DIR > <dir>/.fastagent) — the ChannelContext's stateRoot. */
+  /** Absolute workspace root in use — channels/tools/persona come from here. */
+  root: string;
+  /** Absolute workbench in use — the agent's cwd (= root when flat). */
+  workbench: string;
+  layout: WorkspaceLayout;
+  /** Absolute state root in use (FASTAGENT_STATE_DIR > <root>/.state) — the ChannelContext's stateRoot. */
   stateRoot: string;
   /** Absolute session store directory in use (for the startup report). */
   sessionsDir: string;
@@ -182,7 +192,9 @@ export async function createPiAgentFromWorkspace(
     config,
     configPath,
     modelSpec,
-    agentDir,
+    root,
+    workbench,
+    layout,
     stateRoot,
     authPath,
     tools,
@@ -196,7 +208,7 @@ export async function createPiAgentFromWorkspace(
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
-  const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: dir });
+  const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: workbench });
   // The hub is wired HERE because the store is created here: chicken-and-egg otherwise (the hub
   // needs the store; the agent needs the hub's observer). Boundary parts (models/factory/lease)
   // only exist after the assembly below — the hub takes them as a lazy thunk, filled by the
@@ -223,10 +235,10 @@ export async function createPiAgentFromWorkspace(
         }
       : hub.observer
     : caller;
-  const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
+  const { agent, definition } = await createPiAgentFromDefinition(root, {
     model: modelSpec,
     thinkingLevel: config.thinkingLevel,
-    cwd: dir,
+    cwd: workbench,
     tools: mountedTools,
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
@@ -247,7 +259,9 @@ export async function createPiAgentFromWorkspace(
     definition,
     sessions,
     sessionControl: hub?.control,
-    agentDir,
+    root,
+    workbench,
+    layout,
     config,
     configPath,
     modelSpec,

@@ -26,7 +26,7 @@ function splitPlain(text: string): string[] {
   return parts;
 }
 
-// Standalone copy of the channel transport's discipline: an upload timeout so a wedged connection
+// Embedded copy of the channel transport's discipline: an upload timeout so a wedged connection
 // can't hang the tool call (and the turn), named errors, and success gated on the body's own ok.
 // Deliberately NO 429 retry — a tool error goes back to the agent, which can decide to retry;
 // fail-fast beats a silently sleeping tool.

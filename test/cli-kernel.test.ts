@@ -78,7 +78,7 @@ describe("cli kernel: spec conformance", () => {
       [["dev"], "work product never trigger a restart"],
       [["dev"], "the quick-tunnel URL is ephemeral, not for production"],
       [["init"], "Never overwrites existing files"],
-      [["init"], "the kit goes into ./agent"],
+      [["init"], "the WHOLE workspace goes into ./.fastagent/"],
       [["invoke"], "counterpart of `tool`, for CI smoke and quick checks"],
       [["fire"], "does NOT advance the schedule's fire state"],
       [["schedule", "history"], "did last night's run silently fail"],
@@ -95,7 +95,7 @@ describe("cli kernel: spec conformance", () => {
       [["deploy"], "missing CLI/daemon/login/secret"],
       [["deploy"], "Existing Compose stays authoritative"],
       [["deploy"], "routine redeploy of an already-provisioned agent"],
-      [["login"], "run from $HOME for the global ~/.fastagent/auth.json"],
+      [["login"], "run from $HOME for the global ~/.fastagent/.secrets/auth.json"],
     ];
     const rendered = new Map<string, string>();
     for (const [path, phrase] of carried) {
@@ -308,10 +308,10 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     expect(r.err).toMatch(/Allowed choices are docker, fly, railway/);
   });
 
-  it("conflicting flags are rejected by the parser (init --flat vs --agent-dir)", async () => {
-    const r = await parse(["init", "--flat", "--agent-dir", "x"]);
+  it("conflicting flags are rejected by the parser (init --flat vs --embedded)", async () => {
+    const r = await parse(["init", "--flat", "--embedded"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/'--flat' cannot be used with option '--agent-dir/);
+    expect(r.err).toMatch(/'--flat' cannot be used with option '--embedded/);
   });
 });
 
@@ -373,11 +373,11 @@ describe("cli end to end: the thin entry", () => {
     expect(env.stderr).toMatch(/invalid PORT env/);
   });
 
-  it("an invalid --agent-dir VALUE is a usage error (exit 2), and nothing is written", async () => {
+  it("the retired --agent-dir flag is an unknown option (exit 2), and nothing is written", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-kernel-agentdir-"));
     const r = await run(["init", dir, "--agent-dir", "."]);
     expect(r.code).toBe(2);
-    expect(r.stderr).toMatch(/must be a subdirectory/);
+    expect(r.stderr).toMatch(/unknown option '--agent-dir'/);
   });
 
   it("tool with malformed JSON args exits 2 (usage class); an unknown tool stays a runtime miss (1)", async () => {

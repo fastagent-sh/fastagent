@@ -33,7 +33,8 @@ describe("deploy/docker: planDockerDeploy", () => {
 
     const yaml = compose(plan);
     expect(yaml).toContain('"127.0.0.1:8787:8787"');
-    expect(yaml).toContain('FASTAGENT_STATE_DIR: "/data"');
+    expect(yaml).toContain('FASTAGENT_STATE_DIR: "/data/.state"');
+    expect(yaml).toContain('FASTAGENT_SECRETS_DIR: "/data/.secrets"');
     expect(yaml).toContain("- state:/data");
     expect(yaml).toContain("restart: unless-stopped");
     expect(yaml).not.toContain("cloudflared");
@@ -97,23 +98,23 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(yaml).not.toContain("sk-");
   });
 
-  it("namespaces agentDir artifacts and builds from the repository root, including nested kits", () => {
+  it("namespaces embedded artifacts under .fastagent/ and builds from the workbench root", () => {
     const plan = planDockerDeploy({
       ...base,
       modelAuth: undefined,
       channels: [],
-      kitDir: "packages/agent",
+      embedded: true,
     });
     expect(plan.artifacts.map((artifact) => artifact.path).sort()).toEqual([
       ".dockerignore",
-      "packages/agent/Dockerfile",
-      "packages/agent/Dockerfile.dockerignore",
-      "packages/agent/fastagent.compose.yml",
+      ".fastagent/Dockerfile",
+      ".fastagent/Dockerfile.dockerignore",
+      ".fastagent/fastagent.compose.yml",
     ]);
-    expect(plan.composePath).toBe("packages/agent/fastagent.compose.yml");
-    expect(compose(plan)).toContain("context: ../..");
-    expect(compose(plan)).toContain("dockerfile: packages/agent/Dockerfile");
-    expect(runbook(plan)).toContain("run from the REPO ROOT");
+    expect(plan.composePath).toBe(".fastagent/fastagent.compose.yml");
+    expect(compose(plan)).toContain("context: ..");
+    expect(compose(plan)).toContain("dockerfile: .fastagent/Dockerfile");
+    expect(runbook(plan)).toContain("run from the WORKBENCH ROOT");
   });
 
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {

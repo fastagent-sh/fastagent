@@ -6,7 +6,7 @@
  * web stream primitives give cancellation (consumer disconnect → cancel() → iterator.return() →
  * invoke cancellation, SPEC MUST 3), backpressure (pull-based), and the body cap natively.
  *
- * `nodeListener` is the thin node:http adapter for the standalone `fastagent dev/start` server.
+ * `nodeListener` is the thin node:http adapter for the embedded `fastagent dev/start` server.
  */
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";

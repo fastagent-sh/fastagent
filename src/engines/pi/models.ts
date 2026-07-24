@@ -11,8 +11,8 @@ import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
-  /** Credentials file path. Defaults to the global `~/.fastagent/auth.json`; the directory opener passes
-   *  the project-level `<dir>/.fastagent/auth.json`. */
+  /** Credentials file path. Defaults to the global `~/.fastagent/.secrets/auth.json`; the directory opener passes
+   *  the project-level `<root>/.secrets/auth.json`. */
   authPath?: string;
   /** Extra providers registered on top of the built-ins (same id overrides a built-in). */
   providers?: Provider[];
@@ -21,7 +21,7 @@ export interface CreatePiModelsOptions extends FastagentAuthOptions {
 /**
  * A `Models` with every built-in pi provider, wired to fastagent's auth: stored credentials from the
  * {@link CreatePiModelsOptions.authPath} file (via {@link fastagentCredentialStore}; the global
- * `~/.fastagent/auth.json` unless the opener passes a project-level path), then ambient env vars. A
+ * `~/.fastagent/.secrets/auth.json` unless the opener passes a project-level path), then ambient env vars. A
  * stored credential owns the provider; env is consulted only when nothing is stored (resolution order
  * is upstream-owned).
  */

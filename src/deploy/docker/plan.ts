@@ -28,7 +28,7 @@ export interface DockerPlanInput extends ContainerInput {
 export interface DockerPlan {
   /** fastagent.compose.yml + the shared Dockerfile/ignore artifacts. */
   artifacts: Artifact[];
-  /** Compose file path relative to the workspace root (namespaced for agentDir layouts). */
+  /** Compose file path relative to the workbench root (namespaced under .fastagent/ when embedded). */
   composePath: string;
   /** Ordered local build/run/operate instructions. */
   runbook: string[];
@@ -79,13 +79,9 @@ function composeInterpolation(name: string): string {
   return `\${${name}:-}`;
 }
 
-/** Relative path from the namespaced Compose file's directory back to the workspace/build root. */
-function buildContext(kitDir?: string): string {
-  if (!kitDir) return ".";
-  return kitDir
-    .split("/")
-    .map(() => "..")
-    .join("/");
+/** Relative path from the namespaced Compose file's directory back to the workbench/build root. */
+function buildContext(embedded?: boolean): string {
+  return embedded ? ".." : ".";
 }
 
 function composeYaml(input: DockerPlanInput): string {
@@ -94,8 +90,8 @@ function composeYaml(input: DockerPlanInput): string {
   // it is empty otherwise. Values never land in this file — Compose interpolates them at invocation.
   const envNames = [...new Set([...secrets.map((secret) => secret.name), "FASTAGENT_AUTH_SEED"])];
   const secretEnv = envNames.map((name) => `      ${name}: "${composeInterpolation(name)}"`).join("\n");
-  const context = buildContext(input.kitDir);
-  const dockerfile = input.kitDir ? `${input.kitDir}/Dockerfile` : "Dockerfile";
+  const context = buildContext(input.embedded);
+  const dockerfile = input.embedded ? ".fastagent/Dockerfile" : "Dockerfile";
   const tunnelService = input.tunnel
     ? `
   # Cloudflare Quick Tunnel: ephemeral URL, generated only with \`deploy docker --tunnel\`.
@@ -131,7 +127,9 @@ services:
       - "127.0.0.1:${input.port}:${input.port}"
     environment:
       PORT: "${input.port}"
-      FASTAGENT_STATE_DIR: "${MOUNT}"
+      # Machinery on the ONE state volume: mutable state and (seeded, possibly rotated) secrets.
+      FASTAGENT_STATE_DIR: "${MOUNT}/.state"
+      FASTAGENT_SECRETS_DIR: "${MOUNT}/.secrets"
 ${secretEnv}
     volumes:
       - state:${MOUNT}
@@ -144,7 +142,7 @@ volumes:
 
 /** Compute local-Docker artifacts + the runbook; no Docker process is touched here. */
 export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
-  const composePath = input.kitDir ? `${input.kitDir}/${DOCKER_COMPOSE_FILE}` : DOCKER_COMPOSE_FILE;
+  const composePath = input.embedded ? `.fastagent/${DOCKER_COMPOSE_FILE}` : DOCKER_COMPOSE_FILE;
   const artifacts: Artifact[] = [{ path: composePath, content: composeYaml(input) }, ...containerArtifacts(input)];
   const compose = `docker compose -f ${composePath}`;
   const secrets = deploymentSecrets(input.modelAuth, input.channels, input.extraSecrets, input.longConnectionChannels);
@@ -177,10 +175,11 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     );
   }
 
-  if (input.kitDir) {
+  if (input.embedded) {
     runbook.push(
-      `# Repo-as-workspace: run from the REPO ROOT. Compose lives under ${input.kitDir}/ but builds`,
-      `# the whole repository; only the kit's dependencies are installed by ${input.kitDir}/Dockerfile.`,
+      `# Embedded workspace: run from the WORKBENCH ROOT (the directory containing .fastagent/).`,
+      `# Compose lives under .fastagent/ but bakes the whole directory as the agent's workbench;`,
+      `# only the workspace's own dependencies (.fastagent/package.json) are installed.`,
     );
   }
 

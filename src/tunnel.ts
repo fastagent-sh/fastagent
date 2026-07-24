@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { registerFeishuWebhook } from "./channels/feishu/register-webhook.ts";
 import { registerSlackWebhook } from "./channels/slack/register-webhook.ts";
 import { registerTelegramWebhook } from "./channels/telegram/register-webhook.ts";
-import { loadDotEnv } from "./env.ts";
+import { dotEnvPath, loadDotEnv } from "./env.ts";
 import { resolveStateRoot } from "./engines/pi/config.ts";
 import { log } from "./log.ts";
 
@@ -141,9 +141,9 @@ function channelBasenames(dir: string): string[] {
 }
 
 /**
- * Print the public URL and wire up first-party webhook channels found under `dir`: Telegram and
- * Feishu/Lark use runtime credentials; onboarded Slack uses its owner-local config token; GitHub and a
- * manually scaffolded Slack app receive explicit console URLs.
+ * Print the public URL and wire up first-party webhook channels found under `dir` (the workspace
+ * ROOT): Telegram and Feishu/Lark use runtime credentials; onboarded Slack uses its owner-local config
+ * token; GitHub and a manually scaffolded Slack app receive explicit console URLs.
  */
 export async function announceWebhooks(
   dir: string,
@@ -159,10 +159,10 @@ export async function announceWebhooks(
     // void-called with no unhandledRejection handler, so a throw here would terminate the process. Warn
     // (surface it, rule 8) and continue best-effort; each registrar then surfaces its own
     // missing-credential guidance. loadDotEnv keeps throwing for the synchronous command callers.
-    log.warn(`[fastagent] could not read ${join(dir, ".env")}: ${(error as Error).message} — continuing without it`);
+    log.warn(`[fastagent] could not read ${dotEnvPath(dir)}: ${(error as Error).message} — continuing without it`);
   }
   // Serving passes the validated route-channel subset. The basename fallback preserves the public
-  // helper's standalone behavior for callers that did not assemble channels first.
+  // helper's embedded behavior for callers that did not assemble channels first.
   const routeChannels = opts.routeChannels ?? channelBasenames(dir);
   if (routeChannels.length === 0) return;
   // Readiness is the registrar's job now: a fresh quick tunnel returns Cloudflare 530 for ~20-30s before

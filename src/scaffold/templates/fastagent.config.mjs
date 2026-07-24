@@ -1,6 +1,7 @@
 // fastagent.config.mjs — deployment choices only (model / http; code tools auto-discover from tools/).
 // Your agent's identity lives in persona.md; its capabilities in skills/ + tools/ — never here.
-// An AGENTS.md at the workspace root (yours or the host repo's) is read as project context.
+// An AGENTS.md at the workbench (this directory when flat; the host tree when this workspace lives
+// in .fastagent/) is read as project context.
 // Model precedence: `--model` flag > FASTAGENT_MODEL env > this default.
 // No model is preset: `fastagent dev` shows the full model catalog (models you already have
 // credentials for come first; picking one that needs auth logs you in inline) and writes your choice

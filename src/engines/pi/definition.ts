@@ -14,8 +14,9 @@
  * (bad skill files, name collisions) are returned as data. An unreadable ② context file only warns (pi).
  */
 import { realpathSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import ignore from "ignore";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
@@ -121,21 +122,50 @@ export function isUnderDir(targetPath: string, baseDir: string): boolean {
 }
 
 /**
- * Self-ignore a state dir: create it if missing, then write `<stateDir>/.gitignore` = "*" (idempotent
- * — an existing one is kept), so a workspace that runs dev/start never shows machine state as
- * untracked. Creates the dir because a caller may self-ignore it before anything else populates it
- * (e.g. `login` writing auth.json into a not-yet-created root).
+ * Self-ignore a machinery dir: create it if missing, then write `<dir>/.gitignore` = `content`, so a
+ * workspace that runs dev/start/login never shows machine state or secrets as
+ * untracked-but-committable. Creates the dir because a caller may self-ignore it before anything else
+ * populates it (e.g. `login` writing auth.json into a not-yet-created dir).
  *
- * Module-PRIVATE on purpose: the only entry to the leak guard is {@link ensureStateRootSelfIgnored}
- * (home exclusion + containment). Keeping this unexported makes that single-owner claim hold at the
- * type level — a sibling command can't bypass those checks by writing a `.gitignore` directly.
+ * An EXISTING `.gitignore` is kept — but only after VERIFYING it still does the one job this guard
+ * exists for: every name in `mustIgnore` must actually be ignored by its rules. "A file exists" is
+ * not "the contents are protected" — an emptied file, a bad merge, or a `!.env` re-include would
+ * otherwise pass silently and the next `login`/`add` would write a real credential into a COMMITTABLE
+ * dir. A failing file throws with the remedy (fail visibly; the caller was about to write a secret).
+ *
+ * Module-PRIVATE on purpose: the only entries to the leak guard are {@link ensureStateRootSelfIgnored}
+ * and {@link ensureSecretsDirSelfIgnored} (home exclusion + containment). Keeping this unexported makes
+ * that single-owner claim hold at the type level — a sibling command can't bypass those checks by
+ * writing a `.gitignore` directly.
  */
-async function ensureStateDirSelfIgnored(stateDir: string): Promise<void> {
-  await mkdir(stateDir, { recursive: true });
-  await writeFile(join(stateDir, ".gitignore"), "*\n", { flag: "wx" }).catch((e: NodeJS.ErrnoException) => {
-    if (e.code !== "EEXIST") throw e;
-  });
+async function ensureDirSelfIgnored(dir: string, content: string, mustIgnore: string[]): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  try {
+    await writeFile(join(dir, ".gitignore"), content, { flag: "wx" }); // wx: never clobber
+    return;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+  }
+  const file = join(dir, ".gitignore");
+  // Same matcher discipline as loadRootIgnore (workspace.ts): case-sensitive, git semantics — a
+  // later `!name` line un-ignores exactly like git would, so the check can't disagree with git.
+  const matcher = ignore({ ignorecase: false }).add(await readFile(file, "utf8"));
+  const leaks = mustIgnore.filter((name) => !matcher.ignores(name));
+  if (leaks.length > 0) {
+    const rules = content.trim().split("\n").join(" + ");
+    throw new Error(
+      `${file} does not ignore ${leaks.join(", ")} — this fastagent-managed dir must keep its contents ` +
+        `out of git before a secret/state file is written. Restore the self-ignore rules (${rules}), or ` +
+        `delete the file and fastagent rewrites it`,
+    );
+  }
 }
+
+/** The `.secrets/` self-ignore: everything is a secret EXCEPT the committable template and the
+ *  protection itself (un-ignored so both travel with the workspace through git; git's nested-ignore
+ *  precedence means no root .gitignore entry can re-include the rest). The scaffold's
+ *  templates/secrets.gitignore mirrors these rules. */
+const SECRETS_GITIGNORE = "*\n!.gitignore\n!.env.example\n";
 
 /**
  * The single owner of the self-ignore MECHANISM: iff the resolved state ROOT lands inside the workspace
@@ -162,7 +192,19 @@ export async function ensureStateRootSelfIgnored(dir: string, stateRoot: string)
   if (canonicalPath(dir) === canonicalPath(homedir())) return;
   // Containment on RAW paths: stateRoot is resolve()'d (config.ts) and `dir` is absolute, so it is exact
   // by construction. An external-volume root resolves outside the tree → skip (not ours to ignore).
-  if (isUnderDir(stateRoot, dir)) await ensureStateDirSelfIgnored(stateRoot);
+  // Must-ignore names = the state dirs that actually live here (representative, not exhaustive).
+  if (isUnderDir(stateRoot, dir)) await ensureDirSelfIgnored(stateRoot, "*\n", ["sessions", "channels", "schedule"]);
+}
+
+/**
+ * The `.secrets/` sibling of {@link ensureStateRootSelfIgnored}: iff the resolved secrets dir lands
+ * inside the workspace tree, make it exist and self-ignore ({@link SECRETS_GITIGNORE}) — called by
+ * every path that WRITES a secret (`login`, the opener, channel onboarding), so a credential or `.env`
+ * value can never land untracked-but-committable. Same home exclusion and containment rules.
+ */
+export async function ensureSecretsDirSelfIgnored(dir: string, secretsDir: string): Promise<void> {
+  if (canonicalPath(dir) === canonicalPath(homedir())) return;
+  if (isUnderDir(secretsDir, dir)) await ensureDirSelfIgnored(secretsDir, SECRETS_GITIGNORE, [".env", "auth.json"]);
 }
 
 /** Resolve to a canonical (symlink-free) absolute path so comparisons match `process.cwd()`'s realpath.

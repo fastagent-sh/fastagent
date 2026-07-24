@@ -17,7 +17,7 @@ import {
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
-import { ensureStateRootSelfIgnored, isUnderDir } from "../src/engines/pi/definition.ts";
+import { ensureSecretsDirSelfIgnored, ensureStateRootSelfIgnored, isUnderDir } from "../src/engines/pi/definition.ts";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "agent");
 
@@ -47,6 +47,33 @@ describe("definition: ensureStateRootSelfIgnored (root-based leak guard)", () =>
     const ext = await mkdtemp(join(tmpdir(), "fa-vol-"));
     await ensureStateRootSelfIgnored(dir, ext);
     expect(existsSync(join(ext, ".gitignore"))).toBe(false);
+  });
+
+  it("an EXISTING .gitignore is verified, not trusted — an emptied file fails loudly with the remedy", async () => {
+    // "A file exists" is not "the contents are protected": a bad merge/emptied file would otherwise
+    // pass silently and the next login/add would write a credential into a committable dir.
+    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
+    const secrets = join(dir, ".secrets");
+    await mkdir(secrets, { recursive: true });
+    await writeFile(join(secrets, ".gitignore"), "");
+    await expect(ensureSecretsDirSelfIgnored(dir, secrets)).rejects.toThrow(/does not ignore \.env, auth\.json/);
+
+    const state = join(dir, ".state");
+    await mkdir(state, { recursive: true });
+    await writeFile(join(state, ".gitignore"), "");
+    await expect(ensureStateRootSelfIgnored(dir, state)).rejects.toThrow(/does not ignore sessions/);
+  });
+
+  it("a `!.env` re-include is caught with git's last-match semantics; a custom-but-safe file passes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-guard-"));
+    const secrets = join(dir, ".secrets");
+    await mkdir(secrets, { recursive: true });
+    await writeFile(join(secrets, ".gitignore"), "*\n!.gitignore\n!.env\n");
+    await expect(ensureSecretsDirSelfIgnored(dir, secrets)).rejects.toThrow(/does not ignore \.env\b/);
+
+    // Author's own additions are fine as long as the protection holds (.env + auth.json ignored).
+    await writeFile(join(secrets, ".gitignore"), "*\n!.gitignore\n!.env.example\n!README.md\n");
+    await expect(ensureSecretsDirSelfIgnored(dir, secrets)).resolves.toBeUndefined();
   });
 });
 

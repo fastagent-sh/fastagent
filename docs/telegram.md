@@ -29,13 +29,13 @@ It also appends the required env vars to `.env.example` when possible.
 
 ## Configure Telegram
 
-Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token in the run-root `.env`:
+Create a bot with [@BotFather](https://t.me/BotFather), then set the bot token in the workspace `.secrets/.env`:
 
 ```bash
 TELEGRAM_BOT_TOKEN=...
 ```
 
-`fastagent add telegram` writes a generated `TELEGRAM_SECRET_TOKEN` to `.env` when `.env` is gitignored. If it could not write one, add it yourself:
+`fastagent add telegram` writes a generated `TELEGRAM_SECRET_TOKEN` to `.secrets/.env` (the dir self-gitignores). If it could not write one, add it yourself:
 
 ```bash
 TELEGRAM_SECRET_TOKEN=... # any random string; verifies inbound updates
@@ -185,7 +185,7 @@ Downloaded files persist until the operator cleans them up. Treat `<state root>/
 
 ## State & restarts
 
-The channel persists its state under `<state root>/channels/telegram/` (the state root resolves as `FASTAGENT_STATE_DIR` > `<dir>/.fastagent`; the channel-state convention puts engine state at the root, channel state under `channels/<kind>/`):
+The channel persists its state under `<state root>/channels/telegram/` (the state root resolves as `FASTAGENT_STATE_DIR` > `<workspace>/.state`; the channel-state convention puts engine state at the root, channel state under `channels/<kind>/`):
 
 - `buffers.json` — the group-context buffer, written before each webhook ACK (an ACKed update is never redelivered, so ACK-then-persist would be a silent-loss window).
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start.

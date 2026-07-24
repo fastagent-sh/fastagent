@@ -4,16 +4,16 @@
  * the schedule's stable session (faithful to the served behavior). Does NOT advance the schedule's fire
  * state — a test run must never make the scheduler skip the real next run.
  */
-import { relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import { loadDotEnv } from "../../env.ts";
-import { loadConfig, resolveAgentDir } from "../../engines/pi/config.ts";
+import { resolveWorkspace } from "../../engines/pi/config.ts";
 import { reportModuleLoadFailures } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
 import { runInvokeStream } from "../invoke-stream.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { scheduleSession } from "../../schedule/scheduler.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failStartupOn } from "../fail.ts";
 import { reportAuth, resolveFirstRunModel } from "../shared.ts";
 
 export interface FireOptions {
@@ -25,21 +25,19 @@ export interface FireOptions {
 
 export async function runFire(name: string, dirArg: string, opts: FireOptions): Promise<void> {
   const fireDir = resolve(dirArg);
-  loadDotEnv(fireDir);
+  const ws = failStartupOn(() => resolveWorkspace(fireDir));
+  loadDotEnv(ws.root);
   installProxyFetch();
-  await resolveFirstRunModel(fireDir, opts);
-  // Schedules are agent surface — discover them where dev/start/`schedule list` do (agentDir), not the
-  // run root, so `fire` sees the same set the scheduler serves in the kit layout.
-  const { config: fireConfig } = await loadConfig(fireDir).catch(failStartup);
-  const fireAgentDir = resolveAgentDir(fireDir, fireConfig);
-  const { schedules, failures } = await loadSchedules(fireAgentDir).catch(failStartup);
+  await resolveFirstRunModel(ws.root, opts);
+  // Schedules are workspace surface — discover them where dev/start/`schedule list` do (the workspace
+  // root), so `fire` sees the same set the scheduler serves in the embedded layout too.
+  const { schedules, failures } = await loadSchedules(ws.root).catch(failStartup);
   reportModuleLoadFailures(failures);
   const schedule = schedules.find((s) => s.name === name);
   if (!schedule) {
-    // Name the discovery path in the kit layout: a schedule misplaced at the run root should read as
-    // "wrong place", not "broken file".
-    const looked =
-      fireAgentDir === fireDir ? "" : ` (looked in ${relative(fireDir, fireAgentDir).split(sep).join("/")}/schedules)`;
+    // Name the discovery path in the embedded layout: a schedule misplaced at the workbench root
+    // should read as "wrong place", not "broken file".
+    const looked = ws.layout === "embedded" ? ` (looked in .fastagent/schedules)` : "";
     failStartup(
       new Error(
         `unknown schedule "${name}"${looked}. available: ${schedules.map((s) => s.name).join(", ") || "(none)"}`,

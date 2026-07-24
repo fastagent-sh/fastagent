@@ -1,6 +1,6 @@
 /**
  * `fastagent login`: authenticate a MODEL PROVIDER into the resolved auth file (project-level
- * `<dir>/.fastagent/auth.json` by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`) via the same
+ * `<root>/.secrets/auth.json` by default, or `--auth-path`/`FASTAGENT_AUTH_PATH`) via the same
  * {@link fastagentCredentialStore} the runtime uses (one writer, one lock/corruption semantics).
  *
  * Flow (pi-ai's unified `ProviderAuth` API): pick a method (OAuth or API key), then a provider that

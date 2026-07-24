@@ -142,7 +142,7 @@ function createPiAgentFromDefinition(
 ): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
-Load `persona.md`/`skills/` from `dir` (the agent-definition dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the run/working directory (where tools operate, whose repo `AGENTS.md` is context) from the definition dir.
+Load `persona.md`/`skills/` from `dir` (the workspace root) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workbench (where tools operate, whose repo `AGENTS.md` is context) from the workspace root — `createPiAgentFromWorkspace` does this for the embedded layout.
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
 
@@ -158,7 +158,9 @@ function createPiAgentFromWorkspace(
   config: FastagentConfig;
   configPath?: string;
   modelSpec: string;
-  agentDir: string;
+  root: string; // the workspace root
+  workbench: string; // the agent's cwd (= root when flat; the parent when embedded)
+  layout: "flat" | "embedded";
   stateRoot: string;
   sessionsDir: string;
   authPath: string;
@@ -261,7 +263,7 @@ Costs and behavior to know:
 ```ts
 interface ChannelContext {
   agent: Agent;
-  stateRoot: string; // resolved state root (FASTAGENT_STATE_DIR > <dir>/.fastagent), absolute
+  stateRoot: string; // resolved state root (FASTAGENT_STATE_DIR > <root>/.state), absolute
 }
 type ChannelModule = (ctx: ChannelContext) => Routes;
 interface LongConnection {
@@ -373,13 +375,13 @@ function probeAuthSource(models: Models, spec: string): Promise<string | undefin
 Auth:
 
 ```ts
-const GLOBAL_AUTH_PATH: string; // ~/.fastagent/auth.json — the cross-project share target
+const GLOBAL_AUTH_PATH: string; // ~/.fastagent/.secrets/auth.json — the cross-project share target
 function fastagentCredentialStore(authPath?: string, options?: FastagentAuthOptions): CredentialStore;
 ```
 
-`fastagent login` writes the **project-level** `<state root>/auth.json` by default; `GLOBAL_AUTH_PATH`
+`fastagent login` writes the **project-level** `<workspace>/.secrets/auth.json` by default; `GLOBAL_AUTH_PATH`
 is `createPiModels`'s default when no `authPath` is passed, and the explicit one-file share target
-(`FASTAGENT_AUTH_PATH=~/.fastagent/auth.json`). Note the two defaults differ: an embedder calling
+(`FASTAGENT_AUTH_PATH=~/.fastagent/.secrets/auth.json`). Note the two defaults differ: an embedder calling
 `createPiModels()` bare reads the global file, not a project-level `login` — pass `authPath` explicitly
 to read the project's credential (the `createPiAgentFrom*` openers already do).
 

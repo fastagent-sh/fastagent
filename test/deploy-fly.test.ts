@@ -22,7 +22,8 @@ const base = {
 describe("deploy/fly: planFlyDeploy", () => {
   it("wires the state root to the volume and tunes autostop to suspend", () => {
     const toml = flyToml(planFlyDeploy({ ...base, modelAuth: "OPENAI_API_KEY", channels: [] }));
-    expect(toml).toContain('FASTAGENT_STATE_DIR = "/data"');
+    expect(toml).toContain('FASTAGENT_STATE_DIR = "/data/.state"');
+    expect(toml).toContain('FASTAGENT_SECRETS_DIR = "/data/.secrets"');
     expect(toml).toContain('destination = "/data"');
     expect(toml).toContain('auto_stop_machines = "suspend"');
     expect(toml).toContain("min_machines_running = 0");
@@ -165,60 +166,64 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(docker).toContain("npm i -g @fastagent-sh/fastagent");
   });
 
-  it("kit layout (kitDir): artifacts namespaced under the kit, kit deps installed, .git shipped, explicit deploy flags", () => {
-    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [], kitDir: "agent" });
+  it("embedded: artifacts namespaced under .fastagent/, workspace deps installed, .git shipped, explicit deploy flags", () => {
+    const p = planFlyDeploy({ ...base, modelAuth: undefined, channels: [], embedded: true });
     // Artifacts never collide with the host repo's own deploy files.
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore", // ROOT form — the only one host context-packers reliably read (kept if the host has one)
-      "agent/Dockerfile",
-      "agent/Dockerfile.dockerignore",
-      "agent/fly.toml",
+      ".fastagent/Dockerfile",
+      ".fastagent/Dockerfile.dockerignore",
+      ".fastagent/fly.toml",
     ]);
-    // Both ignore forms carry the same kit content (recursive patterns, .git not excluded).
+    // Both ignore forms carry the same content (recursive patterns, .git not excluded).
     const rootIgnore = p.artifacts.find((a) => a.path === ".dockerignore")?.content ?? "";
     expect(rootIgnore).toMatch(/^\*\*\/node_modules$/m);
     expect(rootIgnore).not.toMatch(/^\.git$/m);
-    const df = p.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
-    expect(df).toContain("COPY agent/package.json agent/package-lock.json* ./agent/"); // kit deps…
-    expect(df).toContain("cd agent && npm ci");
-    expect(df).toContain("COPY . ."); // …then the whole repo as the workspace
-    expect(df).toContain(`"./agent/node_modules/.bin/fastagent", "start", "/app"`); // runs from the kit
-    const ignore = p.artifacts.find((a) => a.path === "agent/Dockerfile.dockerignore")?.content ?? "";
+    const df = p.artifacts.find((a) => a.path === ".fastagent/Dockerfile")?.content ?? "";
+    expect(df).toContain("COPY .fastagent/package.json .fastagent/package-lock.json* ./.fastagent/"); // workspace deps…
+    expect(df).toContain("cd .fastagent && npm ci");
+    expect(df).toContain("COPY . ."); // …then the whole workbench
+    expect(df).toContain(`"./.fastagent/node_modules/.bin/fastagent", "start", "/app"`); // runs from the workspace
+    const ignore = p.artifacts.find((a) => a.path === ".fastagent/Dockerfile.dockerignore")?.content ?? "";
     expect(ignore).not.toMatch(/^\.git$/m); // write-back needs the repo's .git — NOT excluded
     // Recursive on purpose: dockerignore is root-anchored, and a bare `node_modules` would let the build
-    // machine's agent/node_modules (macOS binaries) clobber the image's freshly-installed linux deps.
+    // machine's deps (macOS binaries) clobber the image's freshly-installed linux deps.
     expect(ignore).toMatch(/^\*\*\/node_modules$/m);
     expect(ignore).toMatch(/^\*\*\/\.env$/m);
-    // The runbook deploys from the repo root with explicit, version-proof flags.
-    expect(runbook(p)).toContain("fly deploy . --config agent/fly.toml --dockerfile agent/Dockerfile --app bot");
-    expect(runbook(p)).toMatch(/Write-back mechanics/);
+    expect(ignore).toMatch(/^\*\*\/\.secrets$/m); // the machinery dirs never enter an image
+    expect(ignore).toMatch(/^\*\*\/\.state$/m);
+    // The runbook deploys from the workbench root with explicit, version-proof flags.
+    expect(runbook(p)).toContain(
+      "fly deploy . --config .fastagent/fly.toml --dockerfile .fastagent/Dockerfile --app bot",
+    );
+    expect(runbook(p)).toMatch(/WYSIWYG snapshot/);
   });
 
-  it("kit layout: bun kit uses the bun base + cd-install + bun run; markdown-only kit uses the pinned global CLI", () => {
+  it("embedded: bun workspace uses the bun base + cd-install + bun run; markdown-only uses the pinned global CLI", () => {
     const bun = planFlyDeploy({
       ...base,
       runtime: "bun",
       bunVersion: "1.3.13",
       modelAuth: undefined,
       channels: [],
-      kitDir: "agent",
+      embedded: true,
     });
-    const bunDf = bun.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
+    const bunDf = bun.artifacts.find((a) => a.path === ".fastagent/Dockerfile")?.content ?? "";
     expect(bunDf).toContain("FROM oven/bun:1.3.13");
-    expect(bunDf).toContain("COPY agent/package.json agent/bun.lock* ./agent/");
-    expect(bunDf).toContain("cd agent && bun install --frozen-lockfile");
-    expect(bunDf).toContain(`"sh", "-c", "cd agent && bun run fastagent start /app"`);
+    expect(bunDf).toContain("COPY .fastagent/package.json .fastagent/bun.lock* ./.fastagent/");
+    expect(bunDf).toContain("cd .fastagent && bun install --frozen-lockfile");
+    expect(bunDf).toContain(`"sh", "-c", "cd .fastagent && bun run fastagent start /app"`);
 
     const md = planFlyDeploy({
       ...base,
       hasPackageJson: false,
       modelAuth: undefined,
       channels: [],
-      kitDir: "agent",
+      embedded: true,
     });
-    const mdDf = md.artifacts.find((a) => a.path === "agent/Dockerfile")?.content ?? "";
+    const mdDf = md.artifacts.find((a) => a.path === ".fastagent/Dockerfile")?.content ?? "";
     expect(mdDf).toContain("FROM node:22-slim");
-    expect(mdDf).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned global — no kit deps to install
+    expect(mdDf).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned global — no deps to install
     expect(mdDf).not.toContain("npm ci");
     expect(mdDf).toContain(`["fastagent", "start", "/app"]`);
   });

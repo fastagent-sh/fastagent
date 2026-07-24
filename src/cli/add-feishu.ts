@@ -10,7 +10,6 @@
  * for WebSocket or probes the same webhook/token bootstrap with the config-route-404 manual fallback.
  */
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { isCancel, log as clackLog, password, text as clackText } from "@clack/prompts";
 import { bootstrapFeishuVerificationToken } from "../channels/feishu/bootstrap-token.ts";
 import {
@@ -27,7 +26,7 @@ import {
 } from "../channels/feishu/feishu-api.ts";
 import { registerFeishuApp } from "../channels/feishu/register-app.ts";
 import { onboardLarkApp } from "../channels/lark/onboard.ts";
-import { parseEnvContent } from "../env.ts";
+import { dotEnvPath, parseEnvContent } from "../env.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { appendChannelDotEnv, type GroupBehaviorChoice } from "../scaffold/add-channel.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
@@ -131,28 +130,21 @@ export async function configureGroupBehavior(input: {
 }
 
 /**
- * Create or resume the platform app behind `add feishu` / `add lark`. Returns credentials for the
+ * Create or resume the platform app behind `add feishu` / `add lark`. `target` is the workspace ROOT
+ * — credentials land in `<target>/.secrets/.env` (the caller has already ensured the secrets dir
+ * self-ignores, so a real credential can never land committable). Returns credentials for the
  * caller's generic .env write (the guided Lark path), or undefined when nothing remains to write —
  * the feishu path persists its own two credential stages internally (the App ID/Secret boundary is
- * irreversible and must not wait for the caller). Throws on refusal (a committable .env, a
- * non-interactive lark run); the caller surfaces that as a startup failure.
+ * irreversible and must not wait for the caller). Throws on refusal (a non-interactive lark run);
+ * the caller surfaces that as a startup failure.
  */
 export async function onboardFeishuCloudApp(
   target: string,
   kind: "feishu" | "lark",
-  envIgnored: boolean,
   ingress: FeishuSubscriptionMode = "webhook",
   groupBehavior: GroupBehaviorChoice = { behavior: "context", explicit: false },
 ): Promise<Record<string, string> | undefined> {
   const { envPrefix, apiBase, capabilities } = cloudFor(kind);
-  // The CLI must never materialize a real credential into a committable file — refuse, don't warn.
-  if (!envIgnored) {
-    throw new Error(
-      kind === "feishu"
-        ? "`add feishu` creates an app and writes real credentials to .env — add .env to .gitignore/.fastagentignore first, then re-run"
-        : "`add lark` writes real app credentials to .env — add .env to .gitignore/.fastagentignore first, then re-run",
-    );
-  }
   const requiredNames = [
     `${envPrefix}_APP_ID`,
     `${envPrefix}_APP_SECRET`,
@@ -160,7 +152,7 @@ export async function onboardFeishuCloudApp(
   ];
   const existing = await activeDotEnvValues(target, requiredNames);
   if (Object.keys(existing).length === requiredNames.length) {
-    console.error(`[fastagent] ${requiredNames.join("/")} already set in .env — keeping them`);
+    console.error(`[fastagent] ${requiredNames.join("/")} already set in .secrets/.env — keeping them`);
     // WebSocket still needs its console mode/publish guidance. A complete webhook can skip the rest of
     // onboarding, but group visibility must still be inspected/configured on every explicit re-run.
     if (ingress === "webhook") {
@@ -283,8 +275,8 @@ async function createFeishuAppFlow(
   if (appId && appSecret) {
     console.error(
       ingress === "webhook"
-        ? `[fastagent] resuming Feishu app ${appId} from .env to capture its missing Verification Token`
-        : `[fastagent] reusing Feishu app ${appId} from .env for WebSocket ingress`,
+        ? `[fastagent] resuming Feishu app ${appId} from .secrets/.env to capture its missing Verification Token`
+        : `[fastagent] reusing Feishu app ${appId} from .secrets/.env for WebSocket ingress`,
     );
   } else {
     console.error(`[fastagent] creating the Feishu app (confirm in the app)…`);
@@ -331,8 +323,8 @@ async function createFeishuAppFlow(
     await appendChannelDotEnv(target, "feishu", staged, Object.keys(staged), ingress);
     console.error(
       ingress === "webhook"
-        ? `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .env before Token bootstrap`
-        : `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .env`,
+        ? `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .secrets/.env before Token bootstrap`
+        : `[fastagent] wrote FEISHU_APP_ID, FEISHU_APP_SECRET to .secrets/.env`,
     );
   }
 
@@ -401,10 +393,10 @@ async function createFeishuAppFlow(
     // Persist the second credential stage immediately too — opening the publish page and generic
     // scaffold finalization happen only after the complete runtime credential set is durable.
     const staged = await appendChannelDotEnv(target, "feishu", { [tokenVar]: token }, [tokenVar]);
-    console.error(`[fastagent] wrote ${staged.written.join(", ")} to .env`);
+    console.error(`[fastagent] wrote ${staged.written.join(", ")} to .secrets/.env`);
   } else {
     console.error(
-      `[fastagent] copy it manually: developer console → Events & Callbacks → Encryption Strategy → Verification Token → ${tokenVar} in .env`,
+      `[fastagent] copy it manually: developer console → Events & Callbacks → Encryption Strategy → Verification Token → ${tokenVar} in .secrets/.env`,
     );
   }
   if (webhookModeChanged) {
@@ -424,12 +416,12 @@ async function createFeishuAppFlow(
   }
 }
 
-/** Active run-root `.env` values for the requested names — decided by THE .env parser, so this
- * check can never disagree with what `loadEnvFile` reads. Empty/commented values are absent. */
+/** Active workspace `.env` (`.secrets/.env`) values for the requested names — decided by THE .env
+ * parser, so this check can never disagree with what `loadEnvFile` reads. Empty/commented values are absent. */
 async function activeDotEnvValues(dir: string, names: string[]): Promise<Record<string, string>> {
   let content: string;
   try {
-    content = await readFile(join(dir, ".env"), "utf8");
+    content = await readFile(dotEnvPath(dir), "utf8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return {};
     throw e;

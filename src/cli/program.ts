@@ -17,7 +17,7 @@ const MODEL: FlagSpec = {
 };
 const AUTH_PATH: FlagSpec = {
   flags: "--auth-path <file>",
-  description: "credentials file (default: <state root>/auth.json; env: FASTAGENT_AUTH_PATH)",
+  description: "credentials file (default: <workspace>/.secrets/auth.json; env: FASTAGENT_AUTH_PATH)",
 };
 const JSON_FLAG: FlagSpec = { flags: "--json", description: "machine-readable JSON output" };
 const NO_INPUT: FlagSpec = {
@@ -45,8 +45,8 @@ const init: CommandSpec = {
   flags: [
     { flags: "--minimal", description: "persona.md + the example skill + config only (no code tool / package.json)" },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
-    { flags: "--flat", description: "force the flat layout (skip host-signal detection)", conflicts: ["agentDir"] },
-    { flags: "--agent-dir <name>", description: "force the agent kit into ./<name>" },
+    { flags: "--flat", description: "force the flat layout (skip host-signal detection)", conflicts: ["embedded"] },
+    { flags: "--embedded", description: "force the embedded layout (the whole workspace in ./.fastagent/)" },
   ],
   examples: [
     { cmd: "fastagent init my-agent", note: "a new agent dir, ready to dev" },
@@ -56,14 +56,15 @@ const init: CommandSpec = {
     'Layout: flat by default ("a directory is an agent"); when an existing toolchain/deploy claims ' +
     "the directory (tsconfig/framework config, a non-JS build manifest like " +
     "go.mod/pyproject.toml/Cargo.toml, Dockerfile/fly/railway, or occupied tools/, channels/, or " +
-    "skills/), the kit goes into ./agent and config.agentDir points there — the reason is printed, " +
-    "no prompt.",
+    "skills/), the WHOLE workspace goes into ./.fastagent/ (embedded — zero files at the host " +
+    "root; the layout is structural, not configured) — the reason is printed, no prompt. Both " +
+    "layouts share one directory shape.",
   run: async (args, f) =>
     (await import("./commands/init.ts")).runInit(args[0] as string, {
       minimal: f.minimal === true,
       install: f.install !== false,
       flat: f.flat === true,
-      agentDir: f.agentDir as string | undefined,
+      embedded: f.embedded === true,
     }),
 };
 
@@ -73,8 +74,8 @@ const dev: CommandSpec = {
   description:
     "Assemble the agent in dir (default .) and serve a local HTTP channel. persona.md/AGENTS.md/skills " +
     "are re-read every turn (edits go live next turn); edits to code inputs — tools/, channels/, " +
-    "fastagent.config.*, package.json, .env — restart the worker. Files the agent writes as work " +
-    "product never trigger a restart.",
+    "fastagent.config.*, package.json, .secrets/.env — restart the worker. Files the agent writes as " +
+    "work product never trigger a restart.",
   args: [DIR_ARG],
   flags: [
     PORT,
@@ -248,14 +249,14 @@ const start: CommandSpec = {
   notes:
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
-    "  state:    FASTAGENT_STATE_DIR > <dir>/.fastagent — the ONE machine-state\n" +
-    "            root (auth, sessions, channel state all derive from it); point\n" +
-    "            it at a mounted volume so a redeploy that replaces the\n" +
-    "            directory never wipes state\n" +
+    "  state:    FASTAGENT_STATE_DIR > <workspace>/.state — mutable machine state\n" +
+    "            (sessions, channel state, schedule state); point it at a mounted\n" +
+    "            volume so a redeploy that replaces the directory never wipes it\n" +
+    "  secrets:  FASTAGENT_SECRETS_DIR > <workspace>/.secrets — .env + auth.json\n" +
     "  sessions: --sessions-dir > FASTAGENT_SESSIONS_DIR > <state>/sessions\n" +
-    "  auth:     --auth-path > FASTAGENT_AUTH_PATH > <state>/auth.json\n" +
-    "            (project-level; point it at ~/.fastagent/auth.json to share one\n" +
-    "            credential across projects)",
+    "  auth:     --auth-path > FASTAGENT_AUTH_PATH > <secrets>/auth.json\n" +
+    "            (project-level; point it at ~/.fastagent/.secrets/auth.json to\n" +
+    "            share one credential across projects)",
   run: async (args, f) =>
     (await import("./commands/start.ts")).runStart(args[0] as string, {
       port: f.port as string | undefined,
@@ -519,10 +520,10 @@ const login: CommandSpec = {
   name: "login",
   summary: "authenticate a model provider (subscription/OAuth or API key)",
   description:
-    "Authenticate a model provider into the project-level <state root>/auth.json — default " +
-    "<cwd>/.fastagent/auth.json (run from $HOME for the global ~/.fastagent/auth.json): pick a method " +
-    "(subscription/OAuth or API key), then a provider that offers it (configured status shown). " +
-    "[provider] takes the method from what that provider supports, asked only when both.",
+    "Authenticate a model provider into the project-level <workspace>/.secrets/auth.json (run from " +
+    "$HOME for the global ~/.fastagent/.secrets/auth.json): pick a method (subscription/OAuth or API " +
+    "key), then a provider that offers it (configured status shown). [provider] takes the method from " +
+    "what that provider supports, asked only when both.",
   args: [{ name: "[provider]", description: "provider id (skip the provider menu)" }],
   flags: [AUTH_PATH, NO_INPUT],
   examples: [{ cmd: "fastagent login" }, { cmd: "fastagent login openai" }],
