@@ -23,29 +23,9 @@ export interface SlackTarget {
   recipientTeamId?: string;
 }
 
-interface SlackMarkdownTextChunk {
-  type: "markdown_text";
-  text: string;
-}
-
-interface SlackTaskUpdateChunk {
-  type: "task_update";
-  id: string;
-  title: string;
-  status: "pending" | "in_progress" | "complete" | "error";
-}
-
-export type SlackStreamChunk = SlackMarkdownTextChunk | SlackTaskUpdateChunk;
-
 interface SlackStreamContent {
   markdownText?: string;
-  chunks?: SlackStreamChunk[];
 }
-
-/** How Slack lays out task cards in a native stream (chat.startStream `task_display_mode`): `timeline`
- *  lists steps sequentially, `plan` groups them under one heading, `dense` collapses consecutive tool
- *  calls into one summarized card. */
-export type SlackTaskDisplayMode = "timeline" | "plan" | "dense";
 
 export interface DownloadedSlackFile {
   path: string;
@@ -109,11 +89,7 @@ export interface SlackApi {
   updateMarkdown(channelId: string, ts: string, markdown: string): Promise<void>;
   deleteMessage(channelId: string, ts: string): Promise<void>;
   sendMarkdown(target: SlackTarget, markdown: string): Promise<string | undefined>;
-  startStream(
-    target: SlackTarget,
-    content?: SlackStreamContent,
-    taskDisplayMode?: SlackTaskDisplayMode,
-  ): Promise<string>;
+  startStream(target: SlackTarget, content?: SlackStreamContent): Promise<string>;
   appendStream(channelId: string, ts: string, content: SlackStreamContent): Promise<void>;
   stopStream(channelId: string, ts: string, content?: SlackStreamContent): Promise<void>;
   setThreadStatus(target: SlackTarget, status: string): Promise<void>;
@@ -176,15 +152,6 @@ export function chunkSlackMarkdown(markdown: string, maxPoints = SLACK_MAX_MARKD
     output.push(`${prefix}${raw}${suffix}`);
   }
   return output;
-}
-
-/** Slack locks a stream to top-level `markdown_text` or `chunks` mode on its first write. Tasks need
- * chunks, so encode text as markdown chunks too; mixing the two modes yields `streaming_mode_mismatch`. */
-function streamChunks(content: SlackStreamContent): SlackStreamChunk[] {
-  return [
-    ...(content.markdownText ? ([{ type: "markdown_text", text: content.markdownText }] as const) : []),
-    ...(content.chunks ?? []),
-  ];
 }
 
 function safeFileName(file: SlackFile): string {
@@ -391,7 +358,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       }
       return first;
     },
-    async startStream(target, content = {}, taskDisplayMode = "plan") {
+    async startStream(target, content = {}) {
       if (!target.threadTs) throw new Error("Slack native streams require a parent thread timestamp");
       const channelRecipient = target.channelId.startsWith("D")
         ? {}
@@ -402,31 +369,27 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       if (!target.channelId.startsWith("D") && (!target.recipientUserId || !target.recipientTeamId)) {
         throw new Error("Slack native channel streams require recipient user and team IDs");
       }
-      const chunks = streamChunks(content);
       const data = await call<SlackBody & { ts?: string }>("chat.startStream", {
         channel: target.channelId,
         thread_ts: target.threadTs,
-        task_display_mode: taskDisplayMode,
         ...channelRecipient,
-        ...(chunks.length ? { chunks } : {}),
+        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
       });
       if (!data.ts) throw new SlackApiError("chat.startStream", 200, "response carried no ts");
       return data.ts;
     },
     async appendStream(channelId, ts, content) {
-      const chunks = streamChunks(content);
       await call("chat.appendStream", {
         channel: channelId,
         ts,
-        ...(chunks.length ? { chunks } : {}),
+        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
       });
     },
     async stopStream(channelId, ts, content = {}) {
-      const chunks = streamChunks(content);
       await call("chat.stopStream", {
         channel: channelId,
         ts,
-        ...(chunks.length ? { chunks } : {}),
+        ...(content.markdownText ? { markdown_text: content.markdownText } : {}),
       });
     },
     async setThreadStatus(target, status) {

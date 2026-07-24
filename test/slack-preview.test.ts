@@ -86,6 +86,47 @@ describe("Slack reply rendering", () => {
   });
 });
 
+describe("native Slack tool traces", () => {
+  it("shows the invoked operation and a bounded failed result as inline Markdown", async () => {
+    const api = fakeApi();
+    const events = (async function* (): AsyncIterable<AgentEvent> {
+      yield {
+        type: "tool_started",
+        id: "tool-1",
+        name: "bash",
+        args: { command: `npm test <!channel> ${"🐍".repeat(80)}` },
+      };
+      yield {
+        type: "tool_ended",
+        id: "tool-1",
+        isError: true,
+        content: {
+          content: [{ type: "text", text: `permission denied <!here> ${"💥".repeat(300)}` }],
+        },
+      };
+      yield { type: "text", delta: "Recovered." };
+      yield { type: "completed" };
+    })();
+
+    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+      rendering: "native",
+      disclaimer: false,
+    });
+
+    const invocation = vi.mocked(api.startStream).mock.calls[0]?.[1]?.markdownText ?? "";
+    expect(invocation).toContain("**Bash** — `npm test &lt;!channel>");
+    expect(invocation).not.toContain("<!channel>");
+
+    const appended = vi.mocked(api.appendStream).mock.calls.map(([, , content]) => content.markdownText ?? "");
+    const failure = appended.find((text) => text.includes("failed")) ?? "";
+    expect(failure).toContain("**Bash** failed — `permission denied &lt;!here>");
+    expect(failure).not.toContain("<!here>");
+    expect(failure).toContain("…");
+    expect(Array.from(failure).length).toBeLessThanOrEqual(300);
+    expect(appended.join("\n")).toContain("Recovered.");
+  });
+});
+
 describe("native DM Agent status around a retry backoff", () => {
   function eventSource() {
     const queue: AgentEvent[] = [];

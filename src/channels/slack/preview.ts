@@ -1,5 +1,5 @@
 /** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
-import type { AgentEvent } from "../../agent.ts";
+import type { AgentEvent, Json } from "../../agent.ts";
 import { log } from "../../log.ts";
 import {
   RETRY_NOTICE,
@@ -11,13 +11,13 @@ import {
   defaultErrorMessage,
   humanizeToolName,
   revealedAnswer,
+  summarizeToolArgs,
   toolLines,
 } from "../preview-kit.ts";
+import { truncateCodePointPrefix } from "../text.ts";
 import {
   type SlackApi,
-  type SlackStreamChunk,
   type SlackTarget,
-  type SlackTaskDisplayMode,
   chunkSlackMarkdown,
   chunkSlackText,
   isSlackNativeUnavailable,
@@ -31,6 +31,9 @@ const CLASSIC_UPDATE_INTERVAL_MS = 3_000;
 const NATIVE_APPEND_INTERVAL_MS = 750;
 const WORKING_STATUS = "is working on your request…";
 const GENERIC_FAILURE = "⚠️ The response stream stopped unexpectedly. Please try again.";
+/** Keep factual tool traces compact while leaving enough room for useful commands and paths. */
+const TOOL_TRACE_ARG_MAX = 96;
+const TOOL_TRACE_ERROR_MAX = 256;
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -42,6 +45,66 @@ const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(
  * (real Slack controls never contain a `<`). */
 export function sanitizeSlackMarkdown(markdown: string): string {
   return markdown.replace(/<[@!][^<>]*>/g, (control) => `&lt;${control.slice(1)}`);
+}
+
+interface NativeToolTrace {
+  label: string;
+  operation?: string;
+}
+
+/** Render untrusted tool names/arguments as one standard-Markdown code span. A fence longer than any
+ * backtick run in the value keeps the span balanced without changing the factual text. */
+function inlineCode(value: string): string {
+  const longest = Math.max(0, ...(value.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longest + 1);
+  const content = value.startsWith("`") || value.endsWith("`") ? ` ${value} ` : value;
+  return `${fence}${content}${fence}`;
+}
+
+function nativeToolTrace(name: string, args: Json): NativeToolTrace {
+  const operation = sanitizeSlackMarkdown(summarizeToolArgs(args, TOOL_TRACE_ARG_MAX));
+  return {
+    label: sanitizeSlackMarkdown(humanizeToolName(name)),
+    ...(operation ? { operation } : {}),
+  };
+}
+
+function boldText(value: string): string {
+  return `**${value.replace(/[\\*]/g, "\\$&")}**`;
+}
+
+function nativeToolInvocation(trace: NativeToolTrace): string {
+  return `${boldText(trace.label)}${trace.operation ? ` — ${inlineCode(trace.operation)}` : ""}`;
+}
+
+/** Prefer pi's AgentToolResult text blocks, then common custom-tool error fields, then compact JSON. */
+function toolResultText(value: Json): string {
+  if (typeof value === "string") return value;
+  if (value === null) return "";
+  if (typeof value !== "object" || Array.isArray(value)) return JSON.stringify(value);
+
+  const blocks = value.content;
+  if (Array.isArray(blocks)) {
+    const text = blocks
+      .map((block) =>
+        block && typeof block === "object" && !Array.isArray(block) && typeof block.text === "string" ? block.text : "",
+      )
+      .filter(Boolean)
+      .join("\n");
+    if (text) return text;
+  }
+  for (const key of ["error", "message", "result"] as const) {
+    const field = value[key];
+    if (typeof field === "string" && field.trim()) return field;
+  }
+  return JSON.stringify(value);
+}
+
+/** Successful tool output stays private. A failed call gets one bounded, sanitized factual line. */
+function nativeToolFailure(content: Json, trace: NativeToolTrace): string {
+  const raw = toolResultText(content).replace(/\s+/g, " ").trim() || "Tool failed without an error message.";
+  const error = truncateCodePointPrefix(sanitizeSlackMarkdown(raw), TOOL_TRACE_ERROR_MAX);
+  return `${boldText(trace.label)} failed — ${inlineCode(error)}`;
 }
 
 function withDisclaimer(markdown: string, disclaimer: string | false | undefined): string {
@@ -218,7 +281,6 @@ async function streamNativeSlackReply(
   threadTitle: string | undefined,
   disclaimer: string | false | undefined,
   label: string,
-  taskDisplayMode: SlackTaskDisplayMode,
 ): Promise<void> {
   if (initialPreviewTs) {
     await api
@@ -253,7 +315,7 @@ async function streamNativeSlackReply(
         .catch((error) => log.warn(`${label} could not set Slack Agent status: ${String(error)}`)),
     );
   };
-  const toolNames = new Map<string, string>();
+  const toolTraces = new Map<string, NativeToolTrace>();
   let pendingText = "";
   let fullAnswer = "";
   let textTimer: ReturnType<typeof setTimeout> | undefined;
@@ -261,6 +323,8 @@ async function streamNativeSlackReply(
   let operation = Promise.resolve();
   let renderError: unknown;
   let finalized = false;
+  let streamHasContent = false;
+  let streamEndsWithBlankLine = false;
 
   const enqueue = (work: () => Promise<void>): void => {
     operation = operation.then(async () => {
@@ -272,12 +336,18 @@ async function streamNativeSlackReply(
       }
     });
   };
-  const sendContent = async (content: { markdownText?: string; chunks?: SlackStreamChunk[] }): Promise<void> => {
+  const sendContent = async (content: { markdownText?: string }): Promise<void> => {
     if (streamTs) {
       await api.appendStream(target.channelId, streamTs, content);
     } else {
-      streamTs = await api.startStream(target, content, taskDisplayMode);
+      streamTs = await api.startStream(target, content);
     }
+  };
+  const queueMarkdown = (markdownText: string): void => {
+    if (!markdownText) return;
+    streamHasContent = true;
+    streamEndsWithBlankLine = markdownText.endsWith("\n\n");
+    enqueue(() => sendContent({ markdownText }));
   };
   const flushText = (final = false): void => {
     if (textTimer) {
@@ -297,9 +367,7 @@ async function streamNativeSlackReply(
     }
     if (!value) return;
     lastTextFlushAt = Date.now();
-    for (const chunk of chunkSlackText(sanitizeSlackMarkdown(value))) {
-      enqueue(() => sendContent({ markdownText: chunk }));
-    }
+    for (const chunk of chunkSlackText(sanitizeSlackMarkdown(value))) queueMarkdown(chunk);
   };
   const scheduleText = (): void => {
     if (textTimer) return;
@@ -309,9 +377,10 @@ async function streamNativeSlackReply(
       flushText();
     }, delay);
   };
-  const sendTask = (chunk: SlackStreamChunk): void => {
+  const sendToolTrace = (line: string): void => {
     flushText();
-    enqueue(() => sendContent({ chunks: [chunk] }));
+    const separator = streamHasContent && !streamEndsWithBlankLine ? "\n\n" : "";
+    queueMarkdown(`${separator}${line}\n\n`);
   };
   const settleNative = async (terminalMarkdown: string): Promise<void> => {
     flushText(true);
@@ -328,7 +397,7 @@ async function streamNativeSlackReply(
       }
       throw renderError;
     }
-    if (!streamTs) streamTs = await api.startStream(target, { markdownText: safeTerminal }, taskDisplayMode);
+    if (!streamTs) streamTs = await api.startStream(target, { markdownText: safeTerminal });
     await api.stopStream(target.channelId, streamTs);
   };
 
@@ -354,16 +423,13 @@ async function streamNativeSlackReply(
           setStatus("hit a temporary problem — retrying…");
         }
       } else if (event.type === "tool_started") {
-        const title = humanizeToolName(event.name);
-        toolNames.set(event.id, title);
-        sendTask({ type: "task_update", id: event.id, title, status: "in_progress" });
+        const trace = nativeToolTrace(event.name, event.args);
+        toolTraces.set(event.id, trace);
+        sendToolTrace(nativeToolInvocation(trace));
       } else if (event.type === "tool_ended") {
-        sendTask({
-          type: "task_update",
-          id: event.id,
-          title: toolNames.get(event.id) ?? "Tool",
-          status: event.isError ? "error" : "complete",
-        });
+        const trace = toolTraces.get(event.id) ?? { label: "Tool" };
+        toolTraces.delete(event.id);
+        if (event.isError) sendToolTrace(nativeToolFailure(event.content, trace));
       } else if (event.type === "completed") {
         finalized = true;
         const finalAnswer = withDisclaimer(fullAnswer, disclaimer);
@@ -410,30 +476,12 @@ export async function streamSlackReply(
     initialPreviewTs?: string;
     threadTitle?: string;
     disclaimer?: string | false;
-    taskDisplay?: SlackTaskDisplayMode;
     label?: string;
   } = {},
 ): Promise<void> {
-  const {
-    rendering = "native",
-    initialPreviewTs,
-    threadTitle,
-    disclaimer,
-    taskDisplay = "plan",
-    label = "[slack]",
-  } = options;
+  const { rendering = "native", initialPreviewTs, threadTitle, disclaimer, label = "[slack]" } = options;
   if (rendering === "native" && target.threadTs) {
-    return streamNativeSlackReply(
-      events,
-      api,
-      target,
-      formatError,
-      initialPreviewTs,
-      threadTitle,
-      disclaimer,
-      label,
-      taskDisplay,
-    );
+    return streamNativeSlackReply(events, api, target, formatError, initialPreviewTs, threadTitle, disclaimer, label);
   }
   if (rendering === "native") {
     log.info(`${label} native streaming needs a thread target — using the classic renderer for this turn`);

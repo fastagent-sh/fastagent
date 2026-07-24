@@ -41,7 +41,7 @@ import {
   streamSlackReply,
 } from "./preview.ts";
 import { resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
-import { type SlackTarget, type SlackTaskDisplayMode, createSlackApi } from "./slack-api.ts";
+import { type SlackTarget, createSlackApi } from "./slack-api.ts";
 import { createWelcomedUsers } from "./welcomed.ts";
 
 export { defaultSlackRoute, slackEnvelope };
@@ -113,15 +113,11 @@ export interface SlackChannelOptions {
   /** `context` (default) admits bare replies in managed group threads and buffers unsummoned group
    * discussion. `mentions` answers only app_mention plus DMs for an explicit least-privilege setup. */
   groupBehavior?: "context" | "mentions";
-  /** `native` (default) uses Slack Agent streams/tasks for threaded replies. `classic` retains the
+  /** `native` (default) uses Slack Agent streams for threaded replies. `classic` retains the
    * compatibility renderer based on one rate-limited edited message. A top-level target selected by an
    * explicit continuous/custom policy necessarily uses the classic renderer because Slack streams
    * require a parent user message. */
   rendering?: SlackRendering;
-  /** Native task-card layout (`chat.startStream` `task_display_mode`): `plan` (default) groups steps
-   * under a single collapsible heading, `timeline` lists each step sequentially, `dense` collapses
-   * consecutive tool calls into one summarized card. Applies to the native renderer only. */
-  taskDisplay?: SlackTaskDisplayMode;
   /** Optional footer for successful Agent replies. Omitted or `false` sends no repetitive disclaimer. */
   aiDisclaimer?: string | false;
   /** First-run direct-message welcome, sent once when a user first opens the DM (`app_home_opened`,
@@ -176,7 +172,6 @@ export function slackChannel({
   groupMessageSession = "threaded",
   groupBehavior = "context",
   rendering = "native",
-  taskDisplay = "plan",
   aiDisclaimer,
   welcome = DEFAULT_WELCOME,
   reactionAck = {},
@@ -195,9 +190,6 @@ export function slackChannel({
   }
   if (!(["native", "classic"] as const).includes(rendering)) {
     throw new Error('slackChannel rendering must be "native" or "classic"');
-  }
-  if (!(["timeline", "plan", "dense"] as const).includes(taskDisplay)) {
-    throw new Error('slackChannel taskDisplay must be "timeline", "plan", or "dense"');
   }
   if (welcome !== false && typeof welcome !== "string") {
     throw new Error("slackChannel welcome must be a string or false");
@@ -370,7 +362,6 @@ export function slackChannel({
               initialPreviewTs: turn.previewTs,
               threadTitle: turn.threadTitle,
               disclaimer: aiDisclaimer,
-              taskDisplay,
               label,
             },
           );
