@@ -78,12 +78,33 @@ describe("config: resolveWorkspace (structural layout resolution)", () => {
     expect(ws).toEqual({ root: dir, workbench: dir, layout: "flat" });
   });
 
-  it("a config at BOTH roots is ambiguous → throws (fail visibly, never guess)", async () => {
+  it("a config at BOTH roots is ambiguous → throws IDENTICALLY from both entry points", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-ws-both-"));
     await writeFile(join(dir, "fastagent.config.mjs"), "export default {};\n");
     await mkdir(join(dir, ".fastagent"));
     await writeFile(join(dir, ".fastagent", "fastagent.config.mjs"), "export default {};\n");
     expect(() => resolveWorkspace(dir)).toThrow(/ambiguous/);
+    // Entry-point-invariant: invoked from INSIDE .fastagent/, the same conflict must refuse the same
+    // way — never silently resolve standalone just because of where the command ran.
+    expect(() => resolveWorkspace(join(dir, ".fastagent"))).toThrow(/ambiguous/);
+  });
+
+  it("a config-less .fastagent/ that READS as a workspace fails loudly (never a silent flat downgrade)", async () => {
+    // A standalone workspace whose config was deleted: resolving the host dir as "flat zero-config"
+    // would silently lose persona/skills — refuse with the way out (restore config, or init fresh).
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-configless-"));
+    await mkdir(join(dir, ".fastagent"));
+    await writeFile(join(dir, ".fastagent", "persona.md"), "You are terse.\n");
+    expect(() => resolveWorkspace(dir)).toThrow(/fastagent\.config.*fastagent init/s);
+    // Same refusal from inside the directory.
+    expect(() => resolveWorkspace(join(dir, ".fastagent"))).toThrow(/fastagent\.config.*fastagent init/s);
+  });
+
+  it("a .fastagent/ that does NOT read as a workspace stays zero-config flat (a directory is an agent)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-ws-unrelated-"));
+    await mkdir(join(dir, ".fastagent"));
+    await writeFile(join(dir, ".fastagent", "notes.txt"), "unrelated\n");
+    expect(resolveWorkspace(dir)).toEqual({ root: dir, workbench: dir, layout: "flat" });
   });
 });
 

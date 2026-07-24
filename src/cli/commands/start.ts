@@ -6,7 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { authSeedBytes } from "../../deploy/fly/run.ts";
 import { loadDotEnv } from "../../env.ts";
-import { resolveAuthPath, resolveSessionsDirOverride, resolveWorkspace } from "../../engines/pi/config.ts";
+import { resolveAuthPath, resolveSecretsDir, resolveSessionsDirOverride, resolveWorkspace } from "../../engines/pi/config.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromWorkspace } from "../../engines/pi/workspace.ts";
@@ -92,6 +92,16 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     log.info(
       `[fastagent] note: state (sessions, channel state) lives under the definition dir; point ` +
         `FASTAGENT_STATE_DIR at a persistent volume so a redeploy that replaces the dir does not wipe it.`,
+    );
+  }
+  // The secrets dir is the SAME trap on a different lifecycle: auth.json is MACHINE-WRITTEN (OAuth
+  // rotation), so the copy under the definition dir is the only valid one — a redeploy that replaces
+  // the dir loses a credential no re-seed can restore. An independent check on purpose: moving ONE
+  // of the two to a volume must not silence the note about the other.
+  if (isUnderDir(resolveSecretsDir(root), root)) {
+    log.info(
+      `[fastagent] note: secrets (.env, rotated auth.json) live under the definition dir; point ` +
+        `FASTAGENT_SECRETS_DIR at a persistent volume so a redeploy that replaces the dir does not wipe them.`,
     );
   }
   reportDefinitionWarnings(definition.collisions, definition.diagnostics);

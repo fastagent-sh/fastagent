@@ -215,25 +215,48 @@ export interface ResolvedWorkspace {
  * Resolve a directory into its workspace: layout is STRUCTURAL, never configured. `<dir>` carrying a
  * fastagent.config.* is flat (root = workbench = dir); `<dir>/.fastagent/` carrying one is standalone
  * (root = the `.fastagent` dir, workbench = dir — the host tree stays untouched). Both at once is
- * ambiguous → throw (fail visibly, never guess). Neither = zero-config, treated as flat — "a directory
- * is an agent" stays the default. Invoked from INSIDE a standalone root (cwd = `<dir>/.fastagent`),
- * the same workspace resolves with workbench = the parent, so both invocation points behave identically.
- * The ONE owner of this rule — every command and opener resolves through here.
+ * ambiguous → throw (fail visibly, never guess) — the SAME refusal from BOTH entry points (the host
+ * dir and inside `.fastagent/`), so where you invoke from can never change what a workspace means.
+ * Neither = zero-config, treated as flat — "a directory is an agent" stays the default — EXCEPT when a
+ * config-less `<dir>/.fastagent/` still READS as a workspace (persona/skills/tools…): the config is
+ * standalone's structural marker, so silently degrading to "the host dir is a flat zero-config agent"
+ * would make the authored persona/skills vanish without a trace → throw with the way out instead.
+ * Invoked from INSIDE a standalone root (cwd = `<dir>/.fastagent`), the same workspace resolves with
+ * workbench = the parent, so both invocation points behave identically. The ONE owner of this rule —
+ * every command and opener resolves through here.
  */
 export function resolveWorkspace(dir: string): ResolvedWorkspace {
   const base = resolve(dir);
   const hasConfig = (d: string): boolean => WORKSPACE_CONFIG_NAMES.some((name) => existsSync(join(d, name)));
-  if (basename(base) === STANDALONE_DIR && hasConfig(base)) {
-    return { root: base, workbench: dirname(base), layout: "standalone" };
+  // What makes a config-less dir READ as a workspace: any of the definition's convention names. Broad
+  // on purpose — a false hit fails loudly with a two-way remedy, a miss loses authored content silently.
+  const looksLikeWorkspace = (d: string): boolean =>
+    ["persona.md", "skills", "tools", "channels", "schedules", "package.json"].some((n) => existsSync(join(d, n)));
+  const ambiguity = (host: string): Error =>
+    new Error(
+      `${host} has a fastagent config at BOTH the directory root and ./${STANDALONE_DIR}/ — ambiguous; keep exactly one workspace`,
+    );
+  const configless = (faDir: string): Error =>
+    new Error(
+      `${faDir} looks like a fastagent workspace (persona/skills/tools…) but has no fastagent.config.* — ` +
+        `the config is the standalone layout's marker. Restore its fastagent.config.mjs, or move the ` +
+        `directory away and run \`fastagent init\` to scaffold a fresh workspace`,
+    );
+  if (basename(base) === STANDALONE_DIR) {
+    if (hasConfig(base)) {
+      // Entry-point-invariant ambiguity: a flat config on the PARENT is the same both-roots conflict
+      // seen from the host dir — refuse identically, never resolve differently by entry.
+      if (hasConfig(dirname(base))) throw ambiguity(dirname(base));
+      return { root: base, workbench: dirname(base), layout: "standalone" };
+    }
+    if (looksLikeWorkspace(base)) throw configless(base);
   }
   const flat = hasConfig(base);
-  const standalone = hasConfig(join(base, STANDALONE_DIR));
-  if (flat && standalone) {
-    throw new Error(
-      `${base} has a fastagent config at BOTH the directory root and ./${STANDALONE_DIR}/ — ambiguous; keep exactly one workspace`,
-    );
-  }
-  if (standalone) return { root: join(base, STANDALONE_DIR), workbench: base, layout: "standalone" };
+  const standaloneDir = join(base, STANDALONE_DIR);
+  const standalone = hasConfig(standaloneDir);
+  if (flat && standalone) throw ambiguity(base);
+  if (standalone) return { root: standaloneDir, workbench: base, layout: "standalone" };
+  if (!flat && existsSync(standaloneDir) && looksLikeWorkspace(standaloneDir)) throw configless(standaloneDir);
   return { root: base, workbench: base, layout: "flat" };
 }
 
