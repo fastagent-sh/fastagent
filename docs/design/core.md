@@ -430,7 +430,8 @@ every artifact under `.fastagent/` (Dockerfile, fly.toml, compose, railway.json)
 write is the root `.dockerignore` the host CLIs' context packers require (kept + warned if the host
 owns one — without its machinery excludes the packer would bake `.secrets/` into the image). `.git`
 ships by default: freshness (pull) and write-back (commit/push) are the AGENT's runtime behavior, not
-deploy machinery.
+deploy machinery — the git binary is baked in exactly when the workbench ships a `.git`; a non-git
+workbench adds it via `config.deploy.apt`.
 
 ## 10. Current boundaries
 

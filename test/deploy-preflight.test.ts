@@ -34,8 +34,9 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (!pre.ok) expect(pre.gate).toMatch(/fastagent\.config/);
   });
 
-  it("standalone layout: container facts come from the WORKSPACE, git is auto-baked, --run works", async () => {
+  it("standalone layout: container facts come from the WORKSPACE, git auto-baked (the workbench ships .git), --run works", async () => {
     const host = await workspace();
+    await mkdir(join(host, ".git")); // the workbench is a git repo — the image gets the git binary
     const root = join(host, ".fastagent");
     await mkdir(root, { recursive: true });
     await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
@@ -54,8 +55,30 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (ok.ok) {
       expect(ok.container.standalone).toBe(true);
       expect(ok.container.hasPackageJson).toBe(true); // the WORKSPACE's manifest, not the (absent) host one
-      expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git guaranteed, deploy.apt kept, deduped
+      expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git baked (workbench ships .git), deploy.apt kept, deduped
       expect(JSON.stringify(ok.messages)).toMatch(/standalone image/); // the layout note is stated
+    }
+  });
+
+  it("git is baked iff the baked workbench ships a .git — a non-git dir gets no silent git layer", async () => {
+    // No .git: only the author's declared packages reach the image (history without a binary is a
+    // dead loop; a binary without history is dead weight — deploy.apt is the explicit escape hatch).
+    const noGit = await workspace();
+    const pre = await call(noGit, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.container.shipsGit).toBe(false);
+      expect(pre.container.apt).toEqual(["ripgrep"]);
+    }
+
+    // .git present (flat layout too — the rule is layout-neutral): git rides in.
+    const gitDir = await workspace();
+    await mkdir(join(gitDir, ".git"));
+    const pre2 = await call(gitDir, { model: "openai/gpt-4o-mini" });
+    expect(pre2.ok).toBe(true);
+    if (pre2.ok) {
+      expect(pre2.container.shipsGit).toBe(true);
+      expect(pre2.container.apt).toEqual(["git"]);
     }
   });
 

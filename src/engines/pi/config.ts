@@ -3,11 +3,12 @@
  * (resolveModel, resolveModelSpec). One concern: everything about fastagent.config.ts.
  *
  * Red line: config describes deployment/runtime choices, never authored identity or expertise (those
- * live in persona.md + skills, with AGENTS.md as project context). Deleting the config still leaves a
- * zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL.
+ * live in persona.md + skills, with AGENTS.md as project context). In a FLAT workspace, deleting the
+ * config still leaves a zero-config agent runnable with a model supplied by --model / FASTAGENT_MODEL;
+ * in a STANDALONE workspace the config doubles as the structural layout marker (resolveWorkspace), so
+ * deleting it un-declares the workspace.
  */
-import { existsSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -15,6 +16,12 @@ import type { FastagentTool } from "./tool.ts";
 import type { Models } from "@earendil-works/pi-ai";
 import { THINKING_LEVELS, type AnyModel } from "./harness.ts";
 import { moduleLoadHint } from "../../loader.ts";
+import { STANDALONE_DIR, resolveOverridePath, resolveSecretsDir } from "../../workspace.ts";
+
+// The machinery path resolution (STANDALONE_DIR, resolveStateRoot, resolveSecretsDir) lives in the
+// neutral src/workspace.ts (env.ts derives the .env path from it); re-exported here — this module
+// stays the one import point for config + workspace resolution.
+export { STANDALONE_DIR, resolveSecretsDir, resolveStateRoot } from "../../workspace.ts";
 
 // pi's thinking levels as a runtime value live in harness.ts (THE single source, with the
 // exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
@@ -190,9 +197,6 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   return { config: c, path };
 }
 
-/** The fixed name of a standalone workspace directory (and of the user-global machinery home `~/.fastagent`). */
-export const STANDALONE_DIR = ".fastagent";
-
 /** The two workspace layouts. ONE directory shape either way — standalone just nests the whole
  *  workspace (definition + config + `.secrets/` + `.state/`) inside `<dir>/.fastagent/`. */
 export type WorkspaceLayout = "flat" | "standalone";
@@ -299,19 +303,6 @@ export function resolveModelSpec(
 }
 
 /**
- * Resolve a user-supplied path override (a CLI flag or an env var) to an absolute path, expanding a
- * leading `~`/`~/` to the home dir FIRST. Path-valued config from `.env` (or any non-shell source)
- * never gets the shell's `~` expansion, so a bare `resolve("~/x")` would silently create a literal `~`
- * directory — a fail-silently footgun for a secret/state path. Expanding here makes `~` mean home
- * everywhere these knobs are read.
- */
-function resolveOverridePath(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  const expanded = raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
-  return resolve(expanded);
-}
-
-/**
  * `start`'s sessions-dir override: `--sessions-dir` flag > `FASTAGENT_SESSIONS_DIR` env > undefined
  * (the opener then falls back to {@link defaultSessionsDir} under the {@link resolveStateRoot} root).
  * Resolved to absolute so the store and the startup report agree regardless of cwd.
@@ -335,51 +326,6 @@ export function resolveAuthPathOverride(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return resolveOverridePath(flag ?? env.FASTAGENT_AUTH_PATH);
-}
-
-/**
- * The machinery home for a workspace root: the root itself — EXCEPT when the root is the user's HOME
- * directory (`fastagent login` run from `~`): machinery then lives under the user-global
- * `~/.fastagent/` (so `~/.secrets` / `~/.state` are never created). The global home carries the same
- * unified shape inside it (`~/.fastagent/.secrets/auth.json` — {@link GLOBAL_AUTH_PATH} in auth.ts).
- * Canonical comparison: `dir` arrives realpath-resolved (process.cwd()), homedir() may be a symlink.
- */
-function machineryHome(dir: string): string {
-  const canonical = (p: string): string => {
-    try {
-      return realpathSync(resolve(p));
-    } catch {
-      return resolve(p);
-    }
-  };
-  return canonical(dir) === canonical(homedir()) ? join(resolve(dir), STANDALONE_DIR) : resolve(dir);
-}
-
-/**
- * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/,
- * control.json): `FASTAGENT_STATE_DIR` env > `<workspaceRoot>/.state`. Absolute, so channels and the
- * startup report agree regardless of cwd. Definition: mutable runtime state — single lifecycle
- * (precious, survives redeploy), single process; a container points this at its mounted volume.
- * Secrets are NOT here — they live under {@link resolveSecretsDir} (a different deploy lifecycle:
- * secret store vs volume). The finer knob (`FASTAGENT_SESSIONS_DIR`) still overrides its path on top.
- *
- * `FASTAGENT_STATE_DIR` is an OPERATOR override, so a relative value resolves against `process.cwd()`
- * — the CLI convention its sibling knobs share (`resolveOverridePath`), NOT against `dir`. Only the
- * DEFAULT (`<root>/.state`) is dir-anchored.
- */
-export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_STATE_DIR) ?? join(machineryHome(dir), ".state");
-}
-
-/**
- * The resolved secrets dir — everything fastagent manages that must NEVER leave the machine (`.env`,
- * auth.json): `FASTAGENT_SECRETS_DIR` env > `<workspaceRoot>/.secrets`. Split from the state root on
- * deploy lifecycle: secrets travel through the host's secret store (env vars / the auth seed), state
- * through a volume. A deployed box sets both env knobs at its volume (e.g. `/data/.secrets`,
- * `/data/.state`) so a seeded-then-ROTATED OAuth credential persists across restarts.
- */
-export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? join(machineryHome(dir), ".secrets");
 }
 
 /** The default credentials file under a resolved secrets dir ({@link resolveSecretsDir}). */

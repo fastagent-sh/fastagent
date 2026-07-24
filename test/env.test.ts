@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadDotEnv, loadEnvFile } from "../src/env.ts";
+import { dotEnvPath, loadDotEnv, loadEnvFile } from "../src/env.ts";
+
+describe("dotEnvPath (follows the resolved secrets dir)", () => {
+  it("default <root>/.secrets/.env; FASTAGENT_SECRETS_DIR moves it together with auth.json", () => {
+    expect(dotEnvPath("/w", {} as NodeJS.ProcessEnv)).toBe(join("/w", ".secrets", ".env"));
+    expect(dotEnvPath("/w", { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv)).toBe(
+      join("/data/.secrets", ".env"),
+    );
+  });
+});
 
 // A portable .env loader (Node has process.loadEnvFile; Bun does not — same parse must run on both).
 describe("loadEnvFile", () => {

@@ -49,6 +49,10 @@ export interface ContainerInput {
    *  facts above (hasPackageJson/runtime/hasLockfile) describe THE WORKSPACE (its package.json drives
    *  the image's install step), never the host repo's — whose manifest belongs to the host's own deploy. */
   standalone?: boolean;
+  /** Whether the baked workbench ships a `.git` (preflight fact). When true, preflight has already
+   *  merged "git" into `apt` (the write-back loop needs history + binary together); the plans word
+   *  their runbook's freshness/write-back guidance from the same fact. */
+  shipsGit?: boolean;
 }
 
 /** The apt layer (cached right after FROM). Debian default repos only. */
@@ -151,7 +155,9 @@ CMD ["./node_modules/.bin/fastagent", "start", "/app"]
  *  secret store, state lives on the volume, cache is re-derivable; NONE of it may enter an image.
  *  `.git` is deliberately SHIPPED: the deployed agent's write-back (pull/commit/push) needs the
  *  repo's history+remote — the WYSIWYG bake's freshness/durability loop runs through git, driven by
- *  the agent itself, not by deploy machinery. */
+ *  the agent itself, not by deploy machinery. Shipping `.git` is only half of that loop: preflight
+ *  bakes the git BINARY into the generated image iff the workbench ships a `.git` (layout-neutral,
+ *  the `shipsGit` fact); a non-git workbench that still needs git declares config.deploy.apt. */
 const DOCKERIGNORE = `**/node_modules
 **/.secrets
 **/.state
@@ -160,8 +166,9 @@ const DOCKERIGNORE = `**/node_modules
 **/.env.*
 !**/.env.example
 **/*.log
-# .git is deliberately shipped: the agent can pull to freshen content and push its work back.
-# For a smaller image with no git needs, add a ".git" line here.
+# .git is deliberately shipped: the agent can pull to freshen content and push its work back
+# (the generated image installs the git binary when this directory ships a .git; otherwise
+# add deploy.apt ["git"]). For a smaller image with no git needs, add a ".git" line here.
 `;
 
 /**

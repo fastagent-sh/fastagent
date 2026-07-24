@@ -201,11 +201,15 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     });
     if (opts.run) {
       if (standalone) {
-        // Config-as-code path is a dashboard-only setting (no CLI flag) — without it Railway reads the
-        // repo root and misses .fastagent/railway.json (healthcheck gate). Surface it, don't gate: the
-        // deploy itself works; the healthcheck/restart policy is what the file adds.
+        // Config-as-code path is a dashboard-only setting (no CLI flag) — without it Railway never
+        // reads .fastagent/railway.json, which carries the BUILD config (dockerfilePath:
+        // .fastagent/Dockerfile) as well as the healthcheck/restart policy: the first build falls
+        // back to auto-detecting the repo root instead of the agent's Dockerfile.
         console.error(
-          `[fastagent] note: point the service at .fastagent/railway.json (Service → Settings → Config-as-code) — dashboard-only; without it the healthcheck/restart policy is not applied`,
+          `[fastagent] note: point the service at .fastagent/railway.json (Service → Settings → Config-as-code) — ` +
+            `dashboard-only, BEFORE the first deploy; without it Railway ignores the file entirely: the build ` +
+            `auto-detects the repo root instead of using .fastagent/Dockerfile, and the healthcheck/restart ` +
+            `policy is not applied`,
         );
       }
       return runDeployRailway({

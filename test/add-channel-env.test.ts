@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +72,21 @@ describe("channel setup guidance", () => {
 });
 
 describe("appendChannelDotEnv", () => {
+  it("writes to the RESOLVED secrets dir — FASTAGENT_SECRETS_DIR moves the .env target with the protection", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-env-move-"));
+    const secrets = await mkdtemp(join(tmpdir(), "fa-env-external-"));
+    process.env.FASTAGENT_SECRETS_DIR = secrets;
+    try {
+      const r = await appendChannelDotEnv(dir, "github", { GITHUB_WEBHOOK_SECRET: "s" });
+      expect(r.written).toContain("GITHUB_WEBHOOK_SECRET");
+      expect(await readFile(join(secrets, ".env"), "utf8")).toContain("GITHUB_WEBHOOK_SECRET=s");
+      // Nothing lands at the workspace default — the write and the leak protection target ONE dir.
+      expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
+    } finally {
+      delete process.env.FASTAGENT_SECRETS_DIR;
+    }
+  });
+
   it("keeps existing values by default; overwrite names replace stale lines IN PLACE (fresh credentials must not lose)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-env-"));
     await mkdir(join(dir, ".secrets"), { recursive: true });

@@ -299,10 +299,11 @@ FASTAGENT_SECRETS_DIR    > <workspace>/.secrets        (.env + auth.json)
 --sessions-dir > FASTAGENT_SESSIONS_DIR > <state root>/sessions
 ```
 
-For deployments, point the whole state root (auth, sessions, channel state) at durable storage:
+For deployments, point the state root (sessions, channel state) and the secrets dir (the
+seeded/rotated `auth.json`) at durable storage:
 
 ```bash
-FASTAGENT_STATE_DIR=/data/fastagent fastagent start
+FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
 ## Global options

@@ -162,6 +162,9 @@ export async function preflightDeploy(input: {
   const runner = runtime === "bun" ? "bun run fastagent" : "./node_modules/.bin/fastagent";
   const hasOtherLock =
     runtime === "node" && ((await exists(join(root, "pnpm-lock.yaml"))) || (await exists(join(root, "yarn.lock"))));
+  // Does the baked workbench ship a `.git`? ONE fact driving both the image's git install (below)
+  // and the plans' runbook wording — the write-back loop needs the history AND the binary together.
+  const shipsGit = await exists(join(workbench, ".git"));
   if (standalone) {
     // After the facts: the deps sentence must match the workspace's actual shape (a markdown-only
     // workspace has no package.json and installs nothing — the note must not point at a file that
@@ -169,13 +172,16 @@ export async function preflightDeploy(input: {
     const deps = hasPackageJson
       ? `only the workspace's deps (.fastagent/package.json) are installed — the host repo's own deps are the agent's runtime concern`
       : `the workspace has no package.json, so no deps are installed (the pinned global CLI serves the directory)`;
+    const durability = shipsGit
+      ? `Un-pushed changes on the box do not survive a redeploy; freshness and write-back run through git, ` +
+        `driven by the agent itself (persona owns the policy; GH_TOKEN etc. go in config.deploy.secrets)`
+      : `no .git here, so no history ships and the image does not install git — changes on the box are ` +
+        `ephemeral and do not survive a redeploy`;
     messages.push({
       level: "note",
       text:
         `standalone image: the whole directory is baked as the agent's workbench (WYSIWYG — what you see ` +
-        `is what ships, git or not, clean or not); ${deps}. Un-pushed changes on the box do not survive a ` +
-        `redeploy; freshness and write-back run through git, driven by the agent itself (persona owns the ` +
-        `policy; GH_TOKEN etc. go in config.deploy.secrets).`,
+        `is what ships, git or not, clean or not); ${deps}. ${durability}.`,
     });
   }
   // A code workspace with no lockfile builds via a non-frozen install (ranges resolve at build time) — not
@@ -247,9 +253,12 @@ export async function preflightDeploy(input: {
     }
   }
 
-  // Write-back mechanics are fastagent's (the policy is the persona's): a standalone image always
-  // carries git, so pull/commit/push can work at all. Merged with (never duplicating) config.deploy.apt.
-  const apt = standalone ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
+  // Write-back mechanics are fastagent's (the policy is the persona's): the image carries the git
+  // BINARY iff the baked workbench ships a `.git` — layout-neutral (history without the binary is a
+  // dead loop; the binary without history is dead weight). A non-git workbench that still needs git
+  // (the agent clones repos as its job) declares config.deploy.apt: ["git"] explicitly. Merged with
+  // (never duplicating) config.deploy.apt.
+  const apt = shipsGit ? [...new Set(["git", ...(config.deploy?.apt ?? [])])] : config.deploy?.apt;
   const container: ContainerInput = {
     hasPackageJson,
     runtime,
@@ -258,6 +267,7 @@ export async function preflightDeploy(input: {
     version: await fastagentVersion(),
     apt,
     standalone,
+    shipsGit,
   };
   const port = config.http?.port ?? 8787;
   // What the agent declared it needs on the box (fastagent.config deploy.secrets) — carried like channel

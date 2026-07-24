@@ -184,15 +184,24 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     );
   }
   runbook.push(deployCmd);
-  runbook.push(
-    ``,
-    `# The image is a WYSIWYG snapshot of this directory. Freshness/durability run through git, driven`,
-    `# by the agent itself: .git ships in the image (see .dockerignore), so the agent can pull to`,
-    `# freshen content and commit/push its work back (creds ride config.deploy.secrets; the POLICY —`,
-    `# push vs PR, identity — lives in persona.md). CAVEAT: whether .git survives the upload is`,
-    `# host-CLI-dependent — verify \`git status\` on the box; if missing, have the agent clone instead.`,
-    `# Un-pushed changes on the box never survive a redeploy; durability lives in git.`,
-  );
+  if (input.shipsGit) {
+    runbook.push(
+      ``,
+      `# The image is a WYSIWYG snapshot of this directory. Freshness/durability run through git, driven`,
+      `# by the agent itself: .git ships in the image (see .dockerignore) and git is baked in, so the agent`,
+      `# can pull to freshen content and commit/push its work back (creds ride config.deploy.secrets; the`,
+      `# POLICY — push vs PR, identity — lives in persona.md). CAVEAT: whether .git survives the upload is`,
+      `# host-CLI-dependent — verify \`git status\` on the box; if missing, have the agent clone instead.`,
+      `# Un-pushed changes on the box never survive a redeploy; durability lives in git.`,
+    );
+  } else {
+    runbook.push(
+      ``,
+      `# The image is a WYSIWYG snapshot of this directory. No .git here, so no history ships and the`,
+      `# generated image does not install git — changes on the box are ephemeral and never survive a`,
+      `# redeploy. If the agent should clone/push repos as part of its work, add deploy: { apt: ["git"] }.`,
+    );
+  }
 
   // Model-auth guidance: an env key becomes a secret above. Otherwise the plan can't read the local
   // credential's VALUE to set as a secret — true for OAuth AND a stored API key (both are

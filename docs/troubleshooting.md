@@ -107,20 +107,24 @@ Use `--no-watch` to serve once without the supervisor.
 
 ## Sessions disappear after redeploy
 
-By default, all machine state (auth, sessions, channel state) lives under the workspace:
+By default, machine state (sessions, channel state, schedule state) lives under the workspace's
+`.state/`, and the seeded/rotated credentials (`auth.json`) under its `.secrets/`:
 
 ```txt
-<state root>   # default <workspace>/.state (credentials live in <workspace>/.secrets)
+<state root>    # default <workspace>/.state
+<secrets dir>   # default <workspace>/.secrets
 ```
 
-A redeploy that replaces the workspace wipes it. Point the whole state root at durable storage:
+A redeploy that replaces the workspace wipes both. Point each at durable storage (the generated
+deploy targets set both):
 
 ```bash
-FASTAGENT_STATE_DIR=/data/fastagent fastagent start
+FASTAGENT_STATE_DIR=/data/.state FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
 ```
 
 Moving only sessions (`FASTAGENT_SESSIONS_DIR` / `--sessions-dir`) is not enough for channel-backed
-deployments — Telegram's durable turn state also lives under the state root.
+deployments — Telegram's durable turn state also lives under the state root. And moving only the
+state root still leaves a rotated `auth.json` in the workspace — set `FASTAGENT_SECRETS_DIR` too.
 
 ## `session busy`
 

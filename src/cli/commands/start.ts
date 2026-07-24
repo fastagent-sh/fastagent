@@ -85,11 +85,12 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // State defaults under the workspace root, which a redeploy may replace wholesale. Gate on where the
   // root ACTUALLY resolved (in-tree?), not on the raw env var: an empty `FASTAGENT_STATE_DIR=""` reads
   // as unset (resolveStateRoot) and still lands in-tree, so a raw `=== undefined` check would wrongly
-  // silence the warning. A sessions/auth override to a volume does not help — channel state (the
-  // telegram turn/context files replay depends on) is still in-tree.
+  // silence the warning. A sessions override to a volume does not help — channel state (the
+  // telegram turn/context files replay depends on) is still in-tree. (auth.json is NOT under the
+  // state root — it lives in the secrets dir, resolveSecretsDir.)
   if (isUnderDir(stateRoot, root)) {
     log.info(
-      `[fastagent] note: state (auth, sessions, channel state) lives under the definition dir; point ` +
+      `[fastagent] note: state (sessions, channel state) lives under the definition dir; point ` +
         `FASTAGENT_STATE_DIR at a persistent volume so a redeploy that replaces the dir does not wipe it.`,
     );
   }

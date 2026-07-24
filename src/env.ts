@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveSecretsDir } from "./workspace.ts";
 
 /**
  * Load a `.env` file into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence
@@ -40,15 +41,20 @@ export function parseEnvContent(content: string): Map<string, string> {
   return parsed;
 }
 
-/** The workspace `.env` file: `<workspaceRoot>/.secrets/.env`. Secrets live in the fastagent-managed
- *  `.secrets/` dir (self-gitignored, dockerignored, never shipped) — THE path every reader/writer of
- *  the workspace .env must use, so "where do secrets live" cannot diverge across commands. */
-export function dotEnvPath(root: string): string {
-  return join(root, ".secrets", ".env");
+/** The workspace `.env` file: `<resolved secrets dir>/.env` — default `<workspaceRoot>/.secrets/.env`,
+ *  moved together with auth.json by `FASTAGENT_SECRETS_DIR` ({@link resolveSecretsDir} in the neutral
+ *  workspace.ts). THE path every reader/writer of the workspace .env must use, so "where do secrets
+ *  live" cannot diverge across commands. The file's OWN location resolves from the REAL environment:
+ *  commands locate + load `.env` first, so a `FASTAGENT_SECRETS_DIR` set INSIDE it still relocates
+ *  auth.json but cannot move the file it is read from. */
+export function dotEnvPath(root: string, env: NodeJS.ProcessEnv = process.env): string {
+  return join(resolveSecretsDir(root, env), ".env");
 }
 
-/** The committable template beside it: `<workspaceRoot>/.secrets/.env.example` (un-ignored by the
- *  `.secrets/.gitignore` the scaffold writes, so the template travels while real values never do). */
+/** The committable template: `<workspaceRoot>/.secrets/.env.example` — deliberately NOT moved by
+ *  `FASTAGENT_SECRETS_DIR`: the template is authored, committable workspace surface (un-ignored by the
+ *  `.secrets/.gitignore` the scaffold writes, so it travels with the workspace while real values never
+ *  do); only the real `.env` follows the override. */
 export function envExamplePath(root: string): string {
   return join(root, ".secrets", ".env.example");
 }

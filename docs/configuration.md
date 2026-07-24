@@ -142,6 +142,11 @@ auth:       --auth-path    > FASTAGENT_AUTH_PATH         > <secrets>/auth.json
 
 A leading `~` in any of these is expanded to your home dir.
 
+`FASTAGENT_SECRETS_DIR` moves both the workspace `.env` and `auth.json`. The `.env`'s own location
+resolves from the real environment — a `FASTAGENT_SECRETS_DIR` set *inside* `.env` still relocates
+`auth.json` but cannot move the file it is read from. The committable `.env.example` template always
+stays at `<workspace>/.secrets/.env.example`.
+
 ## Tools
 
 There are two ways to add tools:

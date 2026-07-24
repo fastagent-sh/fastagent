@@ -155,13 +155,25 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     `# Deploy — uploads this dir and builds the Dockerfile on Railway (no local Docker needed). This is`,
     `# also the ENTIRE redeploy: re-run \`railway up\` alone (the one-time setup above is not repeated).`,
     `railway up`,
-    ``,
-    `# The image is a WYSIWYG snapshot of this directory. Freshness/durability run through git, driven`,
-    `# by the agent itself (pull to freshen, commit/push to write back; creds ride config.deploy.secrets).`,
-    `# CAVEAT — \`railway up\` is known to strip .git from its upload: expect NO baked history on the box;`,
-    `# the agent should \`git clone\` its repo in the workbench (same token) before making changes.`,
-    `# Un-pushed changes on the box never survive a redeploy; durability lives in git.`,
   );
+  if (input.shipsGit) {
+    runbook.push(
+      ``,
+      `# The image is a WYSIWYG snapshot of this directory. Freshness/durability run through git, driven`,
+      `# by the agent itself (pull to freshen, commit/push to write back; creds ride config.deploy.secrets;`,
+      `# git is baked into the image). CAVEAT — \`railway up\` is known to strip .git from its upload:`,
+      `# expect NO baked history on the box; the agent should \`git clone\` its repo in the workbench`,
+      `# (same token) before making changes.`,
+      `# Un-pushed changes on the box never survive a redeploy; durability lives in git.`,
+    );
+  } else {
+    runbook.push(
+      ``,
+      `# The image is a WYSIWYG snapshot of this directory. No .git here, so no history ships and the`,
+      `# generated image does not install git — changes on the box are ephemeral and never survive a`,
+      `# redeploy. If the agent should clone/push repos as part of its work, add deploy: { apt: ["git"] }.`,
+    );
+  }
 
   // The public URL is minted, not deterministic (unlike Fly's <app>.fly.dev) — ONE mint step, then each
   // channel's webhook uses that domain (mint once even when both channels are present).
