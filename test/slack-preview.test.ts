@@ -86,6 +86,63 @@ describe("Slack reply rendering", () => {
   });
 });
 
+describe("native Slack tool tasks", () => {
+  it("shows the operation and a bounded failed result in the native task card", async () => {
+    const api = fakeApi();
+    const events = (async function* (): AsyncIterable<AgentEvent> {
+      yield {
+        type: "tool_started",
+        id: "tool-1",
+        name: "bash",
+        args: { command: `npm test <!channel> ${"🐍".repeat(80)}` },
+      };
+      yield {
+        type: "tool_ended",
+        id: "tool-1",
+        isError: true,
+        content: {
+          content: [{ type: "text", text: `permission denied <!here> ${"💥".repeat(300)}` }],
+        },
+      };
+      yield { type: "text", delta: "Recovered." };
+      yield { type: "completed" };
+    })();
+
+    await streamSlackReply(events, api, { channelId: "D1", threadTs: "1.0" }, () => "failed", {
+      rendering: "native",
+      disclaimer: false,
+    });
+
+    const started = vi.mocked(api.startStream).mock.calls[0]?.[1]?.chunks?.[0];
+    expect(started).toMatchObject({
+      type: "task_update",
+      id: "tool-1",
+      title: "Bash",
+      status: "in_progress",
+    });
+    if (started?.type !== "task_update") throw new Error("missing started task update");
+    expect(started.details).toContain("npm test &lt;!channel>");
+    expect(started.details).not.toContain("<!channel>");
+
+    const ended = vi
+      .mocked(api.appendStream)
+      .mock.calls.flatMap(([, , content]) => content.chunks ?? [])
+      .find((chunk) => chunk.type === "task_update" && chunk.status === "error");
+    expect(ended).toMatchObject({
+      type: "task_update",
+      id: "tool-1",
+      title: "Bash",
+      details: started.details,
+      status: "error",
+    });
+    if (ended?.type !== "task_update") throw new Error("missing ended task update");
+    expect(ended.output).toContain("permission denied &lt;!here>");
+    expect(ended.output).not.toContain("<!here>");
+    expect(Array.from(`${ended.title}${ended.details ?? ""}${ended.output ?? ""}`)).toHaveLength(256);
+    expect(ended.output?.endsWith("…")).toBe(true);
+  });
+});
+
 describe("native DM Agent status around a retry backoff", () => {
   function eventSource() {
     const queue: AgentEvent[] = [];

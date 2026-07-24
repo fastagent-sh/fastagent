@@ -1,5 +1,5 @@
 /** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
-import type { AgentEvent } from "../../agent.ts";
+import type { AgentEvent, Json } from "../../agent.ts";
 import { log } from "../../log.ts";
 import {
   RETRY_NOTICE,
@@ -11,8 +11,10 @@ import {
   defaultErrorMessage,
   humanizeToolName,
   revealedAnswer,
+  summarizeToolArgs,
   toolLines,
 } from "../preview-kit.ts";
+import { truncateCodePointPrefix } from "../text.ts";
 import {
   type SlackApi,
   type SlackStreamChunk,
@@ -31,6 +33,8 @@ const CLASSIC_UPDATE_INTERVAL_MS = 3_000;
 const NATIVE_APPEND_INTERVAL_MS = 750;
 const WORKING_STATUS = "is working on your request…";
 const GENERIC_FAILURE = "⚠️ The response stream stopped unexpectedly. Please try again.";
+/** Slack documents one 256-character budget across a task_update's human-readable text. */
+const NATIVE_TASK_TEXT_MAX = 256;
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -42,6 +46,49 @@ const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(
  * (real Slack controls never contain a `<`). */
 export function sanitizeSlackMarkdown(markdown: string): string {
   return markdown.replace(/<[@!][^<>]*>/g, (control) => `&lt;${control.slice(1)}`);
+}
+
+interface NativeTask {
+  title: string;
+  details?: string;
+}
+
+/** Prefer pi's AgentToolResult text blocks, then common custom-tool error fields, then compact JSON. */
+function toolResultText(value: Json): string {
+  if (typeof value === "string") return value;
+  if (value === null) return "";
+  if (typeof value !== "object" || Array.isArray(value)) return JSON.stringify(value);
+
+  const blocks = value.content;
+  if (Array.isArray(blocks)) {
+    const text = blocks
+      .map((block) =>
+        block && typeof block === "object" && !Array.isArray(block) && typeof block.text === "string" ? block.text : "",
+      )
+      .filter(Boolean)
+      .join("\n");
+    if (text) return text;
+  }
+  for (const key of ["error", "message", "result"] as const) {
+    const field = value[key];
+    if (typeof field === "string" && field.trim()) return field;
+  }
+  return JSON.stringify(value);
+}
+
+function nativeTaskDetails(args: Json): string | undefined {
+  const details = sanitizeSlackMarkdown(summarizeToolArgs(args));
+  return details || undefined;
+}
+
+/** Failed output is the only result content made customer-facing: one line, sanitized, and fitted
+ * into Slack's task text budget after the title and operation details. */
+function nativeTaskErrorOutput(content: Json, task: NativeTask): string | undefined {
+  const used = Array.from(task.title).length + Array.from(task.details ?? "").length;
+  const available = NATIVE_TASK_TEXT_MAX - used;
+  if (available <= 0) return undefined;
+  const raw = toolResultText(content).replace(/\s+/g, " ").trim() || "Tool failed without an error message.";
+  return truncateCodePointPrefix(sanitizeSlackMarkdown(raw), available);
 }
 
 function withDisclaimer(markdown: string, disclaimer: string | false | undefined): string {
@@ -253,7 +300,7 @@ async function streamNativeSlackReply(
         .catch((error) => log.warn(`${label} could not set Slack Agent status: ${String(error)}`)),
     );
   };
-  const toolNames = new Map<string, string>();
+  const toolTasks = new Map<string, NativeTask>();
   let pendingText = "";
   let fullAnswer = "";
   let textTimer: ReturnType<typeof setTimeout> | undefined;
@@ -354,15 +401,21 @@ async function streamNativeSlackReply(
           setStatus("hit a temporary problem — retrying…");
         }
       } else if (event.type === "tool_started") {
-        const title = humanizeToolName(event.name);
-        toolNames.set(event.id, title);
-        sendTask({ type: "task_update", id: event.id, title, status: "in_progress" });
+        const task: NativeTask = {
+          title: humanizeToolName(event.name),
+          details: nativeTaskDetails(event.args),
+        };
+        toolTasks.set(event.id, task);
+        sendTask({ type: "task_update", id: event.id, ...task, status: "in_progress" });
       } else if (event.type === "tool_ended") {
+        const task = toolTasks.get(event.id) ?? { title: "Tool" };
+        const output = event.isError ? nativeTaskErrorOutput(event.content, task) : undefined;
         sendTask({
           type: "task_update",
           id: event.id,
-          title: toolNames.get(event.id) ?? "Tool",
+          ...task,
           status: event.isError ? "error" : "complete",
+          ...(output ? { output } : {}),
         });
       } else if (event.type === "completed") {
         finalized = true;

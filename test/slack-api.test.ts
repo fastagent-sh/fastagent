@@ -66,7 +66,16 @@ describe("Slack Web API transport", () => {
     await expect(api.postMarkdown(target, "**bold**")).resolves.toBe("1.0");
     const streamTs = await api.startStream(target, { markdownText: "# Answer" });
     await api.appendStream("C1", streamTs, {
-      chunks: [{ type: "task_update", id: "tool-1", title: "search", status: "in_progress" }],
+      chunks: [
+        {
+          type: "task_update",
+          id: "tool-1",
+          title: "search",
+          status: "in_progress",
+          details: "public docs",
+          output: "found 3 results",
+        },
+      ],
     });
     await api.stopStream("C1", streamTs);
     await api.setThreadStatus(target, "is working…");
@@ -91,7 +100,16 @@ describe("Slack Web API transport", () => {
       },
     });
     expect(calls[2]?.body).toMatchObject({
-      chunks: [{ type: "task_update", id: "tool-1", title: "search", status: "in_progress" }],
+      chunks: [
+        {
+          type: "task_update",
+          id: "tool-1",
+          title: "search",
+          status: "in_progress",
+          details: "public docs",
+          output: "found 3 results",
+        },
+      ],
     });
     expect(calls.map((call) => call.method)).toEqual([
       "chat.postMessage",

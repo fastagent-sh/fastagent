@@ -33,6 +33,10 @@ interface SlackTaskUpdateChunk {
   id: string;
   title: string;
   status: "pending" | "in_progress" | "complete" | "error";
+  /** Concise operation summary (for example a command or path). Slack caps task text at 256 chars. */
+  details?: string;
+  /** Concise result summary. The renderer currently sends this only for failed tools. */
+  output?: string;
 }
 
 export type SlackStreamChunk = SlackMarkdownTextChunk | SlackTaskUpdateChunk;

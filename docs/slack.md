@@ -219,13 +219,15 @@ usable only when Slack exposes authenticated downloadable bytes.
 2. starts a native stream with `chat.startStream`;
 3. appends standard Markdown with `chat.appendStream`;
 4. maps `tool_started` / `tool_ended` to `task_update` chunks, humanizing each tool's identifier into a
-   plain-language label (`mcp__github__create_issue` → `Github: create issue`) without exposing arguments;
-   the layout follows `taskDisplay` — `plan` (default) groups steps under one collapsible heading,
-   `timeline` lists each step, `dense` collapses consecutive tool calls;
+   plain-language label (`mcp__github__create_issue` → `Github: create issue`) and putting a short,
+   single-line argument summary (normally the command, path, or query) in `details`; failed tasks also put
+   a short error/result summary in `output`. The layout follows `taskDisplay` — `plan` (default) groups
+   steps under one collapsible heading, `timeline` lists each step, `dense` collapses consecutive tool calls;
 5. closes the stream with `chat.stopStream`.
 
-Raw model `thinking` and generic tool arguments are never customer-facing. The former is represented by
-Slack's loading state; task cards carry only the tool name and completion state. Agent replies also
+Raw model `thinking` and successful tool output are not customer-facing. The former is represented by
+Slack's loading state; task-card details and failed output are whitespace-collapsed, Unicode-safe truncated,
+notification-control sanitized, and kept within Slack's 256-character task budget. Agent replies also
 neutralize Slack notification controls such as `<!channel>`; deliberate outbound mentions belong in the
 explicit `slack-send` tool. Successful replies omit repetitive disclaimers by default; configure an
 `aiDisclaimer` string only when workspace policy requires a per-message footer. Native channel streams carry the triggering user/team recipient IDs required by Slack. DM `app_context` entities are included in

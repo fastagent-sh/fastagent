@@ -370,7 +370,7 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({ task_display_mode: "timeline" });
   });
 
-  it("renders safe native task updates without exposing reasoning or tool arguments", async () => {
+  it("renders concise native task details without exposing reasoning or successful tool output", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     let prompt: Prompt | undefined;
@@ -378,8 +378,8 @@ describe("Slack sessions, context, and managed threads", () => {
       async *invoke(_scope, value): AsyncIterable<AgentEvent> {
         prompt = value;
         yield { type: "thinking", delta: "private chain of thought: launch-code" };
-        yield { type: "tool_started", id: "t1", name: "search", args: { token: "tool-secret" } };
-        yield { type: "tool_ended", id: "t1", isError: false, content: { result: "internal" } };
+        yield { type: "tool_started", id: "t1", name: "search", args: { query: "public docs" } };
+        yield { type: "tool_ended", id: "t1", isError: false, content: { result: "internal result" } };
         yield { type: "text", delta: "# Safe answer\n\n**Done.** Do not ping <!channel>." };
         yield { type: "completed" };
       },
@@ -404,17 +404,18 @@ describe("Slack sessions, context, and managed threads", () => {
       .map(([, init]) => String(init?.body))
       .join("\n");
     expect(outbound).not.toContain("launch-code");
-    expect(outbound).not.toContain("tool-secret");
+    expect(outbound).toContain("public docs");
+    expect(outbound).not.toContain("internal result");
     expect(outbound).not.toContain("<!channel>");
     expect(outbound).toContain("&lt;!channel>");
     expect(outbound).toContain("Custom policy footer.");
     expect(slackBodies(fetchMock, "chat.startStream")[0]).toMatchObject({
-      chunks: [{ type: "task_update", id: "t1", title: "Search", status: "in_progress" }],
+      chunks: [{ type: "task_update", id: "t1", title: "Search", details: "public docs", status: "in_progress" }],
     });
     expect(slackBodies(fetchMock, "chat.appendStream")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          chunks: [{ type: "task_update", id: "t1", title: "Search", status: "complete" }],
+          chunks: [{ type: "task_update", id: "t1", title: "Search", details: "public docs", status: "complete" }],
         }),
         expect.objectContaining({
           chunks: [{ type: "markdown_text", text: expect.stringContaining("# Safe answer") }],
