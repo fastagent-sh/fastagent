@@ -118,8 +118,8 @@ export interface SlackChannelOptions {
    * explicit continuous/custom policy necessarily uses the classic renderer because Slack streams
    * require a parent user message. */
   rendering?: SlackRendering;
-  /** Native task-card layout (`chat.startStream` `task_display_mode`): `plan` (default) groups steps
-   * under a single collapsible heading, `timeline` lists each step sequentially, `dense` collapses
+  /** Native task-card layout (`chat.startStream` `task_display_mode`): `timeline` (default) lists each
+   * step sequentially, `plan` groups steps under a single collapsible heading, and `dense` collapses
    * consecutive tool calls into one summarized card. Applies to the native renderer only. */
   taskDisplay?: SlackTaskDisplayMode;
   /** Optional footer for successful Agent replies. Omitted or `false` sends no repetitive disclaimer. */
@@ -176,7 +176,7 @@ export function slackChannel({
   groupMessageSession = "threaded",
   groupBehavior = "context",
   rendering = "native",
-  taskDisplay = "plan",
+  taskDisplay = "timeline",
   aiDisclaimer,
   welcome = DEFAULT_WELCOME,
   reactionAck = {},

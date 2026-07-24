@@ -21,7 +21,7 @@ export default slackChannel({
     : undefined,
   groupBehavior: "context", // default; use "mentions" only for an explicit least-privilege setup
   rendering: "native", // Slack Agent streams + task timeline; use "classic" only for compatibility
-  // taskDisplay: "plan", // native task-card layout: "plan" (default) | "timeline" | "dense"
+  // taskDisplay: "timeline", // native task-card layout (default); alternatives: "plan" | "dense"
   // Optional per-reply footer, if your policy requires one: aiDisclaimer: "AI-generated; verify important information.",
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: a generic greeting)
   // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)

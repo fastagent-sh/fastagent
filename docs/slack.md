@@ -114,7 +114,7 @@ export default slackChannel({
     : undefined,
   groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
   rendering: "native", // native Agent streams/tasks; "classic" is the compatibility renderer
-  // taskDisplay: "plan", // native task-card layout: "plan" (default) | "timeline" | "dense"
+  // taskDisplay: "timeline", // native task-card layout (default); alternatives: "plan" | "dense"
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
   // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
@@ -221,8 +221,8 @@ usable only when Slack exposes authenticated downloadable bytes.
 4. maps `tool_started` / `tool_ended` to `task_update` chunks, humanizing each tool's identifier into a
    plain-language label (`mcp__github__create_issue` → `Github: create issue`) and putting a short,
    single-line argument summary (normally the command, path, or query) in `details`; failed tasks also put
-   a short error/result summary in `output`. The layout follows `taskDisplay` — `plan` (default) groups
-   steps under one collapsible heading, `timeline` lists each step, `dense` collapses consecutive tool calls;
+   a short error/result summary in `output`. The layout follows `taskDisplay` — `timeline` (default) lists
+   each step sequentially, `plan` groups steps under one collapsible heading, `dense` collapses consecutive tool calls;
 5. closes the stream with `chat.stopStream`.
 
 Raw model `thinking` and successful tool output are not customer-facing. The former is represented by

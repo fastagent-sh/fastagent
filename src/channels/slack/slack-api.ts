@@ -395,7 +395,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       }
       return first;
     },
-    async startStream(target, content = {}, taskDisplayMode = "plan") {
+    async startStream(target, content = {}, taskDisplayMode = "timeline") {
       if (!target.threadTs) throw new Error("Slack native streams require a parent thread timestamp");
       const channelRecipient = target.channelId.startsWith("D")
         ? {}

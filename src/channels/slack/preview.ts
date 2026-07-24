@@ -472,7 +472,7 @@ export async function streamSlackReply(
     initialPreviewTs,
     threadTitle,
     disclaimer,
-    taskDisplay = "plan",
+    taskDisplay = "timeline",
     label = "[slack]",
   } = options;
   if (rendering === "native" && target.threadTs) {
