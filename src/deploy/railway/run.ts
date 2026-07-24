@@ -46,6 +46,13 @@ export interface RailwayRunPlan {
    *  by default so `--run` only creates on an unlinked dir and never deploys into a pre-existing (possibly
    *  unrelated/production) project; the flag is the operator's explicit "yes, this project". */
   intoLinked: boolean;
+  /** `RAILWAY_DOCKERFILE_PATH` value — Railway's service-variable route to a non-root Dockerfile
+   *  (builds/dockerfiles docs), set with the machinery variables BEFORE the first `up`. The CLI passes
+   *  `/.fastagent/Dockerfile` for a standalone workspace so the build never falls back to auto-detecting
+   *  the host repo root (the config-as-code file also carries the path, but pointing Railway at
+   *  `.fastagent/railway.json` is dashboard-only — the variable is the scriptable way). Undefined for
+   *  flat: the root `Dockerfile` is auto-detected. */
+  dockerfilePath?: string;
 }
 
 /** Done (with the live URL), or a gate the operator must clear before re-running (printed + non-zero
@@ -203,18 +210,15 @@ export async function deployRailwayRun(
   //     volume (which has no --service and would otherwise attach to that service) — so the mismatch fails
   //     visibly with NO side effect. State root on argv (not secret); secrets one-per-`set --stdin` (value
   //     on stdin, never argv). Idempotent. (Order vs the volume is free — both just need to precede `up`.)
-  log(`setting FASTAGENT_STATE_DIR/FASTAGENT_SECRETS_DIR + ${Object.keys(plan.secrets).length} secret(s)…`);
-  if (
-    (
-      await railway([
-        "variables",
-        "set",
-        `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`,
-        `FASTAGENT_SECRETS_DIR=${plan.mountPath}/.secrets`,
-        ...svc,
-      ])
-    ).code !== 0
-  ) {
+  const machineryVars = [
+    `FASTAGENT_STATE_DIR=${plan.mountPath}/.state`,
+    `FASTAGENT_SECRETS_DIR=${plan.mountPath}/.secrets`,
+    ...(plan.dockerfilePath ? [`RAILWAY_DOCKERFILE_PATH=${plan.dockerfilePath}`] : []),
+  ];
+  log(
+    `setting ${machineryVars.map((v) => v.split("=")[0]).join("/")} + ${Object.keys(plan.secrets).length} secret(s)…`,
+  );
+  if ((await railway(["variables", "set", ...machineryVars, ...svc])).code !== 0) {
     return gate("`railway variables set` failed — see the railway output above");
   }
   for (const [k, v] of Object.entries(plan.secrets)) {

@@ -12,7 +12,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastagentConfig } from "../engines/pi/config.ts";
-import { resolveAuthPath } from "../engines/pi/config.ts";
+import { STANDALONE_DIR, resolveAuthPath } from "../engines/pi/config.ts";
 import { inspectChannels } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
 import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
@@ -208,25 +208,37 @@ export async function preflightDeploy(input: {
     });
   }
   // A KEPT workbench-root .dockerignore silently replaces the generated one's protections — read it
-  // and warn SPECIFICALLY (the generic "kept" line suggests --force, which never clobbers the host's
-  // file). The critical ones: (a) `.secrets`/`.env` excludes — without them the packer BAKES SECRETS
-  // INTO THE IMAGE; (b) a recursive **/node_modules — without it the build machine's deps (native
-  // binaries for YOUR OS) clobber the image's; (c) a .git exclude kills the agent's pull/push loop
-  // (note-level: a legitimate slimming choice). Not force-gated: kept even under --force.
+  // and check SPECIFICALLY (the generic "kept" line suggests --force, which never clobbers the host's
+  // file). The critical ones: (a) a rule matching `.fastagent` on a standalone deploy — the packer
+  // would drop the WHOLE workspace from the context (the box boots with no agent and crash-loops);
+  // (b) `.secrets`/`.env` excludes — without them the packer BAKES SECRETS INTO THE IMAGE. Both GATE
+  // under --run (a full deploy must not push a broken or secret-laden image; same discipline as the
+  // model-travel gate) and warn generate-only. (c) a recursive **/node_modules — without it the build
+  // machine's deps (native binaries for YOUR OS) clobber the image's (warn); (d) a .git exclude kills
+  // the agent's pull/push loop (note-level: a legitimate slimming choice). Not force-gated: kept even
+  // under --force. `covers` is a conservative line matcher, not full dockerignore semantics: a `!`
+  // negation naming the same form reads as NOT covered (a false warn beats a false all-clear).
   if (await exists(join(workbench, ".dockerignore"))) {
     const lines = (await readFile(join(workbench, ".dockerignore"), "utf8")).split("\n").map((l) => l.trim());
+    const matches = (l: string, name: string): boolean =>
+      l === name || l === `${name}/` || l === `**/${name}` || l === `**/${name}/` || l === `/${name}`;
     const covers = (name: string): boolean =>
-      lines.some(
-        (l) => l === name || l === `${name}/` || l === `**/${name}` || l === `**/${name}/` || l === `/${name}`,
-      );
+      lines.some((l) => matches(l, name)) && !lines.some((l) => l.startsWith("!") && matches(l.slice(1), name));
+    if (standalone && covers(STANDALONE_DIR)) {
+      const text =
+        `your .dockerignore (kept) excludes \`${STANDALONE_DIR}\` — the build context would ship WITHOUT the ` +
+        `agent workspace entirely (the deployed box has no persona/config and crash-loops). Remove that line ` +
+        `from it before deploying.`;
+      if (run) return { ok: false, gate: text };
+      messages.push({ level: "warn", text });
+    }
     const secretExcludes = [".secrets", ".env"].filter((n) => !covers(n));
     if (secretExcludes.length > 0) {
-      messages.push({
-        level: "warn",
-        text:
-          `your .dockerignore (kept) lacks ${secretExcludes.map((s) => `\`**/${s}\``).join(" and ")} — the build ` +
-          `context would BAKE SECRETS INTO THE IMAGE. Add the exclude(s) before deploying.`,
-      });
+      const text =
+        `your .dockerignore (kept) lacks ${secretExcludes.map((s) => `\`**/${s}\``).join(" and ")} — the build ` +
+        `context would BAKE SECRETS INTO THE IMAGE. Add the exclude(s) before deploying.`;
+      if (run) return { ok: false, gate: text };
+      messages.push({ level: "warn", text });
     }
     if (!covers(".state")) {
       messages.push({

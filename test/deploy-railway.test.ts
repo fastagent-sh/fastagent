@@ -24,7 +24,7 @@ describe("deploy/railway: planRailwayDeploy", () => {
     expect(json(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }))).not.toContain("FASTAGENT");
   });
 
-  it("standalone: railway.json namespaced + dockerfilePath into .fastagent/ + the dashboard config-path step", () => {
+  it("standalone: railway.json namespaced + the build entry rides RAILWAY_DOCKERFILE_PATH (config-as-code optional)", () => {
     const p = planRailwayDeploy({ ...base, modelAuth: undefined, channels: [], standalone: true });
     expect(p.artifacts.map((a) => a.path).sort()).toEqual([
       ".dockerignore",
@@ -34,8 +34,19 @@ describe("deploy/railway: planRailwayDeploy", () => {
     ]);
     const cfg = JSON.parse(p.artifacts.find((a) => a.path === ".fastagent/railway.json")?.content ?? "{}");
     expect(cfg.build.dockerfilePath).toBe(".fastagent/Dockerfile"); // relative to the workbench upload context
-    expect(runbook(p)).toMatch(/Config-as-code/); // the dashboard-only pointer step is stated
+    // The BUILD entry is a scriptable service variable (pointing Railway at the namespaced config file
+    // is dashboard-only) — set in the same variables step as the machinery knobs, before the first up.
+    expect(runbook(p)).toMatch(
+      /railway variables set FASTAGENT_STATE_DIR=\/data\/\.state FASTAGENT_SECRETS_DIR=\/data\/\.secrets RAILWAY_DOCKERFILE_PATH=\/\.fastagent\/Dockerfile/,
+    );
+    // The dashboard config-as-code pointer is stated as OPTIONAL (adds the /health gate only).
+    expect(runbook(p)).toMatch(/OPTIONAL[\s\S]*Config-as-code/);
     expect(runbook(p)).toMatch(/WYSIWYG snapshot/);
+  });
+
+  it("flat: no RAILWAY_DOCKERFILE_PATH (the root Dockerfile is auto-detected)", () => {
+    const out = runbook(planRailwayDeploy({ ...base, modelAuth: undefined, channels: [] }));
+    expect(out).not.toContain("RAILWAY_DOCKERFILE_PATH");
   });
 
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {

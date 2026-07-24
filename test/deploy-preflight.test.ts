@@ -101,6 +101,35 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
+  it("--run gates on a kept .dockerignore that would bake secrets or drop the standalone workspace", async () => {
+    // Missing **/.secrets and **/.env excludes: warn generate-only (asserted above), GATE under --run —
+    // a full deploy must not push a secret-laden image (same discipline as the model-travel gate).
+    const host = await workspace();
+    const root = join(host, ".fastagent");
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "fastagent.config.mjs"), `export default { model: "openai/gpt-4o-mini" };\n`);
+    await writeFile(join(host, ".dockerignore"), "node_modules\n");
+    const gated = await call(root, { model: "openai/gpt-4o-mini" }, { workbench: host, standalone: true, run: true });
+    expect(gated.ok).toBe(false);
+    if (!gated.ok) expect(gated.gate).toMatch(/BAKE SECRETS/);
+
+    // A rule matching .fastagent on a standalone deploy: the context ships WITHOUT the agent — the
+    // whole deploy is meaningless (crash-loop with no persona/config), so gate regardless of where the
+    // rule came from (a legacy generated file carried `**/.fastagent`; a hand-written exclude hits the
+    // same wall).
+    await writeFile(join(host, ".dockerignore"), "**/.fastagent\n**/.secrets\n**/.env\n");
+    const noAgent = await call(root, { model: "openai/gpt-4o-mini" }, { workbench: host, standalone: true, run: true });
+    expect(noAgent.ok).toBe(false);
+    if (!noAgent.ok) expect(noAgent.gate).toMatch(/WITHOUT the agent workspace/);
+
+    // A later `!` negation defeats a matching exclude — the conservative matcher reads it as NOT
+    // covered (a false warn beats a false all-clear) → still gates.
+    await writeFile(join(host, ".dockerignore"), "**/.secrets\n!**/.secrets\n**/.env\n");
+    const negated = await call(root, { model: "openai/gpt-4o-mini" }, { workbench: host, standalone: true, run: true });
+    expect(negated.ok).toBe(false);
+    if (!negated.ok) expect(negated.gate).toMatch(/\*\*\/\.secrets/);
+  });
+
   it("warns (not gates) about the same model issue without --run", async () => {
     const dir = await workspace();
     const pre = await call(dir, {}, { modelSpec: "openai/gpt-4o-mini", run: false });

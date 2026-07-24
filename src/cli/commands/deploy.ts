@@ -31,7 +31,7 @@ import {
 } from "../../deploy/fly/plan.ts";
 import { deployFlyRun } from "../../deploy/fly/run.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { planRailwayDeploy } from "../../deploy/railway/plan.ts";
+import { STANDALONE_DOCKERFILE_PATH_VAR, planRailwayDeploy } from "../../deploy/railway/plan.ts";
 import { deployRailwayRun } from "../../deploy/railway/run.ts";
 import { spawnRunner } from "../../deploy/runner.ts";
 import { assembleSecrets } from "../../deploy/secrets.ts";
@@ -201,15 +201,14 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     });
     if (opts.run) {
       if (standalone) {
-        // Config-as-code path is a dashboard-only setting (no CLI flag) — without it Railway never
-        // reads .fastagent/railway.json, which carries the BUILD config (dockerfilePath:
-        // .fastagent/Dockerfile) as well as the healthcheck/restart policy: the first build falls
-        // back to auto-detecting the repo root instead of the agent's Dockerfile.
+        // The BUILD entry is guaranteed by the RAILWAY_DOCKERFILE_PATH service variable the runner
+        // sets (Railway's documented non-root-Dockerfile route), and Railway's default restart policy
+        // already equals the file's ON_FAILURE — the dashboard-only Config-as-code pointer only adds
+        // the /health deploy gate (boot-crash visibility), so it is an OPTIONAL note, not a gate.
         console.error(
-          `[fastagent] note: point the service at .fastagent/railway.json (Service → Settings → Config-as-code) — ` +
-            `dashboard-only, BEFORE the first deploy; without it Railway ignores the file entirely: the build ` +
-            `auto-detects the repo root instead of using .fastagent/Dockerfile, and the healthcheck/restart ` +
-            `policy is not applied`,
+          `[fastagent] note: optional — point the service at .fastagent/railway.json (Service → Settings → ` +
+            `Config-as-code, dashboard-only) so the /health healthcheck marks a boot-crashing deploy as FAILED; ` +
+            `the build already uses .fastagent/Dockerfile via the RAILWAY_DOCKERFILE_PATH variable`,
         );
       }
       return runDeployRailway({
@@ -222,6 +221,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         longConnectionChannels,
         extraSecrets,
         intoLinked: !!opts.intoLinked,
+        dockerfilePath: standalone ? STANDALONE_DOCKERFILE_PATH_VAR : undefined,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -535,9 +535,21 @@ async function runDeployRailway(params: {
   longConnectionChannels: string[];
   extraSecrets: string[];
   intoLinked: boolean;
+  /** RAILWAY_DOCKERFILE_PATH for a standalone workspace; undefined for flat (root Dockerfile auto-detected). */
+  dockerfilePath?: string;
 }): Promise<void> {
-  const { root, workbench, name, modelAuth, authPath, channels, longConnectionChannels, extraSecrets, intoLinked } =
-    params;
+  const {
+    root,
+    workbench,
+    name,
+    modelAuth,
+    authPath,
+    channels,
+    longConnectionChannels,
+    extraSecrets,
+    intoLinked,
+    dockerfilePath,
+  } = params;
   const railway = spawnRunner("railway", workbench);
   // Fail fast if the railway CLI is absent (spawn ENOENT → 127), with the install link.
   if ((await railway(["--version"], { capture: true })).code === 127) {
@@ -562,7 +574,7 @@ async function runDeployRailway(params: {
   }
 
   const outcome = await deployRailwayRun(
-    { name, mountPath: "/data", secrets, missingSecrets, channels, longConnectionChannels, intoLinked },
+    { name, mountPath: "/data", secrets, missingSecrets, channels, longConnectionChannels, intoLinked, dockerfilePath },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
     (baseUrl) => registerTelegramWebhook(baseUrl),

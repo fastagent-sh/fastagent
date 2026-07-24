@@ -427,8 +427,9 @@ operator-owned. `--run` alone causes Docker/host side effects; for a tunnel topo
 Quick Tunnel URL and registers webhooks. Both layouts deploy through ONE semantic — bake the workbench
 as the image (WYSIWYG: what you see is what ships, git or not, clean or not). Standalone namespaces
 every artifact under `.fastagent/` (Dockerfile, fly.toml, compose, railway.json); the single host-tree
-write is the root `.dockerignore` the host CLIs' context packers require (kept + warned if the host
-owns one — without its machinery excludes the packer would bake `.secrets/` into the image). `.git`
+write is the root `.dockerignore` the host CLIs' context packers require (kept if the host owns one;
+preflight then checks it — missing secret excludes or a rule dropping `.fastagent` from the context
+gate `--run`, else warn). `.git`
 ships by default: freshness (pull) and write-back (commit/push) are the AGENT's runtime behavior, not
 deploy machinery — the git binary is baked in exactly when the workbench ships a `.git`; a non-git
 workbench adds it via `config.deploy.apt`.
