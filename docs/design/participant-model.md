@@ -215,12 +215,32 @@ The model is platform-neutral; the primitives differ in strength.
 | Sharing a thread's outcome | ask the agent to post to the room | native "also send to channel" |
 | Dedicated direct surface | ordinary p2p chat | assistant pane |
 
-## 11. Scope
+## 11. Per-platform reach
 
-Implemented for Feishu/Lark. Slack still carries the earlier per-ask session model behind its own
-`directMessageSession` / `groupMessageSession` options (`src/channels/slack/slack.ts`), and Telegram
-has its own threading behaviour; converging both is follow-up work, and the rules above are the
-target.
+The rules converge; the mappings do not, because the primitives differ. Convergence means each channel
+implements the same three rules with its own platform's notion of a place — not that they answer in
+the same shape.
+
+| | Feishu/Lark | Slack | Telegram |
+|---|---|---|---|
+| Place | chat, `chat:thread_id` | channel, `channel:thread_ts` | chat, `chat:message_thread_id` |
+| Answer in a group | quoted reply in the room | **thread reply** — Slack has no quote primitive, so a thread under the message *is* answering in place | quoted reply in the room |
+| Direct messages | one continuous chat | **assistant threads** — Slack's Agents surface gives each conversation a thread with a title and status | one continuous chat |
+| Thread rule (§3) | participation, derived from `im/v1/messages?container_id_type=thread` | participation, derived from `conversations.replies` | see below |
+| Stateless addressing | — | — | **reply-to-bot**: the update embeds the parent's sender |
+
+Two consequences worth stating rather than papering over:
+
+- **Telegram cannot derive participation, and does not need to.** The Bot API exposes no history read,
+  so a bot only ever sees messages delivered while it was running — observation alone, which a restart
+  degrades. Telegram instead carries the parent message *inside* the update, so "is this a reply to
+  me?" is answered statelessly and survives restarts. That is a stronger addressing signal than the
+  one the other two reconstruct, and it is why Telegram needs no participation cache.
+- **Feishu/Lark cannot borrow it.** Its event carries `parent_id` as a bare id with no sender, so
+  recognising a quote-reply to the agent would need a platform read per message or a durable record of
+  every message the agent has sent. Neither is worth it while the thread rule covers the same flow: a
+  quote-reply to the agent in a group's main timeline is buffered rather than answered, and the user
+  either mentions it or opens a thread.
 
 ## 12. Migration
 

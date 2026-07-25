@@ -1,7 +1,9 @@
 /**
- * Who is taking part in a group thread — the input to the participant model's summon rule
+ * SHARED: who is taking part in a group thread — the input to the participant model's summon rule
  * (docs/design/participant-model.md §3): the agent speaks unprompted only where it is a participant
- * and exactly one human is.
+ * and exactly one human is. Channels supply their own place key (Feishu `chat:thread`, Slack
+ * `team:channel:thread_ts`) and their own way of reading a thread's senders back; the storage
+ * discipline below is identical for both and deliberately lives in one place.
  *
  * Two kinds of knowledge, deliberately stored differently:
  *
@@ -22,8 +24,8 @@
  * Participation is keyed by `thread_id`: Feishu's `root_id` is NOT thread-stable (a thread shows
  * different `root_id`s as its reply chain moves), so it cannot identify a side conversation.
  */
-import { log } from "../../log.ts";
-import { loadStateFile, saveStateFile } from "../state.ts";
+import { log } from "../log.ts";
+import { loadStateFile, saveStateFile } from "./state.ts";
 
 /** Cap on cached threads: dropping one costs a single list call to re-derive, so an unbounded file
  *  (and an unbounded boot-time load) would buy nothing. Oldest entries are evicted first. */
@@ -39,17 +41,17 @@ interface StoredParticipation {
   agentSpoke: boolean;
 }
 
-interface FeishuThreadParticipation extends StoredParticipation {
+interface ThreadParticipation extends StoredParticipation {
   /** Whether THIS process established the thread's participation from a platform listing. */
   derived: boolean;
 }
 
-export interface FeishuThreadParticipants {
+export interface ThreadParticipants {
   /** Known participation, or undefined when nothing about the thread has been seen or read. */
-  get(chatId: string, threadId: string): FeishuThreadParticipation | undefined;
+  get(key: string): ThreadParticipation | undefined;
   /** Merge in what was just observed or read back. Idempotent; a failed write is a warning, never a
    *  failed delivery (the platform can re-derive it). */
-  merge(chatId: string, threadId: string, seen: Partial<FeishuThreadParticipation>): void;
+  merge(key: string, seen: Partial<ThreadParticipation>): void;
 }
 
 function isRecord(value: unknown): value is StoredParticipation {
@@ -61,7 +63,7 @@ function isRecord(value: unknown): value is StoredParticipation {
   );
 }
 
-export function createFeishuThreadParticipants(path: string, label: string): FeishuThreadParticipants {
+export function createThreadParticipants(path: string, label: string): ThreadParticipants {
   const raw = loadStateFile(path);
   const records = new Map<string, StoredParticipation>();
   if (raw !== undefined) {
@@ -76,16 +78,12 @@ export function createFeishuThreadParticipants(path: string, label: string): Fei
   // Process-local: see the module header. A restart re-establishes each thread once.
   const derivedKeys = new Set<string>();
 
-  const keyOf = (chatId: string, threadId: string): string => `${chatId}:${threadId}`;
-
   return {
-    get(chatId, threadId) {
-      const key = keyOf(chatId, threadId);
+    get(key) {
       const record = records.get(key);
       return record === undefined ? undefined : { ...record, derived: derivedKeys.has(key) };
     },
-    merge(chatId, threadId, seen) {
-      const key = keyOf(chatId, threadId);
+    merge(key, seen) {
       const previous = records.get(key);
       // A derived listing REPLACES the human set: it samples the thread's recent window, so it is the
       // answer to "who is in this conversation now" rather than "who ever spoke". An EMPTY set never

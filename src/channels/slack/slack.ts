@@ -5,7 +5,10 @@ import type { ChannelModule } from "../../host/node.ts";
 import { log } from "../../log.ts";
 import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
+import { rmSync } from "node:fs";
 import { createSeenRing } from "../seen.ts";
+import { withAckDeadline } from "../ack-deadline.ts";
+import { createThreadParticipants } from "../thread-participants.ts";
 import { createTaskTracker } from "../tasks.ts";
 import { ensureStateHome } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
@@ -15,7 +18,6 @@ import { createTurnStore } from "../turn-store.ts";
 import { createSlackBotTokenProvider } from "./bot-auth.ts";
 import { collectSlackBufferedFiles, createSlackContextBuffer } from "./context-buffer.ts";
 import { invokeSlackTurn } from "./invoke-turn.ts";
-import { createOwnedSlackThreads } from "./owned-threads.ts";
 import {
   type SlackEventEnvelope,
   type SlackFile,
@@ -41,13 +43,24 @@ import {
   streamSlackReply,
 } from "./preview.ts";
 import { resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
-import { type SlackTarget, type SlackTaskDisplayMode, createSlackApi } from "./slack-api.ts";
+import {
+  type SlackTarget,
+  type SlackTaskDisplayMode,
+  SlackApiError,
+  createSlackApi,
+  isSlackApiRejection,
+} from "./slack-api.ts";
 import { createWelcomedUsers } from "./welcomed.ts";
 
 export { defaultSlackRoute, slackEnvelope };
 export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, SlackRendering, SlackRoute };
 
 const MAX_EVENT_BYTES = 1 << 20;
+/** ONE shared budget for all pre-ACK platform waits of a delivery: Slack requires an event ACK within
+ *  3s, so the total acceptance wait — not each await — is capped and must never ride the API
+ *  pipeline's full timeout + retry budget. On expiry the delivery is treated as transiently
+ *  unreadable (redelivered), not as unaddressed. */
+const ACK_CHECK_BUDGET_MS = 2500;
 const MAX_TURN_ATTEMPTS = 3;
 const MAX_SIGNATURE_AGE_S = 5 * 60;
 const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task finishes.";
@@ -265,7 +278,17 @@ export function slackChannel({
     };
 
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
-    const ownedThreads = createOwnedSlackThreads(join(stateHome, "owned-threads.json"), label);
+    const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
+    /** This channel's place key for a thread (the shared store is key-agnostic). */
+    const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
+      `${teamId}:${channelId}:${threadTs}`;
+    // The participant model replaced the owned-thread index; its file is dead weight on an upgraded
+    // deployment (a cache, so nothing is lost). Best-effort: a leftover file is untidy, not fatal.
+    try {
+      rmSync(join(stateHome, "owned-threads.json"), { force: true });
+    } catch (error) {
+      log.debug(`${label} could not remove the obsolete owned-threads.json: ${String(error)}`);
+    }
     const welcomed = createWelcomedUsers(join(stateHome, "welcomed.json"), label);
     const buffer = createSlackContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredSlackTurn>(join(stateHome, "turns.json"), {
@@ -409,7 +432,93 @@ export function slackChannel({
     let seq = recovered.reduce((maximum, turn) => Math.max(maximum, turn.seq), 0);
     for (const { attempts: _attempts, ...intent } of recovered) submit({ ...intent }, false);
 
-    const acceptEvent = (envelope: SlackEventEnvelope): void => {
+    /**
+     * The participant model's summon rule for a bare message in a thread
+     * (docs/design/participant-model.md §3): speak unprompted only where the agent takes part AND
+     * exactly one human does. Participation is observed from every message the channel sees and
+     * re-derived from the platform (conversations.replies) for a thread this process has not
+     * established, so a lost state disk costs one lookup rather than the behavior.
+     */
+    const threadReads = new Map<string, Promise<void>>();
+    const warnedRejections = new Set<string>();
+
+    const readThreadParticipants = async (
+      teamId: string,
+      channelId: string,
+      threadTs: string,
+      deadline: number,
+    ): Promise<void> => {
+      const key = threadKey(teamId, channelId, threadTs);
+      const abort = new AbortController();
+      let senders: { userId: string; isBot: boolean }[];
+      try {
+        senders = await withAckDeadline(
+          // No rate-limit backoff: Slack's retry-after can exceed this budget many times over, and
+          // under rate limiting it would amplify each redelivery into several more requests.
+          api.listThreadSenders(channelId, threadTs, { signal: abort.signal, noRateLimitRetry: true }),
+          "thread participant read",
+          deadline,
+          ACK_CHECK_BUDGET_MS,
+          () => abort.abort(),
+        );
+      } catch (error) {
+        if (!isSlackApiRejection(error)) {
+          // Transient (network/5xx/rate limit/timeout): fail the delivery so Slack redelivers, rather
+          // than silently downgrading a genuine ask to background context.
+          throw new Error(`${label} could not read thread ${threadTs} pre-ACK: ${String(error)}`, { cause: error });
+        }
+        // A definitive rejection (thread gone, missing scope): participation is not derivable. Mark it
+        // derived so the read is not retried per message — the summon rule still refuses, because the
+        // record carries no established human set. Process-local, so a scope granted later takes
+        // effect on the next restart with no file to delete.
+        const cause = error instanceof SlackApiError ? (error.slackError ?? "unknown") : "unknown";
+        const line = `${label} thread ${threadTs} is not readable — staying mention-only there: ${String(error)}`;
+        if (warnedRejections.has(cause)) {
+          log.debug(line);
+        } else {
+          warnedRejections.add(cause);
+          log.warn(`${line} (if this repeats for every thread, check the app's conversations history scopes)`);
+        }
+        threadParticipants.merge(key, { derived: true });
+        return;
+      }
+      threadParticipants.merge(key, {
+        humans: senders.filter((sender) => !sender.isBot).map((sender) => sender.userId),
+        agentSpoke: senders.some((sender) => sender.isBot && sender.userId === botUserId),
+        derived: true,
+      });
+    };
+
+    const threadAddressesAgent = async (
+      teamId: string,
+      channelId: string,
+      threadTs: string,
+      deadline: number,
+      speaker: string | undefined,
+    ): Promise<boolean> => {
+      const key = threadKey(teamId, channelId, threadTs);
+      // Only a platform listing sets `derived`, and observing a message never does — so this reads the
+      // live record rather than a snapshot taken before the observation above.
+      if (threadParticipants.get(key)?.derived !== true) {
+        // One read per thread, shared by every delivery awaiting it.
+        let read = threadReads.get(key);
+        if (read === undefined) {
+          read = readThreadParticipants(teamId, channelId, threadTs, deadline).finally(() => threadReads.delete(key));
+          threadReads.set(key, read);
+        }
+        await read;
+        // The listing REPLACES the human set and may not carry a message pushed moments ago, so every
+        // waiter re-asserts its OWN speaker afterwards.
+        if (speaker !== undefined) threadParticipants.merge(key, { humans: [speaker] });
+      }
+      const participation = threadParticipants.get(key);
+      if (participation === undefined) return false;
+      // `derived` is required, not incidental: observation only ever UNDER-counts humans, so speaking
+      // unprompted on an unestablished record could barge into a thread that holds several.
+      return participation.derived && participation.agentSpoke && participation.humans.length === 1;
+    };
+
+    const acceptEvent = async (envelope: SlackEventEnvelope): Promise<void> => {
       const event = envelope.event;
       if (!isSlackHumanMessage(event)) return;
       if (botUserId && event.user === botUserId) return;
@@ -428,13 +537,12 @@ export function slackChannel({
       const direct = isSlackDirectMessage(event);
       const rootTs = event.thread_ts ?? event.ts;
       const bufferKey = slackPlaceKey(teamId, event);
-      const threadedGroup = group && groupMessageSession === "threaded";
-      const managedContinuation =
-        groupBehavior === "context" &&
-        route === undefined &&
-        threadedGroup &&
-        event.thread_ts !== undefined &&
-        ownedThreads.has(teamId, event.channel, event.thread_ts);
+      // Listening is not speaking: every message the channel can see refines who takes part in its
+      // thread, whether or not it is answered. Humans only — a bot's own posts are recorded where they
+      // are known (this channel answering, and the platform listing).
+      if (group && event.thread_ts !== undefined && event.user && !event.bot_id) {
+        threadParticipants.merge(threadKey(teamId, event.channel, event.thread_ts), { humans: [event.user] });
+      }
 
       let routed = decide(envelope);
       const hasUserMention = /<@[A-Z0-9]+>/i.test(event.text ?? "");
@@ -443,7 +551,26 @@ export function slackChannel({
       // identity routes it now; while auth.test is still unresolved, defer any mentioned message rather
       // than buffer+dedup it and accidentally suppress the later app_mention callback.
       if (!routed && route === undefined && group && event.type === "message" && structurallyMentionsBot) routed = {};
-      if (!routed && managedContinuation && event.type !== "app_mention") routed = {};
+      // The participant model's thread rule, independent of the session mode: a bare message reaches
+      // the agent while it takes part and exactly one human does.
+      if (
+        !routed &&
+        groupBehavior === "context" &&
+        route === undefined &&
+        group &&
+        event.thread_ts !== undefined &&
+        event.type !== "app_mention" &&
+        !structurallyMentionsBot &&
+        (await threadAddressesAgent(
+          teamId,
+          event.channel,
+          event.thread_ts,
+          Date.now() + ACK_CHECK_BUDGET_MS,
+          event.user ?? undefined,
+        ))
+      ) {
+        routed = {};
+      }
       if (!routed) {
         if (route === undefined && group && botUserId === undefined && hasUserMention) return;
         if (groupBehavior === "context" && route === undefined && group) {
@@ -507,17 +634,6 @@ export function slackChannel({
           : undefined;
 
       // Match Feishu/Lark ownership in context mode: only a top-level summon that creates an
-      // Agent-managed thread owns the root. Mentioning the Agent inside an existing human thread
-      // answers once without adopting it; mention-only mode never consumes ownership state.
-      if (
-        groupBehavior === "context" &&
-        route === undefined &&
-        threadedGroup &&
-        event.thread_ts === undefined &&
-        sameChannel
-      ) {
-        ownedThreads.add(teamId, event.channel, rootTs);
-      }
       submit(
         {
           id: logicalId,
@@ -534,6 +650,13 @@ export function slackChannel({
         },
         true,
       );
+
+      // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
+      // bare message address it without a mention. Recorded only once the intent is durable: `submit`
+      // can throw, and a redelivery must still see the thread as the agent has actually left it.
+      if (threadTs !== undefined && sameChannel) {
+        threadParticipants.merge(threadKey(teamId, event.channel, threadTs), { agentSpoke: true });
+      }
     };
 
     // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle.
@@ -603,7 +726,7 @@ export function slackChannel({
         return text("slack authentication unavailable\n", 503);
       }
       maybeWelcome(envelope);
-      acceptEvent(envelope);
+      await acceptEvent(envelope);
       return new Response(null, { status: 200 });
     };
     (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () =>

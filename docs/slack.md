@@ -18,7 +18,7 @@ Choose one group behavior:
 
 | Mode | Group behavior | Additional access |
 |---|---|---|
-| `context` (default) | Explicit mentions, bare replies in Agent-owned threads, and recent unsummoned discussion | Channel/private-channel/MPIM history events and scopes |
+| `context` (default) | Explicit mentions, bare replies in threads the Agent takes part in, and recent unsummoned discussion | Channel/private-channel/MPIM history events and scopes |
 | `mentions` | Explicit `app_mention` only; no bare continuation or background context | Least privilege |
 
 The command creates:
@@ -171,15 +171,24 @@ and reply there. Different roots can run concurrently; turns within one root are
 
 Override `route(envelope)` for custom policy. It returns `null` to ignore or a `SlackRoute` with optional
 `session`, `channelId`, `threadTs`, and `text`. `threadTs: null` explicitly sends at channel top level.
-Supplying a custom route disables the default owned-thread and unsummoned-context admission policy; the
+Supplying a custom route disables the default thread-participation and unsummoned-context admission policy; the
 custom route is then the complete authority.
 
 ## Group context
 
-In context mode, only a top-level summon in threaded group mode creates a durable owned root. Mentioning
-the Agent inside an existing human thread answers that turn but does not adopt later bare replies. This
-matches Feishu/Lark's managed-thread boundary. Unsummoned human discussion is bucketed by workspace +
-channel + concrete thread root.
+In context mode the Agent behaves as a participant of the channel
+([design note](design/participant-model.md)): it answers a bare message in a thread while it takes part
+and **exactly one human** does. Mentioning it inside a thread is the bootstrap — it answers, which makes
+it a participant, and later bare replies reach it without the name. When a second person speaks in that
+thread, addressing is ambiguous again and it returns to requiring a mention while still listening.
+
+Who takes part is a property of the thread, not of this process: for a thread it has not established,
+the channel reads the thread's senders back with `conversations.replies`, so losing local state costs
+one lookup rather than the behaviour. That read happens before the event is acknowledged, under a 2.5s
+budget; a transient failure fails the delivery so Slack redelivers it, rather than silently downgrading
+an ask to background context.
+
+Unsummoned human discussion is bucketed by workspace + channel + concrete thread root.
 The next answered turn in that place receives a bounded sender-prefixed block. Consumption is durable:
 
 1. persist each background message before webhook ACK;
@@ -269,7 +278,7 @@ Slack state lives under:
 ├── bot-auth.json       # latest rotating bot access/refresh pair (0600)
 ├── turns.json
 ├── seen.json
-├── owned-threads.json
+├── thread-participants.json
 ├── buffers.json
 └── files/
 ```

@@ -20,6 +20,7 @@ import { ensureStateHome } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
+import { withAckDeadline } from "../ack-deadline.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
   collectFeishuBufferedAttachments,
@@ -38,7 +39,7 @@ import {
 } from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
-import { createFeishuThreadParticipants } from "./thread-participants.ts";
+import { createThreadParticipants } from "../thread-participants.ts";
 import { FEISHU_GROUP_CONTEXT_SCOPE } from "./setup-mode.ts";
 import {
   type FeishuMessage,
@@ -269,7 +270,9 @@ function createFeishuRuntimeFactory(
     } catch (error) {
       log.debug(`${label} could not remove the obsolete owned-threads.json: ${String(error)}`);
     }
-    const threadParticipants = createFeishuThreadParticipants(join(stateHome, "thread-participants.json"), label);
+    const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
+    /** This channel's place key for a thread (the shared store is key-agnostic). */
+    const threadKey = (chatId: string, threadId: string): string => `${chatId}:${threadId}`;
     const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
@@ -462,38 +465,9 @@ function createFeishuRuntimeFactory(
       senderId: string | undefined,
     ): void => {
       if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) return;
-      threadParticipants.merge(m.chat_id, m.thread_id, { humans: [senderId] });
+      threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [senderId] });
     };
 
-    /** Cap a pre-ACK wait at the delivery's shared `deadline` (epoch ms; see {@link ACK_CHECK_BUDGET_MS}).
-     *  `work` may be abandoned by the race (its own late rejection is muted so it cannot become an
-     *  unhandled rejection); `onTimeout` lets the caller cancel the abandoned work instead of leaving
-     *  it to ride the API pipeline's full budget. */
-    const withAckDeadline = async <T>(
-      work: Promise<T>,
-      what: string,
-      deadline: number,
-      onTimeout?: () => void,
-    ): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      Promise.resolve(work).catch(() => {});
-      // The budget is SHARED, so this wait's own share is whatever is left — report that, not the
-      // constant, or an operator reads every timeout as a full-budget stall.
-      const share = Math.max(0, deadline - Date.now());
-      try {
-        return await Promise.race([
-          work,
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-              onTimeout?.();
-              reject(new Error(`${what} exceeded its ${share}ms share of the ${ACK_CHECK_BUDGET_MS}ms pre-ACK budget`));
-            }, share);
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    };
     // One operator-visible warning per rejection CLASS (platform code): a deleted thread (expected,
     // per-resource) and a missing message-read permission (app-wide — it disables every bare
     // continuation) must not share a budget, or the second hides behind the first. Repeats of a class
@@ -511,6 +485,7 @@ function createFeishuRuntimeFactory(
           api.listThreadSenders(threadId, { signal: abort.signal, noRateLimitRetry: true }),
           `thread participant read`,
           deadline,
+          ACK_CHECK_BUDGET_MS,
           () => abort.abort(),
         );
       } catch (error) {
@@ -536,10 +511,10 @@ function createFeishuRuntimeFactory(
           warnedRejectionCodes.add(code);
           log.warn(`${line} (if this repeats for every thread, check the app's message-read permissions)`);
         }
-        threadParticipants.merge(chatId, threadId, { derived: true });
+        threadParticipants.merge(threadKey(chatId, threadId), { derived: true });
         return;
       }
-      threadParticipants.merge(chatId, threadId, {
+      threadParticipants.merge(threadKey(chatId, threadId), {
         humans: senders.filter((sender) => sender.senderType === "user").map((sender) => sender.senderId),
         agentSpoke: senders.some((sender) => sender.senderType === "app" && sender.senderId === appId),
         derived: true,
@@ -560,7 +535,7 @@ function createFeishuRuntimeFactory(
     ): Promise<boolean> => {
       // Only a platform listing sets `derived`, and observing a message never does — so this reads the
       // live record rather than a snapshot taken before the observation above.
-      if (threadParticipants.get(chatId, threadId)?.derived !== true) {
+      if (threadParticipants.get(threadKey(chatId, threadId))?.derived !== true) {
         // One platform read per thread, shared by every delivery awaiting it (sharers resume in arrival
         // order; a joiner inherits the FIRST caller's deadline, still within one budget of that start).
         // LIVE order is best-effort across this window: a message that skips the check (an @mention, a
@@ -576,9 +551,9 @@ function createFeishuRuntimeFactory(
         // The listing REPLACES the human set and its window may not carry a message pushed moments
         // ago, so every waiter re-asserts its OWN speaker afterwards. Doing it inside the read would
         // compensate only whoever started it, letting a racing second human be erased and answered.
-        if (speaker !== undefined) threadParticipants.merge(chatId, threadId, { humans: [speaker] });
+        if (speaker !== undefined) threadParticipants.merge(threadKey(chatId, threadId), { humans: [speaker] });
       }
-      const participation = threadParticipants.get(chatId, threadId);
+      const participation = threadParticipants.get(threadKey(chatId, threadId));
       if (participation === undefined) return false;
       // `derived` is required, not incidental: observation only ever UNDER-counts humans, so speaking
       // unprompted on an unestablished record could barge into a thread that holds several. A read
@@ -618,7 +593,7 @@ function createFeishuRuntimeFactory(
       // bot/v3/info settles would be misread as "not addressed to me" and downgraded to context. Wait
       // for the identity within the shared pre-ACK budget (already settled after startup, so free).
       if (botOpenId === undefined && m.chat_type === "group") {
-        await withAckDeadline(botIdentity, `${label} bot identity resolution`, deadline);
+        await withAckDeadline(botIdentity, `${label} bot identity resolution`, deadline, ACK_CHECK_BUDGET_MS);
       }
       let r = decide(event);
       const normalized = normalizeFeishuMessage(event);
@@ -632,7 +607,7 @@ function createFeishuRuntimeFactory(
       // observation writes one before acceptance can fail, which would strip a re-pushed first
       // message of its anchor.
       const agentInThread =
-        m.thread_id !== undefined && threadParticipants.get(m.chat_id, m.thread_id)?.agentSpoke === true;
+        m.thread_id !== undefined && threadParticipants.get(threadKey(m.chat_id, m.thread_id))?.agentSpoke === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
       // second human speaking is exactly what makes addressing ambiguous again.
@@ -749,7 +724,7 @@ function createFeishuRuntimeFactory(
       // its referent anchor. A later delivery failure does not undo it — entering the conversation is
       // the intent, not the send.
       if (replyInThread === true && m.thread_id !== undefined && sameTarget) {
-        threadParticipants.merge(m.chat_id, m.thread_id, { agentSpoke: true });
+        threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { agentSpoke: true });
       }
     };
 

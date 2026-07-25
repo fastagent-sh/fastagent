@@ -30,11 +30,20 @@ function root(): string {
   return value;
 }
 
-function okFetch() {
+function okFetch(threadSenders: { user: string; bot?: boolean }[] = []) {
   let ts = 100;
   return vi.fn(async (input: string | URL, _init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/auth.test")) return Response.json({ ok: true, team_id: "T1", user_id: "UBOT" });
+    if (url.includes("/conversations.replies")) {
+      return Response.json({
+        ok: true,
+        messages: threadSenders.map((sender) => ({
+          user: sender.user,
+          ...(sender.bot ? { bot_id: "B1", app_id: "A1" } : {}),
+        })),
+      });
+    }
     if (url.endsWith("/chat.postMessage") || url.endsWith("/chat.startStream")) {
       return Response.json({ ok: true, ts: String(ts++) });
     }
@@ -468,8 +477,28 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("answers inside an existing human thread without adopting its later bare replies", async () => {
+  it("a bare reply reaches the agent in a thread it answered in, while one human is in it", async () => {
     vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Mentioning it inside a thread is the bootstrap: it answers, which makes it a participant.
+    await handler(signedRequest(message("10.1", { type: "app_mention", text: "<@UBOT> inspect", thread_ts: "10.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("slack:T1:C1:10.0");
+
+    // A two-party thread no longer needs the name.
+    await handler(signedRequest(message("10.2", { text: "bare follow-up", thread_ts: "10.0" })));
+    await settle();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.scope.session).toBe("slack:T1:C1:10.0");
+  });
+
+  it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
+    // The platform listing is what reveals the humans this process never saw speak.
+    vi.stubGlobal("fetch", okFetch([{ user: "U1" }, { user: "U2" }, { user: "UBOT", bot: true }]));
     const { agent, calls } = replyingAgent();
     const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
     await new Promise((resolve) => setImmediate(resolve));
@@ -477,11 +506,10 @@ describe("Slack sessions, context, and managed threads", () => {
     await handler(signedRequest(message("10.1", { type: "app_mention", text: "<@UBOT> inspect", thread_ts: "10.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("slack:T1:C1:10.0");
 
     await handler(signedRequest(message("10.2", { text: "bare follow-up", thread_ts: "10.0" })));
     await settle();
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(1); // addressing is ambiguous again
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("bare follow-up");
   });
 

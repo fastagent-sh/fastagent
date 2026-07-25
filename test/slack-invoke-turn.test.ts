@@ -5,6 +5,7 @@ import type { SlackApi } from "../src/channels/slack/slack-api.ts";
 
 function fakeApi(overrides: Partial<SlackApi> = {}): SlackApi {
   return {
+    listThreadSenders: async () => [],
     authTest: async () => ({}),
     postMessage: async () => "1.0",
     postMarkdown: async () => "1.0",

@@ -51,6 +51,8 @@ src/
 │   ├── turn-queue.ts        # SHARED: in-memory per-session serial turns (FIFO; telegram + slack + feishu)
 │   ├── turn-store.ts        # SHARED: generic durable turn intent (L1) — record shape/validator/order injected per channel
 │   ├── context-buffer.ts    # SHARED: generic durable un-summoned-discussion buffer (peek→completed→commit) — entry shape/validator/line injected per channel
+│   ├── thread-participants.ts # SHARED: who takes part in a thread (the participant model's summon rule) — observed per message, re-derived from the platform on miss
+│   ├── ack-deadline.ts      # SHARED: ONE budget for a delivery's pre-ACK platform waits
 │   ├── invoke-turn-kit.ts   # SHARED: busy-retry stream loop around agent.invoke (onCompleted commit point) + prompt-suffix wording (manifests/notes)
 │   ├── state.ts, seen.ts    # SHARED: atomic channel state + bounded durable delivery dedup
 │   ├── wait-health.ts       # SHARED: readiness probe for the webhook registrars (both platforms verify the URL)
@@ -72,7 +74,6 @@ src/
 │   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles
 │   │   ├── model.ts, normalize.ts, parse.ts, crypto.ts, card.ts # protocol model/content normalization/policy + security/card
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + streaming-card delivery
-│   │   ├── thread-participants.ts # who takes part in each thread (the summon rule's input); observed per message, re-derived from the platform on miss
 │   │   ├── context-buffer.ts# feishu's entry shape + resource selection over the shared generic buffer
 │   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)
 │   │   ├── register-app.ts  # `add feishu`: scan-to-create device flow
