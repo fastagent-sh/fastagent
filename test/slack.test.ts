@@ -287,13 +287,18 @@ describe("Slack signed ingress", () => {
     expect(verifySlackSignature(SECRET, timestamp, signature, body, 1_700_001_000_000)).toBe(false);
   });
 
-  it("rejects invalid session, rendering, task-display, and reaction policies at construction", () => {
+  it("refuses a removed session option instead of silently changing placement and memory under it", () => {
+    // The migration guarantee: an upgraded workspace still passing a mode fails loudly at construction
+    // rather than starting fine with a different place, a different session, and a different renderer.
     expect(() =>
       slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, groupMessageSession: "continuous" } as never),
     ).toThrow(/groupMessageSession/);
     expect(() =>
       slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, directMessageSession: "threaded" } as never),
     ).toThrow(/directMessageSession/);
+  });
+
+  it("rejects invalid rendering, task-display, and reaction policies at construction", () => {
     expect(() =>
       slackChannel({
         botToken: "xoxb-test",
@@ -340,7 +345,7 @@ describe("Slack signed ingress", () => {
   });
 });
 
-describe("Slack sessions, context, and managed threads", () => {
+describe("Slack sessions, context, and thread participation", () => {
   it("threads each top-level DM by default and settles the one preview message", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -460,6 +465,22 @@ describe("Slack sessions, context, and managed threads", () => {
     );
     await settle();
     expect(calls).toHaveLength(2);
+  });
+
+  it("mentions mode records no thread participation — the least-privilege posture stays that way", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "mentions" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await handler(signedRequest(message("30.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "30.0" })));
+    await settle();
+    await handler(signedRequest(message("30.2", { text: "bare", thread_ts: "30.0" })));
+    await settle();
+
+    // Nothing in this mode reads participation, so nothing may accumulate a durable record of who
+    // spoke in which thread.
+    expect(existsSync(join(stateRoot, "channels", "slack", "thread-participants.json"))).toBe(false);
   });
 
   it("removes the obsolete owned-threads.json on the next start", async () => {

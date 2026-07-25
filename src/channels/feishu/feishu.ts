@@ -484,6 +484,10 @@ function createFeishuRuntimeFactory(
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
+      // Gated on what CONSUMES it: only a group thread's bare-message admission reads the human set,
+      // and a custom route owns admission entirely. Recording elsewhere would persist per-thread user
+      // ids that nothing can ever read.
+      if (route !== undefined || m.chat_type !== "group") return;
       if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) return;
       threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [senderId] });
     };

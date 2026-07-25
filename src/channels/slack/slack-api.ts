@@ -98,11 +98,23 @@ export function isSlackNativeUnavailable(error: unknown): boolean {
   return error instanceof SlackApiError && !!error.slackError && NATIVE_UNAVAILABLE_ERRORS.has(error.slackError);
 }
 
-/** Slack's own name for a SERVER-SIDE problem, returned in the body at HTTP 200 like everything else.
- *  Its docs call these transient and retryable, so they must not be mistaken for a refusal — a caller
- *  that records "this thread cannot be described" from one of these would keep an agent quiet in that
- *  thread for the rest of the process over a blip. */
-const SLACK_TRANSIENT_ERRORS = new Set(["internal_error", "fatal_error", "service_unavailable", "ratelimited"]);
+/** Errors that say nothing about the RESOURCE, so a caller must not record them as a verdict on it.
+ *  Two classes: Slack's own server-side problems (its docs call these transient and retryable) and
+ *  auth failures, which are about this app's token — rotation is proactive here (bot-auth.ts), so one
+ *  blip would otherwise mark every thread touched during it undescribable for the life of the process.
+ *  All are returned in the body at HTTP 200 like everything else. Feishu's twin classifier excludes
+ *  its auth codes for the same reason. */
+const SLACK_TRANSIENT_ERRORS = new Set([
+  "internal_error",
+  "fatal_error",
+  "service_unavailable",
+  "ratelimited",
+  "invalid_auth",
+  "not_authed",
+  "token_expired",
+  "token_revoked",
+  "account_inactive",
+]);
 
 /** Whether Slack REFUSED the request definitively: it arrived and was rejected (unknown thread,
  *  missing scope, not in channel). A 4xx counts by STATUS ALONE — a proxy or WAF page carries no

@@ -561,7 +561,11 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. Humans only — a bot's own posts are recorded where they
       // are known (this channel answering, and the platform listing).
-      if (group && event.thread_ts !== undefined && event.user && !event.bot_id) {
+      // Gated on what CONSUMES it: only the bare-message admission below reads participation, and it
+      // runs solely in context mode without a custom route. `mentions` is the documented
+      // least-privilege posture — it must not still accumulate a durable file of who spoke where.
+      const participationIsRead = groupBehavior === "context" && route === undefined;
+      if (participationIsRead && group && event.thread_ts !== undefined && event.user && !event.bot_id) {
         threadParticipants.merge(threadKey(teamId, event.channel, event.thread_ts), { humans: [event.user] });
       }
 
@@ -665,7 +669,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
       // bare message address it without a mention. Recorded only once the intent is durable: `submit`
       // can throw, and a redelivery must still see the thread as the agent has actually left it.
-      if (threadTs !== undefined && sameChannel) {
+      if (participationIsRead && threadTs !== undefined && sameChannel) {
         threadParticipants.merge(threadKey(teamId, event.channel, threadTs), { agentSpoke: true });
       }
     };

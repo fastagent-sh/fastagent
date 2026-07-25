@@ -1743,7 +1743,7 @@ describe("turn flow", () => {
     expect(existsSync(join(home, "buffers.json"))).toBe(false);
   });
 
-  it("a custom route owns admission: nothing is established, though the agent's own participation is still recorded", async () => {
+  it("a custom route owns admission: no human is recorded, but the agent's own participation still is", async () => {
     feishuFetch();
     const fx = feishuFetch();
     const { handler, calls, home, idle } = buildChannel({ route: () => ({}) });
@@ -1756,13 +1756,14 @@ describe("turn flow", () => {
     expect(calls).toHaveLength(1);
     // The route decided admission, so the built-in thread rule never ran: no platform lookup.
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
-    // Participation still records what observably happened (the agent spoke there). `established` is not
-    // persisted at all — only a platform listing sets it, and only for the process that ran it.
+    // The route owns admission, so nothing reads the human set — and it is therefore not recorded:
+    // a least-privilege posture must not still accumulate who spoke where. `agentSpoke` IS kept, as
+    // the referent anchor reads it whoever decided admission.
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
-      { agentSpoke: boolean }
+      { agentSpoke: boolean; humans: string[] }
     >;
-    expect(participants["oc_1:omt_custom"]).toEqual({ agentSpoke: true, humans: ["ou_alice"] });
+    expect(participants["oc_1:omt_custom"]).toEqual({ agentSpoke: true, humans: [] });
   });
 
   it("a custom route's empty text runs NO turn (nothing to say, nothing to load)", async () => {
