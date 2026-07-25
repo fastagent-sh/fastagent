@@ -350,9 +350,13 @@ describe("Slack sessions, context, and thread participation", () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent, calls } = replyingAgent("hello back");
-    const { handler } = mount(agent);
+    const { handler, stateRoot } = mount(agent);
     await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
     await settle();
+
+    // A DM's answer always opens its assistant thread, but the summon rule never consults
+    // participation outside a group — so a DM must not spend a slot in the bounded cache.
+    expect(existsSync(join(stateRoot, "channels", "slack", "thread-participants.json"))).toBe(false);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.scope.session).toBe("slack:T1:D1:1.0");

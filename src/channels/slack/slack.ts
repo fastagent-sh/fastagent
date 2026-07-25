@@ -553,6 +553,10 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         log.debug(`${label} duplicate logical message ${logicalId} — skipping`);
         return;
       }
+      // Arrival order, taken BEFORE the participation read below can suspend this acceptance: a bare
+      // thread message awaits a platform call while an app_mention behind it does not, and the turn
+      // store replays by `seq`.
+      const arrivalSeq = ++seq;
 
       const group = isSlackGroupMessage(event);
       const direct = isSlackDirectMessage(event);
@@ -652,7 +656,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       submit(
         {
           id: logicalId,
-          seq: ++seq,
+          seq: arrivalSeq,
           session: routed.session ?? defaultSession,
           baseText,
           bufferKey,
@@ -666,10 +670,13 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         true,
       );
 
-      // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
-      // bare message address it without a mention. Recorded only once the intent is durable: `submit`
-      // can throw, and a redelivery must still see the thread as the agent has actually left it.
-      if (participationIsRead && threadTs !== undefined && sameChannel) {
+      // Answering inside a GROUP thread makes the agent a participant of it, which is what lets the
+      // NEXT bare message address it without a mention. `group` matters: a DM's `threadTs` is always
+      // defined (the answer opens its assistant thread), and nothing reads participation there — those
+      // rows would fill the cap and evict the group threads it exists to protect. Recorded only once
+      // the intent is durable: `submit` can throw, and a redelivery must still see the thread as the
+      // agent has actually left it.
+      if (participationIsRead && group && threadTs !== undefined && sameChannel) {
         threadParticipants.merge(threadKey(teamId, event.channel, threadTs), { agentSpoke: true });
       }
     };
