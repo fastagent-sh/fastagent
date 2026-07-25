@@ -51,7 +51,13 @@ export function slackSenderLabel(event: SlackMessageEvent): string {
   return `user ${event.user ?? "unknown"}`;
 }
 
-/** Main-channel discussion and each concrete thread are independent context buckets. */
+/** Main-channel discussion and each concrete thread are independent context buckets.
+ *
+ *  The `:root:` segment carries `thread_ts`, which in Slack IS the thread's parent message and is
+ *  stable for the life of the thread — unrelated to the `<chat>:root:<root_id>` shape Feishu retired
+ *  (its `root_id` moves with the reply chain, so it could not identify a side conversation at all).
+ *  Same token, different platform meaning; the key is left as-is because renaming it would discard
+ *  live context buckets for no semantic gain. */
 export function slackPlaceKey(teamId: string, event: Pick<SlackMessageEvent, "channel" | "thread_ts">): string {
   const base = `${teamId}:${event.channel ?? "unknown-channel"}`;
   return event.thread_ts ? `${base}:root:${event.thread_ts}` : base;

@@ -252,11 +252,19 @@ primitive, so answering in place means opening a thread on the ask — which mak
 place, and its memory starts there.
 
 Neither channel offers a session mode: the place follows from the platform's own way of attaching an
-answer, so there is nothing left to select. What Slack does lose is the room-level memory the rule
-argues for — a second person asking at channel top level starts a fresh place. That is consistent
-with Slack, where a follow-up belongs in the thread; buying it back would mean either serialising an
-entire channel behind one session or splitting threads into two kinds, both of which cost more than
-the case is worth.
+answer, so there is nothing left to select.
+
+Slack pays for that twice, and both are departures from §5 worth naming rather than glossing:
+
+- **In a channel**, the room-level memory §5 argues for is lost — a second person asking at channel
+  top level starts a fresh place. That is consistent with Slack, where a follow-up belongs in the
+  thread; buying it back would mean either serialising an entire channel behind one session or
+  splitting threads into two kinds, both of which cost more than the case is worth.
+- **In a direct message**, each top-level message opens its own assistant thread and therefore its own
+  session — the shape §9 rejects as "a new session per ask" everywhere else. It stands here because
+  Slack's Agents surface *is* a list of conversations: each thread carries its own title and status,
+  and the platform's own model of a DM assistant is one thread per topic, not one linear chat. A
+  follow-up continues inside the thread, where the session already holds the exchange.
 
 Two consequences worth stating rather than papering over:
 
