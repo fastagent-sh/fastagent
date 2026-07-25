@@ -24,8 +24,9 @@
  * The asymmetry is deliberate — over-counting humans only makes the agent ask to be named, while
  * under-counting makes it speak unprompted in a crowded thread, which is the failure §3 exists to
  * prevent. Nothing is shed: the platform emits no event when someone leaves, so shedding could only
- * ever be guessed from a window that might simply have missed them. A restart resets exactly one
- * thing — `established` — which is what makes each process re-read a thread once.
+ * ever be guessed from a window that might simply have missed them. A restart resets the
+ * process-local flags (`established`, `unreadable`) and nothing else — which is what makes each
+ * process read a thread once, and why a permission granted later needs no file deleted by hand.
  *
  * ponytail: establishment is bounded to ONE page of a thread (50 messages). A second human whose only
  * messages fall beyond that page AND predate this process is therefore invisible to both sources, and
@@ -152,11 +153,13 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         humans: [...humans],
         agentSpoke: (previous?.agentSpoke ?? false) || (seen.agentSpoke ?? false),
       };
+      // `humans` starts from `previous` and only grows, so equal size IS set equality here — a
+      // containment check would read as if the set could be replaced, which the union invariant above
+      // forbids.
       const unchanged =
         previous !== undefined &&
         previous.agentSpoke === next.agentSpoke &&
-        previous.humans.length === next.humans.length &&
-        previous.humans.every((human) => humans.has(human));
+        previous.humans.length === next.humans.length;
       // The process-local flags above are already recorded; a merge that carries no OBSERVATION has
       // nothing to persist. Writing one would store an empty row — indistinguishable from "seen,
       // nothing known" on reload — and let unreadable threads evict real participation under the cap.

@@ -125,10 +125,13 @@ export async function configureGroupBehavior(input: {
   if (!explicit) {
     // Defaulted, not chosen: report the gap and how to opt in, but leave the app's requested
     // permission set untouched (a scripted re-run must not silently escalate a mention-only app).
+    // Name what is ACTUALLY missing: the common upgrade has the delivery scope already granted and
+    // only the read scope absent, and pointing at a granted permission sends the author looking in
+    // the wrong place.
     note(
-      `[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted (or could not be verified) — group behavior was ` +
-        `defaulted, so it was not requested. Re-run with --group-behavior context to add it to the app draft, ` +
-        `or --group-behavior mentions to stay least-privilege: ${permissionUrl}`,
+      `[fastagent] ${missing.join(" + ")} not granted (or could not be verified) — group behavior was ` +
+        `defaulted, so nothing was requested. Re-run with --group-behavior context to add ${missing.length > 1 ? "them" : "it"} ` +
+        `to the app draft, or --group-behavior mentions to stay least-privilege: ${permissionUrl}`,
     );
     return { publishReady: false };
   }

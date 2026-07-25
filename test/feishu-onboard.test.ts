@@ -81,6 +81,28 @@ describe("Feishu/Lark group-behavior onboarding", () => {
     expect(fx.opened).toEqual([]);
   });
 
+  it("names the scope actually missing on a defaulted run, not the one already granted", async () => {
+    // The common upgrade: delivery was granted long ago, the read scope is new. Reporting the granted
+    // one sends the author to a permission that is already there.
+    const fx = fixture([{ name: "im:message.group_msg", grantStatus: 1, type: "tenant" }]);
+    const result = await configureGroupBehavior({
+      kind: "feishu",
+      appId: "cli_a",
+      apiBase: "https://open.feishu.cn",
+      api: fx.api,
+      behavior: "context",
+      explicit: false,
+      note: (message) => fx.notes.push(message),
+      openUrl: (url) => fx.opened.push(url),
+    });
+
+    expect(result).toEqual({ publishReady: false });
+    expect(fx.addAppScopes).not.toHaveBeenCalled(); // a defaulted run never escalates the app
+    const notes = fx.notes.join("\n");
+    expect(notes).toContain("im:message:readonly not granted");
+    expect(notes).not.toMatch(/im:message\.group_msg not granted/);
+  });
+
   it("keeps mention-only least privilege explicit and blocks publish on a conflicting existing grant", async () => {
     const missing = fixture();
     const missingResult = await configureGroupBehavior({
