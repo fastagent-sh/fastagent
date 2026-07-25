@@ -127,7 +127,6 @@ what a side conversation concludes gets carried back.
 | Direct message | one continuous session per chat | a colleague does not restart every message |
 | Group main timeline | one session per chat, shared by everyone | B following up on A's question is the normal case, and the agent must remember its own answers |
 | Thread | one session per thread, anchored to what it branched from | a side conversation is separate, not amnesiac |
-| Thread → room | conclusions fold upward (§7, planned) | "we decided X in that thread" |
 
 Sessions are **per place, never per person**. A room's conversation belongs to the room: scoping
 memory per user would break the most common collaborative pattern (one person following up on
@@ -152,35 +151,16 @@ independent, silently wrong when the second refers to the first, and there is no
 apart without understanding the content. The user already tells us which asks are independent: by
 opening a thread.
 
-## 7. Upward fold: what a thread tells the room
+## 7. What a thread does not tell the room
 
-A side conversation loses two different things, and they have asymmetric costs:
-
-| Loss | Who suffers | Cost of fixing automatically |
-|---|---|---|
-| The room's session does not contain the thread's content | the agent (amnesiac when back in the room) | **none** — nobody sees it |
-| The people in the room do not know the thread's outcome | other humans | **high** — a message in the main timeline |
-
-> **Memory folds automatically; attention must be requested explicitly.**
-
-**Memory fold (automatic) — planned, not yet implemented.** When a turn in a thread completes, it records that thread's *latest*
-exchange into the room's pending-fold state, keyed by thread and **overwritten** each time. The
-room's next turn folds those records into its prompt and clears them on `completed` — the same
-peek → completed → commit invariant the context buffer already uses, and the same generic mechanism
-(`channels/context-buffer.ts`).
-
-Keying by thread with overwrite makes the state **O(threads), not O(turns)**, so it needs no pruning
-policy, and the newest exchange is what a side discussion's conclusion usually is. The fold carries
-the agent's own reply as well as the human's message: a participant remembers what it said.
-
-No summarization model call: the fold is truncated verbatim. If a single latest exchange proves
-insufficient, the upgrade path is a summary (pi exposes `generateBranchSummary`), not more history.
-
-**Attention fold (explicit) — available today.** A person in the thread asks the agent to share the outcome, and the
-agent posts to the main timeline using its send capability. This requires no new mechanism — but it
-does require the send tool to state its boundary, or the agent will use it to answer ordinary turns
-and double-post. Slack's native "also send to channel" on a thread reply is the same idea provided by
-the platform, and is preferable where it exists.
+*Non-goal, deliberately deferred:* folding a thread's conclusion back into the room. Two different
+things are lost when a side conversation ends — the room's session does not hold what was decided
+(cheap to fix, invisible to everyone) and the people in the room do not know it (needs a message, so
+it needs consent). Nothing is built for either until the gap is felt in use: a person who wants the
+room to know can already ask the agent to post there, and the agent's own memory gap has not yet
+produced a complaint. If it does, the memory half is the one to build first, and the shape is the
+context buffer's: record the thread's latest exchange per thread, fold it into the room's next turn,
+commit on `completed`.
 
 ## 8. Thread context: the inheritance ladder
 
@@ -206,8 +186,8 @@ focused side discussion, and it pays that cost on every turn rather than once. I
 capability is preserving the agent's reasoning and tool results; that is worth revisiting when a real
 case appears, not before.
 
-*Known asymmetry, accepted:* room → thread transfers once, when the thread starts; thread → room
-folds continuously (§7). A thread does not learn about later room activity.
+*Known asymmetry, accepted:* room → thread transfers once, when the thread starts, and nothing flows
+back (§7). A thread neither learns about later room activity nor reports its own.
 
 ## 9. Rejected designs
 
@@ -229,7 +209,7 @@ The model is platform-neutral; the primitives differ in strength.
 |---|---|---|
 | Side conversation | topic (`thread_id` + `root_id`) | thread (`thread_ts`) |
 | Hearing the room | sensitive group-message scope | channel message events |
-| Attention fold | agent posts a message | native "also send to channel" |
+| Sharing a thread's outcome | ask the agent to post to the room | native "also send to channel" |
 | Dedicated direct surface | ordinary p2p chat | assistant pane |
 
 ## 11. Scope
