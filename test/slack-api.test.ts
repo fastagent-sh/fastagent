@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chunkSlackMarkdown, chunkSlackText, createSlackApi } from "../src/channels/slack/slack-api.ts";
+import {
+  chunkSlackMarkdown,
+  chunkSlackText,
+  createSlackApi,
+  isSlackApiRejection,
+} from "../src/channels/slack/slack-api.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -12,6 +17,94 @@ afterEach(() => {
 });
 
 describe("Slack Web API transport", () => {
+  it("listThreadSenders reads the thread's opening page and separates bots from humans", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL) => {
+      seen.push(String(url));
+      return Response.json({
+        ok: true,
+        messages: [
+          { user: "U1" },
+          { user: "UBOT", bot_id: "B1", app_id: "A1" },
+          { user: "U2" },
+          {}, // no sender — unusable for the participation rule
+        ],
+      });
+    });
+    const api = createSlackApi({ botToken: "x", baseUrl: "https://slack.test/api" });
+
+    expect(await api.listThreadSenders("C1", "10.0")).toEqual([
+      { userId: "U1", isBot: false },
+      { userId: "UBOT", isBot: true },
+      { userId: "U2", isBot: false },
+    ]);
+    expect(seen.at(-1)).toContain("conversations.replies");
+    expect(seen.at(-1)).toContain("ts=10.0");
+  });
+
+  it("noRateLimitRetry makes ONE attempt (a deadline-bounded caller cannot afford the backoff)", async () => {
+    let attempts = 0;
+    vi.stubGlobal("fetch", async () => {
+      attempts++;
+      return Response.json({ ok: false, error: "ratelimited" }, { status: 429, headers: { "retry-after": "1" } });
+    });
+    const api = createSlackApi({ botToken: "x", baseUrl: "https://slack.test/api" });
+
+    await expect(api.listThreadSenders("C1", "10.0", { noRateLimitRetry: true })).rejects.toThrow(
+      /conversations\.replies/,
+    );
+    expect(attempts).toBe(1);
+  });
+
+  it("an aborted signal ends the in-flight request as a transport failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async (_url: string | URL, init?: RequestInit) =>
+        new Promise<Response>((_, reject) => {
+          const fail = () => reject(new DOMException("aborted", "AbortError"));
+          if (init?.signal?.aborted) fail();
+          else init?.signal?.addEventListener("abort", fail);
+        }),
+    );
+    const api = createSlackApi({ botToken: "x", baseUrl: "https://slack.test/api" });
+    const abort = new AbortController();
+    const pending = api.listThreadSenders("C1", "10.0", { signal: abort.signal });
+    abort.abort();
+
+    await expect(pending).rejects.toThrow(/AbortError/);
+  });
+
+  it("isSlackApiRejection separates a refusal from what may heal on its own", async () => {
+    const failureOf = async (respond: () => Response): Promise<unknown> => {
+      vi.stubGlobal("fetch", async () => respond());
+      const api = createSlackApi({ botToken: "x", baseUrl: "https://slack.test/api" });
+      try {
+        await api.listThreadSenders("C1", "10.0", { noRateLimitRetry: true });
+      } catch (error) {
+        return error;
+      }
+      throw new Error("expected the call to fail");
+    };
+
+    // Slack names its refusals in the BODY at HTTP 200 — the usual shape.
+    expect(isSlackApiRejection(await failureOf(() => Response.json({ ok: false, error: "thread_not_found" })))).toBe(
+      true,
+    );
+    // A 4xx with no parseable body (proxy/WAF) is equally definitive: retrying it forever would put
+    // every bare message in that thread into a redelivery loop.
+    expect(isSlackApiRejection(await failureOf(() => new Response("<html>forbidden</html>", { status: 403 })))).toBe(
+      true,
+    );
+    // May heal: server error, transport failure, and rate limiting.
+    expect(isSlackApiRejection(await failureOf(() => new Response("<html>bad gateway</html>", { status: 502 })))).toBe(
+      false,
+    );
+    expect(
+      isSlackApiRejection(await failureOf(() => Response.json({ ok: false, error: "ratelimited" }, { status: 429 }))),
+    ).toBe(false);
+    expect(isSlackApiRejection(new Error("not a pipeline error"))).toBe(false);
+  });
+
   it("gates success on ok:true and names the Slack method/error details", async () => {
     vi.stubGlobal("fetch", async () =>
       Response.json({

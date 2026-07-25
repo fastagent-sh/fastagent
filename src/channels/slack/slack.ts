@@ -469,9 +469,10 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
           throw new Error(`${label} could not read thread ${threadTs} pre-ACK: ${String(error)}`, { cause: error });
         }
         // A definitive rejection (thread gone, missing scope): participation is not derivable. Mark it
-        // derived so the read is not retried per message — the summon rule still refuses, because the
-        // record carries no established human set. Process-local, so a scope granted later takes
-        // effect on the next restart with no file to delete.
+        // UNREADABLE — not derived — so the read is not retried per message while the summon rule still
+        // refuses: collapsing the two would let a refusal promote an observed-only record into an
+        // authoritative one. Process-local, so a scope granted later takes effect on the next restart
+        // with no file to delete.
         const cause = error instanceof SlackApiError ? (error.slackError ?? "unknown") : "unknown";
         const line = `${label} thread ${threadTs} is not readable — staying mention-only there: ${String(error)}`;
         if (warnedRejections.has(cause)) {
