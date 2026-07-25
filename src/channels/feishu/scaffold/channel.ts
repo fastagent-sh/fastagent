@@ -8,7 +8,7 @@ import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
 //   2. Permissions: add `im:message.p2p_msg:readonly` (direct messages), `im:message.group_at_msg:readonly`
 //      (group @mentions), `im:message:send_as_bot` (reply), `im:resource` (attachments), and the
 //      card scope ("Create and update card" — the live preview streams through a card). To answer bare
-//      messages in Agent-managed threads and buffer other unsummoned group/thread context, also add the
+//      messages in threads the Agent takes part in, and buffer other unsummoned group/thread context, also add the
 //      sensitive `im:message.group_msg` scope (tenant-admin approval) and publish a new version. A bare
 //      reply also needs a message-read scope (e.g. `im:message:readonly`): the channel lists a
 //      thread's recent messages to see who is taking part in it, which is what admits bare replies.
@@ -34,9 +34,9 @@ export default feishuChannel({
   onError: (failed) => `⚠️ ${failed.details}`,
   // The channel owns transport + format (markdown card) + attachments (image→vision, file→disk) +
   // the live streaming preview. `route` (POLICY) is OPTIONAL — omitted, it uses defaultFeishuRoute:
-  // p2p chats always answer; groups answer on @this-bot, plus bare continuations in Agent-managed
-  // threads. Other human group/thread discussion buffers until that place's next answered turn;
-  // @other-only messages in managed threads buffer rather than triggering the Agent.
+  // p2p chats always answer; groups answer on @this-bot, plus bare messages in a thread where the
+  // Agent takes part and exactly ONE human does. Other human group/thread discussion buffers until
+  // that place's next answered turn; @other-only messages buffer rather than triggering the Agent.
   // Override to customise explicit routing, reusing the export:
   //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { session: `user:${e.sender?.sender_id?.open_id}` },
   //   route: (e) => defaultFeishuRoute(e, { botOpenId: "ou_xxx" }) && { text: `${feishuEnvelope(e)}\n[extra]` },

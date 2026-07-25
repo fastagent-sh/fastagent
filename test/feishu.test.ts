@@ -608,6 +608,87 @@ describe("turn flow", () => {
     await idle();
   }
 
+  it("an unreadable referent still delivers the ask's own attachments", async () => {
+    const fx = feishuFetch({
+      "/im/v1/messages/om_gone": () =>
+        Response.json({ code: 230110, msg: "Action unavailable as the message has been deleted." }),
+    });
+    const { handler, calls, idle } = buildChannel();
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_with_image",
+          parentId: "om_gone",
+          msgType: "image",
+          content: JSON.stringify({ image_key: "img_1" }),
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    // The quoted message is context; the attached image is the ask. Losing the first must not lose
+    // the second.
+    expect(calls[0]?.prompt.images).toHaveLength(1);
+    expect(calls[0]?.prompt.text).toContain("could not be read");
+    expect(fx.calls("/resources/img_1", "GET")).toHaveLength(1);
+  });
+
+  it("a second human racing the same thread read is not erased by it", async () => {
+    let releaseRead!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    feishuFetch({
+      // The window predates both messages in flight — the shape that erases a racing speaker.
+      "container_id_type=thread": () =>
+        gate.then(() =>
+          Response.json({
+            code: 0,
+            msg: "ok",
+            data: {
+              items: [
+                { sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" } },
+                { sender: { id: "app", id_type: "app_id", sender_type: "app" } },
+              ],
+            },
+          }),
+        ) as unknown as Response,
+    });
+    const { handler, calls, idle, home } = buildChannel();
+    await flush();
+
+    const alice = handler(
+      feishuRequest(messageEvent({ id: "om_race_a", chatType: "group", threadId: "omt_race", text: "from alice" })),
+    );
+    const bob = handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_race_b",
+          chatType: "group",
+          threadId: "omt_race",
+          senderId: "ou_bob",
+          text: "from bob",
+        }),
+      ),
+    );
+    releaseRead();
+    await Promise.all([alice, bob]);
+    await idle();
+
+    // Bob joined Alice's in-flight read, and the listing's window carried neither of them. His own
+    // presence must survive the replace, so HIS message is not answered — the barging §3 forbids.
+    // Alice's is: when it was evaluated the thread was two-party, which is what the rule asks.
+    const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
+      string,
+      { humans: string[] }
+    >;
+    expect(participants["oc_1:omt_race"]?.humans).toContain("ou_bob");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt.text).toContain("from alice");
+  });
+
   it("a re-pushed first message keeps its referent anchor (observation must not consume it)", async () => {
     let reads = 0;
     const fx = feishuFetch({
@@ -1613,7 +1694,7 @@ describe("turn flow", () => {
     expect(existsSync(join(home, "buffers.json"))).toBe(false);
   });
 
-  it("a custom route owns admission: no participation is derived and no thread state is written", async () => {
+  it("a custom route owns admission: nothing is derived, though the agent's own participation is still recorded", async () => {
     feishuFetch();
     const fx = feishuFetch();
     const { handler, calls, home, idle } = buildChannel({ route: () => ({}) });

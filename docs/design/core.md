@@ -359,9 +359,9 @@ a stable hand-authored surface. What is platform-different:
     existing thread to @-mention-only.
   - *Caching.* `thread-participants.json` is a bounded write-through cache carrying, per thread, the
     humans seen, whether this agent has spoken, and whether the record is `derived` (complete).
-    Observation alone leaves `derived` false, so a failed derivation is retried rather than mistaken
-    for an answer; the agent's own reply sets it, since that settles the half of the rule that
-    matters. Losing the file costs one list call per thread.
+    Only the listing sets `derived`: observation can under-count the humans that came before it, and
+    the agent's own reply says nothing about who else is present. A failed derivation is therefore
+    retried rather than mistaken for an answer. Losing the file costs one list call per thread.
   - *Failure ownership.* A transient read failure is not cached: acceptance FAILS the delivery (HTTP
     500 / WS 500 frame) so the platform re-pushes and the next attempt re-checks — the same
     at-least-once contract as a failed pre-ACK state write. The cost is real and accepted: one

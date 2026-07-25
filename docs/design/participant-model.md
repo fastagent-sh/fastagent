@@ -123,7 +123,7 @@ what a side conversation concludes gets carried back.
 | Direct message | one continuous session per chat | a colleague does not restart every message |
 | Group main timeline | one session per chat, shared by everyone | B following up on A's question is the normal case, and the agent must remember its own answers |
 | Thread | one session per thread, anchored to what it branched from | a side conversation is separate, not amnesiac |
-| Thread → room | conclusions fold upward (§7) | "we decided X in that thread" |
+| Thread → room | conclusions fold upward (§7, planned) | "we decided X in that thread" |
 
 Sessions are **per place, never per person**. A room's conversation belongs to the room: scoping
 memory per user would break the most common collaborative pattern (one person following up on
@@ -159,7 +159,7 @@ A side conversation loses two different things, and they have asymmetric costs:
 
 > **Memory folds automatically; attention must be requested explicitly.**
 
-**Memory fold (automatic).** When a turn in a thread completes, it records that thread's *latest*
+**Memory fold (automatic) — planned, not yet implemented.** When a turn in a thread completes, it records that thread's *latest*
 exchange into the room's pending-fold state, keyed by thread and **overwritten** each time. The
 room's next turn folds those records into its prompt and clears them on `completed` — the same
 peek → completed → commit invariant the context buffer already uses, and the same generic mechanism
@@ -172,7 +172,7 @@ the agent's own reply as well as the human's message: a participant remembers wh
 No summarization model call: the fold is truncated verbatim. If a single latest exchange proves
 insufficient, the upgrade path is a summary (pi exposes `generateBranchSummary`), not more history.
 
-**Attention fold (explicit).** A person in the thread asks the agent to share the outcome, and the
+**Attention fold (explicit) — available today.** A person in the thread asks the agent to share the outcome, and the
 agent posts to the main timeline using its send capability. This requires no new mechanism — but it
 does require the send tool to state its boundary, or the agent will use it to answer ordinary turns
 and double-post. Slack's native "also send to channel" on a thread reply is the same idea provided by
@@ -242,10 +242,9 @@ coupled three independent axes — session identity, reply placement, and the su
 who wanted room-level sessions was forced to also give up mention-free thread continuations. The
 model above sets each axis on its own principle, which leaves nothing for the modes to select.
 
-State left by the previous model: `owned-threads.json` is obsolete and is removed on the next start.
-`buffers.json` keeps any pre-upgrade `<chat>:root:<id>` buckets — no place key can produce them again,
-so they are never folded into a turn; they are bounded by the threads that existed before the upgrade
-and can be dropped by deleting the file (it holds only un-summoned context awaiting its next turn).
+State left by the previous model is cleaned up on the next start: `owned-threads.json` is removed, and
+`buffers.json` buckets keyed `<chat>:root:<id>` are dropped at load — no place key can produce that
+shape again, so nothing could ever fold or clear them. Live buckets are untouched.
 
 Breaking changes for existing deployments:
 

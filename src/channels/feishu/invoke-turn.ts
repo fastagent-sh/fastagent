@@ -91,21 +91,24 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       return undefined;
     });
     if (!parent) {
-      return { images: undefined, promptSuffix: `\n\n[replied-to message (msg ${parentId}) could not be read]` };
+      // Fall THROUGH: the resources this turn carries are the ask itself. Returning here would drop
+      // the images and files the user explicitly attached along with the referent they merely quoted.
+      referentBlock = `\n\n[replied-to message (msg ${parentId}) could not be read]`;
+    } else {
+      const parsed = parseContent({
+        message_type: parent.msg_type ?? "unknown",
+        content: parent.body?.content ?? "",
+        mentions: parent.mentions as FeishuMention[] | undefined,
+      });
+      // The referent's own resources join the turn as primary inputs, carried by the PARENT message id.
+      for (const key of parsed.imageKeys) images.push({ msg: parentId, key });
+      for (const ref of parsed.fileRefs) files.push({ msg: parentId, key: ref.key, name: ref.name });
+      // getMessage's sender is `{ id, id_type, sender_type }` — a DIFFERENT shape from the event's
+      // sender (`{ sender_id: { open_id } }`), so the label is built here, not via parse.senderLabel.
+      const senderId = (parent.sender as { id?: string } | undefined)?.id;
+      const from = senderId ? `user ${senderId}` : undefined;
+      referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${codePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)"}]`;
     }
-    const parsed = parseContent({
-      message_type: parent.msg_type ?? "unknown",
-      content: parent.body?.content ?? "",
-      mentions: parent.mentions as FeishuMention[] | undefined,
-    });
-    // The referent's own resources join the turn as primary inputs, carried by the PARENT message id.
-    for (const key of parsed.imageKeys) images.push({ msg: parentId, key });
-    for (const ref of parsed.fileRefs) files.push({ msg: parentId, key: ref.key, name: ref.name });
-    // getMessage's sender is `{ id, id_type, sender_type }` — a DIFFERENT shape from the event's
-    // sender (`{ sender_id: { open_id } }`), so the label is built here, not via parse.senderLabel.
-    const senderId = (parent.sender as { id?: string } | undefined)?.id;
-    const from = senderId ? `user ${senderId}` : undefined;
-    referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${codePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)"}]`;
   }
 
   // Primary first and fail-fast: these are resources the current user explicitly pointed at.

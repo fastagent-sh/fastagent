@@ -119,5 +119,14 @@ function isEntry(value: unknown): value is FeishuBufferEntry {
 }
 
 export function createFeishuContextBuffer(path: string, label: string): FeishuContextBuffer {
-  return createGenericContextBuffer({ path, label, isEntry, line: bufferLine });
+  return createGenericContextBuffer({
+    path,
+    label,
+    isEntry,
+    line: bufferLine,
+    // Buckets from the pre-participant-model keying (`<chat>:root:<root_id>`) can never be produced
+    // again — a place is `<chat>` or `<chat>:thread:<thread_id>` — so nothing could ever fold or clear
+    // them. Drop them rather than keep chat content on disk indefinitely.
+    isLivePlaceKey: (placeKey) => !placeKey.includes(":root:"),
+  });
 }

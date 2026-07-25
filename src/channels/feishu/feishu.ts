@@ -496,12 +496,7 @@ function createFeishuRuntimeFactory(
     const warnedRejectionCodes = new Set<number>();
 
     /** Read a thread's senders back from the platform and merge them into the participation cache. */
-    const readThreadParticipants = async (
-      chatId: string,
-      threadId: string,
-      deadline: number,
-      speaker: string | undefined,
-    ): Promise<void> => {
+    const readThreadParticipants = async (chatId: string, threadId: string, deadline: number): Promise<void> => {
       const abort = new AbortController();
       let senders: { senderType: string; senderId: string }[];
       try {
@@ -534,16 +529,11 @@ function createFeishuRuntimeFactory(
           warnedRejectionCodes.add(code);
           log.warn(`${line} (if this repeats for every thread, check the app's message-read permissions)`);
         }
-        threadParticipants.merge(chatId, threadId, { humans: speaker ? [speaker] : [], derived: true });
+        threadParticipants.merge(chatId, threadId, { derived: true });
         return;
       }
       threadParticipants.merge(chatId, threadId, {
-        // The window may not carry the message being accepted right now, but whoever is speaking is
-        // in the conversation by definition — a derived record must not drop them.
-        humans: [
-          ...senders.filter((sender) => sender.senderType === "user").map((sender) => sender.senderId),
-          ...(speaker ? [speaker] : []),
-        ],
+        humans: senders.filter((sender) => sender.senderType === "user").map((sender) => sender.senderId),
         agentSpoke: senders.some((sender) => sender.senderType === "app" && sender.senderId === appId),
         derived: true,
       });
@@ -562,6 +552,10 @@ function createFeishuRuntimeFactory(
       known: boolean,
       speaker: string | undefined,
     ): Promise<boolean> => {
+      // The listing REPLACES the human set, and its window may not carry a message pushed moments
+      // ago. Every waiter therefore re-asserts its OWN speaker after the read — doing it inside the
+      // read would only compensate whoever happened to start it, letting a racing second human be
+      // erased and then answered.
       if (!known) {
         // One platform read per thread, shared by every delivery awaiting it (sharers resume in arrival
         // order; a joiner inherits the FIRST caller's deadline, still within one budget of that start).
@@ -571,10 +565,11 @@ function createFeishuRuntimeFactory(
         const key = `${chatId}:${threadId}`;
         let read = threadReads.get(key);
         if (read === undefined) {
-          read = readThreadParticipants(chatId, threadId, deadline, speaker).finally(() => threadReads.delete(key));
+          read = readThreadParticipants(chatId, threadId, deadline).finally(() => threadReads.delete(key));
           threadReads.set(key, read);
         }
         await read;
+        if (speaker !== undefined) threadParticipants.merge(chatId, threadId, { humans: [speaker] });
       }
       const participation = threadParticipants.get(chatId, threadId);
       if (participation === undefined) return false;
@@ -719,13 +714,6 @@ function createFeishuRuntimeFactory(
       const baseText = r.text ?? cloudEnvelope(event, kind);
       if (baseText.trim() === "" && images.length === 0 && files.length === 0) return;
 
-      // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
-      // bare message address it without a mention (§3). Recorded at acceptance, before the reply is
-      // attempted: entering the conversation is the intent, and a delivery failure does not undo it.
-      if (replyInThread === true && m.thread_id !== undefined && sameTarget) {
-        threadParticipants.merge(m.chat_id, m.thread_id, { agentSpoke: true });
-      }
-
       submit(
         {
           id: m.message_id,
@@ -747,6 +735,15 @@ function createFeishuRuntimeFactory(
         },
         true,
       );
+
+      // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
+      // bare message address it without a mention (§3). Recorded only once the intent is durable:
+      // `submit` can throw, and a re-pushed first message must still see an empty thread so it keeps
+      // its referent anchor. A later delivery failure does not undo it — entering the conversation is
+      // the intent, not the send.
+      if (replyInThread === true && m.thread_id !== undefined && sameTarget) {
+        threadParticipants.merge(m.chat_id, m.thread_id, { agentSpoke: true });
+      }
     };
 
     return { acceptEvent, turnsIdle: () => Promise.all([queue.idle(), sideTasks.drain()]).then(() => undefined) };

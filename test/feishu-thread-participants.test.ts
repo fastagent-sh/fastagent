@@ -52,11 +52,13 @@ describe("Feishu/Lark thread participation", () => {
     expect(store.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
   });
 
-  it("a derived listing REPLACES the human set: a thread can become two-party again", () => {
+  it("a derived listing REPLACES the human set (the shape a restart's re-derive relies on)", () => {
     const store = createFeishuThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
     store.merge("oc_1", "omt_a", { humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
 
-    // The listing samples the thread's RECENT window; Bob has left the conversation.
+    // A listing samples the thread's RECENT window, so it answers "who is here now" rather than
+    // "who ever spoke". Within one process `derived` is monotone and this runs once per thread; the
+    // replace matters when a restart re-derives a thread that has since quietened to two parties.
     store.merge("oc_1", "omt_a", { humans: ["ou_alex"], derived: true });
 
     expect(store.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
