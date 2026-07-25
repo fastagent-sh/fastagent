@@ -73,10 +73,15 @@ const MAX_TURN_ATTEMPTS = 3;
 const MAX_EVENT_BYTES = 1 << 20;
 
 /** ONE shared budget for all pre-ACK platform waits of a delivery (bot identity + thread read): the
- *  platform expects event ACKs within seconds, so the total acceptance wait — not each await — is
- *  capped and must never ride the API pipeline's full 30s timeout + retry budget. On expiry the
- *  delivery is treated as transiently unreadable (re-pushed), not as unmanaged. */
-const ACK_CHECK_BUDGET_MS = 2000;
+ *  platform requires event ACKs within 3s, so the total acceptance wait — not each await — is capped
+ *  and must never ride the API pipeline's full 30s timeout + retry budget. On expiry the delivery is
+ *  treated as transiently unreadable (re-pushed), not as unmanaged.
+ *
+ *  Sized against measured round trips rather than a round number: a thread listing costs 1.2–1.7s
+ *  from a distant network (independent of page size — it is latency, not payload), and a cold tenant
+ *  token adds another ~1.5s. 2s left no headroom and leaned on the platform's re-push for an ordinary
+ *  slow call; this keeps ~0.5s for the state writes and the response, which are sub-millisecond. */
+const ACK_CHECK_BUDGET_MS = 2500;
 
 /** Queue feedback is immediate by default: it is the user's acknowledgement that this exact ask was
  *  accepted behind another turn. The same reply-quoted card becomes the preview/final answer, so there

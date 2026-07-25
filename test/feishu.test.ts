@@ -964,7 +964,7 @@ describe("turn flow", () => {
       },
       (error: unknown) => error,
     );
-    await vi.advanceTimersByTimeAsync(2_500); // past the shared pre-ACK budget (ACK_CHECK_BUDGET_MS)
+    await vi.advanceTimersByTimeAsync(3_000); // past the shared pre-ACK budget (ACK_CHECK_BUDGET_MS)
     const error = await pending;
     vi.useRealTimers();
     expect(String(error)).toMatch(/thread omt_stuck/);
@@ -1027,7 +1027,7 @@ describe("turn flow", () => {
       },
       (error: unknown) => error,
     );
-    await vi.advanceTimersByTimeAsync(2_500);
+    await vi.advanceTimersByTimeAsync(3_000);
     const error = await pending;
     vi.useRealTimers();
     expect(String(error)).toMatch(/bot identity resolution/);
