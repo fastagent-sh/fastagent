@@ -554,14 +554,11 @@ function createFeishuRuntimeFactory(
       chatId: string,
       threadId: string,
       deadline: number,
-      known: boolean,
       speaker: string | undefined,
     ): Promise<boolean> => {
-      // The listing REPLACES the human set, and its window may not carry a message pushed moments
-      // ago. Every waiter therefore re-asserts its OWN speaker after the read — doing it inside the
-      // read would only compensate whoever happened to start it, letting a racing second human be
-      // erased and then answered.
-      if (!known) {
+      // Only a platform listing sets `derived`, and observing a message never does — so this reads the
+      // live record rather than a snapshot taken before the observation above.
+      if (threadParticipants.get(chatId, threadId)?.derived !== true) {
         // One platform read per thread, shared by every delivery awaiting it (sharers resume in arrival
         // order; a joiner inherits the FIRST caller's deadline, still within one budget of that start).
         // LIVE order is best-effort across this window: a message that skips the check (an @mention, a
@@ -574,6 +571,9 @@ function createFeishuRuntimeFactory(
           threadReads.set(key, read);
         }
         await read;
+        // The listing REPLACES the human set and its window may not carry a message pushed moments
+        // ago, so every waiter re-asserts its OWN speaker afterwards. Doing it inside the read would
+        // compensate only whoever started it, letting a racing second human be erased and answered.
         if (speaker !== undefined) threadParticipants.merge(chatId, threadId, { humans: [speaker] });
       }
       const participation = threadParticipants.get(chatId, threadId);
@@ -621,16 +621,13 @@ function createFeishuRuntimeFactory(
       const seq = ++seqCounter; // arrival order, taken BEFORE any await below can reorder acceptance
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
-      // Two different questions, both about the state BEFORE this message — sampled here because
-      // observing below would mask them:
-      //   · has the agent answered here? → whether the thread's session already holds what a message
-      //     replies to, or whether the referent is still the only anchor it has;
-      //   · is the human side complete? → whether participation must be read back from the platform.
-      // Neither may be derived from "a record exists": observation writes one BEFORE acceptance can
-      // fail, so a re-pushed first message would otherwise lose its anchor.
-      const priorThread = m.thread_id === undefined ? undefined : threadParticipants.get(m.chat_id, m.thread_id);
-      const agentInThread = priorThread?.agentSpoke === true;
-      const threadDerived = priorThread?.derived === true;
+      // Has the agent answered in this thread BEFORE this delivery? That decides whether the thread's
+      // session already holds what a message replies to, or whether the referent is still the only
+      // anchor it has. Read before the reply is accepted below, never from "a record exists":
+      // observation writes one before acceptance can fail, which would strip a re-pushed first
+      // message of its anchor.
+      const agentInThread =
+        m.thread_id !== undefined && threadParticipants.get(m.chat_id, m.thread_id)?.agentSpoke === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
       // second human speaking is exactly what makes addressing ambiguous again.
@@ -642,7 +639,7 @@ function createFeishuRuntimeFactory(
         isHumanGroup &&
         m.thread_id !== undefined &&
         !normalized.content.hasMentions &&
-        (await threadAddressesAgent(m.chat_id, m.thread_id, deadline, threadDerived, event.sender?.sender_id?.open_id))
+        (await threadAddressesAgent(m.chat_id, m.thread_id, deadline, event.sender?.sender_id?.open_id))
       ) {
         r = {};
       }
