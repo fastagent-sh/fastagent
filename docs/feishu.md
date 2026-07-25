@@ -323,7 +323,7 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `seen.json` — the most recent 2,000 `message_id`s whose turn intent or buffered context was persisted; Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key,
-- `thread-participants.json` — a bounded CACHE of who takes part in each thread (the humans seen, whether the Agent has spoken, and whether the record is complete); re-established from the platform when it has no answer, so losing it costs one lookup per thread, not the behavior,
+- `thread-participants.json` — a bounded CACHE of who takes part in each thread: the humans seen and whether the Agent has spoken. Whether that picture is COMPLETE is deliberately not stored — each process establishes it once from the platform, so a refused read can never become a durable "do not retry". Losing the file costs one lookup per thread, not the behavior,
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/<chat>/` — downloaded inbound files.
 

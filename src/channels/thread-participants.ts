@@ -84,7 +84,7 @@ export interface ThreadParticipants {
   merge(key: string, seen: { humans?: string[]; agentSpoke?: true; established?: true; unreadable?: true }): void;
 }
 
-function isRecord(value: unknown): value is StoredParticipation {
+function isStoredParticipation(value: unknown): value is StoredParticipation {
   const record = value as StoredParticipation;
   return (
     Array.isArray(record?.humans) &&
@@ -97,7 +97,12 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
   const raw = loadStateFile(path);
   const records = new Map<string, StoredParticipation>();
   if (raw !== undefined) {
-    if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.values(raw).every(isRecord)) {
+    if (
+      typeof raw === "object" &&
+      raw !== null &&
+      !Array.isArray(raw) &&
+      Object.values(raw).every(isStoredParticipation)
+    ) {
       for (const [key, record] of Object.entries(raw as Record<string, StoredParticipation>)) {
         records.set(key, { humans: record.humans, agentSpoke: record.agentSpoke });
       }
