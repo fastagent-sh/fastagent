@@ -122,6 +122,7 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
    - `im:message.group_msg` — sensitive, tenant-admin-approved; required to buffer unsummoned group/thread context and accept bare continuations in Agent-managed threads,
    - `im:message:send_as_bot` — send replies,
    - `im:resource` — download message images/files,
+   - a message-read scope (e.g. `im:message:readonly`) if the console rejects reads of a single message: the channel fetches a replied-to message and a thread's root message by id (the latter decides whether bare continuations are answered). A rejection is logged once per cause and the affected threads stay @-only,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
 3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose one mode:
    - **WebSocket:** choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
@@ -233,7 +234,7 @@ reuses that builder with the `[lark: …]` compatibility tag.
 
 ### Group visibility is scope-gated
 
-With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel and therefore cannot be buffered. The sensitive `im:message.group_msg` scope (custom apps only, tenant-admin approval) plus a newly published app version delivers all group messages. FastAgent then invokes only explicit `@bot` turns plus bare human continuations in its durable managed-thread index; other human discussion is durably buffered by main chat or thread root and folded into that place's next answered turn.
+With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel and therefore cannot be buffered. The sensitive `im:message.group_msg` scope (custom apps only, tenant-admin approval) plus a newly published app version delivers all group messages. FastAgent then invokes only explicit `@bot` turns plus bare human continuations in **managed threads** — threads whose own root message is a human @mention of the bot, verified by reading that root back from the platform (`owned-threads.json` is only a cache of the answer). Other human discussion is durably buffered by main chat or thread root and folded into that place's next answered turn.
 
 Practical consequences in groups:
 
@@ -327,7 +328,7 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `seen.json` — the most recent 2,000 `message_id`s whose turn intent or buffered context was persisted; Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key,
-- `owned-threads.json` — durable `root_id → chat_id` ownership for managed group threads, written before the transport ACK so restarts preserve continuation routing,
+- `owned-threads.json` — a CACHE of `root_id → chat_id` for managed group threads (a thread is managed when its own root message is a human @mention of the bot — re-read from the platform when this file has no answer, so losing it costs one lookup per thread, not the behavior),
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/<chat>/` — downloaded inbound files.
 

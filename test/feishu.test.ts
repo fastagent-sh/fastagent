@@ -682,6 +682,7 @@ describe("turn flow", () => {
             items: [
               {
                 message_id: "om_lost_root",
+                chat_id: "oc_1",
                 sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
                 msg_type: "text",
                 body: { content: JSON.stringify({ text: "@_bot start" }) },
@@ -744,6 +745,7 @@ describe("turn flow", () => {
                 items: [
                   {
                     message_id: "om_flaky_root",
+                    chat_id: "oc_1",
                     sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
                     msg_type: "text",
                     body: { content: JSON.stringify({ text: "@_bot start" }) },
@@ -794,6 +796,7 @@ describe("turn flow", () => {
               items: [
                 {
                   message_id: "om_slow_root",
+                  chat_id: "oc_1",
                   sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
                   msg_type: "text",
                   body: { content: JSON.stringify({ text: "@_bot start" }) },
@@ -842,6 +845,7 @@ describe("turn flow", () => {
                   items: [
                     {
                       message_id: "om_stuck_root",
+                      chat_id: "oc_1",
                       sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
                       msg_type: "text",
                       body: { content: JSON.stringify({ text: "@_bot start" }) },
@@ -872,7 +876,7 @@ describe("turn flow", () => {
       },
       (error: unknown) => error,
     );
-    await vi.advanceTimersByTimeAsync(2_500); // past ROOT_CHECK_TIMEOUT_MS
+    await vi.advanceTimersByTimeAsync(2_500); // past the shared pre-ACK budget (ACK_CHECK_BUDGET_MS)
     const error = await pending;
     vi.useRealTimers();
     expect(String(error)).toMatch(/thread root om_stuck_root/);
@@ -910,7 +914,7 @@ describe("turn flow", () => {
       },
       (error: unknown) => error,
     );
-    await vi.advanceTimersByTimeAsync(2_500); // past ROOT_CHECK_TIMEOUT_MS
+    await vi.advanceTimersByTimeAsync(2_500); // past the shared pre-ACK budget (ACK_CHECK_BUDGET_MS)
     const error = await pending;
     vi.useRealTimers();
     expect(String(error)).toMatch(/bot identity resolution exceeded/);
@@ -982,6 +986,7 @@ describe("turn flow", () => {
             items: [
               {
                 message_id: "om_race_root",
+                chat_id: "oc_1",
                 sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
                 msg_type: "text",
                 body: { content: JSON.stringify({ text: "@_bot start" }) },
@@ -1052,6 +1057,38 @@ describe("turn flow", () => {
     expect(warnings.some((message) => message.includes("lives in chat oc_elsewhere"))).toBe(true);
   });
 
+  it("a root carrying no chat at all fails closed (unprovable, never admitted by default)", async () => {
+    const fx = feishuFetch({
+      "/im/v1/messages/om_chatless_root": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_chatless_root", // no chat_id in the response
+                sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+                msg_type: "text",
+                body: { content: JSON.stringify({ text: "@_bot start" }) },
+                mentions: [{ key: "@_bot", name: "Bot", id: "ou_bot", id_type: "open_id" }],
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls } = buildChannel();
+    await flush();
+
+    await handler(
+      feishuRequest(
+        messageEvent({ id: "om_c1", chatType: "group", rootId: "om_chatless_root", threadId: "omt_c", text: "bare" }),
+      ),
+    );
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(fx.calls("/im/v1/messages/om_chatless_root", "GET")).toHaveLength(1);
+  });
+
   it("a 2xx root read with no message is a visible anomaly: unmanaged, checked once", async () => {
     const fx = feishuFetch({
       "/im/v1/messages/om_empty_root": () => Response.json({ code: 0, msg: "ok", data: { items: [] } }),
@@ -1084,6 +1121,7 @@ describe("turn flow", () => {
             items: [
               {
                 message_id: "om_human_root",
+                chat_id: "oc_1",
                 sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
                 msg_type: "text",
                 body: { content: JSON.stringify({ text: "humans talking" }) },

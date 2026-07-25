@@ -28,7 +28,13 @@ import {
 } from "./context-buffer.ts";
 import { decryptEvent, timingSafeEqualStr, verifySignature } from "./crypto.ts";
 import { invokeFeishuTurn } from "./invoke-turn.ts";
-import { type FeishuApi, type FeishuTarget, createFeishuApi, isFeishuApiRejection } from "./feishu-api.ts";
+import {
+  type FeishuApi,
+  type FeishuTarget,
+  createFeishuApi,
+  feishuApiErrorCode,
+  isFeishuApiRejection,
+} from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
 import { createFeishuManagedRoots } from "./managed-roots.ts";
@@ -497,10 +503,11 @@ function createFeishuRuntimeFactory(
         clearTimeout(timer);
       }
     };
-    // First definitive root rejection is an operator-visible warning: it MAY mean the app cannot read
-    // messages at all (a configuration error that disables every bare continuation), which must not
-    // hide at debug level. Repeats (each recalled root is one) stay at debug.
-    let rootRejectionWarned = false;
+    // One operator-visible warning per rejection CLASS (platform code): a recalled root (expected,
+    // per-resource) and a missing message-read permission (app-wide — it disables every bare
+    // continuation) must not share a budget, or the second hides behind the first. Repeats of a class
+    // stay at debug.
+    const warnedRejectionCodes = new Set<number>();
     const checkRootSummons = async (
       chatId: string,
       rootId: string,
@@ -511,7 +518,9 @@ function createFeishuRuntimeFactory(
       const abort = new AbortController();
       try {
         root = await withAckDeadline(
-          api.getMessage(rootId, { signal: abort.signal }),
+          // No rate-limit backoff: the pipeline's retries (up to 6s) cannot fit this budget, and under
+          // rate limiting they would amplify each re-push into several more requests.
+          api.getMessage(rootId, { signal: abort.signal, noRateLimitRetry: true }),
           `thread root read`,
           deadline,
           () => abort.abort(),
@@ -531,10 +540,11 @@ function createFeishuRuntimeFactory(
         // A definitive platform rejection (recalled root, missing read permission): management is not
         // provable. Negative-cache it — per process only, so a permission grant plus restart recovers.
         const line = `${label} thread root ${rootId} is not readable — treating the thread as unmanaged: ${String(error)}`;
-        if (rootRejectionWarned) {
+        const code = feishuApiErrorCode(error) ?? 0;
+        if (warnedRejectionCodes.has(code)) {
           log.debug(line);
         } else {
-          rootRejectionWarned = true;
+          warnedRejectionCodes.add(code);
           log.warn(`${line} (if this repeats for every thread, check the app's message-read permissions)`);
         }
         rememberForeign(rootKey);
@@ -547,10 +557,11 @@ function createFeishuRuntimeFactory(
         rememberForeign(rootKey);
         return false;
       }
-      if (root.chat_id !== undefined && root.chat_id !== chatId) {
-        // The event claims a chat the root does not live in — an anomaly, and unmanaged FOR THAT CHAT.
-        // Cached under the chat-scoped key, so the mismatch cannot amplify into per-message reads.
-        log.warn(`${label} thread root ${rootId} lives in chat ${root.chat_id}, not ${chatId} — unmanaged`);
+      if (root.chat_id !== chatId) {
+        // The root does not live in the chat this event claims (or carries no chat at all): unprovable
+        // for THIS chat, so fail closed like the sibling anomalies above. Cached under the chat-scoped
+        // key, so the mismatch cannot amplify into a read per message.
+        log.warn(`${label} thread root ${rootId} lives in chat ${root.chat_id ?? "(none)"}, not ${chatId} — unmanaged`);
         rememberForeign(rootKey);
         return false;
       }
@@ -585,9 +596,9 @@ function createFeishuRuntimeFactory(
       }
       // One platform read per root, shared by every delivery awaiting it (sharers resume in arrival
       // order; a joiner inherits the FIRST caller's deadline, still within one budget of that start).
-      // A message that skips this check (an @mention, a stop) can still enter the live queue ahead of
-      // a bare message stuck in this read window; `seq` is assigned at arrival, so recovery order is
-      // unaffected.
+      // LIVE order is best-effort across this window: a message that skips the check (an @mention, a
+      // stop) reaches `queue.accept` first and runs first, even in the same session. Only durable
+      // RECOVERY order is guaranteed — `seq` is assigned at arrival, before this await.
       let check = rootChecks.get(rootKey);
       if (check === undefined) {
         check = checkRootSummons(chatId, rootId, rootKey, deadline).finally(() => rootChecks.delete(rootKey));

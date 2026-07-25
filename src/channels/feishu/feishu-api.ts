@@ -108,6 +108,12 @@ export function isFeishuConfigApiMissing(e: unknown): boolean {
  *  body). A 2xx whose body yielded NO code (a proxy/interception page) is transport noise, not a
  *  verdict. Other excluded may-heal classes: transport failure (status 0), server error (5xx), rate
  *  limiting (429 or its 400-carried code), and auth codes the pipeline refreshes. */
+/** The platform error code behind a pipeline failure (0 when none was readable; undefined when the
+ *  error did not come from this pipeline). Lets a caller group repeated failures by class. */
+export function feishuApiErrorCode(e: unknown): number | undefined {
+  return e instanceof FeishuApiError ? e.code : undefined;
+}
+
 export function isFeishuApiRejection(e: unknown): boolean {
   return (
     e instanceof FeishuApiError &&
@@ -179,10 +185,11 @@ export interface FeishuApi {
   /** Recall (delete) a message the bot sent. */
   deleteMessage(messageId: string): Promise<void>;
   /** Fetch one message (the reply-referent + thread-root paths). Undefined when the API returns no
-   *  item. `signal` aborts the underlying request (deadline-bounded pre-ACK callers). */
+   *  item. `signal` aborts the underlying request and `noRateLimitRetry` skips the pipeline's backoff
+   *  retries — both for deadline-bounded pre-ACK callers, which cannot afford either wait. */
   getMessage(
     messageId: string,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; noRateLimitRetry?: boolean },
   ): Promise<
     | {
         message_id?: string;
@@ -303,7 +310,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; noRateLimitRetry?: boolean },
   ): Promise<T> => {
     let refreshedAuth = false;
     for (let attempt = 0; ; ) {
@@ -342,7 +349,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         cached = undefined;
         continue;
       }
-      if ((res.status === 429 || code === RATE_LIMIT_CODE) && attempt < RETRIES) {
+      if ((res.status === 429 || code === RATE_LIMIT_CODE) && attempt < RETRIES && !opts?.noRateLimitRetry) {
         attempt++;
         await wait(attempt * 1000);
         continue;
@@ -421,7 +428,9 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
       const data = await call<ApiBody & { data?: { items?: unknown[] } }>(
         "getMessage",
         "GET",
-        `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+        // Pin the id type: callers match mentions/sender against open_ids, so the response's id shape
+        // must not depend on the platform's default staying open_id.
+        `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}?user_id_type=open_id`,
         undefined,
         opts,
       );
