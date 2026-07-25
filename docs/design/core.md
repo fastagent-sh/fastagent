@@ -297,7 +297,7 @@ Feishu is the second stateful chat-channel reference, shaped as a sibling of Tel
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
 `model.ts` / `normalize.ts` content decoding + message-scoped resource normalization,
 `invoke-turn.ts` IO assembly, `preview.ts` delivery,
-`managed-roots.ts` managed-root cache, shared `../seen.ts` bounded delivery dedup,
+`thread-participants.ts` thread-participation cache, shared `../seen.ts` bounded delivery dedup,
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / generic `context-buffer` /
 `invoke-turn-kit` / `state` / `wait-health`) remain one level up.
@@ -334,38 +334,43 @@ a stable hand-authored surface. What is platform-different:
   buffered-context entry. It is post-persist, best-effort insurance rather than exactly-once execution:
   a crash between the state and ring writes, a failed ring write, or an id beyond the cap retains L1's
   at-least-once tail. The generic turn store still owns unfinished-run recovery and its poison ceiling.
-- **Session partitioning is policy, not transport inference.** P2p and groups default to threaded root
-  sessions: every top-level DM or summoned group message owns a new `<kind>:message_id` session, creates
-  its platform thread with `reply_in_thread`, and maps continuations back through `<kind>:root_id`. The
-  kind prefix isolates Feishu/Lark while keeping pi's provider-facing cache key below its 64-character
-  ceiling. One root remains FIFO while different roots run concurrently. `directMessageSession:
-  "continuous"` and `groupMessageSession: "continuous"` are explicit compatibility opt-outs; the latter
-  restores legacy `chat_id` / `chat_id:thread_id` group sessions. Thread continuations do not rehydrate
-  `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
-  but owns a new root session. With `im:message.group_msg`, bare user messages in managed roots become
-  normal required turns with the same queue, streaming-card, error, and delivery behavior as an
-  explicit @mention. An explicit mention of only other people is targeted discussion instead and
-  enters the context buffer.
-- **A managed group thread is defined by its OWN root, not by local bookkeeping.** Three separable
+- **Session partitioning follows the place, not the ask.** A chat is one session (`chat_id`) and a
+  thread is another (`chat_id:thread_id`), so a room keeps one memory that everyone in it shares and a
+  side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the platform's `root_id`
+  tracks the reply chain and can differ between messages of one thread, which would split a side
+  conversation across sessions (and across context-buffer buckets). One place stays FIFO while
+  different places run concurrently — the concurrency unit is the place because the causal unit is.
+  The rules, and why they are derived rather than configured, are in
+  [participant-model.md](participant-model.md); there is deliberately no session-mode option.
+- **Speaking is gated by who is in the place, listening is not.** Direct messages always answer;
+  a group's main timeline requires an @mention; inside a thread the agent answers bare messages only
+  while it takes part and exactly one human does. Everything else it can see is buffered as context
+  (`im:message.group_msg` is what buys the hearing). An explicit mention of only other people is
+  discussion, never an ask. The first message of a thread loads its `parent_id` referent (a thread
+  usually starts from the agent's own earlier answer); later messages in a known thread do not, since
+  the session already holds what they reply to. An unreadable referent degrades to a marker in the
+  prompt rather than failing the turn.
+- **Thread participation is a property of the thread, not local bookkeeping.** Three separable
   decisions:
-  - *Predicate.* The thread is managed when its root message is a human @mention of this bot — a
-    property of the thread, re-derivable from the platform with `getMessage(root_id)` (pinned to
-    `user_id_type=open_id`, and the root's chat must match the event's). The earlier design recognized
-    only threads this process had created, so a lost state disk silently demoted every existing thread
-    to @-mention-only.
-  - *Caching.* Positive results are a write-through `owned-threads.json` (bounded, warmed at summon
-    time); negative results are in-process, chat-scoped, and bounded, covering non-summon roots and
-    definitive platform rejections such as a recalled root. Losing the file costs one re-check per
-    thread — except a thread whose root was recalled, which can no longer prove itself.
+  - *Predicate.* Who takes part comes from the messages the channel observes, and — for a thread this
+    process has never completed a picture of — from `listThreadSenders` (`container_id_type=thread`,
+    pinned to `user_id_type=open_id`; a bot sender's `id` is the app id). The earlier design
+    recognized only threads this process had created, so a lost state disk silently demoted every
+    existing thread to @-mention-only.
+  - *Caching.* `thread-participants.json` is a bounded write-through cache carrying, per thread, the
+    humans seen, whether this agent has spoken, and whether the record is `derived` (complete).
+    Observation alone leaves `derived` false, so a failed derivation is retried rather than mistaken
+    for an answer; the agent's own reply sets it, since that settles the half of the rule that
+    matters. Losing the file costs one list call per thread.
   - *Failure ownership.* A transient read failure is not cached: acceptance FAILS the delivery (HTTP
     500 / WS 500 frame) so the platform re-pushes and the next attempt re-checks — the same
     at-least-once contract as a failed pre-ACK state write. The cost is real and accepted: one
-    `im/v1/messages` GET becomes a precondition for ACKing every bare thread message, *including*
+    `im/v1/messages` list becomes a precondition for ACKing a bare thread message, *including*
     un-summoned chatter that would only have buffered, so if a read outage outlasts the platform's
     bounded re-push schedule that message is lost entirely (turn and buffered copy, operator logs
     only). The alternative — ACKing and buffering — would silently downgrade a genuine ask to
     background context, which is the failure this channel refuses. Both platform waits (bot identity,
-    root read) share ONE deadline so a slow read cannot stall the event ACK.
+    thread read) share ONE deadline so a slow read cannot stall the event ACK.
 - **Group visibility is scope-gated and chosen during onboarding.** `Context-aware groups`
   (recommended and initially selected) requests the sensitive `im:message.group_msg` scope;
   `Mention-only` is the least-privilege alternative. The CLI states that the former delivers all group

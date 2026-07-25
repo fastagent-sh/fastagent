@@ -27,6 +27,12 @@ import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
 import { codePointPrefix } from "../text.ts";
 
+/** How much of a replied-to message is quoted back into the prompt. The referent is what a thread
+ *  starts from (docs/design/participant-model.md §8 rung 2), and the message being followed up on is
+ *  usually the agent's own previous answer — a card-sized reply, routinely longer than a snippet. Cut
+ *  too short, the agent cannot see the part the question is about, and fails silently. */
+const REFERENT_MAX_CODE_POINTS = 4000;
+
 /** Appended to the prompt (not the system prompt): the channel renders the reply in a card, and the
  *  card's markdown element is the natural fit for LLM output — steer away from HTML/plain. */
 const MARKDOWN_INSTRUCTION = "\n\n(Format your reply in standard Markdown — it is rendered in a Feishu/Lark card.)";
@@ -75,8 +81,18 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   let referentBlock = "";
   if (attachments.primary.parentId !== undefined) {
     const parentId = attachments.primary.parentId;
-    const parent = await t.api.getMessage(parentId);
-    if (!parent) throw new Error(`replied-to message ${parentId} is not readable`);
+    // A referent is CONTEXT, not the ask. Losing it (deleted, restricted, unreadable) must not cost
+    // the user their answer — every first message of a thread carries one, so a hard failure here
+    // would turn an ordinary platform edge into a lost turn. Degrade visibly instead: the operator
+    // gets a warning, and the model is told the quote could not be read rather than being left to
+    // guess what "about that" refers to.
+    const parent = await t.api.getMessage(parentId).catch((error) => {
+      log.warn(`${t.label} could not read replied-to message ${parentId}: ${String(error)}`);
+      return undefined;
+    });
+    if (!parent) {
+      return { images: undefined, promptSuffix: `\n\n[replied-to message (msg ${parentId}) could not be read]` };
+    }
     const parsed = parseContent({
       message_type: parent.msg_type ?? "unknown",
       content: parent.body?.content ?? "",
@@ -89,7 +105,7 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
     // sender (`{ sender_id: { open_id } }`), so the label is built here, not via parse.senderLabel.
     const senderId = (parent.sender as { id?: string } | undefined)?.id;
     const from = senderId ? `user ${senderId}` : undefined;
-    referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${codePointPrefix(parsed.text, 560) || "(empty)"}]`;
+    referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${codePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)"}]`;
   }
 
   // Primary first and fail-fast: these are resources the current user explicitly pointed at.

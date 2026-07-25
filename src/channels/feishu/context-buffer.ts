@@ -38,12 +38,16 @@ function bufferLine(entry: FeishuBufferEntry): string {
   return `${entry.sender} (${meta}): ${entry.body}`;
 }
 
-/** Main-chat discussion stays in the chat bucket; a topic uses its stable root id (thread id fallback). */
+/**
+ * The place a message belongs to: the main chat, or a thread within it. Keyed by `thread_id`, the
+ * platform's own identity for a side conversation — NOT `root_id`, which tracks the reply chain and
+ * can differ between messages of one thread (which would split a thread's context across buckets).
+ * A quoted reply outside a thread carries a root but is main-chat discussion, so it buckets there.
+ */
 export function feishuBufferPlaceKey(
   conversation: Pick<NormalizedFeishuMessage["conversation"], "chatId" | "rootId" | "threadId">,
 ): string {
-  const topic = conversation.rootId ?? conversation.threadId;
-  return topic ? `${conversation.chatId}:root:${topic}` : conversation.chatId;
+  return conversation.threadId ? `${conversation.chatId}:thread:${conversation.threadId}` : conversation.chatId;
 }
 
 /** One-line, bounded background text. Resource-only messages already carry a visible decoder marker. */

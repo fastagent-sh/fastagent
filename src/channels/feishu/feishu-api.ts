@@ -201,6 +201,12 @@ export interface FeishuApi {
       }
     | undefined
   >;
+  /** List a thread's messages (oldest first), for deriving who is taking part in it. Bounded by
+   *  `limit`: the participant question only needs enough senders, never the whole transcript. */
+  listThreadSenders(
+    threadId: string,
+    opts?: { signal?: AbortSignal; noRateLimitRetry?: boolean; limit?: number },
+  ): Promise<{ senderType: string; senderId: string }[]>;
   /** Download a message resource (image/file bytes). Caps at {@link MAX_DOWNLOAD_BYTES}. */
   downloadResource(
     messageId: string,
@@ -435,6 +441,23 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         opts,
       );
       return data.data?.items?.[0] as Awaited<ReturnType<FeishuApi["getMessage"]>>;
+    },
+    async listThreadSenders(threadId, opts) {
+      const size = Math.min(Math.max(opts?.limit ?? 50, 1), 50);
+      const data = await call<ApiBody & { data?: { items?: { sender?: { id?: string; sender_type?: string } }[] } }>(
+        "listThreadSenders",
+        "GET",
+        // `thread` container: the platform's own identity for a side conversation. A bot sender's `id`
+        // is the app id (cli_…), a human's is an open_id — both compared by the caller.
+        `/open-apis/im/v1/messages?container_id_type=thread&container_id=${encodeURIComponent(threadId)}&page_size=${size}&user_id_type=open_id`,
+        undefined,
+        opts,
+      );
+      return (data.data?.items ?? []).flatMap((item) => {
+        const senderType = item.sender?.sender_type;
+        const senderId = item.sender?.id;
+        return typeof senderType === "string" && typeof senderId === "string" ? [{ senderType, senderId }] : [];
+      });
     },
     async downloadResource(messageId, fileKey, type) {
       // The byte download is the one non-JSON call, so it cannot ride the pipeline — same token +
