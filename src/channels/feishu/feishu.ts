@@ -604,7 +604,13 @@ function createFeishuRuntimeFactory(
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
       // Whether the thread was known BEFORE this message is what decides if participation has to be
       // read back from the platform — sample it first, because observing below would mask it.
-      const threadKnown = m.thread_id !== undefined && threadParticipants.get(m.chat_id, m.thread_id)?.derived === true;
+      // Two different questions, both about the state BEFORE this message — sampled here because
+      // observing below would mask them:
+      //   · was this thread ever seen? → whether its first message still needs its referent loaded;
+      //   · is the human side complete? → whether participation must be read back from the platform.
+      const priorThread = m.thread_id === undefined ? undefined : threadParticipants.get(m.chat_id, m.thread_id);
+      const threadSeen = priorThread !== undefined;
+      const threadDerived = priorThread?.derived === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
       // second human speaking is exactly what makes addressing ambiguous again.
@@ -616,7 +622,7 @@ function createFeishuRuntimeFactory(
         isHumanGroup &&
         m.thread_id !== undefined &&
         !normalized.content.hasMentions &&
-        (await threadAddressesAgent(m.chat_id, m.thread_id, deadline, threadKnown))
+        (await threadAddressesAgent(m.chat_id, m.thread_id, deadline, threadDerived))
       ) {
         r = {};
       }
@@ -662,9 +668,11 @@ function createFeishuRuntimeFactory(
       const session = r.session ?? placeKey(m);
       const chatId = r.chatId ?? m.chat_id;
       const sameTarget = chatId === m.chat_id;
-      // Answer where asked (§4): quote in a group so the ask is identifiable, stay plain in a direct
-      // message, and stay inside a thread when the question came from one.
-      const replyTo = sameTarget && m.chat_type === "group" ? m.message_id : undefined;
+      // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers,
+      // stay plain in an ordinary direct message, and stay inside a thread whenever the question came
+      // from one — a direct message's thread is a place too, and relocating out of it is the silent
+      // move the model refuses.
+      const replyTo = sameTarget && (m.chat_type === "group" || m.thread_id !== undefined) ? m.message_id : undefined;
       const replyInThread = replyTo !== undefined && m.thread_id !== undefined ? true : undefined;
       const queueReplyTo = sameTarget ? m.message_id : undefined;
       // Explicit user stop: a control action, never a turn — it must not queue behind the run it
@@ -709,9 +717,9 @@ function createFeishuRuntimeFactory(
           replyInThread,
           // The referent anchor is what a thread starts from (§8 rung 2): the first message of a
           // thread points at something OUTSIDE it — usually the agent's own previous answer — so it is
-          // fetched. Later messages in a known thread point at the previous message, which the
-          // session already holds; re-fetching it would cost a call per turn and duplicate context.
-          parentId: threadKnown ? undefined : m.parent_id,
+          // fetched. Later messages in a thread already seen point at the previous message, which the
+          // session holds; re-fetching it would cost a call per turn and duplicate context.
+          parentId: threadSeen ? undefined : m.parent_id,
           images,
           files,
         },

@@ -46,7 +46,7 @@ export function senderLabel(sender: FeishuSender | undefined): string | undefine
   return id ? `user ${id}` : undefined;
 }
 
-/** The place a message lives (chat, or chat:topic in a topic group) — the legacy default session key. */
+/** The place a message lives (the chat, or a thread within it) — the session key (participant model §5). */
 export function placeKey(message: Pick<FeishuMessage, "chat_id" | "thread_id">): string {
   return message.thread_id ? `${message.chat_id}:${message.thread_id}` : message.chat_id;
 }

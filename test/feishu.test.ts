@@ -365,6 +365,21 @@ describe("turn flow", () => {
     expect(restarted.calls).toHaveLength(0);
   });
 
+  it("a direct message asked inside a thread is answered inside that thread", async () => {
+    const fx = feishuFetch();
+    const { handler, calls, idle } = buildChannel({}, "threaded answer");
+
+    await handler(
+      feishuRequest(messageEvent({ id: "om_dm_thread", threadId: "omt_dm", text: "continue in the topic" })),
+    );
+    await idle();
+
+    // A direct message's thread is a place too: answering in the main timeline would relocate it.
+    expect(calls[0]?.scope.session).toBe("oc_1:omt_dm");
+    const reply = fx.calls("/im/v1/messages/om_dm_thread/reply", "POST")[0];
+    expect(reply?.body?.reply_in_thread).toBe(true);
+  });
+
   it("a direct-message reply loads its referent and stays in the chat session", async () => {
     const fx = feishuFetch({
       "/im/v1/messages/om_old": () =>

@@ -230,9 +230,10 @@ The model is platform-neutral; the primitives differ in strength.
 
 ## 11. Scope
 
-Implemented for Feishu/Lark. Slack and Telegram still carry the earlier per-ask session model and its
-`directMessageSession` / `groupMessageSession` options; converging them is follow-up work, and the
-rules above are the target for both.
+Implemented for Feishu/Lark. Slack still carries the earlier per-ask session model behind its own
+`directMessageSession` / `groupMessageSession` options (`src/channels/slack/slack.ts`), and Telegram
+has its own threading behaviour; converging both is follow-up work, and the rules above are the
+target.
 
 ## 12. Migration
 
