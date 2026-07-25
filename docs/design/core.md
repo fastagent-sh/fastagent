@@ -362,8 +362,9 @@ a stable hand-authored surface. What is platform-different:
     Only the listing sets `derived`, and `derived` is PROCESS-LOCAL while the observations are
     durable: observation can only under-count, so speaking unprompted requires an established record,
     and persisting the flag would make one listing authoritative forever (a failed read becoming a
-    durable "do not retry"). Each process therefore re-establishes each thread once, which also bounds
-    how stale the answer can get. Losing the file costs one list call per thread.
+    durable "do not retry"). The listing is UNIONED with what was observed rather than substituted for
+    it — the two cover different stretches of the thread, and dropping a human is the one error that
+    makes the agent barge in. Losing the file costs one list call per thread.
   - *Failure ownership.* A transient read failure is not cached: acceptance FAILS the delivery (HTTP
     500 / WS 500 frame) so the platform re-pushes and the next attempt re-checks — the same
     at-least-once contract as a failed pre-ACK state write. The cost is real and accepted: one

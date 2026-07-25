@@ -495,7 +495,6 @@ export function slackChannel({
       channelId: string,
       threadTs: string,
       deadline: number,
-      speaker: string | undefined,
     ): Promise<boolean> => {
       const key = threadKey(teamId, channelId, threadTs);
       // Only a platform listing sets `derived`, and observing a message never does — so this reads the
@@ -509,9 +508,6 @@ export function slackChannel({
           threadReads.set(key, read);
         }
         await read;
-        // The listing REPLACES the human set and may not carry a message pushed moments ago, so every
-        // waiter re-asserts its OWN speaker afterwards.
-        if (speaker !== undefined) threadParticipants.merge(key, { humans: [speaker] });
       }
       const participation = threadParticipants.get(key);
       if (participation === undefined) return false;
@@ -581,13 +577,7 @@ export function slackChannel({
         event.thread_ts !== undefined &&
         event.type !== "app_mention" &&
         !structurallyMentionsBot &&
-        (await threadAddressesAgent(
-          teamId,
-          event.channel,
-          event.thread_ts,
-          Date.now() + ACK_CHECK_BUDGET_MS,
-          event.user ?? undefined,
-        ))
+        (await threadAddressesAgent(teamId, event.channel, event.thread_ts, Date.now() + ACK_CHECK_BUDGET_MS))
       ) {
         routed = {};
       }

@@ -45,7 +45,7 @@ function bufferLine(entry: FeishuBufferEntry): string {
  * A quoted reply outside a thread carries a root but is main-chat discussion, so it buckets there.
  */
 export function feishuBufferPlaceKey(
-  conversation: Pick<NormalizedFeishuMessage["conversation"], "chatId" | "rootId" | "threadId">,
+  conversation: Pick<NormalizedFeishuMessage["conversation"], "chatId" | "threadId">,
 ): string {
   return conversation.threadId ? `${conversation.chatId}:thread:${conversation.threadId}` : conversation.chatId;
 }

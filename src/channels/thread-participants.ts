@@ -18,11 +18,13 @@
  *
  * The two sources cover different time: observation covers the present (every message this process can
  * see), and the listing covers the past this process never watched — which is why it reads a thread
- * from its START. They are UNIONED, never replaced. The asymmetry is deliberate: over-counting humans
- * only makes the agent ask to be named, while under-counting makes it speak unprompted in a crowded
- * thread, which is the failure §3 exists to prevent. The cost is that a human who leaves is never
- * shed — the platform emits no event for leaving, so it could only ever be inferred from a window
- * that might simply have missed them.
+ * from its START. They are UNIONED, never replaced, so participation only ever ACCUMULATES: a thread
+ * that has held two humans keeps requiring a mention, across restarts, and `agentSpoke` never decays.
+ * The asymmetry is deliberate — over-counting humans only makes the agent ask to be named, while
+ * under-counting makes it speak unprompted in a crowded thread, which is the failure §3 exists to
+ * prevent. Nothing is shed: the platform emits no event when someone leaves, so shedding could only
+ * ever be guessed from a window that might simply have missed them. A restart resets exactly one
+ * thing — `derived` — which is what makes each process re-read a thread once.
  *
  * Participation is keyed by `thread_id`: Feishu's `root_id` is NOT thread-stable (a thread shows
  * different `root_id`s as its reply chain moves), so it cannot identify a side conversation.
@@ -84,14 +86,29 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
       log.warn(`${label} unexpected shape in ${path} — starting with no thread participation`);
     }
   }
-  // Process-local: see the module header. A restart re-establishes each thread once.
-  const derivedKeys = new Set<string>();
-  const unreadableKeys = new Set<string>();
+  // Process-local: see the module header. A restart re-establishes each thread once. Capped on its
+  // own, because an unreadable thread stores no observation and so is never reached by the eviction
+  // that bounds `records` — without this, a workspace full of threads the app cannot read would leak
+  // one entry per thread for the life of the process.
+  const flags = new Map<string, { derived: boolean; unreadable: boolean }>();
+  const flag = (key: string, next: { derived?: boolean; unreadable?: boolean }): void => {
+    const previous = flags.get(key);
+    flags.delete(key); // re-insert so insertion order stays "least recently flagged first"
+    flags.set(key, {
+      derived: (previous?.derived ?? false) || (next.derived ?? false),
+      unreadable: (previous?.unreadable ?? false) || (next.unreadable ?? false),
+    });
+    while (flags.size > MAX_THREADS) {
+      const oldest = flags.keys().next().value;
+      if (oldest === undefined) break;
+      flags.delete(oldest);
+    }
+  };
 
   return {
     get(key) {
-      const derived = derivedKeys.has(key);
-      const unreadable = unreadableKeys.has(key);
+      const derived = flags.get(key)?.derived ?? false;
+      const unreadable = flags.get(key)?.unreadable ?? false;
       const record = records.get(key);
       // A thread can be flagged without a stored row: an unreadable one contributes no observation, so
       // nothing is persisted for it, yet the channel must still see the flag and stop re-reading.
@@ -110,8 +127,9 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         if (humans.size >= MAX_HUMANS) break;
         humans.add(human);
       }
-      if (seen.derived === true) derivedKeys.add(key);
-      if (seen.unreadable === true) unreadableKeys.add(key);
+      if (seen.derived === true || seen.unreadable === true) {
+        flag(key, { derived: seen.derived, unreadable: seen.unreadable });
+      }
       const next: StoredParticipation = {
         humans: [...humans],
         agentSpoke: (previous?.agentSpoke ?? false) || (seen.agentSpoke ?? false),
@@ -131,8 +149,7 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         const oldest = records.keys().next().value;
         if (oldest === undefined) break;
         records.delete(oldest);
-        derivedKeys.delete(oldest);
-        unreadableKeys.delete(oldest);
+        flags.delete(oldest);
       }
       try {
         saveStateFile(path, Object.fromEntries(records));

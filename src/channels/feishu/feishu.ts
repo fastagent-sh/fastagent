@@ -543,12 +543,7 @@ function createFeishuRuntimeFactory(
      * cache, which is refined by every observed message and re-derived from the platform once for a
      * thread this process has never seen.
      */
-    const threadAddressesAgent = async (
-      chatId: string,
-      threadId: string,
-      deadline: number,
-      speaker: string | undefined,
-    ): Promise<boolean> => {
+    const threadAddressesAgent = async (chatId: string, threadId: string, deadline: number): Promise<boolean> => {
       // Only a platform listing sets `derived`, and observing a message never does — so this reads the
       // live record rather than a snapshot taken before the observation above.
       const cached = threadParticipants.get(threadKey(chatId, threadId));
@@ -565,10 +560,6 @@ function createFeishuRuntimeFactory(
           threadReads.set(key, read);
         }
         await read;
-        // The listing REPLACES the human set and its window may not carry a message pushed moments
-        // ago, so every waiter re-asserts its OWN speaker afterwards. Doing it inside the read would
-        // compensate only whoever started it, letting a racing second human be erased and answered.
-        if (speaker !== undefined) threadParticipants.merge(threadKey(chatId, threadId), { humans: [speaker] });
       }
       const participation = threadParticipants.get(threadKey(chatId, threadId));
       if (participation === undefined) return false;
@@ -633,7 +624,7 @@ function createFeishuRuntimeFactory(
         isHumanGroup &&
         m.thread_id !== undefined &&
         !normalized.content.hasMentions &&
-        (await threadAddressesAgent(m.chat_id, m.thread_id, deadline, event.sender?.sender_id?.open_id))
+        (await threadAddressesAgent(m.chat_id, m.thread_id, deadline))
       ) {
         r = {};
       }

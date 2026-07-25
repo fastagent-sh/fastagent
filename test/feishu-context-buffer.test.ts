@@ -25,7 +25,7 @@ describe("Feishu/Lark group context buffer", () => {
     const path = statePath();
     const buffer = createFeishuContextBuffer(path, "[feishu]");
     const chat = feishuBufferPlaceKey({ chatId: "oc_1" });
-    const topic = feishuBufferPlaceKey({ chatId: "oc_1", rootId: "om_root", threadId: "omt_1" });
+    const topic = feishuBufferPlaceKey({ chatId: "oc_1", threadId: "omt_1" });
 
     buffer.push(chat, { sender: "user alice", body: "main context", messageId: "om_1" });
     buffer.push(topic, { sender: "user bob", body: "thread context", messageId: "om_2" });

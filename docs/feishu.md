@@ -261,9 +261,10 @@ discussion is folded into its next answered turn there.
 
 Participation is a property of the thread, not of this process: for a thread it has no complete
 picture of, the channel reads the thread's recent senders back from the platform, so losing local
-state costs one lookup rather than the behaviour. Both halves are read from that recent window — a
-thread the Agent has been silent in for a long stretch reads as one it is no longer part of, and a
-single mention puts it back. That read happens before the event is acknowledged and shares a
+state costs one lookup rather than the behaviour. Participation accumulates and is never shed: the
+listing supplies the thread's start, the Agent observes everything since, and the two are unioned, so
+a thread that has ever held two people keeps requiring a mention. That read happens before the event
+is acknowledged and shares a
 2.5s budget with the bot-identity lookup; if it fails transiently the delivery fails and the platform
 re-pushes it, rather than the ask being silently downgraded to background context.
 

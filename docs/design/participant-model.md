@@ -80,12 +80,17 @@ colleague who keeps answering every sentence of a three-way discussion because t
 question is behaving badly. The agent must fall back to listening when the conversation stops being
 a two-party exchange.
 
-Both halves are read from the thread's **recent window** — who is taking part now, not who ever spoke.
-Humans who join later are seen live, since the agent observes every message it can see. A human
-*leaving* is not observable at all, so within one process a thread stays multi-party once it has been;
-each process re-establishes a thread once, which is what bounds how stale that answer can get. A thread
-the agent has been silent in for a whole window reads as one it is no longer part of, and one mention
-puts it back.
+Participation **accumulates and is never shed**. Two sources feed it, covering different stretches of
+time: the agent observes every message it can see (the present), and a platform listing supplies the
+thread's start (the past it never watched). They are unioned, so a thread that has ever held two humans
+keeps requiring a mention, across restarts, and the agent stays a participant of a thread it once
+answered in.
+
+That direction is chosen, not incidental: over-counting humans only makes the agent ask to be named,
+while under-counting makes it speak unprompted in a crowded thread — the failure this rule exists to
+prevent. Shedding could only ever be guessed, since no platform emits an event when someone stops
+taking part. The single thing a restart resets is whether the listing has been read, which is what
+makes each process read a thread once.
 
 **Participation** is required so the agent does not barge into a human thread it was never part of.
 The agent is a participant of a thread once it has answered in it. Bootstrapping is therefore the
