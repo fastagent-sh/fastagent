@@ -134,9 +134,9 @@ export interface SlackApi {
   ): Promise<string>;
   appendStream(channelId: string, ts: string, content: SlackStreamContent): Promise<void>;
   stopStream(channelId: string, ts: string, content?: SlackStreamContent): Promise<void>;
-  /** Senders of a thread's MOST RECENT messages (one page), for deriving who is taking part in it.
-   *  Deliberately not paginated: the question is who is in the conversation now, and an unbounded walk
-   *  cannot run inside a pre-ACK budget. */
+  /** Senders of a thread's opening page, for deriving who took part before this process watched it.
+   *  Deliberately not paginated: an unbounded walk cannot run inside a pre-ACK budget, and the
+   *  channel's own observations cover everything since. */
   listThreadSenders(
     channelId: string,
     threadTs: string,

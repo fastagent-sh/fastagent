@@ -16,10 +16,13 @@
  *   afterwards would need the file deleted by hand. Kept in memory, each process re-establishes each
  *   thread once, which is also what bounds how stale the answer can get.
  *
- * The listing answers from the thread's RECENT WINDOW — "who is taking part now", not "who ever
- * spoke". Humans joining later are seen live, since the channel observes every message it can see; a
- * human LEAVING is not observable at all (the platform emits nothing), so within one process a thread
- * that has gone quiet stays multi-party until a restart re-establishes it.
+ * The two sources cover different time: observation covers the present (every message this process can
+ * see), and the listing covers the past this process never watched — which is why it reads a thread
+ * from its START. They are UNIONED, never replaced. The asymmetry is deliberate: over-counting humans
+ * only makes the agent ask to be named, while under-counting makes it speak unprompted in a crowded
+ * thread, which is the failure §3 exists to prevent. The cost is that a human who leaves is never
+ * shed — the platform emits no event for leaving, so it could only ever be inferred from a window
+ * that might simply have missed them.
  *
  * Participation is keyed by `thread_id`: Feishu's `root_id` is NOT thread-stable (a thread shows
  * different `root_id`s as its reply chain moves), so it cannot identify a side conversation.
@@ -87,19 +90,22 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
 
   return {
     get(key) {
+      const derived = derivedKeys.has(key);
+      const unreadable = unreadableKeys.has(key);
       const record = records.get(key);
-      return record === undefined
-        ? undefined
-        : { ...record, derived: derivedKeys.has(key), unreadable: unreadableKeys.has(key) };
+      // A thread can be flagged without a stored row: an unreadable one contributes no observation, so
+      // nothing is persisted for it, yet the channel must still see the flag and stop re-reading.
+      if (record === undefined) {
+        return derived || unreadable ? { humans: [], agentSpoke: false, derived, unreadable } : undefined;
+      }
+      return { ...record, derived, unreadable };
     },
     merge(key, seen) {
       const previous = records.get(key);
-      // A derived listing REPLACES the human set: it samples the thread's recent window, so it is the
-      // answer to "who is in this conversation now" rather than "who ever spoke". An EMPTY set never
-      // replaces: a listing that names nobody is an anomaly, not the news that the thread is empty,
-      // and dropping the humans already seen there could admit a message it must not.
-      const replacing = seen.derived === true && (seen.humans?.length ?? 0) > 0;
-      const humans = new Set(replacing ? [] : (previous?.humans ?? []));
+      // UNION, never replace — see the module header: a listing and this channel's observations cover
+      // different stretches of a thread, so either erasing the other could drop a human and let the
+      // agent speak unprompted in a crowded thread.
+      const humans = new Set(previous?.humans ?? []);
       for (const human of seen.humans ?? []) {
         if (humans.size >= MAX_HUMANS) break;
         humans.add(human);
@@ -110,14 +116,15 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         humans: [...humans],
         agentSpoke: (previous?.agentSpoke ?? false) || (seen.agentSpoke ?? false),
       };
-      if (
+      const unchanged =
         previous !== undefined &&
         previous.agentSpoke === next.agentSpoke &&
         previous.humans.length === next.humans.length &&
-        previous.humans.every((human) => humans.has(human))
-      ) {
-        return; // nothing new to persist — the process-local flags above are memory-only
-      }
+        previous.humans.every((human) => humans.has(human));
+      // The process-local flags above are already recorded; a merge that carries no OBSERVATION has
+      // nothing to persist. Writing one would store an empty row — indistinguishable from "seen,
+      // nothing known" on reload — and let unreadable threads evict real participation under the cap.
+      if (unchanged || (previous === undefined && next.humans.length === 0 && !next.agentSpoke)) return;
       records.delete(key); // re-insert so insertion order stays "least recently updated first"
       records.set(key, next);
       while (records.size > MAX_THREADS) {

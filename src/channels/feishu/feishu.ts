@@ -204,6 +204,21 @@ interface FeishuRuntime {
   turnsIdle(): Promise<void>;
 }
 
+/** The participant model removed the session modes (docs/design/participant-model.md §12). An upgraded
+ *  workspace still passing one would otherwise start fine and silently get different placement AND a
+ *  different memory boundary — the one breaking change most likely to be hit, and invisible. */
+function rejectRemovedSessionOptions(opts: FeishuChannelBaseOptions, factoryName: string): void {
+  const removed = ["directMessageSession", "groupMessageSession"].filter(
+    (name) => (opts as unknown as Record<string, unknown>)[name] !== undefined,
+  );
+  if (removed.length > 0) {
+    throw new Error(
+      `${factoryName} no longer accepts ${removed.join(" / ")}: a chat is one session and a thread is another, ` +
+        "and the summon rule no longer depends on the mode — remove the option (see docs/design/participant-model.md)",
+    );
+  }
+}
+
 function createFeishuRuntimeFactory(
   profile: FeishuCloudProfile,
   opts: FeishuChannelBaseOptions,
@@ -598,11 +613,13 @@ function createFeishuRuntimeFactory(
       const seq = ++seqCounter; // arrival order, taken BEFORE any await below can reorder acceptance
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
-      // Has the agent answered in this thread BEFORE this delivery? That decides whether the thread's
-      // session already holds what a message replies to, or whether the referent is still the only
-      // anchor it has. Read before the reply is accepted below, never from "a record exists":
-      // observation writes one before acceptance can fail, which would strip a re-pushed first
-      // message of its anchor.
+      // Has THIS PROCESS answered in this thread before this delivery? That is the cheap proxy for
+      // "the thread's session already holds what this message replies to". It is deliberately read
+      // before the participation lookup below, and never from "a record exists": observation writes
+      // one before acceptance can fail, which would strip a re-pushed first message of its anchor.
+      // The cost of the proxy: after a restart, the first continuation in a long-running thread loads
+      // its referent again — one extra read and some duplicated text, in exchange for never leaving a
+      // thread's opening message without the context it replies to.
       const agentInThread =
         m.thread_id !== undefined && threadParticipants.get(threadKey(m.chat_id, m.thread_id))?.agentSpoke === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its
@@ -819,6 +836,7 @@ export function buildFeishuChannel(
   opts: FeishuChannelOptions,
   factoryName: string,
 ): ChannelModule {
+  rejectRemovedSessionOptions(opts, factoryName);
   const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
   return (ctx) => {
     if (!opts.verificationToken) {
@@ -834,6 +852,7 @@ export function buildFeishuWebSocketChannel(
   factoryName: string,
   deps: FeishuWebSocketChannelDeps = {},
 ): LongConnectionChannelModule {
+  rejectRemovedSessionOptions(opts, factoryName);
   const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
   return {
     name: `${profile.kind} websocket`,

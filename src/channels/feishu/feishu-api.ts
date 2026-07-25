@@ -236,9 +236,9 @@ export interface FeishuApi {
   updateCard(cardId: string, cardJson: string, sequence: number): Promise<void>;
 }
 
-/** How many of a thread's most recent messages are sampled to decide who is taking part in it. The
- *  platform's page cap is 50; the rule only asks whether more than one human is present, and recent
- *  messages are what answers that. */
+/** How many of a thread's messages are sampled to decide who took part in it before this process
+ *  started watching. The platform's page cap is 50, and the rule only asks whether more than one human
+ *  is present. */
 const THREAD_SENDER_PAGE = 50;
 
 /** The platform caps a text-message request body at 150 KB; stay well under it (the content is a JSON
@@ -440,10 +440,10 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
       const data = await call<ApiBody & { data?: { items?: { sender?: { id?: string; sender_type?: string } }[] } }>(
         "listThreadSenders",
         "GET",
-        // `thread` container: the platform's own identity for a side conversation. Newest first, one
-        // page: a late-joining second human must be visible in a long thread, which an oldest-first
-        // page would miss. A bot sender's `id` is the app id (cli_…), a human's is an open_id.
-        `/open-apis/im/v1/messages?container_id_type=thread&container_id=${encodeURIComponent(threadId)}&sort_type=ByCreateTimeDesc&page_size=${THREAD_SENDER_PAGE}&user_id_type=open_id`,
+        // `thread` container: the platform's own identity for a side conversation. Read from the
+        // START: the channel already observes the present, so what a listing adds is the history it
+        // never watched. A bot sender's `id` is the app id (cli_…), a human's is an open_id.
+        `/open-apis/im/v1/messages?container_id_type=thread&container_id=${encodeURIComponent(threadId)}&sort_type=ByCreateTimeAsc&page_size=${THREAD_SENDER_PAGE}&user_id_type=open_id`,
         undefined,
         opts,
       );

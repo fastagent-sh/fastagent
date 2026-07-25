@@ -73,25 +73,17 @@ describe("thread participation (shared)", () => {
     });
   });
 
-  it("a derived listing REPLACES the human set, which is how a restart's re-establish sheds a departed human", () => {
-    const path = join(stateDir(), "p.json");
-    const first = createThreadParticipants(path, "[feishu]");
-    first.merge("oc_1:omt_a", { humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true, unreadable: false });
+  it("a listing UNIONS with what was observed: over-counting is safe, under-counting is not", () => {
+    const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+    store.merge("oc_1:omt_a", { humans: ["ou_bob"] }); // observed live
 
-    // A listing answers "who is here now". Within one process it runs once per thread, so the replace
-    // matters on the NEXT process: the observations survive, `derived` does not, and the fresh listing
-    // of a thread that has quietened to two parties replaces the pair with the one who remains.
-    const restarted = createThreadParticipants(path, "[feishu]");
-    expect(restarted.get("oc_1:omt_a")).toEqual({
-      humans: ["ou_alex", "ou_bob"],
-      agentSpoke: true,
-      derived: false,
-      unreadable: false,
-    });
+    // The listing reads the thread's start, so it can miss someone who spoke only recently — and the
+    // observations can miss someone who spoke only before this process watched. Neither may erase the
+    // other: a human dropped from the set would let the agent speak unprompted in a crowded thread.
+    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true, derived: true });
 
-    restarted.merge("oc_1:omt_a", { humans: ["ou_alex"], derived: true });
-    expect(restarted.get("oc_1:omt_a")).toEqual({
-      humans: ["ou_alex"],
+    expect(store.get("oc_1:omt_a")).toEqual({
+      humans: ["ou_bob", "ou_alex"],
       agentSpoke: true,
       derived: true,
       unreadable: false,

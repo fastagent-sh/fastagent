@@ -165,9 +165,9 @@ describe("pipeline invariants", () => {
     ]);
     const url = fx.calls().at(-1)?.url ?? "";
     expect(url).toContain("container_id_type=thread&container_id=omt_1");
-    // Newest first: in a long thread, a late-joining second human must be visible in the one page
-    // that is read, or the summon rule would keep treating it as a two-party conversation.
-    expect(url).toContain("sort_type=ByCreateTimeDesc");
+    // Oldest first: the channel already observes the present, so what a listing adds is the history
+    // it never watched. The two are unioned, so neither has to be complete on its own.
+    expect(url).toContain("sort_type=ByCreateTimeAsc");
   });
 
   it("noRateLimitRetry makes ONE attempt (a deadline-bounded caller cannot afford the backoff)", async () => {

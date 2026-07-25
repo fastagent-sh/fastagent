@@ -292,6 +292,16 @@ describe("ingress verification", () => {
 });
 
 describe("upgrade from the session-mode model", () => {
+  it("refuses a removed session option instead of silently changing behaviour under it", () => {
+    const opts = { appId: "app", appSecret: "secret", verificationToken: TOKEN } as FeishuChannelOptions;
+    expect(() => buildFeishuChannel({ ...opts, groupMessageSession: "continuous" } as never)).toThrow(
+      /groupMessageSession/,
+    );
+    expect(() => buildFeishuChannel({ ...opts, directMessageSession: "threaded" } as never)).toThrow(
+      /directMessageSession/,
+    );
+  });
+
   it("removes the obsolete owned-threads.json and drops only the retired context buckets", async () => {
     feishuFetch();
     const root = mkdtempSync(join(tmpdir(), "feishu-upgrade-"));
@@ -707,16 +717,15 @@ describe("turn flow", () => {
     await Promise.all([alice, bob]);
     await idle();
 
-    // Bob joined Alice's in-flight read, and the listing's window carried neither of them. His own
-    // presence must survive the replace, so HIS message is not answered — the barging §3 forbids.
-    // Alice's is: when it was evaluated the thread was two-party, which is what the rule asks.
+    // Bob joined Alice's in-flight read and the listing named neither of them. Because a listing is
+    // UNIONED rather than substituted, his presence survives it — so the thread reads as multi-party
+    // and NEITHER bare message is answered. Both people are there; refusing is what §3 asks for.
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
       { humans: string[] }
     >;
-    expect(participants["oc_1:omt_race"]?.humans).toContain("ou_bob");
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt.text).toContain("from alice");
+    expect(participants["oc_1:omt_race"]?.humans).toEqual(expect.arrayContaining(["ou_alice", "ou_bob"]));
+    expect(calls).toHaveLength(0);
   });
 
   it("a re-pushed first message keeps its referent anchor (observation must not consume it)", async () => {
