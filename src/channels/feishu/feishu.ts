@@ -541,7 +541,8 @@ function createFeishuRuntimeFactory(
       }
       threadParticipants.merge(threadKey(chatId, threadId), {
         humans: senders.filter((sender) => sender.senderType === "user").map((sender) => sender.senderId),
-        agentSpoke: senders.some((sender) => sender.senderType === "app" && sender.senderId === appId),
+        // `|| undefined`: the store only ever SETS this, so a false would be a silent no-op.
+        agentSpoke: senders.some((sender) => sender.senderType === "app" && sender.senderId === appId) || undefined,
         derived: true,
       });
     };

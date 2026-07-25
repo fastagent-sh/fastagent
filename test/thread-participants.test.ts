@@ -128,6 +128,21 @@ describe("thread participation (shared)", () => {
     });
   });
 
+  it("bounds the flag map on its own — an unreadable thread stores no observation to evict with", () => {
+    const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+    // Nothing is persisted for these, so the record cap can never reach them: without its own bound
+    // the flag map would keep one entry per unreadable thread for the life of the process.
+    for (let i = 0; i <= 5000; i++) store.merge(`oc_1:omt_${i}`, { unreadable: true });
+
+    expect(store.get("oc_1:omt_0")).toBeUndefined();
+    expect(store.get("oc_1:omt_5000")).toEqual({
+      humans: [],
+      agentSpoke: false,
+      derived: false,
+      unreadable: true,
+    });
+  });
+
   it("stops accumulating humans once a second is known — the rule never asks for more", () => {
     const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
     store.merge("oc_1:omt_a", { humans: ["ou_1", "ou_2", "ou_3", "ou_4"], derived: true });
@@ -161,7 +176,7 @@ describe("thread participation (shared)", () => {
     const warnings: string[] = [];
     vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
 
-    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true, derived: true, unreadable: false });
+    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true, derived: true });
 
     expect(store.get("oc_1:omt_a")).toEqual({
       humans: ["ou_alex"],

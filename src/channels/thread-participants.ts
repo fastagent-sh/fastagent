@@ -60,9 +60,15 @@ interface ThreadParticipation extends StoredParticipation {
 export interface ThreadParticipants {
   /** Known participation, or undefined when nothing about the thread has been seen or read. */
   get(key: string): ThreadParticipation | undefined;
-  /** Merge in what was just observed or read back. Idempotent; a failed write is a warning, never a
-   *  failed delivery (the platform can re-derive it). */
-  merge(key: string, seen: Partial<ThreadParticipation>): void;
+  /**
+   * Merge in what was just observed or read back. Idempotent; a failed write is a warning, never a
+   * failed delivery (the platform can re-derive it).
+   *
+   * The parameter only admits values the store can honour: participation accumulates, so a flag can
+   * be set but never cleared, and `humans` unions. Passing `false` to clear one would compile and do
+   * nothing, so the type refuses it — "never shed" is an invariant, not a convention.
+   */
+  merge(key: string, seen: { humans?: string[]; agentSpoke?: true; derived?: true; unreadable?: true }): void;
 }
 
 function isRecord(value: unknown): value is StoredParticipation {

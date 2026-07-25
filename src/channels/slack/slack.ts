@@ -485,7 +485,8 @@ export function slackChannel({
       }
       threadParticipants.merge(key, {
         humans: senders.filter((sender) => !sender.isBot).map((sender) => sender.userId),
-        agentSpoke: senders.some((sender) => sender.isBot && sender.userId === botUserId),
+        // `|| undefined`: the store only ever SETS this, so a false would be a silent no-op.
+        agentSpoke: senders.some((sender) => sender.isBot && sender.userId === botUserId) || undefined,
         derived: true,
       });
     };
@@ -535,6 +536,9 @@ export function slackChannel({
     };
 
     const acceptNewEvent = async (envelope: SlackEventEnvelope): Promise<void> => {
+      // ONE budget for this delivery's platform waits, taken at acceptance: a per-call deadline would
+      // silently give each wait the full allowance the moment a second one is added.
+      const deadline = Date.now() + ACK_CHECK_BUDGET_MS;
       const event = envelope.event;
       if (!isSlackHumanMessage(event)) return;
       if (botUserId && event.user === botUserId) return;
@@ -579,7 +583,7 @@ export function slackChannel({
         // Mentioning only other people is targeted discussion, never an ask (§3) — the same guard
         // Feishu applies with `hasMentions`.
         !hasUserMention &&
-        (await threadAddressesAgent(teamId, event.channel, event.thread_ts, Date.now() + ACK_CHECK_BUDGET_MS))
+        (await threadAddressesAgent(teamId, event.channel, event.thread_ts, deadline))
       ) {
         routed = {};
       }
