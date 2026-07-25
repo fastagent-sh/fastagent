@@ -586,6 +586,22 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(reads).toBe(1); // recorded once, not retried per message
   });
 
+  it("a bare message that mentions only other people is discussion, not an ask", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+    await handler(signedRequest(message("14.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "14.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+
+    // The agent takes part and one human is here, but this message addresses someone else.
+    await handler(signedRequest(message("14.2", { text: "<@U9> can you look?", thread_ts: "14.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("can you look?");
+  });
+
   it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
     // The platform listing is what reveals the humans this process never saw speak.
     vi.stubGlobal("fetch", okFetch([{ user: "U1" }, { user: "U2" }, { user: "UBOT", bot: true }]));

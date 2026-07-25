@@ -258,8 +258,12 @@ function createFeishuRuntimeFactory(
             (scope.type === undefined || scope.type === "tenant"),
         );
         if (contextAware) {
+          // Buffering is settled by this scope; bare replies additionally need the message-read
+          // capability behind `listThreadSenders`, which cannot be inferred from the scope list. Say
+          // what is verified and what is not, rather than promising a capability that may fail on its
+          // first use (the refusal path below reports it once, app-wide).
           log.info(
-            `${label} group visibility: context-aware — bare replies in the agent's threads + buffered discussion enabled`,
+            `${label} group visibility: context-aware — buffered discussion enabled; bare replies in the agent's threads pending the first thread read`,
           );
         } else {
           log.warn(
@@ -516,16 +520,21 @@ function createFeishuRuntimeFactory(
           throw new Error(`${label} could not read thread ${threadId} pre-ACK: ${String(error)}`, { cause: error });
         }
         // A definitive platform rejection (deleted thread, missing read permission): participation is
-        // not derivable. Mark it derived so the read is not retried per message — the summon rule
+        // not derivable. Mark it unreadable so the read is not retried per message — the summon rule
         // still refuses, because the record carries no established human set. Process-local, so a
         // permission granted later takes effect on the next restart with no file to delete.
-        const line = `${label} thread ${threadId} is not readable — staying mention-only there: ${String(error)}`;
         const code = feishuApiErrorCode(error) ?? 0;
         if (warnedRejectionCodes.has(code)) {
-          log.debug(line);
+          log.debug(`${label} thread ${threadId} is not readable — staying mention-only there: ${String(error)}`);
         } else {
           warnedRejectionCodes.add(code);
-          log.warn(`${line} (if this repeats for every thread, check the app's message-read permissions)`);
+          // The FIRST refusal of a class is the only honest moment to say this is app-wide: a missing
+          // message-read permission disables bare replies everywhere, not just in this thread.
+          log.warn(
+            `${label} cannot read thread ${threadId}, so bare replies stay mention-only there: ${String(error)} ` +
+              "— if this repeats for every thread, the app is missing the message-read permission and bare " +
+              "replies are disabled everywhere",
+          );
         }
         threadParticipants.merge(threadKey(chatId, threadId), { unreadable: true });
         return;

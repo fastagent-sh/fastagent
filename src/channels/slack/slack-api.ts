@@ -98,8 +98,10 @@ export function isSlackNativeUnavailable(error: unknown): boolean {
   return error instanceof SlackApiError && !!error.slackError && NATIVE_UNAVAILABLE_ERRORS.has(error.slackError);
 }
 
-/** Whether Slack REFUSED the request definitively: it arrived and was rejected by name (unknown
- *  thread, missing scope, not in channel). Transport failures (status 0), server errors, and rate
+/** Whether Slack REFUSED the request definitively: it arrived and was rejected (unknown thread,
+ *  missing scope, not in channel). A 4xx counts by STATUS ALONE — a proxy or WAF page carries no
+ *  parseable `error`, and treating that as transient would put the delivery in a redelivery loop that
+ *  never records the thread as unreadable. Transport failures (status 0), server errors, and rate
  *  limiting may heal on their own and are NOT rejections. */
 export function isSlackApiRejection(error: unknown): boolean {
   return (
@@ -107,7 +109,9 @@ export function isSlackApiRejection(error: unknown): boolean {
     error.status !== 0 &&
     error.status < 500 &&
     error.status !== 429 &&
-    error.slackError !== undefined &&
+    // Slack names its refusals in the BODY at HTTP 200 (`ok:false` + `error`); a 4xx with no parseable
+    // body is a proxy or WAF page, which is equally definitive and must not be retried forever.
+    (error.status >= 400 || error.slackError !== undefined) &&
     error.slackError !== "ratelimited"
   );
 }

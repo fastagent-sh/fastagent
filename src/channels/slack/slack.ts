@@ -576,7 +576,9 @@ export function slackChannel({
         group &&
         event.thread_ts !== undefined &&
         event.type !== "app_mention" &&
-        !structurallyMentionsBot &&
+        // Mentioning only other people is targeted discussion, never an ask (§3) — the same guard
+        // Feishu applies with `hasMentions`.
+        !hasUserMention &&
         (await threadAddressesAgent(teamId, event.channel, event.thread_ts, Date.now() + ACK_CHECK_BUDGET_MS))
       ) {
         routed = {};
