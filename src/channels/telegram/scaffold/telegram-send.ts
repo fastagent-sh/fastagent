@@ -60,8 +60,11 @@ export default defineTool({
   description:
     "Send to a Telegram chat: a text message (`text` — long text is split into multiple messages " +
     "automatically), or a local file (`path` — a document, or a photo if it is an image). Exactly one " +
-    "of text/path. In a chat turn take chatId from the [telegram: chat …] context line; in a " +
-    "scheduled/woken turn (no context line) the chat id must come from your instruction.",
+    "of text/path. Use it for a turn NO channel is carrying — a scheduled or self-scheduled (wake) " +
+    "turn — or to reach a chat OTHER than the one you are answering. In a normal chat turn the channel " +
+    "already delivers your reply, so do NOT call this to answer (it would send it twice). chatId comes " +
+    "from the [telegram: chat …] context line in a chat turn; a scheduled/woken turn has no context " +
+    "line, so name the destination in your instruction.",
   input: z.object({
     chatId: z.union([z.string(), z.number()]).describe("target chat id"),
     text: z.string().optional().describe("message text to send"),

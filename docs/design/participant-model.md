@@ -80,6 +80,10 @@ colleague who keeps answering every sentence of a three-way discussion because t
 question is behaving badly. The agent must fall back to listening when the conversation stops being
 a two-party exchange.
 
+Both halves of the rule are read from the thread's **recent window** — who is taking part now, not who
+ever spoke. A thread that quietened back to two parties behaves like one again, and a thread the agent
+has been silent in for a whole window is one it is no longer part of (one mention puts it back).
+
 **Participation** is required so the agent does not barge into a human thread it was never part of.
 The agent is a participant of a thread once it has answered in it. Bootstrapping is therefore the
 ordinary social move: mention it once inside the thread, and it stops needing to be named. (A thread's

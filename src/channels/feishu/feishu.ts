@@ -616,8 +616,6 @@ function createFeishuRuntimeFactory(
       const seq = ++seqCounter; // arrival order, taken BEFORE any await below can reorder acceptance
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
-      // Whether the thread was known BEFORE this message is what decides if participation has to be
-      // read back from the platform — sample it first, because observing below would mask it.
       // Two different questions, both about the state BEFORE this message — sampled here because
       // observing below would mask them:
       //   · has the agent answered here? → whether the thread's session already holds what a message

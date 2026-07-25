@@ -57,9 +57,11 @@ async function tenantToken(): Promise<string> {
 export default defineTool({
   description:
     "Send a message to a Feishu chat: plain `text`, or `markdown` (rendered as a card — headings, " +
-    "bold, code blocks, links). Exactly one of the two. In a chat turn take chatId from the " +
-    "[feishu: chat …] context line; in a scheduled/woken turn (no context line) the chat id must come " +
-    "from your instruction.",
+    "bold, code blocks, links). Exactly one of the two. Use it for a turn NO channel is carrying — a " +
+    "scheduled or self-scheduled (wake) turn — or to reach a chat OTHER than the one you are " +
+    "answering. In a normal chat turn the channel already delivers your reply, so do NOT call this to " +
+    "answer (it would post the message twice). chatId comes from the [feishu: chat …] context line in a " +
+    "chat turn; a scheduled/woken turn has no context line, so name the destination in your instruction.",
   input: z.object({
     chatId: z.string().describe("target chat id (oc_…)"),
     text: z.string().optional().describe("plain text message to send"),

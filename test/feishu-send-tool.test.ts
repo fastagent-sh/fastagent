@@ -7,10 +7,13 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
 let execute: (params: unknown) => Promise<{ details: unknown }>;
+let description: string;
 beforeAll(async () => {
   const templatePath = new URL("../src/channels/feishu/scaffold/feishu-send.ts", import.meta.url).pathname;
   const mod = (await import(templatePath)) as { default: unknown };
-  execute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
+  const tool = mod.default as { execute: RawExecute; description: string };
+  execute = (params) => tool.execute("call-1", params);
+  description = tool.description;
 });
 
 function stubOpenApi(): { calls: { url: string; body: Record<string, unknown> }[] } {
@@ -32,6 +35,11 @@ const creds = () => {
 };
 
 describe("canonical scaffold feishu-send: text-or-markdown mode switch", () => {
+  it("steers the model away from using it to answer a normal chat turn (the channel already delivers)", () => {
+    expect(description).toMatch(/do not call this to answer/i);
+    expect(description).toMatch(/post the message twice/i);
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -97,14 +105,22 @@ describe("canonical scaffold feishu-send: text-or-markdown mode switch", () => {
 // Lark keeps a branded send-tool edge, but it is the compatibility twin of the canonical Feishu tool.
 describe("scaffold lark-send: compatibility cloud binding", () => {
   let larkExecute: (params: unknown) => Promise<{ details: unknown }>;
+  let larkDescription: string;
   beforeAll(async () => {
     const templatePath = new URL("../src/channels/lark/scaffold/lark-send.ts", import.meta.url).pathname;
     const mod = (await import(templatePath)) as { default: unknown };
-    larkExecute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
+    const tool = mod.default as { execute: RawExecute; description: string };
+    larkExecute = (params) => tool.execute("call-1", params);
+    larkDescription = tool.description;
   });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it("steers the model away from using it to answer a normal chat turn (the channel already delivers)", () => {
+    expect(larkDescription).toMatch(/do not call this to answer/i);
+    expect(larkDescription).toMatch(/post the message twice/i);
   });
 
   it("reads LARK_* credentials and talks to open.larksuite.com", async () => {

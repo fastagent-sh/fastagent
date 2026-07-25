@@ -5,10 +5,16 @@
  *
  * This is a CACHE, refined two ways: every observed message merges its sender in (authoritative going
  * forward, since the channel hears everything in a thread it can see), and a thread the process has
- * never seen is re-derived from the platform (`listThreadSenders`). Losing the file therefore costs
- * one lookup per thread, never the behavior — the same discipline the managed-root cache used, and
- * the reason participation is keyed by `thread_id`: Feishu's `root_id` is NOT thread-stable (a thread
- * shows different `root_id`s as its reply chain moves), so it cannot identify a side conversation.
+ * never seen is re-derived from the platform (`listThreadSenders`).
+ *
+ * Both halves are answered from the thread's RECENT WINDOW — "who is taking part now", not "who ever
+ * spoke". That is deliberate for humans (a thread that quietened back to two parties should behave
+ * like one) and it applies to the agent equally: a thread it has been silent in for a whole window is
+ * one it is no longer part of. After a restart such a thread re-derives as mention-only, and a single
+ * mention puts the agent back in it — the same bootstrap that starts any thread.
+ *
+ * Participation is keyed by `thread_id`: Feishu's `root_id` is NOT thread-stable (a thread shows
+ * different `root_id`s as its reply chain moves), so it cannot identify a side conversation.
  */
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "../state.ts";
