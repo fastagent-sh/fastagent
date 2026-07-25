@@ -102,6 +102,24 @@ export function isFeishuConfigApiMissing(e: unknown): boolean {
   return e instanceof FeishuApiError && e.status === 404;
 }
 
+/** Whether the platform REJECTED the request definitively (deleted message, missing permission, bad
+ *  id): the request reached the platform and was refused — a 4xx status (an unreadable 4xx body still
+ *  counts by status alone), or an error `code` carried on a 2xx (Feishu puts error semantics in the
+ *  body). A 2xx whose body yielded NO code (a proxy/interception page) is transport noise, not a
+ *  verdict. Other excluded may-heal classes: transport failure (status 0), server error (5xx), rate
+ *  limiting (429 or its 400-carried code), and auth codes the pipeline refreshes. */
+export function isFeishuApiRejection(e: unknown): boolean {
+  return (
+    e instanceof FeishuApiError &&
+    e.status !== 0 &&
+    e.status < 500 &&
+    e.status !== 429 &&
+    (e.status >= 400 || e.code !== 0) &&
+    e.code !== RATE_LIMIT_CODE &&
+    !AUTH_ERROR_CODES.has(e.code)
+  );
+}
+
 /** Whether a registration-PATCH failure is transient weather worth retrying: network/DNS/timeouts, or
  *  the platform's 210042 "request_url validation failed" while its own path to a fresh tunnel edge
  *  warms up. Everything else (scope, auth, app under review, the config-route 404 above) is definitive
@@ -160,11 +178,20 @@ export interface FeishuApi {
   editTextMessage(messageId: string, text: string): Promise<void>;
   /** Recall (delete) a message the bot sent. */
   deleteMessage(messageId: string): Promise<void>;
-  /** Fetch one message (the reply-referent path). Undefined when the API returns no item. */
+  /** Fetch one message (the reply-referent + thread-root paths). Undefined when the API returns no
+   *  item. `signal` aborts the underlying request (deadline-bounded pre-ACK callers). */
   getMessage(
     messageId: string,
+    opts?: { signal?: AbortSignal },
   ): Promise<
-    | { message_id?: string; msg_type?: string; body?: { content?: string }; mentions?: unknown[]; sender?: unknown }
+    | {
+        message_id?: string;
+        chat_id?: string;
+        msg_type?: string;
+        body?: { content?: string };
+        mentions?: unknown[];
+        sender?: unknown;
+      }
     | undefined
   >;
   /** Download a message resource (image/file bytes). Caps at {@link MAX_DOWNLOAD_BYTES}. */
@@ -276,6 +303,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
+    opts?: { signal?: AbortSignal },
   ): Promise<T> => {
     let refreshedAuth = false;
     for (let attempt = 0; ; ) {
@@ -290,7 +318,9 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
             "content-type": "application/json; charset=utf-8",
           },
           body: body === undefined ? undefined : JSON.stringify(body),
-          signal: AbortSignal.timeout(API_TIMEOUT_MS),
+          signal: opts?.signal
+            ? AbortSignal.any([AbortSignal.timeout(API_TIMEOUT_MS), opts.signal])
+            : AbortSignal.timeout(API_TIMEOUT_MS),
         });
         raw = await res.text(); // the body read shares the timeout — a mid-body stall is a transport failure too
       } catch (e) {
@@ -387,11 +417,13 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
     async deleteMessage(messageId) {
       await call("deleteMessage", "DELETE", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`);
     },
-    async getMessage(messageId) {
+    async getMessage(messageId, opts) {
       const data = await call<ApiBody & { data?: { items?: unknown[] } }>(
         "getMessage",
         "GET",
         `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+        undefined,
+        opts,
       );
       return data.data?.items?.[0] as Awaited<ReturnType<FeishuApi["getMessage"]>>;
     },

@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chunkFeishuText, createFeishuApi, isFeishuConfigApiMissing } from "../src/channels/feishu/feishu-api.ts";
+import {
+  chunkFeishuText,
+  createFeishuApi,
+  isFeishuApiRejection,
+  isFeishuConfigApiMissing,
+} from "../src/channels/feishu/feishu-api.ts";
 
 const BASE = "http://feishu.test";
 
@@ -136,6 +141,67 @@ describe("pipeline invariants", () => {
     stubFetch(() => new Response("<html>gateway error</html>", { status: 502 }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await expect(api.deleteMessage("om_1")).rejects.toThrow(/deleteMessage failed: 502/);
+  });
+});
+
+describe("isFeishuApiRejection", () => {
+  /** Drive one call through the real pipeline and capture the error it throws. */
+  async function failureOf(route: (url: string, init: RequestInit) => Response | Promise<Response>): Promise<unknown> {
+    stubFetch(route);
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    try {
+      await api.deleteMessage("om_x");
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected the call to fail");
+  }
+
+  it("classifies definitive rejections: 4xx (readable or not) and error codes on HTTP 200", async () => {
+    // Error code carried on HTTP 200 — Feishu's usual error shape.
+    expect(isFeishuApiRejection(await failureOf(() => Response.json({ code: 230110, msg: "deleted" })))).toBe(true);
+    // Plain 4xx with a structured code.
+    expect(
+      isFeishuApiRejection(
+        await failureOf(() => Response.json({ code: 230027, msg: "no permission" }, { status: 400 })),
+      ),
+    ).toBe(true);
+    // 4xx whose body is unreadable (gateway HTML): the status alone is definitive — treating this as
+    // transient would re-push the delivery forever.
+    expect(isFeishuApiRejection(await failureOf(() => new Response("<html>forbidden</html>", { status: 403 })))).toBe(
+      true,
+    );
+  });
+
+  it("leaves the may-heal classes out: 5xx, 200-without-code, transport, auth-refresh, rate limit", async () => {
+    expect(isFeishuApiRejection(await failureOf(() => new Response("<html>bad gateway</html>", { status: 502 })))).toBe(
+      false,
+    );
+    // HTTP 200 with an unreadable body (a proxy/interception page): the platform never spoke a code,
+    // so this is transport noise — treating it as definitive would silently brand threads unmanaged.
+    expect(isFeishuApiRejection(await failureOf(() => new Response("<html>proxy</html>", { status: 200 })))).toBe(
+      false,
+    );
+    expect(
+      isFeishuApiRejection(
+        await failureOf(() => {
+          throw new TypeError("fetch failed");
+        }),
+      ),
+    ).toBe(false);
+    // A PERSISTENT auth code (thrown after the pipeline's single refresh) is app-wide, not a verdict
+    // on the resource.
+    expect(isFeishuApiRejection(await failureOf(() => Response.json({ code: 99991663, msg: "token expired" })))).toBe(
+      false,
+    );
+    // Rate limiting: its code can arrive on HTTP 400 as well as 429; both retry then fail transient.
+    vi.useFakeTimers();
+    const pending = failureOf(() => Response.json({ code: 99991400, msg: "frequency limit" }, { status: 400 })).finally(
+      () => vi.useRealTimers(),
+    );
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(isFeishuApiRejection(await pending)).toBe(false);
+    expect(isFeishuApiRejection(new Error("not a pipeline error"))).toBe(false);
   });
 });
 

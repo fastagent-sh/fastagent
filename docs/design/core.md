@@ -297,7 +297,7 @@ Feishu is the second stateful chat-channel reference, shaped as a sibling of Tel
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
 `model.ts` / `normalize.ts` content decoding + message-scoped resource normalization,
 `invoke-turn.ts` IO assembly, `preview.ts` delivery,
-`owned-threads.ts` durable managed-root routing, shared `../seen.ts` bounded delivery dedup,
+`managed-roots.ts` managed-root cache, shared `../seen.ts` bounded delivery dedup,
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / generic `context-buffer` /
 `invoke-turn-kit` / `state` / `wait-health`) remain one level up.
@@ -342,16 +342,28 @@ a stable hand-authored surface. What is platform-different:
   "continuous"` and `groupMessageSession: "continuous"` are explicit compatibility opt-outs; the latter
   restores legacy `chat_id` / `chat_id:thread_id` group sessions. Thread continuations do not rehydrate
   `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
-  but owns a new root session. Group roots are indexed pre-ACK in `owned-threads.json`: with
-  `im:message.group_msg`, bare user messages in those roots become normal required turns with the same
-  queue, streaming-card, error, and delivery behavior as an explicit @mention. An explicit mention of
-  only other people is targeted discussion instead and enters the context buffer.
+  but owns a new root session. A group thread is managed when the thread's OWN root message summons
+  this bot — a platform-derivable property, checked via `getMessage(root_id)` mentions on a cache miss
+  and cached (positive: write-through `owned-threads.json`, warmed at summon time; negative:
+  in-process, covering both non-summon roots and definitive platform rejections such as a recalled
+  root; a transient read failure is not cached — the acceptance FAILS the delivery (HTTP 500 / WS 500
+  frame) so the platform re-pushes it and the next attempt re-checks, the same at-least-once contract
+  as a failed pre-ACK state write; the check itself is deadline-capped so a slow read cannot stall the
+  event ACK, one shared budget across the identity and root reads). This makes one `im/v1/messages`
+  GET a precondition for ACKing a bare continuation — including the un-summoned chatter that would
+  only have buffered: a platform read outage rides the platform's own bounded re-push schedule, and
+  if every re-push fails the message is lost entirely (turn AND buffered copy, operator logs only) —
+  the accepted trade-off for never silently downgrading a genuine ask to background context. Losing
+  the state disk therefore costs one re-check per thread rather than a fallback to @-only — except a thread
+  whose root was recalled, which can no longer prove itself. With `im:message.group_msg`, bare user messages in managed roots become normal required
+  turns with the same queue, streaming-card, error, and delivery behavior as an explicit @mention. An
+  explicit mention of only other people is targeted discussion instead and enters the context buffer.
 - **Group visibility is scope-gated and chosen during onboarding.** `Context-aware groups`
   (recommended and initially selected) requests the sensitive `im:message.group_msg` scope;
   `Mention-only` is the least-privilege alternative. The CLI states that the former delivers all group
   messages, adds it to the app draft through application-v7 config when supported, opens tenant-admin
   approval, and reports the granted capability again at serving startup. Explicit @bot turns always invoke; bare
-  human messages invoke only in `chat_id + root_id` roots from the durable ownership index. Other human
+  human messages invoke only in `chat_id + root_id` roots whose root message summons the bot. Other human
   discussion is persisted in `buffers.json`, bucketed by main chat or thread root, and folded into that
   place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only
   on `completed`, and retain failures plus messages arriving in-flight. Non-`user` senders are dropped.

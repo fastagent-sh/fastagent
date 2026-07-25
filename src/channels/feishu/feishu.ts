@@ -28,10 +28,10 @@ import {
 } from "./context-buffer.ts";
 import { decryptEvent, timingSafeEqualStr, verifySignature } from "./crypto.ts";
 import { invokeFeishuTurn } from "./invoke-turn.ts";
-import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
+import { type FeishuApi, type FeishuTarget, createFeishuApi, isFeishuApiRejection } from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
-import { createOwnedFeishuThreads } from "./owned-threads.ts";
+import { createFeishuManagedRoots } from "./managed-roots.ts";
 import { FEISHU_GROUP_CONTEXT_SCOPE } from "./setup-mode.ts";
 import {
   type FeishuMessage,
@@ -40,6 +40,7 @@ import {
   cloudEnvelope,
   defaultFeishuRoute,
   feishuEnvelope,
+  fetchedMessageSummons,
   placeKey,
   senderLabel,
 } from "./parse.ts";
@@ -64,6 +65,12 @@ const MAX_TURN_ATTEMPTS = 3;
 
 /** Event body cap — events are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_EVENT_BYTES = 1 << 20;
+
+/** ONE shared budget for all pre-ACK platform waits of a delivery (identity + thread-root read): the
+ *  platform expects event ACKs within seconds, so the total acceptance wait — not each await — is
+ *  capped and must never ride the API pipeline's full 30s timeout + retry budget. On expiry the
+ *  delivery is treated as transiently unreadable (re-pushed), not as unmanaged. */
+const ACK_CHECK_BUDGET_MS = 2000;
 
 /** Queue feedback is immediate by default: it is the user's acknowledgement that this exact ask was
  *  accepted behind another turn. The same reply-quoted card becomes the preview/final answer, so there
@@ -188,7 +195,9 @@ interface FeishuWebSocketChannelDeps {
 }
 
 interface FeishuRuntime {
-  acceptEvent(event: FeishuMessageEvent): void;
+  /** Settles once the event is routed + persisted (pre-ACK); a rejection must fail the delivery so
+   *  the platform re-pushes. The Agent turn itself stays fire-and-forget. */
+  acceptEvent(event: FeishuMessageEvent): Promise<void>;
   turnsIdle(): Promise<void>;
 }
 
@@ -228,9 +237,11 @@ function createFeishuRuntimeFactory(
     const api: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
 
     // One bot/v3/info at startup: the bot's open_id drives the default route's group @mention summon.
-    // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works.
+    // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works. The
+    // managed-thread check additionally awaits this promise (bounded) so a startup race delays a bare
+    // continuation instead of misclassifying it.
     let botOpenId: string | undefined;
-    void api.botInfo().then(
+    const botIdentity: Promise<void> = api.botInfo().then(
       (me) => {
         botOpenId = me.openId;
         if (!botOpenId) log.warn(`${label} bot/v3/info returned no open_id — group @mention summon stays off`);
@@ -267,7 +278,7 @@ function createFeishuRuntimeFactory(
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
-    const ownedThreads = createOwnedFeishuThreads(join(stateHome, "owned-threads.json"), label);
+    const managedRoots = createFeishuManagedRoots(join(stateHome, "owned-threads.json"), label);
     const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
@@ -442,29 +453,195 @@ function createFeishuRuntimeFactory(
       submit({ ...intent, bufferKey, preview: undefined }, false);
     }
 
-    // Transport-neutral acceptance boundary. It performs only the fast pre-ACK work: normalize,
-    // route, persist intent/context, and enqueue. The minutes-long Agent turn remains fire-and-forget.
-    const acceptEvent = (event: FeishuMessageEvent): void => {
+    // Thread management is a property of the thread ITSELF: its root is a message that summoned this
+    // bot. owned-threads.json is only a write-through cache of that fact; on a miss the root message is
+    // read back from the platform, so a lost state disk degrades to one extra lookup per thread — the
+    // one unprovable case is a RECALLED root, which falls back to @-only after cache loss.
+    // Per-process negative cache, capped: eviction only costs the evicted root one re-check.
+    const FOREIGN_ROOTS_CAP = 10_000;
+    const foreignRoots = new Set<string>();
+    const rememberForeign = (rootKey: string): void => {
+      if (foreignRoots.size >= FOREIGN_ROOTS_CAP) {
+        const oldest = foreignRoots.values().next().value;
+        if (oldest !== undefined) foreignRoots.delete(oldest);
+      }
+      foreignRoots.add(rootKey);
+    };
+    const rootChecks = new Map<string, Promise<boolean>>();
+    /** Cap a pre-ACK wait at the delivery's shared `deadline` (epoch ms; see {@link ACK_CHECK_BUDGET_MS}).
+     *  `work` may be abandoned by the race (its own late rejection is muted so it cannot become an
+     *  unhandled rejection); `onTimeout` lets the caller cancel the abandoned work instead of leaving
+     *  it to ride the API pipeline's full budget. */
+    const withAckDeadline = async <T>(
+      work: Promise<T>,
+      what: string,
+      deadline: number,
+      onTimeout?: () => void,
+    ): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      Promise.resolve(work).catch(() => {});
+      try {
+        return await Promise.race([
+          work,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => {
+                onTimeout?.();
+                reject(new Error(`${what} exceeded the ${ACK_CHECK_BUDGET_MS}ms pre-ACK budget`));
+              },
+              Math.max(0, deadline - Date.now()),
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    // First definitive root rejection is an operator-visible warning: it MAY mean the app cannot read
+    // messages at all (a configuration error that disables every bare continuation), which must not
+    // hide at debug level. Repeats (each recalled root is one) stay at debug.
+    let rootRejectionWarned = false;
+    const checkRootSummons = async (
+      chatId: string,
+      rootId: string,
+      rootKey: string,
+      deadline: number,
+    ): Promise<boolean> => {
+      let root: Awaited<ReturnType<FeishuApi["getMessage"]>>;
+      const abort = new AbortController();
+      try {
+        root = await withAckDeadline(
+          api.getMessage(rootId, { signal: abort.signal }),
+          `thread root read`,
+          deadline,
+          () => abort.abort(),
+        );
+      } catch (error) {
+        if (!isFeishuApiRejection(error)) {
+          // Transient (network/5xx/rate limit/timeout). This runs BEFORE management is known, so most
+          // deliveries hitting it are ordinary thread chatter that would only have buffered — the
+          // trade-off is: unknown-management messages fail closed (HTTP 500 / WS 500 frame → platform
+          // re-push → re-check), because ACKing here would silently downgrade a GENUINE ask to
+          // background context. If every bounded re-push fails, both the turn and the buffered copy
+          // are lost (operator log only) — accepted; see docs/design/core.md.
+          throw new Error(`${label} could not read thread root ${rootId} pre-ACK: ${String(error)}`, {
+            cause: error,
+          });
+        }
+        // A definitive platform rejection (recalled root, missing read permission): management is not
+        // provable. Negative-cache it — per process only, so a permission grant plus restart recovers.
+        const line = `${label} thread root ${rootId} is not readable — treating the thread as unmanaged: ${String(error)}`;
+        if (rootRejectionWarned) {
+          log.debug(line);
+        } else {
+          rootRejectionWarned = true;
+          log.warn(`${line} (if this repeats for every thread, check the app's message-read permissions)`);
+        }
+        rememberForeign(rootKey);
+        return false;
+      }
+      if (root === undefined) {
+        // The platform answered OK but carried no message — an anomaly worth a visible line, not a
+        // silent branch. Unprovable → unmanaged, cached like a rejection.
+        log.warn(`${label} thread root ${rootId} read succeeded but returned no message — treating as unmanaged`);
+        rememberForeign(rootKey);
+        return false;
+      }
+      if (root.chat_id !== undefined && root.chat_id !== chatId) {
+        // The event claims a chat the root does not live in — an anomaly, and unmanaged FOR THAT CHAT.
+        // Cached under the chat-scoped key, so the mismatch cannot amplify into per-message reads.
+        log.warn(`${label} thread root ${rootId} lives in chat ${root.chat_id}, not ${chatId} — unmanaged`);
+        rememberForeign(rootKey);
+        return false;
+      }
+      if (fetchedMessageSummons(root, botOpenId)) {
+        managedRoots.add(chatId, rootId);
+        return true;
+      }
+      // Guard against silent wire-shape drift: mentions we cannot read at all are indistinguishable
+      // from "mentions other people" to the summon check, but must not be indistinguishable in logs.
+      const mentions = (root.mentions ?? []) as { id_type?: unknown }[];
+      if (mentions.length > 0 && !mentions.some((mention) => typeof mention.id_type === "string")) {
+        log.warn(
+          `${label} thread root ${rootId} mentions carry no id_type — unexpected wire shape; treating as unmanaged`,
+        );
+      }
+      rememberForeign(rootKey);
+      return false;
+    };
+    const isManagedThread = async (chatId: string, rootId: string, deadline: number): Promise<boolean> => {
+      if (managedRoots.has(chatId, rootId)) return true;
+      // foreignRoots/rootChecks share this chat-scoped key; the persisted cache keys by the globally
+      // unique root and treats a conflicting chat as an anomaly (first write wins, see managed-roots.ts).
+      const rootKey = `${chatId}:${rootId}`;
+      if (foreignRoots.has(rootKey)) return false;
+      if (botOpenId === undefined) {
+        // The identity read may simply still be in flight at startup: wait for it (within the shared
+        // budget) rather than misclassifying the ask; past the deadline the delivery fails → re-push.
+        await withAckDeadline(botIdentity, `${label} bot identity resolution`, deadline);
+        // Still undefined after settling = bot/v3/info FAILED: app-wide degraded mode (warned at
+        // startup, mirrors group summon staying off). Fail closed without caching.
+        if (botOpenId === undefined) return false;
+      }
+      // One platform read per root, shared by every delivery awaiting it (sharers resume in arrival
+      // order; a joiner inherits the FIRST caller's deadline, still within one budget of that start).
+      // A message that skips this check (an @mention, a stop) can still enter the live queue ahead of
+      // a bare message stuck in this read window; `seq` is assigned at arrival, so recovery order is
+      // unaffected.
+      let check = rootChecks.get(rootKey);
+      if (check === undefined) {
+        check = checkRootSummons(chatId, rootId, rootKey, deadline).finally(() => rootChecks.delete(rootKey));
+        rootChecks.set(rootKey, check);
+      }
+      return check;
+    };
+
+    // Concurrent duplicate deliveries of one message (documented platform behavior) share ONE outcome:
+    // both ACK success, or both leave the delivery re-pushable — never one 200 racing one 500.
+    const inflight = new Map<string, Promise<void>>();
+
+    // Transport-neutral acceptance boundary. It performs only bounded pre-ACK work: normalize, route
+    // (including the deadline-capped root read above on a managed-thread cache miss), persist
+    // intent/context, and enqueue. The minutes-long Agent turn remains fire-and-forget.
+    const acceptEvent = (event: FeishuMessageEvent): Promise<void> => {
       const m = event.message;
-      if (!m?.message_id || !m.chat_id) return;
+      if (!m?.message_id || !m.chat_id) return Promise.resolve();
       if (seen.has(m.message_id)) {
         log.debug(`${label} duplicate push for message ${m.message_id} — already persisted, skipping`);
-        return;
+        return Promise.resolve();
       }
+      let pending = inflight.get(m.message_id);
+      if (pending === undefined) {
+        pending = acceptNewEvent(event).finally(() => inflight.delete(m.message_id));
+        inflight.set(m.message_id, pending);
+      } else {
+        log.debug(`${label} duplicate push for message ${m.message_id} — joining the in-flight acceptance`);
+      }
+      return pending;
+    };
 
+    const acceptNewEvent = async (event: FeishuMessageEvent): Promise<void> => {
+      const m = event.message;
+      if (!m?.message_id || !m.chat_id) return;
       let r = decide(event);
       const normalized = normalizeFeishuMessage(event);
       if (!normalized) return;
+      const seq = ++seqCounter; // arrival order, taken BEFORE any await below can reorder acceptance
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
-      const managedThread =
+
+      if (
+        !r &&
+        route === undefined &&
         groupMessageSession === "threaded" &&
         isHumanGroup &&
         m.thread_id !== undefined &&
         m.root_id !== undefined &&
-        ownedThreads.has(m.chat_id, m.root_id);
-
-      if (!r && route === undefined && managedThread && !normalized.content.hasMentions) r = {};
+        !normalized.content.hasMentions &&
+        (await isManagedThread(m.chat_id, m.root_id, Date.now() + ACK_CHECK_BUDGET_MS))
+      ) {
+        r = {};
+      }
       if (!r) {
         if (route === undefined && isHumanGroup) {
           const bodyText = feishuBufferText(normalized.content.text);
@@ -542,12 +719,12 @@ function createFeishuRuntimeFactory(
       if (baseText.trim() === "" && images.length === 0 && files.length === 0) return;
 
       if (route === undefined && threadedGroup && m.thread_id === undefined && sameTarget && replyInThread === true) {
-        ownedThreads.add(m.chat_id, m.message_id);
+        managedRoots.add(m.chat_id, m.message_id);
       }
       submit(
         {
           id: m.message_id,
-          seq: ++seqCounter,
+          seq,
           session,
           baseText,
           bufferKey,
@@ -645,7 +822,7 @@ function createFeishuWebhookRoutes(
       log.debug(`${label} ignoring event type ${header?.event_type ?? "(none)"}`);
       return new Response(null, { status: 200 });
     }
-    runtime.acceptEvent((envelope.event ?? {}) as FeishuMessageEvent);
+    await runtime.acceptEvent((envelope.event ?? {}) as FeishuMessageEvent);
     return new Response(null, { status: 200 });
   };
   (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = runtime.turnsIdle;

@@ -72,7 +72,7 @@ src/
 │   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles
 │   │   ├── model.ts, normalize.ts, parse.ts, crypto.ts, card.ts # protocol model/content normalization/policy + security/card
 │   │   ├── invoke-turn.ts, preview.ts # turn IO + streaming-card delivery
-│   │   ├── owned-threads.ts # durable index of Agent-created group threads (admits bare continuations)
+│   │   ├── managed-roots.ts # managed-root cache (managed = the thread's root message summons the bot; re-derived from the platform on miss)
 │   │   ├── context-buffer.ts# feishu's entry shape + resource selection over the shared generic buffer
 │   │   ├── feishu-api.ts    # canonical Open API pipeline (token cache, retry, cardkit)
 │   │   ├── register-app.ts  # `add feishu`: scan-to-create device flow

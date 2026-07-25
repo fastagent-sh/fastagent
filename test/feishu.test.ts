@@ -670,6 +670,463 @@ describe("turn flow", () => {
     expect(fx.calls("/cardkit/v1/cards/c2", "PUT")).not.toHaveLength(0);
   });
 
+  it("admits a bare thread continuation after state loss by reading the root summon back from the platform", async () => {
+    // NB: the GET response's mention shape differs from the event push — `id` is the bare string plus
+    // an `id_type` discriminator (per the official SDK's im.message.get typings), never `{ open_id }`.
+    const fx = feishuFetch({
+      "/im/v1/messages/om_lost_root": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_lost_root",
+                sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+                msg_type: "text",
+                body: { content: JSON.stringify({ text: "@_bot start" }) },
+                mentions: [{ key: "@_bot", name: "Bot", id: "ou_bot", id_type: "open_id" }],
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle, home } = buildChannel();
+    await flush(); // botOpenId resolves — the root-mention check fails closed without it
+
+    // No summon ever seen by THIS state root (owned-threads.json empty): the bare continuation still
+    // answers because the thread's own root is a summon message.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_after_loss",
+          chatType: "group",
+          rootId: "om_lost_root",
+          threadId: "omt_lost",
+          text: "still there?",
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("feishu:om_lost_root");
+    expect(fx.calls("/im/v1/messages/om_lost_root", "GET")).toHaveLength(1);
+    // The positive check re-warms the cache…
+    expect(JSON.parse(readFileSync(join(home, "owned-threads.json"), "utf8"))).toHaveProperty("om_lost_root");
+
+    // …so the next continuation answers without another platform read.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_after_loss_2",
+          chatType: "group",
+          rootId: "om_lost_root",
+          threadId: "omt_lost",
+          text: "and now?",
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(2);
+    expect(fx.calls("/im/v1/messages/om_lost_root", "GET")).toHaveLength(1);
+  });
+
+  it("a transient root-read failure leaves the delivery un-ACKed: the platform re-push answers it", async () => {
+    let rootGets = 0;
+    const fx = feishuFetch({
+      "/im/v1/messages/om_flaky_root": () =>
+        ++rootGets === 1
+          ? Response.json({ code: 230001, msg: "internal error" }, { status: 500 })
+          : Response.json({
+              code: 0,
+              msg: "ok",
+              data: {
+                items: [
+                  {
+                    message_id: "om_flaky_root",
+                    sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+                    msg_type: "text",
+                    body: { content: JSON.stringify({ text: "@_bot start" }) },
+                    mentions: [{ key: "@_bot", name: "Bot", id: "ou_bot", id_type: "open_id" }],
+                  },
+                ],
+              },
+            }),
+    });
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const ask = () =>
+      feishuRequest(
+        messageEvent({
+          id: "om_f1",
+          chatType: "group",
+          rootId: "om_flaky_root",
+          threadId: "omt_flaky",
+          text: "the ask",
+        }),
+      );
+
+    // First delivery: the root read fails transiently → the user's ask must NOT silently degrade to
+    // background context; the delivery fails so the platform re-pushes it.
+    await expect(handler(ask())).rejects.toThrow(/thread root om_flaky_root/);
+    expect(calls).toHaveLength(0);
+
+    // The re-push re-checks (failure was not negative-cached) and answers the SAME message.
+    await handler(ask());
+    await idle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt.text).toContain("the ask");
+    expect(fx.calls("/im/v1/messages/om_flaky_root", "GET")).toHaveLength(2);
+  });
+
+  it("concurrent duplicate deliveries share one acceptance: one root read, one turn", async () => {
+    let releaseRoot!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseRoot = resolve;
+    });
+    const fx = feishuFetch({
+      "/im/v1/messages/om_slow_root": () =>
+        gate.then(() =>
+          Response.json({
+            code: 0,
+            msg: "ok",
+            data: {
+              items: [
+                {
+                  message_id: "om_slow_root",
+                  sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+                  msg_type: "text",
+                  body: { content: JSON.stringify({ text: "@_bot start" }) },
+                  mentions: [{ key: "@_bot", name: "Bot", id: "ou_bot", id_type: "open_id" }],
+                },
+              ],
+            },
+          }),
+        ) as unknown as Response,
+    });
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+
+    const push = () =>
+      handler(
+        feishuRequest(
+          messageEvent({
+            id: "om_dup",
+            chatType: "group",
+            rootId: "om_slow_root",
+            threadId: "omt_slow",
+            text: "ask once",
+          }),
+        ),
+      );
+    const [first, second] = [push(), push()]; // both in flight while the root read hangs
+    releaseRoot();
+    expect((await first).status).toBe(200);
+    expect((await second).status).toBe(200);
+    await idle();
+    expect(calls).toHaveLength(1);
+    expect(fx.calls("/im/v1/messages/om_slow_root", "GET")).toHaveLength(1);
+  });
+
+  it("a root read past the ACK deadline fails the delivery (not negative-cached); the re-push recovers", async () => {
+    let rootGets = 0;
+    const fx = feishuFetch({
+      "/im/v1/messages/om_stuck_root": () =>
+        (++rootGets === 1
+          ? new Promise<Response>(() => {}) // first read hangs past the deadline
+          : Promise.resolve(
+              Response.json({
+                code: 0,
+                msg: "ok",
+                data: {
+                  items: [
+                    {
+                      message_id: "om_stuck_root",
+                      sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+                      msg_type: "text",
+                      body: { content: JSON.stringify({ text: "@_bot start" }) },
+                      mentions: [{ key: "@_bot", name: "Bot", id: "ou_bot", id_type: "open_id" }],
+                    },
+                  ],
+                },
+              }),
+            )) as unknown as Response,
+    });
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const ask = () =>
+      feishuRequest(
+        messageEvent({
+          id: "om_s1",
+          chatType: "group",
+          rootId: "om_stuck_root",
+          threadId: "omt_stuck",
+          text: "stuck ask",
+        }),
+      );
+
+    vi.useFakeTimers();
+    const pending = Promise.resolve(handler(ask())).then(
+      () => {
+        throw new Error("expected the delivery to fail");
+      },
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(2_500); // past ROOT_CHECK_TIMEOUT_MS
+    const error = await pending;
+    vi.useRealTimers();
+    expect(String(error)).toMatch(/thread root om_stuck_root/);
+    expect(calls).toHaveLength(0);
+
+    // The timeout was transient: the re-push re-reads the root and answers.
+    await handler(ask());
+    await idle();
+    expect(calls).toHaveLength(1);
+    expect(fx.calls("/im/v1/messages/om_stuck_root", "GET")).toHaveLength(2);
+  });
+
+  it("an identity read past the ACK deadline fails the delivery instead of stalling the ACK", async () => {
+    const fx = feishuFetch({
+      "/bot/v3/info": () => new Promise<Response>(() => {}) as unknown as Response, // hangs forever
+    });
+    const { handler, calls } = buildChannel();
+
+    vi.useFakeTimers();
+    const pending = Promise.resolve(
+      handler(
+        feishuRequest(
+          messageEvent({
+            id: "om_i1",
+            chatType: "group",
+            rootId: "om_wait_root",
+            threadId: "omt_wait",
+            text: "waiting ask",
+          }),
+        ),
+      ),
+    ).then(
+      () => {
+        throw new Error("expected the delivery to fail");
+      },
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(2_500); // past ROOT_CHECK_TIMEOUT_MS
+    const error = await pending;
+    vi.useRealTimers();
+    expect(String(error)).toMatch(/bot identity resolution exceeded/);
+    expect(calls).toHaveLength(0);
+    expect(fx.calls("/im/v1/messages/om_wait_root", "GET")).toHaveLength(0); // never reached the root read
+  });
+
+  it("a permanently failed bot identity fails closed: bare continuations buffer without a root read", async () => {
+    const fx = feishuFetch({
+      "/bot/v3/info": () => Response.json({ code: 1, msg: "bot capability disabled" }, { status: 403 }),
+    });
+    const { handler, calls, home } = buildChannel();
+    await flush(); // botInfo settles as FAILED — app-wide degraded mode (warned at startup)
+
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_noid",
+          chatType: "group",
+          rootId: "om_any_root",
+          threadId: "omt_any",
+          text: "who am I asking?",
+        }),
+      ),
+    );
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(fx.calls("/im/v1/messages/om_any_root", "GET")).toHaveLength(0); // no identity → no root read
+    expect(readFileSync(join(home, "buffers.json"), "utf8")).toContain("who am I asking?");
+  });
+
+  it("a recalled root is a definitive rejection (even on HTTP 200): negative-cached, not re-read per message", async () => {
+    // Feishu carries error semantics in `code`; a rejection can arrive on HTTP 200 as well as 4xx.
+    const fx = feishuFetch({
+      "/im/v1/messages/om_dead_root": () =>
+        Response.json({ code: 230110, msg: "Action unavailable as the message has been deleted." }),
+    });
+    const { handler, calls } = buildChannel();
+    await flush();
+
+    for (const [id, text] of [
+      ["om_d1", "first ask"],
+      ["om_d2", "second ask"],
+    ] as const) {
+      await handler(
+        feishuRequest(messageEvent({ id, chatType: "group", rootId: "om_dead_root", threadId: "omt_dead", text })),
+      );
+    }
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(fx.calls("/im/v1/messages/om_dead_root", "GET")).toHaveLength(1);
+  });
+
+  it("a startup race (bot identity unresolved) waits for the identity instead of downgrading the ask", async () => {
+    let releaseBotInfo!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseBotInfo = resolve;
+    });
+    const fx = feishuFetch({
+      "/bot/v3/info": () =>
+        gate.then(() =>
+          Response.json({ code: 0, msg: "ok", bot: { open_id: "ou_bot", app_name: "Bot" } }),
+        ) as unknown as Response,
+      "/im/v1/messages/om_race_root": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_race_root",
+                sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+                msg_type: "text",
+                body: { content: JSON.stringify({ text: "@_bot start" }) },
+                mentions: [{ key: "@_bot", name: "Bot", id: "ou_bot", id_type: "open_id" }],
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle } = buildChannel();
+
+    // The bare continuation arrives while bot/v3/info is still in flight: acceptance WAITS for the
+    // identity (bounded), then checks the root and answers — the ask is never silently downgraded.
+    const pending = handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_r1",
+          chatType: "group",
+          rootId: "om_race_root",
+          threadId: "omt_race",
+          text: "early ask",
+        }),
+      ),
+    );
+    releaseBotInfo();
+    expect((await pending).status).toBe(200);
+    await idle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt.text).toContain("early ask");
+    expect(fx.calls("/im/v1/messages/om_race_root", "GET")).toHaveLength(1);
+  });
+
+  it("a root living in a different chat than the event claims is unmanaged for that chat (checked once)", async () => {
+    const fx = feishuFetch({
+      "/im/v1/messages/om_cross_root": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_cross_root",
+                chat_id: "oc_elsewhere", // NOT the chat the event claims
+                sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+                msg_type: "text",
+                body: { content: JSON.stringify({ text: "@_bot start" }) },
+                mentions: [{ key: "@_bot", name: "Bot", id: "ou_bot", id_type: "open_id" }],
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls } = buildChannel();
+    await flush();
+    const warnings: string[] = [];
+    vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
+
+    for (const id of ["om_x1", "om_x2"]) {
+      await handler(
+        feishuRequest(
+          messageEvent({ id, chatType: "group", rootId: "om_cross_root", threadId: "omt_cross", text: "bare" }),
+        ),
+      );
+    }
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(fx.calls("/im/v1/messages/om_cross_root", "GET")).toHaveLength(1); // negative-cached per chat
+    expect(warnings.some((message) => message.includes("lives in chat oc_elsewhere"))).toBe(true);
+  });
+
+  it("a 2xx root read with no message is a visible anomaly: unmanaged, checked once", async () => {
+    const fx = feishuFetch({
+      "/im/v1/messages/om_empty_root": () => Response.json({ code: 0, msg: "ok", data: { items: [] } }),
+    });
+    const { handler, calls } = buildChannel();
+    await flush();
+    const warnings: string[] = [];
+    vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
+
+    for (const id of ["om_e1", "om_e2"]) {
+      await handler(
+        feishuRequest(
+          messageEvent({ id, chatType: "group", rootId: "om_empty_root", threadId: "omt_empty", text: "bare" }),
+        ),
+      );
+    }
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(fx.calls("/im/v1/messages/om_empty_root", "GET")).toHaveLength(1); // negative-cached
+    expect(warnings.some((message) => message.includes("returned no message"))).toBe(true);
+  });
+
+  it("a human thread (root without @bot) stays unmanaged: bare messages buffer and the root is checked once", async () => {
+    const fx = feishuFetch({
+      "/im/v1/messages/om_human_root": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_human_root",
+                sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+                msg_type: "text",
+                body: { content: JSON.stringify({ text: "humans talking" }) },
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+
+    for (const [id, text] of [
+      ["om_h1", "first aside"],
+      ["om_h2", "second aside"],
+    ] as const) {
+      await handler(
+        feishuRequest(messageEvent({ id, chatType: "group", rootId: "om_human_root", threadId: "omt_human", text })),
+      );
+    }
+    await flush();
+    expect(calls).toHaveLength(0);
+    // Negative result is cached per process: one platform read, not one per message.
+    expect(fx.calls("/im/v1/messages/om_human_root", "GET")).toHaveLength(1);
+
+    // An explicit @bot inside that thread still summons and folds the buffered asides.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_h3",
+          chatType: "group",
+          rootId: "om_human_root",
+          threadId: "omt_human",
+          content: JSON.stringify({ text: "@_bot summarize" }),
+          mentions: [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }],
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt.text).toContain("first aside");
+    expect(calls[0]?.prompt.text).toContain("second aside");
+  });
+
   it("buffers @other-only discussion in a managed thread; a bare continuation consumes it", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel();

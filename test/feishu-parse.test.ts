@@ -4,6 +4,7 @@ import {
   type FeishuMessageEvent,
   defaultFeishuRoute,
   feishuEnvelope,
+  fetchedMessageSummons,
   mentionsBot,
   parseContent,
   placeKey,
@@ -107,6 +108,25 @@ describe("summon + route policy", () => {
     expect(mentionsBot(m, "ou_other")).toBe(false);
     expect(mentionsBot(m, undefined)).toBe(false); // no identity → never summon
     expect(mentionsBot(msg(), "ou_bot")).toBe(false); // no mentions array
+  });
+
+  it("fetchedMessageSummons reads the GET-response shapes and requires a HUMAN sender", () => {
+    const sender = { id: "ou_alice", id_type: "open_id", sender_type: "user" };
+    const mentions = [{ key: "@_bot", name: "Bot", id: "ou_bot", id_type: "open_id" }];
+    expect(fetchedMessageSummons({ sender, mentions }, "ou_bot")).toBe(true);
+    expect(fetchedMessageSummons({ sender, mentions }, "ou_other")).toBe(false);
+    expect(fetchedMessageSummons({ sender, mentions }, undefined)).toBe(false); // no identity → never summon
+    expect(fetchedMessageSummons({ sender }, "ou_bot")).toBe(false); // no mentions
+    // Non-user senders never summon (mirrors the ingress policy): a bot @'ing the bot manages nothing.
+    expect(fetchedMessageSummons({ sender: { ...sender, sender_type: "app" }, mentions }, "ou_bot")).toBe(false);
+    expect(fetchedMessageSummons({ mentions }, "ou_bot")).toBe(false); // absent sender fails closed
+    // The two wire shapes must not be conflated: each helper rejects the other's.
+    expect(fetchedMessageSummons({ sender, mentions: [{ key: "@_bot", id: { open_id: "ou_bot" } }] }, "ou_bot")).toBe(
+      false,
+    );
+    expect(mentionsBot({ mentions: [{ key: "@_bot", id: "ou_bot", id_type: "open_id" } as never] }, "ou_bot")).toBe(
+      false,
+    );
   });
 
   it("defaultFeishuRoute: p2p answers; a group only on an @mention of THIS bot", () => {
