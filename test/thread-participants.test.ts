@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -126,6 +126,28 @@ describe("thread participation (shared)", () => {
       derived: true,
       unreadable: false,
     });
+  });
+
+  it("persists only NEW observations — a repeat message writes nothing", () => {
+    const path = join(stateDir(), "p.json");
+    const store = createThreadParticipants(path, "[feishu]");
+
+    // The write is a synchronous whole-map rewrite on the pre-ACK path, so it must be driven by new
+    // information, not by traffic: a busy thread the agent only listens to would otherwise rewrite
+    // the file for every message it sees.
+    store.merge("c:t1", { humans: ["u1"] });
+    expect(existsSync(path)).toBe(true);
+
+    rmSync(path); // if a repeat observation wrote, the file would come back
+    for (let i = 0; i < 99; i++) store.merge("c:t1", { humans: ["u1"] });
+    expect(existsSync(path)).toBe(false);
+
+    store.merge("c:t1", { humans: ["u2"] }); // a second human IS new information
+    expect(existsSync(path)).toBe(true);
+
+    rmSync(path);
+    for (let i = 0; i < 99; i++) store.merge("c:t1", { humans: [i % 2 ? "u1" : "u2"] });
+    expect(existsSync(path)).toBe(false); // MAX_HUMANS reached: nothing new can arrive for this thread
   });
 
   it("bounds the flag map on its own — an unreadable thread stores no observation to evict with", () => {

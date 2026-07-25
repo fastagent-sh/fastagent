@@ -40,8 +40,11 @@
 import { log } from "../log.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";
 
-/** Cap on cached threads: dropping one costs a single list call to re-derive, so an unbounded file
- *  (and an unbounded boot-time load) would buy nothing. Oldest entries are evicted first. */
+/** Cap on cached threads. Dropping one costs a single list call to re-derive, so an unbounded file
+ *  buys nothing — and it is not only boot-time load: a merge that carries new information rewrites the
+ *  WHOLE map synchronously on the pre-ACK path, so the map's size is also the cost of every such
+ *  write. What keeps that bounded is that only NEW information writes at all (a repeat sender, or any
+ *  message once MAX_HUMANS is reached, returns before persisting). Oldest entries are evicted first. */
 const MAX_THREADS = 5000;
 
 /** Cap on remembered humans per thread. The rule only asks "exactly one?", so a second human is

@@ -92,7 +92,8 @@ export async function configureGroupBehavior(input: {
 
   note(
     `[fastagent] group behavior: context-aware (recommended) — ${kind} will deliver all group messages; ` +
-      `FastAgent invokes @Agent + bare replies in threads it takes part in, and durably buffers other discussion`,
+      `FastAgent invokes @Agent and durably buffers other discussion; bare replies in threads it takes ` +
+      `part in additionally need a message-read scope, or those threads stay @-only`,
   );
   if (groupScope?.grantStatus === 1) {
     note(`[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPE} is already granted`);
