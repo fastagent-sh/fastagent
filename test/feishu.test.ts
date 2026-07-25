@@ -607,6 +607,60 @@ describe("turn flow", () => {
     await idle();
   }
 
+  it("a re-pushed first message keeps its referent anchor (observation must not consume it)", async () => {
+    let reads = 0;
+    const fx = feishuFetch({
+      "container_id_type=thread": () =>
+        ++reads === 1
+          ? Response.json({ code: 230001, msg: "internal error" }, { status: 500 })
+          : Response.json({
+              code: 0,
+              msg: "ok",
+              data: {
+                items: [
+                  { sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" } },
+                  { sender: { id: "app", id_type: "app_id", sender_type: "app" } },
+                ],
+              },
+            }),
+      "/im/v1/messages/om_anchor": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_anchor",
+                msg_type: "text",
+                body: { content: '{"text":"the answer being followed up on"}' },
+                sender: { id: "app", id_type: "app_id", sender_type: "app" },
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const ask = () =>
+      feishuRequest(
+        messageEvent({
+          id: "om_first",
+          chatType: "group",
+          threadId: "omt_anchor",
+          parentId: "om_anchor",
+          text: "expand on that",
+        }),
+      );
+
+    await expect(handler(ask())).rejects.toThrow(/thread omt_anchor/);
+    await handler(ask()); // the platform re-push
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt.text).toContain("the answer being followed up on");
+    expect(fx.calls("/im/v1/messages/om_anchor", "GET")).toHaveLength(1);
+  });
+
   it("a bare message in a thread the agent is talking to addresses it, through the normal streaming path", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle, home } = buildChannel();

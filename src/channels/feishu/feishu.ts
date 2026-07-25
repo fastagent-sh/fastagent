@@ -625,10 +625,13 @@ function createFeishuRuntimeFactory(
       // read back from the platform — sample it first, because observing below would mask it.
       // Two different questions, both about the state BEFORE this message — sampled here because
       // observing below would mask them:
-      //   · was this thread ever seen? → whether its first message still needs its referent loaded;
+      //   · has the agent answered here? → whether the thread's session already holds what a message
+      //     replies to, or whether the referent is still the only anchor it has;
       //   · is the human side complete? → whether participation must be read back from the platform.
+      // Neither may be derived from "a record exists": observation writes one BEFORE acceptance can
+      // fail, so a re-pushed first message would otherwise lose its anchor.
       const priorThread = m.thread_id === undefined ? undefined : threadParticipants.get(m.chat_id, m.thread_id);
-      const threadSeen = priorThread !== undefined;
+      const agentInThread = priorThread?.agentSpoke === true;
       const threadDerived = priorThread?.derived === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
@@ -734,11 +737,11 @@ function createFeishuRuntimeFactory(
           replyTo,
           queueReplyTo,
           replyInThread,
-          // The referent anchor is what a thread starts from (§8 rung 2): the first message of a
-          // thread points at something OUTSIDE it — usually the agent's own previous answer — so it is
-          // fetched. Later messages in a thread already seen point at the previous message, which the
-          // session holds; re-fetching it would cost a call per turn and duplicate context.
-          parentId: threadSeen ? undefined : m.parent_id,
+          // The referent anchor is what a thread starts from (§8 rung 2). Until the agent has answered
+          // in a thread its session is empty, so the replied-to message is the only context there is.
+          // Once it has, the session holds what later messages reply to and re-fetching would cost a
+          // call per turn and duplicate it.
+          parentId: agentInThread ? undefined : m.parent_id,
           images,
           files,
         },
