@@ -496,6 +496,63 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(calls[1]?.scope.session).toBe("slack:T1:C1:10.0");
   });
 
+  it("a transient thread read leaves the delivery un-ACKed: Slack's redelivery answers it", async () => {
+    let reads = 0;
+    const base = okFetch([{ user: "U1" }, { user: "UBOT", bot: true }]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        if (String(input).includes("/conversations.replies") && ++reads === 1) {
+          return Response.json({ ok: false, error: "internal_error" }, { status: 500 });
+        }
+        return base(input, init);
+      }),
+    );
+    const { agent, calls } = replyingAgent();
+    const { handler } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+    const bare = () => signedRequest(message("11.2", { text: "the ask", thread_ts: "11.0" }));
+
+    // A system fault must not silently demote a genuine ask to background context.
+    await expect(handler(bare())).rejects.toThrow(/thread 11\.0/);
+    expect(calls).toHaveLength(0);
+
+    await handler(bare()); // Slack's redelivery
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt.text).toContain("the ask");
+  });
+
+  it("a thread Slack refuses to read stays mention-only, and is not re-read per message", async () => {
+    let reads = 0;
+    const base = okFetch();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        if (String(input).includes("/conversations.replies")) {
+          reads++;
+          return Response.json({ ok: false, error: "thread_not_found" });
+        }
+        return base(input, init);
+      }),
+    );
+    const { agent, calls } = replyingAgent();
+    const { handler } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Even after answering a mention there — participation is not established, so it stays quiet.
+    await handler(signedRequest(message("12.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "12.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+
+    for (const ts of ["12.2", "12.3"]) {
+      await handler(signedRequest(message(ts, { text: "bare", thread_ts: "12.0" })));
+      await settle();
+    }
+    expect(calls).toHaveLength(1);
+    expect(reads).toBe(1); // recorded once, not retried per message
+  });
+
   it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
     // The platform listing is what reveals the humans this process never saw speak.
     vi.stubGlobal("fetch", okFetch([{ user: "U1" }, { user: "U2" }, { user: "UBOT", bot: true }]));

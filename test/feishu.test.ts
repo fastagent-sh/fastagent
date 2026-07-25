@@ -918,7 +918,7 @@ describe("turn flow", () => {
       "container_id_type=thread": () =>
         Response.json({ code: 230110, msg: "Action unavailable as the message has been deleted." }),
     });
-    const { handler, calls } = buildChannel();
+    const { handler, calls, idle } = buildChannel();
     await flush();
 
     for (const id of ["om_d1", "om_d2"]) {
@@ -928,6 +928,16 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(0);
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(1);
+
+    // And the refusal must not become an authoritative human set once the agent HAS answered there:
+    // observation alone under-counts, so speaking unprompted could barge into a crowded thread.
+    await joinThread(handler, idle, "omt_dead", "om_join_dead");
+    expect(calls).toHaveLength(1);
+    await handler(
+      feishuRequest(messageEvent({ id: "om_d3", chatType: "group", threadId: "omt_dead", text: "bare again" })),
+    );
+    await flush();
+    expect(calls).toHaveLength(1);
   });
 
   it("a transient thread read leaves the delivery un-ACKed: the platform re-push answers it", async () => {

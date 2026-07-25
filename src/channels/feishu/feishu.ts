@@ -21,6 +21,7 @@ import { dispatchStop, isStopText } from "../stop-command.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
 import { withAckDeadline } from "../ack-deadline.ts";
+import { createInflightAcceptances } from "../inflight.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
   collectFeishuBufferedAttachments,
@@ -511,7 +512,7 @@ function createFeishuRuntimeFactory(
           warnedRejectionCodes.add(code);
           log.warn(`${line} (if this repeats for every thread, check the app's message-read permissions)`);
         }
-        threadParticipants.merge(threadKey(chatId, threadId), { derived: true });
+        threadParticipants.merge(threadKey(chatId, threadId), { unreadable: true });
         return;
       }
       threadParticipants.merge(threadKey(chatId, threadId), {
@@ -535,7 +536,8 @@ function createFeishuRuntimeFactory(
     ): Promise<boolean> => {
       // Only a platform listing sets `derived`, and observing a message never does — so this reads the
       // live record rather than a snapshot taken before the observation above.
-      if (threadParticipants.get(threadKey(chatId, threadId))?.derived !== true) {
+      const cached = threadParticipants.get(threadKey(chatId, threadId));
+      if (cached?.derived !== true && cached?.unreadable !== true) {
         // One platform read per thread, shared by every delivery awaiting it (sharers resume in arrival
         // order; a joiner inherits the FIRST caller's deadline, still within one budget of that start).
         // LIVE order is best-effort across this window: a message that skips the check (an @mention, a
@@ -561,9 +563,7 @@ function createFeishuRuntimeFactory(
       return participation.derived && participation.agentSpoke && participation.humans.length === 1;
     };
 
-    // Concurrent duplicate deliveries of one message (documented platform behavior) share ONE outcome:
-    // both ACK success, or both leave the delivery re-pushable — never one 200 racing one 500.
-    const inflight = new Map<string, Promise<void>>();
+    const inflight = createInflightAcceptances();
 
     // Transport-neutral acceptance boundary. It performs only bounded pre-ACK work: normalize, route
     // (including the deadline-capped thread-participant read above on a cache miss), persist
@@ -575,14 +575,11 @@ function createFeishuRuntimeFactory(
         log.debug(`${label} duplicate push for message ${m.message_id} — already persisted, skipping`);
         return Promise.resolve();
       }
-      let pending = inflight.get(m.message_id);
-      if (pending === undefined) {
-        pending = acceptNewEvent(event).finally(() => inflight.delete(m.message_id));
-        inflight.set(m.message_id, pending);
-      } else {
-        log.debug(`${label} duplicate push for message ${m.message_id} — joining the in-flight acceptance`);
-      }
-      return pending;
+      return inflight.join(
+        m.message_id,
+        () => acceptNewEvent(event),
+        () => log.debug(`${label} duplicate push for message ${m.message_id} — joining the in-flight acceptance`),
+      );
     };
 
     const acceptNewEvent = async (event: FeishuMessageEvent): Promise<void> => {

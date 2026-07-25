@@ -131,6 +131,9 @@ what a side conversation concludes gets carried back.
 | Group main timeline | one session per chat, shared by everyone | B following up on A's question is the normal case, and the agent must remember its own answers |
 | Thread | one session per thread, anchored to what it branched from | a side conversation is separate, not amnesiac |
 
+The rows name *places*, so a platform whose primitives make a different thing the place lands
+differently while obeying the same rule — see §11.
+
 Sessions are **per place, never per person**. A room's conversation belongs to the room: scoping
 memory per user would break the most common collaborative pattern (one person following up on
 another's exchange) and would hide the agent's own answers from everyone but the asker.
@@ -227,7 +230,16 @@ the same shape.
 | Answer in a group | quoted reply in the room | **thread reply** — Slack has no quote primitive, so a thread under the message *is* answering in place | quoted reply in the room |
 | Direct messages | one continuous chat | **assistant threads** — Slack's Agents surface gives each conversation a thread with a title and status | one continuous chat |
 | Thread rule (§3) | participation, derived from `im/v1/messages?container_id_type=thread` | participation, derived from `conversations.replies` | see below |
+| Session for a group ask | the room (`chat_id`) | the **thread the answer creates** (`channel:thread_ts`) | the room (`chat_id`) |
 | Stateless addressing | — | — | **reply-to-bot**: the update embeds the parent's sender |
+
+The session row is the same rule with a different place, not a different rule. Feishu and Telegram
+answer a group ask *in the room*, so the room is the place and keeps one memory. Slack has no quote
+primitive, so answering in place means opening a thread on the ask — which makes that thread the
+place, and its memory starts there. Slack keeps `directMessageSession` / `groupMessageSession` for
+that reason: in Slack those two choices (where the answer goes, what it remembers) are one decision,
+whereas in Feishu they were bolted onto the summon rule as well, which is why they were removed
+there.
 
 Two consequences worth stating rather than papering over:
 
@@ -249,12 +261,16 @@ coupled three independent axes — session identity, reply placement, and the su
 who wanted room-level sessions was forced to also give up mention-free thread continuations. The
 model above sets each axis on its own principle, which leaves nothing for the modes to select.
 
-State left by the previous model is cleaned up on the next start: `owned-threads.json` is removed, and
+For Feishu/Lark, state left by the previous model is cleaned up on the next start: `owned-threads.json` is removed, and
 `buffers.json` buckets keyed `<chat>:root:<id>` are dropped at load — no place key can produce that
 shape again, so nothing could ever fold or clear them. Live buckets are untouched.
 
-Breaking changes for existing deployments:
+Breaking changes for existing Feishu/Lark deployments:
 
 - direct messages become one continuous conversation instead of one session per top-level message;
 - group summons answer in place instead of opening a thread;
 - threads answer bare messages only while a single human is in them.
+
+For Slack, placement and sessions are unchanged; what changes is the summon rule: a thread the agent
+has answered in admits bare replies while one human is in it, and a second human restores the mention
+requirement. `owned-threads.json` is removed on the next start.

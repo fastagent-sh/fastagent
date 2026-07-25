@@ -28,14 +28,24 @@ describe("thread participation (shared)", () => {
     first.merge("oc_1:omt_a", { humans: ["ou_alex"] }); // already known — no change
     first.merge("oc_1:omt_a", { humans: ["ou_alex"], derived: true }); // a listing completes it
 
-    expect(first.get("oc_1:omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
+    expect(first.get("oc_1:omt_a")).toEqual({
+      humans: ["ou_alex"],
+      agentSpoke: true,
+      derived: true,
+      unreadable: false,
+    });
     // Only observations are persisted: `derived` is process-local, so a restart re-establishes.
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       "oc_1:omt_a": { humans: ["ou_alex"], agentSpoke: true },
     });
 
     const restarted = createThreadParticipants(path, "[lark]");
-    expect(restarted.get("oc_1:omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: false });
+    expect(restarted.get("oc_1:omt_a")).toEqual({
+      humans: ["ou_alex"],
+      agentSpoke: true,
+      derived: false,
+      unreadable: false,
+    });
     expect(restarted.get("oc_other:omt_a")).toBeUndefined(); // participation is per chat
     expect(restarted.get("oc_1:omt_unseen")).toBeUndefined();
   });
@@ -47,25 +57,45 @@ describe("thread participation (shared)", () => {
     store.merge("oc_1:omt_a", { agentSpoke: true });
     // The agent replying proves it takes part, but says nothing about who ELSE is in the thread —
     // the half the summon rule counts.
-    expect(store.get("oc_1:omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: false });
+    expect(store.get("oc_1:omt_a")).toEqual({
+      humans: ["ou_alex"],
+      agentSpoke: true,
+      derived: false,
+      unreadable: false,
+    });
 
     store.merge("oc_1:omt_a", { humans: ["ou_alex", "ou_bob"], derived: true });
-    expect(store.get("oc_1:omt_a")).toEqual({ humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
+    expect(store.get("oc_1:omt_a")).toEqual({
+      humans: ["ou_alex", "ou_bob"],
+      agentSpoke: true,
+      derived: true,
+      unreadable: false,
+    });
   });
 
   it("a derived listing REPLACES the human set, which is how a restart's re-establish sheds a departed human", () => {
     const path = join(stateDir(), "p.json");
     const first = createThreadParticipants(path, "[feishu]");
-    first.merge("oc_1:omt_a", { humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
+    first.merge("oc_1:omt_a", { humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true, unreadable: false });
 
     // A listing answers "who is here now". Within one process it runs once per thread, so the replace
     // matters on the NEXT process: the observations survive, `derived` does not, and the fresh listing
     // of a thread that has quietened to two parties replaces the pair with the one who remains.
     const restarted = createThreadParticipants(path, "[feishu]");
-    expect(restarted.get("oc_1:omt_a")).toEqual({ humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: false });
+    expect(restarted.get("oc_1:omt_a")).toEqual({
+      humans: ["ou_alex", "ou_bob"],
+      agentSpoke: true,
+      derived: false,
+      unreadable: false,
+    });
 
     restarted.merge("oc_1:omt_a", { humans: ["ou_alex"], derived: true });
-    expect(restarted.get("oc_1:omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
+    expect(restarted.get("oc_1:omt_a")).toEqual({
+      humans: ["ou_alex"],
+      agentSpoke: true,
+      derived: true,
+      unreadable: false,
+    });
   });
 
   it("accumulates distinct humans — the summon rule needs to tell one apart from several", () => {
@@ -78,10 +108,18 @@ describe("thread participation (shared)", () => {
     expect(store.get("oc_1:omt_a")?.humans).toEqual(["ou_alex", "ou_bob"]);
   });
 
-  it("records a thread that answered with no senders, so an unreadable thread is not re-read forever", () => {
+  it("an unreadable thread is remembered as such WITHOUT claiming its humans are known", () => {
     const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
-    store.merge("oc_1:omt_dead", { derived: true });
-    expect(store.get("oc_1:omt_dead")).toEqual({ humans: [], agentSpoke: false, derived: true });
+    store.merge("oc_1:omt_dead", { unreadable: true });
+
+    // The two flags mean different things: "do not ask again" must never imply "the human set is
+    // established", or a refusal would promote an observed-only record into an authoritative one.
+    expect(store.get("oc_1:omt_dead")).toEqual({
+      humans: [],
+      agentSpoke: false,
+      derived: false,
+      unreadable: true,
+    });
   });
 
   it("warns and starts empty when valid JSON has the wrong shape", () => {
@@ -109,9 +147,14 @@ describe("thread participation (shared)", () => {
     const warnings: string[] = [];
     vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
 
-    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true, derived: true });
+    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true, derived: true, unreadable: false });
 
-    expect(store.get("oc_1:omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
+    expect(store.get("oc_1:omt_a")).toEqual({
+      humans: ["ou_alex"],
+      agentSpoke: true,
+      derived: true,
+      unreadable: false,
+    });
     expect(warnings.some((message) => message.includes("could not persist thread participation"))).toBe(true);
   });
 });

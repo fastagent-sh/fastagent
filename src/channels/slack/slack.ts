@@ -8,6 +8,7 @@ import { text } from "../respond.ts";
 import { rmSync } from "node:fs";
 import { createSeenRing } from "../seen.ts";
 import { withAckDeadline } from "../ack-deadline.ts";
+import { createInflightAcceptances } from "../inflight.ts";
 import { createThreadParticipants } from "../thread-participants.ts";
 import { createTaskTracker } from "../tasks.ts";
 import { ensureStateHome } from "../state.ts";
@@ -479,7 +480,7 @@ export function slackChannel({
           warnedRejections.add(cause);
           log.warn(`${line} (if this repeats for every thread, check the app's conversations history scopes)`);
         }
-        threadParticipants.merge(key, { derived: true });
+        threadParticipants.merge(key, { unreadable: true });
         return;
       }
       threadParticipants.merge(key, {
@@ -499,7 +500,8 @@ export function slackChannel({
       const key = threadKey(teamId, channelId, threadTs);
       // Only a platform listing sets `derived`, and observing a message never does — so this reads the
       // live record rather than a snapshot taken before the observation above.
-      if (threadParticipants.get(key)?.derived !== true) {
+      const cached = threadParticipants.get(key);
+      if (cached?.derived !== true && cached?.unreadable !== true) {
         // One read per thread, shared by every delivery awaiting it.
         let read = threadReads.get(key);
         if (read === undefined) {
@@ -518,7 +520,25 @@ export function slackChannel({
       return participation.derived && participation.agentSpoke && participation.humans.length === 1;
     };
 
-    const acceptEvent = async (envelope: SlackEventEnvelope): Promise<void> => {
+    // Acceptance now awaits a platform read, so the seen ring alone cannot stop two copies of one
+    // delivery (Slack redelivers an un-ACKed event, and app_mention/message can both carry it).
+    const inflight = createInflightAcceptances();
+
+    const acceptEvent = (envelope: SlackEventEnvelope): Promise<void> => {
+      // The same logical identity the seen ring uses; without a workspace or a message the acceptance
+      // below drops the event anyway, so it needs no in-flight slot.
+      const event = envelope.event;
+      const teamId = slackTeamId(envelope) ?? authenticatedTeamId;
+      if (!isSlackHumanMessage(event) || !teamId) return acceptNewEvent(envelope);
+      const logicalId = `${teamId}:${event.channel}:${event.ts}`;
+      return inflight.join(
+        logicalId,
+        () => acceptNewEvent(envelope),
+        () => log.debug(`${label} duplicate delivery ${logicalId} — joining the in-flight acceptance`),
+      );
+    };
+
+    const acceptNewEvent = async (envelope: SlackEventEnvelope): Promise<void> => {
       const event = envelope.event;
       if (!isSlackHumanMessage(event)) return;
       if (botUserId && event.user === botUserId) return;
@@ -633,7 +653,6 @@ export function slackChannel({
             )
           : undefined;
 
-      // Match Feishu/Lark ownership in context mode: only a top-level summon that creates an
       submit(
         {
           id: logicalId,

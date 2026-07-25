@@ -94,6 +94,10 @@ const NATIVE_UNAVAILABLE_ERRORS = new Set([
 
 /** A definitive capability rejection is safe to route through the compatibility renderer. Network,
  * internal, and timeout failures are ambiguous: Slack may already have created the stream. */
+export function isSlackNativeUnavailable(error: unknown): boolean {
+  return error instanceof SlackApiError && !!error.slackError && NATIVE_UNAVAILABLE_ERRORS.has(error.slackError);
+}
+
 /** Whether Slack REFUSED the request definitively: it arrived and was rejected by name (unknown
  *  thread, missing scope, not in channel). Transport failures (status 0), server errors, and rate
  *  limiting may heal on their own and are NOT rejections. */
@@ -106,10 +110,6 @@ export function isSlackApiRejection(error: unknown): boolean {
     error.slackError !== undefined &&
     error.slackError !== "ratelimited"
   );
-}
-
-export function isSlackNativeUnavailable(error: unknown): boolean {
-  return error instanceof SlackApiError && !!error.slackError && NATIVE_UNAVAILABLE_ERRORS.has(error.slackError);
 }
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

@@ -42,8 +42,14 @@ interface StoredParticipation {
 }
 
 interface ThreadParticipation extends StoredParticipation {
-  /** Whether THIS process established the thread's participation from a platform listing. */
+  /** Whether THIS process established the human set from a platform listing. Speaking unprompted
+   *  requires it: observation alone can only UNDER-count the humans in a thread. */
   derived: boolean;
+  /** Whether the platform definitively refused to describe this thread. Distinct from `derived` on
+   *  purpose — it means "do not ask again", NOT "the human set is known". Collapsing the two would let
+   *  a refusal promote an observed-only record into an authoritative one, and the agent would speak
+   *  unprompted in a thread it cannot see. */
+  unreadable: boolean;
 }
 
 export interface ThreadParticipants {
@@ -77,11 +83,14 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
   }
   // Process-local: see the module header. A restart re-establishes each thread once.
   const derivedKeys = new Set<string>();
+  const unreadableKeys = new Set<string>();
 
   return {
     get(key) {
       const record = records.get(key);
-      return record === undefined ? undefined : { ...record, derived: derivedKeys.has(key) };
+      return record === undefined
+        ? undefined
+        : { ...record, derived: derivedKeys.has(key), unreadable: unreadableKeys.has(key) };
     },
     merge(key, seen) {
       const previous = records.get(key);
@@ -96,6 +105,7 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         humans.add(human);
       }
       if (seen.derived === true) derivedKeys.add(key);
+      if (seen.unreadable === true) unreadableKeys.add(key);
       const next: StoredParticipation = {
         humans: [...humans],
         agentSpoke: (previous?.agentSpoke ?? false) || (seen.agentSpoke ?? false),
@@ -106,7 +116,7 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         previous.humans.length === next.humans.length &&
         previous.humans.every((human) => humans.has(human))
       ) {
-        return; // nothing new to persist — the derived flag above is memory-only
+        return; // nothing new to persist — the process-local flags above are memory-only
       }
       records.delete(key); // re-insert so insertion order stays "least recently updated first"
       records.set(key, next);
@@ -115,6 +125,7 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         if (oldest === undefined) break;
         records.delete(oldest);
         derivedKeys.delete(oldest);
+        unreadableKeys.delete(oldest);
       }
       try {
         saveStateFile(path, Object.fromEntries(records));
