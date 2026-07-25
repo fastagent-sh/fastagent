@@ -324,6 +324,10 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/<chat>/` — downloaded inbound files.
 
+An upgrade from the earlier session-mode model removes the obsolete `owned-threads.json` on the next
+start; pre-upgrade `buffers.json` buckets keyed `<chat>:root:<id>` are no longer reachable and can be
+dropped by deleting that file.
+
 The seen ring is bounded, best-effort delivery dedup rather than exactly-once execution. It is written
 after the turn/buffer state so a failed pre-ACK state write can still be redelivered safely; a crash
 between those writes, a failed ring write, or a duplicate older than the cap can therefore still re-run

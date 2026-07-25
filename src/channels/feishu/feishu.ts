@@ -8,6 +8,7 @@
  * workspace may run both without sharing state. Webhook returns the existing route factory; WebSocket
  * returns an explicit long-connection module. Both feed the same acceptance/turn engine. See docs/feishu.md.
  */
+import { rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../host/node.ts";
 import { log } from "../../log.ts";
@@ -256,6 +257,13 @@ function createFeishuRuntimeFactory(
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
+    // The participant model replaced the managed-root index; its file is dead weight on an upgraded
+    // deployment (a cache, so nothing is lost). Best-effort: a leftover file is untidy, not fatal.
+    try {
+      rmSync(join(stateHome, "owned-threads.json"), { force: true });
+    } catch (error) {
+      log.debug(`${label} could not remove the obsolete owned-threads.json: ${String(error)}`);
+    }
     const threadParticipants = createFeishuThreadParticipants(join(stateHome, "thread-participants.json"), label);
     const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {

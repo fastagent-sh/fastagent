@@ -377,7 +377,7 @@ a stable hand-authored surface. What is platform-different:
   messages, adds it to the app draft through application-v7 config when supported, opens tenant-admin
   approval, and reports the granted capability again at serving startup. Explicit @bot turns always invoke; bare
   human messages invoke only under the thread-participation rule above. Other human
-  discussion is persisted in `buffers.json`, bucketed by main chat or thread root, and folded into that
+  discussion is persisted in `buffers.json`, bucketed by main chat or thread, and folded into that
   place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only
   on `completed`, and retain failures plus messages arriving in-flight. Non-`user` senders are dropped.
   Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved). A reply summon

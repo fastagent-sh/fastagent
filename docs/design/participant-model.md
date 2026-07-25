@@ -242,6 +242,11 @@ coupled three independent axes — session identity, reply placement, and the su
 who wanted room-level sessions was forced to also give up mention-free thread continuations. The
 model above sets each axis on its own principle, which leaves nothing for the modes to select.
 
+State left by the previous model: `owned-threads.json` is obsolete and is removed on the next start.
+`buffers.json` keeps any pre-upgrade `<chat>:root:<id>` buckets — no place key can produce them again,
+so they are never folded into a turn; they are bounded by the threads that existed before the upgrade
+and can be dropped by deleting the file (it holds only un-summoned context awaiting its next turn).
+
 Breaking changes for existing deployments:
 
 - direct messages become one continuous conversation instead of one session per top-level message;

@@ -89,7 +89,10 @@ export function createFeishuThreadParticipants(
     merge(chatId, threadId, seen) {
       const key = keyOf(chatId, threadId);
       const previous = records.get(key);
-      const humans = new Set(previous?.humans ?? []);
+      // A derived listing REPLACES the human set: it samples the thread's recent window, so it is the
+      // answer to "who is in this conversation now". Unioning would ratchet one way — a thread that
+      // had two humans an hour ago could never become a two-party conversation again.
+      const humans = new Set(seen.derived === true ? [] : (previous?.humans ?? []));
       for (const human of seen.humans ?? []) {
         if (humans.size >= MAX_HUMANS) break;
         humans.add(human);
@@ -104,7 +107,8 @@ export function createFeishuThreadParticipants(
         previous !== undefined &&
         previous.agentSpoke === next.agentSpoke &&
         previous.derived === next.derived &&
-        previous.humans.length === next.humans.length
+        previous.humans.length === next.humans.length &&
+        previous.humans.every((human) => humans.has(human))
       ) {
         return; // nothing new — skip the write entirely
       }
