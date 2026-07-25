@@ -3,15 +3,21 @@
  * (docs/design/participant-model.md §3): the agent speaks unprompted only where it is a participant
  * and exactly one human is.
  *
- * This is a CACHE, refined two ways: every observed message merges its sender in (authoritative going
- * forward, since the channel hears everything in a thread it can see), and a thread the process has
- * never seen is re-derived from the platform (`listThreadSenders`).
+ * Two kinds of knowledge, deliberately stored differently:
  *
- * Both halves are answered from the thread's RECENT WINDOW — "who is taking part now", not "who ever
- * spoke". That is deliberate for humans (a thread that quietened back to two parties should behave
- * like one) and it applies to the agent equally: a thread it has been silent in for a whole window is
- * one it is no longer part of. After a restart such a thread re-derives as mention-only, and a single
- * mention puts the agent back in it — the same bootstrap that starts any thread.
+ * - **Observations** (`humans`, `agentSpoke`) are DURABLE. They accumulate from the messages this
+ *   channel sees and from a platform listing, and they only ever under-count — a message observed is
+ *   a fact that a restart should not forget.
+ * - **`derived`** — whether the thread's participation was established rather than merely glimpsed —
+ *   is PROCESS-LOCAL. Persisting it would make a single listing authoritative forever: a thread would
+ *   be read once ever, a failed read would be a durable "do not retry", and a permission granted
+ *   afterwards would need the file deleted by hand. Kept in memory, each process re-establishes each
+ *   thread once, which is also what bounds how stale the answer can get.
+ *
+ * The listing answers from the thread's RECENT WINDOW — "who is taking part now", not "who ever
+ * spoke". Humans joining later are seen live, since the channel observes every message it can see; a
+ * human LEAVING is not observable at all (the platform emits nothing), so within one process a thread
+ * that has gone quiet stays multi-party until a restart re-establishes it.
  *
  * Participation is keyed by `thread_id`: Feishu's `root_id` is NOT thread-stable (a thread shows
  * different `root_id`s as its reply chain moves), so it cannot identify a side conversation.
@@ -27,27 +33,19 @@ const MAX_THREADS = 5000;
  *  already the whole answer and anything beyond it is weight the predicate never reads. */
 const MAX_HUMANS = 2;
 
-interface FeishuThreadParticipation {
-  /** Distinct human open_ids seen in this thread (capped, see {@link MAX_HUMANS}). */
+/** What a restart keeps: observations, which only under-count. */
+interface StoredParticipation {
   humans: string[];
-  /** Whether THIS agent has spoken in the thread. */
   agentSpoke: boolean;
-  /**
-   * Whether the HUMAN side of the record covers the thread from its start, rather than only the
-   * messages this process happened to observe. Only a platform listing can establish that, so only
-   * the listing sets it — the agent's own reply proves `agentSpoke` but says nothing about who else
-   * is in the thread. A merely observed record stays `false`, so a failed derivation is retried
-   * instead of being mistaken for an answer.
-   */
+}
+
+interface FeishuThreadParticipation extends StoredParticipation {
+  /** Whether THIS process established the thread's participation from a platform listing. */
   derived: boolean;
 }
 
-interface StoredParticipation extends FeishuThreadParticipation {
-  updatedAt: number;
-}
-
 export interface FeishuThreadParticipants {
-  /** Known participation, or undefined when this process has never seen the thread. */
+  /** Known participation, or undefined when nothing about the thread has been seen or read. */
   get(chatId: string, threadId: string): FeishuThreadParticipation | undefined;
   /** Merge in what was just observed or read back. Idempotent; a failed write is a warning, never a
    *  failed delivery (the platform can re-derive it). */
@@ -59,38 +57,32 @@ function isRecord(value: unknown): value is StoredParticipation {
   return (
     Array.isArray(record?.humans) &&
     record.humans.every((human) => typeof human === "string") &&
-    typeof record.agentSpoke === "boolean" &&
-    typeof record.derived === "boolean" &&
-    typeof record.updatedAt === "number" &&
-    Number.isFinite(record.updatedAt)
+    typeof record.agentSpoke === "boolean"
   );
 }
 
-export function createFeishuThreadParticipants(
-  path: string,
-  label: string,
-  now: () => number = Date.now,
-): FeishuThreadParticipants {
+export function createFeishuThreadParticipants(path: string, label: string): FeishuThreadParticipants {
   const raw = loadStateFile(path);
   const records = new Map<string, StoredParticipation>();
   if (raw !== undefined) {
     if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.values(raw).every(isRecord)) {
       for (const [key, record] of Object.entries(raw as Record<string, StoredParticipation>)) {
-        records.set(key, record);
+        records.set(key, { humans: record.humans, agentSpoke: record.agentSpoke });
       }
     } else {
       log.warn(`${label} unexpected shape in ${path} — starting with no thread participation`);
     }
   }
+  // Process-local: see the module header. A restart re-establishes each thread once.
+  const derivedKeys = new Set<string>();
 
   const keyOf = (chatId: string, threadId: string): string => `${chatId}:${threadId}`;
 
   return {
     get(chatId, threadId) {
-      const record = records.get(keyOf(chatId, threadId));
-      return record === undefined
-        ? undefined
-        : { humans: record.humans, agentSpoke: record.agentSpoke, derived: record.derived };
+      const key = keyOf(chatId, threadId);
+      const record = records.get(key);
+      return record === undefined ? undefined : { ...record, derived: derivedKeys.has(key) };
     },
     merge(chatId, threadId, seen) {
       const key = keyOf(chatId, threadId);
@@ -99,32 +91,24 @@ export function createFeishuThreadParticipants(
       // answer to "who is in this conversation now" rather than "who ever spoke". An EMPTY set never
       // replaces: a listing that names nobody is an anomaly, not the news that the thread is empty,
       // and dropping the humans already seen there could admit a message it must not.
-      //
-      // ponytail: `derived` is monotone and the channel re-reads only while it is false, so this
-      // branch runs at most ONCE per thread per process — a second human observed afterwards is
-      // terminal until a restart re-derives. Deliberate: re-reading on a timer would put a platform
-      // call back on the pre-ACK path for every long-lived thread, and a thread quietening back down
-      // to two parties is rarer than the cost of checking for it.
       const replacing = seen.derived === true && (seen.humans?.length ?? 0) > 0;
       const humans = new Set(replacing ? [] : (previous?.humans ?? []));
       for (const human of seen.humans ?? []) {
         if (humans.size >= MAX_HUMANS) break;
         humans.add(human);
       }
+      if (seen.derived === true) derivedKeys.add(key);
       const next: StoredParticipation = {
         humans: [...humans],
         agentSpoke: (previous?.agentSpoke ?? false) || (seen.agentSpoke ?? false),
-        derived: (previous?.derived ?? false) || (seen.derived ?? false),
-        updatedAt: now(),
       };
       if (
         previous !== undefined &&
         previous.agentSpoke === next.agentSpoke &&
-        previous.derived === next.derived &&
         previous.humans.length === next.humans.length &&
         previous.humans.every((human) => humans.has(human))
       ) {
-        return; // nothing new — skip the write entirely
+        return; // nothing new to persist — the derived flag above is memory-only
       }
       records.delete(key); // re-insert so insertion order stays "least recently updated first"
       records.set(key, next);
@@ -132,6 +116,7 @@ export function createFeishuThreadParticipants(
         const oldest = records.keys().next().value;
         if (oldest === undefined) break;
         records.delete(oldest);
+        derivedKeys.delete(oldest);
       }
       try {
         saveStateFile(path, Object.fromEntries(records));

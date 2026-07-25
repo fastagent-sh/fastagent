@@ -520,12 +520,14 @@ function createFeishuRuntimeFactory(
           // only have buffered — the trade-off is: unknown-addressing messages fail closed (HTTP 500 /
           // WS 500 frame → platform re-push → re-check), because ACKing here would silently downgrade
           // a GENUINE ask to background context. If every bounded re-push fails, both the turn and the
-          // buffered copy are lost (operator log only) — accepted; see docs/design/participant-model.md.
+          // buffered copy are lost (operator log only) — the trade-off is argued in
+          // docs/design/core.md (§Session partitioning, "Failure ownership").
           throw new Error(`${label} could not read thread ${threadId} pre-ACK: ${String(error)}`, { cause: error });
         }
         // A definitive platform rejection (deleted thread, missing read permission): participation is
-        // not derivable. Record the thread as seen-but-empty so the read is not retried per message;
-        // the agent then stays @-only there, and a permission grant plus restart recovers.
+        // not derivable. Mark it derived so the read is not retried per message — the summon rule
+        // still refuses, because the record carries no established human set. Process-local, so a
+        // permission granted later takes effect on the next restart with no file to delete.
         const line = `${label} thread ${threadId} is not readable — staying mention-only there: ${String(error)}`;
         const code = feishuApiErrorCode(error) ?? 0;
         if (warnedRejectionCodes.has(code)) {
@@ -578,7 +580,10 @@ function createFeishuRuntimeFactory(
       }
       const participation = threadParticipants.get(chatId, threadId);
       if (participation === undefined) return false;
-      return participation.agentSpoke && participation.humans.length === 1;
+      // `derived` is required, not incidental: observation only ever UNDER-counts humans, so speaking
+      // unprompted on an unestablished record could barge into a thread that holds several. A read
+      // the platform refused therefore leaves the thread mention-only, which is what its log says.
+      return participation.derived && participation.agentSpoke && participation.humans.length === 1;
     };
 
     // Concurrent duplicate deliveries of one message (documented platform behavior) share ONE outcome:
@@ -725,10 +730,12 @@ function createFeishuRuntimeFactory(
           replyTo,
           queueReplyTo,
           replyInThread,
-          // The referent anchor is what a thread starts from (§8 rung 2). Until the agent has answered
-          // in a thread its session is empty, so the replied-to message is the only context there is.
-          // Once it has, the session holds what later messages reply to and re-fetching would cost a
-          // call per turn and duplicate it.
+          // What a quoted message is worth depends on where it is quoted:
+          //   · in a thread the agent has ALREADY answered in, the session holds what the message
+          //     replies to, so re-fetching would cost a call per turn and duplicate the text;
+          //   · everywhere else — a thread's first message (§8 rung 2), and any quote in a chat's main
+          //     timeline — the quote is the user explicitly pointing at something, which may predate
+          //     this session entirely, so it is loaded.
           parentId: agentInThread ? undefined : m.parent_id,
           images,
           files,

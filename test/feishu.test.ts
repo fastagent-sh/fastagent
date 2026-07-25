@@ -291,6 +291,36 @@ describe("ingress verification", () => {
   });
 });
 
+describe("upgrade from the session-mode model", () => {
+  it("removes the obsolete owned-threads.json and drops only the retired context buckets", async () => {
+    feishuFetch();
+    const root = mkdtempSync(join(tmpdir(), "feishu-upgrade-"));
+    tempRoots.push(root);
+    const home = join(root, "channels", "feishu");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "owned-threads.json"), JSON.stringify({ om_root: { rootId: "om_root" } }));
+    const entry = (body: string) => [{ sender: "user ou_alice", body, messageId: `om_${body}` }];
+    writeFileSync(
+      join(home, "buffers.json"),
+      JSON.stringify({
+        "oc_1:root:om_old": entry("retired"), // no place key can produce this shape any more
+        "oc_1:thread:omt_live": entry("live-thread"),
+        oc_1: entry("live-chat"),
+      }),
+    );
+
+    const { agent } = replyingAgent();
+    buildFeishuChannel({ appId: "app", appSecret: "secret", verificationToken: TOKEN, baseUrl: BASE })({
+      agent,
+      stateRoot: root,
+    });
+
+    expect(existsSync(join(home, "owned-threads.json"))).toBe(false);
+    const buffers = JSON.parse(readFileSync(join(home, "buffers.json"), "utf8")) as Record<string, unknown[]>;
+    expect(Object.keys(buffers).sort()).toEqual(["oc_1", "oc_1:thread:omt_live"]);
+  });
+});
+
 describe("turn flow", () => {
   it("a direct message is one continuous conversation, answered in place", async () => {
     const fx = feishuFetch();
@@ -1707,13 +1737,13 @@ describe("turn flow", () => {
     expect(calls).toHaveLength(1);
     // The route decided admission, so the built-in thread rule never ran: no platform lookup.
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
-    // Participation still records what observably happened (the agent spoke there), but nothing
-    // claims the human side was established — only a platform listing sets `derived`.
+    // Participation still records what observably happened (the agent spoke there). `derived` is not
+    // persisted at all — only a platform listing sets it, and only for the process that ran it.
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
-      { agentSpoke: boolean; derived: boolean }
+      { agentSpoke: boolean }
     >;
-    expect(participants["oc_1:omt_custom"]).toMatchObject({ agentSpoke: true, derived: false });
+    expect(participants["oc_1:omt_custom"]).toEqual({ agentSpoke: true, humans: ["ou_alice"] });
   });
 
   it("a custom route's empty text runs NO turn (nothing to say, nothing to load)", async () => {

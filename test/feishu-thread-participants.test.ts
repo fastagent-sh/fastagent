@@ -21,7 +21,7 @@ function stateDir(): string {
 describe("Feishu/Lark thread participation", () => {
   it("merges observations, keeps them across a restart, and scopes them per chat", () => {
     const path = join(stateDir(), "thread-participants.json");
-    const first = createFeishuThreadParticipants(path, "[lark]", () => 123);
+    const first = createFeishuThreadParticipants(path, "[lark]");
 
     first.merge("oc_1", "omt_a", { humans: ["ou_alex"] });
     first.merge("oc_1", "omt_a", { agentSpoke: true }); // the agent's own reply: its half only
@@ -29,12 +29,13 @@ describe("Feishu/Lark thread participation", () => {
     first.merge("oc_1", "omt_a", { humans: ["ou_alex"], derived: true }); // a listing completes it
 
     expect(first.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
+    // Only observations are persisted: `derived` is process-local, so a restart re-establishes.
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
-      "oc_1:omt_a": { humans: ["ou_alex"], agentSpoke: true, derived: true, updatedAt: 123 },
+      "oc_1:omt_a": { humans: ["ou_alex"], agentSpoke: true },
     });
 
     const restarted = createFeishuThreadParticipants(path, "[lark]");
-    expect(restarted.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
+    expect(restarted.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: false });
     expect(restarted.get("oc_other", "omt_a")).toBeUndefined(); // participation is per chat
     expect(restarted.get("oc_1", "omt_unseen")).toBeUndefined();
   });
@@ -52,16 +53,19 @@ describe("Feishu/Lark thread participation", () => {
     expect(store.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
   });
 
-  it("a derived listing REPLACES the human set (the shape a restart's re-derive relies on)", () => {
-    const store = createFeishuThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
-    store.merge("oc_1", "omt_a", { humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
+  it("a derived listing REPLACES the human set, which is how a restart's re-establish sheds a departed human", () => {
+    const path = join(stateDir(), "p.json");
+    const first = createFeishuThreadParticipants(path, "[feishu]");
+    first.merge("oc_1", "omt_a", { humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
 
-    // A listing samples the thread's RECENT window, so it answers "who is here now" rather than
-    // "who ever spoke". Within one process `derived` is monotone and this runs once per thread; the
-    // replace matters when a restart re-derives a thread that has since quietened to two parties.
-    store.merge("oc_1", "omt_a", { humans: ["ou_alex"], derived: true });
+    // A listing answers "who is here now". Within one process it runs once per thread, so the replace
+    // matters on the NEXT process: the observations survive, `derived` does not, and the fresh listing
+    // of a thread that has quietened to two parties replaces the pair with the one who remains.
+    const restarted = createFeishuThreadParticipants(path, "[feishu]");
+    expect(restarted.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: false });
 
-    expect(store.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
+    restarted.merge("oc_1", "omt_a", { humans: ["ou_alex"], derived: true });
+    expect(restarted.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
   });
 
   it("accumulates distinct humans — the summon rule needs to tell one apart from several", () => {

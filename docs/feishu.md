@@ -264,7 +264,7 @@ picture of, the channel reads the thread's recent senders back from the platform
 state costs one lookup rather than the behaviour. Both halves are read from that recent window — a
 thread the Agent has been silent in for a long stretch reads as one it is no longer part of, and a
 single mention puts it back. That read happens before the event is acknowledged and shares a
-2s budget with the bot-identity lookup; if it fails transiently the delivery fails and the platform
+2.5s budget with the bot-identity lookup; if it fails transiently the delivery fails and the platform
 re-pushes it, rather than the ask being silently downgraded to background context.
 
 The thread's identity is `thread_id`. Feishu's `root_id` is NOT stable within a thread — it tracks the

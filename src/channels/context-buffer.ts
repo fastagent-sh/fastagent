@@ -75,16 +75,25 @@ export function createContextBuffer<E>(options: {
     ) {
       const loaded = Object.entries(raw as Record<string, E[]>);
       const live = isLivePlaceKey ? loaded.filter(([placeKey]) => isLivePlaceKey(placeKey)) : loaded;
-      if (live.length !== loaded.length) {
-        log.info(`${label} dropped ${loaded.length - live.length} context bucket(s) with a retired key shape`);
-      }
+      droppedAtLoad = loaded.length - live.length;
       return new Map(live);
     }
     log.warn(`${label} unexpected shape in ${path} — starting with an empty context buffer`);
     return new Map();
   };
+  let droppedAtLoad = 0;
   const buffers = load();
   const persist = (): void => saveStateFile(path, Object.fromEntries(buffers));
+  if (droppedAtLoad > 0) {
+    // Rewrite now rather than at the next push: the dropped buckets hold chat content, and a channel
+    // that never buffers again would otherwise keep them on disk forever.
+    log.info(`${label} dropped ${droppedAtLoad} context bucket(s) with a retired key shape`);
+    try {
+      persist();
+    } catch (error) {
+      log.warn(`${label} could not rewrite ${path} after dropping retired buckets: ${String(error)}`);
+    }
+  }
 
   return {
     push(placeKey, entry) {

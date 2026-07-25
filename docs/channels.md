@@ -175,9 +175,8 @@ export default feishuChannel({
   appSecret: process.env.FEISHU_APP_SECRET ?? "",
   verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",
   encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
-  // Direct/group asks default to independent sessions + platform threads; opt out independently:
-  // directMessageSession: "continuous",
-  // groupMessageSession: "continuous",
+  // No session modes: a chat is one session and a thread is another, and the summon/placement rules
+  // follow from that (docs/design/participant-model.md).
 });
 ```
 

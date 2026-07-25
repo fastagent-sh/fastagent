@@ -80,9 +80,12 @@ colleague who keeps answering every sentence of a three-way discussion because t
 question is behaving badly. The agent must fall back to listening when the conversation stops being
 a two-party exchange.
 
-Both halves of the rule are read from the thread's **recent window** — who is taking part now, not who
-ever spoke. A thread that quietened back to two parties behaves like one again, and a thread the agent
-has been silent in for a whole window is one it is no longer part of (one mention puts it back).
+Both halves are read from the thread's **recent window** — who is taking part now, not who ever spoke.
+Humans who join later are seen live, since the agent observes every message it can see. A human
+*leaving* is not observable at all, so within one process a thread stays multi-party once it has been;
+each process re-establishes a thread once, which is what bounds how stale that answer can get. A thread
+the agent has been silent in for a whole window reads as one it is no longer part of, and one mention
+puts it back.
 
 **Participation** is required so the agent does not barge into a human thread it was never part of.
 The agent is a participant of a thread once it has answered in it. Bootstrapping is therefore the
@@ -207,7 +210,7 @@ The model is platform-neutral; the primitives differ in strength.
 
 | Capability | Feishu / Lark | Slack |
 |---|---|---|
-| Side conversation | topic (`thread_id` + `root_id`) | thread (`thread_ts`) |
+| Side conversation | topic (`thread_id`) | thread (`thread_ts`) |
 | Hearing the room | sensitive group-message scope | channel message events |
 | Sharing a thread's outcome | ask the agent to post to the room | native "also send to channel" |
 | Dedicated direct surface | ordinary p2p chat | assistant pane |
