@@ -163,7 +163,11 @@ describe("pipeline invariants", () => {
       { senderType: "user", senderId: "ou_alice" },
       { senderType: "app", senderId: "cli_app" },
     ]);
-    expect(fx.calls().at(-1)?.url).toContain("container_id_type=thread&container_id=omt_1");
+    const url = fx.calls().at(-1)?.url ?? "";
+    expect(url).toContain("container_id_type=thread&container_id=omt_1");
+    // Newest first: in a long thread, a late-joining second human must be visible in the one page
+    // that is read, or the summon rule would keep treating it as a two-party conversation.
+    expect(url).toContain("sort_type=ByCreateTimeDesc");
   });
 
   it("noRateLimitRetry makes ONE attempt (a deadline-bounded caller cannot afford the backoff)", async () => {

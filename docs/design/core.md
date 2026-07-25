@@ -376,7 +376,7 @@ a stable hand-authored surface. What is platform-different:
   `Mention-only` is the least-privilege alternative. The CLI states that the former delivers all group
   messages, adds it to the app draft through application-v7 config when supported, opens tenant-admin
   approval, and reports the granted capability again at serving startup. Explicit @bot turns always invoke; bare
-  human messages invoke only in `chat_id + root_id` roots whose root message summons the bot. Other human
+  human messages invoke only under the thread-participation rule above. Other human
   discussion is persisted in `buffers.json`, bucketed by main chat or thread root, and folded into that
   place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only
   on `completed`, and retain failures plus messages arriving in-flight. Non-`user` senders are dropped.

@@ -1,7 +1,8 @@
 /** Durable roots of Slack group threads entered by an explicit summon. This is a SOURCE OF TRUTH: a
- *  failed write must fail the delivery. Feishu's same-named state file is deliberately different — it
- *  re-derives management from the thread's root message and keeps the file as a cache (see
- *  channels/feishu/managed-roots.ts). That divergence is Feishu-scoped; nothing here is claimed wrong. */
+ *  failed write must fail the delivery. Feishu/Lark deliberately diverges: it derives who takes part
+ *  in a thread from the platform and keeps its file as a cache (see
+ *  channels/feishu/thread-participants.ts and docs/design/participant-model.md). That divergence is
+ *  Feishu-scoped for now; nothing here is claimed wrong. */
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "../state.ts";
 

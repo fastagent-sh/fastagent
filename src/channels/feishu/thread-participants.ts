@@ -17,9 +17,9 @@ import { loadStateFile, saveStateFile } from "../state.ts";
  *  (and an unbounded boot-time load) would buy nothing. Oldest entries are evicted first. */
 const MAX_THREADS = 5000;
 
-/** Cap on remembered humans per thread. The rule only asks "exactly one?", so two is already an
- *  answer; a few more keep the record readable in state dumps without growing with the thread. */
-const MAX_HUMANS = 8;
+/** Cap on remembered humans per thread. The rule only asks "exactly one?", so a second human is
+ *  already the whole answer and anything beyond it is weight the predicate never reads. */
+const MAX_HUMANS = 2;
 
 interface FeishuThreadParticipation {
   /** Distinct human open_ids seen in this thread (capped, see {@link MAX_HUMANS}). */

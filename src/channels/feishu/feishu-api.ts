@@ -191,11 +191,12 @@ export interface FeishuApi {
     | { message_id?: string; msg_type?: string; body?: { content?: string }; mentions?: unknown[]; sender?: unknown }
     | undefined
   >;
-  /** List a thread's messages (oldest first), for deriving who is taking part in it. Bounded by
-   *  `limit`: the participant question only needs enough senders, never the whole transcript. */
+  /** Senders of a thread's MOST RECENT messages (one page, newest first), for deriving who is taking
+   *  part in it. Deliberately not paginated: the question is who is in the conversation now, and an
+   *  unbounded walk cannot run inside a pre-ACK budget. */
   listThreadSenders(
     threadId: string,
-    opts?: { signal?: AbortSignal; noRateLimitRetry?: boolean; limit?: number },
+    opts?: { signal?: AbortSignal; noRateLimitRetry?: boolean },
   ): Promise<{ senderType: string; senderId: string }[]>;
   /** Download a message resource (image/file bytes). Caps at {@link MAX_DOWNLOAD_BYTES}. */
   downloadResource(
@@ -234,6 +235,11 @@ export interface FeishuApi {
   /** Replace a card entity's content (the settle write; also flips streaming_mode off via the JSON). */
   updateCard(cardId: string, cardJson: string, sequence: number): Promise<void>;
 }
+
+/** How many of a thread's most recent messages are sampled to decide who is taking part in it. The
+ *  platform's page cap is 50; the rule only asks whether more than one human is present, and recent
+ *  messages are what answers that. */
+const THREAD_SENDER_PAGE = 50;
 
 /** The platform caps a text-message request body at 150 KB; stay well under it (the content is a JSON
  *  envelope around the text, and multi-byte characters inflate the byte count). */
@@ -431,13 +437,13 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
       return data.data?.items?.[0] as Awaited<ReturnType<FeishuApi["getMessage"]>>;
     },
     async listThreadSenders(threadId, opts) {
-      const size = Math.min(Math.max(opts?.limit ?? 50, 1), 50);
       const data = await call<ApiBody & { data?: { items?: { sender?: { id?: string; sender_type?: string } }[] } }>(
         "listThreadSenders",
         "GET",
-        // `thread` container: the platform's own identity for a side conversation. A bot sender's `id`
-        // is the app id (cli_…), a human's is an open_id — both compared by the caller.
-        `/open-apis/im/v1/messages?container_id_type=thread&container_id=${encodeURIComponent(threadId)}&page_size=${size}&user_id_type=open_id`,
+        // `thread` container: the platform's own identity for a side conversation. Newest first, one
+        // page: a late-joining second human must be visible in a long thread, which an oldest-first
+        // page would miss. A bot sender's `id` is the app id (cli_…), a human's is an open_id.
+        `/open-apis/im/v1/messages?container_id_type=thread&container_id=${encodeURIComponent(threadId)}&sort_type=ByCreateTimeDesc&page_size=${THREAD_SENDER_PAGE}&user_id_type=open_id`,
         undefined,
         opts,
       );
