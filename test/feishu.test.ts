@@ -297,6 +297,7 @@ describe("turn flow", () => {
     const { handler, calls, idle } = buildChannel({}, "**bold** answer");
 
     expect((await handler(feishuRequest(messageEvent({ id: "om_dm1", text: "hello there" })))).status).toBe(200);
+    await idle(); // settle the first turn before the second: queue cards would race for card ids
     await handler(feishuRequest(messageEvent({ id: "om_dm2", text: "and another thing" })));
     await idle();
 
