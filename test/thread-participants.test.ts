@@ -114,6 +114,28 @@ describe("thread participation (shared)", () => {
     });
   });
 
+  it("evicts the oldest thread once the cap is reached, and keeps its flags with it", () => {
+    const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+    // MAX_THREADS is 5000; touching one more than that must shed exactly the least recently updated.
+    for (let i = 0; i <= 5000; i++) store.merge(`oc_1:omt_${i}`, { humans: [`ou_${i}`], derived: true });
+
+    expect(store.get("oc_1:omt_0")).toBeUndefined(); // oldest gone, flags with it
+    expect(store.get("oc_1:omt_5000")).toEqual({
+      humans: ["ou_5000"],
+      agentSpoke: false,
+      derived: true,
+      unreadable: false,
+    });
+  });
+
+  it("stops accumulating humans once a second is known — the rule never asks for more", () => {
+    const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+    store.merge("oc_1:omt_a", { humans: ["ou_1", "ou_2", "ou_3", "ou_4"], derived: true });
+
+    // Two is already the whole answer to "is more than one human here?".
+    expect(store.get("oc_1:omt_a")?.humans).toEqual(["ou_1", "ou_2"]);
+  });
+
   it("warns and starts empty when valid JSON has the wrong shape", () => {
     const path = join(stateDir(), "p.json");
     writeFileSync(

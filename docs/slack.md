@@ -142,8 +142,8 @@ The default route answers:
 
 - every human `message.im` DM;
 - human `app_mention` events in channels;
-- in context + threaded group mode, unmentioned human replies whose `thread_ts` belongs to a durably
-  owned Agent thread.
+- in context mode, unmentioned human replies in a thread the Agent takes part in while exactly one
+  human does (see [Group context](#group-context)).
 
 Bot messages, edits, deletes, hidden events, and service subtypes are ignored. `file_share` and
 `thread_broadcast` are new human content and remain eligible. Overlapping `app_mention` and `message.*`

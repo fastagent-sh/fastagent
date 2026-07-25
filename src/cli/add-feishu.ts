@@ -85,14 +85,14 @@ export async function configureGroupBehavior(input: {
       return { publishReady: false };
     }
     note(
-      `[fastagent] group behavior: mention-only — bare managed-thread replies and group context buffering are disabled`,
+      `[fastagent] group behavior: mention-only — bare replies in the Agent's threads and group context buffering are disabled`,
     );
     return { publishReady: true };
   }
 
   note(
     `[fastagent] group behavior: context-aware (recommended) — ${kind} will deliver all group messages; ` +
-      `FastAgent invokes @Agent + bare managed-thread replies and durably buffers other discussion`,
+      `FastAgent invokes @Agent + bare replies in threads it takes part in, and durably buffers other discussion`,
   );
   if (groupScope?.grantStatus === 1) {
     note(`[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPE} is already granted`);

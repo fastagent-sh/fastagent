@@ -553,7 +553,7 @@ function createFeishuRuntimeFactory(
         // LIVE order is best-effort across this window: a message that skips the check (an @mention, a
         // stop) reaches `queue.accept` first and runs first, even in the same session. Only durable
         // RECOVERY order is guaranteed — `seq` is assigned at arrival, before this await.
-        const key = `${chatId}:${threadId}`;
+        const key = threadKey(chatId, threadId);
         let read = threadReads.get(key);
         if (read === undefined) {
           read = readThreadParticipants(chatId, threadId, deadline).finally(() => threadReads.delete(key));

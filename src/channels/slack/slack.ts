@@ -146,7 +146,7 @@ export interface SlackChannelOptions {
    * disables it; an object overrides either emoji name. Requires the `reactions:write` scope; a missing
    * scope degrades to no ack. */
   reactionAck?: false | { processing?: string; completed?: string };
-  /** Custom route policy. Providing it disables the default managed-thread/context admission policy. */
+  /** Custom route policy. Providing it disables the default participant-model thread/context admission policy. */
   route?: (envelope: SlackEventEnvelope) => SlackRoute | null;
   /** Customer-facing failure formatter; full details always remain in operator logs. */
   onError?: (failure: SlackFailure) => string | undefined;
