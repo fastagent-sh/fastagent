@@ -437,7 +437,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
      * The participant model's summon rule for a bare message in a thread
      * (docs/design/participant-model.md §3): speak unprompted only where the agent takes part AND
      * exactly one human does. Participation is observed from every message the channel sees and
-     * re-derived from the platform (conversations.replies) for a thread this process has not
+     * re-established from the platform (conversations.replies) for a thread this process has not
      * established, so a lost state disk costs one lookup rather than the behavior.
      */
     const threadReads = new Map<string, Promise<void>>();
@@ -469,7 +469,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
           throw new Error(`${label} could not read thread ${threadTs} pre-ACK: ${String(error)}`, { cause: error });
         }
         // A definitive rejection (thread gone, missing scope): participation is not derivable. Mark it
-        // UNREADABLE — not derived — so the read is not retried per message while the summon rule still
+        // UNREADABLE — not established — so the read is not retried per message while the summon rule still
         // refuses: collapsing the two would let a refusal promote an observed-only record into an
         // authoritative one. Process-local, so a scope granted later takes effect on the next restart
         // with no file to delete.
@@ -488,7 +488,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         humans: senders.filter((sender) => !sender.isBot).map((sender) => sender.userId),
         // `|| undefined`: the store only ever SETS this, so a false would be a silent no-op.
         agentSpoke: senders.some((sender) => sender.isBot && sender.userId === botUserId) || undefined,
-        derived: true,
+        established: true,
       });
     };
 
@@ -499,10 +499,10 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       deadline: number,
     ): Promise<boolean> => {
       const key = threadKey(teamId, channelId, threadTs);
-      // Only a platform listing sets `derived`, and observing a message never does — so this reads the
+      // Only a platform listing sets `established`, and observing a message never does — so this reads the
       // live record rather than a snapshot taken before the observation above.
       const cached = threadParticipants.get(key);
-      if (cached?.derived !== true && cached?.unreadable !== true) {
+      if (cached?.established !== true && cached?.unreadable !== true) {
         // One read per thread, shared by every delivery awaiting it.
         let read = threadReads.get(key);
         if (read === undefined) {
@@ -513,9 +513,9 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       }
       const participation = threadParticipants.get(key);
       if (participation === undefined) return false;
-      // `derived` is required, not incidental: observation only ever UNDER-counts humans, so speaking
+      // `established` is required, not incidental: observation only ever UNDER-counts humans, so speaking
       // unprompted on an unestablished record could barge into a thread that holds several.
-      return participation.derived && participation.agentSpoke && participation.humans.length === 1;
+      return participation.established && participation.agentSpoke && participation.humans.length === 1;
     };
 
     // Acceptance now awaits a platform read, so the seen ring alone cannot stop two copies of one

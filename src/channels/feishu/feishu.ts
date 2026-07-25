@@ -468,7 +468,7 @@ function createFeishuRuntimeFactory(
     }
 
     // Who takes part in a thread decides whether a bare message addresses the agent (participant
-    // model §3). Participation is observed from every message the channel sees, and re-derived from
+    // model §3). Participation is observed from every message the channel sees, and re-established from
     // the platform for a thread this process has never seen — so a lost state disk costs one list
     // call, not the behavior.
     const threadReads = new Map<string, Promise<void>>();
@@ -543,21 +543,21 @@ function createFeishuRuntimeFactory(
         humans: senders.filter((sender) => sender.senderType === "user").map((sender) => sender.senderId),
         // `|| undefined`: the store only ever SETS this, so a false would be a silent no-op.
         agentSpoke: senders.some((sender) => sender.senderType === "app" && sender.senderId === appId) || undefined,
-        derived: true,
+        established: true,
       });
     };
 
     /**
      * The participant model's summon rule for a bare message in a thread (§3): speak unprompted only
      * where the agent takes part AND exactly one human does. Both facts come from the participation
-     * cache, which is refined by every observed message and re-derived from the platform once for a
+     * cache, which is refined by every observed message and re-established from the platform once for a
      * thread this process has never seen.
      */
     const threadAddressesAgent = async (chatId: string, threadId: string, deadline: number): Promise<boolean> => {
-      // Only a platform listing sets `derived`, and observing a message never does — so this reads the
+      // Only a platform listing sets `established`, and observing a message never does — so this reads the
       // live record rather than a snapshot taken before the observation above.
       const cached = threadParticipants.get(threadKey(chatId, threadId));
-      if (cached?.derived !== true && cached?.unreadable !== true) {
+      if (cached?.established !== true && cached?.unreadable !== true) {
         // One platform read per thread, shared by every delivery awaiting it (sharers resume in arrival
         // order; a joiner inherits the FIRST caller's deadline, still within one budget of that start).
         // LIVE order is best-effort across this window: a message that skips the check (an @mention, a
@@ -573,10 +573,10 @@ function createFeishuRuntimeFactory(
       }
       const participation = threadParticipants.get(threadKey(chatId, threadId));
       if (participation === undefined) return false;
-      // `derived` is required, not incidental: observation only ever UNDER-counts humans, so speaking
+      // `established` is required, not incidental: observation only ever UNDER-counts humans, so speaking
       // unprompted on an unestablished record could barge into a thread that holds several. A read
       // the platform refused therefore leaves the thread mention-only, which is what its log says.
-      return participation.derived && participation.agentSpoke && participation.humans.length === 1;
+      return participation.established && participation.agentSpoke && participation.humans.length === 1;
     };
 
     const inflight = createInflightAcceptances();
@@ -614,13 +614,14 @@ function createFeishuRuntimeFactory(
       const seq = ++seqCounter; // arrival order, taken BEFORE any await below can reorder acceptance
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
-      // Has THIS PROCESS answered in this thread before this delivery? That is the cheap proxy for
-      // "the thread's session already holds what this message replies to". It is deliberately read
+      // Has the agent answered in this thread before this delivery? That is the cheap proxy for "the
+      // thread's session already holds what this message replies to". `agentSpoke` is a DURABLE
+      // observation, so a restart keeps the answer and changes nothing here. It is deliberately read
       // before the participation lookup below, and never from "a record exists": observation writes
       // one before acceptance can fail, which would strip a re-pushed first message of its anchor.
-      // The cost of the proxy: after a restart, the first continuation in a long-running thread loads
-      // its referent again — one extra read and some duplicated text, in exchange for never leaving a
-      // thread's opening message without the context it replies to.
+      // The cost of the proxy lands on state LOSS — a new machine, or eviction under the cap — where
+      // the next continuation loads its referent again: one extra read and some duplicated text, in
+      // exchange for never leaving a thread's opening message without the context it replies to.
       const agentInThread =
         m.thread_id !== undefined && threadParticipants.get(threadKey(m.chat_id, m.thread_id))?.agentSpoke === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its

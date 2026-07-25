@@ -1743,7 +1743,7 @@ describe("turn flow", () => {
     expect(existsSync(join(home, "buffers.json"))).toBe(false);
   });
 
-  it("a custom route owns admission: nothing is derived, though the agent's own participation is still recorded", async () => {
+  it("a custom route owns admission: nothing is established, though the agent's own participation is still recorded", async () => {
     feishuFetch();
     const fx = feishuFetch();
     const { handler, calls, home, idle } = buildChannel({ route: () => ({}) });
@@ -1756,7 +1756,7 @@ describe("turn flow", () => {
     expect(calls).toHaveLength(1);
     // The route decided admission, so the built-in thread rule never ran: no platform lookup.
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
-    // Participation still records what observably happened (the agent spoke there). `derived` is not
+    // Participation still records what observably happened (the agent spoke there). `established` is not
     // persisted at all — only a platform listing sets it, and only for the process that ran it.
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,

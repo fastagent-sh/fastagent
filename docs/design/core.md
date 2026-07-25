@@ -358,8 +358,8 @@ a stable hand-authored surface. What is platform-different:
     recognized only threads this process had created, so a lost state disk silently demoted every
     existing thread to @-mention-only.
   - *Caching.* `thread-participants.json` is a bounded write-through cache carrying, per thread, the
-    humans seen, whether this agent has spoken, and whether the record is `derived` (complete).
-    Only the listing sets `derived`, and `derived` is PROCESS-LOCAL while the observations are
+    humans seen, whether this agent has spoken, and whether the record is `established` (complete).
+    Only the listing sets `established`, and `established` is PROCESS-LOCAL while the observations are
     durable: observation can only under-count, so speaking unprompted requires an established record,
     and persisting the flag would make one listing authoritative forever (a failed read becoming a
     durable "do not retry"). The listing is UNIONED with what was observed rather than substituted for

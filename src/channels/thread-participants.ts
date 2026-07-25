@@ -10,11 +10,12 @@
  * - **Observations** (`humans`, `agentSpoke`) are DURABLE. They accumulate from the messages this
  *   channel sees and from a platform listing, and they only ever under-count — a message observed is
  *   a fact that a restart should not forget.
- * - **`derived`** — whether the thread's participation was established rather than merely glimpsed —
- *   is PROCESS-LOCAL. Persisting it would make a single listing authoritative forever: a thread would
- *   be read once ever, a failed read would be a durable "do not retry", and a permission granted
- *   afterwards would need the file deleted by hand. Kept in memory, each process re-establishes each
- *   thread once, which is also what bounds how stale the answer can get.
+ * - **`established`** — whether the human set is AUTHORITATIVE (a platform listing settled it) rather
+ *   than merely what this process happened to see — is PROCESS-LOCAL. Persisting it would make a
+ *   single listing authoritative forever: a thread would be read once ever, a failed read would be a
+ *   durable "do not retry", and a permission granted afterwards would need the file deleted by hand.
+ *   Kept in memory, each process establishes each thread once, which is also what bounds how stale
+ *   the answer can get.
  *
  * The two sources cover different time: observation covers the present (every message this process can
  * see), and the listing covers the past this process never watched — which is why it reads a thread
@@ -24,7 +25,7 @@
  * under-counting makes it speak unprompted in a crowded thread, which is the failure §3 exists to
  * prevent. Nothing is shed: the platform emits no event when someone leaves, so shedding could only
  * ever be guessed from a window that might simply have missed them. A restart resets exactly one
- * thing — `derived` — which is what makes each process re-read a thread once.
+ * thing — `established` — which is what makes each process re-read a thread once.
  *
  * ponytail: establishment is bounded to ONE page of a thread (50 messages). A second human whose only
  * messages fall beyond that page AND predate this process is therefore invisible to both sources, and
@@ -58,13 +59,13 @@ interface StoredParticipation {
 }
 
 interface ThreadParticipation extends StoredParticipation {
-  /** Whether THIS process established the human set from a platform listing. Speaking unprompted
-   *  requires it: observation alone can only UNDER-count the humans in a thread. */
-  derived: boolean;
-  /** Whether the platform definitively refused to describe this thread. Distinct from `derived` on
-   *  purpose — it means "do not ask again", NOT "the human set is known". Collapsing the two would let
-   *  a refusal promote an observed-only record into an authoritative one, and the agent would speak
-   *  unprompted in a thread it cannot see. */
+  /** Whether the human set is authoritative — a platform listing settled it in THIS process. Speaking
+   *  unprompted requires it, because observation alone can only UNDER-count the humans in a thread. */
+  established: boolean;
+  /** Whether the platform definitively refused to describe this thread — "do not ask again", which is
+   *  NOT the same claim as `established`. Collapsing the two would let a refusal promote an
+   *  observed-only record into an authoritative one, and the agent would speak unprompted in a thread
+   *  it cannot see. */
   unreadable: boolean;
 }
 
@@ -79,7 +80,7 @@ export interface ThreadParticipants {
    * be set but never cleared, and `humans` unions. Passing `false` to clear one would compile and do
    * nothing, so the type refuses it — "never shed" is an invariant, not a convention.
    */
-  merge(key: string, seen: { humans?: string[]; agentSpoke?: true; derived?: true; unreadable?: true }): void;
+  merge(key: string, seen: { humans?: string[]; agentSpoke?: true; established?: true; unreadable?: true }): void;
 }
 
 function isRecord(value: unknown): value is StoredParticipation {
@@ -107,12 +108,12 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
   // own, because an unreadable thread stores no observation and so is never reached by the eviction
   // that bounds `records` — without this, a workspace full of threads the app cannot read would leak
   // one entry per thread for the life of the process.
-  const flags = new Map<string, { derived: boolean; unreadable: boolean }>();
-  const flag = (key: string, next: { derived?: boolean; unreadable?: boolean }): void => {
+  const flags = new Map<string, { established: boolean; unreadable: boolean }>();
+  const flag = (key: string, next: { established?: boolean; unreadable?: boolean }): void => {
     const previous = flags.get(key);
     flags.delete(key); // re-insert so insertion order stays "least recently flagged first"
     flags.set(key, {
-      derived: (previous?.derived ?? false) || (next.derived ?? false),
+      established: (previous?.established ?? false) || (next.established ?? false),
       unreadable: (previous?.unreadable ?? false) || (next.unreadable ?? false),
     });
     while (flags.size > MAX_THREADS) {
@@ -124,15 +125,15 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
 
   return {
     get(key) {
-      const derived = flags.get(key)?.derived ?? false;
+      const established = flags.get(key)?.established ?? false;
       const unreadable = flags.get(key)?.unreadable ?? false;
       const record = records.get(key);
       // A thread can be flagged without a stored row: an unreadable one contributes no observation, so
       // nothing is persisted for it, yet the channel must still see the flag and stop re-reading.
       if (record === undefined) {
-        return derived || unreadable ? { humans: [], agentSpoke: false, derived, unreadable } : undefined;
+        return established || unreadable ? { humans: [], agentSpoke: false, established, unreadable } : undefined;
       }
-      return { ...record, derived, unreadable };
+      return { ...record, established, unreadable };
     },
     merge(key, seen) {
       const previous = records.get(key);
@@ -144,8 +145,8 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         if (humans.size >= MAX_HUMANS) break;
         humans.add(human);
       }
-      if (seen.derived === true || seen.unreadable === true) {
-        flag(key, { derived: seen.derived, unreadable: seen.unreadable });
+      if (seen.established === true || seen.unreadable === true) {
+        flag(key, { established: seen.established, unreadable: seen.unreadable });
       }
       const next: StoredParticipation = {
         humans: [...humans],

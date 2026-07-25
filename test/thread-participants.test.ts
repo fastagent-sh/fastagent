@@ -26,15 +26,15 @@ describe("thread participation (shared)", () => {
     first.merge("oc_1:omt_a", { humans: ["ou_alex"] });
     first.merge("oc_1:omt_a", { agentSpoke: true }); // the agent's own reply: its half only
     first.merge("oc_1:omt_a", { humans: ["ou_alex"] }); // already known — no change
-    first.merge("oc_1:omt_a", { humans: ["ou_alex"], derived: true }); // a listing completes it
+    first.merge("oc_1:omt_a", { humans: ["ou_alex"], established: true }); // a listing completes it
 
     expect(first.get("oc_1:omt_a")).toEqual({
       humans: ["ou_alex"],
       agentSpoke: true,
-      derived: true,
+      established: true,
       unreadable: false,
     });
-    // Only observations are persisted: `derived` is process-local, so a restart re-establishes.
+    // Only observations are persisted: `established` is process-local, so a restart re-establishes.
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       "oc_1:omt_a": { humans: ["ou_alex"], agentSpoke: true },
     });
@@ -43,7 +43,7 @@ describe("thread participation (shared)", () => {
     expect(restarted.get("oc_1:omt_a")).toEqual({
       humans: ["ou_alex"],
       agentSpoke: true,
-      derived: false,
+      established: false,
       unreadable: false,
     });
     expect(restarted.get("oc_other:omt_a")).toBeUndefined(); // participation is per chat
@@ -60,15 +60,15 @@ describe("thread participation (shared)", () => {
     expect(store.get("oc_1:omt_a")).toEqual({
       humans: ["ou_alex"],
       agentSpoke: true,
-      derived: false,
+      established: false,
       unreadable: false,
     });
 
-    store.merge("oc_1:omt_a", { humans: ["ou_alex", "ou_bob"], derived: true });
+    store.merge("oc_1:omt_a", { humans: ["ou_alex", "ou_bob"], established: true });
     expect(store.get("oc_1:omt_a")).toEqual({
       humans: ["ou_alex", "ou_bob"],
       agentSpoke: true,
-      derived: true,
+      established: true,
       unreadable: false,
     });
   });
@@ -80,12 +80,12 @@ describe("thread participation (shared)", () => {
     // The listing reads the thread's start, so it can miss someone who spoke only recently — and the
     // observations can miss someone who spoke only before this process watched. Neither may erase the
     // other: a human dropped from the set would let the agent speak unprompted in a crowded thread.
-    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true, derived: true });
+    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true, established: true });
 
     expect(store.get("oc_1:omt_a")).toEqual({
       humans: ["ou_bob", "ou_alex"],
       agentSpoke: true,
-      derived: true,
+      established: true,
       unreadable: false,
     });
   });
@@ -109,7 +109,7 @@ describe("thread participation (shared)", () => {
     expect(store.get("oc_1:omt_dead")).toEqual({
       humans: [],
       agentSpoke: false,
-      derived: false,
+      established: false,
       unreadable: true,
     });
   });
@@ -117,13 +117,13 @@ describe("thread participation (shared)", () => {
   it("evicts the oldest thread once the cap is reached, and keeps its flags with it", () => {
     const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
     // MAX_THREADS is 5000; touching one more than that must shed exactly the least recently updated.
-    for (let i = 0; i <= 5000; i++) store.merge(`oc_1:omt_${i}`, { humans: [`ou_${i}`], derived: true });
+    for (let i = 0; i <= 5000; i++) store.merge(`oc_1:omt_${i}`, { humans: [`ou_${i}`], established: true });
 
     expect(store.get("oc_1:omt_0")).toBeUndefined(); // oldest gone, flags with it
     expect(store.get("oc_1:omt_5000")).toEqual({
       humans: ["ou_5000"],
       agentSpoke: false,
-      derived: true,
+      established: true,
       unreadable: false,
     });
   });
@@ -160,14 +160,14 @@ describe("thread participation (shared)", () => {
     expect(store.get("oc_1:omt_5000")).toEqual({
       humans: [],
       agentSpoke: false,
-      derived: false,
+      established: false,
       unreadable: true,
     });
   });
 
   it("stops accumulating humans once a second is known — the rule never asks for more", () => {
     const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
-    store.merge("oc_1:omt_a", { humans: ["ou_1", "ou_2", "ou_3", "ou_4"], derived: true });
+    store.merge("oc_1:omt_a", { humans: ["ou_1", "ou_2", "ou_3", "ou_4"], established: true });
 
     // Two is already the whole answer to "is more than one human here?".
     expect(store.get("oc_1:omt_a")?.humans).toEqual(["ou_1", "ou_2"]);
@@ -177,7 +177,7 @@ describe("thread participation (shared)", () => {
     const path = join(stateDir(), "p.json");
     writeFileSync(
       path,
-      JSON.stringify({ "oc_1:omt_a": { humans: "nope", agentSpoke: true, derived: true, updatedAt: 1 } }),
+      JSON.stringify({ "oc_1:omt_a": { humans: "nope", agentSpoke: true, established: true, updatedAt: 1 } }),
     );
     const warnings: string[] = [];
     vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
@@ -198,12 +198,12 @@ describe("thread participation (shared)", () => {
     const warnings: string[] = [];
     vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
 
-    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true, derived: true });
+    store.merge("oc_1:omt_a", { humans: ["ou_alex"], agentSpoke: true, established: true });
 
     expect(store.get("oc_1:omt_a")).toEqual({
       humans: ["ou_alex"],
       agentSpoke: true,
-      derived: true,
+      established: true,
       unreadable: false,
     });
     expect(warnings.some((message) => message.includes("could not persist thread participation"))).toBe(true);

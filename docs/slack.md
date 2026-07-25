@@ -178,7 +178,7 @@ and **exactly one human** does. Mentioning it inside a thread is the bootstrap â
 it a participant, and later bare replies reach it without the name. When a second person speaks in that
 thread, addressing is ambiguous again and it returns to requiring a mention while still listening.
 
-Who takes part is a property of the thread, not of this process: for a thread it has not established,
+Who takes part is a property of the thread, not of this process: for a thread whose participation it has not established,
 the channel reads the thread's senders back with `conversations.replies`, so losing local state costs
 one lookup rather than the behaviour. That read happens before the event is acknowledged, under a 2.5s
 budget; a transient failure fails the delivery so Slack redelivers it, rather than silently downgrading

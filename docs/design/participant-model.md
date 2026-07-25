@@ -242,7 +242,7 @@ the same shape.
 | Place | chat, `chat:thread_id` | channel, `channel:thread_ts` | chat, `chat:message_thread_id` |
 | Answer in a group | quoted reply in the room | **thread reply** — Slack has no quote primitive, so a thread under the message *is* answering in place | quoted reply in the room |
 | Direct messages | one continuous chat | **assistant threads** — Slack's Agents surface gives each conversation a thread with a title and status | one continuous chat |
-| Thread rule (§3) | participation, derived from `im/v1/messages?container_id_type=thread` | participation, derived from `conversations.replies` | see below |
+| Thread rule (§3) | participation, read back from `im/v1/messages?container_id_type=thread` | participation, read back from `conversations.replies` | see below |
 | Session for a group ask | the room (`chat_id`) | the **thread the answer creates** (`channel:thread_ts`) | the room (`chat_id`) |
 | Stateless addressing | — | — | **reply-to-bot**: the update embeds the parent's sender |
 

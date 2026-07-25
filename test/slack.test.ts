@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -462,6 +462,19 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("removes the obsolete owned-threads.json on the next start", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const stateRoot = root();
+    const home = join(stateRoot, "channels", "slack");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "owned-threads.json"), JSON.stringify({ "T1:C1:1.0": { rootTs: "1.0" } }));
+
+    const { agent } = replyingAgent();
+    mount(agent, {}, stateRoot);
+
+    expect(existsSync(join(home, "owned-threads.json"))).toBe(false);
+  });
+
   it("a bare reply reaches the agent in a thread it answered in, while one human is in it", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
@@ -641,7 +654,6 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt.text).not.toContain("background");
     expect(() => readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toThrow();
-    expect(() => readFileSync(join(stateRoot, "channels", "slack", "owned-threads.json"), "utf8")).toThrow();
   });
 
   it("persists a turn before ACK and uses only Slack file IDs in the intent", async () => {
