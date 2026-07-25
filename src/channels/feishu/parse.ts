@@ -81,26 +81,6 @@ export function mentionsBot(message: Pick<FeishuMessage, "mentions">, botOpenId:
 }
 
 /**
- * Whether a FETCHED message (GET /im/v1/messages/:id) summons this bot: a HUMAN sender whose message
- * @mentions the bot — mirroring the ingress policy that non-user senders never summon. The GET
- * response's shapes DIFFER from the event push (see invoke-turn.ts): `sender` is `{ id, id_type,
- * sender_type }`, and each mention's `id` is the bare id string discriminated by `id_type` (our
- * pipeline requests the default open_id), not an object of ids — {@link mentionsBot} would silently
- * never match here.
- */
-export function fetchedMessageSummons(
-  message: { sender?: unknown; mentions?: unknown[] },
-  botOpenId: string | undefined,
-): boolean {
-  if (!botOpenId) return false;
-  if ((message.sender as { sender_type?: unknown } | undefined)?.sender_type !== "user") return false;
-  return (message.mentions ?? []).some((raw) => {
-    const mention = raw as { id?: unknown; id_type?: unknown };
-    return mention.id_type === "open_id" && mention.id === botOpenId;
-  });
-}
-
-/**
  * Default EXPLICIT-summon policy: ignore non-user senders, always answer p2p, and answer groups only
  * when THIS bot is structurally mentioned. No bot identity means group routing fails closed. The
  * stateful channel wiring may additionally admit unmentioned continuations from its managed-root index.

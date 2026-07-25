@@ -27,10 +27,11 @@ interface FeishuThreadParticipation {
   /** Whether THIS agent has spoken in the thread. */
   agentSpoke: boolean;
   /**
-   * Whether the record covers the thread from its start, rather than only the messages this process
-   * happened to observe. True once the platform listing succeeded, or once the agent itself answered
-   * in the thread (its own participation is the half that decides the rule). A merely observed
-   * record stays `false`, so a failed derivation is retried instead of being mistaken for an answer.
+   * Whether the HUMAN side of the record covers the thread from its start, rather than only the
+   * messages this process happened to observe. Only a platform listing can establish that, so only
+   * the listing sets it — the agent's own reply proves `agentSpoke` but says nothing about who else
+   * is in the thread. A merely observed record stays `false`, so a failed derivation is retried
+   * instead of being mistaken for an answer.
    */
   derived: boolean;
 }
@@ -96,9 +97,7 @@ export function createFeishuThreadParticipants(
       const next: StoredParticipation = {
         humans: [...humans],
         agentSpoke: (previous?.agentSpoke ?? false) || (seen.agentSpoke ?? false),
-        // The agent's own reply settles the half of the rule that matters; a platform listing settles
-        // both. Either way the record no longer needs deriving.
-        derived: (previous?.derived ?? false) || (seen.derived ?? false) || (seen.agentSpoke ?? false),
+        derived: (previous?.derived ?? false) || (seen.derived ?? false),
         updatedAt: now(),
       };
       if (

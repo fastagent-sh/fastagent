@@ -24,8 +24,9 @@ describe("Feishu/Lark thread participation", () => {
     const first = createFeishuThreadParticipants(path, "[lark]", () => 123);
 
     first.merge("oc_1", "omt_a", { humans: ["ou_alex"] });
-    first.merge("oc_1", "omt_a", { agentSpoke: true });
+    first.merge("oc_1", "omt_a", { agentSpoke: true }); // the agent's own reply: its half only
     first.merge("oc_1", "omt_a", { humans: ["ou_alex"] }); // already known — no change
+    first.merge("oc_1", "omt_a", { derived: true }); // only a platform listing completes the record
 
     expect(first.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
@@ -36,6 +37,19 @@ describe("Feishu/Lark thread participation", () => {
     expect(restarted.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
     expect(restarted.get("oc_other", "omt_a")).toBeUndefined(); // participation is per chat
     expect(restarted.get("oc_1", "omt_unseen")).toBeUndefined();
+  });
+
+  it("only a platform listing completes the record: the agent's own reply does not", () => {
+    const store = createFeishuThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+
+    store.merge("oc_1", "omt_a", { humans: ["ou_alex"] });
+    store.merge("oc_1", "omt_a", { agentSpoke: true });
+    // The agent replying proves it takes part, but says nothing about who ELSE is in the thread —
+    // the half the summon rule counts.
+    expect(store.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: false });
+
+    store.merge("oc_1", "omt_a", { humans: ["ou_alex", "ou_bob"], derived: true });
+    expect(store.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
   });
 
   it("accumulates distinct humans — the summon rule needs to tell one apart from several", () => {
@@ -79,7 +93,7 @@ describe("Feishu/Lark thread participation", () => {
     const warnings: string[] = [];
     vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
 
-    store.merge("oc_1", "omt_a", { humans: ["ou_alex"], agentSpoke: true });
+    store.merge("oc_1", "omt_a", { humans: ["ou_alex"], agentSpoke: true, derived: true });
 
     expect(store.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
     expect(warnings.some((message) => message.includes("could not persist thread participation"))).toBe(true);

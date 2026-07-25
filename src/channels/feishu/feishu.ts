@@ -71,7 +71,7 @@ const MAX_TURN_ATTEMPTS = 3;
 /** Event body cap — events are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_EVENT_BYTES = 1 << 20;
 
-/** ONE shared budget for all pre-ACK platform waits of a delivery (identity + thread-root read): the
+/** ONE shared budget for all pre-ACK platform waits of a delivery (bot identity + thread read): the
  *  platform expects event ACKs within seconds, so the total acceptance wait — not each await — is
  *  capped and must never ride the API pipeline's full 30s timeout + retry budget. On expiry the
  *  delivery is treated as transiently unreadable (re-pushed), not as unmanaged. */
@@ -216,8 +216,8 @@ function createFeishuRuntimeFactory(
 
     // One bot/v3/info at startup: the bot's open_id drives the default route's group @mention summon.
     // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works. The
-    // managed-thread check additionally awaits this promise (bounded) so a startup race delays a bare
-    // continuation instead of misclassifying it.
+    // acceptance path additionally awaits this promise (bounded) so a startup race delays a group
+    // message instead of misclassifying it as "not addressed to me".
     let botOpenId: string | undefined;
     const botIdentity: Promise<void> = api.botInfo().then(
       (me) => {
@@ -236,11 +236,11 @@ function createFeishuRuntimeFactory(
         );
         if (contextAware) {
           log.info(
-            `${label} group visibility: context-aware — bare managed-thread replies + buffered discussion enabled`,
+            `${label} group visibility: context-aware — bare replies in the agent's threads + buffered discussion enabled`,
           );
         } else {
           log.warn(
-            `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare managed-thread replies + group context buffering are unavailable`,
+            `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare replies in the agent's threads + group context buffering are unavailable`,
           );
         }
       },
@@ -437,18 +437,19 @@ function createFeishuRuntimeFactory(
     // call, not the behavior.
     const threadReads = new Map<string, Promise<void>>();
 
-    /** Merge one observed message's sender into its thread's participation. */
+    /**
+     * Merge one observed human sender into its thread's participation. Only humans: the platform does
+     * not push the agent's own messages back to it, and the event's sender id is an open_id while a
+     * bot is identified by app id — agent participation is recorded where it is actually known (when
+     * this channel answers in the thread, and from the platform listing).
+     */
     const observeThreadSender = (
       m: FeishuMessage,
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
-      if (m.thread_id === undefined) return;
-      if (senderType === "user" && senderId !== undefined) {
-        threadParticipants.merge(m.chat_id, m.thread_id, { humans: [senderId] });
-      } else if (senderType === "app" && senderId === appId) {
-        threadParticipants.merge(m.chat_id, m.thread_id, { agentSpoke: true });
-      }
+      if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) return;
+      threadParticipants.merge(m.chat_id, m.thread_id, { humans: [senderId] });
     };
 
     /** Cap a pre-ACK wait at the delivery's shared `deadline` (epoch ms; see {@link ACK_CHECK_BUDGET_MS}).
@@ -566,7 +567,7 @@ function createFeishuRuntimeFactory(
     const inflight = new Map<string, Promise<void>>();
 
     // Transport-neutral acceptance boundary. It performs only bounded pre-ACK work: normalize, route
-    // (including the deadline-capped root read above on a managed-thread cache miss), persist
+    // (including the deadline-capped thread-participant read above on a cache miss), persist
     // intent/context, and enqueue. The minutes-long Agent turn remains fire-and-forget.
     const acceptEvent = (event: FeishuMessageEvent): Promise<void> => {
       const m = event.message;

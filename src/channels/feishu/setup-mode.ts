@@ -6,5 +6,5 @@ export type FeishuSubscriptionMode = "webhook" | "websocket";
  * are delivered. */
 export type FeishuGroupBehavior = "context" | "mentions";
 
-/** The sensitive tenant scope behind both managed-thread bare replies and group context buffering. */
+/** The sensitive tenant scope behind both bare replies in the agent's threads and group context buffering. */
 export const FEISHU_GROUP_CONTEXT_SCOPE = "im:message.group_msg";

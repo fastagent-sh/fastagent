@@ -137,11 +137,33 @@ describe("pipeline invariants", () => {
     expect(calls).toBe(4); // 1 + 3 bounded retries
   });
 
-  it("getMessage pins user_id_type=open_id (callers match open_ids, not the platform default)", async () => {
+  it("message reads pin user_id_type=open_id (callers match open_ids, not the platform default)", async () => {
     const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }] }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await api.getMessage("om_1");
     expect(fx.calls().at(-1)?.url).toContain("user_id_type=open_id");
+    await api.listThreadSenders("omt_1");
+    expect(fx.calls().at(-1)?.url).toContain("user_id_type=open_id");
+  });
+
+  it("listThreadSenders reads the thread container and keeps only well-formed senders", async () => {
+    const fx = stubFetch(() =>
+      okData({
+        items: [
+          { sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" } },
+          { sender: { id: "cli_app", id_type: "app_id", sender_type: "app" } },
+          { sender: { sender_type: "user" } }, // no id — unusable for the participation rule
+          {},
+        ],
+      }),
+    );
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+
+    expect(await api.listThreadSenders("omt_1")).toEqual([
+      { senderType: "user", senderId: "ou_alice" },
+      { senderType: "app", senderId: "cli_app" },
+    ]);
+    expect(fx.calls().at(-1)?.url).toContain("container_id_type=thread&container_id=omt_1");
   });
 
   it("noRateLimitRetry makes ONE attempt (a deadline-bounded caller cannot afford the backoff)", async () => {
@@ -151,7 +173,9 @@ describe("pipeline invariants", () => {
       return Response.json({ code: 99991400, msg: "frequency limit" }, { status: 429 });
     });
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
-    await expect(api.getMessage("om_1", { noRateLimitRetry: true })).rejects.toThrow(/getMessage failed/);
+    await expect(api.listThreadSenders("omt_1", { noRateLimitRetry: true })).rejects.toThrow(
+      /listThreadSenders failed/,
+    );
     expect(attempts).toBe(1); // the default path would have made 4 over ~6s
   });
 
@@ -168,9 +192,9 @@ describe("pipeline invariants", () => {
     );
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     const abort = new AbortController();
-    const pending = api.getMessage("om_1", { signal: abort.signal });
+    const pending = api.listThreadSenders("omt_1", { signal: abort.signal });
     abort.abort();
-    await expect(pending).rejects.toThrow(/getMessage: AbortError: aborted/);
+    await expect(pending).rejects.toThrow(/listThreadSenders: AbortError: aborted/);
   });
 
   it("a non-JSON body degrades to a named failure, never a silent success", async () => {

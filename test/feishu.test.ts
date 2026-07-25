@@ -613,8 +613,9 @@ describe("turn flow", () => {
     // Rule 3: a thread is its own place, so both turns share the thread's session.
     expect(calls.map((call) => call.scope.session)).toEqual(["oc_1:omt_two_party", "oc_1:omt_two_party"]);
     expect(calls[1]?.prompt.text).toContain("what about queues?");
-    // Participation was already known, so the bare message needed no platform lookup.
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
+    // The agent's own reply proves only its half; who else is in the thread still comes from the
+    // platform, once. (The default listing is empty, so the observed human stands.)
+    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(1);
     const reply = fx.calls("/im/v1/messages/om_bare/reply", "POST")[0];
     expect(reply?.body?.msg_type).toBe("interactive");
     expect(reply?.body?.reply_in_thread).toBe(true);
@@ -1199,7 +1200,7 @@ describe("turn flow", () => {
     expect(reply?.body?.reply_in_thread).toBe(true);
   });
 
-  it("continuous group mode preserves chat/topic sessions and does not create a top-level thread", async () => {
+  it("a group summon answers in the room's session; inside a thread, in the thread's session", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel();
     await flush();
@@ -1536,15 +1537,26 @@ describe("turn flow", () => {
     expect(existsSync(join(home, "buffers.json"))).toBe(false);
   });
 
-  it("does not persist managed-thread ownership when a custom route owns admission", async () => {
+  it("a custom route owns admission: no participation is derived and no thread state is written", async () => {
     feishuFetch();
+    const fx = feishuFetch();
     const { handler, calls, home, idle } = buildChannel({ route: () => ({}) });
 
-    await handler(feishuRequest(messageEvent({ id: "om_custom_group", chatType: "group", text: "custom" })));
+    await handler(
+      feishuRequest(messageEvent({ id: "om_custom_group", chatType: "group", threadId: "omt_custom", text: "custom" })),
+    );
     await idle();
 
     expect(calls).toHaveLength(1);
-    expect(existsSync(join(home, "owned-threads.json"))).toBe(false);
+    // The route decided admission, so the built-in thread rule never ran: no platform lookup.
+    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
+    // Participation still records what observably happened (the agent spoke there), but nothing
+    // claims the human side was established — only a platform listing sets `derived`.
+    const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
+      string,
+      { agentSpoke: boolean; derived: boolean }
+    >;
+    expect(participants["oc_1:omt_custom"]).toMatchObject({ agentSpoke: true, derived: false });
   });
 
   it("a custom route's empty text runs NO turn (nothing to say, nothing to load)", async () => {
