@@ -9,7 +9,9 @@ import { feishuChannel } from "@fastagent-sh/fastagent/feishu";
 //      (group @mentions), `im:message:send_as_bot` (reply), `im:resource` (attachments), and the
 //      card scope ("Create and update card" — the live preview streams through a card). To answer bare
 //      messages in Agent-managed threads and buffer other unsummoned group/thread context, also add the
-//      sensitive `im:message.group_msg` scope (tenant-admin approval) and publish a new version.
+//      sensitive `im:message.group_msg` scope (tenant-admin approval) and publish a new version. A bare
+//      reply also needs a message-read scope (e.g. `im:message:readonly`): a thread counts as
+//      Agent-managed only if its ROOT message @mentions the bot, which is read back by message id.
 //   3. Events & Callbacks → subscribe to `im.message.receive_v1`; copy the Verification Token into
 //      .env; RECOMMENDED: set an Encrypt Key there and mirror it in FEISHU_ENCRYPT_KEY
 //   4. the event Request URL (https://your.host/feishu) is registered AUTOMATICALLY by

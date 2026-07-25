@@ -22,6 +22,10 @@ interface FeishuManagedRoots {
   add(chatId: string, rootId: string): void;
 }
 
+/** Cap on cached roots: dropping one costs a single `getMessage` to re-derive, so an unbounded file
+ *  (and an unbounded boot-time load) would buy nothing. Oldest entries are evicted first. */
+const MAX_ROOTS = 5000;
+
 function isRecord(value: unknown): value is FeishuManagedRoot {
   const record = value as FeishuManagedRoot;
   return (
@@ -61,8 +65,6 @@ export function createFeishuManagedRoots(
     },
     add(chatId, rootId) {
       const existing = records.get(rootId);
-      // ponytail: a failed save is never retried for this root (the early return sees the memory
-      // entry) — it lives memory-only until restart, when the platform root check re-derives it.
       if (existing !== undefined) {
         // Roots are globally unique; a second chat claiming one is a protocol anomaly. First write
         // wins — silently rebinding the chat would let a later event steal an established thread.
@@ -72,10 +74,18 @@ export function createFeishuManagedRoots(
         return;
       }
       records.set(rootId, { rootId, chatId, createdAt: now() });
+      // Insertion order is arrival order (the loaded file preserves it), so the first key is the oldest.
+      while (records.size > MAX_ROOTS) {
+        const oldest = records.keys().next().value;
+        if (oldest === undefined) break;
+        records.delete(oldest);
+      }
       try {
         saveStateFile(path, Object.fromEntries(records));
       } catch (error) {
-        // Cache only: memory stays correct for this process; the platform root check rebuilds the rest.
+        // Cache only: memory stays correct for this process, and the whole map is rewritten on the next
+        // successful add — so a failed write costs durability only until then (or until a restart, where
+        // the platform root check re-derives it).
         log.warn(`${label} could not persist managed-thread cache ${path}: ${String(error)}`);
       }
     },

@@ -137,6 +137,42 @@ describe("pipeline invariants", () => {
     expect(calls).toBe(4); // 1 + 3 bounded retries
   });
 
+  it("getMessage pins user_id_type=open_id (callers match open_ids, not the platform default)", async () => {
+    const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }] }));
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    await api.getMessage("om_1");
+    expect(fx.calls().at(-1)?.url).toContain("user_id_type=open_id");
+  });
+
+  it("noRateLimitRetry makes ONE attempt (a deadline-bounded caller cannot afford the backoff)", async () => {
+    let attempts = 0;
+    stubFetch(() => {
+      attempts++;
+      return Response.json({ code: 99991400, msg: "frequency limit" }, { status: 429 });
+    });
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    await expect(api.getMessage("om_1", { noRateLimitRetry: true })).rejects.toThrow(/getMessage failed/);
+    expect(attempts).toBe(1); // the default path would have made 4 over ~6s
+  });
+
+  it("an aborted signal ends the in-flight request as a transport failure", async () => {
+    // Mirror fetch's own semantics: an ALREADY-aborted signal rejects at call time (the token fetch
+    // runs first, so the abort here lands before the message request starts).
+    stubFetch(
+      (_url, init) =>
+        new Promise<Response>((_, reject) => {
+          const fail = () => reject(new DOMException("aborted", "AbortError"));
+          if (init.signal?.aborted) fail();
+          else init.signal?.addEventListener("abort", fail);
+        }),
+    );
+    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
+    const abort = new AbortController();
+    const pending = api.getMessage("om_1", { signal: abort.signal });
+    abort.abort();
+    await expect(pending).rejects.toThrow(/getMessage: AbortError: aborted/);
+  });
+
   it("a non-JSON body degrades to a named failure, never a silent success", async () => {
     stubFetch(() => new Response("<html>gateway error</html>", { status: 502 }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });

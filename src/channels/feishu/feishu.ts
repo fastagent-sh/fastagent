@@ -486,17 +486,17 @@ function createFeishuRuntimeFactory(
     ): Promise<T> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       Promise.resolve(work).catch(() => {});
+      // The budget is SHARED, so this wait's own share is whatever is left — report that, not the
+      // constant, or an operator reads every timeout as a full-budget stall.
+      const share = Math.max(0, deadline - Date.now());
       try {
         return await Promise.race([
           work,
           new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => {
-                onTimeout?.();
-                reject(new Error(`${what} exceeded the ${ACK_CHECK_BUDGET_MS}ms pre-ACK budget`));
-              },
-              Math.max(0, deadline - Date.now()),
-            );
+            timer = setTimeout(() => {
+              onTimeout?.();
+              reject(new Error(`${what} exceeded its ${share}ms share of the ${ACK_CHECK_BUDGET_MS}ms pre-ACK budget`));
+            }, share);
           }),
         ]);
       } finally {
@@ -571,10 +571,13 @@ function createFeishuRuntimeFactory(
       }
       // Guard against silent wire-shape drift: mentions we cannot read at all are indistinguishable
       // from "mentions other people" to the summon check, but must not be indistinguishable in logs.
+      // The read pins `user_id_type=open_id`, so open_id-typed mentions are what a summon check can
+      // match. Anything else means the platform ignored that parameter: a real managed thread would
+      // degrade to @-only with nothing in the logs.
       const mentions = (root.mentions ?? []) as { id_type?: unknown }[];
-      if (mentions.length > 0 && !mentions.some((mention) => typeof mention.id_type === "string")) {
+      if (mentions.length > 0 && !mentions.some((mention) => mention.id_type === "open_id")) {
         log.warn(
-          `${label} thread root ${rootId} mentions carry no id_type — unexpected wire shape; treating as unmanaged`,
+          `${label} thread root ${rootId} mentions carry no open_id — unexpected wire shape; treating as unmanaged`,
         );
       }
       rememberForeign(rootKey);

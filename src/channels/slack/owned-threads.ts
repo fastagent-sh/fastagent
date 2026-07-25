@@ -1,4 +1,7 @@
-/** Durable roots of Slack group threads entered by an explicit summon. */
+/** Durable roots of Slack group threads entered by an explicit summon. This is a SOURCE OF TRUTH: a
+ *  failed write must fail the delivery. Feishu's same-named state file is deliberately different — it
+ *  re-derives management from the thread's root message and keeps the file as a cache (see
+ *  channels/feishu/managed-roots.ts). That divergence is Feishu-scoped; nothing here is claimed wrong. */
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "../state.ts";
 

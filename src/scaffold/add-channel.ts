@@ -130,7 +130,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
     ],
     steps: [
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer. A bare reply additionally needs a message-read scope (e.g. im:message:readonly): the channel verifies a thread's ROOT message to decide whether the thread is Agent-managed",
       "PUBLISH the app version in the developer console after permission approval — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
       "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
       "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run`",
@@ -154,7 +154,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     ],
     steps: [
       "finish the console setup: enable Bot and add the required permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer. A bare reply additionally needs a message-read scope (e.g. im:message:readonly): the channel verifies a thread's ROOT message to decide whether the thread is Agent-managed",
       "run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
@@ -168,7 +168,7 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
   feishu: {
     env: CHANNEL_SCAFFOLDS.feishu.env.filter((entry) => ["FEISHU_APP_ID", "FEISHU_APP_SECRET"].includes(entry.name)),
     steps: [
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer. A bare reply additionally needs a message-read scope (e.g. im:message:readonly): the channel verifies a thread's ROOT message to decide whether the thread is Agent-managed",
       "PUBLISH the app version in the developer console after permission approval — long-connection event subscriptions become active with the published version",
       "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
       "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
@@ -178,7 +178,7 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
   lark: {
     env: CHANNEL_SCAFFOLDS.lark.env.filter((entry) => ["LARK_APP_ID", "LARK_APP_SECRET"].includes(entry.name)),
     steps: [
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer. A bare reply additionally needs a message-read scope (e.g. im:message:readonly): the channel verifies a thread's ROOT message to decide whether the thread is Agent-managed",
       "in Events & Callbacks choose long connection, subscribe im.message.receive_v1, then create + publish a version",
       "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
       "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",

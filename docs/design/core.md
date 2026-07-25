@@ -342,22 +342,30 @@ a stable hand-authored surface. What is platform-different:
   "continuous"` and `groupMessageSession: "continuous"` are explicit compatibility opt-outs; the latter
   restores legacy `chat_id` / `chat_id:thread_id` group sessions. Thread continuations do not rehydrate
   `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
-  but owns a new root session. A group thread is managed when the thread's OWN root message summons
-  this bot — a platform-derivable property, checked via `getMessage(root_id)` mentions on a cache miss
-  and cached (positive: write-through `owned-threads.json`, warmed at summon time; negative:
-  in-process, covering both non-summon roots and definitive platform rejections such as a recalled
-  root; a transient read failure is not cached — the acceptance FAILS the delivery (HTTP 500 / WS 500
-  frame) so the platform re-pushes it and the next attempt re-checks, the same at-least-once contract
-  as a failed pre-ACK state write; the check itself is deadline-capped so a slow read cannot stall the
-  event ACK, one shared budget across the identity and root reads). This makes one `im/v1/messages`
-  GET a precondition for ACKing a bare continuation — including the un-summoned chatter that would
-  only have buffered: a platform read outage rides the platform's own bounded re-push schedule, and
-  if every re-push fails the message is lost entirely (turn AND buffered copy, operator logs only) —
-  the accepted trade-off for never silently downgrading a genuine ask to background context. Losing
-  the state disk therefore costs one re-check per thread rather than a fallback to @-only — except a thread
-  whose root was recalled, which can no longer prove itself. With `im:message.group_msg`, bare user messages in managed roots become normal required
-  turns with the same queue, streaming-card, error, and delivery behavior as an explicit @mention. An
-  explicit mention of only other people is targeted discussion instead and enters the context buffer.
+  but owns a new root session. With `im:message.group_msg`, bare user messages in managed roots become
+  normal required turns with the same queue, streaming-card, error, and delivery behavior as an
+  explicit @mention. An explicit mention of only other people is targeted discussion instead and
+  enters the context buffer.
+- **A managed group thread is defined by its OWN root, not by local bookkeeping.** Three separable
+  decisions:
+  - *Predicate.* The thread is managed when its root message is a human @mention of this bot — a
+    property of the thread, re-derivable from the platform with `getMessage(root_id)` (pinned to
+    `user_id_type=open_id`, and the root's chat must match the event's). The earlier design recognized
+    only threads this process had created, so a lost state disk silently demoted every existing thread
+    to @-mention-only.
+  - *Caching.* Positive results are a write-through `owned-threads.json` (bounded, warmed at summon
+    time); negative results are in-process, chat-scoped, and bounded, covering non-summon roots and
+    definitive platform rejections such as a recalled root. Losing the file costs one re-check per
+    thread — except a thread whose root was recalled, which can no longer prove itself.
+  - *Failure ownership.* A transient read failure is not cached: acceptance FAILS the delivery (HTTP
+    500 / WS 500 frame) so the platform re-pushes and the next attempt re-checks — the same
+    at-least-once contract as a failed pre-ACK state write. The cost is real and accepted: one
+    `im/v1/messages` GET becomes a precondition for ACKing every bare thread message, *including*
+    un-summoned chatter that would only have buffered, so if a read outage outlasts the platform's
+    bounded re-push schedule that message is lost entirely (turn and buffered copy, operator logs
+    only). The alternative — ACKing and buffering — would silently downgrade a genuine ask to
+    background context, which is the failure this channel refuses. Both platform waits (bot identity,
+    root read) share ONE deadline so a slow read cannot stall the event ACK.
 - **Group visibility is scope-gated and chosen during onboarding.** `Context-aware groups`
   (recommended and initially selected) requests the sensitive `im:message.group_msg` scope;
   `Mention-only` is the least-privilege alternative. The CLI states that the former delivers all group
