@@ -496,7 +496,12 @@ function createFeishuRuntimeFactory(
     const warnedRejectionCodes = new Set<number>();
 
     /** Read a thread's senders back from the platform and merge them into the participation cache. */
-    const readThreadParticipants = async (chatId: string, threadId: string, deadline: number): Promise<void> => {
+    const readThreadParticipants = async (
+      chatId: string,
+      threadId: string,
+      deadline: number,
+      speaker: string | undefined,
+    ): Promise<void> => {
       const abort = new AbortController();
       let senders: { senderType: string; senderId: string }[];
       try {
@@ -529,12 +534,17 @@ function createFeishuRuntimeFactory(
           warnedRejectionCodes.add(code);
           log.warn(`${line} (if this repeats for every thread, check the app's message-read permissions)`);
         }
-        threadParticipants.merge(chatId, threadId, { derived: true });
+        threadParticipants.merge(chatId, threadId, { humans: speaker ? [speaker] : [], derived: true });
         return;
       }
       threadParticipants.merge(chatId, threadId, {
-        humans: senders.filter((s) => s.senderType === "user").map((s) => s.senderId),
-        agentSpoke: senders.some((s) => s.senderType === "app" && s.senderId === appId),
+        // The window may not carry the message being accepted right now, but whoever is speaking is
+        // in the conversation by definition — a derived record must not drop them.
+        humans: [
+          ...senders.filter((sender) => sender.senderType === "user").map((sender) => sender.senderId),
+          ...(speaker ? [speaker] : []),
+        ],
+        agentSpoke: senders.some((sender) => sender.senderType === "app" && sender.senderId === appId),
         derived: true,
       });
     };
@@ -550,6 +560,7 @@ function createFeishuRuntimeFactory(
       threadId: string,
       deadline: number,
       known: boolean,
+      speaker: string | undefined,
     ): Promise<boolean> => {
       if (!known) {
         // One platform read per thread, shared by every delivery awaiting it (sharers resume in arrival
@@ -560,7 +571,7 @@ function createFeishuRuntimeFactory(
         const key = `${chatId}:${threadId}`;
         let read = threadReads.get(key);
         if (read === undefined) {
-          read = readThreadParticipants(chatId, threadId, deadline).finally(() => threadReads.delete(key));
+          read = readThreadParticipants(chatId, threadId, deadline, speaker).finally(() => threadReads.delete(key));
           threadReads.set(key, read);
         }
         await read;
@@ -630,7 +641,7 @@ function createFeishuRuntimeFactory(
         isHumanGroup &&
         m.thread_id !== undefined &&
         !normalized.content.hasMentions &&
-        (await threadAddressesAgent(m.chat_id, m.thread_id, deadline, threadDerived))
+        (await threadAddressesAgent(m.chat_id, m.thread_id, deadline, threadDerived, event.sender?.sender_id?.open_id))
       ) {
         r = {};
       }

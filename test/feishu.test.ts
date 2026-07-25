@@ -640,7 +640,13 @@ describe("turn flow", () => {
   });
 
   it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
-    const fx = feishuFetch();
+    const fx = feishuFetch({
+      "container_id_type=thread": threadListing([
+        { senderType: "user", senderId: "ou_alice" },
+        { senderType: "user", senderId: "ou_bob" },
+        { senderType: "app", senderId: "app" },
+      ]),
+    });
     const { handler, calls, idle } = buildChannel();
     await flush();
     await joinThread(handler, idle, "omt_crowd");

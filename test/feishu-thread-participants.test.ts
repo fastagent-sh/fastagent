@@ -26,7 +26,7 @@ describe("Feishu/Lark thread participation", () => {
     first.merge("oc_1", "omt_a", { humans: ["ou_alex"] });
     first.merge("oc_1", "omt_a", { agentSpoke: true }); // the agent's own reply: its half only
     first.merge("oc_1", "omt_a", { humans: ["ou_alex"] }); // already known — no change
-    first.merge("oc_1", "omt_a", { derived: true }); // only a platform listing completes the record
+    first.merge("oc_1", "omt_a", { humans: ["ou_alex"], derived: true }); // a listing completes it
 
     expect(first.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
@@ -50,6 +50,16 @@ describe("Feishu/Lark thread participation", () => {
 
     store.merge("oc_1", "omt_a", { humans: ["ou_alex", "ou_bob"], derived: true });
     expect(store.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
+  });
+
+  it("a derived listing REPLACES the human set: a thread can become two-party again", () => {
+    const store = createFeishuThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+    store.merge("oc_1", "omt_a", { humans: ["ou_alex", "ou_bob"], agentSpoke: true, derived: true });
+
+    // The listing samples the thread's RECENT window; Bob has left the conversation.
+    store.merge("oc_1", "omt_a", { humans: ["ou_alex"], derived: true });
+
+    expect(store.get("oc_1", "omt_a")).toEqual({ humans: ["ou_alex"], agentSpoke: true, derived: true });
   });
 
   it("accumulates distinct humans — the summon rule needs to tell one apart from several", () => {

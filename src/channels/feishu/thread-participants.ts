@@ -91,8 +91,11 @@ export function createFeishuThreadParticipants(
       const previous = records.get(key);
       // A derived listing REPLACES the human set: it samples the thread's recent window, so it is the
       // answer to "who is in this conversation now". Unioning would ratchet one way — a thread that
-      // had two humans an hour ago could never become a two-party conversation again.
-      const humans = new Set(seen.derived === true ? [] : (previous?.humans ?? []));
+      // had two humans an hour ago could never become a two-party conversation again. An EMPTY set
+      // never replaces: a listing that names nobody is an anomaly, not the news that the thread is
+      // empty, and dropping the humans already seen there could admit a message it must not.
+      const replacing = seen.derived === true && (seen.humans?.length ?? 0) > 0;
+      const humans = new Set(replacing ? [] : (previous?.humans ?? []));
       for (const human of seen.humans ?? []) {
         if (humans.size >= MAX_HUMANS) break;
         humans.add(human);
