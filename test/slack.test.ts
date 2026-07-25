@@ -496,6 +496,39 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(calls[1]?.scope.session).toBe("slack:T1:C1:10.0");
   });
 
+  it("concurrent duplicate deliveries share one acceptance: one thread read, one turn", async () => {
+    let releaseRead!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    let reads = 0;
+    const base = okFetch([{ user: "U1" }, { user: "UBOT", bot: true }]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        if (String(input).includes("/conversations.replies")) {
+          reads++;
+          await gate;
+        }
+        return base(input, init);
+      }),
+    );
+    const { agent, calls } = replyingAgent();
+    const { handler } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Slack redelivers an event whose ACK it did not see, and app_mention/message can both carry one.
+    const push = () => handler(signedRequest(message("13.2", { text: "ask once", thread_ts: "13.0" })));
+    const [first, second] = [push(), push()];
+    releaseRead();
+    expect((await first).status).toBe(200);
+    expect((await second).status).toBe(200);
+    await settle();
+
+    expect(calls).toHaveLength(1);
+    expect(reads).toBe(1);
+  });
+
   it("a transient thread read leaves the delivery un-ACKed: Slack's redelivery answers it", async () => {
     let reads = 0;
     const base = okFetch([{ user: "U1" }, { user: "UBOT", bot: true }]);
