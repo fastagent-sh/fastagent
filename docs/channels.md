@@ -158,9 +158,8 @@ export default slackChannel({
   groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
   rendering: "native", // Slack Agent streams/tasks; "classic" for compatibility
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-  // Direct/group asks default to independent sessions + Slack threads; opt out independently:
-  // directMessageSession: "continuous",
-  // groupMessageSession: "continuous",
+  // No session modes: an answer attaches to its question with a thread (Slack has no quote primitive),
+  // and that thread is the session — see docs/design/participant-model.md.
 });
 ```
 

@@ -249,10 +249,14 @@ the same shape.
 The session row is the same rule with a different place, not a different rule. Feishu and Telegram
 answer a group ask *in the room*, so the room is the place and keeps one memory. Slack has no quote
 primitive, so answering in place means opening a thread on the ask — which makes that thread the
-place, and its memory starts there. Slack keeps `directMessageSession` / `groupMessageSession` for
-that reason: in Slack those two choices (where the answer goes, what it remembers) are one decision,
-whereas in Feishu they were bolted onto the summon rule as well, which is why they were removed
-there.
+place, and its memory starts there.
+
+Neither channel offers a session mode: the place follows from the platform's own way of attaching an
+answer, so there is nothing left to select. What Slack does lose is the room-level memory the rule
+argues for — a second person asking at channel top level starts a fresh place. That is consistent
+with Slack, where a follow-up belongs in the thread; buying it back would mean either serialising an
+entire channel behind one session or splitting threads into two kinds, both of which cost more than
+the case is worth.
 
 Two consequences worth stating rather than papering over:
 

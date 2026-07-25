@@ -117,13 +117,6 @@ export interface SlackChannelOptions {
   clientId?: string;
   clientSecret?: string;
   botTokenExpiresAt?: number;
-  /** Direct-message policy. `threaded` (default) gives every top-level DM its own session/thread;
-   * `continuous` keeps one linear session per DM channel. */
-  directMessageSession?: "continuous" | "threaded";
-  /** Group-message context + delivery policy. `threaded` (default) gives every top-level summon its
-   * own session/thread; `continuous` keeps one session for channel-top-level turns while preserving
-   * existing Slack threads as separate root sessions. */
-  groupMessageSession?: "continuous" | "threaded";
   /** `context` (default) admits bare replies in managed group threads and buffers unsummoned group
    * discussion. `mentions` answers only app_mention plus DMs for an explicit least-privilege setup. */
   groupBehavior?: "context" | "mentions";
@@ -179,30 +172,37 @@ function messageRefOf(turnId: string): { channelId: string; ts: string } | undef
   return parts.length === 3 && parts[1] && parts[2] ? { channelId: parts[1], ts: parts[2] } : undefined;
 }
 
-export function slackChannel({
-  botToken,
-  signingSecret,
-  botRefreshToken,
-  clientId,
-  clientSecret,
-  botTokenExpiresAt,
-  directMessageSession = "threaded",
-  groupMessageSession = "threaded",
-  groupBehavior = "context",
-  rendering = "native",
-  taskDisplay = "plan",
-  aiDisclaimer,
-  welcome = DEFAULT_WELCOME,
-  reactionAck = {},
-  route,
-  onError,
-  apiBaseUrl = "https://slack.com/api",
-}: SlackChannelOptions): ChannelModule {
-  if (!(["continuous", "threaded"] as const).includes(directMessageSession)) {
-    throw new Error('slackChannel directMessageSession must be "continuous" or "threaded"');
-  }
-  if (!(["continuous", "threaded"] as const).includes(groupMessageSession)) {
-    throw new Error('slackChannel groupMessageSession must be "continuous" or "threaded"');
+export function slackChannel(options: SlackChannelOptions): ChannelModule {
+  const {
+    botToken,
+    signingSecret,
+    botRefreshToken,
+    clientId,
+    clientSecret,
+    botTokenExpiresAt,
+    groupBehavior = "context",
+    rendering = "native",
+    taskDisplay = "plan",
+    aiDisclaimer,
+    welcome = DEFAULT_WELCOME,
+    reactionAck = {},
+    route,
+    onError,
+    apiBaseUrl = "https://slack.com/api",
+  } = options;
+
+  // The participant model derives placement instead of selecting it: Slack has no quote primitive, so
+  // answering in place means answering in a thread on the ask, whichever renderer draws it. An
+  // upgraded workspace still passing one of the removed modes would otherwise start fine and silently
+  // get a different placement AND a different memory boundary.
+  const removedModes = ["directMessageSession", "groupMessageSession"].filter(
+    (name) => (options as unknown as Record<string, unknown>)[name] !== undefined,
+  );
+  if (removedModes.length > 0) {
+    throw new Error(
+      `slackChannel no longer accepts ${removedModes.join(" / ")}: an answer goes in a thread on the ask, and ` +
+        "that thread is the session — see docs/design/participant-model.md",
+    );
   }
   if (!(["context", "mentions"] as const).includes(groupBehavior)) {
     throw new Error('slackChannel groupBehavior must be "context" or "mentions"');
@@ -609,19 +609,14 @@ export function slackChannel({
 
       const targetChannel = routed.channelId ?? event.channel;
       const sameChannel = targetChannel === event.channel;
-      const defaultThread = group
-        ? (event.thread_ts ?? (groupMessageSession === "threaded" ? event.ts : undefined))
-        : (event.thread_ts ?? (directMessageSession === "threaded" ? event.ts : undefined));
+      // Answer where asked (participant model §4). Slack has no quote primitive, so the only way to
+      // attach an answer to its question is a thread on it — which then IS the place, and carries the
+      // memory (§5). Native streaming additionally REQUIRES a thread, but the shape does not depend on
+      // the renderer: `classic` attaches its answer the same way.
+      const defaultThread = event.thread_ts ?? event.ts;
       const threadTs =
         routed.threadTs === null ? undefined : (routed.threadTs ?? (sameChannel ? defaultThread : undefined));
-      const continuousTopLevel = event.thread_ts === undefined;
-      const defaultSession = direct
-        ? directMessageSession === "continuous" && continuousTopLevel
-          ? `slack:${teamId}:${event.channel}`
-          : `slack:${teamId}:${event.channel}:${rootTs}`
-        : groupMessageSession === "continuous" && continuousTopLevel
-          ? `slack:${teamId}:${event.channel}`
-          : `slack:${teamId}:${event.channel}:${rootTs}`;
+      const defaultSession = `slack:${teamId}:${event.channel}:${rootTs}`;
       // Explicit user stop: a control action, never a turn — it must not queue behind the run it
       // stops. Match the bare word after stripping the bot mention; record the logical id so a Slack
       // redelivery doesn't double-abort or double-notify.

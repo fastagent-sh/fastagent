@@ -118,9 +118,7 @@ export default slackChannel({
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
   // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
-  // Direct and group asks default to independent sessions + Slack threads; opt out independently:
-  // directMessageSession: "continuous",
-  // groupMessageSession: "continuous",
+  // No session modes: an answer attaches to its question with a thread, and that thread is the session.
   onError: (failed) => `⚠️ ${failed.details}`, // development transparency
 });
 ```
@@ -153,21 +151,19 @@ Default sessions:
 
 | Message | Session |
 |---|---|
-| Top-level DM (`threaded`, default) | `slack:<team>:<channel>:<ts>` |
+| Top-level DM | `slack:<team>:<channel>:<ts>` |
 | DM thread continuation | `slack:<team>:<channel>:<root_ts>` |
-| Top-level DM with `directMessageSession: "continuous"` | `slack:<team>:<channel>` |
-| Group mention / managed continuation (`threaded`, default) | `slack:<team>:<channel>:<root_ts>` |
-| Top-level group mention with `groupMessageSession: "continuous"` | `slack:<team>:<channel>` |
-| Existing group thread in continuous mode | `slack:<team>:<channel>:<root_ts>` |
+| Top-level group mention | `slack:<team>:<channel>:<ts>` |
+| Group thread continuation | `slack:<team>:<channel>:<root_ts>` |
 
-DMs default to the same root model: a top-level message receives its answer in `thread_ts = incoming.ts`,
-and later thread replies reuse that root session. This is also the shape required by Slack native streams.
-`directMessageSession: "continuous"` instead keeps ordinary top-level DM replies linear and therefore uses
-the classic top-level renderer for those turns. Threaded groups use
-`thread_ts = incoming.thread_ts ?? incoming.ts`; a top-level summon therefore creates a Slack thread and
-persists that root before ACK. Continuous groups keep top-level turns in one channel session and answer
-at channel top level, while explicit summons inside an existing Slack thread preserve that root session
-and reply there. Different roots can run concurrently; turns within one root are FIFO.
+There are no session modes. Slack has no quote primitive, so the only way to attach an answer to its
+question is a thread on it (`thread_ts = incoming.thread_ts ?? incoming.ts`) — and that thread is then
+the *place*, so it carries the memory ([design note](design/participant-model.md)). Native streaming
+additionally requires a thread, but the shape does not depend on the renderer: `classic` attaches its
+answer the same way.
+
+Follow-ups therefore live in the thread, which is also where Slack's own conventions put them. Two
+different threads run concurrently; turns within one are FIFO.
 
 Override `route(envelope)` for custom policy. It returns `null` to ignore or a `SlackRoute` with optional
 `session`, `channelId`, `threadTs`, and `text`. `threadTs: null` explicitly sends at channel top level.

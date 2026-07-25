@@ -289,12 +289,11 @@ describe("Slack signed ingress", () => {
 
   it("rejects invalid session, rendering, task-display, and reaction policies at construction", () => {
     expect(() =>
-      slackChannel({
-        botToken: "xoxb-test",
-        signingSecret: SECRET,
-        groupMessageSession: "invalid" as "threaded",
-      }),
+      slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, groupMessageSession: "continuous" } as never),
     ).toThrow(/groupMessageSession/);
+    expect(() =>
+      slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, directMessageSession: "threaded" } as never),
+    ).toThrow(/directMessageSession/);
     expect(() =>
       slackChannel({
         botToken: "xoxb-test",
@@ -430,20 +429,6 @@ describe("Slack sessions, context, and managed threads", () => {
         }),
       ]),
     );
-  });
-
-  it("keeps one linear DM session when continuous mode is explicitly selected", async () => {
-    const fetchMock = okFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    const { agent, calls } = replyingAgent();
-    const { handler } = mount(agent, { directMessageSession: "continuous" });
-    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "first" })));
-    await settle();
-
-    expect(calls[0]?.scope.session).toBe("slack:T1:D1");
-    const post = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat.postMessage"));
-    expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ markdown_text: expect.stringContaining("done") });
-    expect(JSON.parse(String(post?.[1]?.body))).not.toHaveProperty("thread_ts");
   });
 
   it("defaults to context-aware groups, owns the summoned thread, and dedups logical messages", async () => {
@@ -619,33 +604,26 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("bare follow-up");
   });
 
-  it("supports Feishu-compatible continuous top-level group sessions without creating ownership", async () => {
+  it("attaches an answer to its question with a thread, and that thread carries the memory", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent, calls } = replyingAgent();
-    const { handler } = mount(agent, { groupBehavior: "context", groupMessageSession: "continuous" });
+    const { handler } = mount(agent, { groupBehavior: "context" });
     await new Promise((resolve) => setImmediate(resolve));
 
+    // Slack has no quote primitive, so answering in place means opening a thread on the ask — and the
+    // thread is then the place, so its session is where the exchange lives (§4/§5).
     await handler(signedRequest(message("20.0", { type: "app_mention", text: "<@UBOT> top level" })));
     await settle();
-    expect(calls[0]?.scope.session).toBe("slack:T1:C1");
+    expect(calls[0]?.scope.session).toBe("slack:T1:C1:20.0");
+    const stream = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat.startStream"));
+    expect(JSON.parse(String(stream?.[1]?.body))).toMatchObject({ thread_ts: "20.0" });
 
-    await handler(signedRequest(message("20.1", { text: "not managed", thread_ts: "20.0" })));
+    // A continuation inside that thread is the same place, hence the same session.
+    await handler(signedRequest(message("20.1", { text: "and the follow-up", thread_ts: "20.0" })));
     await settle();
-    expect(calls).toHaveLength(1);
-
-    await handler(
-      signedRequest(message("21.1", { type: "app_mention", text: "<@UBOT> existing topic", thread_ts: "21.0" })),
-    );
-    await settle();
-    expect(calls[1]?.scope.session).toBe("slack:T1:C1:21.0");
-
-    const posts = fetchMock.mock.calls
-      .filter(([url]) => String(url).endsWith("/chat.postMessage"))
-      .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
-    expect(posts[0]).not.toHaveProperty("thread_ts");
-    const streams = slackBodies(fetchMock, "chat.startStream");
-    expect(streams[0]).toMatchObject({ thread_ts: "21.0", recipient_user_id: "U1", recipient_team_id: "T1" });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.scope.session).toBe("slack:T1:C1:20.0");
   });
 
   it("keeps mention-only mode available explicitly without buffering group traffic", async () => {
