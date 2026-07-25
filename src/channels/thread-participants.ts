@@ -26,6 +26,14 @@
  * ever be guessed from a window that might simply have missed them. A restart resets exactly one
  * thing — `derived` — which is what makes each process re-read a thread once.
  *
+ * ponytail: establishment is bounded to ONE page of a thread (50 messages). A second human whose only
+ * messages fall beyond that page AND predate this process is therefore invisible to both sources, and
+ * such a thread reads as two-party. It is the one direction this design otherwise avoids, and it is
+ * accepted because the alternatives are worse: refusing to establish any thread longer than a page
+ * would deny mention-free replies to exactly the long working threads that want them, and covering
+ * both ends of a thread costs a second platform round trip that does not fit the pre-ACK budget. The
+ * exposure shrinks with uptime, since observation accumulates every message the process does see.
+ *
  * Participation is keyed by `thread_id`: Feishu's `root_id` is NOT thread-stable (a thread shows
  * different `root_id`s as its reply chain moves), so it cannot identify a side conversation.
  */

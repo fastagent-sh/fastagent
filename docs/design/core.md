@@ -257,7 +257,7 @@ Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It k
 `Agent.invoke` boundary and reuses shared `turn-queue`, generic `turn-store`, generic `context-buffer`,
 the invoke-turn kit (busy retry + manifest wording), `state`, `seen`, and the
 shared turn-view reducer + preview policies (`preview-kit`). Platform-specific modules own signature verification/event acceptance, message subtype policy,
-managed roots/context, private-file resolution, Slack Web API transport, and dual native-stream /
+thread participation/context, private-file resolution, Slack Web API transport, and dual native-stream /
 rate-limited edited-message rendering.
 
 The request boundary verifies Slack's `v0` HMAC over the capped raw body and a five-minute timestamp,

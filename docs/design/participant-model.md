@@ -92,6 +92,14 @@ prevent. Shedding could only ever be guessed, since no platform emits an event w
 taking part. The single thing a restart resets is whether the listing has been read, which is what
 makes each process read a thread once.
 
+**Known ceiling.** A listing reads one page (50 messages), so participation is established from a
+thread's first page plus everything observed since. A second human whose only messages fall beyond
+that page *and* predate this process is invisible to both, and such a thread reads as two-party. This
+is the one under-count the design otherwise refuses, kept because the alternatives cost more than the
+risk: refusing to establish any thread longer than a page would deny mention-free replies to the long
+working threads that most want them, and reading both ends of a thread needs a second round trip that
+does not fit the pre-ACK budget.
+
 **Participation** is required so the agent does not barge into a human thread it was never part of.
 The agent is a participant of a thread once it has answered in it. Bootstrapping is therefore the
 ordinary social move: mention it once inside the thread, and it stops needing to be named. (A thread's
