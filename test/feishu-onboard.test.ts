@@ -32,14 +32,38 @@ describe("Feishu/Lark group-behavior onboarding", () => {
     });
 
     expect(result).toEqual({ publishReady: false });
-    expect(fx.addAppScopes).toHaveBeenCalledWith("cli_a", ["im:message.group_msg"]);
+    // BOTH halves of the recommended path: delivery, and reading a thread's senders (what decides
+    // whether a bare reply is answered). Requesting only the first ships a feature that cannot work.
+    expect(fx.addAppScopes).toHaveBeenCalledWith("cli_a", ["im:message.group_msg", "im:message:readonly"]);
     expect(fx.notes.join("\n")).toMatch(/context-aware \(recommended\).*all group messages/);
     expect(fx.notes.join("\n")).toContain("complete tenant-admin approval before publishing");
     expect(fx.opened).toEqual(["https://open.feishu.cn/app/cli_a/permission"]);
   });
 
-  it("recognizes an already-granted tenant scope as ready to publish without reopening the console", async () => {
+  it("requests only what is missing when delivery is granted but reading a thread's senders is not", async () => {
+    // The gap this guards: with delivery alone the platform pushes every group message, so the app
+    // looks configured — but no bare reply can ever be answered, because participation is unreadable.
     const fx = fixture([{ name: "im:message.group_msg", grantStatus: 1, type: "tenant" }]);
+    const result = await configureGroupBehavior({
+      kind: "feishu",
+      appId: "cli_a",
+      apiBase: "https://open.feishu.cn",
+      api: fx.api,
+      behavior: "context",
+      explicit: true,
+      note: (message) => fx.notes.push(message),
+      openUrl: (url) => fx.opened.push(url),
+    });
+
+    expect(result).toEqual({ publishReady: false });
+    expect(fx.addAppScopes).toHaveBeenCalledWith("cli_a", ["im:message:readonly"]);
+  });
+
+  it("recognizes both already-granted tenant scopes as ready to publish without reopening the console", async () => {
+    const fx = fixture([
+      { name: "im:message.group_msg", grantStatus: 1, type: "tenant" },
+      { name: "im:message:readonly", grantStatus: 1, type: "tenant" },
+    ]);
     const result = await configureGroupBehavior({
       kind: "feishu",
       appId: "cli_a",

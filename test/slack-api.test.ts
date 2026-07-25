@@ -95,6 +95,12 @@ describe("Slack Web API transport", () => {
     expect(isSlackApiRejection(await failureOf(() => new Response("<html>forbidden</html>", { status: 403 })))).toBe(
       true,
     );
+    // May heal: Slack's own server-side error names, returned at HTTP 200 like everything else.
+    // Recording one of these as a refusal would keep the agent quiet in that thread for the rest of
+    // the process over a blip.
+    for (const transient of ["internal_error", "fatal_error", "service_unavailable"]) {
+      expect(isSlackApiRejection(await failureOf(() => Response.json({ ok: false, error: transient })))).toBe(false);
+    }
     // May heal: server error, transport failure, and rate limiting.
     expect(isSlackApiRejection(await failureOf(() => new Response("<html>bad gateway</html>", { status: 502 })))).toBe(
       false,

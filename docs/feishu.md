@@ -122,7 +122,7 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
    - `im:message.group_msg` — sensitive, tenant-admin-approved; required to buffer unsummoned group/thread context and accept bare replies in threads the Agent is part of,
    - `im:message:send_as_bot` — send replies,
    - `im:resource` — download message images/files,
-   - a message-read scope (e.g. `im:message:readonly`) if the console rejects message reads: the channel fetches a replied-to message by id, and lists a thread's recent messages (`container_id_type=thread`) to see who is taking part in it — the latter is what admits bare replies. A rejection is logged once per cause and the affected threads stay @-only,
+   - `im:message:readonly` — required alongside the scope above for context-aware groups: the channel fetches a replied-to message by id, and lists a thread's senders (`container_id_type=thread`) to see who is taking part in it, which is what admits a bare reply. `add feishu|lark --group-behavior context` requests both together. Without it the platform still delivers group messages, but every thread stays @-only and a rejection is logged once per cause,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
 3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose one mode:
    - **WebSocket:** choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
