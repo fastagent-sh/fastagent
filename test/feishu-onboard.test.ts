@@ -70,7 +70,7 @@ describe("Feishu/Lark group-behavior onboarding", () => {
       openUrl: (url) => missing.opened.push(url),
     });
     expect(missingResult).toEqual({ publishReady: true });
-    expect(missing.notes.join("\n")).toMatch(/mention-only.*bare managed-thread replies.*disabled/);
+    expect(missing.notes.join("\n")).toMatch(/mention-only.*bare replies in the Agent.s threads.*disabled/);
     expect(missing.addAppScopes).not.toHaveBeenCalled();
     expect(missing.opened).toEqual([]);
 
