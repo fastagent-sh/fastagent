@@ -77,15 +77,15 @@ interface ThreadParticipation {
 
 export interface ThreadParticipants {
   /**
-   * The participant model's summon rule (docs/design/participant-model.md §3): may the agent answer a
-   * bare message in this thread? True where it takes part AND no second human has been heard. Lives
+   * The participant model's summon rule (docs/design/participant-model.md §3): does a bare message in
+   * this thread address the agent? True where it takes part AND no second human has been heard. Lives
    * here rather than in each channel because it is one rule over one store — `<= 1` is an easy edge to
    * get wrong twice, and "a second human restores the mention requirement" must have one place to change.
    */
-  addressesAgent(key: string): boolean;
+  admitsBareMessage(key: string): boolean;
   /**
    * The store's INSPECTION surface — what has been heard in this thread, or undefined when nothing has.
-   * `addressesAgent` above is the rule surface, and is what the channels call; this exists so the
+   * `admitsBareMessage` above is the rule surface, and is what the channels call; this exists so the
    * store's own behaviour (accumulation, caps, eviction, durability) can be asserted directly rather
    * than through a rule that collapses several states into one boolean.
    */
@@ -128,7 +128,7 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
   }
 
   return {
-    addressesAgent(key) {
+    admitsBareMessage(key) {
       const heard = records.get(key);
       return heard?.agentSpoke === true && heard.humans.length <= 1;
     },

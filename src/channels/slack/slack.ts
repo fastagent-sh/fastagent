@@ -476,7 +476,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         // Mentioning only other people is targeted discussion, never an ask (§3) — the same guard
         // Feishu applies with `hasMentions`.
         !hasUserMention &&
-        threadParticipants.addressesAgent(threadKey(teamId, event.channel, event.thread_ts))
+        threadParticipants.admitsBareMessage(threadKey(teamId, event.channel, event.thread_ts))
       ) {
         routed = {};
       }

@@ -532,7 +532,7 @@ function createFeishuRuntimeFactory(
         isHumanGroup &&
         m.thread_id !== undefined &&
         !normalized.content.hasMentions &&
-        threadParticipants.addressesAgent(threadKey(m.chat_id, m.thread_id))
+        threadParticipants.admitsBareMessage(threadKey(m.chat_id, m.thread_id))
       ) {
         r = {};
       }

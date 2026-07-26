@@ -203,7 +203,7 @@ export function channelSetup(
       env: setup.env,
       steps: setup.steps.map((step) =>
         step.includes("im:message.group_msg")
-          ? "group behavior: mention-only — do not grant im:message.group_msg; bare thread replies and group context buffering remain disabled"
+          ? "group behavior: mention-only — do not grant im:message.group_msg; bare thread replies and group context buffering remain disabled. im:message:readonly is independent of this choice: add it if you want an @mention to carry the message it quotes (without it that quote degrades to a marker)"
           : step,
       ),
     };
