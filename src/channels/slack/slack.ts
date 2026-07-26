@@ -460,14 +460,9 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. Humans only — a bot's own posts are recorded where they
       // are known — this channel answering.
-      // Gated on a STRUCTURAL fact (is this a group?) and never on configuration. `groupBehavior` and
-      // `route` are the tempting gate — nothing reads participation without them — but they can be
-      // changed on a running deployment, and the record outlives the change: switch context → mentions
-      // → context, or add a route and drop it, and `agentSpoke` is still on disk while the humans who
-      // spoke during the window were never recorded. That thread then reads as participant + one human
-      // and the agent barges into a crowd, with no mention needed to trigger it and no state loss to
-      // heal it. A record that no rule currently reads costs two ids and is evicted before live ones;
-      // that is the cheaper side of the trade by far.
+      // Gated on a STRUCTURAL fact (is this a group?) and never on `groupBehavior` or `route` — see
+      // thread-participants.ts for why configuration must not gate a record that outlives it. Slack
+      // adds no delta of its own here; its summon rule is the only consumer.
       if (group && event.thread_ts !== undefined && event.user && !event.bot_id) {
         threadParticipants.merge(threadKey(teamId, event.channel, event.thread_ts), { humans: [event.user] });
       }
@@ -572,15 +567,25 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Answering inside a GROUP thread makes the agent a participant of it, which is what lets the
       // NEXT bare message address it without a mention.
       //
-      // Gated exactly like the human observation above — same structural condition, so the invariant
-      // holds: a thread the agent answered in has heard every human who spoke there. `group` excludes
-      // DMs, whose `threadTs` is always defined (the answer opens its assistant thread) and which no
-      // rule could ever read; that exclusion is safe to make here precisely because it is structural,
+      // `group` excludes DMs, whose `threadTs` is always defined (the answer opens its assistant
+      // thread) and which no rule could ever read — an exclusion safe to make because it is structural,
       // and a channel never becomes a DM.
+      //
+      // The two `routed` conditions keep the record describing what it claims. `session` undefined: the
+      // flag asserts "the agent answered into THIS thread's session", so a route supplying its own
+      // would record participation in a memory that never held the turn. `threadTs` undefined: a route
+      // can send the answer to a DIFFERENT thread, where the asker never spoke — recording them there
+      // would invent a participant. Feishu carries the same two conditions for the same reasons.
       //
       // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
       // the thread as the agent has actually left it.
-      if (group && threadTs !== undefined && sameChannel) {
+      if (
+        group &&
+        threadTs !== undefined &&
+        sameChannel &&
+        routed.session === undefined &&
+        routed.threadTs === undefined
+      ) {
         // The ASKER counts as heard in this thread too, and both halves are written together so the
         // record can never say "the agent takes part and nobody has spoken". When the ask is top
         // level, the answer is what CREATES the thread, so the observation above never ran for it (no

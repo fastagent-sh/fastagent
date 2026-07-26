@@ -19,6 +19,23 @@
  * bootstrap every thread starts with, it self-heals in one message, and it is visible to the user,
  * unlike the failure this replaced (silently mention-only, forever, with no signal).
  *
+ * The other direction is possible too, and is NOT free: a record is only as complete as the channel's
+ * hearing when it was written. An agent answering a mention in a restricted posture (Slack `mentions`,
+ * Feishu without `im:message.group_msg`) records itself plus the one human who summoned it, while every
+ * other human's bare message in that thread is never delivered. Widen the posture later and that thread
+ * reads "participant + one human" though it holds several. Accepted rather than defended against: the
+ * failure is one unwanted reply, it corrects itself the moment a second human speaks, and detecting it
+ * needs exactly the completeness bookkeeping this module exists to avoid. An operator changing posture
+ * on a live deployment can delete this file to force every thread back to the mention bootstrap.
+ *
+ * RECORDING IS NEVER GATED ON CONFIGURATION — not on a group-behaviour setting, not on the presence of
+ * a custom route — even though nothing reads participation under those postures. Configuration changes
+ * while a record outlives the change: gate on it and switching back leaves `agentSpoke` on disk with
+ * the humans of the intervening window missing, which is the under-count above with no mention needed
+ * to trigger it. Gate only on STRUCTURAL facts (is this a group?), which do not change under a live
+ * deployment. Channels may add their own reasons on top — Feishu's referent anchor also consumes
+ * `agentSpoke` — but none may subtract from this one.
+ *
  * Observations only ever ACCUMULATE. Nothing is shed, because the absence of a signal is not evidence
  * that someone left, and because the error directions are not symmetric: over-counting humans makes
  * the agent ask to be named, under-counting makes it speak into a crowd.

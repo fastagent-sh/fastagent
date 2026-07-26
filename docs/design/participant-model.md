@@ -117,6 +117,15 @@ records no rule will read. Those are harmless: they cost two ids, and the cap ev
 (ones the agent has only listened to) before threads it takes part in, so listening traffic can never
 push out a thread being served.
 
+The cost runs both ways, and the second direction is not free. A record is only as complete as the
+channel's hearing when it was written: an agent answering a mention in a restricted posture (Slack
+`mentions`, Feishu without `im:message.group_msg`) records itself plus the human who summoned it, while
+everyone else's bare messages in that thread are never delivered. Widen the posture later and the thread
+reads "participant + one human" though it holds several. That is accepted rather than defended against —
+the failure is one unwanted reply, it corrects itself the moment a second human speaks, and detecting it
+needs exactly the completeness bookkeeping this design removed. An operator changing posture on a live
+deployment can delete the state file to force every thread back to the mention bootstrap.
+
 Two consequences worth naming rather than discovering:
 
 - A thread where several people are present but only one has spoken *while the agent was listening*

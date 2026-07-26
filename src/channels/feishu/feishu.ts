@@ -484,15 +484,10 @@ function createFeishuRuntimeFactory(
       senderType: string | undefined,
       speakerId: string | undefined,
     ): void => {
-      // Deliberately UNGATED, unlike Slack's counterpart, and FORCED rather than chosen. The invariant
-      // is that a thread the agent answered in has heard every human who spoke there — an unrecorded
-      // human is the under-count that makes it speak into a crowd — so humans must be recorded wherever
-      // `agentSpoke` can be. Feishu's referent anchor consumes `agentSpoke` in every chat type and under
-      // any route, which pins that write, which pins this one. Slack has no such second consumer, so it
-      // narrows to exactly what its summon rule reads. (Route-drop resilience is a side effect, not the
-      // reason: re-entering a thread costs the ordinary mention §3 already asks for.) Recording under a
-      // posture no rule reads costs two ids per thread, and bystander-first eviction keeps those records
-      // from crowding out live ones.
+      // Ungated for the reason thread-participants.ts states for every channel (configuration changes
+      // while records outlive the change), plus a delta of Feishu's own: its referent anchor consumes
+      // `agentSpoke` in every chat type and under any route, and the invariant that a thread the agent
+      // answered in has heard every human who spoke there then pins this write to that one.
       //
       // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
       // there is no addressing ambiguity between machines (§3).
