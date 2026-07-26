@@ -554,6 +554,12 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls).toHaveLength(1);
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("what do you think?");
 
+    // A broadcast addresses the room, not the Agent: discussion, like any mention of other people.
+    await handler(signedRequest(message("40.4", { text: "<!here> can someone look at this?", thread_ts: "40.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("look at this");
+
     // …and the stop command must survive the strip in either form, or it becomes an ordinary turn
     // queued behind the very run it meant to stop.
     await handler(signedRequest(message("40.3", { text: "<@UBOT|agent> stop", thread_ts: "40.0" })));

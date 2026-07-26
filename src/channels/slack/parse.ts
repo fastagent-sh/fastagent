@@ -13,9 +13,14 @@ const HUMAN_MESSAGE_SUBTYPES = new Set(["file_share", "thread_broadcast"]);
  * the bare form turned `<@bot|name> stop` into an ordinary turn, queued behind the run it meant to stop.
  */
 const mentionSource = (idPattern: string): string => String.raw`<@${idPattern}(?:\|[^>]*)?>`;
-const ANY_MENTION = mentionSource("[A-Z0-9]+");
+const USER_MENTION = mentionSource("[A-Z0-9]+");
+/** Broadcasts and user groups address people too: `<!here>`, `<!channel>`, `<!everyone>`,
+ *  `<!subteam^S123|@team>`. Feishu's twin guard counts every mention, and the summon rule is supposed
+ *  to be the same on both — without these, "@here can someone look at this" in a thread the agent takes
+ *  part in reads as a bare message addressed to IT, and gets answered. */
+const ANY_MENTION = String.raw`(?:${USER_MENTION}|<!(?:here|channel|everyone)(?:\|[^>]*)?>|<!subteam\^[^>]*>)`;
 
-/** Does this text mention ANY user? */
+/** Does this text address ANYONE — a user, a broadcast, or a user group? */
 export function hasSlackMention(text: string): boolean {
   return new RegExp(ANY_MENTION, "i").test(text);
 }

@@ -18,9 +18,12 @@ const REMOVE_AT_MINOR = 18;
 describe("one-release migrations", () => {
   it("are deleted before the release that no longer needs them", () => {
     const version = (JSON.parse(readFileSync("package.json", "utf8")) as { version: string }).version;
-    const [major, minor] = version.split(".").map(Number);
+    const [major = 0, minor = 0] = version.split(".").map(Number);
+    // Ordered, not `major === 0 && minor < N`: that reads a 1.0.0 as "deadline passed" for the wrong
+    // reason and would fire with the same message whatever the minor happened to be.
+    const due = major > 0 || minor >= REMOVE_AT_MINOR;
     expect(
-      major === 0 && (minor ?? 0) < REMOVE_AT_MINOR,
+      !due,
       `v${version}: CONFIRM the participant model shipped in 0.16 (re-pin REMOVE_AT_MINOR if not), then ` +
         "remove the removeRetiredStateFile('owned-threads.json') calls in channels/feishu/feishu.ts + " +
         "channels/slack/slack.ts (and the helper itself if nothing else uses it), " +
