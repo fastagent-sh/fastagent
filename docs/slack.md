@@ -281,6 +281,15 @@ Slack state lives under:
 └── files/
 ```
 
+`thread-participants.json` records what the Agent HEARD in each group thread — the humans it saw speak
+(capped at two, since the rule only asks whether a second one exists) and whether it has answered
+there. It is written for **every group thread the channel can see, in every posture** — including
+`groupBehavior: "mentions"` and behind a custom route, where the summon rule never reads it. That is
+deliberate: the posture is configuration and a record outlives a change to it, so gating the write
+would leave a thread marked as answered-in while the humans who spoke during the intervening window
+went unrecorded, and the Agent would then speak into a crowd. Deleting the file is safe; each thread
+then costs one mention to re-enter.
+
 The onboarded App Manifest enables Slack token rotation. Before expiry, the runtime exchanges the bot
 refresh token, atomically persists the replacement pair in `bot-auth.json`, and uses that durable pair on
 later restarts; all four rotation inputs must be configured together. `deploy --run` overlays any newer
