@@ -345,6 +345,8 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 
 `fastagent add feishu` also scaffolds `tools/feishu-send.ts` (lark: `tools/lark-send.ts`): the agent can send plain text or a Markdown card to any chat by id. It is the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up; those turns have no `[feishu: chat …]` envelope line, so the schedule's prompt must name the target chat id.
 
+**Do not use it to answer the current turn** — the channel already delivers the reply, so calling the tool as well posts it twice. The scaffolded description says so; a workspace scaffolded before that was added keeps its own copy, so paste the boundary into the tool's `description` (or re-run `fastagent add` in a scratch dir and copy the file) if the Agent is double-posting.
+
 ## Limits
 
 - One app uses one subscription mode. FastAgent cannot fail over from WebSocket to webhook at runtime;

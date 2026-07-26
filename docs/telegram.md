@@ -202,6 +202,8 @@ The state home self-ignores (a nested `.gitignore`), so buffered chat content is
 
 `fastagent add telegram` also scaffolds `tools/telegram-send.ts`. Because tool names come from filenames, the agent can call the `telegram-send` tool with a `chatId` from the `[telegram: chat …]` envelope to send a text message or a local file back through the bot. It is also the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up, whose plain reply is not delivered anywhere; those turns have no `[telegram: chat …]` line, so the schedule's prompt (or the wake's) must name the target chat id.
 
+**Do not use it to answer the current turn** — the channel already delivers the reply, so calling the tool as well posts it twice. The scaffolded description says so; a workspace scaffolded before that was added keeps its own copy, so paste the boundary into the tool's `description` (or re-run `fastagent add` in a scratch dir and copy the file) if the Agent is double-posting.
+
 ## Limits
 
 - Telegram messages are split to the 4096-character limit as valid HTML: a tag spanning a boundary is closed at the chunk end and reopened (with its attributes) at the next chunk start, and the split never cuts through a tag token — so a long `<pre>` code block stays formatted instead of degrading to a plain-text fallback.
