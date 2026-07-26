@@ -284,7 +284,9 @@ function createFeishuRuntimeFactory(
     }
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
     /** This channel's place key for a thread (the shared store is key-agnostic). */
-    const threadKey = (chatId: string, threadId: string): string => `${chatId}:${threadId}`;
+    // The SAME identity the session uses (`placeKey`) — a thread's place. Defining it twice would let a
+    // future re-keying silently split participation from the sessions it is supposed to describe.
+    const threadKey = (chatId: string, threadId: string): string => placeKey({ chat_id: chatId, thread_id: threadId });
     const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
@@ -472,15 +474,14 @@ function createFeishuRuntimeFactory(
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
-      // Deliberately UNGATED, unlike Slack's counterpart, for two reasons that both point the same way.
-      // The invariant is that a thread the agent answered in has heard every human who spoke there —
-      // an unrecorded human is the under-count that makes it speak into a crowd. (1) `hearsGroupThreads`
-      // settles asynchronously, so gating on it would under-record for the whole boot window. (2) A
-      // deployment that later drops its custom route would otherwise inherit threads whose humans were
-      // never recorded. The cost is that a mention-only app still persists thread participation, which
-      // Slack's counterpart refuses — Slack can, because its scope posture is configuration it knows
-      // synchronously. Records no rule reads are harmless: they cost two ids, and the cap evicts
-      // bystanders first.
+      // Deliberately UNGATED, unlike Slack's counterpart. The invariant is that a thread the agent
+      // answered in has heard every human who spoke there — an unrecorded human is the under-count
+      // that makes it speak into a crowd — and `hearsGroupThreads` settles ASYNCHRONOUSLY while a
+      // mention in that same window can already set `agentSpoke`. Gating on it would under-record for
+      // the whole boot window. Records the summon rule never reads are kept anyway because the referent
+      // anchor reads them (p2p and, once the scope is known, group threads); they cost two ids, and the
+      // cap evicts bystanders first. Slack can afford the narrow gate because its posture is
+      // configuration it knows synchronously.
       //
       // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
       // there is no addressing ambiguity between machines (§3).

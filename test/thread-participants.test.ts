@@ -77,6 +77,21 @@ describe("thread participation (shared)", () => {
     expect(store.get("c:bystander_0")).toBeUndefined();
   });
 
+  it("a thread in steady state keeps its place — repeat traffic refreshes recency without writing", () => {
+    const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+    store.merge("c:served", { humans: ["u1"], agentSpoke: true });
+    // Fill with OTHER participant threads, so bystander-first eviction cannot save it.
+    for (let i = 0; i < 4999; i++) store.merge(`c:other_${i}`, { humans: [`u_${i}`], agentSpoke: true });
+
+    // The served thread carries no NEW information (same human, already answered), which is exactly
+    // why it would otherwise sit at the head of the eviction order while being actively served.
+    store.merge("c:served", { humans: ["u1"], agentSpoke: true });
+    store.merge("c:newest", { humans: ["u_new"], agentSpoke: true });
+
+    expect(store.get("c:served")).toEqual({ humans: ["u1"], agentSpoke: true });
+    expect(store.get("c:other_0")).toBeUndefined();
+  });
+
   it("evicts the oldest thread once the cap is reached", () => {
     const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
     // MAX_THREADS is 5000; touching one more than that must shed exactly the least recently updated.

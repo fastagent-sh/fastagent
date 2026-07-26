@@ -112,15 +112,18 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
         agentSpoke: (previous?.agentSpoke ?? false) || (heard.agentSpoke ?? false),
       };
       // `humans` starts from `previous` and only grows, so equal size IS set equality here.
-      if (
+      const unchanged =
         previous !== undefined &&
         previous.agentSpoke === next.agentSpoke &&
-        previous.humans.length === next.humans.length
-      ) {
-        return;
-      }
-      records.delete(key); // re-insert so insertion order stays "least recently updated first"
+        previous.humans.length === next.humans.length;
+      // Re-insert so insertion order is "least recently TOUCHED first" — including when nothing
+      // changed. A thread in its steady state (the agent answers, the same person keeps talking) stops
+      // carrying new information and would otherwise never refresh its position again, leaving the
+      // thread being served right now at the head of the eviction order. Touching memory is free; the
+      // refreshed order reaches disk with the next write that has something to say.
+      records.delete(key);
       records.set(key, next);
+      if (unchanged) return;
       while (records.size > MAX_THREADS) {
         // Oldest bystander first; only when every record is a thread the agent takes part in does age
         // alone decide.

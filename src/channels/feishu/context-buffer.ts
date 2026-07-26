@@ -126,7 +126,9 @@ export function createFeishuContextBuffer(path: string, label: string): FeishuCo
     line: bufferLine,
     // Buckets from the pre-participant-model keying (`<chat>:root:<root_id>`) can never be produced
     // again — a place is `<chat>` or `<chat>:thread:<thread_id>` — so nothing could ever fold or clear
-    // them. Drop them rather than keep chat content on disk indefinitely.
+    // them. Drop them rather than keep chat content on disk indefinitely. Like the `owned-threads.json`
+    // cleanup in feishu.ts, this is a ONE-RELEASE migration: REMOVE THIS (and the `isLivePlaceKey`
+    // option, if it has no other caller) after the release following the participant model ships.
     isLivePlaceKey: (placeKey) => !placeKey.includes(":root:"),
   });
 }
