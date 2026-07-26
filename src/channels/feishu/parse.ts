@@ -42,8 +42,14 @@ export function parseContent(
 
 /** A stable sender label for attribution. Display names require an additional contacts permission. */
 export function senderLabel(sender: FeishuSender | undefined): string | undefined {
-  const id = sender?.sender_id?.open_id ?? sender?.sender_id?.user_id ?? sender?.sender_id?.union_id;
+  const id = senderId(sender);
   return id ? `user ${id}` : undefined;
+}
+
+/** Whichever id flavour the tenant populates. `sender_id` is a union and which members are filled is
+ *  app configuration, not an invariant — callers only ever compare these for distinctness. */
+export function senderId(sender: FeishuSender | undefined): string | undefined {
+  return sender?.sender_id?.open_id ?? sender?.sender_id?.user_id ?? sender?.sender_id?.union_id;
 }
 
 /** The place a message lives (the chat, or a thread within it) — the session key (participant model §5). */

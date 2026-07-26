@@ -462,20 +462,26 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("mentions mode records no thread participation — the least-privilege posture stays that way", async () => {
+  it("records participation even where no rule reads it, so a posture change cannot leave a gap", async () => {
     vi.stubGlobal("fetch", okFetch());
-    const { agent } = replyingAgent();
+    const { agent, calls } = replyingAgent();
     const { handler, stateRoot } = mount(agent, { groupBehavior: "mentions" });
     await new Promise((resolve) => setImmediate(resolve));
 
     await handler(signedRequest(message("30.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "30.0" })));
     await settle();
-    await handler(signedRequest(message("30.2", { text: "bare", thread_ts: "30.0" })));
+    expect(calls).toHaveLength(1);
+    // A second human speaks. Under `mentions` nothing reads participation — but the posture is
+    // configuration, and it can be switched back while this record survives. Skipping the write here
+    // is what would leave `agentSpoke` on disk with U2 missing, and the agent would then barge into a
+    // thread it believes is two-party, with no mention needed and no state loss to heal it.
+    await handler(signedRequest(message("30.2", { user: "U2", text: "and also", thread_ts: "30.0" })));
     await settle();
 
-    // Nothing in this mode reads participation, so nothing may accumulate a durable record of who
-    // spoke in which thread.
-    expect(existsSync(join(stateRoot, "channels", "slack", "thread-participants.json"))).toBe(false);
+    const path = join(stateRoot, "channels", "slack", "thread-participants.json");
+    expect(existsSync(path)).toBe(true);
+    const record = (JSON.parse(readFileSync(path, "utf8")) as Record<string, { humans: string[] }>)["slack:T1:C1:30.0"];
+    expect(record?.humans.sort()).toEqual(["U1", "U2"]);
   });
 
   it("removes the obsolete owned-threads.json on the next start", async () => {

@@ -460,11 +460,15 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. Humans only — a bot's own posts are recorded where they
       // are known — this channel answering.
-      // Gated on what CONSUMES it: only the bare-message admission below reads participation, and it
-      // runs solely in context mode without a custom route. `mentions` is the documented
-      // least-privilege posture — it must not still accumulate a durable file of who spoke where.
-      const participationIsRead = groupBehavior === "context" && route === undefined;
-      if (participationIsRead && group && event.thread_ts !== undefined && event.user && !event.bot_id) {
+      // Gated on a STRUCTURAL fact (is this a group?) and never on configuration. `groupBehavior` and
+      // `route` are the tempting gate — nothing reads participation without them — but they can be
+      // changed on a running deployment, and the record outlives the change: switch context → mentions
+      // → context, or add a route and drop it, and `agentSpoke` is still on disk while the humans who
+      // spoke during the window were never recorded. That thread then reads as participant + one human
+      // and the agent barges into a crowd, with no mention needed to trigger it and no state loss to
+      // heal it. A record that no rule currently reads costs two ids and is evicted before live ones;
+      // that is the cheaper side of the trade by far.
+      if (group && event.thread_ts !== undefined && event.user && !event.bot_id) {
         threadParticipants.merge(threadKey(teamId, event.channel, event.thread_ts), { humans: [event.user] });
       }
 
@@ -568,16 +572,15 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Answering inside a GROUP thread makes the agent a participant of it, which is what lets the
       // NEXT bare message address it without a mention.
       //
-      // Gated exactly like the human observation above, upholding the invariant that a thread the
-      // agent answered in has heard every human who spoke there (an unrecorded human is the
-      // under-count that makes it speak into a crowd). Slack can afford the narrow gate because the summon rule is the
-      // ONLY consumer here — Feishu's is wider because its referent anchor reads participation too.
-      // `group` therefore excludes DMs, whose `threadTs` is always defined (the answer opens its
-      // assistant thread) and whose records no rule would ever read.
+      // Gated exactly like the human observation above — same structural condition, so the invariant
+      // holds: a thread the agent answered in has heard every human who spoke there. `group` excludes
+      // DMs, whose `threadTs` is always defined (the answer opens its assistant thread) and which no
+      // rule could ever read; that exclusion is safe to make here precisely because it is structural,
+      // and a channel never becomes a DM.
       //
       // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
       // the thread as the agent has actually left it.
-      if (participationIsRead && group && threadTs !== undefined && sameChannel) {
+      if (group && threadTs !== undefined && sameChannel) {
         // The ASKER counts as heard in this thread too, and both halves are written together so the
         // record can never say "the agent takes part and nobody has spoken". When the ask is top
         // level, the answer is what CREATES the thread, so the observation above never ran for it (no

@@ -42,6 +42,7 @@ import {
   defaultFeishuRoute,
   feishuEnvelope,
   placeKey,
+  senderId,
   senderLabel,
 } from "./parse.ts";
 import {
@@ -481,7 +482,7 @@ function createFeishuRuntimeFactory(
     const observeThreadSender = (
       m: FeishuMessage,
       senderType: string | undefined,
-      senderId: string | undefined,
+      speakerId: string | undefined,
     ): void => {
       // Deliberately UNGATED, unlike Slack's counterpart, and FORCED rather than chosen. The invariant
       // is that a thread the agent answered in has heard every human who spoke there — an unrecorded
@@ -495,7 +496,7 @@ function createFeishuRuntimeFactory(
       //
       // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
       // there is no addressing ambiguity between machines (§3).
-      if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) {
+      if (m.thread_id === undefined || senderType !== "user" || speakerId === undefined) {
         // A heard human who cannot be told apart from another is the dangerous silence: the rule would
         // go on reading the thread as two-party. Surface it rather than dropping it quietly.
         if (m.thread_id !== undefined && senderType === "user") {
@@ -505,7 +506,7 @@ function createFeishuRuntimeFactory(
         }
         return;
       }
-      threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [senderId] });
+      threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [speakerId] });
     };
 
     /**
@@ -556,7 +557,7 @@ function createFeishuRuntimeFactory(
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
       // second human speaking is exactly what makes addressing ambiguous again.
-      observeThreadSender(m, event.sender?.sender_type, event.sender?.sender_id?.open_id);
+      observeThreadSender(m, event.sender?.sender_type, senderId(event.sender));
 
       if (
         !r &&

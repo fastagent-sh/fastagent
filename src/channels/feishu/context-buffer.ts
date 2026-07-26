@@ -43,6 +43,12 @@ function bufferLine(entry: FeishuBufferEntry): string {
  * platform's own identity for a side conversation — NOT `root_id`, which tracks the reply chain and
  * can differ between messages of one thread (which would split a thread's context across buckets).
  * A quoted reply outside a thread carries a root but is main-chat discussion, so it buckets there.
+ *
+ * Its own namespace, deliberately: this names a BUCKET of undelivered text, while `parse.ts`'s
+ * `placeKey` names a SESSION. Nothing here claims anything about that session — unlike thread
+ * participation, which asserts "the agent answered into this memory" and is therefore keyed by the
+ * session itself. Re-keying either one leaves the other correct, and converging them now would strand
+ * live buckets for no gain (Slack keeps its own shape for the same reason).
  */
 export function feishuBufferPlaceKey(
   conversation: Pick<NormalizedFeishuMessage["conversation"], "chatId" | "threadId">,
