@@ -532,6 +532,25 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("can you look?");
   });
 
+  it("the labelled mention form counts too, on both sides of the guard", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // `<@UBOT|agent>` is a summon, not background text.
+    await handler(signedRequest(message("40.1", { text: "<@UBOT|agent> take a look", thread_ts: "40.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+
+    // …and `<@U9|dana>` is a message aimed at a colleague: discussion, even in a thread the agent
+    // takes part in and where it has heard only one human.
+    await handler(signedRequest(message("40.2", { text: "<@U9|dana> what do you think?", thread_ts: "40.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("what do you think?");
+  });
+
   it("a top-level ask counts as heard in the thread the answer creates, so a stranger's reply does not summon", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();

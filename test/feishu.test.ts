@@ -624,16 +624,6 @@ describe("turn flow", () => {
 
   const BOT_MENTION = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
 
-  /** A thread listing the platform would return for a two-party side conversation. */
-  const threadListing = (senders: { senderType: string; senderId: string }[]) => () =>
-    Response.json({
-      code: 0,
-      msg: "ok",
-      data: {
-        items: senders.map((s) => ({ sender: { id: s.senderId, id_type: "open_id", sender_type: s.senderType } })),
-      },
-    });
-
   /** Join a thread the way a human does: mention the bot inside it, so the agent answers there. */
   async function joinThread(
     handler: (req: Request) => Response | Promise<Response>,
@@ -743,13 +733,7 @@ describe("turn flow", () => {
   });
 
   it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
-    const fx = feishuFetch({
-      "container_id_type=thread": threadListing([
-        { senderType: "user", senderId: "ou_alice" },
-        { senderType: "user", senderId: "ou_bob" },
-        { senderType: "app", senderId: "app" },
-      ]),
-    });
+    const fx = feishuFetch();
     const { handler, calls, idle } = buildChannel();
     await flush();
     await joinThread(handler, idle, "omt_crowd");

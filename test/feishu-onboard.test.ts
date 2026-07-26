@@ -32,8 +32,8 @@ describe("Feishu/Lark group-behavior onboarding", () => {
     });
 
     expect(result).toEqual({ publishReady: false });
-    // BOTH halves of the recommended path: delivery, and reading a thread's senders (what decides
-    // whether a bare reply is answered). Requesting only the first ships a feature that cannot work.
+    // Delivery is the scope the context path REQUIRES; the read scope rides the same approval round so
+    // a quoted message is not silently lost. Splitting them would cost the author a second round.
     expect(fx.addAppScopes).toHaveBeenCalledWith("cli_a", ["im:message.group_msg", "im:message:readonly"]);
     expect(fx.notes.join("\n")).toMatch(/context-aware \(recommended\).*all group messages/);
     expect(fx.notes.join("\n")).toContain("complete tenant-admin approval before publishing");
