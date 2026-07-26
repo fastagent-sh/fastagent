@@ -15,7 +15,7 @@ import { isCancel, log as clackLog, password, text as clackText } from "@clack/p
 import { bootstrapFeishuVerificationToken } from "../channels/feishu/bootstrap-token.ts";
 import {
   FEISHU_GROUP_CONTEXT_SCOPE,
-  FEISHU_GROUP_CONTEXT_SCOPES,
+  FEISHU_CONTEXT_ONBOARDING_SCOPES,
   FEISHU_MESSAGE_READ_SCOPE,
   type FeishuGroupBehavior,
   type FeishuSubscriptionMode,
@@ -75,12 +75,9 @@ export async function configureGroupBehavior(input: {
   // that would actually add it.
   const onApp = (name: string): boolean =>
     scopes.some((scope) => scope.name === name && (scope.type === undefined || scope.type === "tenant"));
-  const groupScope = scopes.find(
-    (scope) => scope.name === FEISHU_GROUP_CONTEXT_SCOPE && (scope.type === undefined || scope.type === "tenant"),
-  );
   // Both halves of the recommended path: delivery (the platform pushes un-mentioned group messages)
   // and reading a quoted message (so a thread's opening ask carries what it replies to).
-  const missing = FEISHU_GROUP_CONTEXT_SCOPES.filter((name: string) => !granted(name));
+  const missing = FEISHU_CONTEXT_ONBOARDING_SCOPES.filter((name: string) => !granted(name));
 
   if (behavior === "mentions") {
     if (!inspected) {
@@ -91,7 +88,7 @@ export async function configureGroupBehavior(input: {
       openUrl(permissionUrl);
       return { publishReady: false };
     }
-    if (groupScope?.grantStatus === 1) {
+    if (granted(FEISHU_GROUP_CONTEXT_SCOPE)) {
       const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
       note(
         `[fastagent] warn: mention-only was selected, but ${FEISHU_GROUP_CONTEXT_SCOPE} is already granted — remove it before publishing a new version to restore least-privilege platform delivery. Opening ${permissionUrl}`,
@@ -109,11 +106,11 @@ export async function configureGroupBehavior(input: {
   note(
     `[fastagent] group behavior: context-aware (recommended) — ${kind} will deliver all group messages; ` +
       `FastAgent invokes @Agent, answers bare replies in threads it takes part in, and durably buffers ` +
-      `other discussion. Both ${FEISHU_GROUP_CONTEXT_SCOPE} (delivery) and ${FEISHU_MESSAGE_READ_SCOPE} ` +
-      `(reading a quoted message) are required`,
+      `other discussion. ${FEISHU_GROUP_CONTEXT_SCOPE} (delivery) is required; ${FEISHU_MESSAGE_READ_SCOPE} ` +
+      `(reading a quoted message) is requested with it — without it a quoted message degrades to a marker`,
   );
   if (missing.length === 0) {
-    note(`[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPES.join(" + ")} are already granted`);
+    note(`[fastagent] ${FEISHU_CONTEXT_ONBOARDING_SCOPES.join(" + ")} are already granted`);
     return { publishReady: true };
   }
   const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;

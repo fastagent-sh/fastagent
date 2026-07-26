@@ -40,9 +40,9 @@ describe("Feishu/Lark group-behavior onboarding", () => {
     expect(fx.opened).toEqual(["https://open.feishu.cn/app/cli_a/permission"]);
   });
 
-  it("requests only what is missing when delivery is granted but reading a thread's senders is not", async () => {
-    // The gap this guards: with delivery alone the platform pushes every group message, so the app
-    // looks configured — but no bare reply can ever be answered, because participation is unreadable.
+  it("requests only the scope that is missing, never one already granted", async () => {
+    // The gap this guards is narrower than the delivery scope's: bare replies work without the read
+    // scope, but a thread's opening ask silently loses the message it quotes.
     const fx = fixture([{ name: "im:message.group_msg", grantStatus: 1, type: "tenant" }]);
     const result = await configureGroupBehavior({
       kind: "feishu",

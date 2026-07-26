@@ -17,5 +17,7 @@ export const FEISHU_GROUP_CONTEXT_SCOPE = "im:message.group_msg";
  *  mention-only app wanting referents must add it by hand. */
 export const FEISHU_MESSAGE_READ_SCOPE = "im:message:readonly";
 
-/** Both scopes the context-aware path depends on. */
-export const FEISHU_GROUP_CONTEXT_SCOPES = [FEISHU_GROUP_CONTEXT_SCOPE, FEISHU_MESSAGE_READ_SCOPE];
+/** What `--group-behavior context` REQUESTS in one approval round — not a dependency set. Only the
+ *  delivery scope is required for the context path; the read scope rides along because it shares the
+ *  round and its absence merely degrades quoted messages to a marker. */
+export const FEISHU_CONTEXT_ONBOARDING_SCOPES = [FEISHU_GROUP_CONTEXT_SCOPE, FEISHU_MESSAGE_READ_SCOPE];
