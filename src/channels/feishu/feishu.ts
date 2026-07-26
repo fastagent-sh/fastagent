@@ -662,9 +662,14 @@ function createFeishuRuntimeFactory(
       ) {
         // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive
         // could otherwise say "answered here, heard nobody" — which admits bare messages forever.
+        // The human half carries the SAME sender-type condition as the observation above (a custom
+        // route can admit a bot, which the default route filters out), so `humans` never gains a
+        // non-human and the agentSpoke condition stays a subset of the humans condition.
+        const asker =
+          event.sender?.sender_type === "user" ? (senderId(event.sender) ?? `unidentified:${m.message_id}`) : undefined;
         threadParticipants.merge(threadKey(m.chat_id, m.thread_id), {
           agentSpoke: true,
-          humans: [senderId(event.sender) ?? `unidentified:${m.message_id}`],
+          ...(asker ? { humans: [asker] } : {}),
         });
       }
     };

@@ -1614,8 +1614,8 @@ describe("turn flow", () => {
     expect(calls[0]?.scope.session).toBe("user:ou_alice");
 
     // `agentSpoke` would claim the thread's own session remembers this turn. It does not — the answer
-    // went to a per-user session — so both readers (the referent anchor and the summon rule) must not
-    // see it here. The human is still recorded: what was heard is heard.
+    // went to a per-user session — so the summon rule must not see it here. The human is still
+    // recorded: what was heard is heard.
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
       { agentSpoke: boolean; humans: string[] }
@@ -1636,9 +1636,9 @@ describe("turn flow", () => {
     // The route decided admission, so the built-in thread rule never ran — and nothing is asked of the
     // platform either way.
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
-    // Both halves are recorded regardless. The referent anchor reads `agentSpoke` under any route, so
-    // that write is pinned — and the invariant "a thread the agent answered in has heard every human
-    // who spoke there" then pins this one, or the record would claim participation with nobody in it.
+    // Both halves are recorded regardless. Nothing reads this record while the route is installed, but
+    // a route is configuration and the record outlives a change to it — gating on it would leave
+    // `agentSpoke` on disk with the intervening humans missing (see thread-participants.ts).
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
       { agentSpoke: boolean; humans: string[] }

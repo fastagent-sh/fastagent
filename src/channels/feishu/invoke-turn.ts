@@ -86,11 +86,17 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
     // would turn an ordinary platform edge into a lost turn. Degrade visibly instead: the operator
     // gets a warning, and the model is told the quote could not be read rather than being left to
     // guess what "about that" refers to.
+    // A deleted or invisible message comes back as an EMPTY item list rather than an error, so the
+    // warning belongs on the branch that renders the marker — that is the one the operator must see.
+    let failure: string | undefined;
     const parent = await t.api.getMessage(parentId).catch((error) => {
-      log.warn(`${t.label} could not read replied-to message ${parentId}: ${String(error)}`);
+      failure = String(error);
       return undefined;
     });
     if (!parent) {
+      log.warn(
+        `${t.label} could not read replied-to message ${parentId} (${failure ?? "no such message"}) — the model is told the quote is unreadable`,
+      );
       // Fall THROUGH: the resources this turn carries are the ask itself. Returning here would drop
       // the images and files the user explicitly attached along with the referent they merely quoted.
       referentBlock = `\n\n[replied-to message (msg ${parentId}) could not be read]`;
