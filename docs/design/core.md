@@ -281,7 +281,8 @@ Newly onboarded apps use Slack's `agent_view`, `assistant:write`, token rotation
 status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Standard Markdown text events append to
 the stream; engine-neutral tool lifecycle events become dense `task_update` chunks. Raw model thinking and
 generic tool arguments stay private. The compatibility renderer retains one edited message with a strict
-three-second mutation interval; a custom route targeting the top level (`threadTs: null`) selects it because native
+three-second mutation interval; a custom route reaching a top-level target selects it (either way of
+getting there is listed on the `rendering` option in `slack.ts`) because native
 streams require a parent user message. HTTP Events API remains the production transport; Socket Mode is a
 separate future boundary rather than entering `ChannelModule` indirectly.
 
