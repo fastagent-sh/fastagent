@@ -121,7 +121,11 @@ export async function configureGroupBehavior(input: {
   const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
   // A missing scope is in one of two states, and they need different actions: already on the app but
   // not yet approved (nothing to add — wait for the admin), or absent from the draft entirely.
-  const awaitingApproval = missing.filter(onApp);
+  // Same superset rule as `missing`: a draft already requesting `im:message` is awaiting approval, not
+  // missing something to add.
+  const awaitingApproval = missing.filter((name: string) =>
+    name === FEISHU_MESSAGE_READ_SCOPE ? FEISHU_MESSAGE_READ_SCOPES.some(onApp) : onApp(name),
+  );
   const toRequest = missing.filter((name: string) => !awaitingApproval.includes(name));
   if (toRequest.length === 0) {
     note(

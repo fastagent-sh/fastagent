@@ -123,6 +123,16 @@ describe("thread participation (shared)", () => {
     expect(existsSync(path)).toBe(false); // MAX_HUMANS reached: nothing new can arrive for this thread
   });
 
+  it("counts an unidentifiable speaker as distinct — the fail-safe direction", () => {
+    const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+    // Two messages whose sender carries no usable id: they may be one person or two, and the model's
+    // asymmetry says to assume the ambiguous case. Two speakers means the thread asks to be named.
+    store.merge("c:t", { humans: ["unidentified:om_1"], agentSpoke: true });
+    store.merge("c:t", { humans: ["unidentified:om_2"] });
+
+    expect(store.get("c:t")?.humans).toHaveLength(2);
+  });
+
   it("warns and starts empty when valid JSON has the wrong shape", () => {
     const path = join(stateDir(), "p.json");
     writeFileSync(path, JSON.stringify({ "oc_1:omt_a": { humans: "nope", agentSpoke: true } }));

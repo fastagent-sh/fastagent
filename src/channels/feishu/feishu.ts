@@ -491,17 +491,19 @@ function createFeishuRuntimeFactory(
       //
       // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
       // there is no addressing ambiguity between machines (§3).
-      if (m.thread_id === undefined || senderType !== "user" || speakerId === undefined) {
-        // A heard human who cannot be told apart from another is the dangerous silence: the rule would
-        // go on reading the thread as two-party. Surface it rather than dropping it quietly.
-        if (m.thread_id !== undefined && senderType === "user") {
-          log.warn(
-            `${label} a human sender in thread ${m.thread_id} carries no usable id — that speaker cannot count toward the bare-reply rule`,
-          );
-        }
-        return;
+      if (m.thread_id === undefined || senderType !== "user") return;
+      // A human whose id no tenant flavour carries still SPOKE, and the invariant is that no human
+      // speaks unrecorded. Count them under a per-message synthetic id: two such messages then read as
+      // two speakers and the thread asks to be named, which is the tolerable direction — while dropping
+      // them reads as two-party and barges into a crowd, which is not. The warn stays because a steady
+      // stream of these means the rule's input is degraded.
+      const heard = speakerId ?? `unidentified:${m.message_id}`;
+      if (speakerId === undefined) {
+        log.warn(
+          `${label} a human sender in thread ${m.thread_id} carries no usable id — counting them as a distinct speaker, so this thread will ask to be named`,
+        );
       }
-      threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [speakerId] });
+      threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [heard] });
     };
 
     /**
