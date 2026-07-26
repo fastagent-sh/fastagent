@@ -239,12 +239,12 @@ function createFeishuRuntimeFactory(
             (scope.type === undefined || scope.type === "tenant"),
         );
         if (contextAware) {
-          // Buffering is settled by this scope; bare replies additionally need the message-read
-          // capability behind `listThreadSenders`, which cannot be inferred from the scope list. Say
-          // what is verified and what is not, rather than promising a capability that may fail on its
-          // first use (the refusal path below reports it once, app-wide).
+          // This scope settles both halves: it delivers the un-mentioned group messages the channel
+          // buffers, and it is what lets the channel HEAR a thread, which is the whole input to the
+          // bare-reply rule. Nothing further is fetched, so nothing else is pending — the only
+          // bootstrap left is social, one mention inside a thread.
           log.info(
-            `${label} group visibility: context-aware — buffered discussion enabled; bare replies in the agent's threads pending the first thread read`,
+            `${label} group visibility: context-aware — buffered discussion enabled; bare replies work in a thread once the agent has been mentioned in it`,
           );
         } else {
           log.warn(
@@ -456,17 +456,20 @@ function createFeishuRuntimeFactory(
      * not push the agent's own messages back to it, so the agent's own half is recorded where it is
      * actually known — when this channel answers in the thread.
      */
-    /** Gated on what CONSUMES participation: only a group thread's bare-message admission reads it, and
-     *  a custom route owns admission entirely. Recording elsewhere would persist per-thread rows that
-     *  nothing can ever read, filling the cap and evicting the group threads it exists to protect. */
-    const participationIsRead = (m: FeishuMessage): boolean => route === undefined && m.chat_type === "group";
+    /** A record's two halves must be written under the SAME condition, or it becomes a lie: a thread
+     *  carrying `agentSpoke` but no humans reads as "the agent takes part and nobody has spoken", which
+     *  the summon rule would admit. So the gate is the one the `agentSpoke` write below cannot avoid —
+     *  group chats, whoever decided admission. A custom route means the rule never reads these records;
+     *  it does not mean they may be half-written, because a deployment can drop its route later.
+     *  P2P threads are excluded on both sides: `threadAddressesAgent` is unreachable there. */
+    const participationIsRecorded = (m: FeishuMessage): boolean => m.chat_type === "group";
 
     const observeThreadSender = (
       m: FeishuMessage,
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
-      if (!participationIsRead(m)) return;
+      if (!participationIsRecorded(m)) return;
       if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) return;
       threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [senderId] });
     };
@@ -622,12 +625,12 @@ function createFeishuRuntimeFactory(
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
       // bare message address it without a mention (§3).
       //
-      // NOT gated on `participationIsRead`, unlike its human-observation sibling — the asymmetry is
-      // deliberate. `agentSpoke` has a SECOND consumer that runs whoever decided admission and in any
-      // chat type: the referent anchor above (`agentInThread`) uses it to tell a thread's opening
-      // message from a continuation. Gating this write would make every message of a custom-route or
-      // p2p thread re-load its `parent_id` referent. `humans` has no such second reader, which is why
-      // only that one is gated.
+      // Ungated by design: `agentSpoke` has a SECOND consumer that runs whoever decided admission and
+      // in any chat type — the referent anchor above (`agentInThread`) uses it to tell a thread's
+      // opening message from a continuation, and gating it would make every message of a custom-route
+      // or p2p thread re-load its `parent_id` referent. That is precisely why the human observation
+      // above matches it for group chats rather than narrowing to the default route: this write is the
+      // one that can create a record, so the other half must be recorded wherever this one is.
       //
       // Recorded only once the intent is durable:
       // `submit` can throw, and a re-pushed first message must still see an empty thread so it keeps

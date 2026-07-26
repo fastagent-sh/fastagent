@@ -568,15 +568,15 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // the intent is durable: `submit` can throw, and a redelivery must still see the thread as the
       // agent has actually left it.
       if (participationIsRead && group && threadTs !== undefined && sameChannel) {
-        // The ASKER counts as heard in this thread too. When the ask is top level, the answer is what
-        // creates the thread, so the observation above never ran for it (no `thread_ts` on the ask) —
-        // leaving a thread whose root message is a human the agent would not count. Recording it here
-        // is the same fact from the same event, and it is what keeps a stranger's first bare reply
-        // from reading as a two-party exchange. Idempotent when the ask was already in the thread.
-        const asker = event.bot_id ? undefined : event.user;
+        // The ASKER counts as heard in this thread too, and both halves are written together so the
+        // record can never say "the agent takes part and nobody has spoken". When the ask is top
+        // level, the answer is what CREATES the thread, so the observation above never ran for it (no
+        // `thread_ts` on the ask) — without this, a thread whose root is a human would not count them,
+        // and a stranger's first bare reply would read as a two-party exchange. `event.user` is
+        // guaranteed here (isSlackHumanMessage). Idempotent when the ask was already in the thread.
         threadParticipants.merge(threadKey(teamId, event.channel, threadTs), {
           agentSpoke: true,
-          ...(asker ? { humans: [asker] } : {}),
+          humans: [event.user],
         });
       }
     };

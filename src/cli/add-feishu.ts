@@ -74,7 +74,7 @@ export async function configureGroupBehavior(input: {
     (scope) => scope.name === FEISHU_GROUP_CONTEXT_SCOPE && (scope.type === undefined || scope.type === "tenant"),
   );
   // Both halves of the recommended path: delivery (the platform pushes un-mentioned group messages)
-  // and reading a thread's senders (what tells a two-party thread from a crowded one).
+  // and reading a quoted message (so a thread's opening ask carries what it replies to).
   const missing = FEISHU_GROUP_CONTEXT_SCOPES.filter((name: string) => !granted(name));
 
   if (behavior === "mentions") {
@@ -104,7 +104,7 @@ export async function configureGroupBehavior(input: {
     `[fastagent] group behavior: context-aware (recommended) — ${kind} will deliver all group messages; ` +
       `FastAgent invokes @Agent, answers bare replies in threads it takes part in, and durably buffers ` +
       `other discussion. Both ${FEISHU_GROUP_CONTEXT_SCOPE} (delivery) and ${FEISHU_MESSAGE_READ_SCOPE} ` +
-      `(reading a thread's senders) are required`,
+      `(reading a quoted message) are required`,
   );
   if (missing.length === 0) {
     note(`[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPES.join(" + ")} are already granted`);

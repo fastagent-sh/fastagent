@@ -675,57 +675,33 @@ describe("turn flow", () => {
     expect(fx.calls("/resources/img_1", "GET")).toHaveLength(1);
   });
 
-  it("a second human racing the same thread read is not erased by it", async () => {
-    let releaseRead!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    feishuFetch({
-      // The window predates both messages in flight — the shape that erases a racing speaker.
-      "container_id_type=thread": () =>
-        gate.then(() =>
-          Response.json({
-            code: 0,
-            msg: "ok",
-            data: {
-              items: [
-                { sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" } },
-                { sender: { id: "app", id_type: "app_id", sender_type: "app" } },
-              ],
-            },
-          }),
-        ) as unknown as Response,
-    });
-    const { handler, calls, idle, home } = buildChannel();
+  it("two deliveries in one thread each observe their sender before admission, so neither is answered", async () => {
+    feishuFetch();
+    const { handler, calls, home } = buildChannel();
     await flush();
 
-    const alice = handler(
-      feishuRequest(messageEvent({ id: "om_race_a", chatType: "group", threadId: "omt_race", text: "from alice" })),
-    );
-    const bob = handler(
-      feishuRequest(
-        messageEvent({
-          id: "om_race_b",
-          chatType: "group",
-          threadId: "omt_race",
-          senderId: "ou_bob",
-          text: "from bob",
-        }),
+    // Alice and Bob both speak in a thread the agent has never answered in. Order does not matter and
+    // neither does timing: the sender is recorded on the way in, before the rule is consulted.
+    await Promise.all([
+      handler(
+        feishuRequest(
+          messageEvent({ id: "om_a", chatType: "group", threadId: "omt_two", text: "alice", senderId: "ou_alice" }),
+        ),
       ),
-    );
-    releaseRead();
-    await Promise.all([alice, bob]);
-    await idle();
+      handler(
+        feishuRequest(
+          messageEvent({ id: "om_b", chatType: "group", threadId: "omt_two", text: "bob", senderId: "ou_bob" }),
+        ),
+      ),
+    ]);
+    await flush();
 
-    // Bob joined Alice's in-flight read and the listing named neither of them. Because a listing is
-    // UNIONED rather than substituted, his presence survives it — so the thread reads as multi-party
-    // and NEITHER bare message is answered. Both people are there; refusing is what §3 asks for.
+    expect(calls).toHaveLength(0);
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
       { humans: string[] }
     >;
-    expect(participants["oc_1:omt_race"]?.humans).toEqual(expect.arrayContaining(["ou_alice", "ou_bob"]));
-    expect(calls).toHaveLength(0);
+    expect(participants["oc_1:omt_two"]?.humans.sort()).toEqual(["ou_alice", "ou_bob"]);
   });
 
   it("a bare message in a thread the agent is talking to addresses it, through the normal streaming path", async () => {
@@ -1512,8 +1488,7 @@ describe("turn flow", () => {
     expect(existsSync(join(home, "buffers.json"))).toBe(false);
   });
 
-  it("a custom route owns admission: no human is recorded, but the agent's own participation still is", async () => {
-    feishuFetch();
+  it("a custom route still records a COMPLETE participation record, since a deployment can drop the route", async () => {
     const fx = feishuFetch();
     const { handler, calls, home, idle } = buildChannel({ route: () => ({}) });
 
@@ -1523,16 +1498,17 @@ describe("turn flow", () => {
     await idle();
 
     expect(calls).toHaveLength(1);
-    // The route decided admission, so the built-in thread rule never ran: no platform lookup.
+    // The route decided admission, so the built-in thread rule never ran — and nothing is asked of the
+    // platform either way.
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
-    // The route owns admission, so nothing reads the human set — and it is therefore not recorded:
-    // a least-privilege posture must not still accumulate who spoke where. `agentSpoke` IS kept, as
-    // the referent anchor reads it whoever decided admission.
+    // Both halves are recorded regardless. Writing only `agentSpoke` here would leave "the agent takes
+    // part and nobody has spoken" behind — a record the summon rule would admit if this deployment
+    // later dropped its route, skipping the mention bootstrap §3 requires.
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
       { agentSpoke: boolean; humans: string[] }
     >;
-    expect(participants["oc_1:omt_custom"]).toEqual({ agentSpoke: true, humans: [] });
+    expect(participants["oc_1:omt_custom"]).toEqual({ agentSpoke: true, humans: ["ou_alice"] });
   });
 
   it("a custom route's empty text runs NO turn (nothing to say, nothing to load)", async () => {

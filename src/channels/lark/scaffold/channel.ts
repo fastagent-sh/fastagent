@@ -9,9 +9,9 @@ import { larkChannel } from "@fastagent-sh/fastagent/lark";
 //      (group @mentions), `im:message:send_as_bot` (reply), `im:resource` (attachments), and the
 //      card scope ("Create and update card" — the live preview streams through a card). To answer bare
 //      messages in threads the Agent takes part in, and buffer other unsummoned group/thread context, also add the
-//      sensitive `im:message.group_msg` scope (tenant-admin approval) and publish a new version. A bare
-//      reply also needs a message-read scope (e.g. `im:message:readonly`): the channel lists a
-//      thread's recent messages to see who is taking part in it, which is what admits bare replies.
+//      sensitive `im:message.group_msg` scope (tenant-admin approval) and publish a new version. Add a
+//      message-read scope (e.g. `im:message:readonly`) too, so a thread's opening ask can carry the
+//      message it quotes; without it that quote degrades to a marker in the prompt.
 //   3. Events & Callbacks → subscribe to `im.message.receive_v1`; copy the Verification Token into
 //      .env; RECOMMENDED: set an Encrypt Key there and mirror it in LARK_ENCRYPT_KEY
 //   4. run `fastagent dev --tunnel`: it attempts to switch Subscription mode to webhook + register

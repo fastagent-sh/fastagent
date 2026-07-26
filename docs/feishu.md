@@ -259,14 +259,12 @@ message in that thread reaches it. When a second person speaks in the thread, ad
 ambiguous again and the Agent goes back to requiring a mention — while still listening, so the
 discussion is folded into its next answered turn there.
 
-Participation is a property of the thread, not of this process: for a thread it has no complete
-picture of, the channel reads the thread's recent senders back from the platform, so losing local
-state costs one lookup rather than the behaviour. Participation accumulates and is never shed: the
-listing supplies the thread's start, the Agent observes everything since, and the two are unioned, so
-a thread that has ever held two people keeps requiring a mention. That read happens before the event
-is acknowledged and shares a
-2.5s budget with the bot-identity lookup; if it fails transiently the delivery fails and the platform
-re-pushes it, rather than the ask being silently downgraded to background context.
+Both halves are what the Agent HEARD, not a claim about who is really in the thread: nothing is read
+back from the platform, so a thread it joined before this deployment — or before a lost
+`thread-participants.json` — takes one mention to re-enter. Observations accumulate and are never
+shed, so a thread in which two people have spoken keeps requiring a mention. A consequence worth
+knowing: a thread where several people are present but only one has spoken *while the Agent was
+listening* counts as two-party.
 
 The thread's identity is `thread_id`. Feishu's `root_id` is NOT stable within a thread — it tracks the
 reply chain and can differ between messages of one thread — so it is used for neither the session key
