@@ -333,6 +333,10 @@ Breaking changes for existing Feishu/Lark deployments:
 - direct messages become one continuous conversation instead of one session per top-level message;
 - group summons answer in place instead of opening a thread;
 - threads answer bare messages only while no second human has been heard in them;
+- **the concurrency unit changes with the session.** Turns serialize per session (§6), so a whole room
+  — and a whole DM chat — is now one queue. Previously each top-level summon was its own session and
+  ran concurrently; now a second person's `@Agent` in a busy room waits behind an unrelated
+  multi-minute turn. Opening a thread is the way to run something alongside it;
 - **sessions are re-keyed** from `<kind>:<root_id ?? message_id>` to the place (`<chat>` or
   `<chat>:<thread_id>`, §5). Existing session history is NOT migrated: every conversation starts fresh
   after the upgrade, which reads to users as the agent forgetting, and the old records stay in the

@@ -142,8 +142,13 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
       // Re-insert so insertion order is "least recently TOUCHED first" — including when nothing
       // changed. A thread in its steady state (the agent answers, the same person keeps talking) stops
       // carrying new information and would otherwise never refresh its position again, leaving the
-      // thread being served right now at the head of the eviction order. Touching memory is free; the
-      // refreshed order reaches disk with the next write that has something to say.
+      // thread being served right now at the head of the eviction order.
+      //
+      // PROCESS-LOCAL: a touch alone never writes, and such a thread has nothing left to write (it has
+      // reached MAX_HUMANS), so the refreshed order survives only until restart. That is the right
+      // trade for a cache — persisting recency would mean a whole-map write per message — and the
+      // consequence is bounded: after a restart, eviction order among participant threads is the order
+      // they last carried new information.
       records.delete(key);
       records.set(key, next);
       if (unchanged) return;

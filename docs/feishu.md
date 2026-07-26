@@ -272,7 +272,9 @@ nor the context bucket. The first message of a thread loads the message it repli
 input (usually the Agent's own earlier answer); later messages do not, because the session already
 holds them. An unreadable referent degrades to a marker instead of failing the turn.
 
-Turns are serialized per session (FIFO) instead of failing fast as `session busy`; different places
+Turns are serialized per session (FIFO) instead of failing fast as `session busy`. Since the session is
+the place, **a whole group room is one queue**: a second person's `@Agent` in a busy room waits behind
+an unrelated multi-minute turn (they see the "⏳ Queued" card). Different places
 run concurrently, which is why a thread is the way to start work that should not queue behind the
 room. Any turn queued behind another one immediately gets a
 reply-quoted "⏳ Queued" card (configure `queueNoticeDelayMs` only if an intentional delay is desired).

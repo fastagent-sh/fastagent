@@ -17,6 +17,7 @@ import {
   FEISHU_GROUP_CONTEXT_SCOPE,
   FEISHU_CONTEXT_ONBOARDING_SCOPES,
   FEISHU_MESSAGE_READ_SCOPE,
+  FEISHU_MESSAGE_READ_SCOPES,
   type FeishuGroupBehavior,
   type FeishuSubscriptionMode,
 } from "../channels/feishu/setup-mode.ts";
@@ -77,7 +78,11 @@ export async function configureGroupBehavior(input: {
     scopes.some((scope) => scope.name === name && (scope.type === undefined || scope.type === "tenant"));
   // Both halves of the recommended path: delivery (the platform pushes un-mentioned group messages)
   // and reading a quoted message (so a thread's opening ask carries what it replies to).
-  const missing = FEISHU_CONTEXT_ONBOARDING_SCOPES.filter((name: string) => !granted(name));
+  // The read capability has two spellings and `im:message` is the superset, so an app holding it needs
+  // nothing added — asking anyway would cost the author a second tenant-admin approval round.
+  const missing = FEISHU_CONTEXT_ONBOARDING_SCOPES.filter((name: string) =>
+    name === FEISHU_MESSAGE_READ_SCOPE ? !FEISHU_MESSAGE_READ_SCOPES.some(granted) : !granted(name),
+  );
 
   if (behavior === "mentions") {
     if (!inspected) {

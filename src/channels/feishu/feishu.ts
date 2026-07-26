@@ -33,7 +33,7 @@ import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
 import { createThreadParticipants } from "../thread-participants.ts";
-import { FEISHU_GROUP_CONTEXT_SCOPE, FEISHU_MESSAGE_READ_SCOPE } from "./setup-mode.ts";
+import { FEISHU_GROUP_CONTEXT_SCOPE, FEISHU_MESSAGE_READ_SCOPE, FEISHU_MESSAGE_READ_SCOPES } from "./setup-mode.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -261,7 +261,7 @@ function createFeishuRuntimeFactory(
         // Reported OUTSIDE the branch above: the quoted-message read runs in every chat type and every
         // posture (a p2p thread's opening ask, any quoted @mention in a group), so pairing this warning
         // with the group scope would leave a mention-only deployment silently losing every referent.
-        if (!grantedScope(FEISHU_MESSAGE_READ_SCOPE)) {
+        if (!FEISHU_MESSAGE_READ_SCOPES.some(grantedScope)) {
           log.warn(
             `${label} ${FEISHU_MESSAGE_READ_SCOPE} is not granted — a message quoted by an ask cannot be read, and degrades to a marker in the prompt`,
           );

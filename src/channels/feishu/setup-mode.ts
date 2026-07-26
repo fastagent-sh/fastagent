@@ -17,6 +17,12 @@ export const FEISHU_GROUP_CONTEXT_SCOPE = "im:message.group_msg";
  *  mention-only app wanting referents must add it by hand. */
 export const FEISHU_MESSAGE_READ_SCOPE = "im:message:readonly";
 
+/** Every scope that authorizes `GET /open-apis/im/v1/messages/{id}`. `im:message` is the read/write
+ *  superset, so an app holding it can already read a quoted message — checking only the readonly
+ *  spelling would warn a correctly configured app forever and push its author into a redundant
+ *  approval round. Request the narrow one; accept either. */
+export const FEISHU_MESSAGE_READ_SCOPES = [FEISHU_MESSAGE_READ_SCOPE, "im:message"];
+
 /** What `--group-behavior context` REQUESTS in one approval round — not a dependency set. Only the
  *  delivery scope is required for the context path; the read scope rides along because it shares the
  *  round and its absence merely degrades quoted messages to a marker. */
