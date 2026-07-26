@@ -1547,6 +1547,27 @@ describe("turn flow", () => {
     expect(existsSync(join(home, "buffers.json"))).toBe(false);
   });
 
+  it("a route supplying its own session leaves a BYSTANDER record — the thread's session never held the turn", async () => {
+    feishuFetch();
+    const { handler, calls, home, idle } = buildChannel({ route: () => ({ session: "user:ou_alice" }) });
+
+    await handler(
+      feishuRequest(messageEvent({ id: "om_rs", chatType: "group", threadId: "omt_rs", text: "routed elsewhere" })),
+    );
+    await idle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("user:ou_alice");
+
+    // `agentSpoke` would claim the thread's own session remembers this turn. It does not — the answer
+    // went to a per-user session — so both readers (the referent anchor and the summon rule) must not
+    // see it here. The human is still recorded: what was heard is heard.
+    const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
+      string,
+      { agentSpoke: boolean; humans: string[] }
+    >;
+    expect(participants["oc_1:omt_rs"]).toEqual({ agentSpoke: false, humans: ["ou_alice"] });
+  });
+
   it("a custom route still records a COMPLETE participation record, since a deployment can drop the route", async () => {
     const fx = feishuFetch();
     const { handler, calls, home, idle } = buildChannel({ route: () => ({}) });

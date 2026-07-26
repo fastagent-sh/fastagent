@@ -250,14 +250,17 @@ function createFeishuRuntimeFactory(
           log.info(
             `${label} group visibility: context-aware — buffered discussion enabled; bare replies work in a thread once the agent has been mentioned in it`,
           );
-          if (!grantedScope(FEISHU_MESSAGE_READ_SCOPE)) {
-            log.warn(
-              `${label} ${FEISHU_MESSAGE_READ_SCOPE} is not granted — a message quoted by an ask cannot be read, and degrades to a marker in the prompt`,
-            );
-          }
         } else {
           log.warn(
             `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare replies in the agent's threads + group context buffering are unavailable`,
+          );
+        }
+        // Reported OUTSIDE the branch above: the quoted-message read runs in every chat type and every
+        // posture (a p2p thread's opening ask, any quoted @mention in a group), so pairing this warning
+        // with the group scope would leave a mention-only deployment silently losing every referent.
+        if (!grantedScope(FEISHU_MESSAGE_READ_SCOPE)) {
+          log.warn(
+            `${label} ${FEISHU_MESSAGE_READ_SCOPE} is not granted — a message quoted by an ask cannot be read, and degrades to a marker in the prompt`,
           );
         }
       },
@@ -533,12 +536,6 @@ function createFeishuRuntimeFactory(
       const agentInThread =
         m.thread_id !== undefined &&
         (m.chat_type !== "group" || hearsGroupThreads) &&
-        // Participation is keyed by THREAD; the memory it stands in for is keyed by SESSION. Those
-        // agree only while the session is derived from the place — a route supplying its own (the
-        // scaffold's `session: user:<open_id>` example) can put two people's turns in the same thread
-        // into different sessions, where "the agent answered here" proves nothing about what THIS
-        // session holds. A custom route is the complete authority, so defer to it and load the quote.
-        r?.session === undefined &&
         threadParticipants.get(threadKey(m.chat_id, m.thread_id))?.agentSpoke === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
@@ -653,17 +650,21 @@ function createFeishuRuntimeFactory(
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
       // bare message address it without a mention (§3).
       //
-      // Ungated by design: the referent anchor above (`agentInThread`) consumes this in every chat
-      // type and under any route to tell a thread's opening message from a continuation, so narrowing
-      // it would make every message of a p2p or custom-route thread re-load its `parent_id` referent.
-      // The human observation above matches this condition for the same reason, so the record is never
-      // half-written.
+      // `r.session === undefined` is what makes this fact mean what both readers assume. Participation
+      // is keyed by THREAD while the memory it stands in for is keyed by SESSION, and those agree only
+      // when the session is derived from the place. A route supplying its own (the scaffold's
+      // `session: user:<open_id>` example) can put two people's turns in one thread into different
+      // sessions — recording `agentSpoke` from one of them would tell the referent anchor to drop a
+      // quote for a session that never held it, and tell the summon rule the agent took part in a
+      // conversation it cannot remember. So the flag records "the agent answered into THIS THREAD'S
+      // session", and both readers can take it at face value. Such a thread simply keeps a bystander
+      // record, and needs the ordinary mention to bootstrap if the route is later dropped.
       //
       // Recorded only once the intent is durable:
       // `submit` can throw, and a re-pushed first message must still see an empty thread so it keeps
       // its referent anchor. A later delivery failure does not undo it — entering the conversation is
       // the intent, not the send.
-      if (replyInThread === true && m.thread_id !== undefined && sameTarget) {
+      if (replyInThread === true && m.thread_id !== undefined && sameTarget && r.session === undefined) {
         threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { agentSpoke: true });
       }
     };

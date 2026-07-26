@@ -100,7 +100,8 @@ export async function configureGroupBehavior(input: {
       return { publishReady: false };
     }
     note(
-      `[fastagent] group behavior: mention-only — bare replies in the Agent's threads and group context buffering are disabled`,
+      `[fastagent] group behavior: mention-only — bare replies in the Agent's threads and group context buffering are disabled. ` +
+        `Add ${FEISHU_MESSAGE_READ_SCOPE} by hand if you want an @mention to carry the message it quotes`,
     );
     return { publishReady: true };
   }
