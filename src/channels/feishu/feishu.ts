@@ -649,10 +649,9 @@ function createFeishuRuntimeFactory(
       // bootstrap if the route is later dropped. `group` matches the observation above so the record is
       // never half-written.
       //
-      // Recorded only once the intent is durable:
-      // `submit` can throw, and a re-pushed first message must still see an empty thread so it keeps
-      // its referent anchor. A later delivery failure does not undo it — entering the conversation is
-      // the intent, not the send.
+      // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
+      // the thread as the agent has actually left it. A later delivery failure does not undo it —
+      // entering the conversation is the intent, not the send.
       if (
         replyInThread === true &&
         m.thread_id !== undefined &&

@@ -268,9 +268,9 @@ listening* counts as two-party.
 
 The thread's identity is `thread_id`. Feishu's `root_id` is NOT stable within a thread — it tracks the
 reply chain and can differ between messages of one thread — so it is used for neither the session key
-nor the context bucket. The first message of a thread loads the message it replies to as referenced
-input (usually the Agent's own earlier answer); later messages do not, because the session already
-holds them. An unreadable referent degrades to a marker instead of failing the turn.
+nor the context bucket. A message that quotes another always loads it as referenced input,
+inside a thread or out of it — a quote is the user pointing at something that may predate the session.
+An unreadable referent degrades to a marker instead of failing the turn.
 
 Turns are serialized per session (FIFO) instead of failing fast as `session busy`. Since the session is
 the place, **a whole group room is one queue**: a second person's `@Agent` in a busy room waits behind

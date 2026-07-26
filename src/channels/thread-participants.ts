@@ -60,8 +60,8 @@ import { loadStateFile, saveStateFile } from "./state.ts";
  *  costs nothing: the summon rule refuses a thread the agent has not spoken in anyway, so the record
  *  would have to be rebuilt by the mention that admits it. Evicting purely by age would let this
  *  traffic push out the threads the agent is actively serving, silently reverting them to
- *  mention-only. This is also what makes it safe for a channel to record threads no rule reads
- *  (Feishu's p2p and custom-route records, kept so a record is never half-written). */
+ *  mention-only. This is also what makes it safe to record threads no rule currently reads (those
+ *  behind a custom route, or under a posture whose summon rule is off — see the header). */
 const MAX_THREADS = 1000;
 
 /** Cap on remembered humans per thread. The rule only asks "have I heard a second one?", so two is

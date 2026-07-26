@@ -346,10 +346,10 @@ a stable hand-authored surface. What is platform-different:
   a group's main timeline requires an @mention; inside a thread the agent answers bare messages only
   while it takes part and has not heard a second human. Everything else it can see is buffered as context
   (`im:message.group_msg` is what buys the hearing). An explicit mention of only other people is
-  discussion, never an ask. The first message of a thread loads its `parent_id` referent (a thread
-  usually starts from the agent's own earlier answer); later messages in a known thread do not, since
-  the session already holds what they reply to. An unreadable referent degrades to a marker in the
-  prompt rather than failing the turn.
+  discussion, never an ask. A message's `parent_id` referent is ALWAYS loaded — a
+  quote is the user pointing at something that may predate this session. (Skipping it inside a thread
+  the agent had answered in was tried and removed: see participant-model.md §8.) An unreadable referent
+  degrades to a marker in the prompt rather than failing the turn.
 - **Thread participation is what the channel HEARD, not a claim about the thread's membership.** Two
   decisions:
   - *Predicate.* The agent speaks unprompted in a thread only where it has answered before and has
