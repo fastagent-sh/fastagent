@@ -31,9 +31,15 @@ export function hasSlackUserMention(text: string): boolean {
   return new RegExp(USER_MENTION, "i").test(text);
 }
 
-/** Does this text mention this specific user (either form)? */
+/** Escape a platform-supplied id before it becomes part of a pattern. Slack ids are alphanumeric in
+ *  practice, but `auth.test`'s value is not validated here, and this runs on every group message: an
+ *  unescaped metacharacter would either mis-answer the summon question or throw on the acceptance
+ *  path, which Slack answers with an endless redelivery. */
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Does this text mention this specific user (either form)? The id is MATCHED, not interpreted. */
 export function mentionsSlackUser(text: string, userId: string): boolean {
-  return new RegExp(mentionSource(userId), "i").test(text);
+  return new RegExp(mentionSource(escapeRegExp(userId)), "i").test(text);
 }
 
 /** Strip every mention, e.g. before matching a bare command word or building a title. */

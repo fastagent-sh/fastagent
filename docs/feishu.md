@@ -361,6 +361,11 @@ Three behaviour changes, none of them opt-in:
   queue: a second person's `@Agent` in a busy room waits behind an unrelated multi-minute turn (they
   see the "⏳ Queued" card). Open a thread to run something alongside it.
 
+- **Unrelated to the model, but in the same release:** the scaffolded send tool's description gained a
+  "do not use this to answer the current turn" boundary (without it the Agent posts its reply twice).
+  Scaffolded files are copies, so an existing workspace keeps the old text — see the send-tool section
+  above for the one-line fix.
+
 State cleans itself up on the first start: `owned-threads.json` is removed, and `buffers.json` buckets
 under the retired key shape are dropped — which means **buffered discussion in threads does not survive
 the upgrade** (a chat's own bucket does). The dropped count is logged.

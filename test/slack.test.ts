@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/agent.ts";
+import { mentionsSlackUser } from "../src/channels/slack/parse.ts";
 import { NO_ACTIVE_RUN_CODE, type SessionCommand, type SessionControl } from "../src/session.ts";
 import { type SlackChannelOptions, type SlackEventEnvelope, slackChannel, verifySlackSignature } from "../src/slack.ts";
 
@@ -534,6 +535,15 @@ describe("Slack sessions, context, and thread participation", () => {
     await settle();
     expect(calls).toHaveLength(1);
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("can you look?");
+  });
+
+  it("a bot id carrying regex metacharacters is matched, not interpreted", () => {
+    // `auth.test`'s user_id is not validated here and this runs on every group message: interpolating
+    // it raw would either mis-answer the summon question or throw on the acceptance path, which Slack
+    // answers with an endless redelivery.
+    expect(mentionsSlackUser("hi <@U.+> there", "U.+")).toBe(true);
+    expect(mentionsSlackUser("hi <@UBOT> there", "U.+")).toBe(false);
+    expect(mentionsSlackUser("hi <@UBOT|agent> there", "UBOT")).toBe(true);
   });
 
   it("a broadcast is not a possible summon, so it buffers while the bot identity is unresolved", async () => {

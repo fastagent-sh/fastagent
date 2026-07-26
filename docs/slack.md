@@ -328,6 +328,9 @@ If either was set to `continuous`, both where answers land and how sessions are 
 removal, and **existing conversation history is not migrated** — every thread starts fresh. The obsolete
 `owned-threads.json` is deleted on the first start; nothing else needs cleaning up.
 
+Slack's scaffolded `slack-send` already carried the "do not use this to answer the current turn"
+boundary its Feishu and Telegram siblings gained this release, so nothing to paste here.
+
 Behaviour that changes even on the default configuration: a bare reply in a thread is answered while
 the Agent takes part and it has not heard a second human there (previously: any thread it had created).
 Derivation in [design/participant-model.md](design/participant-model.md) §3 and §12.
