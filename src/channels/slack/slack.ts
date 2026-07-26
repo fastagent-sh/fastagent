@@ -468,8 +468,10 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // identity routes it now; while auth.test is still unresolved, defer any mentioned message rather
       // than buffer+dedup it and accidentally suppress the later app_mention callback.
       if (!routed && route === undefined && group && event.type === "message" && structurallyMentionsBot) routed = {};
-      // The participant model's thread rule, independent of the session mode: a bare message reaches
-      // the agent while it takes part and exactly one human does.
+      // The participant model's thread rule (§3): a bare message reaches the agent while it takes part
+      // and has not heard a second human. Note the ORDER — the mention guard below runs first and is
+      // structural: it reads who THIS message addresses, which is the one thing an observation-only
+      // store cannot know about someone it has never heard.
       if (
         !routed &&
         groupBehavior === "context" &&
