@@ -339,9 +339,14 @@ coupled three independent axes — session identity, reply placement, and the su
 who wanted room-level sessions was forced to also give up mention-free thread continuations. The
 model above sets each axis on its own principle, which leaves nothing for the modes to select.
 
-For Feishu/Lark, state left by the previous model is cleaned up on the next start: `owned-threads.json` is removed, and
-`buffers.json` buckets keyed `<chat>:root:<id>` are dropped at load — no place key can produce that
-shape again, so nothing could ever fold or clear them. Live buckets are untouched.
+For Feishu/Lark, state left by the previous model is cleaned up on the next start: `owned-threads.json`
+is removed, and `buffers.json` buckets keyed `<chat>:root:<id>` are dropped at load — the re-keying
+means no place key can produce that shape again, so nothing could ever fold or clear them.
+
+That discards real content, once: the retired shape covered EVERY thread bucket and every main-chat
+quoted-reply bucket, so buffered discussion in threads does not survive the upgrade (a chat's own
+`<chat>` bucket does). A turn that was in flight across the upgrade loses its buffered context too —
+its `bufferKey` was persisted under the old shape. Both are one-time, and the dropped count is logged.
 
 Breaking changes for existing Feishu/Lark deployments:
 

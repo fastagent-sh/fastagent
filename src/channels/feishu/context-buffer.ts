@@ -132,11 +132,12 @@ function isEntry(value: unknown): value is FeishuBufferEntry {
  * they would hold chat content on disk forever. Dropped here, before the buffer loads, so the shared
  * kernel never learns about a key shape one channel retired.
  *
- * ONE known loss, accepted: `turns.json` persists each in-flight turn's `bufferKey` verbatim, and this
- * runs before turn recovery — so a turn that was in flight ACROSS the upgrade carries an old key and
- * finds its bucket already gone, losing that turn's buffered context. It happens at most once per
- * deployment, the dropped count is logged, and the alternative (reading the turn store from here to
- * spare referenced keys) couples the buffer to the turn store to protect a single upgrade.
+ * TWO one-time losses, both accepted and both logged by count. (1) The retired shape covered every
+ * thread bucket and every main-chat quoted-reply bucket, so buffered discussion in threads does not
+ * survive the upgrade — it becomes unreachable BECAUSE of the re-keying, not before it. (2)
+ * `turns.json` persists each in-flight turn's `bufferKey` verbatim and this runs before turn recovery,
+ * so a turn spanning the upgrade finds its bucket already gone. Sparing referenced keys would couple
+ * the buffer to the turn store to protect a single upgrade, and would not help (1) at all.
  *
  * PERMANENT, unlike the `owned-threads.json` cleanup it otherwise resembles. That one leaves an inert
  * orphan file, so deleting it a release later is free; this one is what stops user chat content

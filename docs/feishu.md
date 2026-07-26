@@ -329,8 +329,10 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 - `files/<chat>/` — downloaded inbound files.
 
 An upgrade from the earlier session-mode model cleans itself up on the next start: the obsolete
-`owned-threads.json` is removed, and unreachable `buffers.json` buckets keyed `<chat>:root:<id>` are
-dropped at load (live buckets are untouched).
+`owned-threads.json` is removed, and `buffers.json` buckets keyed `<chat>:root:<id>` are dropped at
+load, since the re-keying means nothing can ever fold or clear them again. That old shape covered every
+thread bucket, so **buffered discussion in threads does not survive the upgrade** — a chat's own bucket
+does. The dropped count is logged.
 
 The seen ring is bounded, best-effort delivery dedup rather than exactly-once execution. It is written
 after the turn/buffer state so a failed pre-ACK state write can still be redelivered safely; a crash

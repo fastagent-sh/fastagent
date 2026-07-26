@@ -179,6 +179,10 @@ which makes it a participant, and later bare replies reach it without the name. 
 speaks in that thread, addressing is ambiguous again and it returns to requiring a mention while still
 listening.
 
+A bare message that @-mentions only other people is discussion, never an ask: it is buffered like any
+other unsummoned message, and the Agent stays quiet. Only an absent mention — or one naming the Agent —
+reaches the rule above.
+
 Both halves are what this channel *heard*, not a claim about who is really in the thread: nothing is
 read back from Slack, so acceptance stays synchronous and a thread the Agent joined before this
 deployment — or before a lost `thread-participants.json` — takes one mention to re-enter. That is the
