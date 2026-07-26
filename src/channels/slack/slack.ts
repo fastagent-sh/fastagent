@@ -104,13 +104,15 @@ export interface SlackChannelOptions {
   clientId?: string;
   clientSecret?: string;
   botTokenExpiresAt?: number;
-  /** `context` (default) admits bare replies in managed group threads and buffers unsummoned group
-   * discussion. `mentions` answers only app_mention plus DMs for an explicit least-privilege setup. */
+  /** `context` (default) subscribes to group message streams, which is what lets the channel HEAR a
+   * thread: bare replies are then admitted by the participation rule (design/participant-model.md §3),
+   * and other discussion is buffered. `mentions` answers only app_mention plus DMs for an explicit
+   * least-privilege setup. */
   groupBehavior?: "context" | "mentions";
   /** `native` (default) uses Slack Agent streams/tasks for threaded replies. `classic` retains the
-   * compatibility renderer based on one rate-limited edited message. A top-level target selected by an
-   * explicit continuous/custom policy necessarily uses the classic renderer because Slack streams
-   * require a parent user message. */
+   * compatibility renderer based on one rate-limited edited message. A top-level target — only
+   * reachable from a custom route returning `threadTs: null` — necessarily uses the classic renderer,
+   * because Slack streams require a parent user message. */
   rendering?: SlackRendering;
   /** Native task-card layout (`chat.startStream` `task_display_mode`): `plan` (default) groups steps
    * under a single collapsible heading, `timeline` lists each step sequentially, `dense` collapses

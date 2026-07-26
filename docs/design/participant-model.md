@@ -136,8 +136,9 @@ carries no usable id (Feishu's `sender_id` is a union, and which members a tenan
 configuration) is counted under a synthetic per-message id, so two such messages fill the thread's
 human slots and it requires an @mention from then on. Collapsing them into one speaker would be tidier
 but wrong in the dangerous direction — on a tenant that carries no ids at all, every human would read
-as the same one. Deleting the state file is the only reset; the channel warns once at startup when it
-first sees such a sender.
+as the same one. Deleting the state file is the only reset; the channel warns once per process, the
+first time it hears an unattributable sender in a group thread — the only place participation is
+recorded, so a deployment used purely in direct messages never trips it (and never needs to).
 
 Two consequences worth naming rather than discovering:
 

@@ -431,7 +431,7 @@ describe("Slack sessions, context, and thread participation", () => {
     );
   });
 
-  it("defaults to context-aware groups, owns the summoned thread, and dedups logical messages", async () => {
+  it("defaults to context-aware groups, records participation in the thread its answer creates, and dedups logical messages", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
     const { handler, stateRoot } = mount(agent);

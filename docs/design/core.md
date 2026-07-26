@@ -261,14 +261,16 @@ thread participation/context, private-file resolution, Slack Web API transport, 
 rate-limited edited-message rendering.
 
 The request boundary verifies Slack's `v0` HMAC over the capped raw body and a five-minute timestamp,
-then persists a turn/context/root before returning 200. Logical dedup uses `(team, channel, ts)` because
-`app_mention` and `message.*` subscriptions may overlap; `event_id` alone does not identify that shared
-message. `context` group mode subscribes to channel/private-channel/MPIM message streams, admits bare
-human replies only in durably owned roots, and folds other discussion with the same peek→completed→commit
-invariant as Telegram/Feishu. Direct and group sessions default to independent platform threads, with
-separate `continuous` compatibility options. As in Feishu/Lark, only a top-level group summon creates an
-owned root; an explicit summon inside an existing human thread does not adopt it. `mentions` keeps the
-least-privilege explicit-summon surface.
+then persists the turn intent and any buffered context before returning 200. Logical dedup uses
+`(team, channel, ts)` because `app_mention` and `message.*` subscriptions may overlap; `event_id` alone
+does not identify that shared message. Sessions follow the place, not the ask: an answer goes in a
+thread on the ask and that thread IS the session, so there are no session modes to select. `context`
+group mode subscribes to channel/private-channel/MPIM message streams, admits a bare human reply where
+the participation rule allows it (the agent has answered there and no second human has been heard —
+see participant-model.md §3, and the Feishu bullets above for the shared store), and folds other
+discussion with the same peek→completed→commit invariant as Telegram/Feishu. Answering an explicit
+summon inside an existing human thread is exactly what makes the agent a participant of it. `mentions`
+keeps the least-privilege explicit-summon surface.
 
 File events persist IDs only. Dequeue-time `files.info` resolves current metadata; authenticated downloads
 are host-restricted, timeout/cap guarded, and translated to vision images or absolute local paths. Primary
@@ -279,7 +281,7 @@ Newly onboarded apps use Slack's `agent_view`, `assistant:write`, token rotation
 status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Standard Markdown text events append to
 the stream; engine-neutral tool lifecycle events become dense `task_update` chunks. Raw model thinking and
 generic tool arguments stay private. The compatibility renderer retains one edited message with a strict
-three-second mutation interval; explicit continuous/custom top-level routes select it because native
+three-second mutation interval; a custom route targeting the top level (`threadTs: null`) selects it because native
 streams require a parent user message. HTTP Events API remains the production transport; Socket Mode is a
 separate future boundary rather than entering `ChannelModule` indirectly.
 
