@@ -52,9 +52,17 @@ export function senderId(sender: FeishuSender | undefined): string | undefined {
   return sender?.sender_id?.open_id ?? sender?.sender_id?.user_id ?? sender?.sender_id?.union_id;
 }
 
-/** The place a message lives (the chat, or a thread within it) — the session key (participant model §5). */
-export function placeKey(message: Pick<FeishuMessage, "chat_id" | "thread_id">): string {
-  return message.thread_id ? `${message.chat_id}:${message.thread_id}` : message.chat_id;
+/**
+ * The place a message lives (the chat, or a thread within it) — the session key (participant model §5),
+ * and the key thread participation is recorded under, since that record is a claim about this session.
+ *
+ * Branded with the channel kind, like Slack's twin: a state root shared by a `feishu` and a `lark`
+ * channel would otherwise let two tenants' ids meet in one namespace. Well inside the session-id
+ * budget — a chat plus a thread id is ~30 characters against 64.
+ */
+export function placeKey(kind: string, message: Pick<FeishuMessage, "chat_id" | "thread_id">): string {
+  const chat = `${kind}:${message.chat_id}`;
+  return message.thread_id ? `${chat}:${message.thread_id}` : chat;
 }
 
 /** The canonical Feishu-branded prompt envelope. */

@@ -132,8 +132,11 @@ function isEntry(value: unknown): value is FeishuBufferEntry {
  * they would hold chat content on disk forever. Dropped here, before the buffer loads, so the shared
  * kernel never learns about a key shape one channel retired.
  *
- * A ONE-RELEASE migration, like the `owned-threads.json` cleanup in feishu.ts: REMOVE THIS after the
- * release following the participant model ships. test/migration-deadline.test.ts fails when due.
+ * PERMANENT, unlike the `owned-threads.json` cleanup it otherwise resembles. That one leaves an inert
+ * orphan file, so deleting it a release later is free; this one is what stops user chat content
+ * lingering, and a deployment that skips from before the model to well after it would never run an
+ * expired version of this code. The standing cost is one key scan at load, and nothing when no retired
+ * key is present.
  */
 function dropRetiredBuckets(path: string, label: string): void {
   const raw = loadStateFile(path);

@@ -22,9 +22,10 @@ describe("one-release migrations", () => {
     expect(
       major === 0 && (minor ?? 0) < REMOVE_AT_MINOR,
       `v${version}: CONFIRM the participant model shipped in 0.16 (re-pin REMOVE_AT_MINOR if not), then ` +
-        "remove its migrations — the owned-threads.json cleanups in " +
-        "channels/feishu/feishu.ts + channels/slack/slack.ts, and dropRetiredBuckets in " +
-        "channels/feishu/context-buffer.ts. Then delete this test.",
+        "remove the owned-threads.json cleanups in channels/feishu/feishu.ts + channels/slack/slack.ts, " +
+        "and delete this test. NOT dropRetiredBuckets in channels/feishu/context-buffer.ts — that one is " +
+        "permanent on purpose (it is what stops retired buckets holding chat content, and a version-" +
+        "skipping upgrade would never run an expired copy of it).",
     ).toBe(true);
   });
 });

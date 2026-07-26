@@ -342,7 +342,7 @@ describe("turn flow", () => {
     await idle();
 
     // Rule 3 (memory follows the place): both messages share the chat session — no per-ask session.
-    expect(calls.map((call) => call.scope.session)).toEqual(["oc_1", "oc_1"]);
+    expect(calls.map((call) => call.scope.session)).toEqual(["feishu:oc_1", "feishu:oc_1"]);
     expect(encodeURIComponent(calls[0]?.scope.session ?? "").length).toBeLessThanOrEqual(64);
     expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice]");
     expect(calls[0]?.prompt.text).toContain("hello there");
@@ -416,7 +416,7 @@ describe("turn flow", () => {
     await idle();
 
     // A direct message's thread is a place too: answering in the main timeline would relocate it.
-    expect(calls[0]?.scope.session).toBe("oc_1:omt_dm");
+    expect(calls[0]?.scope.session).toBe("feishu:oc_1:omt_dm");
     const reply = fx.calls("/im/v1/messages/om_dm_thread/reply", "POST")[0];
     expect(reply?.body?.reply_in_thread).toBe(true);
   });
@@ -445,7 +445,7 @@ describe("turn flow", () => {
     await idle();
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("oc_1");
+    expect(calls[0]?.scope.session).toBe("feishu:oc_1");
     expect(calls[0]?.prompt.text).toContain("earlier context"); // the referent anchor (rung 2)
     expect(fx.calls("/im/v1/messages/om_old", "GET")).toHaveLength(1);
   });
@@ -476,12 +476,12 @@ describe("turn flow", () => {
     await handler(feishuRequest(messageEvent({ id: "om_3", chatId: "oc_other", text: "other-chat" })));
 
     await vi.waitFor(() => expect(starts.map((entry) => entry.ask)).toEqual(["first", "other-chat"]));
-    expect(starts.map((entry) => entry.session)).toEqual(["oc_1", "oc_other"]);
+    expect(starts.map((entry) => entry.session)).toEqual(["feishu:oc_1", "feishu:oc_other"]);
 
     releaseFirst();
     await idle();
     expect(starts.map((entry) => entry.ask)).toEqual(["first", "other-chat", "second"]);
-    expect(starts[2]?.session).toBe("oc_1");
+    expect(starts[2]?.session).toBe("feishu:oc_1");
   });
 
   it("a mount rejected with 'cardid is invalid' (cardkit→IM propagation) is retried, not degraded", async () => {
@@ -520,7 +520,7 @@ describe("turn flow", () => {
     await idle();
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("oc_1"); // the room's memory, shared by everyone in it
+    expect(calls[0]?.scope.session).toBe("feishu:oc_1"); // the room's memory, shared by everyone in it
     expect(calls[0]?.prompt.text).toContain("@Bot status?");
     // Answered in place: quoted so the ask stays identifiable, but NOT pushed into a new thread.
     const reply = fx.calls("/im/v1/messages/om_g1/reply", "POST")[0];
@@ -701,7 +701,7 @@ describe("turn flow", () => {
       string,
       { humans: string[] }
     >;
-    expect(participants["oc_1:omt_two"]?.humans.sort()).toEqual(["ou_alice", "ou_bob"]);
+    expect(participants["feishu:oc_1:omt_two"]?.humans.sort()).toEqual(["ou_alice", "ou_bob"]);
   });
 
   it("a bare message in a thread the agent is talking to addresses it, through the normal streaming path", async () => {
@@ -711,7 +711,7 @@ describe("turn flow", () => {
 
     await joinThread(handler, idle, "omt_two_party");
     expect(JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8"))).toHaveProperty(
-      "oc_1:omt_two_party",
+      "feishu:oc_1:omt_two_party",
     );
 
     await handler(
@@ -723,7 +723,7 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(2);
     // Rule 3: a thread is its own place, so both turns share the thread's session.
-    expect(calls.map((call) => call.scope.session)).toEqual(["oc_1:omt_two_party", "oc_1:omt_two_party"]);
+    expect(calls.map((call) => call.scope.session)).toEqual(["feishu:oc_1:omt_two_party", "feishu:oc_1:omt_two_party"]);
     expect(calls[1]?.prompt.text).toContain("what about queues?");
     // Nothing was asked of the platform: both halves of the rule are what this channel heard.
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
@@ -1146,7 +1146,7 @@ describe("turn flow", () => {
     await idle();
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("oc_1:omt_group");
+    expect(calls[0]?.scope.session).toBe("feishu:oc_1:omt_group");
     const reply = fx.calls("/im/v1/messages/om_group_followup/reply", "POST")[0];
     expect(reply?.body?.reply_in_thread).toBe(true);
   });
@@ -1181,7 +1181,7 @@ describe("turn flow", () => {
     );
     await idle();
 
-    expect(calls.map((call) => call.scope.session)).toEqual(["oc_1", "oc_1:omt_existing"]);
+    expect(calls.map((call) => call.scope.session)).toEqual(["feishu:oc_1", "feishu:oc_1:omt_existing"]);
     const topReply = fx.calls("/im/v1/messages/om_group_continuous/reply", "POST")[0];
     expect(topReply?.body?.reply_in_thread).toBeUndefined();
     const topicReply = fx.calls("/im/v1/messages/om_group_topic/reply", "POST")[0];
@@ -1565,7 +1565,7 @@ describe("turn flow", () => {
       string,
       { agentSpoke: boolean; humans: string[] }
     >;
-    expect(participants["oc_1:omt_rs"]).toEqual({ agentSpoke: false, humans: ["ou_alice"] });
+    expect(participants["feishu:oc_1:omt_rs"]).toEqual({ agentSpoke: false, humans: ["ou_alice"] });
   });
 
   it("a custom route still records a COMPLETE participation record, since a deployment can drop the route", async () => {
@@ -1588,7 +1588,7 @@ describe("turn flow", () => {
       string,
       { agentSpoke: boolean; humans: string[] }
     >;
-    expect(participants["oc_1:omt_custom"]).toEqual({ agentSpoke: true, humans: ["ou_alice"] });
+    expect(participants["feishu:oc_1:omt_custom"]).toEqual({ agentSpoke: true, humans: ["ou_alice"] });
   });
 
   it("a custom route's empty text runs NO turn (nothing to say, nothing to load)", async () => {
@@ -1742,7 +1742,7 @@ describe("the Lark compatibility profile", () => {
     expect(res.status).toBe(200);
     await maybeIdle?.();
     expect(calls[0]?.prompt.text).toContain("[lark: chat oc_1 (p2p)");
-    expect(calls[0]?.scope.session).toBe("oc_1");
+    expect(calls[0]?.scope.session).toBe("lark:oc_1"); // branded per channel, not per engine
     // A direct message is answered in place: a plain send, not a quoted thread reply.
     const mount = fx.calls("receive_id_type=chat_id", "POST").find((call) => call.body?.msg_type === "interactive");
     expect(mount).toBeDefined();
@@ -1802,7 +1802,7 @@ describe("feishu stop command", () => {
     expect((await handler(feishuRequest(evt))).status).toBe(200);
     await flush();
     await idle();
-    expect(dispatched).toEqual([{ session: "oc_1", command: { type: "abort" } }]);
+    expect(dispatched).toEqual([{ session: "feishu:oc_1", command: { type: "abort" } }]);
     expect(calls).toHaveLength(0); // a control action, never a turn
   });
 

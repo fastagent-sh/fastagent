@@ -285,7 +285,8 @@ function createFeishuRuntimeFactory(
     /** This channel's place key for a thread (the shared store is key-agnostic). */
     // The SAME identity the session uses (`placeKey`) — a thread's place. Defining it twice would let a
     // future re-keying silently split participation from the sessions it is supposed to describe.
-    const threadKey = (chatId: string, threadId: string): string => placeKey({ chat_id: chatId, thread_id: threadId });
+    const threadKey = (chatId: string, threadId: string): string =>
+      placeKey(kind, { chat_id: chatId, thread_id: threadId });
     const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
@@ -575,7 +576,7 @@ function createFeishuRuntimeFactory(
       // Memory follows the place (participant model §5): one session per chat, and one per thread.
       // Keyed by `thread_id`, never `root_id` — the platform's root_id tracks the reply chain and can
       // differ between messages of ONE thread, which would split a side conversation in two.
-      const session = r.session ?? placeKey(m);
+      const session = r.session ?? placeKey(kind, m);
       const chatId = r.chatId ?? m.chat_id;
       const sameTarget = chatId === m.chat_id;
       // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers,
