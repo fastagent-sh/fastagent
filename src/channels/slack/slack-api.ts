@@ -90,7 +90,6 @@ const NATIVE_UNAVAILABLE_ERRORS = new Set([
 
 /** A definitive capability rejection is safe to route through the compatibility renderer. Network,
  * internal, and timeout failures are ambiguous: Slack may already have created the stream. */
-
 export function isSlackNativeUnavailable(error: unknown): boolean {
   return error instanceof SlackApiError && !!error.slackError && NATIVE_UNAVAILABLE_ERRORS.has(error.slackError);
 }

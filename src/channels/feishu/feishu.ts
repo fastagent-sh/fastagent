@@ -33,7 +33,7 @@ import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
 import { createThreadParticipants } from "../thread-participants.ts";
-import { FEISHU_GROUP_CONTEXT_SCOPE } from "./setup-mode.ts";
+import { FEISHU_GROUP_CONTEXT_SCOPE, FEISHU_MESSAGE_READ_SCOPE } from "./setup-mode.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -230,22 +230,31 @@ function createFeishuRuntimeFactory(
       },
       (e) => log.warn(`${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`),
     );
+    // Whether the platform delivers un-mentioned group messages to this app: the scope probe settles it
+    // shortly after boot. Also gates the referent anchor, which is only sound where the channel heard
+    // the thread it is skipping the quote for.
+    let hearsGroupThreads = false;
     void api.listAppScopes().then(
       (scopes) => {
-        const contextAware = scopes.some(
-          (scope) =>
-            scope.name === FEISHU_GROUP_CONTEXT_SCOPE &&
-            scope.grantStatus === 1 &&
-            (scope.type === undefined || scope.type === "tenant"),
-        );
-        if (contextAware) {
-          // This scope settles both halves: it delivers the un-mentioned group messages the channel
-          // buffers, and it is what lets the channel HEAR a thread, which is the whole input to the
-          // bare-reply rule. Nothing further is fetched, so nothing else is pending — the only
-          // bootstrap left is social, one mention inside a thread.
+        const grantedScope = (name: string): boolean =>
+          scopes.some(
+            (scope) =>
+              scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
+          );
+        if (grantedScope(FEISHU_GROUP_CONTEXT_SCOPE)) {
+          hearsGroupThreads = true;
+          // This scope settles the rule's whole input: it delivers the un-mentioned group messages the
+          // channel buffers, which is also what lets it HEAR a thread. Nothing is fetched, so nothing
+          // is pending — the only bootstrap left is social, one mention inside a thread. The read scope
+          // is a separate, softer dependency, so it is reported separately rather than folded in.
           log.info(
             `${label} group visibility: context-aware — buffered discussion enabled; bare replies work in a thread once the agent has been mentioned in it`,
           );
+          if (!grantedScope(FEISHU_MESSAGE_READ_SCOPE)) {
+            log.warn(
+              `${label} ${FEISHU_MESSAGE_READ_SCOPE} is not granted — a message quoted by an ask cannot be read, and degrades to a marker in the prompt`,
+            );
+          }
         } else {
           log.warn(
             `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare replies in the agent's threads + group context buffering are unavailable`,
@@ -506,8 +515,12 @@ function createFeishuRuntimeFactory(
       // buffered or dropped message still consumes its slot and never reuses a live turn's number
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
-      // Has the agent answered in this thread before this delivery? That is the cheap proxy for "the
-      // thread's session already holds what this message replies to". `agentSpoke` is a DURABLE
+      // Does the thread's session already hold what this message replies to? "The agent answered here"
+      // is the cheap proxy — but only where the channel actually RECEIVED the messages in between.
+      // A group needs the delivery scope for that (without it only @mentions arrive, so a quote of a
+      // message that was never delivered would be silently dropped); p2p is always fully heard. Until
+      // the scope probe settles the answer is "no", which costs a redundant read rather than a lost
+      // quote. `agentSpoke` is a DURABLE
       // observation, so a restart keeps the answer and changes nothing here. It is deliberately read
       // before the participation lookup below, and never from "a record exists": observation writes
       // one before acceptance can fail, which would strip a re-pushed first message of its anchor.
@@ -515,7 +528,9 @@ function createFeishuRuntimeFactory(
       // the next continuation loads its referent again: one extra read and some duplicated text, in
       // exchange for never leaving a thread's opening message without the context it replies to.
       const agentInThread =
-        m.thread_id !== undefined && threadParticipants.get(threadKey(m.chat_id, m.thread_id))?.agentSpoke === true;
+        m.thread_id !== undefined &&
+        (m.chat_type !== "group" || hearsGroupThreads) &&
+        threadParticipants.get(threadKey(m.chat_id, m.thread_id))?.agentSpoke === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
       // second human speaking is exactly what makes addressing ambiguous again.

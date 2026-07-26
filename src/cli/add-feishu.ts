@@ -70,6 +70,11 @@ export async function configureGroupBehavior(input: {
       (scope) =>
         scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
     );
+  // Same type filter as `granted`: a user-type entry is not the tenant scope this path needs, so
+  // treating one as "on the app" would report an approval that can never arrive and skip the PATCH
+  // that would actually add it.
+  const onApp = (name: string): boolean =>
+    scopes.some((scope) => scope.name === name && (scope.type === undefined || scope.type === "tenant"));
   const groupScope = scopes.find(
     (scope) => scope.name === FEISHU_GROUP_CONTEXT_SCOPE && (scope.type === undefined || scope.type === "tenant"),
   );
@@ -113,7 +118,7 @@ export async function configureGroupBehavior(input: {
   const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
   // A missing scope is in one of two states, and they need different actions: already on the app but
   // not yet approved (nothing to add — wait for the admin), or absent from the draft entirely.
-  const awaitingApproval = missing.filter((name: string) => scopes.some((scope) => scope.name === name));
+  const awaitingApproval = missing.filter(onApp);
   const toRequest = missing.filter((name: string) => !awaitingApproval.includes(name));
   if (toRequest.length === 0) {
     note(

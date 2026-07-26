@@ -1444,6 +1444,65 @@ describe("turn flow", () => {
     expect(fx.calls("/im/v1/messages/om_img/resources/k9").length).toBe(1);
   });
 
+  it("a mention-only deployment always loads the quoted message, since it never heard the thread", async () => {
+    // The anchor skips the quote because "the session already holds it" — true only where the channel
+    // RECEIVED the messages in between. Without the delivery scope only @mentions arrive, so a quote of
+    // a message that was never delivered would be dropped with nothing in its place.
+    const fx = feishuFetch({
+      "/im/v1/messages/om_quoted": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_quoted",
+                msg_type: "text",
+                body: { content: '{"text":"the quoted plan"}' },
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+
+    // First mention makes the agent a participant of the thread.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_first",
+          chatType: "group",
+          threadId: "omt_q",
+          content: JSON.stringify({ text: "@_user_1 start" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+
+    // A later mention quoting a message the app was never delivered.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_second",
+          chatType: "group",
+          threadId: "omt_q",
+          parentId: "om_quoted",
+          content: JSON.stringify({ text: "@_user_1 what about this?" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls).toHaveLength(2);
+    expect(fx.calls("/im/v1/messages/om_quoted", "GET")).toHaveLength(1);
+    expect(calls[1]?.prompt.text).toContain("the quoted plan");
+  });
+
   it("resolves a reply summon's referent: fetches the parent, injects its text, downloads its file", async () => {
     const fx = feishuFetch({
       "/im/v1/messages/om_parent": (url) =>
