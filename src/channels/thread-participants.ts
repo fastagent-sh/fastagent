@@ -98,7 +98,10 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
   return {
     get(key) {
       const record = records.get(key);
-      return record === undefined ? undefined : { ...record };
+      // Deep enough to cover the only mutable field: `merge`'s signature refuses a shrinking write so
+      // that "never shed" is an invariant rather than a convention, and handing out the live array
+      // would put it back to a convention on the read path.
+      return record === undefined ? undefined : { humans: [...record.humans], agentSpoke: record.agentSpoke };
     },
     merge(key, heard) {
       const previous = records.get(key);
