@@ -471,11 +471,15 @@ describe("Slack sessions, context, and thread participation", () => {
     await handler(signedRequest(message("30.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "30.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    // A second human speaks. Under `mentions` nothing reads participation — but the posture is
-    // configuration, and it can be switched back while this record survives. Skipping the write here
-    // is what would leave `agentSpoke` on disk with U2 missing, and the agent would then barge into a
-    // thread it believes is two-party, with no mention needed and no state loss to heal it.
-    await handler(signedRequest(message("30.2", { user: "U2", text: "and also", thread_ts: "30.0" })));
+    // A second human summons it in the same thread — an `app_mention`, which IS delivered under
+    // `mentions` (a bare channel message is not, which is why the posture's under-count is documented
+    // as accepted in §3 rather than defended against here). Nothing reads participation in this
+    // posture, but the posture is configuration and this record outlives a change to it: skipping the
+    // write would leave `agentSpoke` on disk with U2 missing, and after a switch back to `context` the
+    // agent would barge into a thread it believes is two-party.
+    await handler(
+      signedRequest(message("30.2", { user: "U2", type: "app_mention", text: "<@UBOT> and also", thread_ts: "30.0" })),
+    );
     await settle();
 
     const path = join(stateRoot, "channels", "slack", "thread-participants.json");

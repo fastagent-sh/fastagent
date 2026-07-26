@@ -8,7 +8,6 @@
  * workspace may run both without sharing state. Webhook returns the existing route factory; WebSocket
  * returns an explicit long-connection module. Both feed the same acceptance/turn engine. See docs/feishu.md.
  */
-import { rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../host/node.ts";
 import { log } from "../../log.ts";
@@ -16,7 +15,7 @@ import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createSeenRing } from "../seen.ts";
 import { createTaskTracker } from "../tasks.ts";
-import { ensureStateHome } from "../state.ts";
+import { ensureStateHome, removeRetiredStateFile } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
@@ -272,15 +271,10 @@ function createFeishuRuntimeFactory(
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
-    // The participant model replaced the managed-root index; its file is dead weight on a deployment
-    // upgrading across this one release (a cache, so nothing is lost). Best-effort: a leftover file is
-    // untidy, not fatal. REMOVE THIS after the release following the participant model ships — by then
-    // no live deployment can still be carrying the file. test/migration-deadline.test.ts fails when due.
-    try {
-      rmSync(join(stateHome, "owned-threads.json"), { force: true });
-    } catch (error) {
-      log.debug(`${label} could not remove the obsolete owned-threads.json: ${String(error)}`);
-    }
+    // The participant model replaced the owned-thread index (a cache, so nothing is lost). REMOVE THIS
+    // after the release following the participant model ships — by then no live deployment can still
+    // be carrying the file. test/migration-deadline.test.ts fails when due.
+    removeRetiredStateFile(stateHome, "owned-threads.json", label);
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
     /** This channel's place key for a thread (the shared store is key-agnostic). */
     // The SAME identity the session uses (`placeKey`) — a thread's place. Defining it twice would let a
@@ -467,21 +461,34 @@ function createFeishuRuntimeFactory(
     let warnedUnidentified = false;
 
     /**
-     * Merge one observed human sender into its thread's participation. Only humans: the platform does
-     * not push the agent's own messages back to it, so the agent's own half is recorded where it is
-     * actually known — when this channel answers in the thread.
+     * What this delivery contributes to thread participation, or undefined when it contributes nothing.
+     *
+     * ONE gate for BOTH writes (the humans observation on the way in, and the `agentSpoke` merge once
+     * the turn is durable) — the invariant that a record never says "answered here, heard nobody"
+     * depends on the two agreeing, and hand-written conditions in two places is exactly the drift that
+     * has already bitten this branch once. The synthetic speaker id has one definition here for the
+     * same reason.
+     *
+     * Gated on STRUCTURAL facts only — never on `route` or the granted scope — for the reason
+     * thread-participants.ts states for every channel: configuration changes while records outlive the
+     * change. `chat_type` is structural (a chat never turns into a group), and p2p records have no
+     * reader so they are not kept. A custom route may admit a bot the default route filters out;
+     * answering one is not participation the summon rule should act on.
      */
-    const observeThreadSender = (
+    const heardIn = (
       m: FeishuMessage,
-      senderType: string | undefined,
-      speakerId: string | undefined,
-    ): void => {
-      // Gated on STRUCTURAL facts only — never on `route` or on the granted scope — for the reason
-      // thread-participants.ts states for every channel: configuration changes while records outlive
-      // the change. `chat_type` is structural (a chat never turns into a group), and p2p records have
-      // no reader, so they are not kept.
-
-      if (m.chat_type !== "group" || m.thread_id === undefined || senderType !== "user") return;
+      sender: FeishuMessageEvent["sender"],
+    ): { key: string; speaker: string } | undefined => {
+      if (m.chat_type !== "group" || m.thread_id === undefined || sender?.sender_type !== "user") return undefined;
+      const speakerId = senderId(sender);
+      if (speakerId === undefined && !warnedUnidentified) {
+        // Once per PROCESS: this is a property of the tenant's event configuration, not of one thread,
+        // so a per-thread set would grow without bound to repeat a single fact.
+        warnedUnidentified = true;
+        log.warn(
+          `${label} human senders arrive with no usable id (first seen in thread ${m.thread_id}) — each counts as a distinct speaker, so affected threads permanently require an @mention until thread-participants.json is deleted`,
+        );
+      }
       // A human whose id no tenant flavour carries still SPOKE, and the invariant is that no human
       // speaks unrecorded. Count them under a per-MESSAGE synthetic id: two such messages read as two
       // speakers and the thread asks to be named. A per-thread id would be tidier but wrong in the
@@ -490,18 +497,8 @@ function createFeishuRuntimeFactory(
       //
       // PERMANENT, unlike every other cost in this model: two id-less messages fill MAX_HUMANS, records
       // never shed, so that thread requires an @mention from then on. It does not self-heal; deleting
-      // thread-participants.json is the only reset. That is the honest price of an event stream the
-      // agent cannot attribute, and the warning below names it once.
-      const heard = speakerId ?? `unidentified:${m.message_id}`;
-      // Once per PROCESS: this is a property of the tenant's event configuration, not of one thread, so
-      // a per-thread set would grow without bound to repeat a single fact.
-      if (speakerId === undefined && !warnedUnidentified) {
-        warnedUnidentified = true;
-        log.warn(
-          `${label} human senders arrive with no usable id (first seen in thread ${m.thread_id}) — each counts as a distinct speaker, so affected threads permanently require an @mention until thread-participants.json is deleted`,
-        );
-      }
-      threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [heard] });
+      // thread-participants.json is the only reset.
+      return { key: threadKey(m.chat_id, m.thread_id), speaker: speakerId ?? `unidentified:${m.message_id}` };
     };
 
     // Transport-neutral acceptance boundary: normalize, route, persist intent/context, enqueue. It
@@ -523,7 +520,8 @@ function createFeishuRuntimeFactory(
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
       // second human speaking is exactly what makes addressing ambiguous again.
-      observeThreadSender(m, event.sender?.sender_type, senderId(event.sender));
+      const heard = heardIn(m, event.sender);
+      if (heard) threadParticipants.merge(heard.key, { humans: [heard.speaker] });
 
       if (
         !r &&
@@ -651,26 +649,14 @@ function createFeishuRuntimeFactory(
       // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
       // the thread as the agent has actually left it. A later delivery failure does not undo it —
       // entering the conversation is the intent, not the send.
-      // The conditions match `observeThreadSender`'s exactly — group, thread, human sender — so the two
-      // writes are ONE gate and the record can never say "answered here, heard nobody". A custom route
-      // may admit a bot the default route filters out; the agent answering a bot is not participation
-      // the summon rule should act on, and recording that bot under `humans` would be a lie in a field
-      // named for them. Such a thread keeps no record at all, so the first human to speak there still
-      // needs the mention bootstrap — the conservative direction.
-      if (
-        replyInThread === true &&
-        m.thread_id !== undefined &&
-        sameTarget &&
-        r.session === undefined &&
-        m.chat_type === "group" &&
-        event.sender?.sender_type === "user"
-      ) {
+      // Reuses `heardIn` from the way in, so both writes share ONE gate by construction. The extra
+      // conditions are about the ANSWER, not the speaker: it must land in this thread (`sameTarget`,
+      // `replyInThread`) and in the place's own session, or the flag would claim a memory that never
+      // held the turn.
+      if (heard && replyInThread === true && sameTarget && r.session === undefined) {
         // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive
         // could otherwise say "answered here, heard nobody" — which admits bare messages forever.
-        threadParticipants.merge(threadKey(m.chat_id, m.thread_id), {
-          agentSpoke: true,
-          humans: [senderId(event.sender) ?? `unidentified:${m.message_id}`],
-        });
+        threadParticipants.merge(heard.key, { agentSpoke: true, humans: [heard.speaker] });
       }
     };
 
