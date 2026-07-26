@@ -5,7 +5,6 @@ import { type SlackApi, SlackApiError } from "../src/channels/slack/slack-api.ts
 
 function fakeApi(): SlackApi {
   return {
-    listThreadSenders: vi.fn(async () => []),
     authTest: vi.fn(async () => ({})),
     postMessage: vi.fn(async () => "1.0"),
     postMarkdown: vi.fn(async () => "1.0"),

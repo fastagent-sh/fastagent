@@ -1,10 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  chunkFeishuText,
-  createFeishuApi,
-  isFeishuApiRejection,
-  isFeishuConfigApiMissing,
-} from "../src/channels/feishu/feishu-api.ts";
+import { chunkFeishuText, createFeishuApi, isFeishuConfigApiMissing } from "../src/channels/feishu/feishu-api.ts";
 
 const BASE = "http://feishu.test";
 
@@ -137,135 +132,17 @@ describe("pipeline invariants", () => {
     expect(calls).toBe(4); // 1 + 3 bounded retries
   });
 
-  it("message reads pin user_id_type=open_id (callers match open_ids, not the platform default)", async () => {
+  it("getMessage pins user_id_type=open_id (callers match open_ids, not the platform default)", async () => {
     const fx = stubFetch(() => okData({ items: [{ message_id: "om_1" }] }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await api.getMessage("om_1");
     expect(fx.calls().at(-1)?.url).toContain("user_id_type=open_id");
-    await api.listThreadSenders("omt_1");
-    expect(fx.calls().at(-1)?.url).toContain("user_id_type=open_id");
-  });
-
-  it("listThreadSenders reads the thread container and keeps only well-formed senders", async () => {
-    const fx = stubFetch(() =>
-      okData({
-        items: [
-          { sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" } },
-          { sender: { id: "cli_app", id_type: "app_id", sender_type: "app" } },
-          { sender: { sender_type: "user" } }, // no id — unusable for the participation rule
-          {},
-        ],
-      }),
-    );
-    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
-
-    expect(await api.listThreadSenders("omt_1")).toEqual([
-      { senderType: "user", senderId: "ou_alice" },
-      { senderType: "app", senderId: "cli_app" },
-    ]);
-    const url = fx.calls().at(-1)?.url ?? "";
-    expect(url).toContain("container_id_type=thread&container_id=omt_1");
-    // Oldest first: the channel already observes the present, so what a listing adds is the history
-    // it never watched. The two are unioned, so neither has to be complete on its own.
-    expect(url).toContain("sort_type=ByCreateTimeAsc");
-  });
-
-  it("noRateLimitRetry makes ONE attempt (a deadline-bounded caller cannot afford the backoff)", async () => {
-    let attempts = 0;
-    stubFetch(() => {
-      attempts++;
-      return Response.json({ code: 99991400, msg: "frequency limit" }, { status: 429 });
-    });
-    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
-    await expect(api.listThreadSenders("omt_1", { noRateLimitRetry: true })).rejects.toThrow(
-      /listThreadSenders failed/,
-    );
-    expect(attempts).toBe(1); // the default path would have made 4 over ~6s
-  });
-
-  it("an aborted signal ends the in-flight request as a transport failure", async () => {
-    // Mirror fetch's own semantics: an ALREADY-aborted signal rejects at call time (the token fetch
-    // runs first, so the abort here lands before the message request starts).
-    stubFetch(
-      (_url, init) =>
-        new Promise<Response>((_, reject) => {
-          const fail = () => reject(new DOMException("aborted", "AbortError"));
-          if (init.signal?.aborted) fail();
-          else init.signal?.addEventListener("abort", fail);
-        }),
-    );
-    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
-    const abort = new AbortController();
-    const pending = api.listThreadSenders("omt_1", { signal: abort.signal });
-    abort.abort();
-    await expect(pending).rejects.toThrow(/listThreadSenders: AbortError: aborted/);
   });
 
   it("a non-JSON body degrades to a named failure, never a silent success", async () => {
     stubFetch(() => new Response("<html>gateway error</html>", { status: 502 }));
     const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
     await expect(api.deleteMessage("om_1")).rejects.toThrow(/deleteMessage failed: 502/);
-  });
-});
-
-describe("isFeishuApiRejection", () => {
-  /** Drive one call through the real pipeline and capture the error it throws. */
-  async function failureOf(route: (url: string, init: RequestInit) => Response | Promise<Response>): Promise<unknown> {
-    stubFetch(route);
-    const api = createFeishuApi({ baseUrl: BASE, appId: "a", appSecret: "s" });
-    try {
-      await api.deleteMessage("om_x");
-    } catch (error) {
-      return error;
-    }
-    throw new Error("expected the call to fail");
-  }
-
-  it("classifies definitive rejections: 4xx (readable or not) and error codes on HTTP 200", async () => {
-    // Error code carried on HTTP 200 — Feishu's usual error shape.
-    expect(isFeishuApiRejection(await failureOf(() => Response.json({ code: 230110, msg: "deleted" })))).toBe(true);
-    // Plain 4xx with a structured code.
-    expect(
-      isFeishuApiRejection(
-        await failureOf(() => Response.json({ code: 230027, msg: "no permission" }, { status: 400 })),
-      ),
-    ).toBe(true);
-    // 4xx whose body is unreadable (gateway HTML): the status alone is definitive — treating this as
-    // transient would re-push the delivery forever.
-    expect(isFeishuApiRejection(await failureOf(() => new Response("<html>forbidden</html>", { status: 403 })))).toBe(
-      true,
-    );
-  });
-
-  it("leaves the may-heal classes out: 5xx, 200-without-code, transport, auth-refresh, rate limit", async () => {
-    expect(isFeishuApiRejection(await failureOf(() => new Response("<html>bad gateway</html>", { status: 502 })))).toBe(
-      false,
-    );
-    // HTTP 200 with an unreadable body (a proxy/interception page): the platform never spoke a code,
-    // so this is transport noise — treating it as definitive would silently brand threads unmanaged.
-    expect(isFeishuApiRejection(await failureOf(() => new Response("<html>proxy</html>", { status: 200 })))).toBe(
-      false,
-    );
-    expect(
-      isFeishuApiRejection(
-        await failureOf(() => {
-          throw new TypeError("fetch failed");
-        }),
-      ),
-    ).toBe(false);
-    // A PERSISTENT auth code (thrown after the pipeline's single refresh) is app-wide, not a verdict
-    // on the resource.
-    expect(isFeishuApiRejection(await failureOf(() => Response.json({ code: 99991663, msg: "token expired" })))).toBe(
-      false,
-    );
-    // Rate limiting: its code can arrive on HTTP 400 as well as 429; both retry then fail transient.
-    vi.useFakeTimers();
-    const pending = failureOf(() => Response.json({ code: 99991400, msg: "frequency limit" }, { status: 400 })).finally(
-      () => vi.useRealTimers(),
-    );
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(isFeishuApiRejection(await pending)).toBe(false);
-    expect(isFeishuApiRejection(new Error("not a pipeline error"))).toBe(false);
   });
 });
 

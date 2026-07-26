@@ -122,7 +122,7 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
    - `im:message.group_msg` — sensitive, tenant-admin-approved; required to buffer unsummoned group/thread context and accept bare replies in threads the Agent is part of,
    - `im:message:send_as_bot` — send replies,
    - `im:resource` — download message images/files,
-   - `im:message:readonly` — required alongside the scope above for context-aware groups: the channel fetches a replied-to message by id, and lists a thread's senders (`container_id_type=thread`) to see who is taking part in it, which is what admits a bare reply. `add feishu|lark --group-behavior context` requests both together. Without it the platform still delivers group messages, but every thread stays @-only and a rejection is logged once per cause,
+   - `im:message:readonly` — required alongside the scope above for context-aware groups: the channel fetches a replied-to message by id, so a thread's first message can carry what it replies to. `add feishu|lark --group-behavior context` requests both together. Without it group messages are still delivered and the thread rule still works; an unreadable referent degrades to a marker in the prompt,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
 3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose one mode:
    - **WebSocket:** choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
@@ -231,7 +231,7 @@ reuses that builder with the `[lark: …]` compatibility tag.
 
 ### Group visibility is scope-gated
 
-With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel and therefore cannot be buffered. The sensitive `im:message.group_msg` scope (custom apps only, tenant-admin approval) plus a newly published app version delivers all group messages. FastAgent then invokes explicit `@bot` turns, plus bare messages in a thread where it takes part and exactly one human does — participation read back from the platform when local state has no answer (`thread-participants.json` is only a cache). Other human discussion is durably buffered per place (the chat, or a thread) and folded into that place's next answered turn.
+With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel and therefore cannot be buffered. The sensitive `im:message.group_msg` scope (custom apps only, tenant-admin approval) plus a newly published app version delivers all group messages. FastAgent then invokes explicit `@bot` turns, plus bare messages in a thread where it takes part and has not heard a second human — both facts being what the channel itself observed, so a thread it joined before this deployment takes one mention to re-enter. Other human discussion is durably buffered per place (the chat, or a thread) and folded into that place's next answered turn.
 
 Practical consequences in groups:
 
@@ -323,7 +323,7 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `seen.json` — the most recent 2,000 `message_id`s whose turn intent or buffered context was persisted; Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key,
-- `thread-participants.json` — a bounded CACHE of who takes part in each thread: the humans seen and whether the Agent has spoken. Whether that picture is COMPLETE is deliberately not stored — each process establishes it once from the platform, so a refused read can never become a durable "do not retry". Losing the file costs one lookup per thread, not the behavior,
+- `thread-participants.json` — a bounded record of what the Agent HEARD in each thread: the humans it saw speak (capped at two, since the rule only asks whether a second one exists) and whether it has answered there. Nothing is read back from the platform, so losing the file costs one mention per thread to re-enter it,
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/<chat>/` — downloaded inbound files.
 

@@ -20,8 +20,6 @@ import { ensureStateHome } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
-import { withAckDeadline } from "../ack-deadline.ts";
-import { createInflightAcceptances } from "../inflight.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
 import {
   collectFeishuBufferedAttachments,
@@ -31,13 +29,7 @@ import {
 } from "./context-buffer.ts";
 import { decryptEvent, timingSafeEqualStr, verifySignature } from "./crypto.ts";
 import { invokeFeishuTurn } from "./invoke-turn.ts";
-import {
-  type FeishuApi,
-  type FeishuTarget,
-  createFeishuApi,
-  feishuApiErrorCode,
-  isFeishuApiRejection,
-} from "./feishu-api.ts";
+import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
 import { createThreadParticipants } from "../thread-participants.ts";
@@ -73,17 +65,6 @@ const MAX_TURN_ATTEMPTS = 3;
 
 /** Event body cap — events are small JSON; 1 MiB is generous and guards a public endpoint. */
 const MAX_EVENT_BYTES = 1 << 20;
-
-/** ONE shared budget for all pre-ACK platform waits of a delivery (bot identity + thread read): the
- *  platform requires event ACKs within 3s, so the total acceptance wait — not each await — is capped
- *  and must never ride the API pipeline's full 30s timeout + retry budget. On expiry the delivery is
- *  treated as transiently unreadable (re-pushed), not as unmanaged.
- *
- *  Sized against measured round trips rather than a round number: a thread listing costs 1.2–1.7s
- *  from a distant network (independent of page size — it is latency, not payload), and a cold tenant
- *  token adds another ~1.5s. 2s left no headroom and leaned on the platform's re-push for an ordinary
- *  slow call; this keeps ~0.5s for the state writes and the response, which are sub-millisecond. */
-const ACK_CHECK_BUDGET_MS = 2500;
 
 /** Queue feedback is immediate by default: it is the user's acknowledgement that this exact ask was
  *  accepted behind another turn. The same reply-quoted card becomes the preview/final answer, so there
@@ -198,9 +179,9 @@ interface FeishuWebSocketChannelDeps {
 }
 
 interface FeishuRuntime {
-  /** Settles once the event is routed + persisted (pre-ACK); a rejection must fail the delivery so
-   *  the platform re-pushes. The Agent turn itself stays fire-and-forget. */
-  acceptEvent(event: FeishuMessageEvent): Promise<void>;
+  /** Routes + persists the event before the transport ACKs it; a throw must fail the delivery so the
+   *  platform re-pushes. Synchronous — it touches no network. The Agent turn stays fire-and-forget. */
+  acceptEvent(event: FeishuMessageEvent): void;
   turnsIdle(): Promise<void>;
 }
 
@@ -238,11 +219,11 @@ function createFeishuRuntimeFactory(
     const api: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
 
     // One bot/v3/info at startup: the bot's open_id drives the default route's group @mention summon.
-    // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works. The
-    // acceptance path additionally awaits this promise (bounded) so a startup race delays a group
-    // message instead of misclassifying it as "not addressed to me".
+    // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works. A
+    // mention landing in that first moment is buffered as context rather than answered; it is folded
+    // into the next answered turn in that place, so the ask is delayed, never lost.
     let botOpenId: string | undefined;
-    const botIdentity: Promise<void> = api.botInfo().then(
+    void api.botInfo().then(
       (me) => {
         botOpenId = me.openId;
         if (!botOpenId) log.warn(`${label} bot/v3/info returned no open_id — group @mention summon stays off`);
@@ -467,11 +448,8 @@ function createFeishuRuntimeFactory(
       submit({ ...intent, bufferKey, preview: undefined }, false);
     }
 
-    // Who takes part in a thread decides whether a bare message addresses the agent (participant
-    // model §3). Participation is observed from every message the channel sees, and re-established from
-    // the platform for a thread this process has never seen — so a lost state disk costs one list
-    // call, not the behavior.
-    const threadReads = new Map<string, Promise<void>>();
+    // Who the agent has heard in a thread decides whether a bare message addresses it (participant
+    // model §3), and it comes from what this channel observed — see thread-participants.ts.
 
     /**
      * Merge one observed human sender into its thread's participation. Only humans: the platform does
@@ -492,125 +470,27 @@ function createFeishuRuntimeFactory(
       threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [senderId] });
     };
 
-    // One operator-visible warning per rejection CLASS (platform code): a deleted thread (expected,
-    // per-resource) and a missing message-read permission (app-wide — it disables every bare
-    // continuation) must not share a budget, or the second hides behind the first. Repeats of a class
-    // stay at debug.
-    const warnedRejectionCodes = new Set<number>();
-
-    /** Read a thread's senders back from the platform and merge them into the participation cache. */
-    const readThreadParticipants = async (chatId: string, threadId: string, deadline: number): Promise<void> => {
-      const abort = new AbortController();
-      let senders: { senderType: string; senderId: string }[];
-      try {
-        senders = await withAckDeadline(
-          // No rate-limit backoff: the pipeline's retries (up to 6s) cannot fit this budget, and under
-          // rate limiting they would amplify each re-push into several more requests.
-          api.listThreadSenders(threadId, { signal: abort.signal, noRateLimitRetry: true }),
-          `thread participant read`,
-          deadline,
-          ACK_CHECK_BUDGET_MS,
-          () => abort.abort(),
-        );
-      } catch (error) {
-        if (!isFeishuApiRejection(error)) {
-          // Transient (network/5xx/rate limit/timeout). This runs BEFORE we know whether the message
-          // addresses the agent, so most deliveries hitting it are ordinary thread chatter that would
-          // only have buffered — the trade-off is: unknown-addressing messages fail closed (HTTP 500 /
-          // WS 500 frame → platform re-push → re-check), because ACKing here would silently downgrade
-          // a GENUINE ask to background context. If every bounded re-push fails, both the turn and the
-          // buffered copy are lost (operator log only) — the trade-off is argued in
-          // docs/design/core.md (§Session partitioning, "Failure ownership").
-          throw new Error(`${label} could not read thread ${threadId} pre-ACK: ${String(error)}`, { cause: error });
-        }
-        // A definitive platform rejection (deleted thread, missing read permission): participation is
-        // not derivable. Mark it unreadable so the read is not retried per message — the summon rule
-        // still refuses, because the record carries no established human set. Process-local, so a
-        // permission granted later takes effect on the next restart with no file to delete.
-        const code = feishuApiErrorCode(error) ?? 0;
-        if (warnedRejectionCodes.has(code)) {
-          log.debug(`${label} thread ${threadId} is not readable — staying mention-only there: ${String(error)}`);
-        } else {
-          warnedRejectionCodes.add(code);
-          // The FIRST refusal of a class is the only honest moment to say this is app-wide: a missing
-          // message-read permission disables bare replies everywhere, not just in this thread.
-          log.warn(
-            `${label} cannot read thread ${threadId}, so bare replies stay mention-only there: ${String(error)} ` +
-              "— if this repeats for every thread, the app is missing the message-read permission and bare " +
-              "replies are disabled everywhere",
-          );
-        }
-        threadParticipants.merge(threadKey(chatId, threadId), { unreadable: true });
-        return;
-      }
-      threadParticipants.merge(threadKey(chatId, threadId), {
-        humans: senders.filter((sender) => sender.senderType === "user").map((sender) => sender.senderId),
-        // `|| undefined`: the store only ever SETS this, so a false would be a silent no-op.
-        agentSpoke: senders.some((sender) => sender.senderType === "app" && sender.senderId === appId) || undefined,
-        established: true,
-      });
-    };
-
     /**
      * The participant model's summon rule for a bare message in a thread (§3): speak unprompted only
-     * where the agent takes part AND exactly one human does. Both facts come from the participation
-     * cache, which is refined by every observed message and re-established from the platform once for a
-     * thread this process has never seen.
+     * where the agent takes part and no second human has been heard. Both facts are what this channel
+     * observed — see thread-participants.ts for why the rule is defined over observation rather than
+     * the thread's true membership.
      */
-    const threadAddressesAgent = async (chatId: string, threadId: string, deadline: number): Promise<boolean> => {
-      // Only a platform listing sets `established`, and observing a message never does — so this reads the
-      // live record rather than a snapshot taken before the observation above.
-      const cached = threadParticipants.get(threadKey(chatId, threadId));
-      if (cached?.established !== true && cached?.unreadable !== true) {
-        // One platform read per thread, shared by every delivery awaiting it (sharers resume in arrival
-        // order; a joiner inherits the FIRST caller's deadline, still within one budget of that start).
-        // LIVE order is best-effort across this window: a message that skips the check (an @mention, a
-        // stop) reaches `queue.accept` first and runs first, even in the same session. Only durable
-        // RECOVERY order is guaranteed — `seq` is assigned at arrival, before this await.
-        const key = threadKey(chatId, threadId);
-        let read = threadReads.get(key);
-        if (read === undefined) {
-          read = readThreadParticipants(chatId, threadId, deadline).finally(() => threadReads.delete(key));
-          threadReads.set(key, read);
-        }
-        await read;
-      }
-      const participation = threadParticipants.get(threadKey(chatId, threadId));
-      if (participation === undefined) return false;
-      // `established` is required, not incidental: observation only ever UNDER-counts humans, so speaking
-      // unprompted on an unestablished record could barge into a thread that holds several. A read
-      // the platform refused therefore leaves the thread mention-only, which is what its log says.
-      return participation.established && participation.agentSpoke && participation.humans.length === 1;
+    const threadAddressesAgent = (chatId: string, threadId: string): boolean => {
+      const heard = threadParticipants.get(threadKey(chatId, threadId));
+      return heard?.agentSpoke === true && heard.humans.length <= 1;
     };
 
-    const inflight = createInflightAcceptances();
-
-    // Transport-neutral acceptance boundary. It performs only bounded pre-ACK work: normalize, route
-    // (including the deadline-capped thread-participant read above on a cache miss), persist
-    // intent/context, and enqueue. The minutes-long Agent turn remains fire-and-forget.
-    const acceptEvent = (event: FeishuMessageEvent): Promise<void> => {
-      const m = event.message;
-      if (!m?.message_id || !m.chat_id) return Promise.resolve();
-      if (seen.has(m.message_id)) {
-        log.debug(`${label} duplicate push for message ${m.message_id} — already persisted, skipping`);
-        return Promise.resolve();
-      }
-      return inflight.join(
-        m.message_id,
-        () => acceptNewEvent(event),
-        () => log.debug(`${label} duplicate push for message ${m.message_id} — joining the in-flight acceptance`),
-      );
-    };
-
-    const acceptNewEvent = async (event: FeishuMessageEvent): Promise<void> => {
+    // Transport-neutral acceptance boundary: normalize, route, persist intent/context, enqueue. It
+    // touches no network, so it stays synchronous inside the platform's ACK window and the delivery
+    // dedup ring alone is enough — there is no await for a duplicate push to race through. The
+    // minutes-long Agent turn remains fire-and-forget.
+    const acceptEvent = (event: FeishuMessageEvent): void => {
       const m = event.message;
       if (!m?.message_id || !m.chat_id) return;
-      const deadline = Date.now() + ACK_CHECK_BUDGET_MS;
-      // A group summon is matched against the bot's own open_id, so a message arriving before
-      // bot/v3/info settles would be misread as "not addressed to me" and downgraded to context. Wait
-      // for the identity within the shared pre-ACK budget (already settled after startup, so free).
-      if (botOpenId === undefined && m.chat_type === "group") {
-        await withAckDeadline(botIdentity, `${label} bot identity resolution`, deadline, ACK_CHECK_BUDGET_MS);
+      if (seen.has(m.message_id)) {
+        log.debug(`${label} duplicate push for message ${m.message_id} — already persisted, skipping`);
+        return;
       }
       let r = decide(event);
       const normalized = normalizeFeishuMessage(event);
@@ -639,7 +519,7 @@ function createFeishuRuntimeFactory(
         isHumanGroup &&
         m.thread_id !== undefined &&
         !normalized.content.hasMentions &&
-        (await threadAddressesAgent(m.chat_id, m.thread_id, deadline))
+        threadAddressesAgent(m.chat_id, m.thread_id)
       ) {
         r = {};
       }
@@ -830,7 +710,7 @@ function createFeishuWebhookRoutes(
       log.debug(`${label} ignoring event type ${header?.event_type ?? "(none)"}`);
       return new Response(null, { status: 200 });
     }
-    await runtime.acceptEvent((envelope.event ?? {}) as FeishuMessageEvent);
+    runtime.acceptEvent((envelope.event ?? {}) as FeishuMessageEvent);
     return new Response(null, { status: 200 });
   };
   (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = runtime.turnsIdle;

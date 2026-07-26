@@ -728,60 +728,6 @@ describe("turn flow", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("a re-pushed first message keeps its referent anchor (observation must not consume it)", async () => {
-    let reads = 0;
-    const fx = feishuFetch({
-      "container_id_type=thread": () =>
-        ++reads === 1
-          ? Response.json({ code: 230001, msg: "internal error" }, { status: 500 })
-          : Response.json({
-              code: 0,
-              msg: "ok",
-              data: {
-                items: [
-                  { sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" } },
-                  { sender: { id: "app", id_type: "app_id", sender_type: "app" } },
-                ],
-              },
-            }),
-      "/im/v1/messages/om_anchor": () =>
-        Response.json({
-          code: 0,
-          msg: "ok",
-          data: {
-            items: [
-              {
-                message_id: "om_anchor",
-                msg_type: "text",
-                body: { content: '{"text":"the answer being followed up on"}' },
-                sender: { id: "app", id_type: "app_id", sender_type: "app" },
-              },
-            ],
-          },
-        }),
-    });
-    const { handler, calls, idle } = buildChannel();
-    await flush();
-    const ask = () =>
-      feishuRequest(
-        messageEvent({
-          id: "om_first",
-          chatType: "group",
-          threadId: "omt_anchor",
-          parentId: "om_anchor",
-          text: "expand on that",
-        }),
-      );
-
-    await expect(handler(ask())).rejects.toThrow(/thread omt_anchor/);
-    await handler(ask()); // the platform re-push
-    await idle();
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt.text).toContain("the answer being followed up on");
-    expect(fx.calls("/im/v1/messages/om_anchor", "GET")).toHaveLength(1);
-  });
-
   it("a bare message in a thread the agent is talking to addresses it, through the normal streaming path", async () => {
     const fx = feishuFetch();
     const { handler, calls, idle, home } = buildChannel();
@@ -803,9 +749,8 @@ describe("turn flow", () => {
     // Rule 3: a thread is its own place, so both turns share the thread's session.
     expect(calls.map((call) => call.scope.session)).toEqual(["oc_1:omt_two_party", "oc_1:omt_two_party"]);
     expect(calls[1]?.prompt.text).toContain("what about queues?");
-    // The agent's own reply proves only its half; who else is in the thread still comes from the
-    // platform, once. (The default listing is empty, so the observed human stands.)
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(1);
+    // Nothing was asked of the platform: both halves of the rule are what this channel heard.
+    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
     const reply = fx.calls("/im/v1/messages/om_bare/reply", "POST")[0];
     expect(reply?.body?.msg_type).toBe("interactive");
     expect(reply?.body?.reply_in_thread).toBe(true);
@@ -867,48 +812,13 @@ describe("turn flow", () => {
     expect(calls[1]?.prompt.text).toContain("so what now?");
   });
 
-  it("rebuilds participation from the platform after state loss", async () => {
-    const fx = feishuFetch({
-      "container_id_type=thread": threadListing([
-        { senderType: "user", senderId: "ou_alice" },
-        { senderType: "app", senderId: "app" }, // the channel's own appId in these tests
-      ]),
-    });
-    const { handler, calls, idle, home } = buildChannel();
-    await flush();
-
-    // Nothing in this process has seen the thread: the platform answers who is in it.
-    await handler(
-      feishuRequest(
-        messageEvent({ id: "om_after_loss", chatType: "group", threadId: "omt_lost", text: "still there?" }),
-      ),
-    );
-    await idle();
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("oc_1:omt_lost");
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(1);
-    expect(JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8"))).toHaveProperty("oc_1:omt_lost");
-
-    // …and the answer is cached, so the next bare message needs no lookup.
-    await handler(
-      feishuRequest(messageEvent({ id: "om_after_loss_2", chatType: "group", threadId: "omt_lost", text: "and now?" })),
-    );
-    await idle();
-    expect(calls).toHaveLength(2);
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(1);
-  });
-
-  it("a human thread the agent never joined is discussion: buffered, and read back only once", async () => {
-    const fx = feishuFetch({
-      "container_id_type=thread": threadListing([
-        { senderType: "user", senderId: "ou_alice" },
-        { senderType: "user", senderId: "ou_bob" },
-      ]),
-    });
+  it("a thread the agent never joined is discussion, however quiet it looks", async () => {
+    const fx = feishuFetch();
     const { handler, calls, home } = buildChannel();
     await flush();
 
+    // One human, no mention, and the agent has never spoken here — being a participant is the half
+    // that is missing, and no amount of listening supplies it.
     for (const [id, text] of [
       ["om_h1", "first aside"],
       ["om_h2", "second aside"],
@@ -918,193 +828,34 @@ describe("turn flow", () => {
     await flush();
 
     expect(calls).toHaveLength(0);
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(1); // cached, not per message
+    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
     expect(JSON.parse(readFileSync(join(home, "buffers.json"), "utf8"))).toHaveProperty("oc_1:thread:omt_human");
   });
 
-  it("an unreadable thread is a definitive rejection: recorded once, then mention-only", async () => {
-    const fx = feishuFetch({
-      "container_id_type=thread": () =>
-        Response.json({ code: 230110, msg: "Action unavailable as the message has been deleted." }),
-    });
-    const { handler, calls, idle } = buildChannel();
-    await flush();
-
-    for (const id of ["om_d1", "om_d2"]) {
-      await handler(feishuRequest(messageEvent({ id, chatType: "group", threadId: "omt_dead", text: "bare" })));
-    }
-    await flush();
-
-    expect(calls).toHaveLength(0);
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(1);
-
-    // And the refusal must not become an authoritative human set once the agent HAS answered there:
-    // observation alone under-counts, so speaking unprompted could barge into a crowded thread.
-    await joinThread(handler, idle, "omt_dead", "om_join_dead");
-    expect(calls).toHaveLength(1);
-    await handler(
-      feishuRequest(messageEvent({ id: "om_d3", chatType: "group", threadId: "omt_dead", text: "bare again" })),
-    );
-    await flush();
-    expect(calls).toHaveLength(1);
-  });
-
-  it("a transient thread read leaves the delivery un-ACKed: the platform re-push answers it", async () => {
-    let reads = 0;
-    const fx = feishuFetch({
-      "container_id_type=thread": () =>
-        ++reads === 1
-          ? Response.json({ code: 230001, msg: "internal error" }, { status: 500 })
-          : Response.json({
-              code: 0,
-              msg: "ok",
-              data: {
-                items: [
-                  { sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" } },
-                  { sender: { id: "app", id_type: "app_id", sender_type: "app" } },
-                ],
-              },
-            }),
-    });
-    const { handler, calls, idle } = buildChannel();
-    await flush();
-    const ask = () =>
-      feishuRequest(messageEvent({ id: "om_f1", chatType: "group", threadId: "omt_flaky", text: "the ask" }));
-
-    // A system fault must not silently demote a genuine ask to background context.
-    await expect(handler(ask())).rejects.toThrow(/thread omt_flaky/);
-    expect(calls).toHaveLength(0);
-
-    await handler(ask());
-    await idle();
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt.text).toContain("the ask");
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(2);
-  });
-
-  it("a thread read past the ACK deadline fails the delivery; the re-push recovers", async () => {
-    let reads = 0;
-    const fx = feishuFetch({
-      "container_id_type=thread": () =>
-        (++reads === 1
-          ? new Promise<Response>(() => {}) // first read hangs past the budget
-          : Promise.resolve(
-              Response.json({
-                code: 0,
-                msg: "ok",
-                data: {
-                  items: [
-                    { sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" } },
-                    { sender: { id: "app", id_type: "app_id", sender_type: "app" } },
-                  ],
-                },
-              }),
-            )) as unknown as Response,
-    });
-    const { handler, calls, idle } = buildChannel();
-    await flush();
-    const ask = () =>
-      feishuRequest(messageEvent({ id: "om_s1", chatType: "group", threadId: "omt_stuck", text: "stuck ask" }));
-
-    vi.useFakeTimers();
-    const pending = Promise.resolve(handler(ask())).then(
-      () => {
-        throw new Error("expected the delivery to fail");
-      },
-      (error: unknown) => error,
-    );
-    await vi.advanceTimersByTimeAsync(3_000); // past the shared pre-ACK budget (ACK_CHECK_BUDGET_MS)
-    const error = await pending;
-    vi.useRealTimers();
-    expect(String(error)).toMatch(/thread omt_stuck/);
-    expect(calls).toHaveLength(0);
-
-    await handler(ask());
-    await idle();
-    expect(calls).toHaveLength(1);
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(2);
-  });
-
-  it("concurrent duplicate deliveries share one acceptance: one thread read, one turn", async () => {
-    let releaseRead!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    const fx = feishuFetch({
-      "container_id_type=thread": () =>
-        gate.then(() =>
-          Response.json({
-            code: 0,
-            msg: "ok",
-            data: {
-              items: [
-                { sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" } },
-                { sender: { id: "app", id_type: "app_id", sender_type: "app" } },
-              ],
-            },
-          }),
-        ) as unknown as Response,
-    });
-    const { handler, calls, idle } = buildChannel();
-    await flush();
-
-    const push = () =>
-      handler(feishuRequest(messageEvent({ id: "om_dup", chatType: "group", threadId: "omt_slow", text: "ask once" })));
-    const [first, second] = [push(), push()]; // both in flight while the read hangs
-    releaseRead();
-    expect((await first).status).toBe(200);
-    expect((await second).status).toBe(200);
-    await idle();
-    expect(calls).toHaveLength(1);
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(1);
-  });
-
-  it("an identity read past the ACK deadline fails the delivery instead of stalling the ACK", async () => {
-    const fx = feishuFetch({
-      "/bot/v3/info": () => new Promise<Response>(() => {}) as unknown as Response, // hangs forever
-    });
-    const { handler, calls } = buildChannel();
-
-    vi.useFakeTimers();
-    const pending = Promise.resolve(
-      handler(
-        feishuRequest(messageEvent({ id: "om_i1", chatType: "group", threadId: "omt_wait", text: "waiting ask" })),
-      ),
-    ).then(
-      () => {
-        throw new Error("expected the delivery to fail");
-      },
-      (error: unknown) => error,
-    );
-    await vi.advanceTimersByTimeAsync(3_000);
-    const error = await pending;
-    vi.useRealTimers();
-    expect(String(error)).toMatch(/bot identity resolution/);
-    expect(calls).toHaveLength(0);
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0); // never reached the thread read
-  });
-
-  it("a permanently failed bot identity keeps mentions off, but thread participation still resolves", async () => {
-    const fx = feishuFetch({
-      "/bot/v3/info": () => Response.json({ code: 1, msg: "bot capability disabled" }, { status: 403 }),
-      "container_id_type=thread": threadListing([{ senderType: "user", senderId: "ou_alice" }]),
-    });
+  it("a permanently failed bot identity keeps group mentions off, and the ask becomes context", async () => {
+    feishuFetch({ "/bot/v3/info": () => Response.json({ code: 1, msg: "bot capability disabled" }, { status: 403 }) });
     const { handler, calls, home } = buildChannel();
     await flush(); // botInfo settles as FAILED — @mention summon stays off (warned at startup)
 
     await handler(
-      feishuRequest(messageEvent({ id: "om_noid", chatType: "group", threadId: "omt_any", text: "who am I asking?" })),
+      feishuRequest(
+        messageEvent({
+          id: "om_noid",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 who am I asking?" }),
+          mentions: [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        }),
+      ),
     );
     await flush();
 
-    // The rule's other half is identity-independent, so the thread is still resolved — it just has no
-    // agent in it, so the message is discussion.
+    // Fail-closed: without its own identity the agent cannot tell a mention of itself from one of
+    // someone else, so the message is kept as context rather than answered.
     expect(calls).toHaveLength(0);
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(1);
     expect(readFileSync(join(home, "buffers.json"), "utf8")).toContain("who am I asking?");
   });
 
-  it("a startup race waits for the bot identity instead of downgrading the ask", async () => {
+  it("a mention landing before the bot identity resolves is kept as context, then folded into the next turn", async () => {
     let releaseBotInfo!: () => void;
     const gate = new Promise<void>((resolve) => {
       releaseBotInfo = resolve;
@@ -1116,22 +867,40 @@ describe("turn flow", () => {
         ) as unknown as Response,
     });
     const { handler, calls, idle } = buildChannel();
+    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
 
-    const pending = handler(
+    // Acceptance is synchronous, so it cannot wait for the identity: this one is buffered.
+    await handler(
       feishuRequest(
         messageEvent({
-          id: "om_r1",
+          id: "om_early",
           chatType: "group",
           content: JSON.stringify({ text: "@_user_1 early ask" }),
-          mentions: BOT_MENTION,
+          mentions: mention,
         }),
       ),
     );
+    await flush();
+    expect(calls).toHaveLength(0);
+
     releaseBotInfo();
-    expect((await pending).status).toBe(200);
+    await flush();
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_later",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_user_1 later ask" }),
+          mentions: mention,
+        }),
+      ),
+    );
     await idle();
+
+    // Delayed, never lost: the early ask arrives as context on the next answered turn in that place.
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt.text).toContain("early ask");
+    expect(calls[0]?.prompt.text).toContain("later ask");
   });
 
   it("buffers @other-only discussion in a thread; the next bare message consumes it", async () => {

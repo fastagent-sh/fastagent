@@ -102,30 +102,6 @@ export function isFeishuConfigApiMissing(e: unknown): boolean {
   return e instanceof FeishuApiError && e.status === 404;
 }
 
-/** The platform error code behind a pipeline failure (0 when none was readable; undefined when the
- *  error did not come from this pipeline). Lets a caller group repeated failures by class. */
-export function feishuApiErrorCode(e: unknown): number | undefined {
-  return e instanceof FeishuApiError ? e.code : undefined;
-}
-
-/** Whether the platform REJECTED the request definitively (deleted message, missing permission, bad
- *  id): the request reached the platform and was refused — a 4xx status (an unreadable 4xx body still
- *  counts by status alone), or an error `code` carried on a 2xx (Feishu puts error semantics in the
- *  body). A 2xx whose body yielded NO code (a proxy/interception page) is transport noise, not a
- *  verdict. Other excluded may-heal classes: transport failure (status 0), server error (5xx), rate
- *  limiting (429 or its 400-carried code), and auth codes the pipeline refreshes. */
-export function isFeishuApiRejection(e: unknown): boolean {
-  return (
-    e instanceof FeishuApiError &&
-    e.status !== 0 &&
-    e.status < 500 &&
-    e.status !== 429 &&
-    (e.status >= 400 || e.code !== 0) &&
-    e.code !== RATE_LIMIT_CODE &&
-    !AUTH_ERROR_CODES.has(e.code)
-  );
-}
-
 /** Whether a registration-PATCH failure is transient weather worth retrying: network/DNS/timeouts, or
  *  the platform's 210042 "request_url validation failed" while its own path to a fresh tunnel edge
  *  warms up. Everything else (scope, auth, app under review, the config-route 404 above) is definitive
@@ -191,13 +167,6 @@ export interface FeishuApi {
     | { message_id?: string; msg_type?: string; body?: { content?: string }; mentions?: unknown[]; sender?: unknown }
     | undefined
   >;
-  /** Senders of a thread's OPENING page (oldest first), for deriving who took part before this process
-   *  watched it. Deliberately not paginated: an unbounded walk cannot run inside a pre-ACK budget, and
-   *  the channel's own observations already cover everything since. */
-  listThreadSenders(
-    threadId: string,
-    opts?: { signal?: AbortSignal; noRateLimitRetry?: boolean },
-  ): Promise<{ senderType: string; senderId: string }[]>;
   /** Download a message resource (image/file bytes). Caps at {@link MAX_DOWNLOAD_BYTES}. */
   downloadResource(
     messageId: string,
@@ -235,11 +204,6 @@ export interface FeishuApi {
   /** Replace a card entity's content (the settle write; also flips streaming_mode off via the JSON). */
   updateCard(cardId: string, cardJson: string, sequence: number): Promise<void>;
 }
-
-/** How many of a thread's messages are sampled to decide who took part in it before this process
- *  started watching. The platform's page cap is 50, and the rule only asks whether more than one human
- *  is present. */
-const THREAD_SENDER_PAGE = 50;
 
 /** The platform caps a text-message request body at 150 KB; stay well under it (the content is a JSON
  *  envelope around the text, and multi-byte characters inflate the byte count). */
@@ -312,7 +276,6 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
-    opts?: { signal?: AbortSignal; noRateLimitRetry?: boolean },
   ): Promise<T> => {
     let refreshedAuth = false;
     for (let attempt = 0; ; ) {
@@ -327,9 +290,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
             "content-type": "application/json; charset=utf-8",
           },
           body: body === undefined ? undefined : JSON.stringify(body),
-          signal: opts?.signal
-            ? AbortSignal.any([AbortSignal.timeout(API_TIMEOUT_MS), opts.signal])
-            : AbortSignal.timeout(API_TIMEOUT_MS),
+          signal: AbortSignal.timeout(API_TIMEOUT_MS),
         });
         raw = await res.text(); // the body read shares the timeout — a mid-body stall is a transport failure too
       } catch (e) {
@@ -351,7 +312,7 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         cached = undefined;
         continue;
       }
-      if ((res.status === 429 || code === RATE_LIMIT_CODE) && attempt < RETRIES && !opts?.noRateLimitRetry) {
+      if ((res.status === 429 || code === RATE_LIMIT_CODE) && attempt < RETRIES) {
         attempt++;
         await wait(attempt * 1000);
         continue;
@@ -435,23 +396,6 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
         `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}?user_id_type=open_id`,
       );
       return data.data?.items?.[0] as Awaited<ReturnType<FeishuApi["getMessage"]>>;
-    },
-    async listThreadSenders(threadId, opts) {
-      const data = await call<ApiBody & { data?: { items?: { sender?: { id?: string; sender_type?: string } }[] } }>(
-        "listThreadSenders",
-        "GET",
-        // `thread` container: the platform's own identity for a side conversation. Read from the
-        // START: the channel already observes the present, so what a listing adds is the history it
-        // never watched. A bot sender's `id` is the app id (cli_…), a human's is an open_id.
-        `/open-apis/im/v1/messages?container_id_type=thread&container_id=${encodeURIComponent(threadId)}&sort_type=ByCreateTimeAsc&page_size=${THREAD_SENDER_PAGE}&user_id_type=open_id`,
-        undefined,
-        opts,
-      );
-      return (data.data?.items ?? []).flatMap((item) => {
-        const senderType = item.sender?.sender_type;
-        const senderId = item.sender?.id;
-        return typeof senderType === "string" && typeof senderId === "string" ? [{ senderType, senderId }] : [];
-      });
     },
     async downloadResource(messageId, fileKey, type) {
       // The byte download is the one non-JSON call, so it cannot ride the pipeline — same token +

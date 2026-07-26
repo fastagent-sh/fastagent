@@ -62,43 +62,50 @@ rather than a feature:
 People address each other by name in a crowd, and drop the name when a conversation has only two
 sides. The rule is therefore about the *conversation*, not about the chat type:
 
-> **Speak without being addressed if, and only if, the agent is a participant of this place and this
-> place has exactly one human participant. Otherwise require an explicit mention.**
+> **Speak without being addressed if, and only if, the agent takes part in this place and has not
+> heard a second human in it. Otherwise require an explicit mention.**
 
-Direct messages are not a special case — they are the instance of the rule where the place has one
-human. The derived behavior:
+Direct messages are not a special case — they are the instance of the rule where only one human can
+be heard. The derived behavior:
 
-| Place | Humans | Behavior |
+| Place | Humans heard | Behavior |
 |---|---|---|
 | Direct message | 1 | always answer |
 | Group main timeline | many | require @mention |
-| Thread with one human | 1 | answer bare messages |
-| Thread with several humans | many | require @mention, keep listening |
+| Thread where only one human has spoken | ≤1 | answer bare messages |
+| Thread where a second human has spoken | ≥2 | require @mention, keep listening |
 
 The last row is the part that "answer everything in a thread the agent once joined" gets wrong: a
 colleague who keeps answering every sentence of a three-way discussion because they were asked one
 question is behaving badly. The agent must fall back to listening when the conversation stops being
 a two-party exchange.
 
-Participation **accumulates and is never shed**. Two sources feed it, covering different stretches of
-time: the agent observes every message it can see (the present), and a platform listing supplies the
-thread's start (the past it never watched). They are unioned, so a thread that has ever held two humans
-keeps requiring a mention, across restarts, and the agent stays a participant of a thread it once
-answered in.
+### The rule is about what the agent HEARD, not about who is really there
 
-That direction is chosen, not incidental: over-counting humans only makes the agent ask to be named,
-while under-counting makes it speak unprompted in a crowded thread — the failure this rule exists to
-prevent. Shedding could only ever be guessed, since no platform emits an event when someone stops
-taking part. The single thing a restart resets is whether the listing has been read, which is what
-makes each process read a thread once.
+This is the load-bearing decision, and it is a deliberate weakening. No platform transmits "who is
+taking part", and none emits an event when someone stops; a claim about true membership can only come
+from reading the thread back on the acceptance path — a remote, paginated, deadline-bound call inside
+the event ACK window.
 
-**Known ceiling.** A listing reads one page (50 messages), so participation is established from a
-thread's first page plus everything observed since. A second human whose only messages fall beyond
-that page *and* predate this process is invisible to both, and such a thread reads as two-party. This
-is the one under-count the design otherwise refuses, kept because the alternatives cost more than the
-risk: refusing to establish any thread longer than a page would deny mention-free replies to the long
-working threads that most want them, and reading both ends of a thread needs a second round trip that
-does not fit the pre-ACK budget.
+That was built, and then removed. It bought a claim its own page cap made incomplete anyway, and it
+dragged in a failure taxonomy per platform, an ACK budget, request aborts, a completeness flag with a
+refusal-flag sibling, and a duplicate-delivery join — which is where nearly every defect lived.
+Observation makes the weaker claim the rule actually needs, and it is free: the channel already sees
+these messages, and it hears everything in a place it can see (§2).
+
+What the weaker claim costs, stated plainly: **a thread the agent joined before this deployment — or
+before a lost state file — reads as unheard, so it takes one mention to re-enter.** That is the same
+bootstrap every thread starts with, it self-heals in one message, and it is visible to the user. It is
+not the failure this replaced, which was silently mention-only, forever, with no signal.
+
+Two consequences worth naming rather than discovering:
+
+- A thread where several people are present but only one has spoken *while the agent was listening*
+  reads as two-party. Given the rule's intent — ambiguity comes from several people **talking** — that
+  is arguably more faithful than counting silent members.
+- Observations accumulate and are never shed. The absence of a signal is not evidence that someone
+  left, and the error directions are not symmetric: over-counting humans makes the agent ask to be
+  named, under-counting makes it speak into a crowd.
 
 **Participation** is required so the agent does not barge into a human thread it was never part of.
 The agent is a participant of a thread once it has answered in it. Bootstrapping is therefore the
@@ -242,7 +249,7 @@ the same shape.
 | Place | chat, `chat:thread_id` | channel, `channel:thread_ts` | chat, `chat:message_thread_id` |
 | Answer in a group | quoted reply in the room | **thread reply** — Slack has no quote primitive, so a thread under the message *is* answering in place | quoted reply in the room |
 | Direct messages | one continuous chat | **assistant threads** — Slack's Agents surface gives each conversation a thread with a title and status | one continuous chat |
-| Thread rule (§3) | participation, read back from `im/v1/messages?container_id_type=thread` | participation, read back from `conversations.replies` | see below |
+| Thread rule (§3) | what the channel heard in the thread | what the channel heard in the thread | not applicable — see below |
 | Session for a group ask | the room (`chat_id`) | the **thread the answer creates** (`channel:thread_ts`) | the room (`chat_id`) |
 | Stateless addressing | — | — | **reply-to-bot**: the update embeds the parent's sender |
 
@@ -268,11 +275,12 @@ Slack pays for that twice, and both are departures from §5 worth naming rather 
 
 Two consequences worth stating rather than papering over:
 
-- **Telegram cannot derive participation, and does not need to.** The Bot API exposes no history read,
-  so a bot only ever sees messages delivered while it was running — observation alone, which a restart
-  degrades. Telegram instead carries the parent message *inside* the update, so "is this a reply to
-  me?" is answered statelessly and survives restarts. That is a stronger addressing signal than the
-  one the other two reconstruct, and it is why Telegram needs no participation cache.
+- **Telegram needs no participation store at all**, and it is the channel that shaped this design. Its
+  Bot API exposes no history read, so it was never able to claim more than it had heard — and it
+  carries the parent message *inside* the update, so "is this a reply to me?" is answered statelessly
+  and survives restarts with no state whatsoever. The other two ended up in the same epistemic
+  position (§3) with a state file, because they have no equivalent primitive; the weakest-claim channel
+  turned out to be the simplest and the least buggy, which is the argument that removed the read.
 - **Feishu/Lark cannot borrow it.** Its event carries `parent_id` as a bare id with no sender, so
   recognising a quote-reply to the agent would need a platform read per message or a durable record of
   every message the agent has sent. Neither is worth it while the thread rule covers the same flow: a

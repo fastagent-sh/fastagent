@@ -174,25 +174,17 @@ custom route is then the complete authority.
 
 In context mode the Agent behaves as a participant of the channel
 ([design note](design/participant-model.md)): it answers a bare message in a thread while it takes part
-and **exactly one human** does. Mentioning it inside a thread is the bootstrap — it answers, which makes
-it a participant, and later bare replies reach it without the name. When a second person speaks in that
-thread, addressing is ambiguous again and it returns to requiring a mention while still listening.
+and **has not heard a second human** there. Mentioning it inside a thread is the bootstrap — it answers,
+which makes it a participant, and later bare replies reach it without the name. When a second person
+speaks in that thread, addressing is ambiguous again and it returns to requiring a mention while still
+listening.
 
-Who takes part is a property of the thread, not of this process: for a thread whose participation it has
-not established, the channel reads the thread's senders back with `conversations.replies`, so losing
-local state costs one lookup rather than the behaviour. That read happens before the event is
-acknowledged, under a 2.5s budget; a transient failure fails the delivery so Slack redelivers it,
-rather than silently downgrading an ask to background context.
-
-**Operationally this differs from Feishu/Lark, which re-push indefinitely.** Slack retries an
-unacknowledged event a small number of times and then drops it, and an app that fails a sustained
-share of deliveries can have its event subscription disabled. The exposed traffic is narrow — only the
-first bare message of a thread whose participation is not yet established; mentions, DMs and
-established threads never take this path — but a `conversations.replies` outage does turn those into
-5xx responses. Watch for repeated `could not read thread … pre-ACK` lines: they mean deliveries are
-being refused, not that one thread is unreadable. The alternative (giving up after N failures and
-treating the thread as unreadable) is deliberately not implemented, because it converts a platform
-fault into a silently mention-only thread — the failure this model refuses.
+Both halves are what this channel *heard*, not a claim about who is really in the thread: nothing is
+read back from Slack, so acceptance stays synchronous and a thread the Agent joined before this
+deployment — or before a lost `thread-participants.json` — takes one mention to re-enter. That is the
+same bootstrap every thread starts with and it self-heals in one message. A consequence worth knowing:
+a thread where several people are present but only one has spoken *while the Agent was listening*
+counts as two-party.
 
 Unsummoned human discussion is bucketed by workspace + channel + concrete thread root.
 The next answered turn in that place receives a bounded sender-prefixed block. Consumption is durable:

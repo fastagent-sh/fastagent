@@ -7,8 +7,6 @@ import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { rmSync } from "node:fs";
 import { createSeenRing } from "../seen.ts";
-import { withAckDeadline } from "../ack-deadline.ts";
-import { createInflightAcceptances } from "../inflight.ts";
 import { createThreadParticipants } from "../thread-participants.ts";
 import { createTaskTracker } from "../tasks.ts";
 import { ensureStateHome } from "../state.ts";
@@ -44,24 +42,13 @@ import {
   streamSlackReply,
 } from "./preview.ts";
 import { resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
-import {
-  type SlackTarget,
-  type SlackTaskDisplayMode,
-  SlackApiError,
-  createSlackApi,
-  isSlackApiRejection,
-} from "./slack-api.ts";
+import { type SlackTarget, type SlackTaskDisplayMode, createSlackApi } from "./slack-api.ts";
 import { createWelcomedUsers } from "./welcomed.ts";
 
 export { defaultSlackRoute, slackEnvelope };
 export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, SlackRendering, SlackRoute };
 
 const MAX_EVENT_BYTES = 1 << 20;
-/** ONE shared budget for all pre-ACK platform waits of a delivery: Slack requires an event ACK within
- *  3s, so the total acceptance wait — not each await — is capped and must never ride the API
- *  pipeline's full timeout + retry budget. On expiry the delivery is treated as transiently
- *  unreadable (redelivered), not as unaddressed. */
-const ACK_CHECK_BUDGET_MS = 2500;
 const MAX_TURN_ATTEMPTS = 3;
 const MAX_SIGNATURE_AGE_S = 5 * 60;
 const QUEUED_PLACEHOLDER = "⏳ Queued — I’ll start once the current task finishes.";
@@ -434,112 +421,20 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     for (const { attempts: _attempts, ...intent } of recovered) submit({ ...intent }, false);
 
     /**
-     * The participant model's summon rule for a bare message in a thread
-     * (docs/design/participant-model.md §3): speak unprompted only where the agent takes part AND
-     * exactly one human does. Participation is observed from every message the channel sees and
-     * re-established from the platform (conversations.replies) for a thread this process has not
-     * established, so a lost state disk costs one lookup rather than the behavior.
+     * The participant model's summon rule for a bare message in a thread (§3): speak unprompted only
+     * where the agent takes part and no second human has been heard. Both facts are what this channel
+     * observed — see channels/thread-participants.ts for why the rule is defined over observation
+     * rather than the thread's true membership.
      */
-    const threadReads = new Map<string, Promise<void>>();
-    const warnedRejections = new Set<string>();
-
-    const readThreadParticipants = async (
-      teamId: string,
-      channelId: string,
-      threadTs: string,
-      deadline: number,
-    ): Promise<void> => {
-      const key = threadKey(teamId, channelId, threadTs);
-      const abort = new AbortController();
-      let senders: { userId: string; isBot: boolean }[];
-      try {
-        senders = await withAckDeadline(
-          // No rate-limit backoff: Slack's retry-after can exceed this budget many times over, and
-          // under rate limiting it would amplify each redelivery into several more requests.
-          api.listThreadSenders(channelId, threadTs, { signal: abort.signal, noRateLimitRetry: true }),
-          "thread participant read",
-          deadline,
-          ACK_CHECK_BUDGET_MS,
-          () => abort.abort(),
-        );
-      } catch (error) {
-        if (!isSlackApiRejection(error)) {
-          // Transient (network/5xx/rate limit/timeout): fail the delivery so Slack redelivers, rather
-          // than silently downgrading a genuine ask to background context.
-          throw new Error(`${label} could not read thread ${threadTs} pre-ACK: ${String(error)}`, { cause: error });
-        }
-        // A definitive rejection (thread gone, missing scope): participation is not derivable. Mark it
-        // UNREADABLE — not established — so the read is not retried per message while the summon rule still
-        // refuses: collapsing the two would let a refusal promote an observed-only record into an
-        // authoritative one. Process-local, so a scope granted later takes effect on the next restart
-        // with no file to delete.
-        const cause = error instanceof SlackApiError ? (error.slackError ?? "unknown") : "unknown";
-        const line = `${label} thread ${threadTs} is not readable — staying mention-only there: ${String(error)}`;
-        if (warnedRejections.has(cause)) {
-          log.debug(line);
-        } else {
-          warnedRejections.add(cause);
-          log.warn(`${line} (if this repeats for every thread, check the app's conversations history scopes)`);
-        }
-        threadParticipants.merge(key, { unreadable: true });
-        return;
-      }
-      threadParticipants.merge(key, {
-        humans: senders.filter((sender) => !sender.isBot).map((sender) => sender.userId),
-        // `|| undefined`: the store only ever SETS this, so a false would be a silent no-op.
-        agentSpoke: senders.some((sender) => sender.isBot && sender.userId === botUserId) || undefined,
-        established: true,
-      });
+    const threadAddressesAgent = (teamId: string, channelId: string, threadTs: string): boolean => {
+      const heard = threadParticipants.get(threadKey(teamId, channelId, threadTs));
+      return heard?.agentSpoke === true && heard.humans.length <= 1;
     };
 
-    const threadAddressesAgent = async (
-      teamId: string,
-      channelId: string,
-      threadTs: string,
-      deadline: number,
-    ): Promise<boolean> => {
-      const key = threadKey(teamId, channelId, threadTs);
-      // Only a platform listing sets `established`, and observing a message never does — so this reads the
-      // live record rather than a snapshot taken before the observation above.
-      const cached = threadParticipants.get(key);
-      if (cached?.established !== true && cached?.unreadable !== true) {
-        // One read per thread, shared by every delivery awaiting it.
-        let read = threadReads.get(key);
-        if (read === undefined) {
-          read = readThreadParticipants(teamId, channelId, threadTs, deadline).finally(() => threadReads.delete(key));
-          threadReads.set(key, read);
-        }
-        await read;
-      }
-      const participation = threadParticipants.get(key);
-      if (participation === undefined) return false;
-      // `established` is required, not incidental: observation only ever UNDER-counts humans, so speaking
-      // unprompted on an unestablished record could barge into a thread that holds several.
-      return participation.established && participation.agentSpoke && participation.humans.length === 1;
-    };
-
-    // Acceptance now awaits a platform read, so the seen ring alone cannot stop two copies of one
-    // delivery (Slack redelivers an un-ACKed event, and app_mention/message can both carry it).
-    const inflight = createInflightAcceptances();
-
-    const acceptEvent = (envelope: SlackEventEnvelope): Promise<void> => {
-      // The same logical identity the seen ring uses; without a workspace or a message the acceptance
-      // below drops the event anyway, so it needs no in-flight slot.
-      const event = envelope.event;
-      const teamId = slackTeamId(envelope) ?? authenticatedTeamId;
-      if (!isSlackHumanMessage(event) || !teamId) return acceptNewEvent(envelope);
-      const logicalId = `${teamId}:${event.channel}:${event.ts}`;
-      return inflight.join(
-        logicalId,
-        () => acceptNewEvent(envelope),
-        () => log.debug(`${label} duplicate delivery ${logicalId} — joining the in-flight acceptance`),
-      );
-    };
-
-    const acceptNewEvent = async (envelope: SlackEventEnvelope): Promise<void> => {
-      // ONE budget for this delivery's platform waits, taken at acceptance: a per-call deadline would
-      // silently give each wait the full allowance the moment a second one is added.
-      const deadline = Date.now() + ACK_CHECK_BUDGET_MS;
+    // Acceptance touches no network, so it stays synchronous inside Slack's ACK window and the
+    // delivery dedup ring alone is enough — there is no await for a duplicate delivery to race
+    // through. The minutes-long Agent turn remains fire-and-forget.
+    const acceptEvent = (envelope: SlackEventEnvelope): void => {
       const event = envelope.event;
       if (!isSlackHumanMessage(event)) return;
       if (botUserId && event.user === botUserId) return;
@@ -553,10 +448,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         log.debug(`${label} duplicate logical message ${logicalId} — skipping`);
         return;
       }
-      // Arrival order, taken BEFORE the participation read below can suspend this acceptance: a bare
-      // thread message awaits a platform call while an app_mention behind it does not, and the turn
-      // store replays by `seq`.
-      const arrivalSeq = ++seq;
 
       const group = isSlackGroupMessage(event);
       const direct = isSlackDirectMessage(event);
@@ -592,7 +483,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         // Mentioning only other people is targeted discussion, never an ask (§3) — the same guard
         // Feishu applies with `hasMentions`.
         !hasUserMention &&
-        (await threadAddressesAgent(teamId, event.channel, event.thread_ts, deadline))
+        threadAddressesAgent(teamId, event.channel, event.thread_ts)
       ) {
         routed = {};
       }
@@ -656,7 +547,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       submit(
         {
           id: logicalId,
-          seq: arrivalSeq,
+          seq: ++seq,
           session: routed.session ?? defaultSession,
           baseText,
           bufferKey,
@@ -748,7 +639,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         return text("slack authentication unavailable\n", 503);
       }
       maybeWelcome(envelope);
-      await acceptEvent(envelope);
+      acceptEvent(envelope);
       return new Response(null, { status: 200 });
     };
     (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = () =>

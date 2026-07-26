@@ -11,10 +11,6 @@ const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const RETRIES = 3;
 const MAX_RETRY_AFTER_S = 30;
 const MAX_REDIRECTS = 3;
-/** How many of a thread's messages are sampled to decide who is taking part in it. The rule only asks
- *  whether more than one human is present, and conversations.replies returns the thread from its
- *  start — its opening window is where a thread's participants are established. */
-const THREAD_SENDER_PAGE = 50;
 /** Slack's standard-Markdown fields cap each call at 12,000 characters. Keep headroom for
  * code-fence balancing and future server-side transformations. */
 const SLACK_MAX_MARKDOWN = 10_000;
@@ -94,44 +90,9 @@ const NATIVE_UNAVAILABLE_ERRORS = new Set([
 
 /** A definitive capability rejection is safe to route through the compatibility renderer. Network,
  * internal, and timeout failures are ambiguous: Slack may already have created the stream. */
+
 export function isSlackNativeUnavailable(error: unknown): boolean {
   return error instanceof SlackApiError && !!error.slackError && NATIVE_UNAVAILABLE_ERRORS.has(error.slackError);
-}
-
-/** Errors that say nothing about the RESOURCE, so a caller must not record them as a verdict on it.
- *  Two classes: Slack's own server-side problems (its docs call these transient and retryable) and
- *  auth failures, which are about this app's token — rotation is proactive here (bot-auth.ts), so one
- *  blip would otherwise mark every thread touched during it undescribable for the life of the process.
- *  All are returned in the body at HTTP 200 like everything else. Feishu's twin classifier excludes
- *  its auth codes for the same reason. */
-const SLACK_TRANSIENT_ERRORS = new Set([
-  "internal_error",
-  "fatal_error",
-  "service_unavailable",
-  "ratelimited",
-  "invalid_auth",
-  "not_authed",
-  "token_expired",
-  "token_revoked",
-  "account_inactive",
-]);
-
-/** Whether Slack REFUSED the request definitively: it arrived and was rejected (unknown thread,
- *  missing scope, not in channel). A 4xx counts by STATUS ALONE — a proxy or WAF page carries no
- *  parseable `error`, and treating that as transient would put the delivery in a redelivery loop that
- *  never records the thread as unreadable. Transport failures (status 0), server errors, rate
- *  limiting, and the named transients above may heal on their own and are NOT rejections. */
-export function isSlackApiRejection(error: unknown): boolean {
-  return (
-    error instanceof SlackApiError &&
-    error.status !== 0 &&
-    error.status < 500 &&
-    error.status !== 429 &&
-    // Slack names its refusals in the BODY at HTTP 200 (`ok:false` + `error`); a 4xx with no parseable
-    // body is a proxy or WAF page, which is equally definitive and must not be retried forever.
-    (error.status >= 400 || error.slackError !== undefined) &&
-    !(error.slackError !== undefined && SLACK_TRANSIENT_ERRORS.has(error.slackError))
-  );
 }
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -156,14 +117,6 @@ export interface SlackApi {
   ): Promise<string>;
   appendStream(channelId: string, ts: string, content: SlackStreamContent): Promise<void>;
   stopStream(channelId: string, ts: string, content?: SlackStreamContent): Promise<void>;
-  /** Senders of a thread's opening page, for deriving who took part before this process watched it.
-   *  Deliberately not paginated: an unbounded walk cannot run inside a pre-ACK budget, and the
-   *  channel's own observations cover everything since. */
-  listThreadSenders(
-    channelId: string,
-    threadTs: string,
-    opts?: { signal?: AbortSignal; noRateLimitRetry?: boolean },
-  ): Promise<{ userId: string; isBot: boolean }[]>;
   setThreadStatus(target: SlackTarget, status: string): Promise<void>;
   setThreadTitle(target: SlackTarget, title: string): Promise<void>;
   addReaction(channelId: string, timestamp: string, emoji: string): Promise<void>;
@@ -303,7 +256,6 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
     method: string,
     body: Record<string, unknown>,
     httpMethod: "GET" | "POST" = "POST",
-    opts?: { signal?: AbortSignal; noRateLimitRetry?: boolean },
   ): Promise<T> => {
     const url = new URL(`${apiBase}/${method}`);
     if (httpMethod === "GET") {
@@ -323,9 +275,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
             ...(httpMethod === "POST" ? { "content-type": "application/json; charset=utf-8" } : {}),
           },
           ...(httpMethod === "POST" ? { body: JSON.stringify(body) } : {}),
-          signal: opts?.signal
-            ? AbortSignal.any([AbortSignal.timeout(API_TIMEOUT_MS), opts.signal])
-            : AbortSignal.timeout(API_TIMEOUT_MS),
+          signal: AbortSignal.timeout(API_TIMEOUT_MS),
         });
         raw = await response.text();
       } catch (error) {
@@ -339,7 +289,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       }
       if (response.ok && data.ok === true) return data;
       const rateLimited = response.status === 429 || data.error === "ratelimited";
-      if (rateLimited && attempt < RETRIES && !opts?.noRateLimitRetry) {
+      if (rateLimited && attempt < RETRIES) {
         const retryAfter = Number(response.headers.get("retry-after") ?? attempt + 1);
         if (Number.isFinite(retryAfter) && retryAfter <= MAX_RETRY_AFTER_S) {
           await wait(Math.max(1, retryAfter) * 1000);
@@ -478,17 +428,6 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
         channel: channelId,
         ts,
         ...(chunks.length ? { chunks } : {}),
-      });
-    },
-    async listThreadSenders(channelId, threadTs, opts) {
-      const data = await call<
-        SlackBody & { messages?: { user?: string; bot_id?: string; subtype?: string; app_id?: string }[] }
-      >("conversations.replies", { channel: channelId, ts: threadTs, limit: THREAD_SENDER_PAGE }, "GET", opts);
-      return (data.messages ?? []).flatMap((message) => {
-        // A bot post carries `bot_id` (and `app_id` for an app); a human carries only `user`.
-        const isBot = message.bot_id !== undefined || message.app_id !== undefined;
-        const userId = message.user;
-        return typeof userId === "string" ? [{ userId, isBot }] : [];
       });
     },
     async setThreadStatus(target, status) {

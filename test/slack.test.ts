@@ -30,20 +30,11 @@ function root(): string {
   return value;
 }
 
-function okFetch(threadSenders: { user: string; bot?: boolean }[] = []) {
+function okFetch() {
   let ts = 100;
   return vi.fn(async (input: string | URL, _init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/auth.test")) return Response.json({ ok: true, team_id: "T1", user_id: "UBOT" });
-    if (url.includes("/conversations.replies")) {
-      return Response.json({
-        ok: true,
-        messages: threadSenders.map((sender) => ({
-          user: sender.user,
-          ...(sender.bot ? { bot_id: "B1", app_id: "A1" } : {}),
-        })),
-      });
-    }
     if (url.endsWith("/chat.postMessage") || url.endsWith("/chat.startStream")) {
       return Response.json({ ok: true, ts: String(ts++) });
     }
@@ -519,96 +510,6 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls[1]?.scope.session).toBe("slack:T1:C1:10.0");
   });
 
-  it("concurrent duplicate deliveries share one acceptance: one thread read, one turn", async () => {
-    let releaseRead!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    let reads = 0;
-    const base = okFetch([{ user: "U1" }, { user: "UBOT", bot: true }]);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL, init?: RequestInit) => {
-        if (String(input).includes("/conversations.replies")) {
-          reads++;
-          await gate;
-        }
-        return base(input, init);
-      }),
-    );
-    const { agent, calls } = replyingAgent();
-    const { handler } = mount(agent, { groupBehavior: "context" });
-    await new Promise((resolve) => setImmediate(resolve));
-
-    // Slack redelivers an event whose ACK it did not see, and app_mention/message can both carry one.
-    const push = () => handler(signedRequest(message("13.2", { text: "ask once", thread_ts: "13.0" })));
-    const [first, second] = [push(), push()];
-    releaseRead();
-    expect((await first).status).toBe(200);
-    expect((await second).status).toBe(200);
-    await settle();
-
-    expect(calls).toHaveLength(1);
-    expect(reads).toBe(1);
-  });
-
-  it("a transient thread read leaves the delivery un-ACKed: Slack's redelivery answers it", async () => {
-    let reads = 0;
-    const base = okFetch([{ user: "U1" }, { user: "UBOT", bot: true }]);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL, init?: RequestInit) => {
-        if (String(input).includes("/conversations.replies") && ++reads === 1) {
-          return Response.json({ ok: false, error: "internal_error" }, { status: 500 });
-        }
-        return base(input, init);
-      }),
-    );
-    const { agent, calls } = replyingAgent();
-    const { handler } = mount(agent, { groupBehavior: "context" });
-    await new Promise((resolve) => setImmediate(resolve));
-    const bare = () => signedRequest(message("11.2", { text: "the ask", thread_ts: "11.0" }));
-
-    // A system fault must not silently demote a genuine ask to background context.
-    await expect(handler(bare())).rejects.toThrow(/thread 11\.0/);
-    expect(calls).toHaveLength(0);
-
-    await handler(bare()); // Slack's redelivery
-    await settle();
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt.text).toContain("the ask");
-  });
-
-  it("a thread Slack refuses to read stays mention-only, and is not re-read per message", async () => {
-    let reads = 0;
-    const base = okFetch();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL, init?: RequestInit) => {
-        if (String(input).includes("/conversations.replies")) {
-          reads++;
-          return Response.json({ ok: false, error: "thread_not_found" });
-        }
-        return base(input, init);
-      }),
-    );
-    const { agent, calls } = replyingAgent();
-    const { handler } = mount(agent, { groupBehavior: "context" });
-    await new Promise((resolve) => setImmediate(resolve));
-
-    // Even after answering a mention there — participation is not established, so it stays quiet.
-    await handler(signedRequest(message("12.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "12.0" })));
-    await settle();
-    expect(calls).toHaveLength(1);
-
-    for (const ts of ["12.2", "12.3"]) {
-      await handler(signedRequest(message(ts, { text: "bare", thread_ts: "12.0" })));
-      await settle();
-    }
-    expect(calls).toHaveLength(1);
-    expect(reads).toBe(1); // recorded once, not retried per message
-  });
-
   it("a bare message that mentions only other people is discussion, not an ask", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
@@ -626,8 +527,7 @@ describe("Slack sessions, context, and thread participation", () => {
   });
 
   it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
-    // The platform listing is what reveals the humans this process never saw speak.
-    vi.stubGlobal("fetch", okFetch([{ user: "U1" }, { user: "U2" }, { user: "UBOT", bot: true }]));
+    vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
     const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
     await new Promise((resolve) => setImmediate(resolve));
@@ -636,10 +536,26 @@ describe("Slack sessions, context, and thread participation", () => {
     await settle();
     expect(calls).toHaveLength(1);
 
-    await handler(signedRequest(message("10.2", { text: "bare follow-up", thread_ts: "10.0" })));
+    // A second human SPEAKS — which is how the agent learns of them, the rule being defined over what
+    // it heard rather than over the thread's true membership.
+    await handler(signedRequest(message("10.2", { user: "U2", text: "I think it is the cache", thread_ts: "10.0" })));
     await settle();
-    expect(calls).toHaveLength(1); // addressing is ambiguous again
+    expect(calls).toHaveLength(1);
+
+    // Addressing is ambiguous again, so even the original asker now needs the name.
+    await handler(signedRequest(message("10.3", { text: "bare follow-up", thread_ts: "10.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("bare follow-up");
+
+    // …and the discussion it stayed quiet through is folded into the next answered turn.
+    await handler(
+      signedRequest(message("10.4", { type: "app_mention", text: "<@UBOT> summarize", thread_ts: "10.0" })),
+    );
+    await settle();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt.text).toContain("I think it is the cache");
+    expect(calls[1]?.prompt.text).toContain("bare follow-up");
   });
 
   it("attaches an answer to its question with a thread, and that thread carries the memory", async () => {

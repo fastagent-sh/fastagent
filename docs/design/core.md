@@ -344,41 +344,37 @@ a stable hand-authored surface. What is platform-different:
   [participant-model.md](participant-model.md); there is deliberately no session-mode option.
 - **Speaking is gated by who is in the place, listening is not.** Direct messages always answer;
   a group's main timeline requires an @mention; inside a thread the agent answers bare messages only
-  while it takes part and exactly one human does. Everything else it can see is buffered as context
+  while it takes part and has not heard a second human. Everything else it can see is buffered as context
   (`im:message.group_msg` is what buys the hearing). An explicit mention of only other people is
   discussion, never an ask. The first message of a thread loads its `parent_id` referent (a thread
   usually starts from the agent's own earlier answer); later messages in a known thread do not, since
   the session already holds what they reply to. An unreadable referent degrades to a marker in the
   prompt rather than failing the turn.
-- **Thread participation is a property of the thread, not local bookkeeping.** Three separable
+- **Thread participation is what the channel HEARD, not a claim about the thread's membership.** Two
   decisions:
-  - *Predicate.* Who takes part comes from the messages the channel observes, and — for a thread this
-    process has never completed a picture of — from `listThreadSenders` (`container_id_type=thread`,
-    pinned to `user_id_type=open_id`; a bot sender's `id` is the app id). The earlier design
-    recognized only threads this process had created, so a lost state disk silently demoted every
-    existing thread to @-mention-only.
-  - *Caching.* `thread-participants.json` is a bounded write-through cache carrying, per thread, the
-    humans seen, whether this agent has spoken, and whether the record is `established` (complete).
-    Only the listing sets `established`, and `established` is PROCESS-LOCAL while the observations are
-    durable: observation can only under-count, so speaking unprompted requires an established record,
-    and persisting the flag would make one listing authoritative forever (a failed read becoming a
-    durable "do not retry"). The listing is UNIONED with what was observed rather than substituted for
-    it — the two cover different stretches of the thread, and dropping a human is the one error that
-    makes the agent barge in. Losing the file costs one list call per thread.
-  - *Failure ownership.* A transient read failure is not cached: acceptance FAILS the delivery (HTTP
-    500 / WS 500 frame) so the platform re-pushes and the next attempt re-checks — the same
-    at-least-once contract as a failed pre-ACK state write. The cost is real and accepted: one
-    `im/v1/messages` list becomes a precondition for ACKing a bare thread message, *including*
-    un-summoned chatter that would only have buffered, so if a read outage outlasts the platform's
-    bounded re-push schedule that message is lost entirely (turn and buffered copy, operator logs
-    only). The alternative — ACKing and buffering — would silently downgrade a genuine ask to
-    background context, which is the failure this channel refuses. Both platform waits (bot identity,
-    thread read) share ONE deadline so a slow read cannot stall the event ACK.
+  - *Predicate.* The agent speaks unprompted in a thread only where it has answered before and has
+    heard at most one human. Both facts come from the messages the channel observes; nothing is read
+    back from the platform. That is a deliberate weakening: a thread joined before this deployment (or
+    before a lost state file) reads as unheard and takes one mention to re-enter — the same bootstrap
+    every thread starts with, self-healing in one message and visible to the user. The alternative was
+    built and removed: a pre-ACK `listThreadSenders` bought a membership claim its own 50-message page
+    cap made incomplete anyway, at the price of a failure taxonomy, an ACK budget, request aborts, a
+    completeness flag, and a duplicate-delivery join — where nearly every defect in the feature lived.
+    See `src/channels/thread-participants.ts` and design/participant-model.md §3.
+  - *Storage.* `thread-participants.json` records, per thread, the humans heard (capped at two — the
+    rule only asks whether a second one exists) and whether this agent has spoken. Observations only
+    ever accumulate: no platform emits an event when someone stops taking part, and the error
+    directions are asymmetric — over-counting makes the agent ask to be named, under-counting makes it
+    speak into a crowd. Because nothing is fetched, acceptance stays synchronous inside the ACK
+    window and the delivery dedup ring alone keeps a re-push idempotent.
 - **Group visibility is scope-gated and chosen during onboarding.** `Context-aware groups`
   (recommended and initially selected) requests the sensitive `im:message.group_msg` scope;
   `Mention-only` is the least-privilege alternative. The CLI states that the former delivers all group
   messages, adds it to the app draft through application-v7 config when supported, opens tenant-admin
-  approval, and reports the granted capability again at serving startup. Explicit @bot turns always invoke; bare
+  approval, and reports the granted capability again at serving startup. A mention arriving before the
+  startup `bot/v3/info` settles is kept as context rather than answered (fail-closed: without its own
+  open_id the channel cannot tell a mention of itself from one of someone else) and is folded into the
+  next answered turn in that place. Explicit @bot turns always invoke; bare
   human messages invoke only under the thread-participation rule above. Other human
   discussion is persisted in `buffers.json`, bucketed by main chat or thread, and folded into that
   place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only
