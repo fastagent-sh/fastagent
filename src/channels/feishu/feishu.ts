@@ -472,13 +472,15 @@ function createFeishuRuntimeFactory(
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
-      // Deliberately UNGATED, unlike Slack's counterpart. The invariant is that a thread the agent
-      // answered in has heard every human who spoke there — an unrecorded human is the under-count
-      // that makes it speak into a crowd. The `agentSpoke` write below cannot be narrowed (the referent
-      // anchor consumes it in every chat type and under any route), so this one matches its condition
-      // rather than the narrower set the summon rule can read; otherwise a deployment that later drops
-      // its custom route would inherit threads whose humans were never recorded. Records no rule reads
-      // are harmless: they cost two ids, and the cap evicts bystanders first.
+      // Deliberately UNGATED, unlike Slack's counterpart, for two reasons that both point the same way.
+      // The invariant is that a thread the agent answered in has heard every human who spoke there —
+      // an unrecorded human is the under-count that makes it speak into a crowd. (1) `hearsGroupThreads`
+      // settles asynchronously, so gating on it would under-record for the whole boot window. (2) A
+      // deployment that later drops its custom route would otherwise inherit threads whose humans were
+      // never recorded. The cost is that a mention-only app still persists thread participation, which
+      // Slack's counterpart refuses — Slack can, because its scope posture is configuration it knows
+      // synchronously. Records no rule reads are harmless: they cost two ids, and the cap evicts
+      // bystanders first.
       //
       // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
       // there is no addressing ambiguity between machines (§3).
@@ -530,6 +532,12 @@ function createFeishuRuntimeFactory(
       const agentInThread =
         m.thread_id !== undefined &&
         (m.chat_type !== "group" || hearsGroupThreads) &&
+        // Participation is keyed by THREAD; the memory it stands in for is keyed by SESSION. Those
+        // agree only while the session is derived from the place — a route supplying its own (the
+        // scaffold's `session: user:<open_id>` example) can put two people's turns in the same thread
+        // into different sessions, where "the agent answered here" proves nothing about what THIS
+        // session holds. A custom route is the complete authority, so defer to it and load the quote.
+        r?.session === undefined &&
         threadParticipants.get(threadKey(m.chat_id, m.thread_id))?.agentSpoke === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
