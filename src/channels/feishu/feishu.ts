@@ -453,19 +453,20 @@ function createFeishuRuntimeFactory(
 
     /**
      * Merge one observed human sender into its thread's participation. Only humans: the platform does
-     * not push the agent's own messages back to it, and the event's sender id is an open_id while a
-     * bot is identified by app id — agent participation is recorded where it is actually known (when
-     * this channel answers in the thread, and from the platform listing).
+     * not push the agent's own messages back to it, so the agent's own half is recorded where it is
+     * actually known — when this channel answers in the thread.
      */
+    /** Gated on what CONSUMES participation: only a group thread's bare-message admission reads it, and
+     *  a custom route owns admission entirely. Recording elsewhere would persist per-thread rows that
+     *  nothing can ever read, filling the cap and evicting the group threads it exists to protect. */
+    const participationIsRead = (m: FeishuMessage): boolean => route === undefined && m.chat_type === "group";
+
     const observeThreadSender = (
       m: FeishuMessage,
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
-      // Gated on what CONSUMES it: only a group thread's bare-message admission reads the human set,
-      // and a custom route owns admission entirely. Recording elsewhere would persist per-thread user
-      // ids that nothing can ever read.
-      if (route !== undefined || m.chat_type !== "group") return;
+      if (!participationIsRead(m)) return;
       if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) return;
       threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [senderId] });
     };
@@ -619,7 +620,16 @@ function createFeishuRuntimeFactory(
       );
 
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
-      // bare message address it without a mention (§3). Recorded only once the intent is durable:
+      // bare message address it without a mention (§3).
+      //
+      // NOT gated on `participationIsRead`, unlike its human-observation sibling — the asymmetry is
+      // deliberate. `agentSpoke` has a SECOND consumer that runs whoever decided admission and in any
+      // chat type: the referent anchor above (`agentInThread`) uses it to tell a thread's opening
+      // message from a continuation. Gating this write would make every message of a custom-route or
+      // p2p thread re-load its `parent_id` referent. `humans` has no such second reader, which is why
+      // only that one is gated.
+      //
+      // Recorded only once the intent is durable:
       // `submit` can throw, and a re-pushed first message must still see an empty thread so it keeps
       // its referent anchor. A later delivery failure does not undo it — entering the conversation is
       // the intent, not the send.

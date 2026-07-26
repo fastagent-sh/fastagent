@@ -526,6 +526,26 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("can you look?");
   });
 
+  it("a top-level ask counts as heard in the thread the answer creates, so a stranger's reply does not summon", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // U1 asks at CHANNEL top level: the ask carries no thread_ts, so the observation on the way in
+    // never runs for it — the agent's answer is what creates thread 20.0.
+    await handler(signedRequest(message("20.0", { type: "app_mention", text: "<@UBOT> look at this" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+
+    // U2 bare-replies inside that thread. Two humans are demonstrably here (U1's ask IS the root), so
+    // this must stay listening rather than read as a two-party exchange.
+    await handler(signedRequest(message("20.1", { user: "U2", text: "which part?", thread_ts: "20.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("which part?");
+  });
+
   it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
