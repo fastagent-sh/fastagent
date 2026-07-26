@@ -469,16 +469,13 @@ function createFeishuRuntimeFactory(
      * What this delivery contributes to thread participation, or undefined when it contributes nothing.
      *
      * ONE gate for BOTH writes (the humans observation on the way in, and the `agentSpoke` merge once
-     * the turn is durable) — the invariant that a record never says "answered here, heard nobody"
-     * depends on the two agreeing, and hand-written conditions in two places is exactly the drift that
-     * has already bitten this branch once. The synthetic speaker id has one definition here for the
-     * same reason.
+     * the turn is durable), and one definition of the synthetic speaker id — hand-written conditions in
+     * two places is the drift that has already bitten this branch once. Structural facts only; see
+     * thread-participants.ts for why configuration must not appear here.
      *
-     * Gated on STRUCTURAL facts only — never on `route` or the granted scope — for the reason
-     * thread-participants.ts states for every channel: configuration changes while records outlive the
-     * change. `chat_type` is structural (a chat never turns into a group), and p2p records have no
-     * reader so they are not kept. A custom route may admit a bot the default route filters out;
-     * answering one is not participation the summon rule should act on.
+     * Feishu-specific: p2p is excluded (nothing reads those records), and a custom route may admit a
+     * bot the default route filters out — answering one is not participation the summon rule should
+     * act on, so such a thread keeps no record and the first human still needs the mention bootstrap.
      */
     const heardIn = (
       m: FeishuMessage,
@@ -494,15 +491,11 @@ function createFeishuRuntimeFactory(
           `${label} human senders arrive with no usable id (first seen in thread ${m.thread_id}) — each counts as a distinct speaker, so affected threads permanently require an @mention until thread-participants.json is deleted`,
         );
       }
-      // A human whose id no tenant flavour carries still SPOKE, and the invariant is that no human
-      // speaks unrecorded. Count them under a per-MESSAGE synthetic id: two such messages read as two
-      // speakers and the thread asks to be named. A per-thread id would be tidier but wrong in the
-      // dangerous direction — on a tenant that carries no ids at all, every human would collapse into
-      // one and the agent would speak into a crowd it cannot see.
-      //
-      // PERMANENT, unlike every other cost in this model: two id-less messages fill MAX_HUMANS, records
-      // never shed, so that thread requires an @mention from then on. It does not self-heal; deleting
-      // thread-participants.json is the only reset.
+      // A human whose id no tenant flavour carries still SPOKE, and no human may speak unrecorded. A
+      // per-MESSAGE synthetic id keeps them distinct; a per-thread one would collapse every human on an
+      // id-less tenant into one, which is the direction that barges into a crowd. Its cost is PERMANENT
+      // — two such messages fill MAX_HUMANS and records never shed, so that thread needs an @mention
+      // from then on and only deleting the file resets it (§3).
       return { key: threadKey(m.chat_id, m.thread_id), speaker: speakerId ?? `unidentified:${m.message_id}` };
     };
 

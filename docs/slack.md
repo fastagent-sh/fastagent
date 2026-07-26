@@ -314,6 +314,21 @@ forever. File-backed channel state supports one process/replica only.
 stable `/slack` Request URL. `--run` deploys the app but still reports Slack registration as the required
 manual console step. Mount `FASTAGENT_STATE_DIR` on durable storage and keep one replica.
 
+## Upgrading from the session-mode releases
+
+`directMessageSession` and `groupMessageSession` are **removed**, and passing either now fails at
+startup rather than being ignored — placement and session identity follow from Slack's own primitives
+(an answer goes in a thread on the ask, and that thread is the session), which leaves nothing for the
+options to select. Delete them from `channels/slack.ts`.
+
+If either was set to `continuous`, both where answers land and how sessions are keyed change with the
+removal, and **existing conversation history is not migrated** — every thread starts fresh. The obsolete
+`owned-threads.json` is deleted on the first start; nothing else needs cleaning up.
+
+Behaviour that changes even on the default configuration: a bare reply in a thread is answered while
+the Agent takes part and it has not heard a second human there (previously: any thread it had created).
+Derivation in [design/participant-model.md](design/participant-model.md) §3 and §12.
+
 ## Current boundaries
 
 - HTTP Events API only; Socket Mode is not included.

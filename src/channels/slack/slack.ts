@@ -450,8 +450,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. Humans only — a bot's own posts are recorded where they
       // are known — this channel answering.
-      // Gated on a STRUCTURAL fact (is this a group?) and never on `groupBehavior` or `route` — see
-      // thread-participants.ts for why configuration must not gate a record that outlives it. Slack
+      // Structural facts only, never `groupBehavior` or `route` — see thread-participants.ts. Slack
       // adds no delta of its own here; its summon rule is the only consumer.
       if (group && event.thread_ts !== undefined) {
         threadParticipants.merge(threadKey(teamId, event.channel, event.thread_ts), { humans: [event.user] });
@@ -554,8 +553,8 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // NEXT bare message address it without a mention.
       //
       // `group` excludes DMs, whose `threadTs` is always defined (the answer opens its assistant
-      // thread) and which no rule could ever read — an exclusion safe to make because it is structural,
-      // and a channel never becomes a DM.
+      // thread) and which no rule could ever read — safe because it is structural: a channel never
+      // becomes a DM.
       //
       // The two `routed` conditions keep the record describing what it claims. `session` undefined: the
       // flag asserts "the agent answered into THIS thread's session", so a route supplying its own

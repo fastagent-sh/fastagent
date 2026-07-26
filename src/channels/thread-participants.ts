@@ -1,52 +1,23 @@
 /**
- * SHARED: who the agent has HEARD in a group thread — the input to the participant model's summon
- * rule (docs/design/participant-model.md §3): it speaks unprompted only where it takes part and has
- * not heard a second human. The storage discipline is identical for every channel and lives here;
- * channels supply the place key, and it MUST be the same string the session uses — a record here is a
- * claim about that session's memory, so the two cannot be keyed independently. That is also where the
- * channel brand comes from (`feishu:<chat>:<thread>`, `slack:<team>:<channel>:<thread_ts>`): this file
- * is already per-channel and would not need it, but SESSION ids share one namespace across every
- * channel in a deployment, so stripping the prefix here would silently key participation to a session
- * that is not the one that answered.
+ * SHARED: who the agent has HEARD in a group thread — the sole input to the participant model's summon
+ * rule. **The derivation lives in docs/design/participant-model.md §3** (why the rule is defined over
+ * observation rather than the thread's true membership, what the weaker claim costs in both
+ * directions, and why recording is never gated on configuration). Repeating it here would mean two
+ * copies to keep true; what follows is only what a caller of this module must not get wrong.
  *
- * **The rule is defined over what the agent observed, not over the thread's true membership.** That is
- * the load-bearing decision. No platform transmits "who is taking part", and none emits an event when
- * someone stops; the only way to claim ground truth is to read a thread back from the platform on the
- * acceptance path — a remote, paginated, deadline-bound call that must finish inside the event ACK
- * window. That was tried (git history on this file): it bought a claim that its own page cap made
- * incomplete anyway, and it dragged in a failure taxonomy, an ACK budget, request aborts, a
- * completeness flag and its refusal-flag sibling, and a duplicate-delivery join — which is where
- * nearly every defect lived. Observation makes the weaker claim the rule actually needs, and it is
- * free: the channel already sees these messages.
- *
- * What the weaker claim costs, stated plainly: a thread the agent joined before this deployment — or
- * before a lost state file — reads as unheard, so it takes one mention to re-enter. That is the same
- * bootstrap every thread starts with, it self-heals in one message, and it is visible to the user,
- * unlike the failure this replaced (silently mention-only, forever, with no signal).
- *
- * The other direction is possible too, and is NOT free: a record is only as complete as the channel's
- * hearing when it was written. An agent answering a mention in a restricted posture (Slack `mentions`,
- * Feishu without `im:message.group_msg`) records itself plus the one human who summoned it, while every
- * other human's bare message in that thread is never delivered. Widen the posture later and that thread
- * reads "participant + one human" though it holds several. Accepted rather than defended against: the
- * failure is one unwanted reply, it corrects itself the moment a second human speaks, and detecting it
- * needs exactly the completeness bookkeeping this module exists to avoid. An operator changing posture
- * on a live deployment can delete this file to force every thread back to the mention bootstrap.
- *
- * RECORDING IS NEVER GATED ON CONFIGURATION — not on a group-behaviour setting, not on the presence of
- * a custom route — even though nothing reads participation under those postures. Configuration changes
- * while a record outlives the change: gate on it and switching back leaves `agentSpoke` on disk with
- * the humans of the intervening window missing, which is the under-count above with no mention needed
- * to trigger it. Gate only on STRUCTURAL facts (is this a group?), which do not change under a live
- * deployment. (Feishu's referent anchor used to consume `agentSpoke` too; it no longer exists, so the
- * summon rule is now the only reader in either channel.)
- *
- * Observations only ever ACCUMULATE. Nothing is shed, because the absence of a signal is not evidence
- * that someone left, and because the error directions are not symmetric: over-counting humans makes
- * the agent ask to be named, under-counting makes it speak into a crowd.
- *
- * Keyed by `thread_id`, never a reply-chain root: Feishu's `root_id` moves with the chain, so it
- * cannot identify a side conversation at all.
+ * - **The key MUST be the string the session uses.** A record here is a claim about that session's
+ *   memory, so the two cannot be keyed independently — including the channel brand
+ *   (`feishu:<chat>:<thread>`, `slack:<team>:<channel>:<thread_ts>`). This file is already per-channel
+ *   and would not need the prefix, but SESSION ids share one namespace across every channel in a
+ *   deployment, so dropping it would key participation to a session that is not the one that answered.
+ * - **Write both halves under one condition**, and gate that condition on STRUCTURAL facts only (is
+ *   this a group? a thread? a human speaking?) — never on configuration, which changes while records
+ *   outlive the change.
+ * - **Observations only accumulate.** Nothing here sheds: no platform signals that someone stopped
+ *   taking part, and the error directions are not symmetric — over-counting humans makes the agent ask
+ *   to be named, under-counting makes it speak into a crowd.
+ * - Keyed by `thread_id`, never a reply-chain root: Feishu's `root_id` moves with the chain, so it
+ *   cannot identify a side conversation at all.
  */
 import { log } from "../log.ts";
 import { loadStateFile, saveStateFile } from "./state.ts";

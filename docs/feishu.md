@@ -347,6 +347,26 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 
 **Do not use it to answer the current turn** — the channel already delivers the reply, so calling the tool as well posts it twice. The scaffolded description says so; a workspace scaffolded before that was added keeps its own copy, so paste the boundary into the tool's `description` (or re-run `fastagent add` in a scratch dir and copy the file) if the Agent is double-posting.
 
+## Upgrading from the session-mode releases
+
+Three behaviour changes, none of them opt-in:
+
+- **Direct messages become one continuous conversation** instead of one session per top-level message,
+  and a group summon is answered **in place** instead of opening a thread.
+- **Sessions are re-keyed** to the place (`<kind>:<chat_id>`, or `<kind>:<chat_id>:<thread_id>` in a
+  thread). Existing history is NOT migrated — every conversation starts fresh, which reads to users as
+  the Agent forgetting. The old session records stay in the store unreferenced; deleting them is
+  optional and safe.
+- **The concurrency unit changes with it.** Turns serialize per session, so a whole room is now one
+  queue: a second person's `@Agent` in a busy room waits behind an unrelated multi-minute turn (they
+  see the "⏳ Queued" card). Open a thread to run something alongside it.
+
+State cleans itself up on the first start: `owned-threads.json` is removed, and `buffers.json` buckets
+under the retired key shape are dropped — which means **buffered discussion in threads does not survive
+the upgrade** (a chat's own bucket does). The dropped count is logged.
+
+Derivation in [design/participant-model.md](design/participant-model.md) §3 and §12.
+
 ## Limits
 
 - One app uses one subscription mode. FastAgent cannot fail over from WebSocket to webhook at runtime;
