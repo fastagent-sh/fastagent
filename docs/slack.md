@@ -251,7 +251,10 @@ seconds. A native-configured turn also uses this renderer when a custom route se
 at channel top level, because Slack native streams must reply to a parent user message. This fallback is
 logged. Agent/API failures remain visible in the thread or operator logs.
 
-The scaffolded `slack-send` tool supports text or one local file. File mode uses Slack's current [external
+The scaffolded `slack-send` tool supports text or one local file. **Do not use it to answer the current
+turn** — the channel already delivers the reply, so calling the tool as well posts it twice; its
+scaffolded description says so. It is the delivery path for turns no channel is carrying: a cron
+schedule or a self-scheduled wake-up. File mode uses Slack's current [external
 upload protocol](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/):
 
 ```txt
