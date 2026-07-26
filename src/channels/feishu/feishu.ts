@@ -468,9 +468,7 @@ function createFeishuRuntimeFactory(
      * not push the agent's own messages back to it, so the agent's own half is recorded where it is
      * actually known — when this channel answers in the thread.
      */
-    /** Bounded by MAX_THREADS' sibling concern: one entry per thread that ever produced an id-less
-     *  human, process-local, and only ever reached on a degraded tenant. */
-    const warnedUnidentified = new Set<string>();
+    let warnedUnidentified = false;
 
     const observeThreadSender = (
       m: FeishuMessage,
@@ -486,17 +484,22 @@ function createFeishuRuntimeFactory(
       // there is no addressing ambiguity between machines (§3).
       if (m.chat_type !== "group" || m.thread_id === undefined || senderType !== "user") return;
       // A human whose id no tenant flavour carries still SPOKE, and the invariant is that no human
-      // speaks unrecorded. Count them under a per-message synthetic id: two such messages then read as
-      // two speakers and the thread asks to be named, which is the tolerable direction — while dropping
-      // them reads as two-party and barges into a crowd, which is not. The warn stays because a steady
-      // stream of these means the rule's input is degraded.
+      // speaks unrecorded. Count them under a per-MESSAGE synthetic id: two such messages read as two
+      // speakers and the thread asks to be named. A per-thread id would be tidier but wrong in the
+      // dangerous direction — on a tenant that carries no ids at all, every human would collapse into
+      // one and the agent would speak into a crowd it cannot see.
+      //
+      // PERMANENT, unlike every other cost in this model: two id-less messages fill MAX_HUMANS, records
+      // never shed, so that thread requires an @mention from then on. It does not self-heal; deleting
+      // thread-participants.json is the only reset. That is the honest price of an event stream the
+      // agent cannot attribute, and the warning below names it once.
       const heard = speakerId ?? `unidentified:${m.message_id}`;
-      // Once per thread: the condition is systemic when it happens (a tenant whose events carry no id
-      // flavour), so a per-message line would be a warning stream on the acceptance path.
-      if (speakerId === undefined && !warnedUnidentified.has(m.thread_id)) {
-        warnedUnidentified.add(m.thread_id);
+      // Once per PROCESS: this is a property of the tenant's event configuration, not of one thread, so
+      // a per-thread set would grow without bound to repeat a single fact.
+      if (speakerId === undefined && !warnedUnidentified) {
+        warnedUnidentified = true;
         log.warn(
-          `${label} a human sender in thread ${m.thread_id} carries no usable id — counting them as a distinct speaker, so this thread will ask to be named`,
+          `${label} human senders arrive with no usable id (first seen in thread ${m.thread_id}) — each counts as a distinct speaker, so affected threads permanently require an @mention until thread-participants.json is deleted`,
         );
       }
       threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [heard] });

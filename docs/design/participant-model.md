@@ -127,6 +127,14 @@ the failure is one unwanted reply, it corrects itself the moment a second human 
 needs exactly the completeness bookkeeping this design removed. An operator changing posture on a live
 deployment can delete the state file to force every thread back to the mention bootstrap.
 
+One cost in this model is NOT self-healing, and it is worth stating separately: a human whose event
+carries no usable id (Feishu's `sender_id` is a union, and which members a tenant populates is app
+configuration) is counted under a synthetic per-message id, so two such messages fill the thread's
+human slots and it requires an @mention from then on. Collapsing them into one speaker would be tidier
+but wrong in the dangerous direction — on a tenant that carries no ids at all, every human would read
+as the same one. Deleting the state file is the only reset; the channel warns once at startup when it
+first sees such a sender.
+
 Two consequences worth naming rather than discovering:
 
 - A thread where several people are present but only one has spoken *while the agent was listening*
