@@ -480,9 +480,7 @@ function createFeishuRuntimeFactory(
       // thread-participants.ts states for every channel: configuration changes while records outlive
       // the change. `chat_type` is structural (a chat never turns into a group), and p2p records have
       // no reader, so they are not kept.
-      //
-      // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
-      // there is no addressing ambiguity between machines (§3).
+
       if (m.chat_type !== "group" || m.thread_id === undefined || senderType !== "user") return;
       // A human whose id no tenant flavour carries still SPOKE, and the invariant is that no human
       // speaks unrecorded. Count them under a per-MESSAGE synthetic id: two such messages read as two
@@ -653,23 +651,25 @@ function createFeishuRuntimeFactory(
       // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
       // the thread as the agent has actually left it. A later delivery failure does not undo it —
       // entering the conversation is the intent, not the send.
+      // The conditions match `observeThreadSender`'s exactly — group, thread, human sender — so the two
+      // writes are ONE gate and the record can never say "answered here, heard nobody". A custom route
+      // may admit a bot the default route filters out; the agent answering a bot is not participation
+      // the summon rule should act on, and recording that bot under `humans` would be a lie in a field
+      // named for them. Such a thread keeps no record at all, so the first human to speak there still
+      // needs the mention bootstrap — the conservative direction.
       if (
         replyInThread === true &&
         m.thread_id !== undefined &&
         sameTarget &&
         r.session === undefined &&
-        m.chat_type === "group"
+        m.chat_type === "group" &&
+        event.sender?.sender_type === "user"
       ) {
         // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive
         // could otherwise say "answered here, heard nobody" — which admits bare messages forever.
-        // The human half carries the SAME sender-type condition as the observation above (a custom
-        // route can admit a bot, which the default route filters out), so `humans` never gains a
-        // non-human and the agentSpoke condition stays a subset of the humans condition.
-        const asker =
-          event.sender?.sender_type === "user" ? (senderId(event.sender) ?? `unidentified:${m.message_id}`) : undefined;
         threadParticipants.merge(threadKey(m.chat_id, m.thread_id), {
           agentSpoke: true,
-          ...(asker ? { humans: [asker] } : {}),
+          humans: [senderId(event.sender) ?? `unidentified:${m.message_id}`],
         });
       }
     };

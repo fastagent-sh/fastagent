@@ -101,14 +101,15 @@ not the failure this replaced, which was silently mention-only, forever, with no
 **The invariant is that every human the channel hears in a thread is recorded there, until a second one
 is known** — not that a record always holds one, and not that `humans` is ever a complete roster. The
 rule asks nothing beyond "is there a second?", so the store stops counting at two; what it must never
-do is miss the first two. `{agentSpoke: true, humans: []}` is a legitimate state, and the rule admits it
-on purpose: ambiguity comes from a second person *talking*, not from the absence of a first, so a
-thread where no human has spoken has nothing to disambiguate. (The built-in routes admit only human
-senders, so this state arises behind a custom route — the predicate states the intent rather than
-relying on an upstream filter to make the case unreachable.) What must never happen is one of those first two
-speaking *unrecorded*, because that is the under-count that makes the agent speak into a crowd. The `agentSpoke` condition is therefore a SUBSET of the
-`humans` condition: anywhere the agent can record having answered, it was already recording who spoke,
-so "answered here but heard nobody" cannot arise from the gates. (The agent half is additionally
+do is miss the first two. Missing one of them is the under-count that makes the agent speak into a
+crowd.
+
+Both halves of a record are therefore written under the SAME gate — a group thread, a human sender —
+so "answered here but heard nobody" cannot arise at all. The predicate still admits it (`humans` of
+zero or one), which states the intent: ambiguity comes from a second person *talking*, not from the
+absence of a first. But it is not a state the channels can produce. A custom route may admit a bot the
+built-in routes filter out; answering one is not participation the rule should act on, so such a thread
+keeps no record and the first human to speak there still needs the mention bootstrap. (The agent half is additionally
 narrowed — it must be the same place and the place's own session — which only ever leaves a bystander
 record, never a participant one with humans missing.)
 
