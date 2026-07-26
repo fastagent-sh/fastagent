@@ -264,8 +264,10 @@ function createFeishuRuntimeFactory(
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
-    // The participant model replaced the managed-root index; its file is dead weight on an upgraded
-    // deployment (a cache, so nothing is lost). Best-effort: a leftover file is untidy, not fatal.
+    // The participant model replaced the managed-root index; its file is dead weight on a deployment
+    // upgrading across this one release (a cache, so nothing is lost). Best-effort: a leftover file is
+    // untidy, not fatal. REMOVE THIS after the release following the participant model ships — by then
+    // no live deployment can still be carrying the file.
     try {
       rmSync(join(stateHome, "owned-threads.json"), { force: true });
     } catch (error) {
@@ -461,12 +463,16 @@ function createFeishuRuntimeFactory(
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
-      // Deliberately UNGATED, unlike Slack's counterpart. A record's two halves must be written under
-      // the same condition or the record lies — a thread carrying `agentSpoke` with no humans reads as
-      // "the agent takes part and nobody has spoken", which the summon rule admits. The `agentSpoke`
-      // write below cannot be narrowed (the referent anchor consumes it in every chat type and under
-      // any route), so this one matches it rather than the narrower set the rule can read. Records no
-      // rule reads are harmless: they cost two ids, and the cap evicts bystanders first.
+      // Deliberately UNGATED, unlike Slack's counterpart. The invariant is that a thread the agent
+      // answered in has heard every human who spoke there — an unrecorded human is the under-count
+      // that makes it speak into a crowd. The `agentSpoke` write below cannot be narrowed (the referent
+      // anchor consumes it in every chat type and under any route), so this one matches its condition
+      // rather than the narrower set the summon rule can read; otherwise a deployment that later drops
+      // its custom route would inherit threads whose humans were never recorded. Records no rule reads
+      // are harmless: they cost two ids, and the cap evicts bystanders first.
+      //
+      // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
+      // there is no addressing ambiguity between machines (§3).
       if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) return;
       threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [senderId] });
     };
@@ -496,7 +502,8 @@ function createFeishuRuntimeFactory(
       let r = decide(event);
       const normalized = normalizeFeishuMessage(event);
       if (!normalized) return;
-      const seq = ++seqCounter; // arrival order, taken BEFORE any await below can reorder acceptance
+      const seq = ++seqCounter; // arrival order; hoisted above the early returns below so a
+      // buffered or dropped message still consumes its slot and never reuses a live turn's number
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
       // Has the agent answered in this thread before this delivery? That is the cheap proxy for "the

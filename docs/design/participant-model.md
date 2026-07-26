@@ -98,10 +98,15 @@ before a lost state file — reads as unheard, so it takes one mention to re-ent
 bootstrap every thread starts with, it self-heals in one message, and it is visible to the user. It is
 not the failure this replaced, which was silently mention-only, forever, with no signal.
 
-**A record is never half-written.** Both halves — the humans heard and whether the agent has answered
-— are recorded under the same condition, per channel. A record carrying `agentSpoke` with no humans
-would read as "the agent takes part and nobody has spoken", which this rule admits; that state must
-therefore be unreachable rather than defended against in the predicate.
+**The invariant is that every human the channel hears in a thread is recorded there** — not that a
+record always holds one. `{agentSpoke: true, humans: []}` is a legitimate state, and the rule admits it
+on purpose: ambiguity comes from a second person *talking*, not from the absence of a first, so a
+thread where no human has spoken has nothing to disambiguate. (The built-in routes admit only human
+senders, so this state arises behind a custom route — the predicate states the intent rather than
+relying on an upstream filter to make the case unreachable.) What must never happen is a human speaking *unrecorded*,
+because that is the under-count that makes the agent speak into a crowd. Both halves of a record are
+therefore written under the same condition, per channel: a thread the agent answered in must have
+heard every human that spoke there.
 
 What that condition *is* differs between the two channels, and the difference is a fact about them
 rather than a disagreement. Slack's summon rule is the only consumer, so recording is narrowed to

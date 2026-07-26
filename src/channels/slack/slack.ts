@@ -270,8 +270,10 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     /** This channel's place key for a thread (the shared store is key-agnostic). */
     const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
       `${teamId}:${channelId}:${threadTs}`;
-    // The participant model replaced the owned-thread index; its file is dead weight on an upgraded
-    // deployment (a cache, so nothing is lost). Best-effort: a leftover file is untidy, not fatal.
+    // The participant model replaced the owned-thread index; its file is dead weight on a deployment
+    // upgrading across this one release (a cache, so nothing is lost). Best-effort: a leftover file is
+    // untidy, not fatal. REMOVE THIS after the release following the participant model ships — by then
+    // no live deployment can still be carrying the file.
     try {
       rmSync(join(stateHome, "owned-threads.json"), { force: true });
     } catch (error) {
@@ -564,9 +566,9 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Answering inside a GROUP thread makes the agent a participant of it, which is what lets the
       // NEXT bare message address it without a mention.
       //
-      // Gated exactly like the human observation above, so a record is never half-written (a thread
-      // carrying `agentSpoke` with no humans reads as "the agent takes part and nobody has spoken",
-      // which the summon rule admits). Slack can afford the narrow gate because the summon rule is the
+      // Gated exactly like the human observation above, upholding the invariant that a thread the
+      // agent answered in has heard every human who spoke there (an unrecorded human is the
+      // under-count that makes it speak into a crowd). Slack can afford the narrow gate because the summon rule is the
       // ONLY consumer here — Feishu's is wider because its referent anchor reads participation too.
       // `group` therefore excludes DMs, whose `threadTs` is always defined (the answer opens its
       // assistant thread) and whose records no rule would ever read.
