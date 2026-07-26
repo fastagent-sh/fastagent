@@ -113,9 +113,8 @@ from configuration. A group-behaviour setting or the presence of a custom route 
 since nothing reads participation without them, but configuration changes while records outlive the
 change: gate on it, switch back, and `agentSpoke` is still on disk with the humans of the intervening
 window missing. Both channels therefore record in postures where no rule will read the result. The
-only delta between them is reach — Feishu also records p2p threads, because its referent anchor asks
-"has the agent answered here?" in every chat type to tell a thread's opening message from a
-continuation. Unread records are harmless: they cost two ids, and the cap evicts bystander threads
+condition is the same in both: a group thread, whatever the posture. Unread records are harmless:
+they cost two ids, and the cap evicts bystander threads
 (ones the agent has only listened to) before threads it takes part in, so listening traffic can never
 push out a thread being served.
 
@@ -230,9 +229,12 @@ A thread must start from something. Four rungs, increasing in cost:
 | 4 | session fork | the room's entire history, reasoning and tool results included |
 
 Rung 1 fails the model's own main path: following up on the agent's answer, where the answer is
-routinely longer than the cut. **Rung 2 is implemented.** The anchor is loaded for the FIRST message of
-a thread — the one that points at something outside it — and skipped afterwards, since later messages
-reply to what the thread's own session already holds. An unreadable referent degrades to a marker in
+routinely longer than the cut. **Rung 2 is implemented.** A quoted message is always loaded — the quote is the
+user pointing at something that may predate this session. (Skipping it inside a thread the agent had
+already answered in was tried: deciding whether the session really held it needs a second fact, whether
+the channel RECEIVED the messages in between, which depends on a permission that changes over time
+while the record is durable. Every way of gating it failed toward a silently missing quote, for the
+price of one extra read.) An unreadable referent degrades to a marker in
 the prompt: context is not the ask, and losing it must not cost the answer. Rung 3 is the next
 increment if anchors prove too narrow.
 

@@ -231,12 +231,6 @@ function createFeishuRuntimeFactory(
       },
       (e) => log.warn(`${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`),
     );
-    // Whether the platform delivers un-mentioned group messages to this app: the scope probe settles it
-    // shortly after boot. Also gates the referent anchor, which is only sound where the channel heard
-    // the thread it is skipping the quote for.
-    // False until the probe says otherwise — the fail-safe direction for its one reader, the referent
-    // anchor, which would otherwise drop a quote the session never received.
-    let hearsGroupThreads = false;
     void api.listAppScopes().then(
       (scopes) => {
         const grantedScope = (name: string): boolean =>
@@ -244,8 +238,7 @@ function createFeishuRuntimeFactory(
             (scope) =>
               scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
           );
-        hearsGroupThreads = grantedScope(FEISHU_GROUP_CONTEXT_SCOPE);
-        if (hearsGroupThreads) {
+        if (grantedScope(FEISHU_GROUP_CONTEXT_SCOPE)) {
           // This scope settles the rule's whole input: it delivers the un-mentioned group messages the
           // channel buffers, which is also what lets it HEAR a thread. Nothing is fetched, so nothing
           // is pending — the only bootstrap left is social, one mention inside a thread. The read scope
@@ -267,11 +260,7 @@ function createFeishuRuntimeFactory(
           );
         }
       },
-      (error) => {
-        // `hearsGroupThreads` stays false, which costs its one reader (the referent anchor) a redundant
-        // quote read per thread continuation until restart — the fail-safe direction.
-        log.warn(`${label} could not inspect group visibility: ${String(error)}`);
-      },
+      (error) => log.warn(`${label} could not inspect group visibility: ${String(error)}`),
     );
     const decide = route ?? ((event: FeishuMessageEvent) => defaultFeishuRoute(event, { botOpenId }));
 
@@ -488,14 +477,14 @@ function createFeishuRuntimeFactory(
       senderType: string | undefined,
       speakerId: string | undefined,
     ): void => {
-      // Ungated for the reason thread-participants.ts states for every channel (configuration changes
-      // while records outlive the change), plus a delta of Feishu's own: its referent anchor consumes
-      // `agentSpoke` in every chat type and under any route, and the invariant that a thread the agent
-      // answered in has heard every human who spoke there then pins this write to that one.
+      // Gated on STRUCTURAL facts only — never on `route` or on the granted scope — for the reason
+      // thread-participants.ts states for every channel: configuration changes while records outlive
+      // the change. `chat_type` is structural (a chat never turns into a group), and p2p records have
+      // no reader, so they are not kept.
       //
       // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
       // there is no addressing ambiguity between machines (§3).
-      if (m.thread_id === undefined || senderType !== "user") return;
+      if (m.chat_type !== "group" || m.thread_id === undefined || senderType !== "user") return;
       // A human whose id no tenant flavour carries still SPOKE, and the invariant is that no human
       // speaks unrecorded. Count them under a per-message synthetic id: two such messages then read as
       // two speakers and the thread asks to be named, which is the tolerable direction — while dropping
@@ -540,22 +529,6 @@ function createFeishuRuntimeFactory(
       if (!normalized) return;
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
-      // Does the thread's session already hold what this message replies to? "The agent answered here"
-      // is the cheap proxy — but only where the channel actually RECEIVED the messages in between.
-      // A group needs the delivery scope for that (without it only @mentions arrive, so a quote of a
-      // message that was never delivered would be silently dropped); p2p is always fully heard. Until
-      // the scope probe settles the answer is "no", which costs a redundant read rather than a lost
-      // quote. `agentSpoke` is a DURABLE
-      // observation, so a restart keeps the answer and changes nothing here. It is deliberately read
-      // before the participation lookup below, and never from "a record exists": observation writes
-      // one before acceptance can fail, which would strip a re-pushed first message of its anchor.
-      // The cost of the proxy lands on state LOSS — a new machine, or eviction under the cap — where
-      // the next continuation loads its referent again: one extra read and some duplicated text, in
-      // exchange for never leaving a thread's opening message without the context it replies to.
-      const agentInThread =
-        m.thread_id !== undefined &&
-        (m.chat_type !== "group" || hearsGroupThreads) &&
-        threadParticipants.get(threadKey(m.chat_id, m.thread_id))?.agentSpoke === true;
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. The sender counts toward the rule immediately — a
       // second human speaking is exactly what makes addressing ambiguous again.
@@ -653,13 +626,18 @@ function createFeishuRuntimeFactory(
           replyTo,
           queueReplyTo,
           replyInThread,
-          // What a quoted message is worth depends on where it is quoted:
-          //   · in a thread the agent has ALREADY answered in, the session holds what the message
-          //     replies to, so re-fetching would cost a call per turn and duplicate the text;
-          //   · everywhere else — a thread's first message (§8 rung 2), and any quote in a chat's main
-          //     timeline — the quote is the user explicitly pointing at something, which may predate
-          //     this session entirely, so it is loaded.
-          parentId: agentInThread ? undefined : m.parent_id,
+          // A quote is the user explicitly pointing at something that may predate this session
+          // (§8 rung 2), so it is always loaded.
+          //
+          // There used to be an exception: skip it inside a thread the agent had already answered in,
+          // since the session would hold it. That needed a second fact — did the channel RECEIVE the
+          // messages in between? — which depends on a scope that changes over time, while the record it
+          // was read against is durable. Every attempt to gate it correctly failed in the same
+          // direction (a silently missing quote), for an optimisation worth one `getMessage` on a
+          // quote-reply inside an active thread. Loading it costs a call and some text the session may
+          // already have; it also pins WHICH message is being answered, which a long thread benefits
+          // from anyway.
+          parentId: m.parent_id,
           images,
           files,
         },
@@ -669,21 +647,27 @@ function createFeishuRuntimeFactory(
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
       // bare message address it without a mention (§3).
       //
-      // `r.session === undefined` is what makes this fact mean what both readers assume. Participation
+      // `r.session === undefined` is what makes this fact mean what its reader assumes. Participation
       // is keyed by THREAD while the memory it stands in for is keyed by SESSION, and those agree only
       // when the session is derived from the place. A route supplying its own (the scaffold's
       // `session: user:<open_id>` example) can put two people's turns in one thread into different
-      // sessions — recording `agentSpoke` from one of them would tell the referent anchor to drop a
-      // quote for a session that never held it, and tell the summon rule the agent took part in a
-      // conversation it cannot remember. So the flag records "the agent answered into THIS THREAD'S
-      // session", and both readers can take it at face value. Such a thread simply keeps a bystander
-      // record, and needs the ordinary mention to bootstrap if the route is later dropped.
+      // sessions — recording `agentSpoke` from one of them would tell the summon rule the agent took
+      // part in a conversation it cannot remember. So the flag records "the agent answered into THIS
+      // THREAD'S session". Such a thread keeps a bystander record and needs the ordinary mention to
+      // bootstrap if the route is later dropped. `group` matches the observation above so the record is
+      // never half-written.
       //
       // Recorded only once the intent is durable:
       // `submit` can throw, and a re-pushed first message must still see an empty thread so it keeps
       // its referent anchor. A later delivery failure does not undo it — entering the conversation is
       // the intent, not the send.
-      if (replyInThread === true && m.thread_id !== undefined && sameTarget && r.session === undefined) {
+      if (
+        replyInThread === true &&
+        m.thread_id !== undefined &&
+        sameTarget &&
+        r.session === undefined &&
+        m.chat_type === "group"
+      ) {
         threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { agentSpoke: true });
       }
     };
