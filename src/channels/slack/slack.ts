@@ -25,7 +25,10 @@ import {
   defaultSlackRoute,
   isSlackDirectMessage,
   isSlackGroupMessage,
+  hasSlackMention,
   isSlackHumanMessage,
+  mentionsSlackUser,
+  stripSlackMentions,
   slackBufferText,
   slackEnvelope,
   slackFileIds,
@@ -461,13 +464,10 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       }
 
       let routed = decide(envelope);
-      // Both forms of a Slack mention: `<@U123>` and the labelled `<@U123|name>`. The label matters —
-      // `hasUserMention` is the "@-mentions only other people is discussion, never an ask" guard (§3),
-      // so missing a form lets a message aimed at a colleague reach the summon rule and be answered.
-      const text = event.text ?? "";
-      const hasUserMention = /<@[A-Z0-9]+(\|[^>]*)?>/i.test(text);
-      const structurallyMentionsBot =
-        botUserId !== undefined && new RegExp(`<@${botUserId}(\\|[^>]*)?>`).test(text);
+      // `hasUserMention` is the "@-mentions only other people is discussion, never an ask" guard (§3);
+      // both helpers accept either mention form (see parse.ts).
+      const hasUserMention = hasSlackMention(event.text ?? "");
+      const structurallyMentionsBot = botUserId !== undefined && mentionsSlackUser(event.text ?? "", botUserId);
       // app_mention and message.* subscriptions can overlap. If message.* arrives first, structural bot
       // identity routes it now; while auth.test is still unresolved, defer any mentioned message rather
       // than buffer+dedup it and accidentally suppress the later app_mention callback.
@@ -521,7 +521,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Explicit user stop: a control action, never a turn — it must not queue behind the run it
       // stops. Match the bare word after stripping the bot mention; record the logical id so a Slack
       // redelivery doesn't double-abort or double-notify.
-      if (isStopText((event.text ?? "").replace(/<@[A-Z0-9]+>/gi, " "))) {
+      if (isStopText(stripSlackMentions(event.text ?? ""))) {
         seen.add(logicalId);
         const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
         sideTasks.track(
@@ -536,13 +536,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       if (!baseText.trim() && fileIds.length === 0) return;
       const threadTitle =
         direct && event.thread_ts === undefined
-          ? codePointPrefix(
-              slackMessageText(event)
-                .replace(/<@[A-Z0-9]+>/gi, "")
-                .replace(/\s+/g, " ")
-                .trim(),
-              80,
-            )
+          ? codePointPrefix(stripSlackMentions(slackMessageText(event), "").replace(/\s+/g, " ").trim(), 80)
           : undefined;
 
       submit(

@@ -5,6 +5,30 @@ export type { SlackEventEnvelope, SlackFile, SlackMessageEvent, SlackRoute } fro
 
 const HUMAN_MESSAGE_SUBTYPES = new Set(["file_share", "thread_broadcast"]);
 
+/**
+ * Both forms Slack writes a mention in: `<@U123>` and the labelled `<@U123|name>`. ONE definition,
+ * because the forms have to agree across every site that reads them — the "@-mentions only other
+ * people is discussion" guard, the structural bot-summon check, the stop-command strip, and the
+ * assistant-thread title. They drifted once: widening the first two while the strip still matched only
+ * the bare form turned `<@bot|name> stop` into an ordinary turn, queued behind the run it meant to stop.
+ */
+const MENTION_SOURCE = String.raw`<@[A-Z0-9]+(?:\|[^>]*)?>`;
+
+/** Does this text mention ANY user? */
+export function hasSlackMention(text: string): boolean {
+  return new RegExp(MENTION_SOURCE, "i").test(text);
+}
+
+/** Does this text mention this specific user (either form)? */
+export function mentionsSlackUser(text: string, userId: string): boolean {
+  return new RegExp(String.raw`<@${userId}(?:\|[^>]*)?>`).test(text);
+}
+
+/** Strip every mention, e.g. before matching a bare command word or building a title. */
+export function stripSlackMentions(text: string, replacement = " "): string {
+  return text.replace(new RegExp(MENTION_SOURCE, "gi"), replacement);
+}
+
 /** Slack message events whose content represents a new human message rather than a mutation/service event. */
 export function isSlackHumanMessage(
   event: SlackMessageEvent | undefined,

@@ -549,6 +549,12 @@ describe("Slack sessions, context, and thread participation", () => {
     await settle();
     expect(calls).toHaveLength(1);
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("what do you think?");
+
+    // …and the stop command must survive the strip in either form, or it becomes an ordinary turn
+    // queued behind the very run it meant to stop.
+    await handler(signedRequest(message("40.3", { text: "<@UBOT|agent> stop", thread_ts: "40.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
   });
 
   it("a top-level ask counts as heard in the thread the answer creates, so a stranger's reply does not summon", async () => {
