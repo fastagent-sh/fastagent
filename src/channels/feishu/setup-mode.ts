@@ -21,7 +21,6 @@ export const FEISHU_MESSAGE_READ_SCOPE = "im:message:readonly";
  *  superset, so an app holding it can already read a quoted message — checking only the readonly
  *  spelling would warn a correctly configured app forever and push its author into a redundant
  *  approval round. Request the narrow one; accept either. */
-export const FEISHU_MESSAGE_READ_SCOPES = [FEISHU_MESSAGE_READ_SCOPE, "im:message"];
 
 /** A scope the onboarding asks for, and every spelling that already satisfies it. Kept as one concept
  *  so adding another superset means editing this table, not every call site that tests a scope. */
@@ -40,7 +39,15 @@ export function scopeSatisfied(entry: FeishuScopeRequest, predicate: (name: stri
 /** What `--group-behavior context` REQUESTS in one approval round — not a dependency set. Only the
  *  delivery scope is required for the context path; the read scope rides along because it shares the
  *  round and its absence merely degrades quoted messages to a marker. */
+/** `im:message` is the read/write superset, so an app holding it can already read a quoted message.
+ *  Exported on its own because the serving-time capability report needs the same question answered —
+ *  a second mechanism there is what this table exists to prevent. */
+export const FEISHU_MESSAGE_READ_REQUEST: FeishuScopeRequest = {
+  request: FEISHU_MESSAGE_READ_SCOPE,
+  satisfiedBy: [FEISHU_MESSAGE_READ_SCOPE, "im:message"],
+};
+
 export const FEISHU_CONTEXT_ONBOARDING_SCOPES: FeishuScopeRequest[] = [
   { request: FEISHU_GROUP_CONTEXT_SCOPE, satisfiedBy: [FEISHU_GROUP_CONTEXT_SCOPE] },
-  { request: FEISHU_MESSAGE_READ_SCOPE, satisfiedBy: FEISHU_MESSAGE_READ_SCOPES },
+  FEISHU_MESSAGE_READ_REQUEST,
 ];
