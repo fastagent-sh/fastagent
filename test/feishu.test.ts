@@ -1581,9 +1581,9 @@ describe("turn flow", () => {
     // The route decided admission, so the built-in thread rule never ran — and nothing is asked of the
     // platform either way.
     expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
-    // Both halves are recorded regardless. Writing only `agentSpoke` here would leave "the agent takes
-    // part and nobody has spoken" behind — a record the summon rule would admit if this deployment
-    // later dropped its route, skipping the mention bootstrap §3 requires.
+    // Both halves are recorded regardless. The referent anchor reads `agentSpoke` under any route, so
+    // that write is pinned — and the invariant "a thread the agent answered in has heard every human
+    // who spoke there" then pins this one, or the record would claim participation with nobody in it.
     const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
       string,
       { agentSpoke: boolean; humans: string[] }

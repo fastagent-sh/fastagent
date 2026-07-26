@@ -275,7 +275,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     // The participant model replaced the owned-thread index; its file is dead weight on a deployment
     // upgrading across this one release (a cache, so nothing is lost). Best-effort: a leftover file is
     // untidy, not fatal. REMOVE THIS after the release following the participant model ships — by then
-    // no live deployment can still be carrying the file.
+    // no live deployment can still be carrying the file. test/migration-deadline.test.ts fails when due.
     try {
       rmSync(join(stateHome, "owned-threads.json"), { force: true });
     } catch (error) {

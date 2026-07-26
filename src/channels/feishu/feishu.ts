@@ -267,8 +267,8 @@ function createFeishuRuntimeFactory(
         }
       },
       (error) => {
-        // Leave the tri-state UNKNOWN: a failed probe is not evidence the scope is absent, and
-        // recording is the safe direction.
+        // `hearsGroupThreads` stays false, which costs its one reader (the referent anchor) a redundant
+        // quote read per thread continuation until restart — the fail-safe direction.
         log.warn(`${label} could not inspect group visibility: ${String(error)}`);
       },
     );
@@ -285,7 +285,7 @@ function createFeishuRuntimeFactory(
     // The participant model replaced the managed-root index; its file is dead weight on a deployment
     // upgrading across this one release (a cache, so nothing is lost). Best-effort: a leftover file is
     // untidy, not fatal. REMOVE THIS after the release following the participant model ships — by then
-    // no live deployment can still be carrying the file.
+    // no live deployment can still be carrying the file. test/migration-deadline.test.ts fails when due.
     try {
       rmSync(join(stateHome, "owned-threads.json"), { force: true });
     } catch (error) {
@@ -483,16 +483,15 @@ function createFeishuRuntimeFactory(
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
-      // Deliberately UNGATED, unlike Slack's counterpart, and the asymmetry is a deliberate position
-      // rather than an oversight. The invariant is that a thread the agent answered in has heard every
-      // human who spoke there — an unrecorded human is the under-count that makes it speak into a
-      // crowd. Slack knows its posture from CONFIGURATION, synchronously, so it can narrow recording to
-      // exactly what its rule reads. Feishu's posture is a granted scope it learns from a remote probe,
-      // and gating on that would put a correctness invariant behind the probe's interpretation: a probe
-      // that is wrong, slow, or failing would stop the agent counting humans while the platform keeps
-      // delivering their messages. The price is the other way round — a mention-only app keeps a small
-      // record of who spoke where that no rule will read — and a privacy nit is the better trade than a
-      // silent barge-in. Bystander-first eviction keeps those records from crowding out live ones.
+      // Deliberately UNGATED, unlike Slack's counterpart, and FORCED rather than chosen. The invariant
+      // is that a thread the agent answered in has heard every human who spoke there — an unrecorded
+      // human is the under-count that makes it speak into a crowd — so humans must be recorded wherever
+      // `agentSpoke` can be. Feishu's referent anchor consumes `agentSpoke` in every chat type and under
+      // any route, which pins that write, which pins this one. Slack has no such second consumer, so it
+      // narrows to exactly what its summon rule reads. (Route-drop resilience is a side effect, not the
+      // reason: re-entering a thread costs the ordinary mention §3 already asks for.) Recording under a
+      // posture no rule reads costs two ids per thread, and bystander-first eviction keeps those records
+      // from crowding out live ones.
       //
       // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
       // there is no addressing ambiguity between machines (§3).
