@@ -124,6 +124,24 @@ describe("thread participation (shared)", () => {
     expect(stored(path)["c:other_0"]).toBeUndefined();
   });
 
+  it("never evicts the thread being written, so a two-step participant record cannot lose its humans", () => {
+    const path = join(stateDir(), "p.json");
+    const store = createThreadParticipants(path, "[feishu]");
+    // A full map of PARTICIPANT threads: bystander-first eviction has nothing cheap to shed, and the
+    // new thread is itself the only bystander — the shape the channels actually produce.
+    for (let i = 0; i < 1000; i++) store.merge(`c:other_${i}`, { humans: [`u_${i}`], agentSpoke: true });
+
+    store.merge("c:new", { humans: ["asker"] }); // heard, not yet answered
+    store.merge("c:new", { agentSpoke: true }); // the answer, a separate merge
+
+    // Evicting the key under the pen would leave { humans: [], agentSpoke: true }, which admits bare
+    // messages from anyone, forever — the under-count the model exists to prevent.
+    expect(stored(path)["c:new"]).toEqual({ humans: ["asker"], agentSpoke: true });
+    expect(store.admitsBareMessage("c:new")).toBe(true);
+    store.merge("c:new", { humans: ["second"] });
+    expect(store.admitsBareMessage("c:new")).toBe(false);
+  });
+
   it("evicts the oldest thread once the cap is reached", () => {
     const path = join(stateDir(), "p.json");
     const store = createThreadParticipants(path, "[feishu]");

@@ -161,9 +161,13 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
       if (unchanged) return;
       while (records.size > MAX_THREADS) {
         // Oldest bystander first; only when every record is a thread the agent takes part in does age
-        // alone decide.
+        // alone decide. NEVER the key just merged: it is the most recently touched record, so evicting
+        // it contradicts the recency policy re-established above — and worse, a channel that records a
+        // thread's humans and its own participation in two steps would then write the second half onto
+        // an empty record, producing "answered here, heard nobody" and a permanent bare-message admit.
         let evict: string | undefined;
         for (const [candidate, record] of records) {
+          if (candidate === key) continue;
           if (!record.agentSpoke) {
             evict = candidate;
             break;

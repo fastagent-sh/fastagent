@@ -660,7 +660,12 @@ function createFeishuRuntimeFactory(
         r.session === undefined &&
         m.chat_type === "group"
       ) {
-        threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { agentSpoke: true });
+        // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive
+        // could otherwise say "answered here, heard nobody" — which admits bare messages forever.
+        threadParticipants.merge(threadKey(m.chat_id, m.thread_id), {
+          agentSpoke: true,
+          humans: [senderId(event.sender) ?? `unidentified:${m.message_id}`],
+        });
       }
     };
 
