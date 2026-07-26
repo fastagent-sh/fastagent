@@ -463,7 +463,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       // Gated on a STRUCTURAL fact (is this a group?) and never on `groupBehavior` or `route` — see
       // thread-participants.ts for why configuration must not gate a record that outlives it. Slack
       // adds no delta of its own here; its summon rule is the only consumer.
-      if (group && event.thread_ts !== undefined && event.user && !event.bot_id) {
+      if (group && event.thread_ts !== undefined) {
         threadParticipants.merge(threadKey(teamId, event.channel, event.thread_ts), { humans: [event.user] });
       }
 

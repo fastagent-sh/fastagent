@@ -71,7 +71,7 @@ describe("thread participation (shared)", () => {
     // Oldest of all, but the agent takes part in it — this is the record that costs a mention to lose.
     store.merge("c:served", { humans: ["u1"], agentSpoke: true });
     // Threads it merely listens to are written on the same path and vastly outnumber the rest.
-    for (let i = 0; i < 5000; i++) store.merge(`c:bystander_${i}`, { humans: [`u_${i}`] });
+    for (let i = 0; i < 1000; i++) store.merge(`c:bystander_${i}`, { humans: [`u_${i}`] });
 
     expect(store.get("c:served")).toEqual({ humans: ["u1"], agentSpoke: true });
     expect(store.get("c:bystander_0")).toBeUndefined();
@@ -81,7 +81,7 @@ describe("thread participation (shared)", () => {
     const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
     store.merge("c:served", { humans: ["u1"], agentSpoke: true });
     // Fill with OTHER participant threads, so bystander-first eviction cannot save it.
-    for (let i = 0; i < 4999; i++) store.merge(`c:other_${i}`, { humans: [`u_${i}`], agentSpoke: true });
+    for (let i = 0; i < 999; i++) store.merge(`c:other_${i}`, { humans: [`u_${i}`], agentSpoke: true });
 
     // The served thread carries no NEW information (same human, already answered), which is exactly
     // why it would otherwise sit at the head of the eviction order while being actively served.
@@ -94,11 +94,11 @@ describe("thread participation (shared)", () => {
 
   it("evicts the oldest thread once the cap is reached", () => {
     const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
-    // MAX_THREADS is 5000; touching one more than that must shed exactly the least recently updated.
-    for (let i = 0; i <= 5000; i++) store.merge(`oc_1:omt_${i}`, { humans: [`ou_${i}`] });
+    // MAX_THREADS is 1000; touching one more than that must shed exactly the least recently updated.
+    for (let i = 0; i <= 1000; i++) store.merge(`oc_1:omt_${i}`, { humans: [`ou_${i}`] });
 
     expect(store.get("oc_1:omt_0")).toBeUndefined();
-    expect(store.get("oc_1:omt_5000")).toEqual({ humans: ["ou_5000"], agentSpoke: false });
+    expect(store.get("oc_1:omt_1000")).toEqual({ humans: ["ou_1000"], agentSpoke: false });
   });
 
   it("persists only NEW observations — a repeat message writes nothing", () => {

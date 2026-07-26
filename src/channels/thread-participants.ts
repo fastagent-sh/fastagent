@@ -50,7 +50,10 @@ import { loadStateFile, saveStateFile } from "./state.ts";
  *  buys little — and a merge that carries new information rewrites the whole map synchronously, so the
  *  map's size is the cost of every such write. What keeps that bounded is that only NEW information
  *  writes at all (a repeat speaker, or any message once MAX_HUMANS is reached, returns before
- *  persisting).
+ *  persisting), and that the map stays small enough for state.ts's premise to hold — these writes land
+ *  synchronously on the acceptance path, so the whole file is the cost of each one. A thousand records
+ *  is tens of KB, and the records that matter (threads the agent takes part in) are far fewer than
+ *  that; the dominant traffic is bystanders, which is what the eviction policy below is aimed at.
  *
  *  Eviction prefers BYSTANDER threads — ones the agent has only listened to. They are written on the
  *  same path and vastly outnumber the rest (every thread in every visible channel), yet losing one
@@ -59,7 +62,7 @@ import { loadStateFile, saveStateFile } from "./state.ts";
  *  traffic push out the threads the agent is actively serving, silently reverting them to
  *  mention-only. This is also what makes it safe for a channel to record threads no rule reads
  *  (Feishu's p2p and custom-route records, kept so a record is never half-written). */
-const MAX_THREADS = 5000;
+const MAX_THREADS = 1000;
 
 /** Cap on remembered humans per thread. The rule only asks "have I heard a second one?", so two is
  *  already the whole answer and anything beyond it is weight nothing reads. */

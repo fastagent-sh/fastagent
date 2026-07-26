@@ -330,8 +330,13 @@ Breaking changes for existing Feishu/Lark deployments:
 
 - direct messages become one continuous conversation instead of one session per top-level message;
 - group summons answer in place instead of opening a thread;
-- threads answer bare messages only while a single human is in them.
+- threads answer bare messages only while no second human has been heard in them;
+- **sessions are re-keyed** from `<kind>:<root_id ?? message_id>` to the place (`<chat>` or
+  `<chat>:<thread_id>`, §5). Existing session history is NOT migrated: every conversation starts fresh
+  after the upgrade, which reads to users as the agent forgetting, and the old records stay in the
+  session store unreferenced (there is no TTL or GC — see docs/feishu.md). Deleting them is optional
+  and safe; nothing will ever read them again.
 
 For Slack, placement and sessions are unchanged; what changes is the summon rule: a thread the agent
-has answered in admits bare replies while one human is in it, and a second human restores the mention
+has answered in admits bare replies until a second human is heard there, which restores the mention
 requirement. `owned-threads.json` is removed on the next start.
