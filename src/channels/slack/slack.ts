@@ -267,9 +267,11 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
 
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
-    /** This channel's place key for a thread (the shared store is key-agnostic). */
+    /** A thread's participation is keyed by the SESSION it describes — "the agent answered here" is a
+     *  claim about a memory, so the two must not be re-keyable independently. (Participation is only
+     *  ever recorded on the default route, so this is always the session that answered.) */
     const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
-      `${teamId}:${channelId}:${threadTs}`;
+      `slack:${teamId}:${channelId}:${threadTs}`;
     // The participant model replaced the owned-thread index; its file is dead weight on a deployment
     // upgrading across this one release (a cache, so nothing is lost). Best-effort: a leftover file is
     // untidy, not fatal. REMOVE THIS after the release following the participant model ships — by then
@@ -518,7 +520,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       const defaultThread = event.thread_ts ?? event.ts;
       const threadTs =
         routed.threadTs === null ? undefined : (routed.threadTs ?? (sameChannel ? defaultThread : undefined));
-      const defaultSession = `slack:${teamId}:${event.channel}:${rootTs}`;
+      const defaultSession = threadKey(teamId, event.channel, rootTs);
       // Explicit user stop: a control action, never a turn — it must not queue behind the run it
       // stops. Match the bare word after stripping the bot mention; record the logical id so a Slack
       // redelivery doesn't double-abort or double-notify.

@@ -233,6 +233,8 @@ function createFeishuRuntimeFactory(
     // Whether the platform delivers un-mentioned group messages to this app: the scope probe settles it
     // shortly after boot. Also gates the referent anchor, which is only sound where the channel heard
     // the thread it is skipping the quote for.
+    // False until the probe says otherwise — the fail-safe direction for its one reader, the referent
+    // anchor, which would otherwise drop a quote the session never received.
     let hearsGroupThreads = false;
     void api.listAppScopes().then(
       (scopes) => {
@@ -241,8 +243,8 @@ function createFeishuRuntimeFactory(
             (scope) =>
               scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
           );
-        if (grantedScope(FEISHU_GROUP_CONTEXT_SCOPE)) {
-          hearsGroupThreads = true;
+        hearsGroupThreads = grantedScope(FEISHU_GROUP_CONTEXT_SCOPE);
+        if (hearsGroupThreads) {
           // This scope settles the rule's whole input: it delivers the un-mentioned group messages the
           // channel buffers, which is also what lets it HEAR a thread. Nothing is fetched, so nothing
           // is pending — the only bootstrap left is social, one mention inside a thread. The read scope
@@ -264,7 +266,11 @@ function createFeishuRuntimeFactory(
           );
         }
       },
-      (error) => log.warn(`${label} could not inspect group visibility: ${String(error)}`),
+      (error) => {
+        // Leave the tri-state UNKNOWN: a failed probe is not evidence the scope is absent, and
+        // recording is the safe direction.
+        log.warn(`${label} could not inspect group visibility: ${String(error)}`);
+      },
     );
     const decide = route ?? ((event: FeishuMessageEvent) => defaultFeishuRoute(event, { botOpenId }));
 
@@ -477,18 +483,29 @@ function createFeishuRuntimeFactory(
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
-      // Deliberately UNGATED, unlike Slack's counterpart. The invariant is that a thread the agent
-      // answered in has heard every human who spoke there — an unrecorded human is the under-count
-      // that makes it speak into a crowd — and `hearsGroupThreads` settles ASYNCHRONOUSLY while a
-      // mention in that same window can already set `agentSpoke`. Gating on it would under-record for
-      // the whole boot window. Records the summon rule never reads are kept anyway because the referent
-      // anchor reads them (p2p and, once the scope is known, group threads); they cost two ids, and the
-      // cap evicts bystanders first. Slack can afford the narrow gate because its posture is
-      // configuration it knows synchronously.
+      // Deliberately UNGATED, unlike Slack's counterpart, and the asymmetry is a deliberate position
+      // rather than an oversight. The invariant is that a thread the agent answered in has heard every
+      // human who spoke there — an unrecorded human is the under-count that makes it speak into a
+      // crowd. Slack knows its posture from CONFIGURATION, synchronously, so it can narrow recording to
+      // exactly what its rule reads. Feishu's posture is a granted scope it learns from a remote probe,
+      // and gating on that would put a correctness invariant behind the probe's interpretation: a probe
+      // that is wrong, slow, or failing would stop the agent counting humans while the platform keeps
+      // delivering their messages. The price is the other way round — a mention-only app keeps a small
+      // record of who spoke where that no rule will read — and a privacy nit is the better trade than a
+      // silent barge-in. Bystander-first eviction keeps those records from crowding out live ones.
       //
       // A thread where only bots have spoken keeps `humans: []`, and the rule admits it deliberately —
       // there is no addressing ambiguity between machines (§3).
-      if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) return;
+      if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) {
+        // A heard human who cannot be told apart from another is the dangerous silence: the rule would
+        // go on reading the thread as two-party. Surface it rather than dropping it quietly.
+        if (m.thread_id !== undefined && senderType === "user") {
+          log.warn(
+            `${label} a human sender in thread ${m.thread_id} carries no usable id — that speaker cannot count toward the bare-reply rule`,
+          );
+        }
+        return;
+      }
       threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [senderId] });
     };
 
