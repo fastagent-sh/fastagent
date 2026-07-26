@@ -108,12 +108,14 @@ because that is the under-count that makes the agent speak into a crowd. Both ha
 therefore written under the same condition, per channel: a thread the agent answered in must have
 heard every human that spoke there.
 
-What that condition *is* differs between the two channels, and the difference is a fact about them
-rather than a disagreement. Slack's summon rule is the only consumer, so recording is narrowed to
-exactly what it reads (context mode, default route, group threads). Feishu has a second consumer —
-its referent anchor asks "has the agent answered here?" to tell a thread's opening message from a
-continuation, in every chat type and under any route — so the condition is the union, and Feishu keeps
-records no rule will read. Those are harmless: they cost two ids, and the cap evicts bystander threads
+That condition is built from STRUCTURAL facts only — is this a group? is this a thread? — and never
+from configuration. A group-behaviour setting or the presence of a custom route is the tempting gate,
+since nothing reads participation without them, but configuration changes while records outlive the
+change: gate on it, switch back, and `agentSpoke` is still on disk with the humans of the intervening
+window missing. Both channels therefore record in postures where no rule will read the result. The
+only delta between them is reach — Feishu also records p2p threads, because its referent anchor asks
+"has the agent answered here?" in every chat type to tell a thread's opening message from a
+continuation. Unread records are harmless: they cost two ids, and the cap evicts bystander threads
 (ones the agent has only listened to) before threads it takes part in, so listening traffic can never
 push out a thread being served.
 

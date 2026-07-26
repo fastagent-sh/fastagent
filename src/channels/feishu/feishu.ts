@@ -529,8 +529,6 @@ function createFeishuRuntimeFactory(
       let r = decide(event);
       const normalized = normalizeFeishuMessage(event);
       if (!normalized) return;
-      const seq = ++seqCounter; // arrival order; hoisted above the early returns below so a
-      // buffered or dropped message still consumes its slot and never reuses a live turn's number
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
       // Does the thread's session already hold what this message replies to? "The agent answered here"
@@ -638,7 +636,7 @@ function createFeishuRuntimeFactory(
       submit(
         {
           id: m.message_id,
-          seq,
+          seq: ++seqCounter, // arrival order; the turn store replays by it
           session,
           baseText,
           bufferKey,

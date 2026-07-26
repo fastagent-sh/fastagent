@@ -268,8 +268,9 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
     /** A thread's participation is keyed by the SESSION it describes — "the agent answered here" is a
-     *  claim about a memory, so the two must not be re-keyable independently. (Participation is only
-     *  ever recorded on the default route, so this is always the session that answered.) */
+     *  claim about a memory, so the two must not be re-keyable independently. What keeps the claim true
+     *  under a custom route is the `routed.session === undefined` condition on the write, not the
+     *  absence of a route: a route that supplies its own session records nothing here. */
     const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
       `slack:${teamId}:${channelId}:${threadTs}`;
     // The participant model replaced the owned-thread index; its file is dead weight on a deployment
