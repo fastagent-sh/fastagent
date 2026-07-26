@@ -33,7 +33,15 @@ import { loadStateFile, saveStateFile } from "./state.ts";
  *  buys little — and a merge that carries new information rewrites the whole map synchronously, so the
  *  map's size is the cost of every such write. What keeps that bounded is that only NEW information
  *  writes at all (a repeat speaker, or any message once MAX_HUMANS is reached, returns before
- *  persisting). Oldest entries are evicted first. */
+ *  persisting).
+ *
+ *  Eviction prefers BYSTANDER threads — ones the agent has only listened to. They are written on the
+ *  same path and vastly outnumber the rest (every thread in every visible channel), yet losing one
+ *  costs nothing: the summon rule refuses a thread the agent has not spoken in anyway, so the record
+ *  would have to be rebuilt by the mention that admits it. Evicting purely by age would let this
+ *  traffic push out the threads the agent is actively serving, silently reverting them to
+ *  mention-only. This is also what makes it safe for a channel to record threads no rule reads
+ *  (Feishu's p2p and custom-route records, kept so a record is never half-written). */
 const MAX_THREADS = 5000;
 
 /** Cap on remembered humans per thread. The rule only asks "have I heard a second one?", so two is
@@ -114,9 +122,18 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
       records.delete(key); // re-insert so insertion order stays "least recently updated first"
       records.set(key, next);
       while (records.size > MAX_THREADS) {
-        const oldest = records.keys().next().value;
-        if (oldest === undefined) break;
-        records.delete(oldest);
+        // Oldest bystander first; only when every record is a thread the agent takes part in does age
+        // alone decide.
+        let evict: string | undefined;
+        for (const [candidate, record] of records) {
+          if (!record.agentSpoke) {
+            evict = candidate;
+            break;
+          }
+          evict ??= candidate;
+        }
+        if (evict === undefined) break;
+        records.delete(evict);
       }
       try {
         saveStateFile(path, Object.fromEntries(records));

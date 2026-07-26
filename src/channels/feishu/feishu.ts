@@ -456,20 +456,17 @@ function createFeishuRuntimeFactory(
      * not push the agent's own messages back to it, so the agent's own half is recorded where it is
      * actually known — when this channel answers in the thread.
      */
-    /** A record's two halves must be written under the SAME condition, or it becomes a lie: a thread
-     *  carrying `agentSpoke` but no humans reads as "the agent takes part and nobody has spoken", which
-     *  the summon rule would admit. So the gate is the one the `agentSpoke` write below cannot avoid —
-     *  group chats, whoever decided admission. A custom route means the rule never reads these records;
-     *  it does not mean they may be half-written, because a deployment can drop its route later.
-     *  P2P threads are excluded on both sides: `threadAddressesAgent` is unreachable there. */
-    const participationIsRecorded = (m: FeishuMessage): boolean => m.chat_type === "group";
-
     const observeThreadSender = (
       m: FeishuMessage,
       senderType: string | undefined,
       senderId: string | undefined,
     ): void => {
-      if (!participationIsRecorded(m)) return;
+      // Deliberately UNGATED, unlike Slack's counterpart. A record's two halves must be written under
+      // the same condition or the record lies — a thread carrying `agentSpoke` with no humans reads as
+      // "the agent takes part and nobody has spoken", which the summon rule admits. The `agentSpoke`
+      // write below cannot be narrowed (the referent anchor consumes it in every chat type and under
+      // any route), so this one matches it rather than the narrower set the rule can read. Records no
+      // rule reads are harmless: they cost two ids, and the cap evicts bystanders first.
       if (m.thread_id === undefined || senderType !== "user" || senderId === undefined) return;
       threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [senderId] });
     };
@@ -625,12 +622,11 @@ function createFeishuRuntimeFactory(
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
       // bare message address it without a mention (§3).
       //
-      // Ungated by design: `agentSpoke` has a SECOND consumer that runs whoever decided admission and
-      // in any chat type — the referent anchor above (`agentInThread`) uses it to tell a thread's
-      // opening message from a continuation, and gating it would make every message of a custom-route
-      // or p2p thread re-load its `parent_id` referent. That is precisely why the human observation
-      // above matches it for group chats rather than narrowing to the default route: this write is the
-      // one that can create a record, so the other half must be recorded wherever this one is.
+      // Ungated by design: the referent anchor above (`agentInThread`) consumes this in every chat
+      // type and under any route to tell a thread's opening message from a continuation, so narrowing
+      // it would make every message of a p2p or custom-route thread re-load its `parent_id` referent.
+      // The human observation above matches this condition for the same reason, so the record is never
+      // half-written.
       //
       // Recorded only once the intent is durable:
       // `submit` can throw, and a re-pushed first message must still see an empty thread so it keeps

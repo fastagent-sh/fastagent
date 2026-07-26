@@ -562,11 +562,17 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       );
 
       // Answering inside a GROUP thread makes the agent a participant of it, which is what lets the
-      // NEXT bare message address it without a mention. `group` matters: a DM's `threadTs` is always
-      // defined (the answer opens its assistant thread), and nothing reads participation there — those
-      // rows would fill the cap and evict the group threads it exists to protect. Recorded only once
-      // the intent is durable: `submit` can throw, and a redelivery must still see the thread as the
-      // agent has actually left it.
+      // NEXT bare message address it without a mention.
+      //
+      // Gated exactly like the human observation above, so a record is never half-written (a thread
+      // carrying `agentSpoke` with no humans reads as "the agent takes part and nobody has spoken",
+      // which the summon rule admits). Slack can afford the narrow gate because the summon rule is the
+      // ONLY consumer here — Feishu's is wider because its referent anchor reads participation too.
+      // `group` therefore excludes DMs, whose `threadTs` is always defined (the answer opens its
+      // assistant thread) and whose records no rule would ever read.
+      //
+      // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
+      // the thread as the agent has actually left it.
       if (participationIsRead && group && threadTs !== undefined && sameChannel) {
         // The ASKER counts as heard in this thread too, and both halves are written together so the
         // record can never say "the agent takes part and nobody has spoken". When the ask is top

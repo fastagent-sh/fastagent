@@ -66,6 +66,17 @@ describe("thread participation (shared)", () => {
     expect(store.get("oc_1:omt_a")?.humans).toEqual(["ou_1", "ou_2"]);
   });
 
+  it("evicts BYSTANDER threads first, so listening traffic cannot push out a thread being served", () => {
+    const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+    // Oldest of all, but the agent takes part in it — this is the record that costs a mention to lose.
+    store.merge("c:served", { humans: ["u1"], agentSpoke: true });
+    // Threads it merely listens to are written on the same path and vastly outnumber the rest.
+    for (let i = 0; i < 5000; i++) store.merge(`c:bystander_${i}`, { humans: [`u_${i}`] });
+
+    expect(store.get("c:served")).toEqual({ humans: ["u1"], agentSpoke: true });
+    expect(store.get("c:bystander_0")).toBeUndefined();
+  });
+
   it("evicts the oldest thread once the cap is reached", () => {
     const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
     // MAX_THREADS is 5000; touching one more than that must shed exactly the least recently updated.

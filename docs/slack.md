@@ -6,7 +6,7 @@ status: current
 
 # Slack channel
 
-The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/) at `POST /slack`. It verifies Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/), persists accepted work before ACK, serializes turns per session, and renders threaded replies with Slack's native [`chat.*Stream`](https://docs.slack.dev/reference/methods/chat.startStream) Agent APIs. A rate-limited edited-message renderer remains available for continuous/top-level and compatibility use.
+The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/) at `POST /slack`. It verifies Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/), persists accepted work before ACK, serializes turns per session, and renders threaded replies with Slack's native [`chat.*Stream`](https://docs.slack.dev/reference/methods/chat.startStream) Agent APIs. A rate-limited edited-message renderer remains available for top-level replies and compatibility use.
 
 ## Add the channel
 
@@ -243,7 +243,7 @@ Standard Markdown—not Slack-specific `mrkdwn`—is the output contract. Each A
 Markdown messages.
 
 `rendering: "classic"` retains one `💭 Thinking…` message and updates it no more than once every three
-seconds. A native-configured turn also uses this renderer when an explicit `continuous`/custom route sends
+seconds. A native-configured turn also uses this renderer when a custom route sends
 at channel top level, because Slack native streams must reply to a parent user message. This fallback is
 logged. Agent/API failures remain visible in the thread or operator logs.
 
