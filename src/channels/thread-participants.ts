@@ -2,10 +2,12 @@
  * SHARED: who the agent has HEARD in a group thread — the input to the participant model's summon
  * rule (docs/design/participant-model.md §3): it speaks unprompted only where it takes part and has
  * not heard a second human. The storage discipline is identical for every channel and lives here;
- * channels supply the place key, which MUST carry the channel's own brand — `feishu:<chat>:<thread>`,
- * `slack:<team>:<channel>:<thread_ts>` — since one state root can host several channels and two
- * tenants' ids must not meet in this map. Use the same key the session uses: a record here is a claim
- * about that session's memory.
+ * channels supply the place key, and it MUST be the same string the session uses — a record here is a
+ * claim about that session's memory, so the two cannot be keyed independently. That is also where the
+ * channel brand comes from (`feishu:<chat>:<thread>`, `slack:<team>:<channel>:<thread_ts>`): this file
+ * is already per-channel and would not need it, but SESSION ids share one namespace across every
+ * channel in a deployment, so stripping the prefix here would silently key participation to a session
+ * that is not the one that answered.
  *
  * **The rule is defined over what the agent observed, not over the thread's true membership.** That is
  * the load-bearing decision. No platform transmits "who is taking part", and none emits an event when

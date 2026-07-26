@@ -12,6 +12,7 @@ The stable design center is the engine-neutral Agent Handler contract (`docs/SPE
 |---|---|
 | `docs/SPEC.md` | The locked v0.1 Agent Handler contract. Do not change its semantics without an explicit decision. |
 | `docs/design/core.md` | The pi reference implementation and current architecture. |
+| `docs/design/participant-model.md` | When a chat channel speaks, where it answers, what it remembers. Authority for Feishu/Lark + Slack routing. |
 | `docs/overview.md`, `docs/README.md` | Product overview and documentation index. |
 | `CONTRIBUTING.md` | The full GitHub workflow (branch model, PR loop, merge strategy, review policy). |
 

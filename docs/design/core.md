@@ -336,8 +336,8 @@ a stable hand-authored surface. What is platform-different:
   at-least-once tail. The generic turn store still owns unfinished-run recovery and its poison ceiling.
 - **Session partitioning follows the place, not the ask.** A chat is one session
   (`<kind>:<chat_id>`) and a thread is another (`<kind>:<chat_id>:<thread_id>`) — branded with the
-  channel kind so a state root shared by a `feishu` and a `lark` channel cannot merge two tenants' id
-  spaces, and comfortably inside the 64-character session-id budget. A room keeps one memory that everyone in it shares and a
+  channel kind because session ids share ONE namespace across every channel in a deployment, and
+  comfortably inside the 64-character session-id budget. A room keeps one memory that everyone in it shares and a
   side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the platform's `root_id`
   tracks the reply chain and can differ between messages of one thread, which would split a side
   conversation across sessions (and across context-buffer buckets). One place stays FIFO while
