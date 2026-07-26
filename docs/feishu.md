@@ -246,9 +246,9 @@ place rather than the individual ask ([design note](design/participant-model.md)
 
 | Place | Session | Where the answer appears | Bare messages (no @) |
 |---|---|---|---|
-| Direct message | `chat_id` | in the chat, unquoted | always answered |
-| Group main timeline | `chat_id` | in the room, quoting the ask | never — mention the bot |
-| Thread | `chat_id:thread_id` | inside the thread | answered while the Agent takes part and exactly ONE human does |
+| Direct message | `<kind>:<chat_id>` | in the chat, unquoted | always answered |
+| Group main timeline | `<kind>:<chat_id>` | in the room, quoting the ask | never — mention the bot |
+| Thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | answered while the Agent takes part and no second human has been heard |
 
 There are no session modes to choose. A room has one memory that everyone in it shares, so a colleague
 can follow up on someone else's question; a thread is a separate place with its own.

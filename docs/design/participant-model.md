@@ -292,7 +292,7 @@ the same shape.
 | Answer in a group | quoted reply in the room | **thread reply** — Slack has no quote primitive, so a thread under the message *is* answering in place | quoted reply in the room |
 | Direct messages | one continuous chat | **assistant threads** — Slack's Agents surface gives each conversation a thread with a title and status | one continuous chat |
 | Thread rule (§3) | what the channel heard in the thread | what the channel heard in the thread | not applicable — see below |
-| Session for a group ask | the room (`chat_id`) | the **thread the answer creates** (`channel:thread_ts`) | the room (`chat_id`) |
+| Session for a group ask | the room (`<kind>:<chat_id>`) | the **thread the answer creates** (`slack:<team>:<channel>:<thread_ts>`) | the room (`chat_id`) |
 | Stateless addressing | — | — | **reply-to-bot**: the update embeds the parent's sender |
 
 The session row is the same rule with a different place, not a different rule. Feishu and Telegram
@@ -349,8 +349,8 @@ Breaking changes for existing Feishu/Lark deployments:
   — and a whole DM chat — is now one queue. Previously each top-level summon was its own session and
   ran concurrently; now a second person's `@Agent` in a busy room waits behind an unrelated
   multi-minute turn. Opening a thread is the way to run something alongside it;
-- **sessions are re-keyed** from `<kind>:<root_id ?? message_id>` to the place (`<chat>` or
-  `<chat>:<thread_id>`, §5). Existing session history is NOT migrated: every conversation starts fresh
+- **sessions are re-keyed** from `<kind>:<root_id ?? message_id>` to the place
+  (`<kind>:<chat_id>`, or `<kind>:<chat_id>:<thread_id>` in a thread — §5; the kind brand stays). Existing session history is NOT migrated: every conversation starts fresh
   after the upgrade, which reads to users as the agent forgetting, and the old records stay in the
   session store unreferenced (there is no TTL or GC — see docs/feishu.md). Deleting them is optional
   and safe; nothing will ever read them again.

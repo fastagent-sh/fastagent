@@ -1,8 +1,11 @@
 /**
  * SHARED: who the agent has HEARD in a group thread — the input to the participant model's summon
  * rule (docs/design/participant-model.md §3): it speaks unprompted only where it takes part and has
- * not heard a second human. Channels supply their own place key (Feishu `chat:thread`, Slack
- * `team:channel:thread_ts`); the storage discipline is identical for both and lives here.
+ * not heard a second human. The storage discipline is identical for every channel and lives here;
+ * channels supply the place key, which MUST carry the channel's own brand — `feishu:<chat>:<thread>`,
+ * `slack:<team>:<channel>:<thread_ts>` — since one state root can host several channels and two
+ * tenants' ids must not meet in this map. Use the same key the session uses: a record here is a claim
+ * about that session's memory.
  *
  * **The rule is defined over what the agent observed, not over the thread's true membership.** That is
  * the load-bearing decision. No platform transmits "who is taking part", and none emits an event when
