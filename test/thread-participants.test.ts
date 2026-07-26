@@ -19,6 +19,29 @@ function stateDir(): string {
 }
 
 describe("thread participation (shared)", () => {
+  it("the summon rule: takes part, and no second human heard", () => {
+    const store = createThreadParticipants(join(stateDir(), "p.json"), "[feishu]");
+
+    expect(store.addressesAgent("c:unknown")).toBe(false); // never heard of it
+
+    store.merge("c:listening", { humans: ["u1"] });
+    expect(store.addressesAgent("c:listening")).toBe(false); // a bystander is not a participant
+
+    store.merge("c:two-party", { humans: ["u1"], agentSpoke: true });
+    expect(store.addressesAgent("c:two-party")).toBe(true);
+
+    // Zero humans heard is admitted on purpose: ambiguity comes from a SECOND person talking, not from
+    // the absence of a first.
+    store.merge("c:no-humans", { agentSpoke: true });
+    expect(store.addressesAgent("c:no-humans")).toBe(true);
+
+    // A second speaker restores the mention requirement, and nothing sheds it afterwards.
+    store.merge("c:two-party", { humans: ["u2"] });
+    expect(store.addressesAgent("c:two-party")).toBe(false);
+    store.merge("c:two-party", { humans: ["u1"] });
+    expect(store.addressesAgent("c:two-party")).toBe(false);
+  });
+
   it("keeps what it heard across a restart, and scopes it per place key", () => {
     const path = join(stateDir(), "p.json");
     const first = createThreadParticipants(path, "[lark]");

@@ -463,13 +463,13 @@ function createFeishuRuntimeFactory(
     // Who the agent has heard in a thread decides whether a bare message addresses it (participant
     // model §3), and it comes from what this channel observed — see thread-participants.ts.
 
+    let warnedUnidentified = false;
+
     /**
      * Merge one observed human sender into its thread's participation. Only humans: the platform does
      * not push the agent's own messages back to it, so the agent's own half is recorded where it is
      * actually known — when this channel answers in the thread.
      */
-    let warnedUnidentified = false;
-
     const observeThreadSender = (
       m: FeishuMessage,
       senderType: string | undefined,
@@ -505,17 +505,6 @@ function createFeishuRuntimeFactory(
       threadParticipants.merge(threadKey(m.chat_id, m.thread_id), { humans: [heard] });
     };
 
-    /**
-     * The participant model's summon rule for a bare message in a thread (§3): speak unprompted only
-     * where the agent takes part and no second human has been heard. Both facts are what this channel
-     * observed — see thread-participants.ts for why the rule is defined over observation rather than
-     * the thread's true membership.
-     */
-    const threadAddressesAgent = (chatId: string, threadId: string): boolean => {
-      const heard = threadParticipants.get(threadKey(chatId, threadId));
-      return heard?.agentSpoke === true && heard.humans.length <= 1;
-    };
-
     // Transport-neutral acceptance boundary: normalize, route, persist intent/context, enqueue. It
     // touches no network, so it stays synchronous inside the platform's ACK window and the delivery
     // dedup ring alone is enough — there is no await for a duplicate push to race through. The
@@ -543,7 +532,7 @@ function createFeishuRuntimeFactory(
         isHumanGroup &&
         m.thread_id !== undefined &&
         !normalized.content.hasMentions &&
-        threadAddressesAgent(m.chat_id, m.thread_id)
+        threadParticipants.addressesAgent(threadKey(m.chat_id, m.thread_id))
       ) {
         r = {};
       }

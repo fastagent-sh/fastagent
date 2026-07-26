@@ -425,17 +425,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     let seq = recovered.reduce((maximum, turn) => Math.max(maximum, turn.seq), 0);
     for (const { attempts: _attempts, ...intent } of recovered) submit({ ...intent }, false);
 
-    /**
-     * The participant model's summon rule for a bare message in a thread (§3): speak unprompted only
-     * where the agent takes part and no second human has been heard. Both facts are what this channel
-     * observed — see channels/thread-participants.ts for why the rule is defined over observation
-     * rather than the thread's true membership.
-     */
-    const threadAddressesAgent = (teamId: string, channelId: string, threadTs: string): boolean => {
-      const heard = threadParticipants.get(threadKey(teamId, channelId, threadTs));
-      return heard?.agentSpoke === true && heard.humans.length <= 1;
-    };
-
     // Acceptance touches no network, so it stays synchronous inside Slack's ACK window and the
     // delivery dedup ring alone is enough — there is no await for a duplicate delivery to race
     // through. The minutes-long Agent turn remains fire-and-forget.
@@ -487,7 +476,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         // Mentioning only other people is targeted discussion, never an ask (§3) — the same guard
         // Feishu applies with `hasMentions`.
         !hasUserMention &&
-        threadAddressesAgent(teamId, event.channel, event.thread_ts)
+        threadParticipants.addressesAgent(threadKey(teamId, event.channel, event.thread_ts))
       ) {
         routed = {};
       }

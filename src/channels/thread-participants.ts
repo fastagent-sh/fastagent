@@ -33,8 +33,8 @@
  * while a record outlives the change: gate on it and switching back leaves `agentSpoke` on disk with
  * the humans of the intervening window missing, which is the under-count above with no mention needed
  * to trigger it. Gate only on STRUCTURAL facts (is this a group?), which do not change under a live
- * deployment. Channels may add their own reasons on top — Feishu's referent anchor also consumes
- * `agentSpoke` — but none may subtract from this one.
+ * deployment. (Feishu's referent anchor used to consume `agentSpoke` too; it no longer exists, so the
+ * summon rule is now the only reader in either channel.)
  *
  * Observations only ever ACCUMULATE. Nothing is shed, because the absence of a signal is not evidence
  * that someone left, and because the error directions are not symmetric: over-counting humans makes
@@ -76,6 +76,13 @@ interface ThreadParticipation {
 }
 
 export interface ThreadParticipants {
+  /**
+   * The participant model's summon rule (docs/design/participant-model.md §3): may the agent answer a
+   * bare message in this thread? True where it takes part AND no second human has been heard. Lives
+   * here rather than in each channel because it is one rule over one store — `<= 1` is an easy edge to
+   * get wrong twice, and "a second human restores the mention requirement" must have one place to change.
+   */
+  addressesAgent(key: string): boolean;
   /** What has been heard in this thread, or undefined when nothing has. */
   get(key: string): ThreadParticipation | undefined;
   /**
@@ -116,6 +123,10 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
   }
 
   return {
+    addressesAgent(key) {
+      const heard = records.get(key);
+      return heard?.agentSpoke === true && heard.humans.length <= 1;
+    },
     get(key) {
       const record = records.get(key);
       // Deep enough to cover the only mutable field: `merge`'s signature refuses a shrinking write so

@@ -104,9 +104,11 @@ on purpose: ambiguity comes from a second person *talking*, not from the absence
 thread where no human has spoken has nothing to disambiguate. (The built-in routes admit only human
 senders, so this state arises behind a custom route — the predicate states the intent rather than
 relying on an upstream filter to make the case unreachable.) What must never happen is a human speaking *unrecorded*,
-because that is the under-count that makes the agent speak into a crowd. Both halves of a record are
-therefore written under the same condition, per channel: a thread the agent answered in must have
-heard every human that spoke there.
+because that is the under-count that makes the agent speak into a crowd. The `agentSpoke` condition is therefore a SUBSET of the
+`humans` condition: anywhere the agent can record having answered, it was already recording who spoke,
+so "answered here but heard nobody" cannot arise from the gates. (The agent half is additionally
+narrowed — it must be the same place and the place's own session — which only ever leaves a bystander
+record, never a participant one with humans missing.)
 
 That condition is built from STRUCTURAL facts only — is this a group? is this a thread? — and never
 from configuration. A group-behaviour setting or the presence of a custom route is the tempting gate,
