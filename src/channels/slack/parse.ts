@@ -20,9 +20,15 @@ const USER_MENTION = mentionSource("[A-Z0-9]+");
  *  part in reads as a bare message addressed to IT, and gets answered. */
 const ANY_MENTION = String.raw`(?:${USER_MENTION}|<!(?:here|channel|everyone)(?:\|[^>]*)?>|<!subteam\^[^>]*>)`;
 
-/** Does this text address ANYONE — a user, a broadcast, or a user group? */
+/** Does this text address ANYONE — a user, a broadcast, or a user group? The §3 discussion guard. */
 export function hasSlackMention(text: string): boolean {
   return new RegExp(ANY_MENTION, "i").test(text);
+}
+
+/** Does this text mention a USER? Distinct from the above because only a user mention can be the bot:
+ *  a broadcast never is, so it must not make a message look like a possible summon. */
+export function hasSlackUserMention(text: string): boolean {
+  return new RegExp(USER_MENTION, "i").test(text);
 }
 
 /** Does this text mention this specific user (either form)? */

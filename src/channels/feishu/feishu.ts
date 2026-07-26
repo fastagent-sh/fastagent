@@ -484,8 +484,9 @@ function createFeishuRuntimeFactory(
       if (m.chat_type !== "group" || m.thread_id === undefined || sender?.sender_type !== "user") return undefined;
       const speakerId = senderId(sender);
       if (speakerId === undefined && !warnedUnidentified) {
-        // Once per PROCESS: this is a property of the tenant's event configuration, not of one thread,
-        // so a per-thread set would grow without bound to repeat a single fact.
+        // Once per MOUNT — the flag lives in this channel's closure on purpose: the condition is a
+        // property of THIS app's event configuration, so a `feishu` and a `lark` mount must each be
+        // able to report it. A per-thread set would instead grow without bound to repeat one fact.
         warnedUnidentified = true;
         log.warn(
           `${label} human senders arrive with no usable id (first seen in thread ${m.thread_id}) — each counts as a distinct speaker, so affected threads permanently require an @mention until thread-participants.json is deleted`,

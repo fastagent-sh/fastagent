@@ -25,6 +25,7 @@ import {
   isSlackDirectMessage,
   isSlackGroupMessage,
   hasSlackMention,
+  hasSlackUserMention,
   isSlackHumanMessage,
   mentionsSlackUser,
   stripSlackMentions,
@@ -457,9 +458,11 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       }
 
       let routed = decide(envelope);
-      // `hasUserMention` is the "@-mentions only other people is discussion, never an ask" guard (§3);
-      // both helpers accept either mention form (see parse.ts).
-      const hasUserMention = hasSlackMention(event.text ?? "");
+      // Two different questions (see parse.ts). `addressesSomeone` is the "@-mentions only other people
+      // is discussion, never an ask" guard (§3) and counts broadcasts and user groups too;
+      // `mightBeTheBot` gates the identity-window deferral below, where only a USER mention qualifies.
+      const addressesSomeone = hasSlackMention(event.text ?? "");
+      const mightBeTheBot = hasSlackUserMention(event.text ?? "");
       const structurallyMentionsBot = botUserId !== undefined && mentionsSlackUser(event.text ?? "", botUserId);
       // app_mention and message.* subscriptions can overlap. If message.* arrives first, structural bot
       // identity routes it now; while auth.test is still unresolved, defer any mentioned message rather
@@ -476,13 +479,13 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
         event.type !== "app_mention" &&
         // Mentioning only other people is targeted discussion, never an ask (§3) — the same guard
         // Feishu applies with `hasMentions`.
-        !hasUserMention &&
+        !addressesSomeone &&
         threadParticipants.admitsBareMessage(threadKey(teamId, event.channel, event.thread_ts))
       ) {
         routed = {};
       }
       if (!routed) {
-        if (route === undefined && group && botUserId === undefined && hasUserMention) return;
+        if (route === undefined && group && botUserId === undefined && mightBeTheBot) return;
         if (groupBehavior === "context" && route === undefined && group) {
           const body = slackBufferText(slackMessageText(event));
           if (body) {

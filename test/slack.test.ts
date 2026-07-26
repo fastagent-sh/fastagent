@@ -536,6 +536,28 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("can you look?");
   });
 
+  it("a broadcast is not a possible summon, so it buffers while the bot identity is unresolved", async () => {
+    // auth.test succeeds without a user_id, so botUserId stays undefined: a message mentioning a USER
+    // is deferred (it might be the bot). A broadcast never can be, so deferring it would drop it.
+    const base = okFetch();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) =>
+        String(input).endsWith("/auth.test")
+          ? Response.json({ ok: true, team_id: "T1" })
+          : base(input, init as RequestInit),
+      ),
+    );
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+
+    await handler(signedRequest(message("50.1", { text: "<!here> standup in five" })));
+    await settle();
+
+    expect(calls).toHaveLength(0);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("standup in five");
+  });
+
   it("the labelled mention form counts too, on both sides of the guard", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
