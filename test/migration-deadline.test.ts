@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
  * this file with them — by that release no live deployment can still be carrying the state files they
  * clean up.
  */
-const REMOVE_AT_MINOR = 17; // 0.15 introduced the participant model; 0.16 carries the migrations
+const REMOVE_AT_MINOR = 18; // the participant model ships as 0.16; 0.17 still carries the migrations
 
 describe("one-release migrations", () => {
   it("are deleted before the release that no longer needs them", () => {
@@ -18,9 +18,8 @@ describe("one-release migrations", () => {
     expect(
       major === 0 && (minor ?? 0) < REMOVE_AT_MINOR,
       `v${version}: remove the participant-model migrations — the owned-threads.json cleanups in ` +
-        "channels/feishu/feishu.ts + channels/slack/slack.ts, the `:root:` bucket filter in " +
-        "channels/feishu/context-buffer.ts, and the `isLivePlaceKey` option it added to " +
-        "channels/context-buffer.ts (drop the option if nothing else uses it). Then delete this test.",
+        "channels/feishu/feishu.ts + channels/slack/slack.ts, and dropRetiredBuckets in " +
+        "channels/feishu/context-buffer.ts. Then delete this test.",
     ).toBe(true);
   });
 });

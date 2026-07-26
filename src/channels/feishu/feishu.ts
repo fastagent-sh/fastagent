@@ -479,6 +479,10 @@ function createFeishuRuntimeFactory(
      * not push the agent's own messages back to it, so the agent's own half is recorded where it is
      * actually known — when this channel answers in the thread.
      */
+    /** Bounded by MAX_THREADS' sibling concern: one entry per thread that ever produced an id-less
+     *  human, process-local, and only ever reached on a degraded tenant. */
+    const warnedUnidentified = new Set<string>();
+
     const observeThreadSender = (
       m: FeishuMessage,
       senderType: string | undefined,
@@ -498,7 +502,10 @@ function createFeishuRuntimeFactory(
       // them reads as two-party and barges into a crowd, which is not. The warn stays because a steady
       // stream of these means the rule's input is degraded.
       const heard = speakerId ?? `unidentified:${m.message_id}`;
-      if (speakerId === undefined) {
+      // Once per thread: the condition is systemic when it happens (a tenant whose events carry no id
+      // flavour), so a per-message line would be a warning stream on the acceptance path.
+      if (speakerId === undefined && !warnedUnidentified.has(m.thread_id)) {
+        warnedUnidentified.add(m.thread_id);
         log.warn(
           `${label} a human sender in thread ${m.thread_id} carries no usable id — counting them as a distinct speaker, so this thread will ask to be named`,
         );

@@ -23,7 +23,24 @@ export const FEISHU_MESSAGE_READ_SCOPE = "im:message:readonly";
  *  approval round. Request the narrow one; accept either. */
 export const FEISHU_MESSAGE_READ_SCOPES = [FEISHU_MESSAGE_READ_SCOPE, "im:message"];
 
+/** A scope the onboarding asks for, and every spelling that already satisfies it. Kept as one concept
+ *  so adding another superset means editing this table, not every call site that tests a scope. */
+export interface FeishuScopeRequest {
+  /** What to add to the app draft when nothing satisfies it. */
+  request: string;
+  /** Any of these counts as having it. */
+  satisfiedBy: string[];
+}
+
+/** Whether `predicate` holds for any spelling that satisfies this request. */
+export function scopeSatisfied(entry: FeishuScopeRequest, predicate: (name: string) => boolean): boolean {
+  return entry.satisfiedBy.some(predicate);
+}
+
 /** What `--group-behavior context` REQUESTS in one approval round — not a dependency set. Only the
  *  delivery scope is required for the context path; the read scope rides along because it shares the
  *  round and its absence merely degrades quoted messages to a marker. */
-export const FEISHU_CONTEXT_ONBOARDING_SCOPES = [FEISHU_GROUP_CONTEXT_SCOPE, FEISHU_MESSAGE_READ_SCOPE];
+export const FEISHU_CONTEXT_ONBOARDING_SCOPES: FeishuScopeRequest[] = [
+  { request: FEISHU_GROUP_CONTEXT_SCOPE, satisfiedBy: [FEISHU_GROUP_CONTEXT_SCOPE] },
+  { request: FEISHU_MESSAGE_READ_SCOPE, satisfiedBy: FEISHU_MESSAGE_READ_SCOPES },
+];

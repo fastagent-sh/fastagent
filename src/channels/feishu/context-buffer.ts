@@ -4,11 +4,13 @@
  * buffered-resource selection. Entries are bucketed by conversation place (main chat, or one
  * concrete thread root) and folded into the next answered turn in that place.
  */
+import { log } from "../../log.ts";
 import {
   BUFFER_ATTACH_MAX,
   type ContextBuffer,
   createContextBuffer as createGenericContextBuffer,
 } from "../context-buffer.ts";
+import { loadStateFile, saveStateFile } from "../state.ts";
 import type { NormalizedFeishuMessage } from "./model.ts";
 
 export interface FeishuBufferedResource {
@@ -124,18 +126,35 @@ function isEntry(value: unknown): value is FeishuBufferEntry {
   );
 }
 
+/**
+ * Buckets from the pre-participant-model keying (`<chat>:root:<root_id>`) can never be produced again —
+ * a place is `<chat>` or `<chat>:thread:<thread_id>` — so nothing could ever fold or clear them, and
+ * they would hold chat content on disk forever. Dropped here, before the buffer loads, so the shared
+ * kernel never learns about a key shape one channel retired.
+ *
+ * A ONE-RELEASE migration, like the `owned-threads.json` cleanup in feishu.ts: REMOVE THIS after the
+ * release following the participant model ships. test/migration-deadline.test.ts fails when due.
+ */
+function dropRetiredBuckets(path: string, label: string): void {
+  const raw = loadStateFile(path);
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
+  const live = Object.entries(raw).filter(([placeKey]) => !placeKey.includes(":root:"));
+  const dropped = Object.keys(raw).length - live.length;
+  if (dropped === 0) return;
+  log.info(`${label} dropped ${dropped} context bucket(s) with a retired key shape`);
+  try {
+    saveStateFile(path, Object.fromEntries(live));
+  } catch (error) {
+    log.warn(`${label} could not rewrite ${path} after dropping retired buckets: ${String(error)}`);
+  }
+}
+
 export function createFeishuContextBuffer(path: string, label: string): FeishuContextBuffer {
+  dropRetiredBuckets(path, label);
   return createGenericContextBuffer({
     path,
     label,
     isEntry,
     line: bufferLine,
-    // Buckets from the pre-participant-model keying (`<chat>:root:<root_id>`) can never be produced
-    // again — a place is `<chat>` or `<chat>:thread:<thread_id>` — so nothing could ever fold or clear
-    // them. Drop them rather than keep chat content on disk indefinitely. Like the `owned-threads.json`
-    // cleanup in feishu.ts, this is a ONE-RELEASE migration: REMOVE THIS (and the `isLivePlaceKey`
-    // option, if it has no other caller) after the release following the participant model ships.
-    // test/migration-deadline.test.ts fails when due.
-    isLivePlaceKey: (placeKey) => !placeKey.includes(":root:"),
   });
 }

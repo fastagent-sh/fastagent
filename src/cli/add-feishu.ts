@@ -17,7 +17,7 @@ import {
   FEISHU_GROUP_CONTEXT_SCOPE,
   FEISHU_CONTEXT_ONBOARDING_SCOPES,
   FEISHU_MESSAGE_READ_SCOPE,
-  FEISHU_MESSAGE_READ_SCOPES,
+  scopeSatisfied,
   type FeishuGroupBehavior,
   type FeishuSubscriptionMode,
 } from "../channels/feishu/setup-mode.ts";
@@ -80,9 +80,8 @@ export async function configureGroupBehavior(input: {
   // and reading a quoted message (so a thread's opening ask carries what it replies to).
   // The read capability has two spellings and `im:message` is the superset, so an app holding it needs
   // nothing added — asking anyway would cost the author a second tenant-admin approval round.
-  const missing = FEISHU_CONTEXT_ONBOARDING_SCOPES.filter((name: string) =>
-    name === FEISHU_MESSAGE_READ_SCOPE ? !FEISHU_MESSAGE_READ_SCOPES.some(granted) : !granted(name),
-  );
+  const missing = FEISHU_CONTEXT_ONBOARDING_SCOPES.filter((entry) => !scopeSatisfied(entry, granted));
+  const missingNames = missing.map((entry) => entry.request);
 
   if (behavior === "mentions") {
     if (!inspected) {
@@ -115,7 +114,9 @@ export async function configureGroupBehavior(input: {
       `(reading a quoted message) is requested with it — without it a quoted message degrades to a marker`,
   );
   if (missing.length === 0) {
-    note(`[fastagent] ${FEISHU_CONTEXT_ONBOARDING_SCOPES.join(" + ")} are already granted`);
+    note(
+      `[fastagent] ${FEISHU_CONTEXT_ONBOARDING_SCOPES.map((entry) => entry.request).join(" + ")} are already granted`,
+    );
     return { publishReady: true };
   }
   const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
@@ -123,10 +124,8 @@ export async function configureGroupBehavior(input: {
   // not yet approved (nothing to add — wait for the admin), or absent from the draft entirely.
   // Same superset rule as `missing`: a draft already requesting `im:message` is awaiting approval, not
   // missing something to add.
-  const awaitingApproval = missing.filter((name: string) =>
-    name === FEISHU_MESSAGE_READ_SCOPE ? FEISHU_MESSAGE_READ_SCOPES.some(onApp) : onApp(name),
-  );
-  const toRequest = missing.filter((name: string) => !awaitingApproval.includes(name));
+  const awaitingApproval = missing.filter((entry) => scopeSatisfied(entry, onApp)).map((entry) => entry.request);
+  const toRequest = missing.filter((entry) => !scopeSatisfied(entry, onApp)).map((entry) => entry.request);
   if (toRequest.length === 0) {
     note(
       `[fastagent] ${awaitingApproval.join(" + ")} awaiting approval — complete tenant-admin approval before publishing. Opening ${permissionUrl}`,
@@ -141,7 +140,7 @@ export async function configureGroupBehavior(input: {
     // only the read scope absent, and pointing at a granted permission sends the author looking in
     // the wrong place.
     note(
-      `[fastagent] ${missing.join(" + ")} not granted (or could not be verified) — group behavior was ` +
+      `[fastagent] ${missingNames.join(" + ")} not granted (or could not be verified) — group behavior was ` +
         `defaulted, so nothing was requested. Re-run with --group-behavior context to add ${missing.length > 1 ? "them" : "it"} ` +
         `to the app draft, or --group-behavior mentions to stay least-privilege: ${permissionUrl}`,
     );

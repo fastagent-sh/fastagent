@@ -58,12 +58,8 @@ export function createContextBuffer<E>(options: {
   isEntry: (value: unknown) => value is E;
   /** One fold line for an entry — ALSO the eviction cost basis. */
   line: (entry: E) => string;
-  /** Optional: whether a persisted bucket's key can still be produced by the channel's place keying.
-   *  A key shape that was retired (e.g. after a re-keying) can never be peeked or committed again, so
-   *  its entries would hold chat content forever; they are dropped at load instead. */
-  isLivePlaceKey?: (placeKey: string) => boolean;
 }): ContextBuffer<E> {
-  const { path, label, isEntry, line, isLivePlaceKey } = options;
+  const { path, label, isEntry, line } = options;
   const load = (): Map<string, E[]> => {
     const raw = loadStateFile(path);
     if (raw === undefined) return new Map();
@@ -73,27 +69,13 @@ export function createContextBuffer<E>(options: {
       !Array.isArray(raw) &&
       Object.values(raw).every((entries) => Array.isArray(entries) && entries.every(isEntry))
     ) {
-      const loaded = Object.entries(raw as Record<string, E[]>);
-      const live = isLivePlaceKey ? loaded.filter(([placeKey]) => isLivePlaceKey(placeKey)) : loaded;
-      droppedAtLoad = loaded.length - live.length;
-      return new Map(live);
+      return new Map(Object.entries(raw as Record<string, E[]>));
     }
     log.warn(`${label} unexpected shape in ${path} — starting with an empty context buffer`);
     return new Map();
   };
-  let droppedAtLoad = 0;
   const buffers = load();
   const persist = (): void => saveStateFile(path, Object.fromEntries(buffers));
-  if (droppedAtLoad > 0) {
-    // Rewrite now rather than at the next push: the dropped buckets hold chat content, and a channel
-    // that never buffers again would otherwise keep them on disk forever.
-    log.info(`${label} dropped ${droppedAtLoad} context bucket(s) with a retired key shape`);
-    try {
-      persist();
-    } catch (error) {
-      log.warn(`${label} could not rewrite ${path} after dropping retired buckets: ${String(error)}`);
-    }
-  }
 
   return {
     push(placeKey, entry) {
