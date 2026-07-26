@@ -87,13 +87,6 @@ export interface ThreadParticipants {
    */
   admitsBareMessage(key: string): boolean;
   /**
-   * The store's INSPECTION surface — what has been heard in this thread, or undefined when nothing has.
-   * `admitsBareMessage` above is the rule surface, and is what the channels call; this exists so the
-   * store's own behaviour (accumulation, caps, eviction, durability) can be asserted directly rather
-   * than through a rule that collapses several states into one boolean.
-   */
-  get(key: string): ThreadParticipation | undefined;
-  /**
    * Merge in what was just heard. Idempotent; a failed write is a warning, never a failed delivery.
    *
    * The parameter only admits values the store can honour: observations accumulate, so `agentSpoke`
@@ -134,13 +127,6 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
     admitsBareMessage(key) {
       const heard = records.get(key);
       return heard?.agentSpoke === true && heard.humans.length <= 1;
-    },
-    get(key) {
-      const record = records.get(key);
-      // Deep enough to cover the only mutable field: `merge`'s signature refuses a shrinking write so
-      // that "never shed" is an invariant rather than a convention, and handing out the live array
-      // would put it back to a convention on the read path.
-      return record === undefined ? undefined : { humans: [...record.humans], agentSpoke: record.agentSpoke };
     },
     merge(key, heard) {
       const previous = records.get(key);

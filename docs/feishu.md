@@ -248,7 +248,8 @@ place rather than the individual ask ([design note](design/participant-model.md)
 |---|---|---|---|
 | Direct message | `<kind>:<chat_id>` | in the chat, unquoted | always answered |
 | Group main timeline | `<kind>:<chat_id>` | in the room, quoting the ask | never — mention the bot |
-| Thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | answered while the Agent takes part and no second human has been heard |
+| Group thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | answered while the Agent takes part and no second human has been heard |
+| Direct-message thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | always answered — a p2p chat has one human, so there is nothing to disambiguate and no participation is recorded |
 
 There are no session modes to choose. A room has one memory that everyone in it shares, so a colleague
 can follow up on someone else's question; a thread is a separate place with its own.
