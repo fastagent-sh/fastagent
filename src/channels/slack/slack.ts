@@ -110,9 +110,10 @@ export interface SlackChannelOptions {
    * least-privilege setup. */
   groupBehavior?: "context" | "mentions";
   /** `native` (default) uses Slack Agent streams/tasks for threaded replies. `classic` retains the
-   * compatibility renderer based on one rate-limited edited message. A top-level target — only
-   * reachable from a custom route returning `threadTs: null` — necessarily uses the classic renderer,
-   * because Slack streams require a parent user message. */
+   * compatibility renderer based on one rate-limited edited message. A top-level target necessarily
+   * uses the classic renderer, because Slack streams require a parent user message; a custom route
+   * reaches one either by returning `threadTs: null` or by redirecting to another channel without
+   * naming a thread. */
   rendering?: SlackRendering;
   /** Native task-card layout (`chat.startStream` `task_display_mode`): `plan` (default) groups steps
    * under a single collapsible heading, `timeline` lists each step sequentially, `dense` collapses
