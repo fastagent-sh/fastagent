@@ -58,8 +58,9 @@ export function senderId(sender: FeishuSender | undefined): string | undefined {
  *
  * Branded with the channel kind, like Slack's twin, because session ids share ONE namespace across
  * every channel in a deployment: without it a `feishu` and a `lark` chat carrying the same platform id
- * would answer into the same memory. Well inside the session-id budget — a chat plus a thread id is
- * ~30 characters against 64.
+ * would answer into the same memory. The length bound is the FILENAME the id becomes (sessions.ts
+ * percent-encodes it, so each `:` costs three), and the worst case here — brand + a 35-char chat id +
+ * a 36-char thread id — encodes to well under 100 bytes against the filesystem's 255.
  */
 export function placeKey(kind: string, message: Pick<FeishuMessage, "chat_id" | "thread_id">): string {
   const chat = `${kind}:${message.chat_id}`;

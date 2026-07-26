@@ -147,7 +147,7 @@ function messageEvent(over: {
   content?: string;
   mentions?: unknown[];
   senderType?: string;
-  senderId?: string;
+  senderId?: string | null;
   parentId?: string;
   rootId?: string;
   threadId?: string;
@@ -156,7 +156,11 @@ function messageEvent(over: {
     schema: "2.0",
     header: { event_id: `ev_${over.id ?? "1"}`, event_type: "im.message.receive_v1", token: TOKEN },
     event: {
-      sender: { sender_type: over.senderType ?? "user", sender_id: { open_id: over.senderId ?? "ou_alice" } },
+      sender: {
+        sender_type: over.senderType ?? "user",
+        // `senderId: null` models a tenant whose events carry no id flavour at all.
+        sender_id: over.senderId === null ? {} : { open_id: over.senderId ?? "ou_alice" },
+      },
       message: {
         message_id: over.id ?? "om_1",
         chat_id: over.chatId ?? "oc_1",
@@ -343,7 +347,10 @@ describe("turn flow", () => {
 
     // Rule 3 (memory follows the place): both messages share the chat session — no per-ask session.
     expect(calls.map((call) => call.scope.session)).toEqual(["feishu:oc_1", "feishu:oc_1"]);
-    expect(encodeURIComponent(calls[0]?.scope.session ?? "").length).toBeLessThanOrEqual(64);
+    // The id becomes a percent-encoded jsonl filename, so the bound that matters is the filesystem's,
+    // not a round number: worst-case platform ids stay far under it.
+    const worstCase = `feishu:oc_${"a".repeat(32)}:omt_${"b".repeat(32)}`;
+    expect(encodeURIComponent(worstCase).length).toBeLessThan(255);
     expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice]");
     expect(calls[0]?.prompt.text).toContain("hello there");
     // Rule 2 (answer where asked): a plain send, neither quoted nor pushed into a thread.
@@ -1545,6 +1552,54 @@ describe("turn flow", () => {
 
     expect(calls).toHaveLength(0);
     expect(existsSync(join(home, "buffers.json"))).toBe(false);
+  });
+
+  it("a sender with no id flavour counts as a distinct speaker per message, warned once", async () => {
+    feishuFetch();
+    const warnings: string[] = [];
+    vi.spyOn(log, "warn").mockImplementation((message) => warnings.push(message));
+    const { handler, calls, home, idle } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
+
+    // The agent is summoned by an unattributable human and answers, joining the thread.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_x1",
+          chatType: "group",
+          threadId: "omt_anon",
+          senderId: null,
+          content: JSON.stringify({ text: "@_user_1 take a look" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(1);
+
+    // A second unattributable message. It MAY be the same person, but nothing can say so — counting
+    // them as one would be the under-count that makes the agent speak into a crowd.
+    await handler(
+      feishuRequest(
+        messageEvent({ id: "om_x2", chatType: "group", threadId: "omt_anon", senderId: null, text: "bare follow-up" }),
+      ),
+    );
+    await idle();
+
+    const participants = JSON.parse(readFileSync(join(home, "thread-participants.json"), "utf8")) as Record<
+      string,
+      { agentSpoke: boolean; humans: string[] }
+    >;
+    const heard = participants["feishu:oc_1:omt_anon"];
+    expect(heard?.agentSpoke).toBe(true);
+    expect(heard?.humans).toHaveLength(2); // per MESSAGE, not per thread
+    expect(new Set(heard?.humans).size).toBe(2);
+
+    // …so the bare follow-up was NOT answered, and the thread now requires a mention.
+    expect(calls).toHaveLength(1);
+    // One line for a systemic condition, not one per message.
+    expect(warnings.filter((message) => message.includes("no usable id"))).toHaveLength(1);
   });
 
   it("a route supplying its own session leaves a BYSTANDER record — the thread's session never held the turn", async () => {
