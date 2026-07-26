@@ -459,7 +459,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       const bufferKey = slackPlaceKey(teamId, event);
       // Listening is not speaking: every message the channel can see refines who takes part in its
       // thread, whether or not it is answered. Humans only — a bot's own posts are recorded where they
-      // are known (this channel answering, and the platform listing).
+      // are known — this channel answering.
       // Gated on what CONSUMES it: only the bare-message admission below reads participation, and it
       // runs solely in context mode without a custom route. `mentions` is the documented
       // least-privilege posture — it must not still accumulate a durable file of who spoke where.
