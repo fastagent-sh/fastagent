@@ -355,6 +355,14 @@ Breaking changes for existing Feishu/Lark deployments:
   session store unreferenced (there is no TTL or GC — see docs/feishu.md). Deleting them is optional
   and safe; nothing will ever read them again.
 
-For Slack, placement and sessions are unchanged; what changes is the summon rule: a thread the agent
-has answered in admits bare replies until a second human is heard there, which restores the mention
-requirement. `owned-threads.json` is removed on the next start.
+For Slack, placement and sessions are unchanged **under the default configuration**; what changes is
+the summon rule: a thread the agent has answered in admits bare replies until a second human is heard
+there, which restores the mention requirement. `owned-threads.json` is removed on the next start.
+
+Breaking changes for existing Slack deployments:
+
+- `directMessageSession` and `groupMessageSession` are removed. Passing either now fails at startup
+  rather than being ignored — placement and session identity follow from Slack's own primitives (§5),
+  which leaves nothing for the options to select;
+- a deployment that set either to `continuous` therefore changes both where answers land and how
+  sessions are keyed. Existing history is not migrated, for the same reason as Feishu's re-keying above.

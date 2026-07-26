@@ -83,7 +83,12 @@ export interface ThreadParticipants {
    * get wrong twice, and "a second human restores the mention requirement" must have one place to change.
    */
   addressesAgent(key: string): boolean;
-  /** What has been heard in this thread, or undefined when nothing has. */
+  /**
+   * The store's INSPECTION surface — what has been heard in this thread, or undefined when nothing has.
+   * `addressesAgent` above is the rule surface, and is what the channels call; this exists so the
+   * store's own behaviour (accumulation, caps, eviction, durability) can be asserted directly rather
+   * than through a rule that collapses several states into one boolean.
+   */
   get(key: string): ThreadParticipation | undefined;
   /**
    * Merge in what was just heard. Idempotent; a failed write is a warning, never a failed delivery.
