@@ -1,4 +1,5 @@
-import { codePointPrefix } from "../text.ts";
+import { BUFFER_LINE_MAX_CHARS } from "../context-buffer.ts";
+import { codePointPrefix, truncateCodePointPrefix } from "../text.ts";
 import type { SlackEventEnvelope, SlackMessageEvent, SlackRoute } from "./model.ts";
 
 export type { SlackEventEnvelope, SlackFile, SlackMessageEvent, SlackRoute } from "./model.ts";
@@ -106,7 +107,7 @@ export function slackPlaceKey(teamId: string, event: Pick<SlackMessageEvent, "ch
 }
 
 export function slackBufferText(text: string): string {
-  return codePointPrefix(text.replace(/\s+/g, " ").trim(), 280);
+  return truncateCodePointPrefix(text.replace(/\s+/g, " ").trim(), BUFFER_LINE_MAX_CHARS);
 }
 
 /** Canonical prompt envelope. The channel/thread ids also give slack-send an explicit delivery target. */

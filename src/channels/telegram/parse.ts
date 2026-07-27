@@ -5,6 +5,8 @@
  * "decide" and prompt-building half; telegram.ts wires it in and owns the stateful lifecycle. Kept
  * separate so this layer tests as plain functions and reads without the factory's noise.
  */
+import { BUFFER_LINE_MAX_CHARS } from "../context-buffer.ts";
+import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../text.ts";
 
 /** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */
 export interface TelegramMessage {
@@ -122,7 +124,7 @@ function bodyOf(m: TelegramMessage): string | undefined {
 
 /** A one-line, length-capped rendering of a message's content for the context buffer. */
 export function messageText(m: TelegramMessage): string {
-  return (bodyOf(m) ?? "").replace(/\s+/g, " ").trim().slice(0, 280);
+  return truncateCodePointPrefix((bodyOf(m) ?? "").replace(/\s+/g, " ").trim(), BUFFER_LINE_MAX_CHARS);
 }
 
 /**
@@ -149,7 +151,7 @@ export function telegramEnvelope(m: TelegramMessage): string {
   const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
   const scope = isGroup ? "\n[group chat — multiple people; each message is prefixed with its sender]" : "";
   const replyTo = r
-    ? `\n[in reply to ${fromLabel(r.from) ?? `msg ${r.message_id}`} (msg ${r.message_id}): ${(bodyOf(r) ?? "(empty)").slice(0, 280)}]`
+    ? `\n[in reply to ${fromLabel(r.from) ?? `msg ${r.message_id}`} (msg ${r.message_id}): ${truncateCodePointPrefix(bodyOf(r) ?? "(empty)", REFERENT_MAX_CODE_POINTS)}]`
     : "";
   const parts = [bodyOf(m) ?? ""];
   if (m.location) parts.push(`[location: ${m.location.latitude},${m.location.longitude}]`);

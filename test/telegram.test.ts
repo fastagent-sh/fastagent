@@ -828,6 +828,23 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
     expect(env).not.toMatch(/group chat/); // a 1:1 DM gets no group note
   });
 
+  it("quotes a referent whole up to the platform's own message cap, and marks a cut", () => {
+    // A referent is the text the asker points AT: a bound below what the platform accepts would drop
+    // the tail of a legal message and let the agent answer about text it cannot see.
+    const quote = (text: string): string =>
+      telegramEnvelope({
+        message_id: 2,
+        text: "about this",
+        chat: { id: 42, type: "private" },
+        reply_to_message: { message_id: 1, text, chat: { id: 42, type: "private" } },
+      });
+
+    expect(quote("x".repeat(4096))).toContain(`${"x".repeat(4096)}]`);
+    const cut = quote("y".repeat(5000));
+    expect(cut).toContain(`${"y".repeat(4095)}\u2026]`); // marked, so the model does not read a stump as whole
+    expect(cut).not.toContain("y".repeat(4096));
+  });
+
   it("attributes a username-less sender by name + id (a shared session must still tell who is who)", () => {
     const env = telegramEnvelope({
       message_id: 3,

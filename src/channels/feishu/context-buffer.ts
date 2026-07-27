@@ -7,10 +7,12 @@
 import { log } from "../../log.ts";
 import {
   BUFFER_ATTACH_MAX,
+  BUFFER_LINE_MAX_CHARS,
   type ContextBuffer,
   createContextBuffer as createGenericContextBuffer,
 } from "../context-buffer.ts";
 import { loadStateFile, saveStateFile } from "../state.ts";
+import { truncateCodePointPrefix } from "../text.ts";
 import type { NormalizedFeishuMessage } from "./model.ts";
 
 export interface FeishuBufferedResource {
@@ -60,7 +62,7 @@ export function feishuBufferPlaceKey(
 
 /** One-line, bounded background text. Resource-only messages already carry a visible decoder marker. */
 export function feishuBufferText(text: string): string {
-  return text.replace(/\s+/g, " ").trim().slice(0, 280);
+  return truncateCodePointPrefix(text.replace(/\s+/g, " ").trim(), BUFFER_LINE_MAX_CHARS);
 }
 
 function resourceIdentity(resource: FeishuBufferedResource): string {

@@ -237,13 +237,17 @@ A thread must start from something. Four rungs, increasing in cost:
 
 | Rung | Mechanism | Gives the thread |
 |---|---|---|
-| 1 | referent anchor, truncated | the followed-up message, cut at 560 code points |
-| **2** | **referent anchor, generously bounded** | **the followed-up message in full (4000 code points)** |
+| 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound |
+| **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** |
 | 3 | seed injection | the room's last N exchanges, in the thread's first prompt |
 | 4 | session fork | the room's entire history, reasoning and tool results included |
 
 Rung 1 fails the model's own main path: following up on the agent's answer, where the answer is
-routinely longer than the cut. **Rung 2 is implemented.** A quoted message is always loaded — the quote is the
+routinely longer than the cut. **Rung 2 is implemented**, with one bound for every channel, derived
+rather than chosen: a referent is the exact text the asker points at, so the cut must clear the
+largest message a chat platform accepts (4096, Telegram's cap and the tightest of ours). Anything
+smaller loses a legal message's tail silently. This is a fidelity bound and must not be confused with
+the context buffer's per-line bound, which is a fairness quota inside a shared budget. A quoted message is always loaded — the quote is the
 user pointing at something that may predate this session. (Skipping it inside a thread the agent had
 already answered in was tried: deciding whether the session really held it needs a second fact, whether
 the channel RECEIVED the messages in between, which depends on a permission that changes over time
