@@ -7,6 +7,7 @@
 [![license](https://img.shields.io/npm/l/@fastagent-sh/fastagent.svg)](https://github.com/fastagent-sh/fastagent/blob/main/LICENSE)
 [![node](https://img.shields.io/node/v/@fastagent-sh/fastagent.svg)](https://nodejs.org)
 [![built with pi](https://img.shields.io/badge/built%20with-pi-0b7285.svg)](https://pi.dev)
+[![GitHub stars](https://img.shields.io/github/stars/fastagent-sh/fastagent?style=social)](https://github.com/fastagent-sh/fastagent/stargazers)
 
 <p align="center">
   <sub>Built on</sub>
@@ -202,6 +203,8 @@ The neutral contract leaves room for capabilities that are not complete product 
 
 See [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md) if one of these is the problem you want to work on.
 
+> ☁️ **Prefer these managed?** FastAgent Cloud will run your agents with multi-instance durability, scale-to-zero, and observability built in — and self-hosting stays free forever. [Join the waitlist →](https://tally.so/r/44DVMB)
+
 ## Project
 
 - [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md)
@@ -214,6 +217,13 @@ FastAgent stands on open source. The built-in harness is **[pi](https://github.c
 It also depends on, and is grateful to, [zod](https://github.com/colinhacks/zod), [undici](https://github.com/nodejs/undici), [chokidar](https://github.com/paulmillr/chokidar), [giget](https://github.com/unjs/giget), [@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore), and [octokit/webhooks](https://github.com/octokit/webhooks).
 
 The scaffolded `writing-great-skills` skill is vendored from [mattpocock/skills](https://github.com/mattpocock/skills), with its license included.
+
+---
+
+<p align="center">
+  <b>FastAgent is built in the open.</b><br/>
+  If it saves you from rewriting an agent into yet another framework, <a href="https://github.com/fastagent-sh/fastagent">give it a ⭐</a> — it's the fastest way to help other devs find it.
+</p>
 
 ## License
 
