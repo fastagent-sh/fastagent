@@ -277,8 +277,10 @@ upload three-step protocol and remains at-least-once across an ambiguous complet
 
 Newly onboarded apps use Slack's `agent_view`, `assistant:write`, token rotation, suggested prompts, Agent
 status/title, and `chat.startStream` → `chat.appendStream` → `chat.stopStream`. Standard Markdown text events append to
-the stream; engine-neutral tool lifecycle events become dense `task_update` chunks. Raw model thinking and
-generic tool arguments stay private. The compatibility renderer retains one edited message with a strict
+the stream; each engine-neutral tool start appends a compact factual Markdown trace, and a failed tool end
+appends one line naming the call. Raw model thinking and tool output stay private — reading output would
+mean guessing the engine's result shape. An append-only stream is also the one renderer whose persisted
+message keeps the process beside the answer; the others settle into the answer alone. The compatibility renderer retains one edited message with a strict
 three-second mutation interval; explicit continuous/custom top-level routes select it because native
 streams require a parent user message. HTTP Events API remains the production transport; Socket Mode is a
 separate future boundary rather than entering `ChannelModule` indirectly.

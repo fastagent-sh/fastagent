@@ -66,7 +66,7 @@ src/
 │   │   ├── telegram-api.ts  # the single Bot API pipeline + HTML-aware split
 │   │   ├── register-webhook.ts # --tunnel setWebhook registration
 │   │   └── scaffold/        # `add telegram` bundle (channel.ts + send tool)
-│   ├── slack/               # Slack Agent: native streams/tasks, rotating bot auth, signed Events API ingress, durable threads/context, files + onboarding/scaffold
+│   ├── slack/               # Slack Agent: native streams + inline tool traces, rotating bot auth, signed Events API ingress, durable threads/context, files + onboarding/scaffold
 │   ├── feishu/              # CANONICAL Feishu channel engine — see docs/design/core.md
 │   │   ├── feishu.ts        # ingress + per-turn lifecycle + composition; Lark binds this engine via a profile
 │   │   ├── cloud.ts         # explicit Feishu-reference / Lark-compatibility capability profiles

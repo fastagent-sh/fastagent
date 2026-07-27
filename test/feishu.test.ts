@@ -111,7 +111,7 @@ function buildChannel(
     appId: "app",
     appSecret: "secret",
     verificationToken: TOKEN,
-    baseUrl: BASE,
+    apiBaseUrl: BASE,
     ...channelOpts,
   })({ agent: opts2Agent(opts) ?? agent, stateRoot: root, control });
   const handler = routes["POST /feishu"];
@@ -372,7 +372,7 @@ describe("turn flow", () => {
       appId: "app",
       appSecret: "secret",
       verificationToken: TOKEN,
-      baseUrl: BASE,
+      apiBaseUrl: BASE,
     })({ agent: restarted.agent, stateRoot: first.root });
     const again = routes["POST /feishu"];
     if (!again) throw new Error("expected POST /feishu");
@@ -1443,6 +1443,7 @@ describe("turn flow", () => {
           seq: 1,
           session: "oc_9",
           baseText: "what a prior run never finished",
+          bufferKey: "oc_9",
           chatId: "oc_9",
           images: [],
           files: [],
@@ -1451,7 +1452,7 @@ describe("turn flow", () => {
       }),
     );
     const { agent, calls } = replyingAgent("recovered");
-    const handler = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, baseUrl: BASE })({
+    const handler = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, apiBaseUrl: BASE })({
       agent,
       stateRoot: root,
     })["POST /feishu"];
@@ -1562,7 +1563,7 @@ describe("the Lark compatibility profile", () => {
       appId: "app",
       appSecret: "secret",
       verificationToken: TOKEN,
-      baseUrl: BASE,
+      apiBaseUrl: BASE,
     })({ agent, stateRoot: root });
     expect(routes["POST /feishu"]).toBeUndefined();
     const handler = routes["POST /lark"];

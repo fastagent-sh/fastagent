@@ -210,7 +210,8 @@ export function createPreviewPump(opts: {
   };
 }
 
-/** Max length (code points) of a tool's arg preview in the live view. */
+/** Max length (code points) of a tool's arg preview. Slack's native stream cannot be retracted, so
+ *  this is a disclosure bound, not only a layout one. */
 const TOOL_ARG_MAX = 48;
 
 /** Max length (code points) of a humanized tool label. */
@@ -228,7 +229,7 @@ function clip(s: string): string {
  * rather than just `🔧 read`. Generic (a channel knows no tool schemas): show the salient value — the
  * first primitive field, conventionally the subject (path / command / query / url) — else compact JSON.
  */
-function summarizeToolArgs(args: Json): string {
+export function summarizeToolArgs(args: Json): string {
   if (args === null || typeof args !== "object" || Array.isArray(args)) return clip(String(args));
   const values = Object.values(args);
   const primary = values.find((v) => typeof v === "string" || typeof v === "number");

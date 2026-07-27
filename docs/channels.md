@@ -156,7 +156,7 @@ export default slackChannel({
     ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
     : undefined,
   groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
-  rendering: "native", // Slack Agent streams/tasks; "classic" for compatibility
+  rendering: "native", // Slack Agent stream with inline tool traces; "classic" for compatibility
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // Direct/group asks default to independent sessions + Slack threads; opt out independently:
   // directMessageSession: "continuous",

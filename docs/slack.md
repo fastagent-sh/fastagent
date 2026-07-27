@@ -1,6 +1,6 @@
 ---
 title: Slack channel
-description: "Serve an agent as a Slack-native Agent with signed Events API ingress, durable threads/context, native streams/tasks, and file IO."
+description: "Serve an agent as a Slack-native Agent with signed Events API ingress, durable threads/context, native streams with inline tool traces, and file IO."
 status: current
 ---
 
@@ -50,7 +50,7 @@ The command then:
 
 1. starts a temporary Cloudflare Quick Tunnel (`cloudflared` is required);
 2. creates the internal app from a mode-specific manifest;
-3. enables Slack's irreversible `agent_view`, native Agent streams/tasks, suggested prompts, the writable Messages tab, scopes, and Events API subscriptions;
+3. enables Slack's irreversible `agent_view`, native Agent streaming, suggested prompts, the writable Messages tab, scopes, and Events API subscriptions;
 4. opens [Slack OAuth v2](https://docs.slack.dev/authentication/installing-with-oauth/), validates its `state`, exchanges the code, and installs into one workspace;
 5. writes the Signing Secret plus the rotating bot access/refresh token, expiry, OAuth client ID, and
    client secret to the gitignored run-root `.env`.
@@ -113,8 +113,7 @@ export default slackChannel({
     ? Number(process.env.SLACK_BOT_TOKEN_EXPIRES_AT)
     : undefined,
   groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
-  rendering: "native", // native Agent streams/tasks; "classic" is the compatibility renderer
-  // taskDisplay: "plan", // native task-card layout: "plan" (default) | "timeline" | "dense"
+  rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
   // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
@@ -218,14 +217,20 @@ usable only when Slack exposes authenticated downloadable bytes.
 1. sets the Slack Agent loading status (and a title for a new DM thread);
 2. starts a native stream with `chat.startStream`;
 3. appends standard Markdown with `chat.appendStream`;
-4. maps `tool_started` / `tool_ended` to `task_update` chunks, humanizing each tool's identifier into a
-   plain-language label (`mcp__github__create_issue` → `Github: create issue`) without exposing arguments;
-   the layout follows `taskDisplay` — `plan` (default) groups steps under one collapsible heading,
-   `timeline` lists each step, `dense` collapses consecutive tool calls;
+4. maps each `tool_started` to a compact inline Markdown trace containing the humanized tool identifier
+   (`mcp__github__create_issue` → `Github: create issue`) and a bounded single-line argument summary
+   (normally the command, path, or query); an errored `tool_ended` appends one line naming the failed
+   call, never its output, while a successful one appends nothing — an emitted line cannot be flipped
+   to a checkmark, so the next trace (or the answer) is the completion signal;
 5. closes the stream with `chat.stopStream`.
 
-Raw model `thinking` and generic tool arguments are never customer-facing. The former is represented by
-Slack's loading state; task cards carry only the tool name and completion state. Agent replies also
+Raw model `thinking` and tool output are not customer-facing. The former is represented by Slack's
+loading state; argument summaries are whitespace-collapsed, Unicode-safe truncated, and
+notification-control sanitized. A native stream cannot be retracted, so unlike every other renderer
+these traces stay in the delivered message next to the answer — including that argument summary, which
+is the tool call's first string field and may name whatever the agent passed there. There is no
+answer-only native stream: `rendering: "classic"` does settle into the answer alone, but it also gives
+up native streaming — process visibility and transport are one choice here, not two. Agent replies also
 neutralize Slack notification controls such as `<!channel>`; deliberate outbound mentions belong in the
 explicit `slack-send` tool. Successful replies omit repetitive disclaimers by default; configure an
 `aiDisclaimer` string only when workspace policy requires a per-message footer. Native channel streams carry the triggering user/team recipient IDs required by Slack. DM `app_context` entities are included in
