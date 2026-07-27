@@ -149,7 +149,6 @@ export function normalizeFeishuMessage(event: FeishuMessageEvent): NormalizedFei
     conversation: {
       chatId: message.chat_id,
       threadId: message.thread_id,
-      rootId: message.root_id,
     },
     content: {
       text: decoded.text,

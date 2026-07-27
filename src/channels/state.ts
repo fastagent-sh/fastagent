@@ -12,7 +12,7 @@
  * is an ENVIRONMENT error the operator must fix: it throws, and construction fails loudly — booting
  * with silently-empty state would hide real data behind a config mistake.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { log } from "../log.ts";
 
@@ -55,4 +55,21 @@ export function saveStateFile(path: string, value: unknown): void {
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(value));
   renameSync(tmp, path);
+}
+
+/**
+ * Drop a state file a redesign retired. Best-effort by design: a leftover file is untidy, not fatal,
+ * so a failure is debug-level and never blocks a boot. Only for files that are pure CACHE — anything
+ * whose loss changes behaviour needs a migration, not a delete.
+ *
+ * Shared because a retired file is usually retired in every channel at once: one best-effort
+ * semantic, one log shape, one place to check what "retired" means here. (The removal DEADLINE is not
+ * here — it lives in test/migration-deadline.test.ts, which names every call site to delete.)
+ */
+export function removeRetiredStateFile(stateHome: string, name: string, label: string): void {
+  try {
+    rmSync(join(stateHome, name), { force: true });
+  } catch (error) {
+    log.debug(`${label} could not remove the obsolete ${name}: ${String(error)}`);
+  }
 }

@@ -18,7 +18,7 @@ describe("channel setup guidance", () => {
 
         const mentionSteps = channelSetup(kind, ingress, "mentions").steps;
         expect(mentionSteps.join("\n")).toContain("mention-only");
-        expect(mentionSteps.join("\n")).toContain("bare managed-thread replies");
+        expect(mentionSteps.join("\n")).toContain("bare thread replies");
         expect(mentionSteps.join("\n")).toContain("disabled");
       }
     }

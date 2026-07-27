@@ -130,7 +130,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
       },
     ],
     steps: [
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare replies in the agent's own threads can invoke and other unsummoned discussion can buffer. im:message:readonly is requested alongside it so a thread's opening ask can carry the message it quotes; both need the same approval",
       "PUBLISH the app version in the developer console after permission approval — the switch to webhook mode takes effect on publish (one click, once ever; no API for it)",
       "edit {channel} — routing policy (the header walks through the console setup, for hand-made apps)",
       "the event Request URL is auto-registered by `dev --tunnel` / `deploy --run`",
@@ -154,7 +154,7 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     ],
     steps: [
       "finish the console setup: enable Bot and add the required permissions + im.message.receive_v1 event listed in {channel} (do not publish yet)",
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare replies in the agent's own threads can invoke and other unsummoned discussion can buffer. im:message:readonly is requested alongside it so a thread's opening ask can carry the message it quotes; both need the same approval",
       "run `fastagent dev --tunnel` and keep it running; if auto-registration reports a config-API 404, manually switch Subscription mode to webhook, set its printed https://…/lark Request URL, save, then create + publish a version",
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
     ],
@@ -168,7 +168,7 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
   feishu: {
     env: CHANNEL_SCAFFOLDS.feishu.env.filter((entry) => ["FEISHU_APP_ID", "FEISHU_APP_SECRET"].includes(entry.name)),
     steps: [
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (the CLI adds it to the app draft when supported); it delivers all group messages so bare replies in the agent's own threads can invoke and other unsummoned discussion can buffer. im:message:readonly is requested alongside it so a thread's opening ask can carry the message it quotes; both need the same approval",
       "PUBLISH the app version in the developer console after permission approval — long-connection event subscriptions become active with the published version",
       "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
       "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
@@ -178,7 +178,7 @@ const WEBSOCKET_SETUPS: Record<"feishu" | "lark", ChannelScaffold> = {
   lark: {
     env: CHANNEL_SCAFFOLDS.lark.env.filter((entry) => ["LARK_APP_ID", "LARK_APP_SECRET"].includes(entry.name)),
     steps: [
-      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare managed-thread replies can invoke and other unsummoned discussion can buffer",
+      "before publishing: approve the sensitive im:message.group_msg permission for context-aware groups (add it manually if Lark's config API fallback was used); it delivers all group messages so bare replies in the agent's own threads can invoke and other unsummoned discussion can buffer. im:message:readonly is requested alongside it so a thread's opening ask can carry the message it quotes; both need the same approval",
       "in Events & Callbacks choose long connection, subscribe im.message.receive_v1, then create + publish a version",
       "edit {channel} — routing policy (the scaffold is already set to WebSocket ingress)",
       "run `fastagent dev` without --tunnel; deployments must keep one process running (no scale-to-zero)",
@@ -203,7 +203,7 @@ export function channelSetup(
       env: setup.env,
       steps: setup.steps.map((step) =>
         step.includes("im:message.group_msg")
-          ? "group behavior: mention-only — do not grant im:message.group_msg; bare managed-thread replies and group context buffering remain disabled"
+          ? "group behavior: mention-only — do not grant im:message.group_msg; bare thread replies and group context buffering remain disabled. im:message:readonly is independent of this choice: add it if you want an @mention to carry the message it quotes (without it that quote degrades to a marker)"
           : step,
       ),
     };
@@ -214,7 +214,7 @@ export function channelSetup(
       steps: [
         "Slack Bot Token Scopes: app_mentions:read, assistant:write, chat:write, im:history, files:read, files:write (no channel/group/mpim history scopes)",
         "enable Agents (agent_view) and token rotation; subscribe app_home_opened, app_context_changed, app_mention, and message.im; set Request URL to <public-url>/slack",
-        "group behavior: mention-only — bare managed-thread replies and unsummoned group context remain disabled",
+        "group behavior: mention-only — bare thread replies and unsummoned group context remain disabled",
         ...setup.steps.slice(2),
       ],
     };

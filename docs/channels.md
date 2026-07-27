@@ -158,9 +158,8 @@ export default slackChannel({
   groupBehavior: "context", // default; choose "mentions" only for explicit least privilege
   rendering: "native", // Slack Agent stream with inline tool traces; "classic" for compatibility
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-  // Direct/group asks default to independent sessions + Slack threads; opt out independently:
-  // directMessageSession: "continuous",
-  // groupMessageSession: "continuous",
+  // No session modes: an answer attaches to its question with a thread (Slack has no quote primitive),
+  // and that thread is the session — see docs/design/participant-model.md.
 });
 ```
 
@@ -175,9 +174,8 @@ export default feishuChannel({
   appSecret: process.env.FEISHU_APP_SECRET ?? "",
   verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",
   encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
-  // Direct/group asks default to independent sessions + platform threads; opt out independently:
-  // directMessageSession: "continuous",
-  // groupMessageSession: "continuous",
+  // No session modes: a chat is one session and a thread is another, and the summon/placement rules
+  // follow from that (docs/design/participant-model.md).
 });
 ```
 

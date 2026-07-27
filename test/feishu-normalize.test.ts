@@ -24,7 +24,6 @@ describe("Feishu/Lark normalized webhook model", () => {
       conversation: {
         chatId: "oc_feishu_chat",
         threadId: "omt_feishu_topic",
-        rootId: "om_topic_root",
       },
       content: {
         text: "@FastAgent review this",
@@ -42,7 +41,6 @@ describe("Feishu/Lark normalized webhook model", () => {
     expect(message?.conversation).toEqual({
       chatId: "oc_lark_chat",
       threadId: undefined,
-      rootId: undefined,
     });
     expect(message?.content.text).toContain("Project update");
     expect(message?.content.text).toContain("the spec (https://example.test/spec)");

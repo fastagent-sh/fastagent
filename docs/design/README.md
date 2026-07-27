@@ -32,4 +32,5 @@ Do **not** keep private strategy here: market positioning, competitor analysis, 
 | Document | Purpose |
 |---|---|
 | [core.md](core.md) | Current architecture of the pi reference implementation. |
+| [participant-model.md](participant-model.md) | How a chat bot behaves in a collaboration tool: the participant axiom and the summon/placement/memory rules derived from it. |
 | [session-control.md](session-control.md) | Session control plane beside `invoke`: observation plane shipped; control plane (dispatch) proposed. |

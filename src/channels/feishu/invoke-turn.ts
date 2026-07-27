@@ -25,7 +25,7 @@ import {
 import type { FeishuBufferedRef } from "./context-buffer.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
-import { codePointPrefix } from "../text.ts";
+import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../text.ts";
 
 /** Appended to the prompt (not the system prompt): the channel renders the reply in a card, and the
  *  card's markdown element is the natural fit for LLM output — steer away from HTML/plain. */
@@ -75,21 +75,40 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   let referentBlock = "";
   if (attachments.primary.parentId !== undefined) {
     const parentId = attachments.primary.parentId;
-    const parent = await t.api.getMessage(parentId);
-    if (!parent) throw new Error(`replied-to message ${parentId} is not readable`);
-    const parsed = parseContent({
-      message_type: parent.msg_type ?? "unknown",
-      content: parent.body?.content ?? "",
-      mentions: parent.mentions as FeishuMention[] | undefined,
+    // A referent is CONTEXT, not the ask. Losing it (deleted, restricted, unreadable) must not cost
+    // the user their answer — every first message of a thread carries one, so a hard failure here
+    // would turn an ordinary platform edge into a lost turn. Degrade visibly instead: the operator
+    // gets a warning, and the model is told the quote could not be read rather than being left to
+    // guess what "about that" refers to.
+    // A deleted or invisible message comes back as an EMPTY item list rather than an error, so the
+    // warning belongs on the branch that renders the marker — that is the one the operator must see.
+    let failure: string | undefined;
+    const parent = await t.api.getMessage(parentId).catch((error) => {
+      failure = String(error);
+      return undefined;
     });
-    // The referent's own resources join the turn as primary inputs, carried by the PARENT message id.
-    for (const key of parsed.imageKeys) images.push({ msg: parentId, key });
-    for (const ref of parsed.fileRefs) files.push({ msg: parentId, key: ref.key, name: ref.name });
-    // getMessage's sender is `{ id, id_type, sender_type }` — a DIFFERENT shape from the event's
-    // sender (`{ sender_id: { open_id } }`), so the label is built here, not via parse.senderLabel.
-    const senderId = (parent.sender as { id?: string } | undefined)?.id;
-    const from = senderId ? `user ${senderId}` : undefined;
-    referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${codePointPrefix(parsed.text, 560) || "(empty)"}]`;
+    if (!parent) {
+      log.warn(
+        `${t.label} could not read replied-to message ${parentId} (${failure ?? "no such message"}) — the model is told the quote is unreadable`,
+      );
+      // Fall THROUGH: the resources this turn carries are the ask itself. Returning here would drop
+      // the images and files the user explicitly attached along with the referent they merely quoted.
+      referentBlock = `\n\n[replied-to message (msg ${parentId}) could not be read]`;
+    } else {
+      const parsed = parseContent({
+        message_type: parent.msg_type ?? "unknown",
+        content: parent.body?.content ?? "",
+        mentions: parent.mentions as FeishuMention[] | undefined,
+      });
+      // The referent's own resources join the turn as primary inputs, carried by the PARENT message id.
+      for (const key of parsed.imageKeys) images.push({ msg: parentId, key });
+      for (const ref of parsed.fileRefs) files.push({ msg: parentId, key: ref.key, name: ref.name });
+      // getMessage's sender is `{ id, id_type, sender_type }` — a DIFFERENT shape from the event's
+      // sender (`{ sender_id: { open_id } }`), so the label is built here, not via parse.senderLabel.
+      const senderId = (parent.sender as { id?: string } | undefined)?.id;
+      const from = senderId ? `user ${senderId}` : undefined;
+      referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${truncateCodePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)"}]`;
+    }
   }
 
   // Primary first and fail-fast: these are resources the current user explicitly pointed at.

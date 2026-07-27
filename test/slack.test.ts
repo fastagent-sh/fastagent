@@ -1,9 +1,10 @@
 import { createHmac } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentEvent, Prompt, Scope } from "../src/agent.ts";
+import { mentionsSlackUser } from "../src/channels/slack/parse.ts";
 import { NO_ACTIVE_RUN_CODE, type SessionCommand, type SessionControl } from "../src/session.ts";
 import { type SlackChannelOptions, type SlackEventEnvelope, slackChannel, verifySlackSignature } from "../src/slack.ts";
 
@@ -278,14 +279,18 @@ describe("Slack signed ingress", () => {
     expect(verifySlackSignature(SECRET, timestamp, signature, body, 1_700_001_000_000)).toBe(false);
   });
 
-  it("rejects invalid session, rendering, and reaction policies at construction", () => {
+  it("refuses a removed session option instead of silently changing placement and memory under it", () => {
+    // The migration guarantee: an upgraded workspace still passing a mode fails loudly at construction
+    // rather than starting fine with a different place, a different session, and a different renderer.
     expect(() =>
-      slackChannel({
-        botToken: "xoxb-test",
-        signingSecret: SECRET,
-        groupMessageSession: "invalid" as "threaded",
-      }),
+      slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, groupMessageSession: "continuous" } as never),
     ).toThrow(/groupMessageSession/);
+    expect(() =>
+      slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, directMessageSession: "threaded" } as never),
+    ).toThrow(/directMessageSession/);
+  });
+
+  it("rejects invalid rendering, task-display, and reaction policies at construction", () => {
     expect(() =>
       slackChannel({
         botToken: "xoxb-test",
@@ -325,14 +330,18 @@ describe("Slack signed ingress", () => {
   });
 });
 
-describe("Slack sessions, context, and managed threads", () => {
+describe("Slack sessions, context, and thread participation", () => {
   it("threads each top-level DM by default and settles the one preview message", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent, calls } = replyingAgent("hello back");
-    const { handler } = mount(agent);
+    const { handler, stateRoot } = mount(agent);
     await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
     await settle();
+
+    // A DM's answer always opens its assistant thread, but the summon rule never consults
+    // participation outside a group — so a DM must not spend a slot in the bounded cache.
+    expect(existsSync(join(stateRoot, "channels", "slack", "thread-participants.json"))).toBe(false);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.scope.session).toBe("slack:T1:D1:1.0");
@@ -398,21 +407,7 @@ describe("Slack sessions, context, and managed threads", () => {
     );
   });
 
-  it("keeps one linear DM session when continuous mode is explicitly selected", async () => {
-    const fetchMock = okFetch();
-    vi.stubGlobal("fetch", fetchMock);
-    const { agent, calls } = replyingAgent();
-    const { handler } = mount(agent, { directMessageSession: "continuous" });
-    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "first" })));
-    await settle();
-
-    expect(calls[0]?.scope.session).toBe("slack:T1:D1");
-    const post = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat.postMessage"));
-    expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ markdown_text: expect.stringContaining("done") });
-    expect(JSON.parse(String(post?.[1]?.body))).not.toHaveProperty("thread_ts");
-  });
-
-  it("defaults to context-aware groups, owns the summoned thread, and dedups logical messages", async () => {
+  it("defaults to context-aware groups, records participation in the thread its answer creates, and dedups logical messages", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
     const { handler, stateRoot } = mount(agent);
@@ -443,7 +438,163 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("answers inside an existing human thread without adopting its later bare replies", async () => {
+  it("records participation even where no rule reads it, so a posture change cannot leave a gap", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "mentions" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await handler(signedRequest(message("30.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "30.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    // A second human summons it in the same thread — an `app_mention`, which IS delivered under
+    // `mentions` (a bare channel message is not, which is why the posture's under-count is documented
+    // as accepted in §3 rather than defended against here). Nothing reads participation in this
+    // posture, but the posture is configuration and this record outlives a change to it: skipping the
+    // write would leave `agentSpoke` on disk with U2 missing, and after a switch back to `context` the
+    // agent would barge into a thread it believes is two-party.
+    await handler(
+      signedRequest(message("30.2", { user: "U2", type: "app_mention", text: "<@UBOT> and also", thread_ts: "30.0" })),
+    );
+    await settle();
+
+    const path = join(stateRoot, "channels", "slack", "thread-participants.json");
+    expect(existsSync(path)).toBe(true);
+    const record = (JSON.parse(readFileSync(path, "utf8")) as Record<string, { humans: string[] }>)["slack:T1:C1:30.0"];
+    expect(record?.humans.sort()).toEqual(["U1", "U2"]);
+  });
+
+  it("removes the obsolete owned-threads.json on the next start", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const stateRoot = root();
+    const home = join(stateRoot, "channels", "slack");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "owned-threads.json"), JSON.stringify({ "T1:C1:1.0": { rootTs: "1.0" } }));
+
+    const { agent } = replyingAgent();
+    mount(agent, {}, stateRoot);
+
+    expect(existsSync(join(home, "owned-threads.json"))).toBe(false);
+  });
+
+  it("a bare reply reaches the agent in a thread it answered in, while one human is in it", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Mentioning it inside a thread is the bootstrap: it answers, which makes it a participant.
+    await handler(signedRequest(message("10.1", { type: "app_mention", text: "<@UBOT> inspect", thread_ts: "10.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.scope.session).toBe("slack:T1:C1:10.0");
+
+    // A two-party thread no longer needs the name.
+    await handler(signedRequest(message("10.2", { text: "bare follow-up", thread_ts: "10.0" })));
+    await settle();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.scope.session).toBe("slack:T1:C1:10.0");
+  });
+
+  it("a bare message that mentions only other people is discussion, not an ask", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+    await handler(signedRequest(message("14.1", { type: "app_mention", text: "<@UBOT> hi", thread_ts: "14.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+
+    // The agent takes part and one human is here, but this message addresses someone else.
+    await handler(signedRequest(message("14.2", { text: "<@U9> can you look?", thread_ts: "14.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("can you look?");
+  });
+
+  it("a bot id carrying regex metacharacters is matched, not interpreted", () => {
+    // `auth.test`'s user_id is not validated here and this runs on every group message: interpolating
+    // it raw would either mis-answer the summon question or throw on the acceptance path, which Slack
+    // answers with an endless redelivery.
+    expect(mentionsSlackUser("hi <@U.+> there", "U.+")).toBe(true);
+    expect(mentionsSlackUser("hi <@UBOT> there", "U.+")).toBe(false);
+    expect(mentionsSlackUser("hi <@UBOT|agent> there", "UBOT")).toBe(true);
+  });
+
+  it("a broadcast is not a possible summon, so it buffers while the bot identity is unresolved", async () => {
+    // auth.test succeeds without a user_id, so botUserId stays undefined: a message mentioning a USER
+    // is deferred (it might be the bot). A broadcast never can be, so deferring it would drop it.
+    const base = okFetch();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) =>
+        String(input).endsWith("/auth.test")
+          ? Response.json({ ok: true, team_id: "T1" })
+          : base(input, init as RequestInit),
+      ),
+    );
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+
+    await handler(signedRequest(message("50.1", { text: "<!here> standup in five" })));
+    await settle();
+
+    expect(calls).toHaveLength(0);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("standup in five");
+  });
+
+  it("the labelled mention form counts too, on both sides of the guard", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // `<@UBOT|agent>` is a summon, not background text.
+    await handler(signedRequest(message("40.1", { text: "<@UBOT|agent> take a look", thread_ts: "40.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+
+    // …and `<@U9|dana>` is a message aimed at a colleague: discussion, even in a thread the agent
+    // takes part in and where it has heard only one human.
+    await handler(signedRequest(message("40.2", { text: "<@U9|dana> what do you think?", thread_ts: "40.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("what do you think?");
+
+    // A broadcast addresses the room, not the Agent: discussion, like any mention of other people.
+    await handler(signedRequest(message("40.4", { text: "<!here> can someone look at this?", thread_ts: "40.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("look at this");
+
+    // …and the stop command must survive the strip in either form, or it becomes an ordinary turn
+    // queued behind the very run it meant to stop.
+    await handler(signedRequest(message("40.3", { text: "<@UBOT|agent> stop", thread_ts: "40.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a top-level ask counts as heard in the thread the answer creates, so a stranger's reply does not summon", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const { agent, calls } = replyingAgent();
+    const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // U1 asks at CHANNEL top level: the ask carries no thread_ts, so the observation on the way in
+    // never runs for it — the agent's answer is what creates thread 20.0.
+    await handler(signedRequest(message("20.0", { type: "app_mention", text: "<@UBOT> look at this" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+
+    // U2 bare-replies inside that thread. Two humans are demonstrably here (U1's ask IS the root), so
+    // this must stay listening rather than read as a two-party exchange.
+    await handler(signedRequest(message("20.1", { user: "U2", text: "which part?", thread_ts: "20.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("which part?");
+  });
+
+  it("a second human in the thread restores the mention requirement, and the agent keeps listening", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
     const { handler, stateRoot } = mount(agent, { groupBehavior: "context" });
@@ -452,41 +603,49 @@ describe("Slack sessions, context, and managed threads", () => {
     await handler(signedRequest(message("10.1", { type: "app_mention", text: "<@UBOT> inspect", thread_ts: "10.0" })));
     await settle();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.scope.session).toBe("slack:T1:C1:10.0");
 
-    await handler(signedRequest(message("10.2", { text: "bare follow-up", thread_ts: "10.0" })));
+    // A second human SPEAKS — which is how the agent learns of them, the rule being defined over what
+    // it heard rather than over the thread's true membership.
+    await handler(signedRequest(message("10.2", { user: "U2", text: "I think it is the cache", thread_ts: "10.0" })));
+    await settle();
+    expect(calls).toHaveLength(1);
+
+    // Addressing is ambiguous again, so even the original asker now needs the name.
+    await handler(signedRequest(message("10.3", { text: "bare follow-up", thread_ts: "10.0" })));
     await settle();
     expect(calls).toHaveLength(1);
     expect(readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toContain("bare follow-up");
+
+    // …and the discussion it stayed quiet through is folded into the next answered turn.
+    await handler(
+      signedRequest(message("10.4", { type: "app_mention", text: "<@UBOT> summarize", thread_ts: "10.0" })),
+    );
+    await settle();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt.text).toContain("I think it is the cache");
+    expect(calls[1]?.prompt.text).toContain("bare follow-up");
   });
 
-  it("supports Feishu-compatible continuous top-level group sessions without creating ownership", async () => {
+  it("attaches an answer to its question with a thread, and that thread carries the memory", async () => {
     const fetchMock = okFetch();
     vi.stubGlobal("fetch", fetchMock);
     const { agent, calls } = replyingAgent();
-    const { handler } = mount(agent, { groupBehavior: "context", groupMessageSession: "continuous" });
+    const { handler } = mount(agent, { groupBehavior: "context" });
     await new Promise((resolve) => setImmediate(resolve));
 
+    // Slack has no quote primitive, so answering in place means opening a thread on the ask — and the
+    // thread is then the place, so its session is where the exchange lives (§4/§5).
     await handler(signedRequest(message("20.0", { type: "app_mention", text: "<@UBOT> top level" })));
     await settle();
-    expect(calls[0]?.scope.session).toBe("slack:T1:C1");
+    expect(calls[0]?.scope.session).toBe("slack:T1:C1:20.0");
+    const stream = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat.startStream"));
+    expect(JSON.parse(String(stream?.[1]?.body))).toMatchObject({ thread_ts: "20.0" });
 
-    await handler(signedRequest(message("20.1", { text: "not managed", thread_ts: "20.0" })));
+    // A continuation inside that thread is the same place, hence the same session.
+    await handler(signedRequest(message("20.1", { text: "and the follow-up", thread_ts: "20.0" })));
     await settle();
-    expect(calls).toHaveLength(1);
-
-    await handler(
-      signedRequest(message("21.1", { type: "app_mention", text: "<@UBOT> existing topic", thread_ts: "21.0" })),
-    );
-    await settle();
-    expect(calls[1]?.scope.session).toBe("slack:T1:C1:21.0");
-
-    const posts = fetchMock.mock.calls
-      .filter(([url]) => String(url).endsWith("/chat.postMessage"))
-      .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
-    expect(posts[0]).not.toHaveProperty("thread_ts");
-    const streams = slackBodies(fetchMock, "chat.startStream");
-    expect(streams[0]).toMatchObject({ thread_ts: "21.0", recipient_user_id: "U1", recipient_team_id: "T1" });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.scope.session).toBe("slack:T1:C1:20.0");
   });
 
   it("keeps mention-only mode available explicitly without buffering group traffic", async () => {
@@ -504,7 +663,6 @@ describe("Slack sessions, context, and managed threads", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt.text).not.toContain("background");
     expect(() => readFileSync(join(stateRoot, "channels", "slack", "buffers.json"), "utf8")).toThrow();
-    expect(() => readFileSync(join(stateRoot, "channels", "slack", "owned-threads.json"), "utf8")).toThrow();
   });
 
   it("persists a turn before ACK and uses only Slack file IDs in the intent", async () => {

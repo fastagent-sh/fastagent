@@ -6,7 +6,7 @@ status: current
 
 # Slack channel
 
-The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/) at `POST /slack`. It verifies Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/), persists accepted work before ACK, serializes turns per session, and renders threaded replies with Slack's native [`chat.*Stream`](https://docs.slack.dev/reference/methods/chat.startStream) Agent APIs. A rate-limited edited-message renderer remains available for continuous/top-level and compatibility use.
+The first-party Slack channel uses Slack's [HTTP Events API](https://docs.slack.dev/apis/events-api/using-http-request-urls/) at `POST /slack`. It verifies Slack's [raw-body request signature](https://docs.slack.dev/authentication/verifying-requests-from-slack/), persists accepted work before ACK, serializes turns per session, and renders threaded replies with Slack's native [`chat.*Stream`](https://docs.slack.dev/reference/methods/chat.startStream) Agent APIs. A rate-limited edited-message renderer remains available for top-level replies and compatibility use.
 
 ## Add the channel
 
@@ -18,7 +18,7 @@ Choose one group behavior:
 
 | Mode | Group behavior | Additional access |
 |---|---|---|
-| `context` (default) | Explicit mentions, bare replies in Agent-owned threads, and recent unsummoned discussion | Channel/private-channel/MPIM history events and scopes |
+| `context` (default) | Explicit mentions, bare replies in threads the Agent takes part in, and recent unsummoned discussion | Channel/private-channel/MPIM history events and scopes |
 | `mentions` | Explicit `app_mention` only; no bare continuation or background context | Least privilege |
 
 The command creates:
@@ -117,9 +117,7 @@ export default slackChannel({
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
   // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
-  // Direct and group asks default to independent sessions + Slack threads; opt out independently:
-  // directMessageSession: "continuous",
-  // groupMessageSession: "continuous",
+  // No session modes: an answer attaches to its question with a thread, and that thread is the session.
   onError: (failed) => `⚠️ ${failed.details}`, // development transparency
 });
 ```
@@ -141,8 +139,8 @@ The default route answers:
 
 - every human `message.im` DM;
 - human `app_mention` events in channels;
-- in context + threaded group mode, unmentioned human replies whose `thread_ts` belongs to a durably
-  owned Agent thread.
+- in context mode, unmentioned human replies in a thread the Agent takes part in while exactly one
+  human does (see [Group context](#group-context)).
 
 Bot messages, edits, deletes, hidden events, and service subtypes are ignored. `file_share` and
 `thread_broadcast` are new human content and remain eligible. Overlapping `app_mention` and `message.*`
@@ -152,33 +150,46 @@ Default sessions:
 
 | Message | Session |
 |---|---|
-| Top-level DM (`threaded`, default) | `slack:<team>:<channel>:<ts>` |
+| Top-level DM | `slack:<team>:<channel>:<ts>` |
 | DM thread continuation | `slack:<team>:<channel>:<root_ts>` |
-| Top-level DM with `directMessageSession: "continuous"` | `slack:<team>:<channel>` |
-| Group mention / managed continuation (`threaded`, default) | `slack:<team>:<channel>:<root_ts>` |
-| Top-level group mention with `groupMessageSession: "continuous"` | `slack:<team>:<channel>` |
-| Existing group thread in continuous mode | `slack:<team>:<channel>:<root_ts>` |
+| Top-level group mention | `slack:<team>:<channel>:<ts>` |
+| Group thread continuation | `slack:<team>:<channel>:<root_ts>` |
 
-DMs default to the same root model: a top-level message receives its answer in `thread_ts = incoming.ts`,
-and later thread replies reuse that root session. This is also the shape required by Slack native streams.
-`directMessageSession: "continuous"` instead keeps ordinary top-level DM replies linear and therefore uses
-the classic top-level renderer for those turns. Threaded groups use
-`thread_ts = incoming.thread_ts ?? incoming.ts`; a top-level summon therefore creates a Slack thread and
-persists that root before ACK. Continuous groups keep top-level turns in one channel session and answer
-at channel top level, while explicit summons inside an existing Slack thread preserve that root session
-and reply there. Different roots can run concurrently; turns within one root are FIFO.
+There are no session modes. Slack has no quote primitive, so the only way to attach an answer to its
+question is a thread on it (`thread_ts = incoming.thread_ts ?? incoming.ts`) — and that thread is then
+the *place*, so it carries the memory ([design note](design/participant-model.md)). Native streaming
+additionally requires a thread, but the shape does not depend on the renderer: `classic` attaches its
+answer the same way.
+
+Follow-ups therefore live in the thread, which is also where Slack's own conventions put them. Two
+different threads run concurrently; turns within one are FIFO.
 
 Override `route(envelope)` for custom policy. It returns `null` to ignore or a `SlackRoute` with optional
 `session`, `channelId`, `threadTs`, and `text`. `threadTs: null` explicitly sends at channel top level.
-Supplying a custom route disables the default owned-thread and unsummoned-context admission policy; the
+Supplying a custom route disables the default thread-participation and unsummoned-context admission policy; the
 custom route is then the complete authority.
 
 ## Group context
 
-In context mode, only a top-level summon in threaded group mode creates a durable owned root. Mentioning
-the Agent inside an existing human thread answers that turn but does not adopt later bare replies. This
-matches Feishu/Lark's managed-thread boundary. Unsummoned human discussion is bucketed by workspace +
-channel + concrete thread root.
+In context mode the Agent behaves as a participant of the channel
+([design note](design/participant-model.md)): it answers a bare message in a thread while it takes part
+and **has not heard a second human** there. Mentioning it inside a thread is the bootstrap — it answers,
+which makes it a participant, and later bare replies reach it without the name. When a second person
+speaks in that thread, addressing is ambiguous again and it returns to requiring a mention while still
+listening.
+
+A bare message that @-mentions only other people is discussion, never an ask: it is buffered like any
+other unsummoned message, and the Agent stays quiet. Only an absent mention — or one naming the Agent —
+reaches the rule above.
+
+Both halves are what this channel *heard*, not a claim about who is really in the thread: nothing is
+read back from Slack, so acceptance stays synchronous and a thread the Agent joined before this
+deployment — or before a lost `thread-participants.json` — takes one mention to re-enter. That is the
+same bootstrap every thread starts with and it self-heals in one message. A consequence worth knowing:
+a thread where several people are present but only one has spoken *while the Agent was listening*
+counts as two-party.
+
+Unsummoned human discussion is bucketed by workspace + channel + concrete thread root.
 The next answered turn in that place receives a bounded sender-prefixed block. Consumption is durable:
 
 1. persist each background message before webhook ACK;
@@ -241,11 +252,14 @@ Standard Markdown—not Slack-specific `mrkdwn`—is the output contract. Each A
 Markdown messages.
 
 `rendering: "classic"` retains one `💭 Thinking…` message and updates it no more than once every three
-seconds. A native-configured turn also uses this renderer when an explicit `continuous`/custom route sends
+seconds. A native-configured turn also uses this renderer when a custom route sends
 at channel top level, because Slack native streams must reply to a parent user message. This fallback is
 logged. Agent/API failures remain visible in the thread or operator logs.
 
-The scaffolded `slack-send` tool supports text or one local file. File mode uses Slack's current [external
+The scaffolded `slack-send` tool supports text or one local file. **Do not use it to answer the current
+turn** — the channel already delivers the reply, so calling the tool as well posts it twice; its
+scaffolded description says so. It is the delivery path for turns no channel is carrying: a cron
+schedule or a self-scheduled wake-up. File mode uses Slack's current [external
 upload protocol](https://docs.slack.dev/reference/methods/files.getUploadURLExternal/):
 
 ```txt
@@ -274,10 +288,19 @@ Slack state lives under:
 ├── bot-auth.json       # latest rotating bot access/refresh pair (0600)
 ├── turns.json
 ├── seen.json
-├── owned-threads.json
+├── thread-participants.json
 ├── buffers.json
 └── files/
 ```
+
+`thread-participants.json` records what the Agent HEARD in each group thread — the humans it saw speak
+(capped at two, since the rule only asks whether a second one exists) and whether it has answered
+there. It is written for **every group thread the channel can see, in every posture** — including
+`groupBehavior: "mentions"` and behind a custom route, where the summon rule never reads it. That is
+deliberate: the posture is configuration and a record outlives a change to it, so gating the write
+would leave a thread marked as answered-in while the humans who spoke during the intervening window
+went unrecorded, and the Agent would then speak into a crowd. Deleting the file is safe; each thread
+then costs one mention to re-enter.
 
 The onboarded App Manifest enables Slack token rotation. Before expiry, the runtime exchanges the bot
 refresh token, atomically persists the replacement pair in `bot-auth.json`, and uses that durable pair on
@@ -298,6 +321,24 @@ forever. File-backed channel state supports one process/replica only.
 `fastagent deploy docker|fly|railway` discovers Slack, carries the required access/signing secrets plus any configured rotation credentials, and prints the
 stable `/slack` Request URL. `--run` deploys the app but still reports Slack registration as the required
 manual console step. Mount `FASTAGENT_STATE_DIR` on durable storage and keep one replica.
+
+## Upgrading from the session-mode releases
+
+`directMessageSession` and `groupMessageSession` are **removed**, and passing either now fails at
+startup rather than being ignored — placement and session identity follow from Slack's own primitives
+(an answer goes in a thread on the ask, and that thread is the session), which leaves nothing for the
+options to select. Delete them from `channels/slack.ts`.
+
+If either was set to `continuous`, both where answers land and how sessions are keyed change with the
+removal, and **existing conversation history is not migrated** — every thread starts fresh. The obsolete
+`owned-threads.json` is deleted on the first start; nothing else needs cleaning up.
+
+Slack's scaffolded `slack-send` already carried the "do not use this to answer the current turn"
+boundary its Feishu and Telegram siblings gained this release, so nothing to paste here.
+
+Behaviour that changes even on the default configuration: a bare reply in a thread is answered while
+the Agent takes part and it has not heard a second human there (previously: any thread it had created).
+Derivation in [design/participant-model.md](design/participant-model.md) §3 and §12.
 
 ## Current boundaries
 

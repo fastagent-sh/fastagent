@@ -85,7 +85,6 @@ export interface NormalizedFeishuMessage {
   conversation: {
     chatId: string;
     threadId?: string;
-    rootId?: string;
   };
   content: {
     text: string;

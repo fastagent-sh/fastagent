@@ -263,8 +263,8 @@ async function resolveGroupBehavior(kind: ChannelKind, raw: string | undefined):
       label: "Context-aware groups (recommended)",
       hint:
         kind === "slack"
-          ? "bare managed-thread replies + buffer; requires channel/group/mpim history scopes"
-          : "bare managed-thread replies + buffer; im:message.group_msg delivers all group messages",
+          ? "bare replies in the Agent's threads + buffer; requires channel/group/mpim history scopes"
+          : "bare replies in the Agent's threads + buffer; im:message.group_msg delivers all group messages",
     },
     {
       value: "mentions" as const,

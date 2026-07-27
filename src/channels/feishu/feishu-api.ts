@@ -391,7 +391,9 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
       const data = await call<ApiBody & { data?: { items?: unknown[] } }>(
         "getMessage",
         "GET",
-        `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
+        // Pin the id type: callers match mentions/sender against open_ids, so the response's id shape
+        // must not depend on the platform's default staying open_id.
+        `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}?user_id_type=open_id`,
       );
       return data.data?.items?.[0] as Awaited<ReturnType<FeishuApi["getMessage"]>>;
     },

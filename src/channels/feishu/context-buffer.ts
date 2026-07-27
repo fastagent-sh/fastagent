@@ -4,11 +4,15 @@
  * buffered-resource selection. Entries are bucketed by conversation place (main chat, or one
  * concrete thread root) and folded into the next answered turn in that place.
  */
+import { log } from "../../log.ts";
 import {
   BUFFER_ATTACH_MAX,
+  BUFFER_LINE_MAX_CHARS,
   type ContextBuffer,
   createContextBuffer as createGenericContextBuffer,
 } from "../context-buffer.ts";
+import { loadStateFile, saveStateFile } from "../state.ts";
+import { truncateCodePointPrefix } from "../text.ts";
 import type { NormalizedFeishuMessage } from "./model.ts";
 
 export interface FeishuBufferedResource {
@@ -38,17 +42,27 @@ function bufferLine(entry: FeishuBufferEntry): string {
   return `${entry.sender} (${meta}): ${entry.body}`;
 }
 
-/** Main-chat discussion stays in the chat bucket; a topic uses its stable root id (thread id fallback). */
+/**
+ * The place a message belongs to: the main chat, or a thread within it. Keyed by `thread_id`, the
+ * platform's own identity for a side conversation — NOT `root_id`, which tracks the reply chain and
+ * can differ between messages of one thread (which would split a thread's context across buckets).
+ * A quoted reply outside a thread carries a root but is main-chat discussion, so it buckets there.
+ *
+ * Its own namespace, deliberately: this names a BUCKET of undelivered text, while `parse.ts`'s
+ * `placeKey` names a SESSION. Nothing here claims anything about that session — unlike thread
+ * participation, which asserts "the agent answered into this memory" and is therefore keyed by the
+ * session itself. Re-keying either one leaves the other correct, and converging them now would strand
+ * live buckets for no gain (Slack keeps its own shape for the same reason).
+ */
 export function feishuBufferPlaceKey(
-  conversation: Pick<NormalizedFeishuMessage["conversation"], "chatId" | "rootId" | "threadId">,
+  conversation: Pick<NormalizedFeishuMessage["conversation"], "chatId" | "threadId">,
 ): string {
-  const topic = conversation.rootId ?? conversation.threadId;
-  return topic ? `${conversation.chatId}:root:${topic}` : conversation.chatId;
+  return conversation.threadId ? `${conversation.chatId}:thread:${conversation.threadId}` : conversation.chatId;
 }
 
 /** One-line, bounded background text. Resource-only messages already carry a visible decoder marker. */
 export function feishuBufferText(text: string): string {
-  return text.replace(/\s+/g, " ").trim().slice(0, 280);
+  return truncateCodePointPrefix(text.replace(/\s+/g, " ").trim(), BUFFER_LINE_MAX_CHARS);
 }
 
 function resourceIdentity(resource: FeishuBufferedResource): string {
@@ -114,6 +128,45 @@ function isEntry(value: unknown): value is FeishuBufferEntry {
   );
 }
 
+/**
+ * Buckets from the pre-participant-model keying (`<chat>:root:<root_id>`) can never be produced again —
+ * a place is `<chat>` or `<chat>:thread:<thread_id>` — so nothing could ever fold or clear them, and
+ * they would hold chat content on disk forever. Dropped here, before the buffer loads, so the shared
+ * kernel never learns about a key shape one channel retired.
+ *
+ * TWO one-time losses, both accepted and both logged by count. (1) The retired shape covered every
+ * thread bucket and every main-chat quoted-reply bucket, so buffered discussion in threads does not
+ * survive the upgrade — it becomes unreachable BECAUSE of the re-keying, not before it. (2)
+ * `turns.json` persists each in-flight turn's `bufferKey` verbatim and this runs before turn recovery,
+ * so a turn spanning the upgrade finds its bucket already gone. Sparing referenced keys would couple
+ * the buffer to the turn store to protect a single upgrade, and would not help (1) at all.
+ *
+ * PERMANENT, unlike the `owned-threads.json` cleanup it otherwise resembles. That one leaves an inert
+ * orphan file, so deleting it a release later is free; this one is what stops user chat content
+ * lingering, and a deployment that skips from before the model to well after it would never run an
+ * expired version of this code. The standing cost is one key scan at load, and nothing when no retired
+ * key is present.
+ */
+function dropRetiredBuckets(path: string, label: string): void {
+  const raw = loadStateFile(path);
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
+  const live = Object.entries(raw).filter(([placeKey]) => !placeKey.includes(":root:"));
+  const dropped = Object.keys(raw).length - live.length;
+  if (dropped === 0) return;
+  log.info(`${label} dropped ${dropped} context bucket(s) with a retired key shape`);
+  try {
+    saveStateFile(path, Object.fromEntries(live));
+  } catch (error) {
+    log.warn(`${label} could not rewrite ${path} after dropping retired buckets: ${String(error)}`);
+  }
+}
+
 export function createFeishuContextBuffer(path: string, label: string): FeishuContextBuffer {
-  return createGenericContextBuffer({ path, label, isEntry, line: bufferLine });
+  dropRetiredBuckets(path, label);
+  return createGenericContextBuffer({
+    path,
+    label,
+    isEntry,
+    line: bufferLine,
+  });
 }

@@ -343,7 +343,7 @@ const add: CommandSpec = {
       "scaffold the Slack Events API channel (files, threads, context, live preview)",
       "Choose group visibility, scaffold channels/slack.ts plus slack-send.ts, create a single-workspace " +
         "internal Slack app from a manifest, and install it through OAuth. The channel provides signed " +
-        "Events API ingress, durable turns, files, managed threads, context, and an edited live preview.",
+        "Events API ingress, durable turns, files, threads, context, and an edited live preview.",
       "Automated onboarding requires Slack App Configuration access + refresh tokens and a temporary " +
         "cloudflared tunnel. They stay in owner-readable local state and are never deployed; --no-onboard " +
         "keeps the explicit manual/scaffold-only path.",

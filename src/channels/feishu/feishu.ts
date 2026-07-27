@@ -15,7 +15,7 @@ import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createSeenRing } from "../seen.ts";
 import { createTaskTracker } from "../tasks.ts";
-import { ensureStateHome } from "../state.ts";
+import { ensureStateHome, removeRetiredStateFile } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
@@ -31,8 +31,13 @@ import { invokeFeishuTurn } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
-import { createOwnedFeishuThreads } from "./owned-threads.ts";
-import { FEISHU_GROUP_CONTEXT_SCOPE } from "./setup-mode.ts";
+import { createThreadParticipants } from "../thread-participants.ts";
+import {
+  FEISHU_GROUP_CONTEXT_SCOPE,
+  FEISHU_MESSAGE_READ_REQUEST,
+  FEISHU_MESSAGE_READ_SCOPE,
+  scopeSatisfied,
+} from "./setup-mode.ts";
 import {
   type FeishuMessage,
   type FeishuMessageEvent,
@@ -41,6 +46,7 @@ import {
   defaultFeishuRoute,
   feishuEnvelope,
   placeKey,
+  senderId,
   senderLabel,
 } from "./parse.ts";
 import {
@@ -131,16 +137,6 @@ interface FeishuChannelBaseOptions {
   appId: string;
   /** App Secret (same page) — drives both ingress authentication and outbound API calls. */
   appSecret: string;
-  /** Direct-message context + delivery policy. `threaded` (default) gives every top-level p2p message
-   * its own session, creates a platform thread for the answer, and routes later thread messages back
-   * by root message id. `continuous` keeps one session per p2p chat and sends ordinary unquoted replies. */
-  directMessageSession?: "continuous" | "threaded";
-  /** Group-message context + delivery policy. `threaded` (default) gives every top-level summoned
-   * message its own session and platform thread; later bare user messages in that managed thread answer
-   * in the same root session, while @other-only discussion buffers. `continuous` preserves the legacy
-   * chat/topic sessions (`chat_id` / `chat_id:thread_id`). Buffering and bare continuations require
-   * `im:message.group_msg`. */
-  groupMessageSession?: "continuous" | "threaded";
   /** Policy: whether/where to answer an event (return null to ignore). Defaults to {@link defaultFeishuRoute}. */
   route?: (event: FeishuMessageEvent) => FeishuRoute | null;
   /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator
@@ -184,16 +180,24 @@ interface FeishuWebSocketChannelDeps {
 }
 
 interface FeishuRuntime {
+  /** Routes + persists the event before the transport ACKs it; a throw must fail the delivery so the
+   *  platform re-pushes. Synchronous — it touches no network. The Agent turn stays fire-and-forget. */
   acceptEvent(event: FeishuMessageEvent): void;
   turnsIdle(): Promise<void>;
 }
 
-function validateSessionOptions(opts: FeishuChannelBaseOptions, factoryName: string): void {
-  if (opts.directMessageSession !== undefined && !["continuous", "threaded"].includes(opts.directMessageSession)) {
-    throw new Error(`${factoryName} directMessageSession must be "continuous" or "threaded"`);
-  }
-  if (opts.groupMessageSession !== undefined && !["continuous", "threaded"].includes(opts.groupMessageSession)) {
-    throw new Error(`${factoryName} groupMessageSession must be "continuous" or "threaded"`);
+/** The participant model removed the session modes (docs/design/participant-model.md §12). An upgraded
+ *  workspace still passing one would otherwise start fine and silently get different placement AND a
+ *  different memory boundary — the one breaking change most likely to be hit, and invisible. */
+function rejectRemovedSessionOptions(opts: FeishuChannelBaseOptions, factoryName: string): void {
+  const removed = ["directMessageSession", "groupMessageSession"].filter(
+    (name) => (opts as unknown as Record<string, unknown>)[name] !== undefined,
+  );
+  if (removed.length > 0) {
+    throw new Error(
+      `${factoryName} no longer accepts ${removed.join(" / ")}: a chat is one session and a thread is another, ` +
+        "and the summon rule no longer depends on the mode — remove the option (see docs/design/participant-model.md)",
+    );
   }
 }
 
@@ -202,15 +206,7 @@ function createFeishuRuntimeFactory(
   opts: FeishuChannelBaseOptions,
   factoryName: string,
 ): (ctx: ChannelContext) => FeishuRuntime {
-  const {
-    appId,
-    appSecret,
-    directMessageSession = "threaded",
-    groupMessageSession = "threaded",
-    route,
-    onError,
-    queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS,
-  } = opts;
+  const { appId, appSecret, route, onError, queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS } = opts;
   const baseUrl = opts.apiBaseUrl ?? profile.apiBase;
   const { kind } = profile;
   const label = `[${kind}]`;
@@ -224,7 +220,9 @@ function createFeishuRuntimeFactory(
     const api: FeishuApi = createFeishuApi({ kind, baseUrl, appId, appSecret });
 
     // One bot/v3/info at startup: the bot's open_id drives the default route's group @mention summon.
-    // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works.
+    // Until it resolves (or if it fails), group summon stays off — fail-closed — while p2p works. A
+    // mention landing in that first moment is buffered as context rather than answered; it is folded
+    // into the next answered turn in that place, so the ask is delayed, never lost.
     let botOpenId: string | undefined;
     void api.botInfo().then(
       (me) => {
@@ -235,19 +233,30 @@ function createFeishuRuntimeFactory(
     );
     void api.listAppScopes().then(
       (scopes) => {
-        const contextAware = scopes.some(
-          (scope) =>
-            scope.name === FEISHU_GROUP_CONTEXT_SCOPE &&
-            scope.grantStatus === 1 &&
-            (scope.type === undefined || scope.type === "tenant"),
-        );
-        if (contextAware) {
+        const grantedScope = (name: string): boolean =>
+          scopes.some(
+            (scope) =>
+              scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
+          );
+        if (grantedScope(FEISHU_GROUP_CONTEXT_SCOPE)) {
+          // This scope settles the rule's whole input: it delivers the un-mentioned group messages the
+          // channel buffers, which is also what lets it HEAR a thread. Nothing is fetched, so nothing
+          // is pending — the only bootstrap left is social, one mention inside a thread. The read scope
+          // is a separate, softer dependency, so it is reported separately rather than folded in.
           log.info(
-            `${label} group visibility: context-aware — bare managed-thread replies + buffered discussion enabled`,
+            `${label} group visibility: context-aware — buffered discussion enabled; bare replies work in a thread once the agent has been mentioned in it`,
           );
         } else {
           log.warn(
-            `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare managed-thread replies + group context buffering are unavailable`,
+            `${label} group visibility: @mentions only — ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted; bare replies in the agent's threads + group context buffering are unavailable`,
+          );
+        }
+        // Reported OUTSIDE the branch above: the quoted-message read runs in every chat type and every
+        // posture (a p2p thread's opening ask, any quoted @mention in a group), so pairing this warning
+        // with the group scope would leave a mention-only deployment silently losing every referent.
+        if (!scopeSatisfied(FEISHU_MESSAGE_READ_REQUEST, grantedScope)) {
+          log.warn(
+            `${label} ${FEISHU_MESSAGE_READ_SCOPE} is not granted — a message quoted by an ask cannot be read, and degrades to a marker in the prompt`,
           );
         }
       },
@@ -263,7 +272,16 @@ function createFeishuRuntimeFactory(
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // create + self-ignore — buffers/files may carry chat content
-    const ownedThreads = createOwnedFeishuThreads(join(stateHome, "owned-threads.json"), label);
+    // The participant model replaced the owned-thread index (a cache, so nothing is lost). REMOVE THIS
+    // after the release following the participant model ships — by then no live deployment can still
+    // be carrying the file. test/migration-deadline.test.ts fails when due.
+    removeRetiredStateFile(stateHome, "owned-threads.json", label);
+    const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
+    /** This channel's place key for a thread (the shared store is key-agnostic). */
+    // The SAME identity the session uses (`placeKey`) — a thread's place. Defining it twice would let a
+    // future re-keying silently split participation from the sessions it is supposed to describe.
+    const threadKey = (chatId: string, threadId: string): string =>
+      placeKey(kind, { chat_id: chatId, thread_id: threadId });
     const buffer = createFeishuContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
       label,
@@ -433,8 +451,50 @@ function createFeishuRuntimeFactory(
     let seqCounter = recovered.reduce((max, r) => Math.max(max, r.seq), 0);
     for (const { attempts: _a, ...intent } of recovered) submit({ ...intent, preview: undefined }, false);
 
-    // Transport-neutral acceptance boundary. It performs only the fast pre-ACK work: normalize,
-    // route, persist intent/context, and enqueue. The minutes-long Agent turn remains fire-and-forget.
+    // Who the agent has heard in a thread decides whether a bare message addresses it (participant
+    // model §3), and it comes from what this channel observed — see thread-participants.ts.
+
+    let warnedUnidentified = false;
+
+    /**
+     * What this delivery contributes to thread participation, or undefined when it contributes nothing.
+     *
+     * ONE gate for BOTH writes (the humans observation on the way in, and the `agentSpoke` merge once
+     * the turn is durable), and one definition of the synthetic speaker id — hand-written conditions in
+     * two places is the drift that has already bitten this branch once. Structural facts only; see
+     * thread-participants.ts for why configuration must not appear here.
+     *
+     * Feishu-specific: p2p is excluded (nothing reads those records), and a custom route may admit a
+     * bot the default route filters out — answering one is not participation the summon rule should
+     * act on, so such a thread keeps no record and the first human still needs the mention bootstrap.
+     */
+    const heardIn = (
+      m: FeishuMessage,
+      sender: FeishuMessageEvent["sender"],
+    ): { key: string; speaker: string } | undefined => {
+      if (m.chat_type !== "group" || m.thread_id === undefined || sender?.sender_type !== "user") return undefined;
+      const speakerId = senderId(sender);
+      if (speakerId === undefined && !warnedUnidentified) {
+        // Once per MOUNT — the flag lives in this channel's closure on purpose: the condition is a
+        // property of THIS app's event configuration, so a `feishu` and a `lark` mount must each be
+        // able to report it. A per-thread set would instead grow without bound to repeat one fact.
+        warnedUnidentified = true;
+        log.warn(
+          `${label} human senders arrive with no usable id (first seen in thread ${m.thread_id}) — each counts as a distinct speaker, so affected threads permanently require an @mention until thread-participants.json is deleted`,
+        );
+      }
+      // A human whose id no tenant flavour carries still SPOKE, and no human may speak unrecorded. A
+      // per-MESSAGE synthetic id keeps them distinct; a per-thread one would collapse every human on an
+      // id-less tenant into one, which is the direction that barges into a crowd. Its cost is PERMANENT
+      // — two such messages fill MAX_HUMANS and records never shed, so that thread needs an @mention
+      // from then on and only deleting the file resets it (§3).
+      return { key: threadKey(m.chat_id, m.thread_id), speaker: speakerId ?? `unidentified:${m.message_id}` };
+    };
+
+    // Transport-neutral acceptance boundary: normalize, route, persist intent/context, enqueue. It
+    // touches no network, so it stays synchronous inside the platform's ACK window and the delivery
+    // dedup ring alone is enough — there is no await for a duplicate push to race through. The
+    // minutes-long Agent turn remains fire-and-forget.
     const acceptEvent = (event: FeishuMessageEvent): void => {
       const m = event.message;
       if (!m?.message_id || !m.chat_id) return;
@@ -442,20 +502,27 @@ function createFeishuRuntimeFactory(
         log.debug(`${label} duplicate push for message ${m.message_id} — already persisted, skipping`);
         return;
       }
-
       let r = decide(event);
       const normalized = normalizeFeishuMessage(event);
       if (!normalized) return;
       const bufferKey = feishuBufferPlaceKey(normalized.conversation);
       const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
-      const managedThread =
-        groupMessageSession === "threaded" &&
+      // Listening is not speaking: every message the channel can see refines who takes part in its
+      // thread, whether or not it is answered. The sender counts toward the rule immediately — a
+      // second human speaking is exactly what makes addressing ambiguous again.
+      const heard = heardIn(m, event.sender);
+      if (heard) threadParticipants.merge(heard.key, { humans: [heard.speaker] });
+
+      if (
+        !r &&
+        route === undefined &&
         isHumanGroup &&
         m.thread_id !== undefined &&
-        m.root_id !== undefined &&
-        ownedThreads.has(m.chat_id, m.root_id);
-
-      if (!r && route === undefined && managedThread && !normalized.content.hasMentions) r = {};
+        !normalized.content.hasMentions &&
+        threadParticipants.admitsBareMessage(threadKey(m.chat_id, m.thread_id))
+      ) {
+        r = {};
+      }
       if (!r) {
         if (route === undefined && isHumanGroup) {
           const bodyText = feishuBufferText(normalized.content.text);
@@ -492,23 +559,18 @@ function createFeishuRuntimeFactory(
         return;
       }
 
-      const threadedP2p = directMessageSession === "threaded" && m.chat_type === "p2p";
-      const threadedGroup = groupMessageSession === "threaded" && m.chat_type === "group";
-      const threadedConversation = threadedP2p || threadedGroup;
-      if (threadedConversation && m.thread_id !== undefined && m.root_id === undefined) {
-        log.warn(
-          `${label} threaded ${m.chat_type} message ${m.message_id} has thread_id ${m.thread_id} but no root_id — session continuity cannot be guaranteed`,
-        );
-      }
-      const defaultSession = threadedConversation
-        ? `${kind}:${m.thread_id === undefined ? m.message_id : (m.root_id ?? `missing-root:${m.thread_id}`)}`
-        : placeKey(m);
-      const session = r.session ?? defaultSession;
+      // Memory follows the place (participant model §5): one session per chat, and one per thread.
+      // Keyed by `thread_id`, never `root_id` — the platform's root_id tracks the reply chain and can
+      // differ between messages of ONE thread, which would split a side conversation in two.
+      const session = r.session ?? placeKey(kind, m);
       const chatId = r.chatId ?? m.chat_id;
       const sameTarget = chatId === m.chat_id;
-      const replyTo = sameTarget && (m.chat_type === "group" || threadedP2p) ? m.message_id : undefined;
-      const replyInThread =
-        replyTo !== undefined && (threadedConversation || m.thread_id !== undefined) ? true : undefined;
+      // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers,
+      // stay plain in an ordinary direct message, and stay inside a thread whenever the question came
+      // from one — a direct message's thread is a place too, and relocating out of it is the silent
+      // move the model refuses.
+      const replyTo = sameTarget && (m.chat_type === "group" || m.thread_id !== undefined) ? m.message_id : undefined;
+      const replyInThread = replyTo !== undefined && m.thread_id !== undefined ? true : undefined;
       const queueReplyTo = sameTarget ? m.message_id : undefined;
       // Explicit user stop: a control action, never a turn — it must not queue behind the run it
       // stops. Mentions arrive as @name tokens; strip them before matching the bare word. Record the
@@ -532,13 +594,10 @@ function createFeishuRuntimeFactory(
       const baseText = r.text ?? cloudEnvelope(event, kind);
       if (baseText.trim() === "" && images.length === 0 && files.length === 0) return;
 
-      if (route === undefined && threadedGroup && m.thread_id === undefined && sameTarget && replyInThread === true) {
-        ownedThreads.add(m.chat_id, m.message_id);
-      }
       submit(
         {
           id: m.message_id,
-          seq: ++seqCounter,
+          seq: ++seqCounter, // arrival order; the turn store replays by it
           session,
           baseText,
           bufferKey,
@@ -546,12 +605,49 @@ function createFeishuRuntimeFactory(
           replyTo,
           queueReplyTo,
           replyInThread,
-          parentId: threadedConversation && m.thread_id !== undefined ? undefined : m.parent_id,
+          // A quote is the user explicitly pointing at something that may predate this session
+          // (§8 rung 2), so it is always loaded.
+          //
+          // There used to be an exception: skip it inside a thread the agent had already answered in,
+          // since the session would hold it. That needed a second fact — did the channel RECEIVE the
+          // messages in between? — which depends on a scope that changes over time, while the record it
+          // was read against is durable. Every attempt to gate it correctly failed in the same
+          // direction (a silently missing quote), for an optimisation worth one `getMessage` on a
+          // quote-reply inside an active thread. Loading it costs a call and some text the session may
+          // already have; it also pins WHICH message is being answered, which a long thread benefits
+          // from anyway.
+          parentId: m.parent_id,
           images,
           files,
         },
         true,
       );
+
+      // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT
+      // bare message address it without a mention (§3).
+      //
+      // `r.session === undefined` is what makes this fact mean what its reader assumes. Participation
+      // is keyed by THREAD while the memory it stands in for is keyed by SESSION, and those agree only
+      // when the session is derived from the place. A route supplying its own (the scaffold's
+      // `session: user:<open_id>` example) can put two people's turns in one thread into different
+      // sessions — recording `agentSpoke` from one of them would tell the summon rule the agent took
+      // part in a conversation it cannot remember. So the flag records "the agent answered into THIS
+      // THREAD'S session". Such a thread keeps a bystander record and needs the ordinary mention to
+      // bootstrap if the route is later dropped. `group` matches the observation above so the record is
+      // never half-written.
+      //
+      // Recorded only once the intent is durable: `submit` can throw, and a redelivery must still see
+      // the thread as the agent has actually left it. A later delivery failure does not undo it —
+      // entering the conversation is the intent, not the send.
+      // Reuses `heardIn` from the way in, so both writes share ONE gate by construction. The extra
+      // conditions are about the ANSWER, not the speaker: it must land in this thread (`sameTarget`,
+      // `replyInThread`) and in the place's own session, or the flag would claim a memory that never
+      // held the turn.
+      if (heard && replyInThread === true && sameTarget && r.session === undefined) {
+        // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive
+        // could otherwise say "answered here, heard nobody" — which admits bare messages forever.
+        threadParticipants.merge(heard.key, { agentSpoke: true, humans: [heard.speaker] });
+      }
     };
 
     return { acceptEvent, turnsIdle: () => Promise.all([queue.idle(), sideTasks.drain()]).then(() => undefined) };
@@ -648,7 +744,7 @@ export function buildFeishuChannel(
   opts: FeishuChannelOptions,
   factoryName: string,
 ): ChannelModule {
-  validateSessionOptions(opts, factoryName);
+  rejectRemovedSessionOptions(opts, factoryName);
   const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
   return (ctx) => {
     if (!opts.verificationToken) {
@@ -664,7 +760,7 @@ export function buildFeishuWebSocketChannel(
   factoryName: string,
   deps: FeishuWebSocketChannelDeps = {},
 ): LongConnectionChannelModule {
-  validateSessionOptions(opts, factoryName);
+  rejectRemovedSessionOptions(opts, factoryName);
   const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
   return {
     name: `${profile.kind} websocket`,

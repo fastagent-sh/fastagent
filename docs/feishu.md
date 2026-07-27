@@ -44,11 +44,11 @@ fastagent add lark --ingress webhook --group-behavior mentions
 ```
 
 Onboarding also asks for group behavior. **Context-aware groups (recommended)** is selected first: bare
-human replies in Agent-managed threads invoke the Agent, while other unsummoned group discussion is
+human replies in a thread the Agent is part of invoke it, while other unsummoned group discussion is
 durably buffered for the next `@Agent` turn. It requires the tenant-admin-approved
 `im:message.group_msg` scope, which makes the platform deliver all group messages to the app.
 **Mention-only (least privilege)** skips that scope; users must @Agent on every group turn, and neither
-managed-thread bare replies nor background buffering is available. This choice configures the remote
+bare thread replies nor background buffering is available. This choice configures the remote
 App's visibility; it does not add a second runtime routing mode. Without an interactive terminal the
 choice must be explicit: a run without `--group-behavior` assumes context-aware for guidance but only
 inspects and reports — requesting the sensitive scope requires `--group-behavior context`.
@@ -119,9 +119,10 @@ Create a **custom app** in the developer console ([open.feishu.cn/app](https://o
 2. **Permissions** — add:
    - `im:message.p2p_msg:readonly` — receive direct messages,
    - `im:message.group_at_msg:readonly` — receive group messages that @mention the bot,
-   - `im:message.group_msg` — sensitive, tenant-admin-approved; required to buffer unsummoned group/thread context and accept bare continuations in Agent-managed threads,
+   - `im:message.group_msg` — sensitive, tenant-admin-approved; required to buffer unsummoned group/thread context and accept bare replies in threads the Agent is part of,
    - `im:message:send_as_bot` — send replies,
    - `im:resource` — download message images/files,
+   - `im:message:readonly` — OPTIONAL, and independent of the scope above: the channel fetches a replied-to message by id, so an ask can carry what it quotes. `add feishu|lark --group-behavior context` requests it alongside `im:message.group_msg` because they share one approval round. Without it group messages are still delivered and the thread rule still works; a quoted message degrades to a marker in the prompt. `im:message` (the read/write superset) also satisfies it,
    - the card scope ("Create and update card") — the live preview streams through a card entity.
 3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose one mode:
    - **WebSocket:** choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
@@ -155,9 +156,6 @@ export default feishuChannel({
   appSecret: process.env.FEISHU_APP_SECRET ?? "",
   verificationToken: process.env.FEISHU_VERIFICATION_TOKEN ?? "",
   encryptKey: process.env.FEISHU_ENCRYPT_KEY || undefined,
-  // Direct/group asks default to independent sessions + platform threads; opt out independently:
-  // directMessageSession: "continuous",
-  // groupMessageSession: "continuous",
   onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
 });
 ```
@@ -226,61 +224,60 @@ type FeishuRoute = {
 ```
 
 Return `null` to ignore the event. Omitted fields default from the message. A custom route is
-authoritative: its `null` neither falls through to the built-in managed-thread continuation rule nor
+authoritative: its `null` neither falls through to the built-in thread rule nor
 enters the default context buffer. The canonical `feishuEnvelope(event)` builds the default prompt envelope (chat/sender metadata, group note, reply
 marker, decoded body) for custom Feishu routes. The Lark subpath exposes `larkEnvelope(event)`, which
 reuses that builder with the `[lark: …]` compatibility tag.
 
 ### Group visibility is scope-gated
 
-With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel and therefore cannot be buffered. The sensitive `im:message.group_msg` scope (custom apps only, tenant-admin approval) plus a newly published app version delivers all group messages. FastAgent then invokes only explicit `@bot` turns plus bare human continuations in its durable managed-thread index; other human discussion is durably buffered by main chat or thread root and folded into that place's next answered turn.
+With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel and therefore cannot be buffered. The sensitive `im:message.group_msg` scope (custom apps only, tenant-admin approval) plus a newly published app version delivers all group messages. FastAgent then invokes explicit `@bot` turns, plus bare messages in a thread where it takes part and has not heard a second human — both facts being what the channel itself observed, so a thread it joined before this deployment takes one mention to re-enter. Other human discussion is durably buffered per place (the chat, or a thread) and folded into that place's next answered turn.
 
 Practical consequences in groups:
 
 - without `im:message.group_msg`, a **bare image/file** cannot summon (it has no mention) and is not delivered — put the ask and attachment in one rich-text `post`, or reply to the attachment and @mention the bot,
-- with that scope, a bare attachment inside a managed thread is primary input and answered immediately; elsewhere it is buffered as background input for the next `@bot` turn in that place,
+- with that scope, a bare attachment inside a thread the Agent is part of is primary input and answered immediately; elsewhere it is buffered as background input for the next `@bot` turn in that place,
 - buffered attachment failures degrade per resource with a visible prompt note; primary attachment failures still fail the turn visibly.
 
 ## Threads and sessions
 
-Direct messages and summoned group messages both default to independent threaded sessions:
+The Agent behaves as a participant in the room, so where it answers and what it remembers follow the
+place rather than the individual ask ([design note](design/participant-model.md)):
 
-| `directMessageSession` | Default session | Delivery |
-|---|---|---|
-| `"threaded"` (default) | top level: `<kind>:message_id`; continuation: `<kind>:root_id` | Each top-level DM creates an independent platform thread; every Agent reply stays inside it |
-| `"continuous"` | `chat_id` | One long-running DM context; ordinary unquoted replies |
+| Place | Session | Where the answer appears | Bare messages (no @) |
+|---|---|---|---|
+| Direct message | `<kind>:<chat_id>` | in the chat, unquoted | always answered |
+| Group main timeline | `<kind>:<chat_id>` | in the room, quoting the ask | never — mention the bot |
+| Group thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | answered while the Agent takes part and no second human has been heard |
+| Direct-message thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | always answered — a p2p chat has one human, so there is nothing to disambiguate and no participation is recorded |
 
-| `groupMessageSession` | Default session | Delivery |
-|---|---|---|
-| `"threaded"` (default) | top-level summon: `<kind>:message_id`; continuation: `<kind>:root_id` | Each top-level `@bot` summon creates an independent managed thread; bare continuations answer, while `@other`-only discussion buffers |
-| `"continuous"` | top level: `chat_id`; existing topic: `chat_id:thread_id` | Legacy shared group/topic context; top-level answers quote the summon without creating a thread |
+There are no session modes to choose. A room has one memory that everyone in it shares, so a colleague
+can follow up on someone else's question; a thread is a separate place with its own.
 
-Restore either continuous UX in `channels/feishu.ts` (or the Lark counterpart) when needed:
+**Starting a thread.** Mention the Agent inside a thread once (typically by replying to one of its
+messages and creating a topic). It answers there, which makes it a participant, and every later bare
+message in that thread reaches it. When a second person speaks in the thread, addressing becomes
+ambiguous again and the Agent goes back to requiring a mention — while still listening, so the
+discussion is folded into its next answered turn there.
 
-```ts
-export default feishuChannel({
-  // credentials…
-  directMessageSession: "continuous",
-  groupMessageSession: "continuous",
-});
-```
+Both halves are what the Agent HEARD, not a claim about who is really in the thread: nothing is read
+back from the platform, so a thread it joined before this deployment — or before a lost
+`thread-participants.json` — takes one mention to re-enter. Observations accumulate and are never
+shed, so a thread in which two people have spoken keeps requiring a mention. A consequence worth
+knowing: a thread where several people are present but only one has spoken *while the Agent was
+listening* counts as two-party.
 
-The root message id — not `thread_id` — is the threaded session identity because the first user message
-exists before the platform creates a thread. A later thread event carries that original `message_id` as
-`root_id`. The channel-kind prefix (`feishu:` or `lark:`) isolates the two clouds while keeping pi's
-provider-facing session/cache key under 64 characters. Inside the thread, session history already
-supplies prior turns, so `parent_id` is not fetched again. An ordinary top-level quoted reply has no
-`thread_id`: it starts a new session rooted at its own `message_id`, while the quoted parent is still
-loaded as referenced input.
+The thread's identity is `thread_id`. Feishu's `root_id` is NOT stable within a thread — it tracks the
+reply chain and can differ between messages of one thread — so it is used for neither the session key
+nor the context bucket. A message that quotes another always loads it as referenced input,
+inside a thread or out of it — a quote is the user pointing at something that may predate the session.
+An unreadable referent degrades to a marker instead of failing the turn.
 
-The p2p create-and-continue flow is field-verified on Feishu: replying to a top-level p2p message with
-`reply_in_thread: true` returns `root_id`, `parent_id`, and a new `thread_id`; a user continuation arrives
-with the same root/thread pair. Group threads use the same protocol shape. Lark shares the protocol path
-but still needs a real tenant smoke test; use the matching `"continuous"` option if that cloud rejects
-thread creation.
-
-Turns are serialized per session (FIFO) instead of failing fast as `session busy`; different roots in
-threaded mode run concurrently. Any managed-thread turn queued behind another one immediately gets a
+Turns are serialized per session (FIFO) instead of failing fast as `session busy`. Since the session is
+the place, **a whole group room is one queue**: a second person's `@Agent` in a busy room waits behind
+an unrelated multi-minute turn (they see the "⏳ Queued" card). Different places
+run concurrently, which is why a thread is the way to start work that should not queue behind the
+room. Any turn queued behind another one immediately gets a
 reply-quoted "⏳ Queued" card (configure `queueNoticeDelayMs` only if an intentional delay is desired).
 The running turn takes over its queue card and settles the final answer in place: no second reply and no
 visible "recalled a message" tombstone.
@@ -327,9 +324,15 @@ The channel persists its state under `<state root>/channels/<kind>/` (`channels/
 
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed when the turn ends; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
 - `seen.json` — the most recent 2,000 `message_id`s whose turn intent or buffered context was persisted; Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key,
-- `owned-threads.json` — durable `root_id → chat_id` ownership for managed group threads, written before the transport ACK so restarts preserve continuation routing,
+- `thread-participants.json` — a bounded record of what the Agent HEARD in each thread, written for every group thread the channel can see, in every posture — including ones where the summon rule cannot read it, because the posture is configuration and a record outlives a change to it: the humans it saw speak (capped at two, since the rule only asks whether a second one exists) and whether it has answered there. Nothing is read back from the platform, so losing the file costs one mention per thread to re-enter it,
 - `buffers.json` — unsummoned human group/thread discussion, persisted before the transport ACK and consumed only after an Agent turn completes,
 - `files/<chat>/` — downloaded inbound files.
+
+An upgrade from the earlier session-mode model cleans itself up on the next start: the obsolete
+`owned-threads.json` is removed, and `buffers.json` buckets keyed `<chat>:root:<id>` are dropped at
+load, since the re-keying means nothing can ever fold or clear them again. That old shape covered every
+thread bucket, so **buffered discussion in threads does not survive the upgrade** — a chat's own bucket
+does. The dropped count is logged.
 
 The seen ring is bounded, best-effort delivery dedup rather than exactly-once execution. It is written
 after the turn/buffer state so a failed pre-ACK state write can still be redelivered safely; a crash
@@ -341,6 +344,33 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
 ## Sending messages back (`feishu-send` / `lark-send`)
 
 `fastagent add feishu` also scaffolds `tools/feishu-send.ts` (lark: `tools/lark-send.ts`): the agent can send plain text or a Markdown card to any chat by id. It is the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up; those turns have no `[feishu: chat …]` envelope line, so the schedule's prompt must name the target chat id.
+
+**Do not use it to answer the current turn** — the channel already delivers the reply, so calling the tool as well posts it twice. The scaffolded description says so; a workspace scaffolded before that was added keeps its own copy, so paste the boundary into the tool's `description` (or re-run `fastagent add` in a scratch dir and copy the file) if the Agent is double-posting.
+
+## Upgrading from the session-mode releases
+
+Three behaviour changes, none of them opt-in:
+
+- **Direct messages become one continuous conversation** instead of one session per top-level message,
+  and a group summon is answered **in place** instead of opening a thread.
+- **Sessions are re-keyed** to the place (`<kind>:<chat_id>`, or `<kind>:<chat_id>:<thread_id>` in a
+  thread). Existing history is NOT migrated — every conversation starts fresh, which reads to users as
+  the Agent forgetting. The old session records stay in the store unreferenced; deleting them is
+  optional and safe.
+- **The concurrency unit changes with it.** Turns serialize per session, so a whole room is now one
+  queue: a second person's `@Agent` in a busy room waits behind an unrelated multi-minute turn (they
+  see the "⏳ Queued" card). Open a thread to run something alongside it.
+
+- **Unrelated to the model, but in the same release:** the scaffolded send tool's description gained a
+  "do not use this to answer the current turn" boundary (without it the Agent posts its reply twice).
+  Scaffolded files are copies, so an existing workspace keeps the old text — see the send-tool section
+  above for the one-line fix.
+
+State cleans itself up on the first start: `owned-threads.json` is removed, and `buffers.json` buckets
+under the retired key shape are dropped — which means **buffered discussion in threads does not survive
+the upgrade** (a chat's own bucket does). The dropped count is logged.
+
+Derivation in [design/participant-model.md](design/participant-model.md) §3 and §12.
 
 ## Limits
 
@@ -359,7 +389,7 @@ The state home self-ignores (a nested `.gitignore`). Single-process semantics: t
   paste, then actively probes the config API: automatic mode/token bootstrap on success; manual
   Token + Subscription mode/URL only on an explicit route-level 404.
 - The group context buffer is gated on the sensitive `im:message.group_msg` scope; without it the platform never delivers unsummoned messages.
-- The default threaded direct/group modes create one durable Agent session per top-level DM or summoned group message. Session/owned-root TTL and GC are not implemented, so storage grows with the number of roots.
+- Sessions are one per chat and one per thread, with no TTL or GC, so session storage grows with the number of chats and threads the Agent has taken part in. Thread participation is capped and evicts BYSTANDER threads first (ones the Agent only listened to — losing one costs nothing, since the summon rule refuses such a thread anyway); age decides only among threads it takes part in. The rest is unbounded.
 - `feishu-send` / `lark-send` currently target only `chatId`; schedules and wake-ups cannot select a thread until those tools accept a reply target plus `reply_in_thread`.
 - The sender in events carries only ids (no display name) — prompts attribute messages as `user <open_id>`. Resolving names needs a contacts scope; a custom `route` can enrich the envelope.
 - Events must be ACKed within ~3 seconds in either mode. The channel persists/enqueues synchronously;

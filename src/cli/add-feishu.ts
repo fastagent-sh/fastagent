@@ -15,6 +15,9 @@ import { isCancel, log as clackLog, password, text as clackText } from "@clack/p
 import { bootstrapFeishuVerificationToken } from "../channels/feishu/bootstrap-token.ts";
 import {
   FEISHU_GROUP_CONTEXT_SCOPE,
+  FEISHU_CONTEXT_ONBOARDING_SCOPES,
+  FEISHU_MESSAGE_READ_SCOPE,
+  scopeSatisfied,
   type FeishuGroupBehavior,
   type FeishuSubscriptionMode,
 } from "../channels/feishu/setup-mode.ts";
@@ -63,9 +66,22 @@ export async function configureGroupBehavior(input: {
     inspected = false;
     scopes = [];
   }
-  const groupScope = scopes.find(
-    (scope) => scope.name === FEISHU_GROUP_CONTEXT_SCOPE && (scope.type === undefined || scope.type === "tenant"),
-  );
+  const granted = (name: string): boolean =>
+    scopes.some(
+      (scope) =>
+        scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
+    );
+  // Same type filter as `granted`: a user-type entry is not the tenant scope this path needs, so
+  // treating one as "on the app" would report an approval that can never arrive and skip the PATCH
+  // that would actually add it.
+  const onApp = (name: string): boolean =>
+    scopes.some((scope) => scope.name === name && (scope.type === undefined || scope.type === "tenant"));
+  // Both halves of the recommended path: delivery (the platform pushes un-mentioned group messages)
+  // and reading a quoted message (so a thread's opening ask carries what it replies to).
+  // The read capability has two spellings and `im:message` is the superset, so an app holding it needs
+  // nothing added — asking anyway would cost the author a second tenant-admin approval round.
+  const missing = FEISHU_CONTEXT_ONBOARDING_SCOPES.filter((entry) => !scopeSatisfied(entry, granted));
+  const missingNames = missing.map((entry) => entry.request);
 
   if (behavior === "mentions") {
     if (!inspected) {
@@ -76,7 +92,7 @@ export async function configureGroupBehavior(input: {
       openUrl(permissionUrl);
       return { publishReady: false };
     }
-    if (groupScope?.grantStatus === 1) {
+    if (granted(FEISHU_GROUP_CONTEXT_SCOPE)) {
       const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
       note(
         `[fastagent] warn: mention-only was selected, but ${FEISHU_GROUP_CONTEXT_SCOPE} is already granted — remove it before publishing a new version to restore least-privilege platform delivery. Opening ${permissionUrl}`,
@@ -85,23 +101,34 @@ export async function configureGroupBehavior(input: {
       return { publishReady: false };
     }
     note(
-      `[fastagent] group behavior: mention-only — bare managed-thread replies and group context buffering are disabled`,
+      `[fastagent] group behavior: mention-only — bare replies in the Agent's threads and group context buffering are disabled. ` +
+        `Add ${FEISHU_MESSAGE_READ_SCOPE} by hand if you want an @mention to carry the message it quotes`,
     );
     return { publishReady: true };
   }
 
   note(
     `[fastagent] group behavior: context-aware (recommended) — ${kind} will deliver all group messages; ` +
-      `FastAgent invokes @Agent + bare managed-thread replies and durably buffers other discussion`,
+      `FastAgent invokes @Agent, answers bare replies in threads it takes part in, and durably buffers ` +
+      `other discussion. ${FEISHU_GROUP_CONTEXT_SCOPE} (delivery) is required; ${FEISHU_MESSAGE_READ_SCOPE} ` +
+      `(reading a quoted message) is requested with it — without it a quoted message degrades to a marker`,
   );
-  if (groupScope?.grantStatus === 1) {
-    note(`[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPE} is already granted`);
+  if (missing.length === 0) {
+    note(
+      `[fastagent] ${FEISHU_CONTEXT_ONBOARDING_SCOPES.map((entry) => entry.request).join(" + ")} are already granted`,
+    );
     return { publishReady: true };
   }
   const permissionUrl = `${apiBase}/app/${encodeURIComponent(appId)}/permission`;
-  if (groupScope) {
+  // A missing scope is in one of two states, and they need different actions: already on the app but
+  // not yet approved (nothing to add — wait for the admin), or absent from the draft entirely.
+  // Same superset rule as `missing`: a draft already requesting `im:message` is awaiting approval, not
+  // missing something to add.
+  const awaitingApproval = missing.filter((entry) => scopeSatisfied(entry, onApp)).map((entry) => entry.request);
+  const toRequest = missing.filter((entry) => !scopeSatisfied(entry, onApp)).map((entry) => entry.request);
+  if (toRequest.length === 0) {
     note(
-      `[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPE} is awaiting approval — complete tenant-admin approval before publishing. Opening ${permissionUrl}`,
+      `[fastagent] ${awaitingApproval.join(" + ")} awaiting approval — complete tenant-admin approval before publishing. Opening ${permissionUrl}`,
     );
     openUrl(permissionUrl);
     return { publishReady: false };
@@ -109,21 +136,24 @@ export async function configureGroupBehavior(input: {
   if (!explicit) {
     // Defaulted, not chosen: report the gap and how to opt in, but leave the app's requested
     // permission set untouched (a scripted re-run must not silently escalate a mention-only app).
+    // Name what is ACTUALLY missing: the common upgrade has the delivery scope already granted and
+    // only the read scope absent, and pointing at a granted permission sends the author looking in
+    // the wrong place.
     note(
-      `[fastagent] ${FEISHU_GROUP_CONTEXT_SCOPE} is not granted (or could not be verified) — group behavior was ` +
-        `defaulted, so it was not requested. Re-run with --group-behavior context to add it to the app draft, ` +
-        `or --group-behavior mentions to stay least-privilege: ${permissionUrl}`,
+      `[fastagent] ${missingNames.join(" + ")} not granted (or could not be verified) — group behavior was ` +
+        `defaulted, so nothing was requested. Re-run with --group-behavior context to add ${missing.length > 1 ? "them" : "it"} ` +
+        `to the app draft, or --group-behavior mentions to stay least-privilege: ${permissionUrl}`,
     );
     return { publishReady: false };
   }
   try {
-    await api.addAppScopes(appId, [FEISHU_GROUP_CONTEXT_SCOPE]);
+    await api.addAppScopes(appId, toRequest);
     note(
-      `[fastagent] added ${FEISHU_GROUP_CONTEXT_SCOPE} to the app draft — complete tenant-admin approval before publishing. Opening ${permissionUrl}`,
+      `[fastagent] added ${toRequest.join(" + ")} to the app draft — complete tenant-admin approval before publishing. Opening ${permissionUrl}`,
     );
   } catch (error) {
     note(
-      `[fastagent] warn: could not add ${FEISHU_GROUP_CONTEXT_SCOPE} automatically: ${String(error)} — add it manually before publishing. Opening ${permissionUrl}`,
+      `[fastagent] warn: could not add ${toRequest.join(" + ")} automatically: ${String(error)} — add it manually before publishing. Opening ${permissionUrl}`,
     );
   }
   openUrl(permissionUrl);

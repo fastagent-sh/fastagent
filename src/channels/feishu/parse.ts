@@ -43,13 +43,29 @@ export function parseContent(
 
 /** A stable sender label for attribution. Display names require an additional contacts permission. */
 export function senderLabel(sender: FeishuSender | undefined): string | undefined {
-  const id = sender?.sender_id?.open_id ?? sender?.sender_id?.user_id ?? sender?.sender_id?.union_id;
+  const id = senderId(sender);
   return id ? `user ${id}` : undefined;
 }
 
-/** The place a message lives (chat, or chat:topic in a topic group) — the legacy default session key. */
-export function placeKey(message: Pick<FeishuMessage, "chat_id" | "thread_id">): string {
-  return message.thread_id ? `${message.chat_id}:${message.thread_id}` : message.chat_id;
+/** Whichever id flavour the tenant populates. `sender_id` is a union and which members are filled is
+ *  app configuration, not an invariant — callers only ever compare these for distinctness. */
+export function senderId(sender: FeishuSender | undefined): string | undefined {
+  return sender?.sender_id?.open_id ?? sender?.sender_id?.user_id ?? sender?.sender_id?.union_id;
+}
+
+/**
+ * The place a message lives (the chat, or a thread within it) — the session key (participant model §5),
+ * and the key thread participation is recorded under, since that record is a claim about this session.
+ *
+ * Branded with the channel kind, like Slack's twin, because session ids share ONE namespace across
+ * every channel in a deployment: without it a `feishu` and a `lark` chat carrying the same platform id
+ * would answer into the same memory. The length bound is the FILENAME the id becomes (sessions.ts
+ * percent-encodes it, so each `:` costs three), and the worst case here — brand + a 35-char chat id +
+ * a 36-char thread id — encodes to well under 100 bytes against the filesystem's 255.
+ */
+export function placeKey(kind: string, message: Pick<FeishuMessage, "chat_id" | "thread_id">): string {
+  const chat = `${kind}:${message.chat_id}`;
+  return message.thread_id ? `${chat}:${message.thread_id}` : chat;
 }
 
 /** The canonical Feishu-branded prompt envelope. */
@@ -84,7 +100,8 @@ export function mentionsBot(message: Pick<FeishuMessage, "mentions">, botOpenId:
 /**
  * Default EXPLICIT-summon policy: ignore non-user senders, always answer p2p, and answer groups only
  * when THIS bot is structurally mentioned. No bot identity means group routing fails closed. The
- * stateful channel wiring may additionally admit unmentioned continuations from its managed-root index.
+ * stateful channel wiring may additionally admit unmentioned messages in a thread it takes part in
+ * (docs/design/participant-model.md §3).
  */
 export function defaultFeishuRoute(event: FeishuMessageEvent, options?: { botOpenId?: string }): FeishuRoute | null {
   const message = event.message;

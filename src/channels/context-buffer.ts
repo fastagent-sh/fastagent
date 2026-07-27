@@ -30,6 +30,12 @@ import { loadStateFile, saveStateFile } from "./state.ts";
  *  basis: the budget must price what the fold actually renders, or it would systematically overrun. */
 const BUFFER_MAX_CHARS = 4000;
 
+/** Per-message bound INSIDE that budget. The fold is a digest of many messages competing for one
+ *  allowance, so the job here is fairness, not fidelity: one rambler must not price out everyone who
+ *  spoke after them. 280 against 4000 keeps at least ~14 messages in a full buffer. A referent — the
+ *  single message the asker points at — is the opposite job and takes REFERENT_MAX_CODE_POINTS. */
+export const BUFFER_LINE_MAX_CHARS = 280;
+
 /** How many buffered files and images (each, most recent first) a summon pulls in with the folded
  *  discussion — bounds the latency/token cost of "summarize the file from earlier" against a chatty
  *  group posting many attachments between summons. Skipped ones must be counted into the prompt

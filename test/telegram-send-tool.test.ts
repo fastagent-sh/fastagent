@@ -10,10 +10,13 @@ import { join } from "node:path";
 
 type RawExecute = (id: string, params: unknown) => Promise<{ details: unknown }>;
 let execute: (params: unknown) => Promise<{ details: unknown }>;
+let description: string;
 beforeAll(async () => {
   const templatePath = new URL("../src/channels/telegram/scaffold/telegram-send.ts", import.meta.url).pathname;
   const mod = (await import(templatePath)) as { default: unknown };
-  execute = (params) => (mod.default as { execute: RawExecute }).execute("call-1", params);
+  const tool = mod.default as { execute: RawExecute; description: string };
+  execute = (params) => tool.execute("call-1", params);
+  description = tool.description;
 });
 
 function stubBotApi(): { calls: { url: string; form: FormData }[] } {
@@ -26,6 +29,11 @@ function stubBotApi(): { calls: { url: string; form: FormData }[] } {
 }
 
 describe("scaffold telegram-send: message-or-file mode switch", () => {
+  it("steers the model away from using it to answer a normal chat turn (the channel already delivers)", () => {
+    expect(description).toMatch(/do not call this to answer/i);
+    expect(description).toMatch(/send it twice/i);
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();

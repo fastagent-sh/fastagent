@@ -257,18 +257,20 @@ Slack is a first-party HTTP Events API sibling under `src/channels/slack/`. It k
 `Agent.invoke` boundary and reuses shared `turn-queue`, generic `turn-store`, generic `context-buffer`,
 the invoke-turn kit (busy retry + manifest wording), `state`, `seen`, and the
 shared turn-view reducer + preview policies (`preview-kit`). Platform-specific modules own signature verification/event acceptance, message subtype policy,
-managed roots/context, private-file resolution, Slack Web API transport, and dual native-stream /
+thread participation/context, private-file resolution, Slack Web API transport, and dual native-stream /
 rate-limited edited-message rendering.
 
 The request boundary verifies Slack's `v0` HMAC over the capped raw body and a five-minute timestamp,
-then persists a turn/context/root before returning 200. Logical dedup uses `(team, channel, ts)` because
-`app_mention` and `message.*` subscriptions may overlap; `event_id` alone does not identify that shared
-message. `context` group mode subscribes to channel/private-channel/MPIM message streams, admits bare
-human replies only in durably owned roots, and folds other discussion with the same peek→completed→commit
-invariant as Telegram/Feishu. Direct and group sessions default to independent platform threads, with
-separate `continuous` compatibility options. As in Feishu/Lark, only a top-level group summon creates an
-owned root; an explicit summon inside an existing human thread does not adopt it. `mentions` keeps the
-least-privilege explicit-summon surface.
+then persists the turn intent and any buffered context before returning 200. Logical dedup uses
+`(team, channel, ts)` because `app_mention` and `message.*` subscriptions may overlap; `event_id` alone
+does not identify that shared message. Sessions follow the place, not the ask: an answer goes in a
+thread on the ask and that thread IS the session, so there are no session modes to select. `context`
+group mode subscribes to channel/private-channel/MPIM message streams, admits a bare human reply where
+the participation rule allows it (the agent has answered there and no second human has been heard —
+see participant-model.md §3, and the Feishu bullets above for the shared store), and folds other
+discussion with the same peek→completed→commit invariant as Telegram/Feishu. Answering an explicit
+summon inside an existing human thread is exactly what makes the agent a participant of it. `mentions`
+keeps the least-privilege explicit-summon surface.
 
 File events persist IDs only. Dequeue-time `files.info` resolves current metadata; authenticated downloads
 are host-restricted, timeout/cap guarded, and translated to vision images or absolute local paths. Primary
@@ -281,7 +283,8 @@ the stream; each engine-neutral tool start appends a compact factual Markdown tr
 appends one line naming the call. Raw model thinking and tool output stay private — reading output would
 mean guessing the engine's result shape. An append-only stream is also the one renderer whose persisted
 message keeps the process beside the answer; the others settle into the answer alone. The compatibility renderer retains one edited message with a strict
-three-second mutation interval; explicit continuous/custom top-level routes select it because native
+three-second mutation interval; a custom route reaching a top-level target selects it (either way of
+getting there is listed on the `rendering` option in `slack.ts`) because native
 streams require a parent user message. HTTP Events API remains the production transport; Socket Mode is a
 separate future boundary rather than entering `ChannelModule` indirectly.
 
@@ -299,7 +302,7 @@ Feishu is the second stateful chat-channel reference, shaped as a sibling of Tel
 implementation lives in `src/channels/feishu/`: `feishu.ts` wiring, `parse.ts` pure policy helpers,
 `model.ts` / `normalize.ts` content decoding + message-scoped resource normalization,
 `invoke-turn.ts` IO assembly, `preview.ts` delivery,
-`owned-threads.ts` durable managed-root routing, shared `../seen.ts` bounded delivery dedup,
+`thread-participants.ts` thread-participation cache, shared `../seen.ts` bounded delivery dedup,
 `feishu-api.ts` transport/token pipeline, `crypto.ts` security math, `card.ts` builders, and registration
 automation. Shared mechanisms (`turn-queue` / generic `turn-store` / generic `context-buffer` /
 `invoke-turn-kit` / `state` / `wait-health`) remain one level up.
@@ -336,25 +339,52 @@ a stable hand-authored surface. What is platform-different:
   buffered-context entry. It is post-persist, best-effort insurance rather than exactly-once execution:
   a crash between the state and ring writes, a failed ring write, or an id beyond the cap retains L1's
   at-least-once tail. The generic turn store still owns unfinished-run recovery and its poison ceiling.
-- **Session partitioning is policy, not transport inference.** P2p and groups default to threaded root
-  sessions: every top-level DM or summoned group message owns a new `<kind>:message_id` session, creates
-  its platform thread with `reply_in_thread`, and maps continuations back through `<kind>:root_id`. The
-  kind prefix isolates Feishu/Lark while keeping pi's provider-facing cache key below its 64-character
-  ceiling. One root remains FIFO while different roots run concurrently. `directMessageSession:
-  "continuous"` and `groupMessageSession: "continuous"` are explicit compatibility opt-outs; the latter
-  restores legacy `chat_id` / `chat_id:thread_id` group sessions. Thread continuations do not rehydrate
-  `parent_id`; their session history is authoritative. A top-level quoted reply still loads its parent
-  but owns a new root session. Group roots are indexed pre-ACK in `owned-threads.json`: with
-  `im:message.group_msg`, bare user messages in those roots become normal required turns with the same
-  queue, streaming-card, error, and delivery behavior as an explicit @mention. An explicit mention of
-  only other people is targeted discussion instead and enters the context buffer.
+- **Session partitioning follows the place, not the ask.** A chat is one session
+  (`<kind>:<chat_id>`) and a thread is another (`<kind>:<chat_id>:<thread_id>`) — branded with the
+  channel kind because session ids share ONE namespace across every channel in a deployment. The id
+  becomes a percent-encoded jsonl filename, so its real bound is the filesystem's 255 bytes, which
+  platform ids do not come close to. A room keeps one memory that everyone in it shares and a
+  side conversation keeps its own. Keyed by `thread_id`, never `root_id`: the platform's `root_id`
+  tracks the reply chain and can differ between messages of one thread, which would split a side
+  conversation across sessions (and across context-buffer buckets). One place stays FIFO while
+  different places run concurrently — the concurrency unit is the place because the causal unit is.
+  The rules, and why they are derived rather than configured, are in
+  [participant-model.md](participant-model.md); there is deliberately no session-mode option.
+- **Speaking is gated by who is in the place, listening is not.** Direct messages always answer;
+  a group's main timeline requires an @mention; inside a thread the agent answers bare messages only
+  while it takes part and has not heard a second human. Everything else it can see is buffered as context
+  (`im:message.group_msg` is what buys the hearing). An explicit mention of only other people is
+  discussion, never an ask. A message's `parent_id` referent is ALWAYS loaded — a
+  quote is the user pointing at something that may predate this session. (Skipping it inside a thread
+  the agent had answered in was tried and removed: see participant-model.md §8.) An unreadable referent
+  degrades to a marker in the prompt rather than failing the turn.
+- **Thread participation is what the channel HEARD, not a claim about the thread's membership.** Two
+  decisions:
+  - *Predicate.* The agent speaks unprompted in a thread only where it has answered before and has
+    heard at most one human. Both facts come from the messages the channel observes; nothing is read
+    back from the platform. That is a deliberate weakening: a thread joined before this deployment (or
+    before a lost state file) reads as unheard and takes one mention to re-enter — the same bootstrap
+    every thread starts with, self-healing in one message and visible to the user. The alternative was
+    built and removed: a pre-ACK `listThreadSenders` bought a membership claim its own 50-message page
+    cap made incomplete anyway, at the price of a failure taxonomy, an ACK budget, request aborts, a
+    completeness flag, and a duplicate-delivery join — where nearly every defect in the feature lived.
+    See `src/channels/thread-participants.ts` and design/participant-model.md §3.
+  - *Storage.* `thread-participants.json` records, per thread, the humans heard (capped at two — the
+    rule only asks whether a second one exists) and whether this agent has spoken. Observations only
+    ever accumulate: no platform emits an event when someone stops taking part, and the error
+    directions are asymmetric — over-counting makes the agent ask to be named, under-counting makes it
+    speak into a crowd. Because nothing is fetched, acceptance stays synchronous inside the ACK
+    window and the delivery dedup ring alone keeps a re-push idempotent.
 - **Group visibility is scope-gated and chosen during onboarding.** `Context-aware groups`
   (recommended and initially selected) requests the sensitive `im:message.group_msg` scope;
   `Mention-only` is the least-privilege alternative. The CLI states that the former delivers all group
   messages, adds it to the app draft through application-v7 config when supported, opens tenant-admin
-  approval, and reports the granted capability again at serving startup. Explicit @bot turns always invoke; bare
-  human messages invoke only in `chat_id + root_id` roots from the durable ownership index. Other human
-  discussion is persisted in `buffers.json`, bucketed by main chat or thread root, and folded into that
+  approval, and reports the granted capability again at serving startup. A mention arriving before the
+  startup `bot/v3/info` settles is kept as context rather than answered (fail-closed: without its own
+  open_id the channel cannot tell a mention of itself from one of someone else) and is folded into the
+  next answered turn in that place. Explicit @bot turns always invoke; bare
+  human messages invoke only under the thread-participation rule above. Other human
+  discussion is persisted in `buffers.json`, bucketed by main chat or thread, and folded into that
   place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only
   on `completed`, and retain failures plus messages arriving in-flight. Non-`user` senders are dropped.
   Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved). A reply summon

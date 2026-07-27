@@ -128,8 +128,10 @@ describe("summon + route policy", () => {
 
 describe("envelope + keys", () => {
   it("placeKey: chat, or chat:topic in a topic group", () => {
-    expect(placeKey(msg())).toBe("oc_1");
-    expect(placeKey(msg({ thread_id: "omt_9" }))).toBe("oc_1:omt_9");
+    expect(placeKey("feishu", msg())).toBe("feishu:oc_1");
+    expect(placeKey("feishu", msg({ thread_id: "omt_9" }))).toBe("feishu:oc_1:omt_9");
+    // Branded per channel: a shared state root must not merge two tenants' id spaces.
+    expect(placeKey("lark", msg())).toBe("lark:oc_1");
   });
 
   it("senderLabel prefers open_id and degrades through the id tiers", () => {
