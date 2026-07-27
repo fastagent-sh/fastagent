@@ -10,8 +10,8 @@ import { decodeFeishuContent } from "./normalize.ts";
 
 export type { FeishuMention, FeishuMessage, FeishuMessageEvent, FeishuRoute, FeishuSender };
 
-/** Legacy compatibility shape returned by {@link parseContent}. New internal code consumes normalized
- * resource refs, which retain resource kind + carrying message id. */
+/** A resource reduced to what a caller needs to fetch and name it — the kind and carrying message id
+ * that {@link decodeFeishuContent} attaches are supplied by the caller's own context. */
 interface FeishuAttachmentRef {
   key: string;
   name?: string;
@@ -24,8 +24,9 @@ export interface ParsedFeishuContent {
 }
 
 /**
- * Compatibility decoder for existing helpers/tests and parent-message resolution. The canonical
- * decoder now emits typed resources; this wrapper projects them onto the historical parallel arrays.
+ * The decoder projected onto flat per-kind arrays, for callers that resolve a message on their own
+ * (the prompt envelope, and the quoted parent whose resources are carried by the PARENT message id).
+ * `decodeFeishuContent` stays canonical: this only reshapes what it returns.
  */
 export function parseContent(
   message: Pick<FeishuMessage, "message_type" | "content" | "mentions">,

@@ -86,9 +86,8 @@ interface StoredFeishuTurn {
   seq: number;
   session: string;
   baseText: string;
-  /** Context-buffer bucket to fold at dequeue (main chat, or this message's thread root). Optional only
-   *  for recovery compatibility with turn records written before context buffering existed. */
-  bufferKey?: string;
+  /** Context-buffer bucket to fold at dequeue (main chat, or this message's thread root). */
+  bufferKey: string;
   chatId: string;
   replyTo?: string;
   /** Source message to quote when queue feedback mounts. Unlike `replyTo`, this is also set for a p2p
@@ -114,7 +113,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     typeof r.seq === "number" &&
     typeof r.session === "string" &&
     typeof r.baseText === "string" &&
-    (r.bufferKey === undefined || typeof r.bufferKey === "string") &&
+    typeof r.bufferKey === "string" &&
     typeof r.chatId === "string" &&
     (r.replyTo === undefined || typeof r.replyTo === "string") &&
     (r.queueReplyTo === undefined || typeof r.queueReplyTo === "string") &&
@@ -128,8 +127,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
 
 /** One accepted turn: the persisted intent plus live-only fields. The mounted queue card/text is not
  *  persisted; a replayed turn mounts a fresh preview because an old card may have expired. */
-interface PendingFeishuTurn extends Omit<StoredFeishuTurn, "attempts" | "bufferKey"> {
-  bufferKey: string;
+interface PendingFeishuTurn extends Omit<StoredFeishuTurn, "attempts"> {
   /** The queue-status card/text, when its delayed mount fired. The turn's preview takes it over. */
   preview?: MountedFeishuPreview;
 }
@@ -149,8 +147,6 @@ interface FeishuChannelBaseOptions {
    *  `https://open.feishu.cn`; Lark factories default to `https://open.larksuite.com`. Named to match
    *  the other channels (telegram/slack). */
   apiBaseUrl?: string;
-  /** @deprecated Alias of {@link apiBaseUrl}; kept for existing feishu/lark channel files. */
-  baseUrl?: string;
   /** How long (ms) a turn waits before its reply-quoted "⏳ Queued" card mounts. Defaults to 0
    *  (immediate); the same card is later taken over by the live preview/final answer. */
   queueNoticeDelayMs?: number;
@@ -211,7 +207,7 @@ function createFeishuRuntimeFactory(
   factoryName: string,
 ): (ctx: ChannelContext) => FeishuRuntime {
   const { appId, appSecret, route, onError, queueNoticeDelayMs = QUEUE_NOTICE_DELAY_MS } = opts;
-  const baseUrl = opts.apiBaseUrl ?? opts.baseUrl ?? profile.apiBase;
+  const baseUrl = opts.apiBaseUrl ?? profile.apiBase;
   const { kind } = profile;
   const label = `[${kind}]`;
   return ({ agent, stateRoot, control }) => {
@@ -453,12 +449,7 @@ function createFeishuRuntimeFactory(
     const recovered = store.recover();
     if (recovered.length > 0) log.info(`${label} recovering ${recovered.length} unfinished turn(s) from a prior run`);
     let seqCounter = recovered.reduce((max, r) => Math.max(max, r.seq), 0);
-    for (const { attempts: _a, ...intent } of recovered) {
-      // A pre-buffer-version record has no trustworthy place identity. Give it an empty private bucket
-      // rather than risk consuming new main-chat context that arrived after this restart.
-      const bufferKey = intent.bufferKey ?? `${intent.chatId}:legacy-turn:${intent.id}`;
-      submit({ ...intent, bufferKey, preview: undefined }, false);
-    }
+    for (const { attempts: _a, ...intent } of recovered) submit({ ...intent, preview: undefined }, false);
 
     // Who the agent has heard in a thread decides whether a bare message addresses it (participant
     // model §3), and it comes from what this channel observed — see thread-participants.ts.
@@ -780,7 +771,7 @@ export function buildFeishuWebSocketChannel(
           kind: profile.kind,
           appId: opts.appId,
           appSecret: opts.appSecret,
-          domain: opts.apiBaseUrl ?? opts.baseUrl ?? profile.apiBase,
+          domain: opts.apiBaseUrl ?? profile.apiBase,
           onEvent: runtime.acceptEvent,
         },
         signal,

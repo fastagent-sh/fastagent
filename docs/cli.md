@@ -246,7 +246,7 @@ are the enable/disable source of truth.
 Slack scaffolds `channels/slack.ts` plus `tools/slack-send.ts`; `--group-behavior context|mentions`
 selects both runtime policy and manifest scopes/events, defaulting to context-aware `context`; choose
 `mentions` explicitly for least privilege. By default it opens Slack's App Configuration Token page,
-creates a new internal app with `agent_view`, native streams/tasks, and suggested prompts through
+creates a new internal app with `agent_view`, native Agent streaming, and suggested prompts through
 `apps.manifest.create`, installs it
 through OAuth, and writes rotating bot credentials + the Signing Secret to the gitignored `.env`. The configuration refresh token stays owner-readable
 under `<state root>/channels/slack/` and is used locally by `dev --tunnel` / `deploy --run` to update the

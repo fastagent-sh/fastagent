@@ -23,30 +23,6 @@ export interface SlackTarget {
   recipientTeamId?: string;
 }
 
-interface SlackMarkdownTextChunk {
-  type: "markdown_text";
-  text: string;
-}
-
-interface SlackTaskUpdateChunk {
-  type: "task_update";
-  id: string;
-  title: string;
-  status: "pending" | "in_progress" | "complete" | "error";
-}
-
-export type SlackStreamChunk = SlackMarkdownTextChunk | SlackTaskUpdateChunk;
-
-interface SlackStreamContent {
-  markdownText?: string;
-  chunks?: SlackStreamChunk[];
-}
-
-/** How Slack lays out task cards in a native stream (chat.startStream `task_display_mode`): `timeline`
- *  lists steps sequentially, `plan` groups them under one heading, `dense` collapses consecutive tool
- *  calls into one summarized card. */
-export type SlackTaskDisplayMode = "timeline" | "plan" | "dense";
-
 export interface DownloadedSlackFile {
   path: string;
   name: string;
@@ -109,13 +85,9 @@ export interface SlackApi {
   updateMarkdown(channelId: string, ts: string, markdown: string): Promise<void>;
   deleteMessage(channelId: string, ts: string): Promise<void>;
   sendMarkdown(target: SlackTarget, markdown: string): Promise<string | undefined>;
-  startStream(
-    target: SlackTarget,
-    content?: SlackStreamContent,
-    taskDisplayMode?: SlackTaskDisplayMode,
-  ): Promise<string>;
-  appendStream(channelId: string, ts: string, content: SlackStreamContent): Promise<void>;
-  stopStream(channelId: string, ts: string, content?: SlackStreamContent): Promise<void>;
+  startStream(target: SlackTarget, markdown?: string): Promise<string>;
+  appendStream(channelId: string, ts: string, markdown: string): Promise<void>;
+  stopStream(channelId: string, ts: string, markdown?: string): Promise<void>;
   setThreadStatus(target: SlackTarget, status: string): Promise<void>;
   setThreadTitle(target: SlackTarget, title: string): Promise<void>;
   addReaction(channelId: string, timestamp: string, emoji: string): Promise<void>;
@@ -176,15 +148,6 @@ export function chunkSlackMarkdown(markdown: string, maxPoints = SLACK_MAX_MARKD
     output.push(`${prefix}${raw}${suffix}`);
   }
   return output;
-}
-
-/** Slack locks a stream to top-level `markdown_text` or `chunks` mode on its first write. Tasks need
- * chunks, so encode text as markdown chunks too; mixing the two modes yields `streaming_mode_mismatch`. */
-function streamChunks(content: SlackStreamContent): SlackStreamChunk[] {
-  return [
-    ...(content.markdownText ? ([{ type: "markdown_text", text: content.markdownText }] as const) : []),
-    ...(content.chunks ?? []),
-  ];
 }
 
 function safeFileName(file: SlackFile): string {
@@ -391,7 +354,7 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       }
       return first;
     },
-    async startStream(target, content = {}, taskDisplayMode = "plan") {
+    async startStream(target, markdown) {
       if (!target.threadTs) throw new Error("Slack native streams require a parent thread timestamp");
       const channelRecipient = target.channelId.startsWith("D")
         ? {}
@@ -402,31 +365,23 @@ export function createSlackApi({ botToken, baseUrl = "https://slack.com/api" }: 
       if (!target.channelId.startsWith("D") && (!target.recipientUserId || !target.recipientTeamId)) {
         throw new Error("Slack native channel streams require recipient user and team IDs");
       }
-      const chunks = streamChunks(content);
       const data = await call<SlackBody & { ts?: string }>("chat.startStream", {
         channel: target.channelId,
         thread_ts: target.threadTs,
-        task_display_mode: taskDisplayMode,
         ...channelRecipient,
-        ...(chunks.length ? { chunks } : {}),
+        ...(markdown ? { markdown_text: markdown } : {}),
       });
       if (!data.ts) throw new SlackApiError("chat.startStream", 200, "response carried no ts");
       return data.ts;
     },
-    async appendStream(channelId, ts, content) {
-      const chunks = streamChunks(content);
-      await call("chat.appendStream", {
-        channel: channelId,
-        ts,
-        ...(chunks.length ? { chunks } : {}),
-      });
+    async appendStream(channelId, ts, markdown) {
+      await call("chat.appendStream", { channel: channelId, ts, markdown_text: markdown });
     },
-    async stopStream(channelId, ts, content = {}) {
-      const chunks = streamChunks(content);
+    async stopStream(channelId, ts, markdown) {
       await call("chat.stopStream", {
         channel: channelId,
         ts,
-        ...(chunks.length ? { chunks } : {}),
+        ...(markdown ? { markdown_text: markdown } : {}),
       });
     },
     async setThreadStatus(target, status) {
