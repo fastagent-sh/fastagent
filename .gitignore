@@ -1,6 +1,6 @@
-node_modules/
-dist/
-.fastagent/
+node_modules
+dist
+.fastagent
 .env
 .env.*
 !.env.example
