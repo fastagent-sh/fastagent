@@ -7,7 +7,7 @@
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { controlRoutes } from "../src/channels/control.ts";
 import { createPiAgentFromHarness, inProcessLease } from "../src/engines/pi/invoke.ts";
@@ -506,6 +506,32 @@ describe("session control over HTTP (Phase 3)", () => {
       // Without a hub: passthrough, no file side effects.
       const off = mountSessionControl(base, undefined, stateRoot);
       expect(off.routes).toBe(base);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a bind address lands in the discovery url and a loopback bind drops the LAN warning", async () => {
+    const { mkdtemp, rm, readFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { mountSessionControl } = await import("../src/cli/serve.ts");
+    const { log } = await import("../src/log.ts");
+    const root = await mkdtemp(join(tmpdir(), "fa-ctl-bind-"));
+    try {
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+      const url = (host: string | undefined, stateRoot: string) => {
+        mountSessionControl({}, control, stateRoot, { host }).announce(9000);
+        return readFile(join(stateRoot, "control.json"), "utf8").then((s) => (JSON.parse(s) as { url: string }).url);
+      };
+      expect(await url("127.0.0.1", join(root, "a"))).toBe("http://127.0.0.1:9000");
+      expect(warn).not.toHaveBeenCalled(); // loopback is not LAN-reachable — nothing to warn about
+      // A specific non-wildcard bind is only reachable as itself: the client must dial that address.
+      expect(await url("192.168.1.5", join(root, "b"))).toBe("http://192.168.1.5:9000");
+      expect(await url(undefined, join(root, "c"))).toBe("http://127.0.0.1:9000"); // wildcard accepts loopback
+      expect(warn).toHaveBeenCalledTimes(2);
+      warn.mockRestore();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

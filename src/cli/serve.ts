@@ -13,6 +13,7 @@ import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
 import { text } from "../channels/respond.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/channel.ts";
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
+import { answersLocalhost, classifyBind, clientHost } from "../bind.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "../host/node.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -21,7 +22,7 @@ import type { LoadedSchedule } from "../schedule/schedule.ts";
 import { createScheduler, fireScheduleOnce } from "../schedule/scheduler.ts";
 import type { SessionControl } from "../session.ts";
 import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
-import { failStartup } from "./fail.ts";
+import { failStartup, failUsage } from "./fail.ts";
 
 export interface ServingSurface {
   routes: Routes;
@@ -95,7 +96,7 @@ export function mountSessionControl(
   routes: Routes,
   control: SessionControl | undefined,
   stateRoot: string,
-  options: { tunnel?: boolean; agent?: Agent } = {},
+  options: { tunnel?: boolean; agent?: Agent; host?: string } = {},
 ): { routes: Routes; announce: (boundPort: number) => void } {
   if (!control) return { routes, announce: () => {} };
   const token = crypto.randomUUID();
@@ -122,17 +123,24 @@ export function mountSessionControl(
       // Atomic (tmp+rename, the state.ts pattern): attach re-reads this file exactly during the
       // restart window — a torn read would be misdiagnosed as "serve gone".
       const tmp = `${path}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify({ url: `http://127.0.0.1:${boundPort}`, token })}\n`, { mode: 0o600 });
+      writeFileSync(tmp, `${JSON.stringify({ url: `http://${clientHost(options.host)}:${boundPort}`, token })}\n`, {
+        mode: 0o600,
+      });
       chmodSync(tmp, 0o600); // an existing file keeps its old mode on rewrite — pin it
       renameSync(tmp, path);
       log.info(`[fastagent] session control on /control/* (token in ${path})`);
-      // The serve binds ALL interfaces (containers require it), so /control/* is LAN-reachable
-      // with the bearer token as the only protection — the tunnel and deploy paths warn loudly,
-      // and the LAN path must not be the silent third way past the local trust story.
-      log.warn(
-        "[fastagent] the port binds all interfaces: /control/* is reachable on your LAN, protected only by " +
-          "the bearer token — firewall the port or wrap it for real exposure (docs: design §14)",
-      );
+      // The serve binds ALL interfaces by DEFAULT (containers require it), so /control/* is
+      // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths warn
+      // loudly, and the LAN path must not be the silent third way past the local trust story. A
+      // loopback bind closes exactly that reach, so it earns silence.
+      const bind = classifyBind(options.host);
+      if (bind !== "loopback") {
+        log.warn(
+          `[fastagent] the port binds ${bind === "wildcard" ? "all interfaces" : `${options.host} (off this machine)`}: ` +
+            "/control/* is reachable on your LAN, protected only by the bearer token — bind loopback " +
+            "(--bind 127.0.0.1), firewall the port, or wrap it for real exposure (docs: design §14)",
+        );
+      }
       if (options.tunnel) {
         // Local trust = the token + its file permissions; --tunnel takes the whole port PUBLIC
         // (beyond even the LAN reach the mount already warned about). The operator asked for the tunnel (webhooks), but must not DISCOVER the control
@@ -218,12 +226,39 @@ export function mountAgentcore(
 }
 
 /**
+ * Refuse `--tunnel` with a bind that cloudflared cannot reach: it dials the NAME `localhost:<port>`
+ * (the dev supervisor's tunnel too), so anything outside `127.0.0.1`/`::1`/wildcard — including a
+ * `127.0.0.2` bind, loopback though it is — would leave the tunnel up and 502ing every request.
+ * Checked BEFORE the bind (the flag alone pre-spawn in `dev`, again once config is loaded, since
+ * `http.host` can carry the address), so the failure is clean rather than a live-but-broken public URL.
+ * `source` decides the exit code, per fail.ts: a flag COMBINATION is a usage error (2), a value that
+ * came from config is broken runtime configuration (1).
+ */
+export function assertTunnelBindable(host: string | undefined, tunnel: boolean, source: "flag" | "config"): void {
+  if (!tunnel || answersLocalhost(host)) return;
+  // Name the source, not just the exit code: under `config` there is no `--bind` to change and no flag
+  // to drop, so flag-only wording would send the reader looking for something they never typed.
+  const fix =
+    source === "flag"
+      ? "bind 0.0.0.0 (or 127.0.0.1), or drop --tunnel"
+      : 'set http.host to 0.0.0.0 (or 127.0.0.1) in fastagent.config.*, override it with --bind, or drop --tunnel';
+  const message = `--tunnel reaches the serve by dialing localhost, which the bind address ${host} does not answer — ${fix}`;
+  if (source === "flag") failUsage(message);
+  failStartup(new Error(message));
+}
+
+/**
  * Bind HTTP, open long-connection channels, and report ready only when both forms are usable. Each
  * adapter owns reconnects; a terminal close rejects `closed` and fails the process visibly. Abort is
- * the sole clean-shutdown command.
+ * the sole clean-shutdown command. `host` unset binds all interfaces.
  */
-export function serve(surface: ServingSurface, port: number, onListening?: (boundPort: number) => void): void {
-  const hosted = serveNode(router(surface.routes), { port });
+export function serve(
+  surface: ServingSurface,
+  bind: { port: number; host?: string },
+  onListening?: (boundPort: number) => void,
+): void {
+  const { port, host } = bind;
+  const hosted = serveNode(router(surface.routes), { port, host });
   const abort = new AbortController();
   let stopping = false;
 
@@ -283,7 +318,14 @@ export function serve(surface: ServingSurface, port: number, onListening?: (boun
           port: boundPort,
           routeChannels: surface.routeChannels,
         });
-        log.info(`[fastagent] http host on :${boundPort}`);
+        // Report the BIND: a wildcard bind is every interface, and naming one address there would
+        // understate it. For an explicit bind, address and dial target coincide — clientHost is used
+        // only for its URL form (IPv6 brackets).
+        log.info(
+          `[fastagent] http host on ${
+            classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : `${clientHost(host)}:${boundPort}`
+          }`,
+        );
         log.info(`[fastagent] routes: ${Object.keys(surface.routes).join(", ") || "(none)"}`);
         if (surface.longConnections.length > 0) {
           log.info(
@@ -305,9 +347,17 @@ export function serve(surface: ServingSurface, port: number, onListening?: (boun
       }
     },
     (error: NodeJS.ErrnoException) => {
-      if (error.code === "EADDRINUSE")
-        failStartup(new Error(`port ${port} is already in use; choose another with --port`));
-      failStartup(new Error(`cannot bind http channel on :${port}: ${error.message}`));
+      if (error.code === "EADDRINUSE") {
+        // With a bind address the port is only taken ON THAT interface, so moving the bind is as valid
+        // a fix as moving the port.
+        failStartup(
+          new Error(
+            `${classifyBind(host) === "wildcard" ? `port ${port}` : `${clientHost(host)}:${port}`} is already ` +
+              `in use; choose another with --port${classifyBind(host) === "wildcard" ? "" : " or --bind"}`,
+          ),
+        );
+      }
+      failStartup(new Error(`cannot bind http channel on ${host ?? ""}:${port}: ${error.message}`));
     },
   );
 }

@@ -18,11 +18,20 @@ import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { maybeTunnel, mountAgentcore, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
-import { parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
+import {
+  assertTunnelBindable,
+  maybeTunnel,
+  mountAgentcore,
+  mountSessionControl,
+  routesFor,
+  serve,
+  startSchedules,
+} from "../serve.ts";
+import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
+  bind?: string;
   model?: string;
   sessionsDir?: string;
   authPath?: string;
@@ -37,6 +46,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // the directory being an agent (which is a runtime/environment failure, exit 1).
   const portFlag = parsePort(opts.port, "--port", "flag");
   const placement = placementOrExit(dir);
+  const bindFlag = parseBind(opts.bind);
   setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
   loadDotEnv(placement.agentDir);
   installProxyFetch();
@@ -122,9 +132,12 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const routed = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: !agentcore }).catch(
     failStartup,
   );
+  const host = bindFlag ?? config.http?.host;
+  assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
   const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
     tunnel: opts.tunnel ?? false,
     agent: traced,
+    host,
   });
   // AgentCore + selfSchedule: register the wake-ALARM sink BEFORE the scheduler starts — the boot
   // wake pump may advance a recurring entry (a store save) and that save must already re-arm its
@@ -162,7 +175,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   }
   serve(
     { ...routed, routes },
-    portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787,
+    { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? config.http?.port ?? 8787, host },
     (p) => {
       withControl.announce(p);
       maybeTunnel(agentDir, routed.routeChannels, p, opts.tunnel ?? false, stateRoot);

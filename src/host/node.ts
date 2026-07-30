@@ -79,15 +79,16 @@ export function router(routes: Routes): ChannelHandler {
  * Serve `handler` on a Node HTTP server. Thin mechanism: bind, report the port, let the caller stop
  * accepting or force-close active connections — no logging/signals/exit (the CLI owns those).
  * `listening` resolves with the bound port (useful for port 0) or rejects on a bind error.
+ * `host` is the bind address; unset means all interfaces (what containers need).
  */
 export function serveNode(
   handler: ChannelHandler,
-  options: { port: number },
+  options: { port: number; host?: string },
 ): { listening: Promise<number>; close: () => Promise<void>; closeAllConnections: () => void } {
   const server = createServer(nodeListener(async (req) => handler(req)));
   const listening = new Promise<number>((resolve, reject) => {
     server.once("error", reject); // a bind failure surfaces here, before "listening"
-    server.listen(options.port, () => {
+    server.listen({ port: options.port, host: options.host }, () => {
       server.off("error", reject);
       resolve((server.address() as AddressInfo).port);
     });

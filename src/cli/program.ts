@@ -29,6 +29,10 @@ const NO_INPUT: FlagSpec = {
   description: "never prompt (CI/scripts) — missing information becomes an error instead of a question",
 };
 const PORT: FlagSpec = { flags: "--port <n>", description: "HTTP port" };
+const BIND: FlagSpec = {
+  flags: "--bind <addr>",
+  description: "bind address (default: all interfaces; 127.0.0.1 keeps it off the LAN)",
+};
 const TUNNEL: FlagSpec = {
   flags: "--tunnel",
   description:
@@ -94,6 +98,7 @@ const dev: CommandSpec = {
   args: [DIR_ARG],
   flags: [
     PORT,
+    BIND,
     MODEL,
     AUTH_PATH,
     { flags: "--no-watch", description: "serve once, no file-watching" },
@@ -107,6 +112,7 @@ const dev: CommandSpec = {
   run: async (args, f) =>
     (await import("./commands/dev.ts")).runDev(args[0] as string, {
       port: f.port as string | undefined,
+      bind: f.bind as string | undefined,
       model: f.model as string | undefined,
       authPath: f.authPath as string | undefined,
       watch: f.watch !== false,
@@ -251,6 +257,7 @@ const start: CommandSpec = {
   args: [DIR_ARG],
   flags: [
     PORT,
+    BIND,
     MODEL,
     { flags: "--sessions-dir <dir>", description: "sessions directory override" },
     AUTH_PATH,
@@ -264,6 +271,7 @@ const start: CommandSpec = {
   notes:
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
+    "  bind:     --bind > fastagent.config.ts http.host > all interfaces\n" +
     "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state — mutable machine state\n" +
     "            (sessions, channel state, schedule state); point it at a mounted\n" +
     "            volume so a redeploy that replaces the directory never wipes it\n" +
@@ -275,6 +283,7 @@ const start: CommandSpec = {
   run: async (args, f) =>
     (await import("./commands/start.ts")).runStart(args[0] as string, {
       port: f.port as string | undefined,
+      bind: f.bind as string | undefined,
       model: f.model as string | undefined,
       sessionsDir: f.sessionsDir as string | undefined,
       authPath: f.authPath as string | undefined,

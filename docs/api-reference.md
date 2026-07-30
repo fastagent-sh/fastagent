@@ -86,7 +86,8 @@ JSON.
 ```ts
 function nodeListener(handler: (req: Request) => Promise<Response>): (req, res) => void;
 function router(routes: Routes): ChannelHandler;
-function serveNode(handler: ChannelHandler, options: { port: number }): {
+// `host` is the bind address; unset binds all interfaces (what containers need).
+function serveNode(handler: ChannelHandler, options: { port: number; host?: string }): {
   listening: Promise<number>;
   close(): Promise<void>;
   closeAllConnections(): void;

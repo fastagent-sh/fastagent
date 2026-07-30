@@ -206,6 +206,18 @@ describe("config: loadConfig", () => {
     await expect(loadConfig(dir)).rejects.toThrow(/"http\.port" must be an integer/);
   });
 
+  it("http.host: an IP literal loads, an unbindable string throws at load (not at listen time)", async () => {
+    const load = async (body: string) => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
+      await writeFile(join(dir, "fastagent.config.mjs"), body);
+      return loadConfig(dir);
+    };
+    expect((await load(`export default { http: { host: "127.0.0.1" } };`)).config.http?.host).toBe("127.0.0.1");
+    await expect(load(`export default { http: { host: "banana" } };`)).rejects.toThrow(
+      /"http\.host" must be an IP address/,
+    );
+  });
+
   it("thinkingLevel: a valid pi level loads; an invalid value throws (fail visibly, not a silent default)", async () => {
     const load = async (body: string) => {
       const dir = await mkdtemp(join(tmpdir(), "fa-config-"));

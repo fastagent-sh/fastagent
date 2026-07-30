@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Agent } from "../src/agent.ts";
 import { mountAgentcore, routesFor } from "../src/cli/serve.ts";
 import { text } from "../src/channels/respond.ts";
@@ -85,5 +85,42 @@ describe("mountAgentcore", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ fired: true });
     process.env.FASTAGENT_INGRESS_SECRET = undefined;
+describe("cli: bind address policy", () => {
+  /** Both policies end in process.exit — trade it for a throw so the exit CODE is assertable. */
+  const exits = (fn: () => void): number | undefined => {
+    const spy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      fn();
+      return undefined;
+    } catch (e) {
+      // Only the injected exit is an outcome; a real throw is a bug and must not read as "accepted".
+      if (spy.mock.calls.length === 0) throw e;
+      return spy.mock.calls[0]?.[0] as number | undefined;
+    } finally {
+      spy.mockRestore();
+      quiet.mockRestore();
+    }
+  };
+
+  it("parseBind: an unbindable value is a usage error (2), a valid one passes through", async () => {
+    const { parseBind } = await import("../src/cli/shared.ts");
+    expect(parseBind(undefined)).toBeUndefined();
+    expect(parseBind("  ")).toBeUndefined(); // "not set", so the config/default chain still applies
+    expect(parseBind("127.0.0.1")).toBe("127.0.0.1");
+    expect(exits(() => parseBind("banana"))).toBe(2);
+  });
+
+  it("assertTunnelBindable: --tunnel refuses a bind localhost cannot reach; the source picks the exit code", async () => {
+    const { assertTunnelBindable } = await import("../src/cli/serve.ts");
+    expect(exits(() => assertTunnelBindable("192.168.1.5", true, "config"))).toBe(1); // startup failure
+    expect(exits(() => assertTunnelBindable("192.168.1.5", false, "flag"))).toBeUndefined(); // no tunnel, no conflict
+    expect(exits(() => assertTunnelBindable("127.0.0.1", true, "flag"))).toBeUndefined();
+    expect(exits(() => assertTunnelBindable("::1", true, "flag"))).toBeUndefined(); // localhost resolves to it
+    // Loopback yet NOT what `localhost` resolves to — the tunnel would 502, so it is refused.
+    expect(exits(() => assertTunnelBindable("127.0.0.2", true, "flag"))).toBe(2); // a flag combination = usage
+    expect(exits(() => assertTunnelBindable(undefined, true, "flag"))).toBeUndefined();
   });
 });

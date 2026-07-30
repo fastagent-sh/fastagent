@@ -24,6 +24,7 @@ import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } fr
 import { formatAuthReport } from "./auth-view.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
+import { isBindAddress } from "../bind.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
 /**
@@ -65,6 +66,18 @@ export function parsePort(value: string | undefined, source: string, from: "flag
     failStartup(new Error(message));
   }
   return Number(trimmed);
+}
+
+/**
+ * Parse a `--bind` address: empty/whitespace is "not set" → undefined (the `??` chain falls through to
+ * config, then all interfaces). An unbindable string is a USAGE error (2) — caught here rather than as
+ * a node bind failure, or worse, as a "the interface you bound" diagnostic downstream.
+ */
+export function parseBind(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (!isBindAddress(trimmed)) failUsage(`invalid --bind "${value}": must be an IP address or "localhost"`);
+  return trimmed;
 }
 
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. Non-blocking. */

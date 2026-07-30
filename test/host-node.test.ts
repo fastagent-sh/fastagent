@@ -29,6 +29,19 @@ describe("host/node: serveNode", () => {
     await host.close(); // caller-owned shutdown — releases the listening socket
   });
 
+  it("binds only the given host, leaving every other interface unserved", async () => {
+    const { networkInterfaces } = await import("node:os");
+    const host = serveNode(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
+    const port = await host.listening;
+    expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
+    const lan = Object.values(networkInterfaces())
+      .flat()
+      .find((i) => i?.family === "IPv4" && !i.internal)?.address;
+    // The bind is the point: a LAN address must NOT answer (skipped on a box with no LAN interface).
+    if (lan) await expect(fetch(`http://${lan}:${port}/`)).rejects.toThrow();
+    await host.close();
+  });
+
   it("can force-close an active request instead of waiting for the handler to drain", async () => {
     let entered!: () => void;
     const handling = new Promise<void>((resolve) => {

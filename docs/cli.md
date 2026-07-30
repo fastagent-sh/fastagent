@@ -112,7 +112,7 @@ prints the provider's message.
 ## `fastagent dev`
 
 ```bash
-fastagent dev [dir] [--port N] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel] [--no-input]
+fastagent dev [dir] [--port N] [--bind addr] [--model provider/modelId] [--auth-path file] [--no-watch] [--tunnel] [--no-input]
 ```
 
 Assembles the agent and serves it locally. persona.md/AGENTS.md/`skills/` are re-read every turn (edits go
@@ -287,7 +287,7 @@ Use `--update` to overwrite an existing vendored skill. Review the result with `
 ## `fastagent start`
 
 ```bash
-fastagent start [dir] [--port N] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel] [--no-input]
+fastagent start [dir] [--port N] [--bind addr] [--model provider/modelId] [--sessions-dir dir] [--auth-path file] [--tunnel] [--no-input]
 ```
 
 Runs the agent in production posture: no watch, same assembly as `dev`.
@@ -296,6 +296,12 @@ Port precedence:
 
 ```txt
 --port > PORT > fastagent.config.* http.port > 8787
+```
+
+Bind precedence (same for `dev`):
+
+```txt
+--bind > fastagent.config.* http.host > all interfaces
 ```
 
 Session directory precedence:
@@ -339,6 +345,7 @@ Recurring per-command options (same meaning everywhere they appear):
 
 | Option | Commands | Meaning |
 |---|---|---|
+| `--bind <addr>` | `dev`, `start` | Bind address. Default: all interfaces (containers need it); `127.0.0.1` keeps the port, `/control/*` included, off the LAN. Prefer this flag over `http.host` for a local-only bind — config travels into a deployed image, where `deploy` gates it. See [Bind address](configuration.md#bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
 | `--model <provider/modelId>` | assembly commands | Model override (`--model > FASTAGENT_MODEL > config`). |
 | `--auth-path <file>` | assembly commands, `login` | Credentials file override. |

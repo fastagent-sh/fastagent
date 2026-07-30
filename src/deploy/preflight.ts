@@ -12,6 +12,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
+import { classifyBind } from "../bind.ts";
 import type { FastagentConfig } from "../engines/pi/config.ts";
 import { resolveAuthPath } from "../engines/pi/config.ts";
 import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
@@ -416,6 +417,23 @@ export async function preflightDeploy(input: {
     shipsGit,
   };
   const port = config.http?.port ?? 8787;
+  // `http.host` travels in the artifact (config is what deploy ships), and any non-wildcard value that
+  // is right on a laptop is wrong in a container: the wildcard bind is what makes the published port,
+  // the health check and webhook ingress reachable at all. `--bind` is the local-only knob; config is not.
+  const configBind = classifyBind(config.http?.host);
+  if (configBind !== "wildcard") {
+    const issue =
+      `fastagent.config.ts sets http.host: "${config.http?.host}" — it travels into the image, where ` +
+      (configBind === "loopback"
+        ? `nothing outside the container can reach the serve (published port, health check, webhooks).`
+        : `that address does not exist, so the container fails to bind at start.`) +
+      ` Drop it and use \`--bind ${config.http?.host}\` locally instead.`;
+    // Same disposition as the model-travel issue: warn when producing artifacts (the operator may be
+    // deploying somewhere that fronts the port), gate `--run` — which would otherwise ship a box that
+    // answers nothing, or crash-loops on a bind that cannot resolve inside the container.
+    if (run) return { ok: false, gate: issue };
+    messages.push({ level: "warn", text: issue });
+  }
   // What the agent declared it needs on the box (fastagent.config deploy.secrets) — carried like channel
   // secrets: listed in the runbook, set from the local env under --run, gated if a value is missing.
   const extraSecrets = config.deploy?.secrets ?? [];
