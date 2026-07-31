@@ -482,7 +482,13 @@ function isOurArtifact(path: string, content: string): boolean {
   return false;
 }
 
-async function writeArtifacts(
+/**
+ * Write the plan's artifacts under `target`, honouring the ownership rule: a file we did not generate is
+ * never touched, ours is kept unless `--force`. Exported for its own test — this is a four-branch state
+ * machine over (exists, ours, force) that used to be proven by spawning the CLI eight times, which is
+ * command LOGIC re-run through a subprocess (see vitest.config.ts) and the suite's slowest test.
+ */
+export async function writeArtifacts(
   target: string,
   artifacts: { path: string; content: string }[],
   options: { force: boolean; alwaysWrite?: string[] },
