@@ -6,7 +6,6 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { inMemorySessionStore, jsonlSessionStore, type PiSessionStore } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
@@ -20,7 +19,7 @@ function piAgent(responses: FauxResponseStep[], sessions: PiSessionStore = inMem
   return createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       systemPrompt: "test",
@@ -38,7 +37,7 @@ describeSpecConformance("pi reference implementation (faux model, full L0 compos
     faux.setResponses([fauxAssistantMessage("a long answer that streams out slowly")]);
     const inner = piHarnessFactory({
       sessions: inMemorySessionStore(),
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       systemPrompt: "test",

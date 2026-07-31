@@ -214,7 +214,6 @@ function buildPiAgent(opts: {
   const lease = opts.lease ?? inProcessLease();
   const harnessFactory = piHarnessFactory({
     sessions: opts.sessions ?? inMemorySessionStore(),
-    env,
     models,
     model: resolveModel(models, opts.model),
     thinkingLevel: opts.thinkingLevel,
@@ -309,7 +308,6 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
     tools: options.tools ? withSearchTool(options.tools) : options.tools,
     skills: options.skills,
     sessions: options.sessions,
-    env: options.env,
     lease: options.lease,
     observer: options.observer,
   });

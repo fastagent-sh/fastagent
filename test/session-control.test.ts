@@ -5,7 +5,6 @@
  * state), read-only observation (no session creation), and acceptance-vs-outcome on dispatch.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
@@ -51,7 +50,7 @@ function makeObserved(responses: FauxResponseStep[]) {
     observer,
     harnessFactory: piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       tools: [echoTool],
@@ -299,7 +298,7 @@ describe("session control (Phase 1): observation plane", () => {
       },
       harnessFactory: piHarnessFactory({
         sessions: inMemorySessionStore(),
-        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
         models,
         model: faux.getModel(),
         systemPrompt: "test",
@@ -399,7 +398,7 @@ function makeGated(responses: FauxResponseStep[]) {
     observer,
     harnessFactory: piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       tools: [gate.tool],
@@ -539,7 +538,7 @@ describe("session control (Phase 2a): run modulation", () => {
       },
       harnessFactory: piHarnessFactory({
         sessions: inMemorySessionStore(),
-        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
         models,
         model: faux.getModel(),
         systemPrompt: "test",
@@ -724,7 +723,7 @@ function makeBoundary(responses: FauxResponseStep[]) {
   const lease = inProcessLease();
   const factory = piHarnessFactory({
     sessions,
-    env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
     models,
     model: faux.getModel(),
     tools: [],
@@ -853,7 +852,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const gate = makeGate();
     const factory = piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       tools: [gate.tool],
@@ -1079,7 +1078,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const lease = inProcessLease();
     const factory = piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>, // assembly default
       tools: [],

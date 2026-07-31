@@ -7,7 +7,7 @@
  * historical entries back into context via buildContext().
  */
 import { AgentHarness } from "@earendil-works/pi-agent-core";
-import type { AgentTool, ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentTool, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
@@ -46,7 +46,6 @@ export type PiHarnessFactory = (session: string) => AgentHarness | Promise<Agent
 export interface PiHarnessFactoryOptions {
   /** Session persistence. Continuity = same backing store + same session id. */
   sessions: PiSessionStore;
-  env: ExecutionEnv;
   /** Provider collection for all model requests; {@link model} must belong to it (same provider id). */
   models: Models;
   model: AnyModel;
@@ -269,7 +268,6 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       sessionId,
     );
     const harness = new AgentHarness({
-      env: options.env,
       session,
       models: options.models,
       model: overrides.model,

@@ -6,7 +6,6 @@
  * never reach the consumer), and auth must fail closed.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { Type, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterAll, describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
@@ -40,7 +39,7 @@ async function serveControl() {
   };
   const factory = piHarnessFactory({
     sessions,
-    env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
     models,
     model: faux.getModel(),
     tools: [gate],
@@ -773,7 +772,7 @@ async function serveRemoteAgent(opts: {
     opts.harnessFactory ??
     piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       tools: opts.tools ?? [],

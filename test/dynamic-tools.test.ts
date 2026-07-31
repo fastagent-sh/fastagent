@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import type { AgentEvent } from "../src/agent.ts";
@@ -87,7 +86,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     faux.setResponses(responses);
     const factory = piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       tools: withSearchTool([echo(), weather()]),
@@ -199,7 +198,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     ]);
     const factory = piHarnessFactory({
       sessions: inMemorySessionStore(),
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       tools: withSearchTool(many),
@@ -232,7 +231,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     ]);
     const factory = piHarnessFactory({
       sessions: inMemorySessionStore(),
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       tools: withSearchTool(many),
@@ -281,7 +280,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     const sessions = inMemorySessionStore();
     const factory = piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       tools: [loader, weather()],

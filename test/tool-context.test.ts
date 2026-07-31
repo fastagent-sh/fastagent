@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import type { AgentEvent } from "../src/agent.ts";
@@ -32,7 +31,7 @@ describe("shared ToolContext session manager", () => {
       cwd: process.cwd(),
       harnessFactory: piHarnessFactory({
         sessions: inMemorySessionStore(),
-        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
         models,
         model: faux.getModel(),
         tools: [probe],

@@ -3,7 +3,6 @@ import { readdir } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { inMemorySessionStore, jsonlSessionStore, type AgentEvent, type PiSessionStore } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
@@ -17,7 +16,7 @@ function makeAgent(sessions: PiSessionStore, responses: FauxResponseStep[]) {
   return createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       systemPrompt: "test",

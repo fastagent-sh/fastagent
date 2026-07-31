@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { inMemorySessionStore } from "../src/index.ts";
 import { TOOL_ACTIVATION_ENTRY, piHarnessFactory, resolveHarnessActiveToolNames } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
@@ -22,7 +21,7 @@ describe("piHarnessFactory: provider retry wiring", () => {
     const { faux, models } = makeFaux();
     const factory = piHarnessFactory({
       sessions: inMemorySessionStore(),
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       systemPrompt: "test",
@@ -42,7 +41,7 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     const sessions = inMemorySessionStore();
     const factory = piHarnessFactory({
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       tools: [fakeTool("alpha"), deferred],
@@ -64,7 +63,7 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     const sessions = inMemorySessionStore();
     const base = {
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       systemPrompt: "test",
@@ -90,7 +89,7 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     const sessions = inMemorySessionStore();
     const base = {
       sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       systemPrompt: "test",
@@ -126,7 +125,7 @@ describe("piHarnessFactory: thinking-level wiring", () => {
     const { faux, models } = makeFaux();
     const factory = piHarnessFactory({
       sessions: inMemorySessionStore(),
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       thinkingLevel: "high",
@@ -142,7 +141,7 @@ describe("piHarnessFactory: thinking-level wiring", () => {
     const { faux, models } = makeFaux();
     const factory = piHarnessFactory({
       sessions: inMemorySessionStore(),
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       systemPrompt: "test",

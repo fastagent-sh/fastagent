@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { createInvokeHandler, nodeListener, inMemorySessionStore, type Agent, type AgentEvent } from "../src/index.ts";
 import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
@@ -16,7 +15,7 @@ function makeAgent(responses: FauxResponseStep[]): Agent {
   return createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
       sessions: inMemorySessionStore(),
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+
       models,
       model: faux.getModel(),
       systemPrompt: "test",
