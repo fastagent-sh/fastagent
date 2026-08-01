@@ -17,7 +17,6 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { piDefaultTools } from "../src/engines/pi/create.ts";
 
 /** Either implementation, called uniformly — core's takes the tool context, the coding-agent's ignores it. */
-// biome-ignore lint/suspicious/noExplicitAny: the two implementations differ in execute's arity by design — that IS the thing under test
 type Executable = { execute: (...args: any[]) => Promise<unknown> };
 
 /** What the MODEL sees of a tool — the whole contract this swap has to preserve. */
