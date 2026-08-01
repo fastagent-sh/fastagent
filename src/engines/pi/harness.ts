@@ -7,11 +7,11 @@
  * historical entries back into context via buildContext().
  */
 import { AgentHarness } from "@earendil-works/pi-agent-core";
-import type { AgentTool, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ExecutionEnv, ExecutionToolContext, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
-import { isDeferredTool } from "./tool.ts";
+import { isDeferredTool, type MountedTool } from "./tool.ts";
 
 /**
  * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred
@@ -27,9 +27,12 @@ export const TOOL_ACTIVATION_ENTRY = "fastagent:tool-activation";
  *  to write {@link TOOL_ACTIVATION_ENTRY} deltas (pi's harness keeps its session private). Absent for
  *  a harness built outside {@link piHarnessFactory}: activation still works in-turn there, but is not
  *  recorded — the factory owns persistence. */
-const harnessSessions = new WeakMap<AgentHarness, PiSession>();
+// Keyed by IDENTITY, so the key type is deliberately the structural minimum: the harness's context
+// parameter (pi 0.83) is irrelevant to "which session is this instance bound to", and naming a concrete
+// one here would make every caller's harness type have to match this map's.
+const harnessSessions = new WeakMap<object, PiSession>();
 export type PiSession = Awaited<ReturnType<PiSessionStore["openOrCreate"]>>;
-export function harnessSession(harness: AgentHarness): PiSession | undefined {
+export function harnessSession(harness: object): PiSession | undefined {
   return harnessSessions.get(harness);
 }
 
@@ -41,18 +44,26 @@ export function harnessSession(harness: AgentHarness): PiSession | undefined {
 export type AnyModel = Model<any>;
 
 /** Builds a pi harness bound to the given session — called once per invoke. */
-export type PiHarnessFactory = (session: string) => AgentHarness | Promise<AgentHarness>;
+/** The harness fastagent builds: context-typed on {@link ExecutionToolContext}, because that is what
+ *  pi's env-backed default tools read (pi 0.83). Custom tools are context-FREE and stay assignable — a
+ *  four-parameter `execute` satisfies the five-parameter one, so `defineTool` is untouched by this. */
+type PiHarness = AgentHarness<ExecutionToolContext>;
+export type PiHarnessFactory = (session: string) => PiHarness | Promise<PiHarness>;
 
 export interface PiHarnessFactoryOptions {
   /** Session persistence. Continuity = same backing store + same session id. */
   sessions: PiSessionStore;
+  /** Filesystem/process environment for the default coding tools. Handed to the harness as the TURN's
+   *  tool context (pi 0.83), which is how read/bash/edit/write reach the machine at all — so this is the
+   *  ONE seam a sandbox adapter implements, not a knob beside the tools that ignore it. */
+  env: ExecutionEnv;
   /** Provider collection for all model requests; {@link model} must belong to it (same provider id). */
   models: Models;
   model: AnyModel;
   /** Reasoning effort for the model (pi's scale). Unset = fastagent's pinned default ("medium", pi
    *  TUI parity — see {@link DEFAULT_THINKING_LEVEL}); unsupported levels are clamped by pi per model. */
   thinkingLevel?: ThinkingLevel;
-  tools?: AgentTool[];
+  tools?: MountedTool[];
   /**
    * Final assembled prompt, or a SYNC factory re-evaluated per invoke (how L1 serves dynamic
    * `instructions` + the skills listing). Distinct from {@link live}, which is the directory rung's
@@ -226,7 +237,7 @@ export function resolveHarnessOverrides(
 }
 export function resolveHarnessActiveToolNames(
   recorded: string[] | null,
-  tools: AgentTool[],
+  tools: MountedTool[],
   sessionId: string,
 ): string[] | undefined {
   const anyDeferred = tools.some(isDeferredTool);
@@ -267,7 +278,10 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
       { model: options.model, thinkingLevel: options.thinkingLevel ?? DEFAULT_THINKING_LEVEL },
       sessionId,
     );
-    const harness = new AgentHarness({
+    const harness = new AgentHarness<ExecutionToolContext>({
+      // Static, not a per-turn provider: the env is fixed for the agent's lifetime, and resolving a
+      // constant per turn would only add a promise to the turn's critical path.
+      toolContext: { env: options.env },
       session,
       models: options.models,
       model: overrides.model,

@@ -1,5 +1,6 @@
 /** `fastagent tool <name> '<json>' [dir]`: run one tool's body directly with JSON args — no model. */
 import { resolve } from "node:path";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadDotEnv } from "../../env.ts";
 import { loadConfig } from "../../engines/pi/config.ts";
 
@@ -18,9 +19,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   // The same tool set dev/start mount (defaults + config.tools + discovered, deduped), so the runner
   // exercises exactly what gets served — a shadowed tool is surfaced, not silently run. Resolve the
   // placement like the openers, so `fastagent tool` finds the SAME tools/ as dev/start.
-  const { tools, toolCollisions, toolFailures } = await resolveAgentTools(config, agentDir, workspace).catch(
-    failStartup,
-  );
+  const { tools, toolCollisions, toolFailures } = await resolveAgentTools(config, agentDir).catch(failStartup);
   for (const c of toolCollisions) {
     console.error(
       `[fastagent] warn: tool "${c.name}" (${c.source}) is shadowed by a default/config tool — not mounted`,
@@ -31,7 +30,14 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   if (!tool) {
     failStartup(new Error(`unknown tool "${name}". available: ${tools.map((t) => t.name).join(", ") || "(none)"}`));
   }
-  const result = await turnContext.run({ cwd: workspace }, () => tool.execute(`cli-${name}`, args)).catch(failStartup);
+  // Two contexts, because the two tool families read different ones and this command must serve both
+  // exactly as serving does: fastagent's own tools take cwd/session/activation from `turnContext`
+  // (AsyncLocalStorage), and pi's default coding tools take the ExecutionEnv from the harness's TOOL
+  // context — which no harness supplies here, so this stands in for it, rooted at the same workspace.
+  const env = new NodeExecutionEnv({ cwd: workspace });
+  const result = await turnContext
+    .run({ cwd: workspace }, () => tool.execute(`cli-${name}`, args, undefined, undefined, { env }))
+    .catch(failStartup);
   const out =
     result?.details !== undefined
       ? result.details

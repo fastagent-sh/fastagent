@@ -28,6 +28,7 @@ import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
 import { inProcessLease } from "../src/engines/pi/invoke.ts";
 import { resolveHarnessOverrides } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 const echoTool: AgentTool = {
   name: "echo",
@@ -49,6 +50,7 @@ function makeObserved(responses: FauxResponseStep[]) {
   const agent = createPiAgentFromHarness({
     observer,
     harnessFactory: piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
 
       models,
@@ -297,6 +299,7 @@ describe("session control (Phase 1): observation plane", () => {
         throw new Error("broken hub");
       },
       harnessFactory: piHarnessFactory({
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
         sessions: inMemorySessionStore(),
 
         models,
@@ -397,6 +400,7 @@ function makeGated(responses: FauxResponseStep[]) {
   const agent = createPiAgentFromHarness({
     observer,
     harnessFactory: piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
 
       models,
@@ -537,6 +541,7 @@ describe("session control (Phase 2a): run modulation", () => {
         if (ev.type === "run_started") captured = run;
       },
       harnessFactory: piHarnessFactory({
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
         sessions: inMemorySessionStore(),
 
         models,
@@ -722,6 +727,7 @@ function makeBoundary(responses: FauxResponseStep[]) {
   const sessions = inMemorySessionStore();
   const lease = inProcessLease();
   const factory = piHarnessFactory({
+    env: new NodeExecutionEnv({ cwd: process.cwd() }),
     sessions,
 
     models,
@@ -851,6 +857,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const lease = inProcessLease();
     const gate = makeGate();
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
 
       models,
@@ -1077,6 +1084,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const sessions = inMemorySessionStore();
     const lease = inProcessLease();
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
 
       models,

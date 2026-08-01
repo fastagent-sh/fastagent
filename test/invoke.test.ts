@@ -4,6 +4,7 @@ import {
   InMemorySessionRepo,
   type AgentTool,
   type SessionTreeEntry,
+  type ExecutionToolContext,
 } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxThinking, fauxToolCall, Type, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
@@ -19,6 +20,7 @@ import {
 } from "../src/engines/pi/invoke.ts";
 import { type PiHarnessFactory, piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 /** An echo tool for the tool-call path. */
 const echoTool: AgentTool = {
@@ -42,8 +44,8 @@ function makeAgent(responses: FauxResponseStep[]) {
   const sessions = inMemorySessionStore();
   const agent = createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
-
       models,
       model: faux.getModel(),
       tools: [echoTool],
@@ -116,6 +118,7 @@ describe("invoke fan-in", () => {
     const agent = createPiAgentFromHarness({
       cwd: process.cwd(),
       harnessFactory: piHarnessFactory({
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
         sessions: inMemorySessionStore(),
 
         models,
@@ -175,7 +178,8 @@ describe("invoke fan-in", () => {
         const { faux, models } = makeFaux();
         faux.setResponses([fauxAssistantMessage("a long answer streamed out")]);
         const session = await repo.create({ id: sessionId });
-        const harness = new AgentHarness({
+        const harness = new AgentHarness<ExecutionToolContext>({
+          toolContext: { env: new NodeExecutionEnv({ cwd: process.cwd() }) },
           session,
           models,
           model: faux.getModel(),
@@ -207,7 +211,13 @@ describe("invoke fan-in", () => {
         const { faux, models } = makeFaux();
         faux.setResponses([fauxAssistantMessage("done")]);
         const session = await repo.create({ id: sessionId });
-        const harness = new AgentHarness({ session, models, model: faux.getModel(), systemPrompt: "test" });
+        const harness = new AgentHarness<ExecutionToolContext>({
+          toolContext: { env: new NodeExecutionEnv({ cwd: process.cwd() }) },
+          session,
+          models,
+          model: faux.getModel(),
+          systemPrompt: "test",
+        });
         harness.abort = async () => {
           throw new Error("abort blew up"); // simulate an idle abort rejecting
         };
@@ -240,6 +250,7 @@ describe("prompt.images passthrough (SPEC §4)", () => {
     ]);
     const agent = createPiAgentFromHarness({
       harnessFactory: piHarnessFactory({
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
         sessions: inMemorySessionStore(),
 
         models,
@@ -320,8 +331,8 @@ describe("lease + setup robustness", () => {
     faux.setResponses([fauxAssistantMessage("unreachable")]);
     const sessions = inMemorySessionStore();
     const inner = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
-
       models,
       model: faux.getModel(),
       systemPrompt: "test",
@@ -362,6 +373,7 @@ describe("lease + setup robustness", () => {
         },
       },
       harnessFactory: piHarnessFactory({
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
         sessions: inMemorySessionStore(),
 
         models,
@@ -407,6 +419,7 @@ describe("systemPrompt factory (re-evaluated per invoke)", () => {
     faux.setResponses([fauxAssistantMessage("a"), fauxAssistantMessage("b")]);
     const agent = createPiAgentFromHarness({
       harnessFactory: piHarnessFactory({
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
         sessions: inMemorySessionStore(),
 
         models,

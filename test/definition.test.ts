@@ -185,14 +185,14 @@ describe("create: assembleSystemPrompt (four segments)", () => {
   });
 
   it("piBasePrompt renders the tool list from actual tools so base and toolset stay aligned", () => {
-    const withTools = piBasePrompt({ tools: piDefaultTools(fixtureDir) });
+    const withTools = piBasePrompt({ tools: piDefaultTools() });
     expect(withTools).toContain("- read:");
     expect(withTools).toContain("- bash:");
     expect(piBasePrompt()).toContain("(none)");
   });
 
   it("a persona.md persona overrides the engine identity but keeps the tool list + guidelines", () => {
-    const tools = piDefaultTools(fixtureDir);
+    const tools = piDefaultTools();
     const persona = piBasePrompt({ tools, persona: "You are the Repo Bot." });
     expect(persona).toContain("You are the Repo Bot.");
     expect(persona).not.toContain("operating inside pi"); // default identity replaced
@@ -312,15 +312,19 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 describe("create: toolset (real pi tools, fidelity)", () => {
   it("piDefaultTools are pi core four tools (same as pi default)", () => {
     expect(
-      piDefaultTools(fixtureDir)
+      piDefaultTools()
         .map((t) => t.name)
         .sort(),
     ).toEqual(["bash", "edit", "read", "write"]);
   });
 
   it("pi's read tool can read the fixture (same behavior as local pi)", async () => {
-    const read = piDefaultTools(fixtureDir).find((t) => t.name === "read")!;
-    const r = await read.execute("t1", { path: "AGENTS.md" });
+    const read = piDefaultTools().find((t) => t.name === "read")!;
+    // The env IS the tool's root now (pi 0.83 hands it in as the turn's tool context), so a direct call
+    // has to supply one — the same thing `fastagent tool` does, and the harness for every served turn.
+    const r = await read.execute("t1", { path: "AGENTS.md" }, undefined, undefined, {
+      env: new NodeExecutionEnv({ cwd: fixtureDir }),
+    });
     const text = (r.content[0] as any).text as string;
     expect(text).toContain("Haiku Bot");
   });

@@ -9,6 +9,7 @@ import { makeSearchToolsTool, withSearchTool } from "../src/engines/pi/search-to
 import { defineTool, isDeferredTool } from "../src/engines/pi/tool.ts";
 import { inMemorySessionStore } from "../src/index.ts";
 import { makeFaux } from "./faux.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 const weather = () =>
   defineTool({
@@ -85,6 +86,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     const { faux, models } = makeFaux();
     faux.setResponses(responses);
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
 
       models,
@@ -197,6 +199,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
       fauxAssistantMessage("ok"),
     ]);
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions: inMemorySessionStore(),
 
       models,
@@ -230,6 +233,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
       fauxAssistantMessage("ok"),
     ]);
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions: inMemorySessionStore(),
 
       models,
@@ -279,6 +283,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     faux.setResponses([fauxAssistantMessage(fauxToolCall("my_loader", {}, { id: "c1" })), fauxAssistantMessage("ok")]);
     const sessions = inMemorySessionStore();
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
 
       models,

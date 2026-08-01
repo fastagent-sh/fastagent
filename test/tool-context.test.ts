@@ -7,6 +7,7 @@ import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { defineTool } from "../src/engines/pi/tool.ts";
 import { inMemorySessionStore } from "../src/index.ts";
 import { makeFaux } from "./faux.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 /** Call a built tool's execute directly (the `fastagent tool` path — no session binding). */
 type RawExecute = (id: string, params: unknown, signal?: AbortSignal) => Promise<unknown>;
@@ -30,6 +31,7 @@ describe("shared ToolContext session manager", () => {
     const agent = createPiAgentFromHarness({
       cwd: process.cwd(),
       harnessFactory: piHarnessFactory({
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
         sessions: inMemorySessionStore(),
 
         models,

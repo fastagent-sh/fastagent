@@ -8,10 +8,12 @@
 import { z } from "zod";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { log } from "../../log.ts";
-import { defineTool, isDeferredTool, stripDeferredMarker } from "./tool.ts";
+import { type MountedTool, defineTool, isDeferredTool, stripDeferredMarker } from "./tool.ts";
 
-/** Mount the built-in loader iff any mounted tool is deferred and the author didn't define their own. */
-export function withSearchTool(tools: AgentTool[]): AgentTool[] {
+/** Mount the built-in loader iff any mounted tool is deferred and the author didn't define their own.
+ *  Typed on the MOUNTED tool, not the authored one: it inspects names and deferral and never executes,
+ *  so narrowing here would reject the very set it is handed (pi's defaults take the turn's context). */
+export function withSearchTool(tools: MountedTool[]): MountedTool[] {
   if (!tools.some(isDeferredTool)) return tools;
   const authored = tools.find((t) => t.name === "search_tools");
   if (!authored) return [...tools, makeSearchToolsTool()];
@@ -52,7 +54,7 @@ const MAX_MISS_LISTING = 10;
  * correct load-point attribution everywhere an OUTER active-set diff exists: pi wraps SDK customTools
  * (the chat path) in a before/after diff, and two parallel loader calls would both snapshot the
  * pre-activation set and get stamped with the same activation. Custom loader authors must set it too. */
-export function makeSearchToolsTool(): AgentTool {
+export function makeSearchToolsTool(): MountedTool {
   return defineTool({
     name: "search_tools",
     executionMode: "sequential",

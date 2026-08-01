@@ -12,9 +12,8 @@
  * exclusion config today.
  */
 import { z } from "zod";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { addWakeup, removeWakeup } from "../../schedule/wakeups.ts";
-import { defineTool } from "./tool.ts";
+import { defineTool, type MountedTool } from "./tool.ts";
 
 /**
  * Parse a delay to milliseconds: a number is SECONDS; a string MUST carry a unit — `"<n><s|m|h|d>"`
@@ -36,7 +35,7 @@ export function parseDelayMs(input: string | number): number | undefined {
  * scheduler poller honors a wake-up) and only when the workspace hasn't defined its own `wake` (that
  * wins, like any tool collision). The single place the mount decision + collision rule run.
  */
-export function withWakeTool(tools: AgentTool[], stateRoot: string, enabled: boolean): AgentTool[] {
+export function withWakeTool(tools: MountedTool[], stateRoot: string, enabled: boolean): MountedTool[] {
   if (!enabled) return tools;
   // wake/unwake are a PAIR over one store: if the workspace defines EITHER name, mount NEITHER built-in.
   // Mixing halves would mislead — an author's wake doesn't write our wakeups store, so our unwake could
@@ -46,7 +45,7 @@ export function withWakeTool(tools: AgentTool[], stateRoot: string, enabled: boo
 }
 
 /** Build the `wake` tool bound to `stateRoot` (where wake-ups persist). */
-export function makeWakeTool(stateRoot: string, now: () => Date = () => new Date()): AgentTool {
+export function makeWakeTool(stateRoot: string, now: () => Date = () => new Date()): MountedTool {
   return defineTool({
     name: "wake",
     description:
@@ -93,7 +92,7 @@ export function makeWakeTool(stateRoot: string, now: () => Date = () => new Date
 
 /** Build the `unwake` tool: cancel one of THIS conversation's pending wake-ups by id (a wake/recurring
  *  that is no longer needed). Session-scoped — a conversation can never cancel another's. */
-function makeUnwakeTool(stateRoot: string): AgentTool {
+function makeUnwakeTool(stateRoot: string): MountedTool {
   return defineTool({
     name: "unwake",
     description:

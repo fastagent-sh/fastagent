@@ -11,9 +11,16 @@
  * they come from the definition; the openers own model/tools — from config resolution).
  */
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
-import type { AgentTool, ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import {
+  type ExecutionEnv,
+  type Skill,
+  type ThinkingLevel,
+  createBashTool,
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+} from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import type { Models, Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
@@ -26,11 +33,11 @@ import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import {
   type DefineToolOptions,
-  type FastagentTool,
   type ToolCollision,
   isDeferredTool,
   loadTools,
   mergeDiscoveredTools,
+  type MountedTool,
 } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
 import { type Lease, type SessionObserver, createPiAgentFromHarness, inProcessLease } from "./invoke.ts";
@@ -38,17 +45,30 @@ import { type Lease, type SessionObserver, createPiAgentFromHarness, inProcessLe
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
 // The full pi toolset is the default for fidelity: authors vibe in local pi with it, so serving with
-// fewer tools is behavior drift. Isolation is the K-side ExecutionEnv/sandbox's job, not the tool
-// layer's; locking down for public exposure = passing a restricted `tools` list (a deployment posture).
+// fewer tools is behavior drift. Locking down for public exposure = passing a restricted `tools` list
+// (a deployment posture).
+//
+// These are pi-agent-core's tools, which reach the filesystem and the shell through the
+// {@link ExecutionEnv} the harness hands them per turn — NOT pi-coding-agent's, which are the same four
+// tools wired to `node:fs` directly (identical names, descriptions, parameters and results — asserted
+// in test/tools-parity.test.ts). Going through the env is the whole point: it makes
+// {@link CreatePiAgentOptions.env} the one seam a sandbox adapter has to implement, instead of a knob
+// that governed everything except the tools that actually touch the machine. It also keeps the serving
+// path off pi's TUI stack, which the coding-agent tools carry for rendering fastagent never uses (its
+// channels render from the SPEC stream).
+//
+// `chat` is unaffected: it takes these NAMES only and lets pi's own runtime rebuild the tools it
+// renders (see session-builder.ts).
 
-/** pi's core default toolset (read/bash/edit/write), rooted at cwd. */
-export function piDefaultTools(cwd: string): AgentTool[] {
-  return createCodingTools(cwd) as AgentTool[];
+/** pi's core default toolset (read/bash/edit/write). Rooted at the ExecutionEnv's cwd, supplied per
+ *  turn as the harness tool context — hence no argument here. */
+export function piDefaultTools(): MountedTool[] {
+  return [createReadTool(), createBashTool(), createEditTool(), createWriteTool()];
 }
 
 /** `config.tools` semantics: extra tools APPENDED after pi's defaults, never replacing them. */
-export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] {
-  const defaults = piDefaultTools(cwd);
+export function resolveTools(config: FastagentConfig): MountedTool[] {
+  const defaults = piDefaultTools();
   return config.tools ? [...defaults, ...config.tools] : defaults;
 }
 
@@ -60,9 +80,8 @@ export function resolveTools(config: FastagentConfig, cwd: string): AgentTool[] 
 export async function resolveAgentTools(
   config: FastagentConfig,
   agentDir: string,
-  cwd: string = agentDir,
 ): Promise<{
-  tools: AgentTool[];
+  tools: MountedTool[];
   toolNames: string[];
   /** Tools registered but not initially active (defineTool `deferred: true`) — discovered/activated
    *  via the built-in `search_tools` loader. Surfaced so the operator can see deferral took effect. */
@@ -70,10 +89,11 @@ export async function resolveAgentTools(
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
 }> {
-  // Default coding tools (read/bash/edit/write) are rooted at `cwd` (the workspace the agent operates
-  // on); discovered `tools/` come from `agentDir` (the agent's own surface).
+  // Discovered `tools/` come from `agentDir` (the agent's own surface); the default coding tools carry
+  // no root of their own — they operate through the ExecutionEnv handed to them per turn, whose cwd is
+  // the workspace.
   const discovered = await loadTools(agentDir);
-  const merged = mergeDiscoveredTools(resolveTools(config, cwd), discovered.tools);
+  const merged = mergeDiscoveredTools(resolveTools(config), discovered.tools);
   // The built-in `search_tools` loader mounts here — the one place the agent's full tool set is
   // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; an
   // agent-defined search_tools wins).
@@ -87,7 +107,7 @@ export async function resolveAgentTools(
   // defaults, the builtin loader (like wake, a builtin gets its own report line, not an anonymous
   // slot in the author's list — an author-DEFINED search_tools still shows), and deferred tools —
   // each name lives in exactly ONE report slot, and deferred names live in `deferredToolNames`.
-  const defaultNames = new Set(piDefaultTools(cwd).map((t) => t.name));
+  const defaultNames = new Set(piDefaultTools().map((t) => t.name));
   const toolNames = tools
     .filter(
       (t) => !defaultNames.has(t.name) && !isDeferredTool(t) && !(builtinLoaderMounted && t.name === "search_tools"),
@@ -121,7 +141,7 @@ export async function resolveAgentTools(
  * tool list is generated from the actually-mounted tools (base and toolset must agree). An authored
  * `persona` (from persona.md) replaces the default identity line, keeping the tools list + guidelines.
  */
-export function piBasePrompt(options: { tools?: AgentTool[]; persona?: string } = {}): string {
+export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string } = {}): string {
   const mounted = options.tools ?? [];
   // Deferred tools stay OUT of the list: their schemas are not in the request until activated, so
   // naming them here would invite calls to tools that don't exist yet; discovery is search_tools' job
@@ -197,7 +217,7 @@ function buildPiAgent(opts: {
   providers?: Provider[];
   authPath?: string;
   systemPrompt?: string | (() => string);
-  tools?: AgentTool[];
+  tools?: MountedTool[];
   skills?: Skill[];
   /** Per-invoke prompt+skills source (see {@link PiHarnessFactoryOptions.live}); supersedes the two above. */
   live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
@@ -214,6 +234,7 @@ function buildPiAgent(opts: {
   const lease = opts.lease ?? inProcessLease();
   const harnessFactory = piHarnessFactory({
     sessions: opts.sessions ?? inMemorySessionStore(),
+    env,
     models,
     model: resolveModel(models, opts.model),
     thinkingLevel: opts.thinkingLevel,
@@ -268,8 +289,10 @@ export interface CreatePiAgentOptions {
    * or a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
    */
   instructions?: string | (() => string);
-  /** `FastagentTool` = AgentTool plus the optional `deferred` marker (see {@link DefineToolOptions}). */
-  tools?: FastagentTool[];
+  /** The tool set to mount. `FastagentTool` (AgentTool plus the optional `deferred` marker, see
+   *  {@link DefineToolOptions}) widens into {@link MountedTool}, which additionally admits pi's default
+   *  coding tools — they read the turn's ExecutionEnv as a fifth `execute` parameter. */
+  tools?: MountedTool[];
   skills?: Skill[];
   // ── Tier 2: injectable ports ───────────────────────────────────────────────
   /**
@@ -327,9 +350,9 @@ export interface CreatePiAgentFromDefinitionOptions {
   /** Override the engine base prompt (segment ①). Defaults to piBasePrompt({ tools, persona }) using the
    *  live-read persona.md; pass base to fully opt out of persona.md. */
   base?: string;
-  /** Override tools. Defaults to piDefaultTools (lock down with a custom list). `FastagentTool` =
-   *  AgentTool plus the optional `deferred` marker. */
-  tools?: FastagentTool[];
+  /** Override tools. Defaults to {@link piDefaultTools} (lock down with a custom list). An authored
+   *  `FastagentTool[]` (AgentTool plus the optional `deferred` marker) widens into {@link MountedTool}. */
+  tools?: MountedTool[];
   /**
    * The agent's working directory: where the default tools operate AND whose ancestors are walked for
    * ② project context (AGENTS.md). Defaults to `dir`. Set it to the enclosing repo so a coding agent
@@ -385,7 +408,7 @@ export async function createPiAgentFromDefinition(
   let reportedFindings = findingsSignature(definition);
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
-  const tools = withSearchTool(options.tools ?? piDefaultTools(env.cwd));
+  const tools = withSearchTool(options.tools ?? piDefaultTools());
   const agent = buildPiAgent({
     model: options.model,
     thinkingLevel: options.thinkingLevel,

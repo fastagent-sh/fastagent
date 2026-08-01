@@ -152,7 +152,7 @@ export async function buildAgentSessionRuntime(
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(agentDir, { cwd, env });
     reportDefinitionWarnings(definition.collisions, definition.diagnostics);
-    const defaultNames = piDefaultTools(cwd).map((t) => t.name);
+    const defaultNames = piDefaultTools().map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
     // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
@@ -174,7 +174,11 @@ export async function buildAgentSessionRuntime(
         if (!bound) throw new Error("tool executed before its session was built (lifecycle invariant broken)");
         return turnContext.run(
           { cwd, sessionManager: bound.sessionManager, tools: bound.activation },
-          () => t.execute(id, params, signal) as Promise<unknown>,
+          // pi's per-turn TOOL context (5th parameter) is read only by its default coding tools, and
+          // those are filtered out of `customTools` above; fastagent's own take theirs from
+          // `turnContext` (AsyncLocalStorage). So this env exists to satisfy the shape, and it is the
+          // chat cwd's — the same root a default tool would have got, had one reached here.
+          () => t.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
         );
       },
     })) as unknown as ToolDefinition[];

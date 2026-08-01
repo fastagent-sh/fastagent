@@ -9,7 +9,6 @@
  * watch and can point sessions at a mounted volume.
  */
 import { mkdir } from "node:fs/promises";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Agent } from "../../agent.ts";
 import {
   type FastagentConfig,
@@ -30,6 +29,7 @@ import type { ModuleLoadFailure } from "../../loader.ts";
 import type { LoadedDefinition } from "./definition.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
+import type { MountedTool } from "./tool.ts";
 
 export interface CreatePiAgentFromDirOptions {
   /** Model spec override (e.g. the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -91,7 +91,7 @@ export interface AgentAssembly {
   /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <agentDir>/.secrets/auth.json). */
   authPath: string;
   /** The full mounted tool surface (config.tools + discovered tools/, search_tools applied). */
-  tools: AgentTool[];
+  tools: MountedTool[];
   toolNames: string[];
   deferredToolNames: string[];
   toolCollisions: ToolCollision[];
@@ -116,7 +116,6 @@ export async function resolveAgentAssembly(
   const { tools, toolNames, deferredToolNames, toolCollisions, toolFailures } = await resolveAgentTools(
     config,
     agentDir,
-    workspace,
   );
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it
   // in one knob — a container points it at its volume); the finer overrides below still win.

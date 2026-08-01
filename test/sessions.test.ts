@@ -8,6 +8,7 @@ import { inMemorySessionStore, jsonlSessionStore, type AgentEvent, type PiSessio
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 /** Agent over an injected store (the store is the variable under test). */
 function makeAgent(sessions: PiSessionStore, responses: FauxResponseStep[]) {
@@ -15,6 +16,7 @@ function makeAgent(sessions: PiSessionStore, responses: FauxResponseStep[]) {
   faux.setResponses(responses);
   return createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
 
       models,

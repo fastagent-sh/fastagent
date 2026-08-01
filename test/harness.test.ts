@@ -3,6 +3,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { inMemorySessionStore } from "../src/index.ts";
 import { TOOL_ACTIVATION_ENTRY, piHarnessFactory, resolveHarnessActiveToolNames } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 const fakeTool = (name: string): AgentTool =>
   ({
@@ -20,6 +21,7 @@ describe("piHarnessFactory: provider retry wiring", () => {
     // the option; transients there still fail the turn.
     const { faux, models } = makeFaux();
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions: inMemorySessionStore(),
 
       models,
@@ -40,8 +42,8 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     const { faux, models } = makeFaux();
     const sessions = inMemorySessionStore();
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
-
       models,
       model: faux.getModel(),
       tools: [fakeTool("alpha"), deferred],
@@ -63,7 +65,7 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     const sessions = inMemorySessionStore();
     const base = {
       sessions,
-
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       models,
       model: faux.getModel(),
       systemPrompt: "test",
@@ -89,7 +91,7 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     const sessions = inMemorySessionStore();
     const base = {
       sessions,
-
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       models,
       model: faux.getModel(),
       systemPrompt: "test",
@@ -124,6 +126,7 @@ describe("piHarnessFactory: thinking-level wiring", () => {
   it("threads thinkingLevel to the harness (config.thinkingLevel is not a silent no-op)", async () => {
     const { faux, models } = makeFaux();
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions: inMemorySessionStore(),
 
       models,
@@ -140,6 +143,7 @@ describe("piHarnessFactory: thinking-level wiring", () => {
     // either place cannot silently alter deployments.
     const { faux, models } = makeFaux();
     const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions: inMemorySessionStore(),
 
       models,

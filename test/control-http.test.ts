@@ -19,6 +19,7 @@ import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
 import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 const TOKEN = "test-token";
 
@@ -38,6 +39,7 @@ async function serveControl() {
     },
   };
   const factory = piHarnessFactory({
+    env: new NodeExecutionEnv({ cwd: process.cwd() }),
     sessions,
 
     models,
@@ -771,6 +773,7 @@ async function serveRemoteAgent(opts: {
   const factory =
     opts.harnessFactory ??
     piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
 
       models,

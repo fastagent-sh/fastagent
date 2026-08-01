@@ -12,12 +12,14 @@ import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 function piAgent(responses: FauxResponseStep[], sessions: PiSessionStore = inMemorySessionStore()) {
   const { faux, models } = makeFaux();
   faux.setResponses(responses);
   return createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions,
 
       models,
@@ -36,6 +38,7 @@ describeSpecConformance("pi reference implementation (faux model, full L0 compos
     const { faux, models } = makeFaux();
     faux.setResponses([fauxAssistantMessage("a long answer that streams out slowly")]);
     const inner = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions: inMemorySessionStore(),
 
       models,

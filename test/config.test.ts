@@ -15,6 +15,7 @@ import {
 } from "../src/engines/pi/config.ts";
 import { resolveSecretsDir, resolveStateRoot } from "../src/paths.ts";
 import { resolveTools } from "../src/engines/pi/create.ts";
+import type { FastagentTool } from "../src/engines/pi/tool.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -273,11 +274,11 @@ describe("config: loadConfig", () => {
 
 describe("config: resolveTools (append-after-defaults semantics)", () => {
   it("without config.tools returns pi defaults; with config.tools appends after defaults instead of replacing", () => {
-    const defaults = resolveTools({}, process.cwd());
+    const defaults = resolveTools({});
     expect(defaults.length).toBeGreaterThan(0);
 
-    const extra = { name: "ping" } as (typeof defaults)[number];
-    const merged = resolveTools({ tools: [extra] }, process.cwd());
+    const extra = { name: "ping" } as unknown as FastagentTool;
+    const merged = resolveTools({ tools: [extra] });
     expect(merged.map((t) => t.name)).toEqual([...defaults.map((t) => t.name), "ping"]);
   });
 });

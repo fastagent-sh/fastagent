@@ -8,12 +8,14 @@ import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 function makeAgent(responses: FauxResponseStep[]): Agent {
   const { faux, models } = makeFaux();
   faux.setResponses(responses);
   return createPiAgentFromHarness({
     harnessFactory: piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
       sessions: inMemorySessionStore(),
 
       models,

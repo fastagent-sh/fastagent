@@ -129,7 +129,7 @@ Common options:
 | `tools` | Agent tools. |
 | `skills` | Loaded Agent Skills. |
 | `sessions` | `PiSessionStore`. |
-| `env` | Harness `ExecutionEnv`. This alone does not sandbox the pi coding tools or project-context loader. |
+| `env` | `ExecutionEnv` for the default coding tools (they take it as the turn's tool context) and the definition loader. Narrows where they touch the machine; it does not sandbox author-written `tools/`, which can import anything. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 

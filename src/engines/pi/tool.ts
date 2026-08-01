@@ -12,7 +12,7 @@
  */
 import { join } from "node:path";
 import { assertInsideAgentDir } from "../../paths.ts";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentHarnessTool, ExecutionToolContext, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
 import { type ModuleLoadFailure, loadModuleDir } from "../../loader.ts";
 import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
@@ -54,22 +54,31 @@ export interface DefineToolOptions<I extends z.ZodType> {
 /** An AgentTool with fastagent's deferral marker — the type for raw tools handed to fastagent
  *  (`config.tools`, L1/L2 `tools`): plain `AgentTool` has no `deferred`, so an object literal with the
  *  marker would fail excess-property checking against upstream's type. `defineTool` produces it. */
+/**
+ * A tool as MOUNTED: what the harness actually runs. Wider than the authored {@link AgentTool} on
+ * purpose — pi's default coding tools read the turn's tool context (its ExecutionEnv) as a fifth
+ * `execute` parameter, while fastagent's own tools take four and are assignable to it unchanged.
+ * Naming the wider type is what lets `defineTool` stay context-free for authors while both families
+ * live in one array; every helper that only inspects or reorders tools is typed on THIS.
+ */
+export type MountedTool = AgentHarnessTool<ExecutionToolContext>;
+
 export type FastagentTool = AgentTool & {
   deferred?: boolean;
 };
 
 /** Read the {@link DefineToolOptions.deferred} marker off a mounted tool (extra property on the
  *  AgentTool object — pi ignores it). */
-export function isDeferredTool(tool: AgentTool): boolean {
+export function isDeferredTool(tool: MountedTool): boolean {
   return (tool as FastagentTool).deferred === true;
 }
 
 /** The same tool without the deferred marker — for a loader that must stay active (a deferred loader
  *  could never be activated and would strand every deferred tool). */
-export function stripDeferredMarker(tool: AgentTool): AgentTool {
+export function stripDeferredMarker(tool: MountedTool): MountedTool {
   if (!isDeferredTool(tool)) return tool;
-  const { deferred: _drop, ...active } = tool as AgentTool & { deferred?: boolean };
-  return active as AgentTool;
+  const { deferred: _drop, ...active } = tool as MountedTool & { deferred?: boolean };
+  return active;
 }
 
 /** Wrap a plain return value into pi's tool-result shape; pass a full result through unchanged. */
@@ -177,9 +186,9 @@ export async function loadTools(
  * Existing tools win; dropped discovered tools surface as collisions.
  */
 export function mergeDiscoveredTools(
-  existing: AgentTool[],
+  existing: MountedTool[],
   discovered: AgentTool[],
-): { tools: AgentTool[]; collisions: ToolCollision[] } {
+): { tools: MountedTool[]; collisions: ToolCollision[] } {
   const names = new Set(existing.map((t) => t.name));
   const tools = [...existing];
   const collisions: ToolCollision[] = [];
