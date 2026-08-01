@@ -46,6 +46,16 @@ git branch -d <merged-branch>
 git fetch --prune origin
 ```
 
+## Releases
+
+Start from a clean, up-to-date `main` with an authenticated GitHub CLI, then create a release PR:
+
+```bash
+npm run release:patch # or release:minor / release:major
+```
+
+The script verifies the Git and npm state, updates `package.json` and `package-lock.json`, runs the full local checks plus an npm package dry run, and opens a `chore/release-X.Y.Z` PR. It never merges, tags, or publishes. After a maintainer squash-merges the PR, create and publish GitHub Release `vX.Y.Z`; the protected publish workflow then publishes to npm through Trusted Publishing.
+
 ## Validation before merge
 
 A PR is mergeable only when:
