@@ -282,10 +282,11 @@ test/tools-parity.test.ts, so the choice is about WHERE they touch the machine, 
 Injecting a custom `env` therefore governs the tools that actually do the touching, which is what makes
 it a seam worth having.
 
-It is still not a complete sandbox: `loadProjectContextFiles` and the definition loader read through the
-env, but fastagent's OWN tools (`tools/`) are author code that can import anything, and `deploy`/channel
-machinery runs outside it. A sandbox adapter provides an `ExecutionEnv` AND constrains the process it
-runs in; `env` alone narrows the blast radius rather than closing it.
+It is still not a complete sandbox, and the gaps are specific: `loadProjectContextFiles` reads ② context
+through node fs DIRECTLY rather than the env (definition.ts states this as a known break), fastagent's
+OWN tools (`tools/`) are author code that can import anything, and `deploy`/channel machinery runs
+outside it entirely. A sandbox adapter provides an `ExecutionEnv` AND constrains the process it runs in;
+`env` alone narrows the blast radius rather than closing it.
 
 ## 6. Sessions and concurrency
 

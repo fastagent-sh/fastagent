@@ -11,6 +11,7 @@ export {
   loadTools,
   type DefineToolOptions,
   type FastagentTool,
+  type MountedTool,
   type ToolCollision,
   type ToolContext,
 } from "./engines/pi/tool.ts";

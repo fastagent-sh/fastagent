@@ -21,6 +21,7 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { readImageProcessor } from "./read-image.ts";
 import type { Models, Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
@@ -50,12 +51,14 @@ import { type Lease, type SessionObserver, createPiAgentFromHarness, inProcessLe
 //
 // These are pi-agent-core's tools, which reach the filesystem and the shell through the
 // {@link ExecutionEnv} the harness hands them per turn — NOT pi-coding-agent's, which are the same four
-// tools wired to `node:fs` directly (identical names, descriptions, parameters and results — asserted
-// in test/tools-parity.test.ts). Going through the env is the whole point: it makes
+// tools wired to `node:fs` directly. Going through the env is the point, and the whole of it: it makes
 // {@link CreatePiAgentOptions.env} the one seam a sandbox adapter has to implement, instead of a knob
-// that governed everything except the tools that actually touch the machine. It also keeps the serving
-// path off pi's TUI stack, which the coding-agent tools carry for rendering fastagent never uses (its
-// channels render from the SPEC stream).
+// that governed everything except the tools that actually touch the machine. (It buys no decoupling
+// from pi-coding-agent — definition.ts, models.ts and read-image.ts all import it regardless.)
+//
+// The swap holds only while the two behave alike, which they do NOT for free: core's `read` does
+// nothing with images unless a processor is injected (read-image.ts), and both families are compared
+// on every path in test/tools-parity.test.ts.
 //
 // `chat` is unaffected: it takes these NAMES only and lets pi's own runtime rebuild the tools it
 // renders (see session-builder.ts).
@@ -63,7 +66,13 @@ import { type Lease, type SessionObserver, createPiAgentFromHarness, inProcessLe
 /** pi's core default toolset (read/bash/edit/write). Rooted at the ExecutionEnv's cwd, supplied per
  *  turn as the harness tool context — hence no argument here. */
 export function piDefaultTools(): MountedTool[] {
-  return [createReadTool(), createBashTool(), createEditTool(), createWriteTool()];
+  // `read` needs its image pipeline INJECTED (core ships none); see read-image.ts for what is at stake.
+  return [
+    createReadTool({ imageProcessor: readImageProcessor }),
+    createBashTool(),
+    createEditTool(),
+    createWriteTool(),
+  ];
 }
 
 /** `config.tools` semantics: extra tools APPENDED after pi's defaults, never replacing them. */
@@ -371,9 +380,10 @@ export interface CreatePiAgentFromDefinitionOptions {
   authPath?: string;
   sessions?: PiSessionStore;
   /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it does more
-   *  than root the default tools: the DEFINITION is read through it too (persona.md, skills/,
-   *  AGENTS.md). Author-written `tools/` remain outside it — injecting an env narrows the blast radius
-   *  rather than closing it. */
+   *  than root the default tools: persona.md and skills/ are read through it too. Two surfaces stay
+   *  OUTSIDE it — ② project context (pi's loadProjectContextFiles uses node fs directly; see
+   *  definition.ts) and author-written `tools/`, which are code and can import anything. Injecting an
+   *  env narrows the blast radius rather than closing it. */
   env?: ExecutionEnv;
   lease?: Lease;
   /** Observation-plane tap; see {@link CreatePiAgentOptions.observer}. */

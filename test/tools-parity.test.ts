@@ -11,6 +11,7 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { crc32, deflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -25,6 +26,57 @@ const surface = (t: { name: string; description?: unknown; parameters?: unknown 
   description: String(t.description),
   parameters: JSON.stringify(t.parameters),
 });
+
+/** A noisy PNG of `side`x`side` — noisy so it does not compress away, i.e. big enough to exercise the
+ *  resize path rather than passing through untouched. */
+function pngFixture(side: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(side, 0);
+  ihdr.writeUInt32BE(side, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // truecolour
+  const rows: Buffer[] = [];
+  let seed = 1;
+  for (let y = 0; y < side; y++) {
+    const row = Buffer.alloc(1 + side * 3);
+    for (let i = 1; i < row.length; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      row[i] = seed & 0xff;
+    }
+    rows.push(row);
+  }
+  const idat = deflateSync(Buffer.concat(rows), { level: 1 });
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", idat),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/** A 1x1 BMP — a format neither provider takes inline, so it must be CONVERTED or dropped. */
+function bmpFixture(): Buffer {
+  const px = Buffer.from([0xff, 0x00, 0x00, 0x00]);
+  const header = Buffer.alloc(54);
+  header.write("BM", 0, "ascii");
+  header.writeUInt32LE(54 + px.length, 2);
+  header.writeUInt32LE(54, 10);
+  header.writeUInt32LE(40, 14);
+  header.writeInt32LE(1, 18);
+  header.writeInt32LE(1, 22);
+  header.writeUInt16LE(1, 26);
+  header.writeUInt16LE(24, 28);
+  header.writeUInt32LE(px.length, 34);
+  return Buffer.concat([header, px]);
+}
 
 describe("tools: pi-agent-core's env-backed defaults match pi-coding-agent's", () => {
   it("name, description and parameter schema are identical, tool for tool", () => {
@@ -59,6 +111,15 @@ describe("tools: pi-agent-core's env-backed defaults match pi-coding-agent's", (
     };
 
     await agree("read", { path: "f.txt" });
+    // IMAGES are where they diverge for free: core's `read` does nothing with one unless a processor is
+    // injected (read-image.ts rebuilds pi's from its public halves). Left out, this is what breaks —
+    // measured on a 5.6MB PNG: 7.48MB of raw base64 instead of 3.48MB of resized JPEG, and no dimension
+    // note for the model's coordinate math. A format needing CONVERSION (bmp) is dropped outright, while
+    // the description asserted identical above still advertises it.
+    await writeFile(join(dir, "img.png"), pngFixture(120));
+    await writeFile(join(dir, "img.bmp"), bmpFixture());
+    await agree("read", { path: "img.png" });
+    await agree("read", { path: "img.bmp" });
     await agree("bash", { command: "echo out; pwd" });
     // FAILURE paths matter more than success ones: the divergence this guards against is
     // pi-coding-agent's TUI rendering stack, which shows up in how a tool reports trouble.

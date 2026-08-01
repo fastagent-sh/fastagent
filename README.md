@@ -196,7 +196,7 @@ FastAgent is pre-1.0. The stable design center is the Agent Handler contract in 
 The neutral contract leaves room for capabilities that are not complete product features yet:
 
 - **Durable execution**: Telegram, Slack, and Feishu/Lark accepted turns replay at least once today; general durability and exactly-once execution remain future backend work.
-- **Sandboxed execution** — `ExecutionEnv` is an assembly seam, but the pi coding tools and project-context loader are still local; a complete sandbox adapter is future work.
+- **Sandboxed execution** — `ExecutionEnv` governs the default coding tools, but ② project context and author-written `tools/` still reach the local process; a complete sandbox adapter is future work.
 - **Observability export** — leveled logs and per-turn traces exist today; an OpenTelemetry exporter does not.
 - **More harness bindings and channels** — pi is the built-in harness; another harness can implement the Agent contract, and community channels can use the channel kit.
 - **More deploy targets** — local Docker, Fly, Railway, and AWS Bedrock AgentCore ship today; the generated container is the portable path for other hosts.

@@ -126,7 +126,7 @@ Common options:
 |---|---|
 | `model` | Required `provider/modelId` spec string. |
 | `instructions` | String or function returning the system prompt. |
-| `tools` | Agent tools. |
+| `tools` | Agent tools — `MountedTool[]`. An authored `FastagentTool[]` (what `defineTool` returns) widens into it; the wider type additionally admits pi's default coding tools, which read the turn's `ExecutionEnv` as a fifth `execute` parameter. |
 | `skills` | Loaded Agent Skills. |
 | `sessions` | `PiSessionStore`. |
 | `env` | `ExecutionEnv` for the default coding tools (they take it as the turn's tool context) and the definition loader. Narrows where they touch the machine; it does not sandbox author-written `tools/`, which can import anything. |

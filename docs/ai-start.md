@@ -194,7 +194,7 @@ Use `createPiAgentFromDefinition` or `createPiAgentFromDir`, then mount `createI
 
 Keep authentication, users, database, session ownership, and policy in the host application.
 
-`ExecutionEnv` is an assembly seam, not a complete sandbox. The pi coding tools and project-context loader are still local; do not claim that injecting `env` alone isolates a directory agent.
+`ExecutionEnv` governs the default coding tools (they take it as the turn's tool context) but not ② project context or author-written `tools/`. Do not claim that injecting `env` alone isolates a directory agent — it narrows the blast radius.
 
 ## Deploy
 

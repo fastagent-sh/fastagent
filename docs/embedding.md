@@ -145,13 +145,15 @@ createPiAgent({
 | Port | Default | Reach for it when |
 |---|---|---|
 | `sessions` | `inMemorySessionStore()` (lost on restart) | `jsonlSessionStore({ dir })` for restart-surviving continuity, or your own `PiSessionStore` |
-| `env` | local `NodeExecutionEnv` (cwd) | custom harness filesystem/process IO; not a complete sandbox by itself |
+| `env` | local `NodeExecutionEnv` (cwd) | filesystem/process IO for the default coding tools + definition loading; not a complete sandbox by itself |
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
 
-The pi coding tools created for a directory and the project-context loader are still cwd/local-fs
-bound. Injecting `env` alone therefore does not isolate a directory agent; a complete sandbox adapter
-must wire those surfaces too. That adapter is future work.
+The default coding tools (`read`/`bash`/`edit`/`write`) DO go through `env` — they take it as the turn's
+tool context. Two surfaces do not: ② project context (pi's loader reads node fs directly) and
+author-written `tools/`, which are code and can import anything. So injecting `env` narrows where a
+directory agent reaches, but does not isolate it; a complete sandbox adapter also has to constrain the
+process. That adapter is future work.
 
 ## 4. Auth
 
