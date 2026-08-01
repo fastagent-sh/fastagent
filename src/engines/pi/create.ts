@@ -309,10 +309,10 @@ export interface CreatePiAgentOptions {
   authPath?: string;
   /** Session persistence. Defaults to in-memory; inject jsonlSessionStore for restart-surviving continuity. */
   sessions?: PiSessionStore;
-  /** Filesystem/process environment. Defaults to a local NodeExecutionEnv at `process.cwd()`. At THIS
-   *  rung it supplies the agent's cwd and nothing else — pi 0.83 removed the harness's own env, and the
-   *  default coding tools are cwd-bound and local. So injecting it is not a sandbox boundary; a sandbox
-   *  adapter must wire those tools too (pi-agent-core now ships env-backed ones — see create.ts §tools). */
+  /** Filesystem/process environment. Defaults to a local NodeExecutionEnv at `process.cwd()`, and its
+   *  cwd is the agent's. The default coding tools (read/bash/edit/write) take it as the turn's tool
+   *  context, so injecting a constrained one narrows where the agent reads, writes and shells. It does
+   *  NOT constrain author-written `tools/`, which are code and can import anything. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;
@@ -333,6 +333,7 @@ export function createPiAgent(options: CreatePiAgentOptions): Agent {
     tools: options.tools ? withSearchTool(options.tools) : options.tools,
     skills: options.skills,
     sessions: options.sessions,
+    env: options.env,
     lease: options.lease,
     observer: options.observer,
   });
@@ -370,8 +371,9 @@ export interface CreatePiAgentFromDefinitionOptions {
   authPath?: string;
   sessions?: PiSessionStore;
   /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it does more
-   *  than carry the cwd: the DEFINITION is read through it (persona.md, skills/, AGENTS.md). The coding
-   *  tools stay local and cwd-bound, so injecting it alone still does not sandbox a directory agent. */
+   *  than root the default tools: the DEFINITION is read through it too (persona.md, skills/,
+   *  AGENTS.md). Author-written `tools/` remain outside it — injecting an env narrows the blast radius
+   *  rather than closing it. */
   env?: ExecutionEnv;
   lease?: Lease;
   /** Observation-plane tap; see {@link CreatePiAgentOptions.observer}. */

@@ -27,12 +27,15 @@ export const TOOL_ACTIVATION_ENTRY = "fastagent:tool-activation";
  *  to write {@link TOOL_ACTIVATION_ENTRY} deltas (pi's harness keeps its session private). Absent for
  *  a harness built outside {@link piHarnessFactory}: activation still works in-turn there, but is not
  *  recorded — the factory owns persistence. */
-// Keyed by IDENTITY, so the key type is deliberately the structural minimum: the harness's context
-// parameter (pi 0.83) is irrelevant to "which session is this instance bound to", and naming a concrete
-// one here would make every caller's harness type have to match this map's.
-const harnessSessions = new WeakMap<object, PiSession>();
+// Keyed by IDENTITY, and deliberately context-AGNOSTIC: which session an instance is bound to has
+// nothing to do with the harness's tool-context parameter (pi 0.83), and naming a concrete one would
+// force every caller's harness type to match this map's. `any` is the context, not the argument — it
+// still has to BE a harness.
+// biome-ignore lint/suspicious/noExplicitAny: context-agnostic by intent, audited at this single point
+type AnyHarness = AgentHarness<any>;
+const harnessSessions = new WeakMap<AnyHarness, PiSession>();
 export type PiSession = Awaited<ReturnType<PiSessionStore["openOrCreate"]>>;
-export function harnessSession(harness: object): PiSession | undefined {
+export function harnessSession(harness: AnyHarness): PiSession | undefined {
   return harnessSessions.get(harness);
 }
 

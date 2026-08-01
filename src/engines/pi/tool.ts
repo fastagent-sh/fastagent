@@ -51,9 +51,6 @@ export interface DefineToolOptions<I extends z.ZodType> {
   execute: (input: z.infer<I>, ctx: ToolContext) => unknown | Promise<unknown>;
 }
 
-/** An AgentTool with fastagent's deferral marker — the type for raw tools handed to fastagent
- *  (`config.tools`, L1/L2 `tools`): plain `AgentTool` has no `deferred`, so an object literal with the
- *  marker would fail excess-property checking against upstream's type. `defineTool` produces it. */
 /**
  * A tool as MOUNTED: what the harness actually runs. Wider than the authored {@link AgentTool} on
  * purpose — pi's default coding tools read the turn's tool context (its ExecutionEnv) as a fifth
@@ -63,6 +60,9 @@ export interface DefineToolOptions<I extends z.ZodType> {
  */
 export type MountedTool = AgentHarnessTool<ExecutionToolContext>;
 
+/** An AgentTool with fastagent's deferral marker — the type for raw tools handed to fastagent
+ *  (`config.tools`, L1/L2 `tools`): plain `AgentTool` has no `deferred`, so an object literal with the
+ *  marker would fail excess-property checking against upstream's type. `defineTool` produces it. */
 export type FastagentTool = AgentTool & {
   deferred?: boolean;
 };
