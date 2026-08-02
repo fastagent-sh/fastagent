@@ -29,16 +29,16 @@ describe("host/node: serveNode", () => {
     await host.close(); // caller-owned shutdown — releases the listening socket
   });
 
-  it("binds only the given host, leaving every other interface unserved", async () => {
-    const { networkInterfaces } = await import("node:os");
+  it("binds only the given host, leaving every other address unserved", async () => {
     const host = serveNode(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
     const port = await host.listening;
     expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
-    const lan = Object.values(networkInterfaces())
-      .flat()
-      .find((i) => i?.family === "IPv4" && !i.internal)?.address;
-    // The bind is the point: a LAN address must NOT answer (skipped on a box with no LAN interface).
-    if (lan) await expect(fetch(`http://${lan}:${port}/`)).rejects.toThrow();
+    // The negative goes to a second LOOPBACK alias, not to a LAN address: `127.0.0.2` is the whole
+    // point of the bind (loopback by reach, still not the address bound), it needs no network, and it
+    // cannot pass for the wrong reason — a LAN probe picks up whatever interface is first, often a
+    // VPN/docker one where the refusal comes from routing, and a FILTERED interface would hang the
+    // fetch with no timeout until vitest killed the file.
+    await expect(fetch(`http://127.0.0.2:${port}/`, { signal: AbortSignal.timeout(2000) })).rejects.toThrow();
     await host.close();
   });
 

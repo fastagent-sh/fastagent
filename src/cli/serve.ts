@@ -241,10 +241,32 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
   const fix =
     source === "flag"
       ? "bind 0.0.0.0 (or 127.0.0.1), or drop --tunnel"
-      : 'set http.host to 0.0.0.0 (or 127.0.0.1) in fastagent.config.*, override it with --bind, or drop --tunnel';
+      : "set http.host to 0.0.0.0 (or 127.0.0.1) in fastagent.config.*, override it with --bind, or drop --tunnel";
   const message = `--tunnel reaches the serve by dialing localhost, which the bind address ${host} does not answer — ${fix}`;
   if (source === "flag") failUsage(message);
   failStartup(new Error(message));
+}
+
+/**
+ * The startup lines that name WHERE the serve is: the bind report, and the curl the reader copies.
+ * ONE function because they are one message — they were two, and `--bind` updated the first while the
+ * second went on dialing `localhost`, which is precisely what a non-wildcard bind stops answering. Now
+ * neither can be changed without the other in view, and the address has a single derivation.
+ *
+ * A wildcard bind is every interface, and naming one address there would understate it — but the curl
+ * still needs one to dial, which is what `clientHost` gives (loopback for a wildcard, itself otherwise).
+ */
+export function readyAddressLines(host: string | undefined, boundPort: number, builtinInvoke: boolean): string[] {
+  const dial = `${clientHost(host)}:${boundPort}`;
+  const lines = [
+    `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : dial}`,
+  ];
+  if (builtinInvoke) {
+    lines.push(
+      `[fastagent] try it: curl -s ${dial}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
+    );
+  }
+  return lines;
 }
 
 /**
@@ -318,23 +340,11 @@ export function serve(
           port: boundPort,
           routeChannels: surface.routeChannels,
         });
-        // Report the BIND: a wildcard bind is every interface, and naming one address there would
-        // understate it. For an explicit bind, address and dial target coincide — clientHost is used
-        // only for its URL form (IPv6 brackets).
-        log.info(
-          `[fastagent] http host on ${
-            classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : `${clientHost(host)}:${boundPort}`
-          }`,
-        );
+        for (const line of readyAddressLines(host, boundPort, surface.builtinInvoke)) log.info(line);
         log.info(`[fastagent] routes: ${Object.keys(surface.routes).join(", ") || "(none)"}`);
         if (surface.longConnections.length > 0) {
           log.info(
             `[fastagent] long connections: ${surface.longConnections.map((connection) => connection.name).join(", ")}`,
-          );
-        }
-        if (surface.builtinInvoke) {
-          log.info(
-            `[fastagent] try it: curl -s localhost:${boundPort}/invoke -X POST -H 'content-type: application/json' -d '${INVOKE_EXAMPLE_BODY}'`,
           );
         }
         onListening?.(boundPort);
@@ -357,7 +367,10 @@ export function serve(
           ),
         );
       }
-      failStartup(new Error(`cannot bind http channel on ${host ?? ""}:${port}: ${error.message}`));
+      // Through the same renderer as the EADDRINUSE branch above: hand-concatenating gives `:::8787`
+      // for an IPv6 bind and a bare `:8787` for the wildcard, which reads as an explicit bind of nothing.
+      const where = classifyBind(host) === "wildcard" ? `port ${port}` : `${clientHost(host)}:${port}`;
+      failStartup(new Error(`cannot bind http channel on ${where}: ${error.message}`));
     },
   );
 }

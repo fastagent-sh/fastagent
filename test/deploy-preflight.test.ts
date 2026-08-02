@@ -47,6 +47,16 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
       "package.json": `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
     });
     await mkdir(join(dirname(agentDir), ".git")); // the workspace is a git repo — the image gets the git binary
+
+    const ok = await call(agentDir, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } }, { run: true });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.container.hasPackageJson).toBe(true); // the AGENT's manifest, not the workspace's
+      expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git baked (workspace ships .git), deploy.apt kept, deduped
+      expect(JSON.stringify(ok.messages)).toMatch(/baked as the agent's workspace/); // the WYSIWYG note is stated
+    }
+  });
+
   it("http.host travels into the image: gates --run, warns in plan mode, wildcard is silent", async () => {
     const dir = await workspace();
     const cfg = (host?: string): FastagentConfig => ({ model: "openai/gpt-4o-mini", http: host ? { host } : {} });
@@ -61,24 +71,6 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(planned.ok && planned.messages.some((m) => m.level === "warn" && /http\.host/.test(m.text))).toBe(true);
     const wildcard = await call(dir, cfg("0.0.0.0"), { run: true });
     expect(wildcard.ok && wildcard.messages.every((m) => !/http\.host/.test(m.text))).toBe(true);
-  });
-
-  it("agentDir layout: container facts come from the KIT, git is auto-baked, --run stays gated", async () => {
-    const dir = await workspace({ "fastagent.config.mjs": `export default { model: "openai/gpt-4o-mini" };\n` });
-    const agentDir = join(dir, "agent");
-    await mkdir(agentDir, { recursive: true });
-    await writeFile(
-      join(agentDir, "package.json"),
-      `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
-    );
-
-    const ok = await call(agentDir, { model: "openai/gpt-4o-mini", deploy: { apt: ["ripgrep"] } }, { run: true });
-    expect(ok.ok).toBe(true);
-    if (ok.ok) {
-      expect(ok.container.hasPackageJson).toBe(true); // the AGENT's manifest, not the workspace's
-      expect(ok.container.apt).toEqual(["git", "ripgrep"]); // git baked (workspace ships .git), deploy.apt kept, deduped
-      expect(JSON.stringify(ok.messages)).toMatch(/baked as the agent's workspace/); // the WYSIWYG note is stated
-    }
   });
 
   it("git is baked iff the baked workspace ships a .git — a non-git dir gets no silent git layer", async () => {
