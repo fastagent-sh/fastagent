@@ -25,11 +25,12 @@ const TOKEN = "test-token";
 
 /** A served control plane over a real HTTP server + the agent driving it. Reasoning-capable model:
  *  thinking levels are per model, and the default faux supports only "off". */
-/** The command list the served control answers with — mutable, so a test can change it mid-connection. */
-let commandList: Array<{ name: string; description?: string; source: string }> = [];
-
 async function serveControl() {
-  commandList = [{ name: "triage", description: "Sort an inbox", source: "skill" }];
+  /** What the served control answers `commands()` with — mutable, so a test can change it while a
+   *  client is connected (the definition behind it is live). */
+  const commandList: Array<{ name: string; description?: string; source: string }> = [
+    { name: "triage", description: "Sort an inbox", source: "skill" },
+  ];
   const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
   faux.setResponses([fauxAssistantMessage("hello over the wire")]);
   const sessions = inMemorySessionStore();
@@ -63,13 +64,14 @@ async function serveControl() {
     // A non-empty, MUTABLE list: non-empty so the isomorphism check compares a real payload rather
     // than [] === [], mutable so the wire is pinned as per-call rather than prefetched-and-cached
     // like capabilities (the definition it answers for is live).
-    commands: async () => commandList,
+    commands: async () => [...commandList],
   });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
   const port = await server.listening;
   return {
     agent,
+    commandList,
     localControl: control,
     url: `http://127.0.0.1:${port}`,
     close: () => server.close(),
@@ -87,12 +89,25 @@ describe("session control over HTTP (Phase 3)", () => {
   it("fails closed: no/wrong token is 401 on every route, and connect() rejects", async () => {
     const served = await serveControl();
     try {
-      for (const path of ["/control/capabilities", "/control/state?session=s", "/control/events?session=s"]) {
-        expect((await fetch(`${served.url}${path}`)).status).toBe(401);
-        expect((await fetch(`${served.url}${path}`, { headers: { authorization: "Bearer wrong" } })).status).toBe(401);
+      // DERIVED from the mounted route keys, not a hand-kept list: "every control route requires the
+      // token" must fail when a NEW route forgets `guard`, which a literal array cannot do.
+      const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+      const keys = Object.keys(controlRoutes(control, { token: TOKEN, agent: served.agent }));
+      expect(keys.length).toBeGreaterThan(5);
+      for (const key of keys) {
+        const [method, path] = key.split(" ") as [string, string];
+        const url = `${served.url}${path}?session=s`;
+        expect((await fetch(url, { method, body: method === "POST" ? "{}" : undefined })).status).toBe(401);
+        expect(
+          (
+            await fetch(url, {
+              method,
+              body: method === "POST" ? "{}" : undefined,
+              headers: { authorization: "Bearer wrong" },
+            })
+          ).status,
+        ).toBe(401);
       }
-      const dispatch = await fetch(`${served.url}/control/dispatch`, { method: "POST", body: "{}" });
-      expect(dispatch.status).toBe(401);
       await expect(connectSessionControl({ url: served.url, token: "wrong" })).rejects.toThrow(/401/);
     } finally {
       served.close();
@@ -107,9 +122,6 @@ describe("session control over HTTP (Phase 3)", () => {
 
       expect(remote.capabilities()).toEqual(served.localControl.capabilities());
       expect(await remote.commands()).toEqual(await served.localControl.commands());
-      // Per call, not cached at connect: the definition behind it is live.
-      commandList = [...commandList, { name: "digest", source: "skill" }];
-      expect((await remote.commands()).map((c) => c.name)).toEqual(["triage", "digest"]);
       expect(await remote.state("sW")).toEqual(await served.localControl.state("sW"));
       const [remoteEntries, localEntries] = [await remote.entries("sW"), await served.localControl.entries("sW")];
       expect(remoteEntries).toEqual(localEntries);
@@ -129,6 +141,20 @@ describe("session control over HTTP (Phase 3)", () => {
       const target = localEntries.entries.find((e) => e.kind === "user")?.id as string;
       expect(await remote.dispatch("sW", { type: "navigate", targetId: target })).toEqual({ ok: true });
       expect((await remote.state("sW")).leafEntryId).toBe(target);
+    } finally {
+      served.close();
+    }
+  });
+
+  it("commands() is read per call, not cached at connect like capabilities", async () => {
+    // Why the method is async at all: the definition behind it is live, so a list fetched once at
+    // connect would advertise names the running agent has already left behind.
+    const served = await serveControl();
+    try {
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      expect((await remote.commands()).map((c) => c.name)).toEqual(["triage"]);
+      served.commandList.push({ name: "digest", source: "skill" });
+      expect((await remote.commands()).map((c) => c.name)).toEqual(["triage", "digest"]);
     } finally {
       served.close();
     }
