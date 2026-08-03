@@ -31,8 +31,10 @@ export interface PiSessionStore {
  * dangling tool_use; a `navigate` writes no message either, but it CAN expose one — parking the
  * leaf on an assistant entry whose tool results are now off-path is the dangling-pair state
  * {@link reconcileInterruptedToolCalls} exists for. That is repaired at the next `openOrCreate`,
- * which repairs AT THE LEAF — exactly where a move puts it. Writing MESSAGE-class records through this handle would bypass that repair: use
- * `openOrCreate` for anything that enters the transcript.
+ * which repairs AT THE LEAF — exactly where a move puts it.
+ *
+ * Writing MESSAGE-class records through this handle would bypass that repair: use `openOrCreate`
+ * for anything that enters the transcript.
  */
 export interface PiSessionReader {
   openIfExists(sessionId: string): Promise<Session | undefined>;

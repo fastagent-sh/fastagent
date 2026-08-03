@@ -501,7 +501,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               // Appends a `leaf` record (pi's move is journalled, not an in-place pointer), so the
               // move is durable and visible on the entries plane like every other boundary write.
               await s.moveTo(command.targetId);
-              return { type: "state_changed", timestamp: Date.now(), data: { leafEntryId: command.targetId } };
+              // Read BACK, like set_model resolves rather than echoing: the event reports where the
+              // leaf now is, not what was asked for.
+              return {
+                type: "state_changed",
+                timestamp: Date.now(),
+                data: { leafEntryId: (await s.getLeafId()) ?? command.targetId },
+              };
             };
           }
           // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,

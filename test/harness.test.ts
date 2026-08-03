@@ -59,6 +59,29 @@ describe("piHarnessFactory: active-tool set restore (stateless invoke)", () => {
     expect(second.getActiveTools().map((t) => t.name)).toEqual(["alpha", "lazy"]);
   });
 
+  it("an activation on a branch the session NAVIGATED away from does not survive the move", async () => {
+    const deferred = Object.assign(fakeTool("lazy"), { deferred: true });
+    const { faux, models } = makeFaux();
+    const sessions = inMemorySessionStore();
+    const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      sessions,
+      models,
+      model: faux.getModel(),
+      tools: [fakeTool("alpha"), deferred],
+      systemPrompt: "test",
+    });
+    const session = await sessions.openOrCreate("s1");
+    const before = await session.appendMessage({ role: "user", content: "start", timestamp: Date.now() });
+    await session.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: ["lazy"] });
+    expect((await factory("s1")).getActiveTools().map((t) => t.name)).toEqual(["alpha", "lazy"]);
+
+    // The activation record is still in the journal, but off the active path: the walk is over the
+    // branch this session is on, so the next turn runs without the tool it discovered elsewhere.
+    await session.moveTo(before);
+    expect((await factory("s1")).getActiveTools().map((t) => t.name)).toEqual(["alpha"]);
+  });
+
   it("deltas, not snapshots: later-added tools join old sessions; a tool flipped to deferred drops out", async () => {
     const deferred = Object.assign(fakeTool("lazy"), { deferred: true });
     const { faux, models } = makeFaux();
