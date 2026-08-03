@@ -219,10 +219,11 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     // `/` is a reserved command prefix: a typo'd /aboort silently steering the model (injecting a
     // prompt when the user meant to STOP the run) is the dangerous direction of the ambiguity.
     if (trimmed.startsWith("/") && trimmed !== "/abort") {
-      // The certain half prints NOW (a leading `/` is reserved here, whatever the token turns out to
-      // be); the rest is a remote read that can be slow or fail, and waiting on it would leave the
-      // user's input unanswered. It deliberately does not pre-judge the token as unknown — the read
-      // may be about to prove it names a real skill.
+      // For a MISTYPED slash the certain half prints NOW (a leading `/` is reserved here, whatever
+      // the token turns out to be), because waiting on a remote read that can be slow or fail would
+      // leave the input unanswered; it deliberately does not pre-judge the token as unknown — the
+      // read may be about to prove it names a real skill. `/commands` prints nothing first: its
+      // whole answer IS the read, and a placeholder would just be noise before it.
       // The first WORD is the token: slash input naturally carries arguments (`/triage my inbox`),
       // and taking the whole line would answer "names nothing" for a name the user did give.
       const word = trimmed.slice(1).split(/\s+/)[0] ?? "";

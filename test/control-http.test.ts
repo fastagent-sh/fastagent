@@ -147,6 +147,21 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("a serve without the route reads as SKEW, not as an unreadable definition", async () => {
+    // Both arrive as an uncoded non-2xx; without the distinction a client reports "this agent's
+    // skills are unreadable" about a serve that simply predates the route.
+    const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const { "GET /control/commands": _dropped, ...withoutCommands } = controlRoutes(control, { token: TOKEN });
+    const server = serveNode(router(withoutCommands), { port: 0 });
+    const port = await server.listening;
+    try {
+      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+      await expect(remote.commands()).rejects.toThrow(/predates the route/);
+    } finally {
+      server.close();
+    }
+  });
+
   it("commands() is read per call, not cached at connect like capabilities", async () => {
     // Why the method is async at all: the definition behind it is live, so a list fetched once at
     // connect would advertise names the running agent has already left behind.

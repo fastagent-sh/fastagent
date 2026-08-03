@@ -125,8 +125,19 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
     // NOT prefetched like capabilities: a live definition can grow a skill between calls, so the
     // list is fetched per call. The endpoint is UNCACHED server-side (it re-reads the definition's
     // skills/ per request), which is what keeps it honest about a directory that changes underneath
-    // it.
-    commands: () => get<AgentCommand[]>("/control/commands"),
+    // it. A 404 is SKEW, not a fault in the definition: without this the two read identically
+    // (uncoded non-2xx), and a client would report "this agent's skills are unreadable" about a
+    // serve that simply predates the route.
+    async commands() {
+      try {
+        return await get<AgentCommand[]>("/control/commands");
+      } catch (error) {
+        if (error instanceof ControlRequestError && error.status === 404) {
+          throw new ControlRequestError(404, "this serve does not implement /control/commands (it predates the route)");
+        }
+        throw error;
+      }
+    },
 
     state: (session) => get<SessionState>(`/control/state?session=${encodeURIComponent(session)}`),
 
