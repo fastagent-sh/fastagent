@@ -10,7 +10,7 @@
  * jsonl survives process restarts (disk is the truth).
  */
 import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
-import type { AgentMessage, Session } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, Session, SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { log } from "../../log.ts";
 
@@ -115,6 +115,55 @@ async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
     };
     await session.appendMessage(result);
   }
+}
+
+/** Corruption warns are per (leaf, condition) so a persistent broken chain does not repeat on every
+ *  turn and every observation poll — the dedup discipline `resolveHarnessActiveToolNames` sets. */
+const warnedBrokenChains = new Set<string>();
+function warnOnce(key: string, message: string): void {
+  (warnedBrokenChains.has(key) ? log.debug : log.warn)(message);
+  warnedBrokenChains.add(key);
+}
+
+/**
+ * The entries on the session's ACTIVE path, root→leaf — what every last-wins read must walk.
+ * `getEntries()` is the whole TREE: once `navigate` can move the leaf, the journal still carries
+ * the abandoned branch, and reading it flat would run the session on a setting it moved away from.
+ * Deliberately NOT `Session.getBranch()`, which stops at a compaction: a compaction bounds the
+ * MODEL CONTEXT, while an override recorded before one still governs the session.
+ */
+export async function activePathEntries(session: Session): Promise<SessionTreeEntry[]> {
+  const entries = await session.getEntries();
+  const leafId = await session.getLeafId();
+  if (leafId === null) return entries; // nothing recorded a leaf yet — the journal is the path
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  if (!byId.has(leafId)) {
+    // A leaf naming an entry the journal does not hold is corruption (a rebuilt or pruned
+    // repository), not an empty path — returning [] would silently drop every override and
+    // activation and run the session on the assembly defaults. Warn and read the journal flat, the
+    // pre-navigate behavior: wrong on a branched session, but never silently settings-less.
+    warnOnce(
+      `missing:${leafId}`,
+      `[fastagent] session leaf "${leafId}" is not in the journal — reading entries flat (was the repository rebuilt?)`,
+    );
+    return entries;
+  }
+  const path: SessionTreeEntry[] = [];
+  const seen = new Set<string>();
+  for (let cur = byId.get(leafId); cur; cur = cur.parentId ? byId.get(cur.parentId) : undefined) {
+    if (seen.has(cur.id)) {
+      // A parentId cycle is corruption too, and truncating silently would hand back a partial
+      // settings basis that reads like a short session.
+      warnOnce(
+        `cycle:${cur.id}`,
+        `[fastagent] session entry "${cur.id}" cycles through its parents — path truncated there`,
+      );
+      break;
+    }
+    seen.add(cur.id);
+    path.unshift(cur);
+  }
+  return path;
 }
 
 /** In-process store (pi InMemorySessionRepo). Continuity lives and dies with the instance. */

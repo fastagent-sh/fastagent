@@ -10,9 +10,9 @@ import { AgentHarness } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv, ExecutionToolContext, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
-import type { PiSessionStore } from "./sessions.ts";
+import { type PiSessionStore, activePathEntries } from "./sessions.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
-import { type OverrideEntryLike, activePathEntries, resolveSessionSettings } from "./session-settings.ts";
+import { type OverrideEntryLike, resolveSessionSettings } from "./session-settings.ts";
 
 /**
  * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred

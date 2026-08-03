@@ -1111,6 +1111,13 @@ describe("session control (Phase 2b): boundary mutations", () => {
     ) as SessionEntry;
     expect(await control.dispatch("sNavDangle", { type: "navigate", targetId: callEntry.id })).toEqual({ ok: true });
     const events = await drain(agent.invoke({ session: "sNavDangle" }, { text: "continue" }));
+    // The repair itself, not just a green run: the new branch carries a synthetic result for the
+    // call whose real one is off-path — without it a real provider rejects the transcript.
+    const path = (await control.entries("sNavDangle")).entries;
+    const repaired = path.filter(
+      (e) => e.kind === "tool" && (e.data as { toolCallId?: string; isError?: boolean }).toolCallId === "e1",
+    );
+    expect(repaired.some((e) => (e.data as { isError?: boolean }).isError)).toBe(true);
     expect(events.some((e) => e.type === "failed")).toBe(false);
     expect(events.at(-1)?.type).toBe("completed");
     const text = events

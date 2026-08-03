@@ -8,9 +8,8 @@
  * model. (It could not be made unrepresentable anyway: `model_change`/`thinking_level_change` are
  * pi's entries, and pi appends them itself.)
  */
-import type { Session, SessionTreeEntry, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Models, clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { log } from "../../log.ts";
 import type { AnyModel } from "./harness.ts";
 
 /** Which strings are levels at all — the vocabulary. What a MODEL supports is
@@ -26,37 +25,6 @@ const ALL_THINKING_LEVELS = {
   max: true,
 } satisfies Record<ThinkingLevel, true>;
 export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set(Object.keys(ALL_THINKING_LEVELS) as ThinkingLevel[]);
-
-/**
- * The entries on the session's ACTIVE path, root→leaf — what every last-wins read must walk.
- * `getEntries()` is the whole TREE: once `navigate` can move the leaf, the journal still carries
- * the abandoned branch, and reading it flat would run the session on a setting it moved away from.
- * Deliberately NOT `Session.getBranch()`, which stops at a compaction: a compaction bounds the
- * MODEL CONTEXT, while an override recorded before one still governs the session.
- */
-export async function activePathEntries(session: Session): Promise<SessionTreeEntry[]> {
-  const entries = await session.getEntries();
-  const leafId = await session.getLeafId();
-  if (leafId === null) return entries; // nothing recorded a leaf yet — the journal is the path
-  const byId = new Map(entries.map((e) => [e.id, e]));
-  if (!byId.has(leafId)) {
-    // A leaf naming an entry the journal does not hold is corruption (a rebuilt or pruned
-    // repository), not an empty path — returning [] would silently drop every override and
-    // activation and run the session on the assembly defaults. Warn and read the journal flat, the
-    // pre-navigate behavior: wrong on a branched session, but never silently settings-less.
-    log.warn(
-      `[fastagent] session leaf "${leafId}" is not in the journal — reading entries flat (was the repository rebuilt?)`,
-    );
-    return entries;
-  }
-  const path: SessionTreeEntry[] = [];
-  const seen = new Set<string>(); // a parentId cycle is corruption too; it must not hang the turn
-  for (let cur = byId.get(leafId); cur && !seen.has(cur.id); cur = cur.parentId ? byId.get(cur.parentId) : undefined) {
-    seen.add(cur.id);
-    path.unshift(cur);
-  }
-  return path;
-}
 
 /** The shape both override consumers walk — a session entry, structurally. */
 export interface OverrideEntryLike {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { inMemorySessionStore, jsonlSessionStore, type AgentEvent, type PiSessionStore } from "../src/index.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
+import { activePathEntries } from "../src/engines/pi/sessions.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -336,5 +337,39 @@ describe("jsonlSessionStore (malicious id)", () => {
       ]).invoke({ session: evil }, { text: "continue" }),
     );
     expect(JSON.stringify(turn2)).toContain("hi"); // turn 1 is still present
+  });
+});
+
+describe("activePathEntries", () => {
+  /** The two calls the walk makes — enough to stand in for a Session here. */
+  const fakeSession = (entries: { id: string; parentId?: string }[], leafId: string | null) =>
+    ({
+      getEntries: async () => entries,
+      getLeafId: async () => leafId,
+    }) as unknown as Parameters<typeof activePathEntries>[0];
+
+  it("walks the leaf's chain and leaves the abandoned branch behind", async () => {
+    const entries = [{ id: "a" }, { id: "b", parentId: "a" }, { id: "c", parentId: "a" }];
+    expect((await activePathEntries(fakeSession(entries, "c"))).map((e) => e.id)).toEqual(["a", "c"]);
+    expect((await activePathEntries(fakeSession(entries, null))).map((e) => e.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("corruption is visible, never a silently settings-less session", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // A leaf outside the journal: the flat read (the pre-navigate behavior), not an empty path —
+      // returning [] would drop every override and activation the session recorded.
+      const orphanLeaf = [{ id: "a" }, { id: "b", parentId: "a" }];
+      expect((await activePathEntries(fakeSession(orphanLeaf, "gone"))).map((e) => e.id)).toEqual(["a", "b"]);
+      // A parentId cycle terminates instead of hanging the turn.
+      const cycle = [
+        { id: "x", parentId: "y" },
+        { id: "y", parentId: "x" },
+      ];
+      expect((await activePathEntries(fakeSession(cycle, "x"))).map((e) => e.id)).toEqual(["y", "x"]);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

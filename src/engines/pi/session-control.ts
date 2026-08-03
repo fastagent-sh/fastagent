@@ -37,9 +37,9 @@ import {
 import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
 import { type AnyModel, SUMMARIZATION_RETRY_POLICY, type PiHarnessFactory, harnessSession } from "./harness.ts";
-import { THINKING_LEVELS, activePathEntries, resolveSessionSettings } from "./session-settings.ts";
+import { THINKING_LEVELS, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
-import type { PiSessionReader } from "./sessions.ts";
+import { type PiSessionReader, activePathEntries } from "./sessions.ts";
 
 // ── Entry normalization (durable plane) ──────────────────────────────────────
 
