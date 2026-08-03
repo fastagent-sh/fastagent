@@ -12,10 +12,13 @@ import type { Json, Prompt } from "./agent.ts";
 
 export interface SessionControl {
   capabilities(): SessionCapabilities;
-  /** The named invocations this agent exposes — what a composer's `/` completion lists. Sessionless
-   *  (the definition is a deployment fact, not a per-session one) but ASYNC, because a definition is
-   *  allowed to be live: an implementation that re-reads it per turn must answer from that same read
-   *  or the list and the behavior diverge. `[]` is a complete answer, not a missing one. */
+  /** The names this agent exposes — what a composer's `/` completion LISTS. A listing, not a
+   *  dispatch surface: the data plane takes prompts as text, so what typing one means (expanding it,
+   *  sending "use the X skill", filtering a menu) is the client's business. Sessionless (the
+   *  definition is a deployment fact) but ASYNC, because a definition is allowed to be live: an
+   *  implementation that re-reads it per turn must answer from that same read, or the list and the
+   *  behavior diverge. `[]` is a complete answer, not a missing one; a definition the implementation
+   *  cannot read at all is a deployment fault and MAY reject. */
   commands(): Promise<AgentCommand[]>;
   state(session: string): Promise<SessionState>;
   /** `since` is an APPEND-ORDER position cursor: "every record appended after the one with this
@@ -60,10 +63,11 @@ export interface SessionCapabilities {
 }
 
 /**
- * One named invocation a user can type (pi's slash commands, and the same fields its RPC
- * `get_commands` answers with, so a client can map 1:1). `source` is FREE-FORM on purpose: which
- * kinds exist is an engine's business ("skill" is the only one fastagent assembles today), and an
- * engine with none returns an empty list rather than the contract enumerating a closed set.
+ * One name a client can offer the user. Field NAMES follow pi's RPC `get_commands` so a client
+ * porting from it maps directly; its `sourceInfo` (file provenance) is deliberately not carried, and
+ * `source` is a free-form string rather than pi's closed union — which kinds exist is an engine's
+ * business ("skill" is the only one fastagent assembles today), and an engine with none answers `[]`
+ * rather than the contract enumerating a set it cannot know.
  */
 export interface AgentCommand {
   name: string;

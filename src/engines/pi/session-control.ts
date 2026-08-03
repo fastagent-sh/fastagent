@@ -199,7 +199,7 @@ export interface CreatePiSessionControlOptions {
    *  (assembly completes before any dispatch can arrive). Absent / undefined → boundary commands
    *  are gated off in `capabilities()` and rejected `unsupported_capability`. */
   boundary?: () => PiBoundaryWiring | undefined;
-  /** The definition's named invocations, as a LAZY thunk for the same reason {@link boundary} is
+  /** The definition's names, as a LAZY thunk for the same reason {@link boundary} is
    *  one (the hub exists before the assembly that can read a definition) — and async because the
    *  definition is live: this must re-read it, not close over a boot snapshot, or `commands()` would
    *  advertise a list the next turn no longer runs. Absent → `[]`. */

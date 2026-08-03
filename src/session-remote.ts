@@ -123,7 +123,9 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
     capabilities: () => capabilities,
 
     // NOT prefetched like capabilities: a live definition can grow a skill between calls, so the
-    // list is fetched per call — it is small by contract, same as state().
+    // list is fetched per call. The RESPONSE is small; the server-side work is a full definition
+    // load (every SKILL.md, plus the context-file walk) — fine for a composer opening its
+    // completion list, wrong to poll on a timer.
     commands: () => get<AgentCommand[]>("/control/commands"),
 
     state: (session) => get<SessionState>(`/control/state?session=${encodeURIComponent(session)}`),

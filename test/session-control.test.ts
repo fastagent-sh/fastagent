@@ -353,6 +353,17 @@ describe("session control (Phase 1): observation plane", () => {
         `---\nname: triage\ndescription: Sort an inbox\n---\n\nDo the thing.\n`,
       );
       expect(await control.commands()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
+      // The RESOLVED set, which is the reason this read exists: a same-name collision is decided
+      // first-wins at assembly, and a client reading the directory would list the name twice.
+      await mkdir(join(dir, "fastagent", "skills", "triage-copy"), { recursive: true });
+      await writeFile(
+        join(dir, "fastagent", "skills", "triage-copy", "SKILL.md"),
+        `---\nname: triage\ndescription: A second claim on the same name\n---\n\nDo it differently.\n`,
+      );
+      expect((await control.commands()).map((c) => c.name)).toEqual(["triage"]);
+      // Live in BOTH directions — a cached read would only ever grow the list.
+      await rm(join(dir, "fastagent", "skills"), { recursive: true, force: true });
+      expect(await control.commands()).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

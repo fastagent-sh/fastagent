@@ -161,15 +161,21 @@ type SessionCommand =
 interface AgentCommand { name: string; description?: string; source: string }
 ```
 
-What a composer's `/` completion lists. There is no way to discover the set by trying — an unknown
-command is just text that reaches the model — and the assembly is the only place that knows the full
-set after collisions were resolved first-wins, which a client cannot reconstruct from the directory.
+What a composer's `/` completion LISTS. A listing, deliberately not a dispatch surface: the data
+plane takes prompts as text, and nothing in it expands `/name` — so what typing one means (expanding
+the skill, sending "use the X skill", filtering a menu) is the client's business, and the contract
+says so rather than implying an invocation path that does not exist.
+
+It still cannot be reconstructed client-side: the assembly is the only place that knows the set after
+collisions were resolved first-wins, and there is no way to discover it by trying.
 
 ASYNC on purpose: a definition is allowed to be LIVE (fastagent re-reads the directory per turn), so
-the list must come from that same read. A boot snapshot would advertise a command set the running
-agent has already left behind. `source` is free-form because which kinds exist is an engine's
-business (`"skill"` today; extension commands and prompt templates as they land), and an engine with
-none answers `[]` — a complete answer, not a missing one.
+the list must come from that same read. A boot snapshot would advertise names the running agent has
+already left behind. `source` is free-form because which kinds exist is an engine's business
+(`"skill"` today; extension commands and prompt templates as they land), and an engine with none
+answers `[]` — a complete answer, not a missing one. A definition that cannot be READ at all is a
+deployment fault, and this read may reject: unlike a session-scoped condition, there is no truthful
+degraded value (`[]` would claim the agent has no names).
 
 ### 5.2 Acceptance is not outcome
 

@@ -447,8 +447,8 @@ const watching = (async () => {
 for await (const e of agent.invoke({ session: "s1" }, { text: "hi" })) void e; // the data plane
 await watching;
 
-// What a `/` composer lists: the definition's named invocations, read LIVE (a skill added while
-// serving is invocable next turn, so it is listable now).
+// What a `/` composer LISTS (read live, so a skill added while serving appears at once). A listing
+// only — the data plane takes prompts as text, so what typing `/triage` means is the client's.
 await control.commands(); // [{ name: "triage", description: "Sort an inbox", source: "skill" }]
 
 // After a disconnect, missed history comes from the durable plane, not the live stream:
