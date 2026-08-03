@@ -126,8 +126,12 @@ async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
  * recorded before a compaction is a preference, and it still governs the session after one.
  */
 export async function activePathEntries(session: Session): Promise<SessionTreeEntry[]> {
-  const entries = await session.getEntries();
+  // LEAF FIRST, then the journal — the order is load-bearing, not incidental: `getEntries()` is a
+  // SNAPSHOT, so reading it first would let any concurrent append (i.e. any turn in progress) leave
+  // a leaf the snapshot cannot contain, and the integrity throw below would fire on a live session
+  // instead of a corrupt one. This way the snapshot is always a superset of the leaf's chain.
   const leafId = await session.getLeafId();
+  const entries = await session.getEntries();
   // A null leaf is pi's ROOT position (what `moveTo(null)` sets), so the active path is EMPTY — not
   // "the whole journal", which on a branched session would mean every abandoned branch at once.
   if (leafId === null) return [];

@@ -462,12 +462,16 @@ export interface AttachIo {
  * branch interleaved with the live one as if it were one conversation. Reachability is computed
  * backwards from the leaf; an entry whose parent lies BEFORE the slice is path-connected by
  * construction (its ancestors were rendered in an earlier round), so only what the walk cannot
- * reach is dropped. With no leaf reported, nothing is known to be off-path and the slice stands.
+ * reach is dropped. An engine that reports NO leaf says nothing about branches, so its slice stands
+ * whole — the one case where "unknown" must not read as "off-path".
  */
 export function activePathSlice(entries: SessionEntry[], leafEntryId: string | undefined): SessionEntry[] {
   if (leafEntryId === undefined) return entries;
   const byId = new Map(entries.map((e) => [e.id, e]));
-  if (!byId.has(leafEntryId)) return entries; // the leaf predates the slice: it is all one tail
+  // An append always moves the leaf, so a leaf BEHIND the slice means every entry in it was
+  // appended and then abandoned — a navigate backwards with no new turn since. Nothing here is on
+  // the active path.
+  if (!byId.has(leafEntryId)) return [];
   const onPath = new Set<string>();
   for (let cur = byId.get(leafEntryId); cur; cur = cur.parentId ? byId.get(cur.parentId) : undefined) {
     if (onPath.has(cur.id)) break;

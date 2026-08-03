@@ -284,24 +284,27 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     async state(session): Promise<SessionState> {
       const run = active.get(session);
       const opened = await sessions.openIfExists(session);
-      // The head is always one of the published entries: pi's storages reject a leaf that is not in
-      // the journal (both reads then fail together), and a `leaf` record's id can never BECOME the
-      // leaf — `setLeafId` only ever receives an id that passed the dispatch gate.
       const leafEntryId = opened ? ((await opened.getLeafId()) ?? undefined) : undefined;
       // What will RUN, not the raw record: a client steering a session needs the pair that executes.
-      // Without a boundary there is no model to resolve against, and the fields are absent. A
-      // corrupt chain therefore FAILS this read rather than answering a bare state: `state()` says
-      // what a turn would run with, and a session whose chain is broken has no such answer —
-      // `entries()` still serves the journal, which needs no chain to be true.
+      // Without a boundary there is no model to resolve against, and the fields are absent.
+      // OBSERVATION IS TOTAL: an unreadable entry chain leaves the pair absent too (the same shape a
+      // control-less deployment answers with) rather than rejecting a read that has no error-code
+      // channel to explain itself. The fault is not swallowed — it surfaces where codes exist: the
+      // next invoke fails (the harness build walks the same chain) and a boundary dispatch answers
+      // `boundary_command_failed`. Here it is a server-side warn.
       const b = boundary?.();
-      const settings =
-        opened && b
-          ? resolveSessionSettings(
-              (await activePathEntries(opened)) as Parameters<typeof resolveSessionSettings>[0],
-              b.models,
-              b.defaults,
-            )
-          : undefined;
+      let settings: ReturnType<typeof resolveSessionSettings> | undefined;
+      if (opened && b) {
+        try {
+          settings = resolveSessionSettings(
+            (await activePathEntries(opened)) as Parameters<typeof resolveSessionSettings>[0],
+            b.models,
+            b.defaults,
+          );
+        } catch (error) {
+          log.warn(`[fastagent] session ${session}: settings unreadable (entry chain): ${String(error)}`);
+        }
+      }
       return {
         status: run ? "running" : compacting.has(session) ? "compacting" : "idle",
         ...(run ? { activeRunId: run.runId } : {}),
@@ -320,11 +323,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     async entries(session, opts): Promise<SessionEntries> {
       const opened = await sessions.openIfExists(session);
       if (!opened) return { entries: [] };
-      const all = (await opened.getEntries()).filter(isNavigable).map(toSessionEntry);
-      // A leaf the journal does not hold is not reported: a client walking parentId from a dangling
-      // head would have no signal at all, and "the head is one of these entries" is the whole point
-      // of publishing it.
+      // LEAF FIRST, then the journal: `getEntries()` hands back a SNAPSHOT, so reading it first
+      // would race any concurrent append into a leaf the snapshot cannot contain — a live turn
+      // reading as a dangling head. This order makes the journal a superset of the leaf's chain,
+      // which is what lets the published head be trusted as one of the published entries.
       const leafEntryId = (await opened.getLeafId()) ?? undefined;
+      const all = (await opened.getEntries()).filter(isNavigable).map(toSessionEntry);
       let entries = all;
       if (opts?.since !== undefined) {
         const idx = all.findIndex((e) => e.id === opts.since);

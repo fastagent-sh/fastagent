@@ -1258,10 +1258,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect((await control.state("sNavCompact")).thinkingLevel).toBe("high");
   });
 
-  it("a gap above the leaf fails state(), the read that needs the chain, and not entries()", async () => {
-    // The contract's one read that can reject (src/session.ts): `state()` answers what a turn would
-    // RUN with, which a broken chain has no answer for; `entries()` serves the journal, which needs
-    // no chain. A corrupt journal cannot be produced through the append path, so it is injected.
+  it("a gap above the leaf leaves the settings absent; observation stays total, dispatch carries the code", async () => {
+    // OBSERVATION IS TOTAL: an unreadable chain must not turn a read into a rejection with no
+    // error-code channel to explain itself. The pair is simply absent (a control-less deployment
+    // answers the same shape), and the fault surfaces where codes exist — dispatch. A corrupt
+    // journal cannot be produced through the append path, so it is injected.
     const { models } = makeFaux();
     const brokenEntries = [
       { id: "leaf", parentId: "pruned", type: "message", timestamp: new Date().toISOString(), message: {} },
@@ -1282,7 +1283,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
         defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
       }),
     });
-    await expect(control.state("sBroken")).rejects.toThrow(/pruned/);
+    const state = await control.state("sBroken");
+    expect(state.status).toBe("idle");
+    expect(state.leafEntryId).toBe("leaf");
+    expect(state.model).toBeUndefined(); // unreadable, not silently defaulted
+    expect(state.thinkingLevel).toBeUndefined();
     const entries = await control.entries("sBroken");
     expect(entries.entries.map((e) => e.id)).toEqual(["leaf"]);
     expect(entries.leafEntryId).toBe("leaf");

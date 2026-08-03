@@ -561,8 +561,12 @@ describe("session control over HTTP (Phase 3)", () => {
     expect(activePathSlice(slice, "c").map((e) => e.id)).toEqual(["a", "c"]);
     // Nothing to reduce against: no leaf reported, or a leaf that predates the slice (its ancestors
     // were rendered in an earlier round) — the slice stands rather than being emptied.
+    // An engine that reports no leaf says nothing about branches — "unknown" must not read as
+    // "off-path", or such a client would see an empty replay.
     expect(activePathSlice(slice, undefined)).toEqual(slice);
-    expect(activePathSlice(slice, "older")).toEqual(slice);
+    // A leaf BEHIND the slice (navigate backwards, no turn since): everything here was appended and
+    // then abandoned, so there is nothing on the active path to replay.
+    expect(activePathSlice(slice, "older")).toEqual([]);
   });
 
   it("decideRound: every reconnect-loop diagnosis and budget claim, pinned", async () => {
