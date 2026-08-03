@@ -204,12 +204,23 @@ export async function createPiAgentFromDir(
   // assembly's onAssembly callback (assembly completes before this function returns, so every
   // dispatch sees them). An extra caller observer composes after the hub's (TRUSTED seam).
   let boundaryParts: PiBoundaryWiring | undefined;
+  /** Filled by the assembly below, for the same reason as {@link boundaryParts}. */
+  let readDefinition: (() => Promise<LoadedDefinition>) | undefined;
   const caller = options.observer;
   const wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
   const hub = wantControl
     ? createPiSessionControl({
         sessions,
         boundary: () => boundaryParts,
+        // Skills ARE the commands a user invokes by name — the resolved set, after collisions were
+        // decided first-wins, which a client cannot reconstruct from the directory. Read live: a
+        // skill added while serving is invocable on the next turn, so it must be listable now.
+        commands: async () =>
+          ((await readDefinition?.())?.skills ?? []).map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            source: "skill",
+          })),
         // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub
         // and never cross the data plane's observer seam — without this, an audit tap wired here
         // would miss exactly the mutations it most needs to see (set_model).
@@ -224,7 +235,7 @@ export async function createPiAgentFromDir(
         }
       : hub.observer
     : caller;
-  const { agent, definition } = await createPiAgentFromDefinition(agentDir, {
+  const assembled = await createPiAgentFromDefinition(agentDir, {
     model: modelSpec,
     thinkingLevel: config.thinkingLevel,
     cwd: workspace,
@@ -244,6 +255,8 @@ export async function createPiAgentFromDir(
         }
       : undefined,
   });
+  const { agent, definition } = assembled;
+  readDefinition = assembled.readDefinition;
   return {
     agent,
     definition,

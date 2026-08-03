@@ -447,6 +447,10 @@ const watching = (async () => {
 for await (const e of agent.invoke({ session: "s1" }, { text: "hi" })) void e; // the data plane
 await watching;
 
+// What a `/` composer lists: the definition's named invocations, read LIVE (a skill added while
+// serving is invocable next turn, so it is listable now).
+await control.commands(); // [{ name: "triage", description: "Sort an inbox", source: "skill" }]
+
 // After a disconnect, missed history comes from the durable plane, not the live stream:
 const { entries, leafEntryId } = await control.entries("s1", { since: cursor });
 const state = await control.state("s1"); // { status, activeRunId?, leafEntryId? }

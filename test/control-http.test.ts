@@ -56,6 +56,8 @@ async function serveControl() {
       harnessFactory: factory,
       defaults: { model: faux.getModel(), thinkingLevel: "medium" },
     }),
+    // A non-empty list, so the isomorphism check below compares a real payload rather than [] === [].
+    commands: async () => [{ name: "triage", description: "Sort an inbox", source: "skill" }],
   });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
@@ -98,6 +100,7 @@ describe("session control over HTTP (Phase 3)", () => {
       const remote = await connectSessionControl({ url: served.url, token: TOKEN });
 
       expect(remote.capabilities()).toEqual(served.localControl.capabilities());
+      expect(await remote.commands()).toEqual(await served.localControl.commands());
       expect(await remote.state("sW")).toEqual(await served.localControl.state("sW"));
       const [remoteEntries, localEntries] = [await remote.entries("sW"), await served.localControl.entries("sW")];
       expect(remoteEntries).toEqual(localEntries);

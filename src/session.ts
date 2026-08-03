@@ -12,6 +12,11 @@ import type { Json, Prompt } from "./agent.ts";
 
 export interface SessionControl {
   capabilities(): SessionCapabilities;
+  /** The named invocations this agent exposes — what a composer's `/` completion lists. Sessionless
+   *  (the definition is a deployment fact, not a per-session one) but ASYNC, because a definition is
+   *  allowed to be live: an implementation that re-reads it per turn must answer from that same read
+   *  or the list and the behavior diverge. `[]` is a complete answer, not a missing one. */
+  commands(): Promise<AgentCommand[]>;
   state(session: string): Promise<SessionState>;
   /** `since` is an APPEND-ORDER position cursor: "every record appended after the one with this
    *  id", regardless of branch structure. Reconstructing the active path in a branched session is
@@ -52,6 +57,18 @@ export interface SessionCapabilities {
   navigate: boolean;
   toolProgress: boolean;
   usage: boolean;
+}
+
+/**
+ * One named invocation a user can type (pi's slash commands, and the same fields its RPC
+ * `get_commands` answers with, so a client can map 1:1). `source` is FREE-FORM on purpose: which
+ * kinds exist is an engine's business ("skill" is the only one fastagent assembles today), and an
+ * engine with none returns an empty list rather than the contract enumerating a closed set.
+ */
+export interface AgentCommand {
+  name: string;
+  description?: string;
+  source: string;
 }
 
 /** Stable `SessionResult.error.code` for a command the implementation does not support. */

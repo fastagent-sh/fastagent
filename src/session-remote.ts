@@ -59,7 +59,14 @@ function idleWatchdog(abort: AbortController): ReadWatch {
     stop: () => clearInterval(timer),
   };
 }
-import type { SessionCapabilities, SessionControl, SessionEntries, SessionEvent, SessionState } from "./session.ts";
+import type {
+  AgentCommand,
+  SessionCapabilities,
+  SessionControl,
+  SessionEntries,
+  SessionEvent,
+  SessionState,
+} from "./session.ts";
 
 /** A control request the server answered with a non-2xx status. Carries the STRUCTURED status so a
  *  consumer distinguishing auth failure (401 — stale token, unrecoverable) from transient transport
@@ -114,6 +121,10 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
 
   return {
     capabilities: () => capabilities,
+
+    // NOT prefetched like capabilities: a live definition can grow a skill between calls, so the
+    // list is fetched per call — it is small by contract, same as state().
+    commands: () => get<AgentCommand[]>("/control/commands"),
 
     state: (session) => get<SessionState>(`/control/state?session=${encodeURIComponent(session)}`),
 

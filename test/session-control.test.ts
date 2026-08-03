@@ -341,6 +341,18 @@ describe("session control (Phase 1): observation plane", () => {
       // Not requested → not built.
       const plain = await createPiAgentFromDir(dir, {});
       expect(plain.sessionControl).toBeUndefined();
+
+      // commands(): the definition's named invocations. Empty is a complete answer …
+      expect(await control.commands()).toEqual([]);
+      // … and the read is LIVE, like the definition itself: a skill written while serving is
+      // invocable on the next turn, so it must be listable NOW — a boot snapshot would advertise a
+      // command set the running agent has already left behind.
+      await mkdir(join(dir, "fastagent", "skills", "triage"), { recursive: true });
+      await writeFile(
+        join(dir, "fastagent", "skills", "triage", "SKILL.md"),
+        `---\nname: triage\ndescription: Sort an inbox\n---\n\nDo the thing.\n`,
+      );
+      expect(await control.commands()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

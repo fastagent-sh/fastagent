@@ -131,7 +131,7 @@ export interface ControlRoutesOptions {
 }
 
 /**
- * Mount the control plane: `GET /control/capabilities|state|entries|events` + `POST
+ * Mount the control plane: `GET /control/capabilities|commands|state|entries|events` + `POST
  * /control/dispatch`, all bearer-authenticated. `events` streams SSE (`data: <WireEvent>` lines).
  */
 export function controlRoutes(control: SessionControl, options: ControlRoutesOptions): Routes {
@@ -160,6 +160,8 @@ export function controlRoutes(control: SessionControl, options: ControlRoutesOpt
   return {
     ...(invokeHandler ? { "POST /control/invoke": guard((req) => invokeHandler(req)) } : {}),
     "GET /control/capabilities": guard(() => json(control.capabilities())),
+
+    "GET /control/commands": guard(async () => json(await control.commands())),
 
     "GET /control/state": guard(async (_req, url) => {
       const session = sessionParam(url);
