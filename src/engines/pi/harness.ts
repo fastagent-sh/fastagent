@@ -140,8 +140,10 @@ const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
  */
 const warnedRestores = new Set<string>();
 
-/** pi's ThinkingLevel scale as a checkable set — THE single source for fastagent (session entries
- *  store plain strings; session-control's dispatch validation and capabilities derive from this).
+/** pi's ThinkingLevel scale as a checkable set — the VOCABULARY, not the answer. What a given model
+ *  supports comes from pi-ai's `getSupportedThinkingLevels`; this set only says which strings are
+ *  levels at all, which is what `set_thinking` needs before it has a session (a payload that is not a
+ *  level is invalid independently of any model) and what a recorded string is checked against.
  *  The `satisfies Record<ThinkingLevel, …>` anchor makes it EXHAUSTIVE against pi's union: pi
  *  adding a level turns this into a type error instead of a silent drift where `set_thinking`
  *  rejects a value pi supports. */
@@ -252,9 +254,17 @@ export function resolveHarnessOverrides(
     } else {
       // Against the model resolved ABOVE: `set_thinking` is admitted against the session's model of
       // the moment, and a later `set_model` can strip that level's support out from under it — the
-      // one order the control-plane check cannot see. pi's own clamp (the one its TUI applies), not
-      // a rule of ours — and only for a level fastagent ACCEPTED; with no override, the configured
-      // default reaches pi's clamp at the model call as before.
+      // one order the control-plane check cannot see. The boundary re-records on `set_model`, so this
+      // is the BACKSTOP for the case it cannot reach: a session with no model override whose
+      // CONFIGURED model changed between restarts.
+      //
+      // pi's own clamp (the one its TUI applies), not a rule of ours — and worth stating in the
+      // direction it actually goes: it takes the lowest supported level AT OR ABOVE the recorded one,
+      // and only falls back downward when nothing above exists. So a gap in a model's scale resolves
+      // UPWARD (`low` on a model offering off/high runs at `high`), which costs more rather than
+      // less — the reason the warn names both levels instead of just reporting a substitution.
+      // Only for a level fastagent ACCEPTED; with no override the configured default reaches pi's
+      // clamp at the model call as before.
       const level = recorded.thinkingLevel as ThinkingLevel;
       thinkingLevel = clampThinkingLevel(model, level) as ThinkingLevel;
       if (thinkingLevel !== level) {

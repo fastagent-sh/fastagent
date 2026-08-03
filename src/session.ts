@@ -26,7 +26,13 @@ export interface SessionControl {
  * Static support declaration, two kinds of flag:
  * - COMMAND GATES (`steering`, `followUp`, `manualCompaction`, `modelSelection`, `thinkingLevel`):
  *   clients MUST gate dispatch on them; an unsupported command is rejected before acceptance with
- *   {@link UNSUPPORTED_CAPABILITY_CODE}.
+ *   {@link UNSUPPORTED_CAPABILITY_CODE}. The BOOLEAN half of each gate is authoritative — what is
+ *   off stays off. Their LISTS are not: `thinkingLevel.allowedLevels` is what the deployment's
+ *   configured model supports, and a session that ran `set_model` runs on another one, so the list
+ *   can be wrong in both directions there. Treat a list as a hint for what to offer; the dispatch is
+ *   the authority and answers {@link INVALID_COMMAND_CODE} with the session's real set. (This
+ *   surface is sessionless by contract; putting the session's set on `state()` is a contract change,
+ *   not a fix to make here.)
  * - OBSERVATION-QUALITY flags (`toolProgress`, `usage`): whether those events/state fields appear
  *   at all — nothing to dispatch, nothing to reject.
  * `state`/`entries`/`events` are mandatory (the reconnect contract) and deliberately absent here.

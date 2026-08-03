@@ -817,7 +817,63 @@ describe("session control (Phase 2b): boundary mutations", () => {
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
   });
 
-  it("a set_model that strips support out from under a recorded level does not leave the run applying it", () => {
+  it("set_model RE-RECORDS a level the new model cannot do, so state and the run never disagree", async () => {
+    // The failure this closes: the client set `high`, `set_model` moved the session to a model that
+    // cannot do it, and nothing said so — `state()` went on reporting `high` (it reports what was
+    // recorded), the resolve clamped at run time, and the client saw neither. The boundary re-records
+    // instead, so whatever is recorded is executable and the demotion arrives in the same event.
+    const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
+    const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const sessions = inMemorySessionStore();
+    const boundary: PiBoundaryWiring = {
+      lease: inProcessLease(),
+      models,
+      harnessFactory: piHarnessFactory({
+        sessions,
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+        models,
+        model: thinker,
+        tools: [],
+        systemPrompt: "test",
+      }),
+      defaultModel: thinker,
+    };
+    const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
+    await sessions.openOrCreate("sDemote");
+    expect(await control.dispatch("sDemote", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
+
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sDemote")) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break;
+      }
+    })();
+    expect(await control.dispatch("sDemote", { type: "set_model", model: `${plain.provider}/${plain.id}` })).toEqual({
+      ok: true,
+    });
+    await watching;
+    // ONE event, carrying both halves of what moved — not a model change the client must then
+    // re-derive a level from.
+    expect(seen.filter((e) => e.type === "state_changed")).toHaveLength(1);
+    expect((seen.find((e) => e.type === "state_changed") as { data: unknown }).data).toEqual({
+      model: `${plain.provider}/${plain.id}`,
+      thinkingLevel: "off",
+    });
+    const state = await control.state("sDemote");
+    expect(state.thinkingLevel).toBe("off"); // …and state agrees with what the run will do
+    // A model that CAN do the recorded level is left alone: no spurious demotion, no second entry.
+    await sessions.openOrCreate("sKeep");
+    expect(await control.dispatch("sKeep", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
+    expect(await control.dispatch("sKeep", { type: "set_model", model: `${thinker.provider}/${thinker.id}` })).toEqual({
+      ok: true,
+    });
+    expect((await control.state("sKeep")).thinkingLevel).toBe("high");
+    expect((await control.entries("sKeep")).entries.filter((e) => e.kind === "thinking_level_change")).toHaveLength(1);
+  });
+
+  it("the resolve still clamps as a BACKSTOP — the case the boundary cannot see", () => {
     const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
     const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
     const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
@@ -834,6 +890,25 @@ describe("session control (Phase 2b): boundary mutations", () => {
     );
     expect(out.model).toBe(plain);
     expect(out.thinkingLevel).toBe("off"); // clamped by the model, not left at a level the run ignores
+  });
+
+  it("the clamp we borrow resolves a GAP upward — the direction the comments now state", async () => {
+    // pi's clamp takes the lowest supported level AT OR ABOVE the request and only falls back
+    // downward when nothing above exists. That is not what "nearest" suggests, and the difference is
+    // a cost increase, not a conservative degrade: on a model offering only off/high, a recorded
+    // `low` runs at `high`. The faux registry cannot express a gapped scale (FauxModelDefinition has
+    // no thinkingLevelMap), so the property is pinned against pi directly — if upstream ever makes
+    // the clamp symmetric or downward, this fails and the wording it justifies gets revisited.
+    const { clampThinkingLevel, getSupportedThinkingLevels } = await import("@earendil-works/pi-ai");
+    const gapped = {
+      provider: "probe",
+      id: "gapped",
+      reasoning: true,
+      thinkingLevelMap: { minimal: null, low: null, medium: null },
+    } as unknown as Parameters<typeof clampThinkingLevel>[0];
+    expect(getSupportedThinkingLevels(gapped)).toEqual(["off", "high"]);
+    expect(clampThinkingLevel(gapped, "low")).toBe("high"); // UP, not down to "off"
+    expect(clampThinkingLevel(gapped, "xhigh")).toBe("high"); // nothing above → the highest below
   });
 
   it("set_model / set_thinking append durable overrides and emit state_changed", async () => {

@@ -13,8 +13,8 @@
  * client gating on `capabilities()` never sends them.
  */
 import { DEFAULT_COMPACTION_SETTINGS, compact, prepareCompaction } from "@earendil-works/pi-agent-core";
-import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
-import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import type { SessionTreeEntry, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { type Models, clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
   BOUNDARY_COMMAND_FAILED_CODE,
@@ -180,7 +180,10 @@ export interface PiBoundaryWiring {
   models: Models;
   harnessFactory: PiHarnessFactory;
   /** The assembly's configured model — the base every session's thinking-level answer starts from
-   *  (a session without a `set_model` override runs on exactly this). */
+   *  (a session without a `set_model` override runs on exactly this). MUST be the model
+   *  {@link harnessFactory} was built with: they are two views of one value (create.ts hands both out
+   *  of the same local), and a caller that wires them apart makes `capabilities()` and `set_thinking`
+   *  validate against a model no run uses — the class of lie this whole surface exists to remove. */
   defaultModel: AnyModel;
 }
 
@@ -459,11 +462,34 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 },
               };
             }
+            // A model change can strip support out from under a level this session already set. Left
+            // alone the recorded pair becomes unexecutable: `state()` goes on reporting the old level
+            // (it reports what was RECORDED), the resolve clamps at run time, and the client — the
+            // consumer this plane exists for — sees neither. That is the failure this PR opens by
+            // naming, one surface over. So the boundary re-records: whatever is recorded is always
+            // executable, and the single `state_changed` carries BOTH halves of what moved.
+            //
+            // Read and written under the LEASE (inside `apply`), not pre-lease like the set_thinking
+            // check: this one WRITES, so a concurrent set_thinking between read and append would
+            // otherwise be clamped against a model it never saw.
             apply = async (s) => {
+              const recorded = lastOverrideEntries((await s.getEntries()) as Parameters<typeof lastOverrideEntries>[0])
+                .thinkingLevel as ThinkingLevel | undefined;
+              const clamped =
+                recorded === undefined ? undefined : (clampThinkingLevel(model, recorded) as ThinkingLevel);
+              const demoted = clamped !== undefined && clamped !== recorded ? clamped : undefined;
               await s.appendModelChange(model.provider, model.id);
+              if (demoted !== undefined) await s.appendThinkingLevelChange(demoted);
               // The CANONICAL spec, same string the durable entry and state() report — the event
               // must not echo a client alias the other two surfaces would disagree with.
-              return { type: "state_changed", timestamp: Date.now(), data: { model: `${model.provider}/${model.id}` } };
+              return {
+                type: "state_changed",
+                timestamp: Date.now(),
+                data: {
+                  model: `${model.provider}/${model.id}`,
+                  ...(demoted !== undefined ? { thinkingLevel: demoted } : {}),
+                },
+              };
             };
           } else if (command.type === "set_thinking") {
             // The SCALE check stays here (session-independent: a payload that is not a level at all

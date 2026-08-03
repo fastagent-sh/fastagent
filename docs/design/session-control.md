@@ -171,7 +171,12 @@ interface SessionCapabilities {
 ```
 
 Clients MUST gate controls on capabilities; unsupported commands fail before acceptance with a
-stable `unsupported_capability` code. `state`, `entries`, and `events` are **mandatory** — they are
+stable `unsupported_capability` code. That is the BOOLEAN half. The lists inside a gate are advisory:
+`thinkingLevel.allowedLevels` answers for the deployment's CONFIGURED model, and a session that ran
+`set_model` runs on another — so there the list can be wrong in both directions, and the dispatch,
+which reads the session's own model, is the authority (`invalid_command`, with that model's real set
+in the message). This surface is sessionless by contract; moving the per-session set onto `state()`
+is a contract change, not a patch. `state`, `entries`, and `events` are **mandatory** — they are
 the reconnect contract, and an implementation that cannot honor them cannot claim this interface.
 Branching (`fork`/`clone`/tree projection) and blocking interactions (typed confirm/select/input
 gates that suspend a run for user input) are deliberately absent; each can arrive later as one
