@@ -94,7 +94,7 @@ describe("session control over HTTP (Phase 3)", () => {
       // DERIVED from the routes this server actually MOUNTS — not a hand-kept list, and not a second
       // controlRoutes() call that could drift from it: "every control route requires the token" has
       // to fail when a NEW route forgets `guard`, which a literal array cannot do.
-      expect(served.routeKeys.length).toBeGreaterThan(5);
+      expect(served.routeKeys).toContain("GET /control/commands"); // the route this PR adds is in the sweep
       for (const key of served.routeKeys) {
         const [method, path] = key.split(" ") as [string, string];
         const url = `${served.url}${path}?session=s`;

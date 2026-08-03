@@ -6,7 +6,8 @@
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { log } from "../src/log.ts";
 import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
@@ -379,6 +380,22 @@ describe("session control (Phase 1): observation plane", () => {
         `---\nname: triage\ndescription: A second claim on the same name\n---\n\nDo it differently.\n`,
       );
       expect(await control.commands()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
+      // A skill that FAILED to load is simply absent from the list, so the read is also the only
+      // place that can say so — warned when the finding set changes, silent when it has not (a
+      // composer opening twice must not spam).
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      try {
+        await mkdir(join(dir, "fastagent", "skills", "broken"), { recursive: true });
+        await writeFile(join(dir, "fastagent", "skills", "broken", "SKILL.md"), `no frontmatter here\n`);
+        expect((await control.commands()).map((c) => c.name)).toEqual(["triage"]); // the broken one is gone …
+        expect(warn.mock.calls.flat().join(" ")).toContain("broken"); // … and said so, once
+        warn.mockClear();
+        await control.commands();
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+
       // Live in BOTH directions — a cached read would only ever grow the list.
       await rm(join(dir, "fastagent", "skills"), { recursive: true, force: true });
       expect(await control.commands()).toEqual([]);

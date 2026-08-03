@@ -207,8 +207,7 @@ export interface CreatePiSessionControlOptions {
    *  OPTIONAL because absence is a TRUE answer for the assembly that omits it: a hub over an L1
    *  agent (`createPiAgent({ model, instructions, tools })`) has no definition and therefore no
    *  names, and `[]` says exactly that. Wire it whenever the agent came from a DIRECTORY — there
-   *  `[]` would be a lie, which is why the one production constructor (`open.ts`) throws rather than
-   *  defaults if its reader is missing. */
+   *  `[]` would be a lie; the directory constructor (`createPiAgentFromDir`) always does. */
   commands?: () => Promise<AgentCommand[]>;
   /** Tap for the events the HUB ITSELF generates (boundary mutations: `state_changed`,
    *  `compaction_*`) — those never pass through the data plane's observer seam, so a consumer
