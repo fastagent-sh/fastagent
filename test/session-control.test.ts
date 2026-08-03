@@ -1219,6 +1219,26 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sNavBusy", { type: "navigate", targetId: target.id })).toEqual({ ok: true });
   });
 
+  it("a compaction bounds the model context, not the settings history", async () => {
+    // The active-path walk is not bounded by the compaction the way the CONTEXT read is: an
+    // override recorded before one is a preference, and it still governs the session after it.
+    const { agent, control } = makeBoundary([
+      fauxAssistantMessage("a long answer worth compacting"),
+      fauxAssistantMessage("another long answer"),
+      fauxAssistantMessage("summary of the conversation"),
+    ]);
+    await drain(agent.invoke({ session: "sNavCompact" }, { text: "tell me things" }));
+    expect(await control.dispatch("sNavCompact", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
+    await drain(agent.invoke({ session: "sNavCompact" }, { text: "more things" }));
+    const finished = (async () => {
+      for await (const ev of control.events("sNavCompact")) if (ev.type === "compaction_finished") return ev;
+    })();
+    expect(await control.dispatch("sNavCompact", { type: "compact" })).toEqual({ ok: true });
+    expect((await finished)?.data).toMatchObject({ summary: expect.any(String) });
+    expect((await control.entries("sNavCompact")).entries.map((e) => e.kind)).toContain("compaction");
+    expect((await control.state("sNavCompact")).thinkingLevel).toBe("high");
+  });
+
   it("navigate without boundary wiring is gated off, not silently linear", async () => {
     const { control } = makeObserved([]);
     expect(control.capabilities().navigate).toBe(false);

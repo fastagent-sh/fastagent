@@ -121,18 +121,28 @@ async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
  * The entries on the session's ACTIVE path, root→leaf — what every last-wins read must walk.
  * `getEntries()` is the whole TREE: once `navigate` can move the leaf, the journal still carries
  * the abandoned branch, and reading it flat would run the session on a setting it moved away from.
- * Deliberately NOT `Session.getBranch()`, which stops at a compaction: a compaction bounds the
- * MODEL CONTEXT, while an override recorded before one still governs the session.
+ * Deliberately NOT `Session.getBranch()`: that walk is bounded by the last compaction's retained
+ * window, which is the right bound for MODEL CONTEXT and the wrong one for settings — an override
+ * recorded before a compaction is a preference, and it still governs the session after one.
  */
 export async function activePathEntries(session: Session): Promise<SessionTreeEntry[]> {
   const entries = await session.getEntries();
-  // pi throws `invalid_session` here when the leaf is not in the journal, so a broken chain already
-  // fails visibly — there is nothing left for this walk to re-check or fall back to.
+  // pi throws `invalid_session` when the LEAF is not in the journal, so that half already fails
+  // visibly. A broken parentId mid-chain is this walk's to catch — see below.
   const leafId = await session.getLeafId();
   if (leafId === null) return entries; // nothing recorded a leaf yet — the journal is the path
   const byId = new Map(entries.map((e) => [e.id, e]));
   const path: SessionTreeEntry[] = [];
-  for (let cur = byId.get(leafId); cur; cur = cur.parentId ? byId.get(cur.parentId) : undefined) path.unshift(cur);
+  for (let cur = byId.get(leafId); cur; ) {
+    path.unshift(cur);
+    if (!cur.parentId) break;
+    const parent = byId.get(cur.parentId);
+    // Truncating here would return a PARTIAL path that reads like a short session: every override
+    // and activation above the gap would vanish and the next turn would run on assembly defaults
+    // with nothing said. pi's own path walk throws on this; so does ours.
+    if (!parent) throw new Error(`session entry "${cur.parentId}" is missing from the journal (parent of "${cur.id}")`);
+    cur = parent;
+  }
   return path;
 }
 
