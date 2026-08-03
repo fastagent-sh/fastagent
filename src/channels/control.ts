@@ -62,6 +62,7 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
     compact: true,
     set_model: true,
     set_thinking: true,
+    navigate: true,
   };
   void _commandDriftGuard;
   if (typeof raw !== "object" || raw === null) return undefined;
@@ -111,6 +112,8 @@ function parseWireCommand(raw: unknown): SessionCommand | undefined {
       return typeof c.model === "string" ? { type: "set_model", model: c.model } : undefined;
     case "set_thinking":
       return typeof c.level === "string" ? { type: "set_thinking", level: c.level } : undefined;
+    case "navigate":
+      return typeof c.targetId === "string" ? { type: "navigate", targetId: c.targetId } : undefined;
     default:
       return undefined;
   }

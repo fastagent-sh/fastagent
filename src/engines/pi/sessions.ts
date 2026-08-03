@@ -23,12 +23,12 @@ export interface PiSessionStore {
  * OPEN-EXISTING sibling of {@link PiSessionStore} (session-control.ts): an unknown session answers
  * `undefined`, never creates one — sessions are the data plane's monopoly. Two consumers:
  * - the OBSERVATION plane (`state()`/`entries()`), strictly read-only (design §16 invariant 4);
- * - the control plane's BOUNDARY writers (`set_model`/`set_thinking`), which append override
- *   records to the returned handle after an existence check, under the run lease.
+ * - the control plane's BOUNDARY writers (`set_model`/`set_thinking` append override records to the
+ *   returned handle; `navigate` moves its leaf) after an existence check, under the run lease.
  * `openIfExists` skips the open-time crash reconciliation (that appends repair entries — a write
  * the observation plane must not perform). The boundary writers are safe WITHOUT it only because
- * override records are not messages — they cannot create or interact with a dangling tool_use
- * pair. Writing MESSAGE-class records through this handle would bypass that repair: use
+ * override records are not messages, and a leaf move appends nothing at all — neither can create or
+ * interact with a dangling tool_use pair. Writing MESSAGE-class records through this handle would bypass that repair: use
  * `openOrCreate` for anything that enters the transcript.
  */
 export interface PiSessionReader {

@@ -27,7 +27,7 @@ second run-starting entry point.
 | **Data** | `agent.invoke(scope, prompt)` | No run exists without an invoke. Every turn, and every durable conversation write, is driven by some invoke — channel, schedule, and desktop alike. |
 | **Control** | `dispatch(session, command)` | Modulates, never initiates. `steer`/`follow_up` text reaches the record only through the run an invoke is driving; `abort` only changes that run's course. |
 | **Observation** | `state` / `entries` / `events` | Strictly read-only. Any number of subscribers; disconnecting and resubscribing is lossless with the durable cursor; zero effect on the run. |
-| **Exclusion** | the shared `Lease` | Protects writes only. A run holds it for its whole activity window. Boundary mutations (`compact`, `set_model`, `set_thinking`) are the control plane's only writers and take the same lease. |
+| **Exclusion** | the shared `Lease` | Protects writes only. A run holds it for its whole activity window. Boundary mutations (`compact`, `set_model`, `set_thinking`, `navigate`) are the control plane's only writers and take the same lease. |
 
 ```mermaid
 flowchart LR
@@ -120,7 +120,7 @@ Each of the four non-capability methods survives a deletion test:
 
 ### 5.1 Commands
 
-Six commands. There is no `prompt` command: starting work is the data plane's definition.
+Seven commands. There is no `prompt` command: starting work is the data plane's definition.
 
 ```ts
 type SessionCommand =
@@ -129,7 +129,8 @@ type SessionCommand =
   | { type: "abort" }                        // stops the run, queues, retry delay, and cancellable tool work
   | { type: "compact"; instructions?: string }      // ┐
   | { type: "set_model"; model: string }            // ├ safe boundaries only; otherwise rejected `session_busy`
-  | { type: "set_thinking"; level: string };        // ┘
+  | { type: "set_thinking"; level: string }         // │
+  | { type: "navigate"; targetId: string };        // ┘
 ```
 
 - Queued messages are processed FIFO, one at a time. pi's queue-mode tuning is not exposed.
@@ -140,6 +141,10 @@ type SessionCommand =
   policy. It never accepts provider credentials.
 - `set_thinking` uses a string because supported levels are model-dependent; current allowed values
   are reported in capabilities.
+- `navigate` moves the session's active leaf to an existing entry — the write verb for the tree
+  `entries()` already publishes, and how sibling branches come to exist (the next turn hangs off the
+  new leaf). A target that names no entry rejects `invalid_command`. Deliberately no summarization of
+  the branch being left: that is a model call, engine-flavoured, and not what moving a leaf means.
 - There are no `cycle_*` commands: cycling is a TUI input affordance.
 
 ### 5.2 Acceptance is not outcome
@@ -165,6 +170,7 @@ interface SessionCapabilities {
   manualCompaction: boolean;
   modelSelection: false | { allowedModels: string[] };
   thinkingLevel: boolean;
+  navigate: boolean;
   toolProgress: boolean;
   usage: boolean;
 }
@@ -305,7 +311,7 @@ compare. The vocabulary, grouped by the client maturity level that needs it:
 | L2 | `turn_started`, `turn_finished` | Group tool activity under one assistant turn. |
 | L2 | `compaction_started/finished` | Manual compaction bounds: between runs, no `runId`; every started is closed (`summary`, `error`, or `aborted` — a deliberate stop is not a failure). Automatic overflow compaction stays inside its run and does not emit these. |
 | L2 | `retry_scheduled { operation, attempt, maxAttempts, delayMs, error }` | A transient provider failure scheduled a summarization retry backoff — explains a quiet gap that would otherwise read as a hang. Inside a run (auto-compaction / branch summary, `runId`) or during manual compaction (no `runId`). No closing event: the next event is the closure. |
-| L2 | `state_changed { model?, thinkingLevel? }` | Material state changes. |
+| L2 | `state_changed { model?, thinkingLevel?, leafEntryId? }` | Material state changes — `leafEntryId` carries a `navigate`, so a second attached client sees the branch move without polling `state()`. |
 
 Consumers MUST forward or ignore unknown event types; the vocabulary is additive. The contract
 deliberately excludes editor replacement, themes, widgets, and all other TUI presentation surfaces.
@@ -316,8 +322,8 @@ deliberately excludes editor replacement, themes, widgets, and all other TUI pre
   take the same `Lease` (the existing injectable port in `engines/pi/invoke.ts`) for the run's
   activity window. A scheduler firing into a session mid-run gets `session_busy` and defers, the
   same mechanism and behavior as today.
-- **Boundary mutations take the lease.** `compact`, `set_model`, and `set_thinking` are the control
-  plane's only durable writers; they acquire the lease like a run does and are rejected
+- **Boundary mutations take the lease.** `compact`, `set_model`, `set_thinking` and `navigate` are the
+  control plane's only durable writers; they acquire the lease like a run does and are rejected
   `session_busy` when they would race one.
 - **Residency is an internal cache.** The serving process MAY keep a live engine session per
   recently-used sessionId. Before starting a run it revalidates against the durable record (leaf
@@ -354,7 +360,7 @@ FastAgent adapts pi's concepts, never proxies `pi --mode rpc` unchanged:
 | `get_entries(since)` | Include | Durable cursor recovery. |
 | `agent_settled` | Adapt to `run_settled` + invoke terminal | Correct settle boundary. |
 | tool progress | Include, replace semantics | Live feedback. |
-| `compact`, `set_model`, `set_thinking_level` | Include with policy | Explicit client controls. |
+| `compact`, `set_model`, `set_thinking_level`, `navigate` | Include with policy | Explicit client controls. |
 | `cycle_*`, queue-mode tuning | Exclude | TUI affordances; fixed FIFO is deterministic. |
 | auto-compaction/retry toggles | Exclude | Deployment policy, not per-client state. |
 | `bash`, `abort_bash` | Exclude | Unsafe remote-shell bypass; duplicates tools. |
@@ -412,7 +418,7 @@ safe for untrusted users; `ExecutionEnv` is still not a complete sandbox boundar
 | 0 | **Done.** The definition-aware session builder is extracted (`session-builder.ts`); the TUI-only `~/.pi` auth divergence is eliminated in place; `runPiChat` is one consumer. | Chat assembly semantics unchanged; auth source and `thinkingLevel` deliberately converged to serving; builder independently instantiable. |
 | 1 | **Done.** Observation plane: pi events translate ONCE to `SessionEvent` inside the invoke path (`toSessionEvent`), `AgentEvent` is its projection (`projectAgentEvent`); the `session` subpath types + pi `createPiSessionControl` (`state`/`entries`/`events` over a read-only `PiSessionReader`); conformance tests for projection fidelity, run boundaries (incl. cancellation → exactly-one `run_settled{aborted}`), reconnect, and single-writer. | An L0 client can watch and reconnect to any invoke-driven run. |
 | 2a | **Done.** Run modulation: `dispatch` routes `steer`/`follow_up`/`abort` to the live run via {@link RunControls} registered with `run_started`; the settle window spans steered/queued continuations inside one invoke (pi's agent loop drains both queues within one `prompt()`); `queue_changed` + live `pending` in state; a control-plane abort terminates as `failed{code: "aborted"}` / `run_settled{aborted}`; idle-session run commands reject `no_active_run` before acceptance. | L1 clients. |
-| 2b | **Done.** Boundary mutations under the lease: `set_model`/`set_thinking` append durable session overrides (validated against the registry / the MODEL's own thinking levels — `reasoning` + `thinkingLevelMap`, not the bare scale; `invalid_command` before acceptance) and the fresh-harness resolve (`resolveHarnessOverrides`, the active-tools precedent) applies them on every later turn — a registry change across deploys falls back to the default with a deduped warn instead of bricking the session. `compact` is ACCEPT-FAST (§5.2 has no exceptions: a summarization is a full model call, so the dispatch answers on admission — lease held, harness built — and the outcome travels as `compaction_finished{summary|error|aborted}`, emitted after the lease frees); pre-acceptance failures (the harness build and the local preparation — admission ends where the work becomes a model call) reject `boundary_command_failed` with nothing durable landed, and a session with no compactable history rejects `nothing_to_compact` (a no-op, not a failure — the `no_active_run` pattern: re-dispatch once the session grows); an in-flight compaction is abortable — `abort` during `compacting` aborts the summarization's controller (run/compaction symmetry: both are model calls a client must be able to stop) and converges as `compaction_finished{aborted}` with the lease released, mirroring `run_settled{aborted}`. Mutations contend on the SAME lease as runs (`session_busy` when busy); capabilities report `allowedModels` from the live wiring (`PiBoundaryWiring`, a lazy thunk — the hub exists before the assembly that produces the parts), while the session's model, executing level and available levels come from ONE resolution (`resolveSessionSettings`) that `state()`, the `set_thinking` gate and the fresh-harness resolve all read — model and thinking level are one setting, so deriving them separately is what let the surfaces disagree. | L2 clients. |
+| 2b | **Done.** Boundary mutations under the lease: `set_model`/`set_thinking` append durable session overrides (validated against the registry / the MODEL's own thinking levels — `reasoning` + `thinkingLevelMap`, not the bare scale; `invalid_command` before acceptance) and the fresh-harness resolve (`resolveHarnessOverrides`, the active-tools precedent) applies them on every later turn — a registry change across deploys falls back to the default with a deduped warn instead of bricking the session. `compact` is ACCEPT-FAST (§5.2 has no exceptions: a summarization is a full model call, so the dispatch answers on admission — lease held, harness built — and the outcome travels as `compaction_finished{summary|error|aborted}`, emitted after the lease frees); pre-acceptance failures (the harness build and the local preparation — admission ends where the work becomes a model call) reject `boundary_command_failed` with nothing durable landed, and a session with no compactable history rejects `nothing_to_compact` (a no-op, not a failure — the `no_active_run` pattern: re-dispatch once the session grows); an in-flight compaction is abortable — `abort` during `compacting` aborts the summarization's controller (run/compaction symmetry: both are model calls a client must be able to stop) and converges as `compaction_finished{aborted}` with the lease released, mirroring `run_settled{aborted}`. Mutations contend on the SAME lease as runs (`session_busy` when busy); capabilities report `allowedModels` from the live wiring (`PiBoundaryWiring`, a lazy thunk — the hub exists before the assembly that produces the parts), while the session's model, executing level and available levels come from ONE resolution (`resolveSessionSettings`) that `state()`, the `set_thinking` gate and the fresh-harness resolve all read — model and thinking level are one setting, so deriving them separately is what let the surfaces disagree. `navigate` moves the leaf through pi's `Session.moveTo` (the `SessionStorage.setLeafId` primitive) under the same lease — an unknown `targetId` rejects `invalid_command` before it, and the move rides out as `state_changed{leafEntryId}`. | L2 clients. |
 | 3 | **Done** (HTTP+SSE; subprocess adapter stays demand-driven). One transport serves every remote consumer — Web panel, desktop app, `fastagent attach`: `controlRoutes` (engine-neutral, bearer-token REQUIRED) serves `/control/capabilities\|state\|entries\|dispatch\|events`, with the envelope born at the wire (`{sessionId, epoch, seq, event}` per SSE message; HTTP itself is the request correlation). `connectSessionControl` re-exposes the SAME `SessionControl` interface and consumes the envelope internally — a seq gap ends the iterator into the standard reconnect steps; a server restart is covered by the same rule (its connections drop), and `epoch` is informational for consumers correlating ACROSS connections — within one connection it cannot change, so the client does not compare it. The DATA plane travels too: `POST /control/invoke` (the standard invoke handler behind the same token, mounted when the serve wires an agent) + `connectAgent` client-side — a remote consumer holds a full fastagent instance through the same two contracts local code uses. Serve wiring: `config.sessionControl: true` → dev/start mount the routes, mint a per-boot token, and write `<stateRoot>/control.json` (0600) for local discovery; product runners still own real authentication, idempotency, event persistence, and routing (§14). | Remote `SessionControl` is isomorphic to local (conformance-tested). |
 
 Phase 1 modifies the existing invoke pipeline incrementally (translation + projection); it does not

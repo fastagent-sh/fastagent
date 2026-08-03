@@ -8,7 +8,7 @@
  * stays in the session repository (read via {@link PiSessionReader}), live truth in the events the
  * data plane emits, modulation in the controls the data plane registers.
  *
- * Boundary mutations (Phase 2b: compact/set_model/set_thinking) take the same lease as runs;
+ * Boundary mutations (Phase 2b: compact/set_model/set_thinking/navigate) take the same lease as runs;
  * without boundary wiring they are rejected before acceptance with `unsupported_capability` — a
  * client gating on `capabilities()` never sends them.
  */
@@ -163,7 +163,7 @@ class Subscriber {
 
 // ── The hub ──────────────────────────────────────────────────────────────────
 
-/** What boundary mutations (compact / set_model / set_thinking) need — the SAME instances the
+/** What boundary mutations (compact / set_model / set_thinking / navigate) need — the SAME instances the
  *  agent assembly uses: the lease (mutations must not race a run), the model registry (validation +
  *  allowedModels), and the harness factory (compaction is a model call). Writes go through the
  *  session the hub's reader opened — after an existence check, so the control plane never creates
@@ -262,6 +262,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // Servable or not. WHICH levels is a property of the session's model, so it rides
         // `state().availableThinkingLevels` — a list here could only answer for one model.
         thinkingLevel: !!b,
+        // Gated on the boundary wiring for its LEASE, not its models: moving the leaf is a write,
+        // and a write that races a run would hang the next turn off a stale branch.
+        navigate: !!b,
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: false,
       };
@@ -424,7 +427,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         }
         case "compact":
         case "set_model":
-        case "set_thinking": {
+        case "set_thinking":
+        case "navigate": {
           const b = boundary?.();
           if (!b) {
             // No boundary wiring: rejected before acceptance; a capability-gating client never
@@ -488,6 +492,14 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               await s.appendThinkingLevelChange(command.level);
               return { type: "state_changed", timestamp: Date.now(), data: { thinkingLevel: command.level } };
             };
+          } else if (command.type === "navigate") {
+            apply = async (s) => {
+              // Re-validated under the lease by moveTo itself (SessionError "not_found" →
+              // boundary_command_failed): the pre-lease check below answers the client's typo,
+              // this one answers a target that vanished in the window.
+              await s.moveTo(command.targetId);
+              return { type: "state_changed", timestamp: Date.now(), data: { leafEntryId: command.targetId } };
+            };
           }
           // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
           // not minted into a ghost record. (Existence check before the lease — read-only; the
@@ -499,6 +511,18 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               error: {
                 code: NO_SUCH_SESSION_CODE,
                 message: `session "${session}" does not exist — sessions are created by invoke, not by boundary mutations`,
+                retryable: false,
+              },
+            };
+          }
+          if (command.type === "navigate" && !(await existing.getEntry(command.targetId))) {
+            // A target that names no entry is a permanent payload error, not a session error — the
+            // same disposition as an unknown model spec. `entries()` is where the valid ids come from.
+            return {
+              ok: false,
+              error: {
+                code: INVALID_COMMAND_CODE,
+                message: `entry "${command.targetId}" does not exist in session "${session}" — entries() lists the navigable ids`,
                 retryable: false,
               },
             };
@@ -671,8 +695,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 },
               };
             }
-            // Unreachable by construction: only set_model/set_thinking reach this branch, and
-            // both assign `apply` in validation. Throw rather than silently skip (fail visibly).
+            // Unreachable by construction: only set_model/set_thinking/navigate reach this branch,
+            // and all three assign `apply` in validation. Throw rather than silently skip (fail visibly).
             if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
             emitOwn(session, await apply(fresh));
           } catch (error) {

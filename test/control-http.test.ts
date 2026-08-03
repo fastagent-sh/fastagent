@@ -214,6 +214,7 @@ describe("session control over HTTP (Phase 3)", () => {
         { type: "compact", instructions: 42 }, // instructions not a string
         { type: "set_model", model: 42 }, // model not a string
         { type: "set_thinking", level: 42 }, // level not a string
+        { type: "navigate", targetId: 42 }, // targetId not a string
       ];
       for (const command of malformed) {
         const rejected = await post(command);

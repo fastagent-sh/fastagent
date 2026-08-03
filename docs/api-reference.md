@@ -481,7 +481,13 @@ await control.dispatch("s1", { type: "set_thinking", level: "high" });
 await control.dispatch("s1", { type: "compact", instructions: "keep the decisions" }); // accept-fast: ok on
 // admission; the outcome arrives as compaction_finished{summary|error|aborted} (emitted after the
 // lease frees; aborted = a deliberate stop via dispatch(abort) — not a failure)
+await control.dispatch("s1", { type: "navigate", targetId: entryId }); // move the leaf; state_changed{leafEntryId}
 ```
+
+`navigate` is the write verb for the tree `entries()` publishes: it moves the session's active leaf,
+so the next turn hangs off `targetId` instead of the old leaf — which is also how sibling branches
+come to exist. A `targetId` naming no entry in the session rejects `invalid_command`; gate on
+`capabilities().navigate`.
 
 Overrides persist in the session record and every later turn's fresh harness applies them — on any
 serving path, channels included. One exception: a recorded thinking level the session's CURRENT

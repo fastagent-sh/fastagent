@@ -21,6 +21,7 @@ import {
   NO_SUCH_SESSION_CODE,
   RUN_COMMAND_FAILED_CODE,
   UNSUPPORTED_CAPABILITY_CODE,
+  type SessionEntry,
   type SessionEvent,
 } from "../src/session.ts";
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
@@ -1000,6 +1001,68 @@ describe("session control (Phase 2b): boundary mutations", () => {
       "sB1",
     );
     expect(resolved.thinkingLevel).toBe("high");
+  });
+
+  it("navigate moves the leaf, so the NEXT turn branches from the target", async () => {
+    const { agent, control } = makeBoundary([
+      fauxAssistantMessage("one"),
+      fauxAssistantMessage("two"),
+      fauxAssistantMessage("three"),
+    ]);
+    await drain(agent.invoke({ session: "sNav" }, { text: "first" }));
+    await drain(agent.invoke({ session: "sNav" }, { text: "second" }));
+    const before = (await control.entries("sNav")).entries;
+    const target = before.find((e) => e.kind === "assistant") as SessionEntry;
+    expect((await control.state("sNav")).leafEntryId).not.toBe(target.id);
+
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sNav")) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break;
+      }
+    })();
+    expect(await control.dispatch("sNav", { type: "navigate", targetId: target.id })).toEqual({ ok: true });
+    await watching;
+    expect(seen.at(-1)?.data).toEqual({ leafEntryId: target.id });
+    expect((await control.state("sNav")).leafEntryId).toBe(target.id);
+
+    // The point of moving a leaf: the next turn hangs off the target, creating a sibling branch —
+    // the second turn's records stay in the repository but leave the active path.
+    await drain(agent.invoke({ session: "sNav" }, { text: "third" }));
+    const after = (await control.entries("sNav")).entries;
+    const byId = new Map(after.map((e) => [e.id, e]));
+    const path: string[] = [];
+    for (let id = (await control.state("sNav")).leafEntryId; id; id = byId.get(id)?.parentId) path.unshift(id);
+    expect(path).toContain(target.id);
+    expect(after.length).toBeGreaterThan(before.length); // nothing was deleted; the tree branched
+    // Everything the old branch recorded past the target is off the active path now — still in the
+    // repository, no longer what the next turn continues.
+    const abandoned = before.slice(before.indexOf(target) + 1).map((e) => e.id);
+    expect(abandoned.length).toBeGreaterThan(0);
+    expect(path.filter((id) => abandoned.includes(id))).toEqual([]);
+  });
+
+  it("navigate rejects an entry that is not in the session, and a session that does not exist", async () => {
+    const { agent, control } = makeBoundary([fauxAssistantMessage("ok")]);
+    expect(control.capabilities().navigate).toBe(true);
+    await drain(agent.invoke({ session: "sNavBad" }, { text: "hi" }));
+    const leafBefore = (await control.state("sNavBad")).leafEntryId;
+    const unknownEntry = await control.dispatch("sNavBad", { type: "navigate", targetId: "nope" });
+    expect(unknownEntry.ok).toBe(false);
+    if (!unknownEntry.ok) expect(unknownEntry.error.code).toBe(INVALID_COMMAND_CODE);
+    expect((await control.state("sNavBad")).leafEntryId).toBe(leafBefore); // rejected before acceptance
+    const unknownSession = await control.dispatch("sGhost", { type: "navigate", targetId: "x" });
+    expect(unknownSession.ok).toBe(false);
+    if (!unknownSession.ok) expect(unknownSession.error.code).toBe(NO_SUCH_SESSION_CODE);
+  });
+
+  it("navigate without boundary wiring is gated off, not silently linear", async () => {
+    const { control } = makeObserved([]);
+    expect(control.capabilities().navigate).toBe(false);
+    const rejected = await control.dispatch("sNavCap", { type: "navigate", targetId: "x" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
   });
 
   it("resolveHarnessOverrides: a known recorded model override wins over the default", () => {
