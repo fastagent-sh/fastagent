@@ -450,6 +450,10 @@ await watching;
 // After a disconnect, missed history comes from the durable plane, not the live stream:
 const { entries, leafEntryId } = await control.entries("s1", { since: cursor });
 const state = await control.state("s1"); // { status, activeRunId?, leafEntryId? }
+// `state()` REJECTS (no error code; a non-2xx remotely) when the session's entry chain is
+// unreadable — it answers what a turn would run with, and a broken chain has no such answer.
+// `entries()` still serves the journal, so a client degrades to history rather than losing the
+// session.
 ```
 
 `invoke` stays the only way to start work; the `AgentEvent` stream is a projection of the rich

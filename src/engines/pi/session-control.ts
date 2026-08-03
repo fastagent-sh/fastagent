@@ -521,18 +521,30 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               // change them — an override recorded on the branch just left stops applying, and a
               // client tracking model/level from the event stream would otherwise show what the
               // next turn will not use.
-              const settings = resolveSessionSettings(
-                (await activePathEntries(s)) as Parameters<typeof resolveSessionSettings>[0],
-                b.models,
-                b.defaults,
-              );
+              // The move is already durable here, so a settings read that throws (the new path is
+              // above a gap) must NOT turn into "nothing took effect": report the position without
+              // the settings and let `state()`'s rejection be where the broken chain surfaces.
+              let settings: ReturnType<typeof resolveSessionSettings> | undefined;
+              try {
+                settings = resolveSessionSettings(
+                  (await activePathEntries(s)) as Parameters<typeof resolveSessionSettings>[0],
+                  b.models,
+                  b.defaults,
+                );
+              } catch (error) {
+                log.warn(`[fastagent] session ${session}: leaf moved, settings unreadable: ${String(error)}`);
+              }
               return {
                 type: "state_changed",
                 timestamp: Date.now(),
                 data: {
                   leafEntryId: command.targetId,
-                  model: `${settings.model.provider}/${settings.model.id}`,
-                  thinkingLevel: settings.thinkingLevel,
+                  ...(settings
+                    ? {
+                        model: `${settings.model.provider}/${settings.model.id}`,
+                        thinkingLevel: settings.thinkingLevel,
+                      }
+                    : {}),
                 },
               };
             };
