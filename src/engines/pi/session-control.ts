@@ -318,7 +318,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       const opened = await sessions.openIfExists(session);
       if (!opened) return { entries: [] };
       const all = (await opened.getEntries()).filter(isNavigable).map(toSessionEntry);
-      const leafEntryId = (await opened.getLeafId()) ?? undefined;
+      // A leaf the journal does not hold is not reported: a client walking parentId from a dangling
+      // head would have no signal at all, and "the head is one of these entries" is the whole point
+      // of publishing it.
+      const leaf = (await opened.getLeafId()) ?? undefined;
+      const leafEntryId = leaf !== undefined && all.some((e) => e.id === leaf) ? leaf : undefined;
       let entries = all;
       if (opts?.since !== undefined) {
         const idx = all.findIndex((e) => e.id === opts.since);

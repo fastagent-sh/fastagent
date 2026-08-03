@@ -1281,7 +1281,48 @@ describe("session control (Phase 2b): boundary mutations", () => {
       }),
     });
     await expect(control.state("sBroken")).rejects.toThrow(/pruned/);
-    expect((await control.entries("sBroken")).entries.map((e) => e.id)).toEqual(["leaf"]);
+    const entries = await control.entries("sBroken");
+    expect(entries.entries.map((e) => e.id)).toEqual(["leaf"]);
+    expect(entries.leafEntryId).toBe("leaf");
+    // dispatch NEVER rejects, whatever the chain does: the transport promises a SessionResult.
+    const rejected = await control.dispatch("sBroken", { type: "set_thinking", level: "high" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(BOUNDARY_COMMAND_FAILED_CODE);
+  });
+
+  it("a move whose new path is unreadable still reports the position it reached", async () => {
+    // The durable write happened; reporting it as boundary_command_failed would be the one lie the
+    // acceptance contract forbids. The settings are simply absent from the event.
+    const { models } = makeFaux();
+    let leafId = "b";
+    const entries = [
+      { id: "a", parentId: "pruned", type: "message", timestamp: new Date().toISOString(), message: {} },
+      { id: "b", type: "message", timestamp: new Date().toISOString(), message: {} },
+    ];
+    const broken = {
+      getEntries: async () => entries,
+      getLeafId: async () => leafId,
+      getEntry: async (id: string) => entries.find((e) => e.id === id),
+      moveTo: async (id: string) => {
+        leafId = id;
+      },
+    } as unknown as Awaited<ReturnType<PiSessionReader["openIfExists"]>>;
+    const seen: SessionEvent[] = [];
+    const { control } = createPiSessionControl({
+      sessions: { openIfExists: async () => broken },
+      boundary: () => ({
+        lease: inProcessLease(),
+        models,
+        harnessFactory: (() => {
+          throw new Error("unused");
+        }) as never,
+        defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
+      }),
+      tap: (_session, event) => seen.push(event),
+    });
+    expect(await control.dispatch("sBrokenMove", { type: "navigate", targetId: "a" })).toEqual({ ok: true });
+    expect(leafId).toBe("a"); // the move is durable …
+    expect(seen.at(-1)?.data).toEqual({ leafEntryId: "a" }); // … and reported, settings absent
   });
 
   it("navigate without boundary wiring is gated off, not silently linear", async () => {
