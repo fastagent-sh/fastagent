@@ -1263,11 +1263,13 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // RUN with, which a broken chain has no answer for; `entries()` serves the journal, which needs
     // no chain. A corrupt journal cannot be produced through the append path, so it is injected.
     const { models } = makeFaux();
+    const brokenEntries = [
+      { id: "leaf", parentId: "pruned", type: "message", timestamp: new Date().toISOString(), message: {} },
+    ];
     const broken = {
-      getEntries: async () => [
-        { id: "leaf", parentId: "pruned", type: "message", timestamp: new Date().toISOString(), message: {} },
-      ],
+      getEntries: async () => brokenEntries,
       getLeafId: async () => "leaf",
+      getEntry: async (id: string) => brokenEntries.find((e) => e.id === id),
     } as unknown as Awaited<ReturnType<PiSessionReader["openIfExists"]>>;
     const { control } = createPiSessionControl({
       sessions: { openIfExists: async () => broken },
