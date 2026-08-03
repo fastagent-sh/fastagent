@@ -275,7 +275,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       const opened = await sessions.openIfExists(session);
       const leafEntryId = opened ? ((await opened.getLeafId()) ?? undefined) : undefined;
       // What will RUN, not the raw record: a client steering a session needs the pair that executes.
-      // Without a boundary there is no model to resolve against, and the fields are absent.
+      // Without a boundary there is no model to resolve against, and the fields are absent. A
+      // corrupt chain therefore FAILS this read rather than answering a bare state: `state()` says
+      // what a turn would run with, and a session whose chain is broken has no such answer —
+      // `entries()` still serves the journal, which needs no chain to be true.
       const b = boundary?.();
       const settings =
         opened && b
@@ -448,10 +451,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           }
           // Payload validation BEFORE the lease — an invalid value must not briefly block a run.
           /** The durable write for set_model/set_thinking/navigate — undefined for compact (harness
-           *  path). Answers the event to emit, or nothing when the command was already true. */
-          let apply:
-            | ((session: import("@earendil-works/pi-agent-core").Session) => Promise<SessionEvent | undefined>)
-            | undefined;
+           *  path). Answers the event to emit. */
+          let apply: ((session: import("@earendil-works/pi-agent-core").Session) => Promise<SessionEvent>) | undefined;
           if (command.type === "set_model") {
             const slash = command.model.indexOf("/");
             const model =
@@ -503,12 +504,13 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             apply = async (s) => {
               // A move to where the leaf already is writes nothing: pi journals a move as a `leaf`
               // record, so an idempotent re-dispatch (a client retry, a UI firing on every
-              // selection) would otherwise grow the session by a record no plane publishes.
-              if ((await s.getLeafId()) === command.targetId) return undefined;
+              // selection) would otherwise grow the session by a record no plane publishes. The
+              // EVENT is emitted either way — it reports the resulting position, not the fact that
+              // a record was written, and a client that dispatched must not have to poll for it.
+              if ((await s.getLeafId()) !== command.targetId) await s.moveTo(command.targetId);
               // moveTo's postcondition IS "targetId is the leaf" (it validates, then sets); a
               // failure throws and travels as boundary_command_failed, so a read-back could only
               // re-report what this line already knows.
-              await s.moveTo(command.targetId);
               return { type: "state_changed", timestamp: Date.now(), data: { leafEntryId: command.targetId } };
             };
           }
@@ -716,8 +718,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // Unreachable by construction: only set_model/set_thinking/navigate reach this branch,
             // and all three assign `apply` in validation. Throw rather than silently skip (fail visibly).
             if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
-            const event = await apply(fresh);
-            if (event) emitOwn(session, event);
+            emitOwn(session, await apply(fresh));
           } catch (error) {
             // The append failed before anything durable landed — "nothing took effect"; the same
             // command may succeed on retry.

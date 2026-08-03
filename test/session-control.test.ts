@@ -1135,7 +1135,18 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const leaf = (await control.state("sNavNoop")).leafEntryId as string;
     const size = async () => ((await (await sessions.openIfExists("sNavNoop"))?.getEntries()) ?? []).length;
     const before = await size();
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sNavNoop")) {
+        seen.push(ev);
+        if (ev.type === "state_changed") break;
+      }
+    })();
     expect(await control.dispatch("sNavNoop", { type: "navigate", targetId: leaf })).toEqual({ ok: true });
+    await watching;
+    // The event still travels: it reports the resulting POSITION, not that a record was written —
+    // a concurrent client whose dispatch lost the race must not have to poll to learn where it is.
+    expect(seen.at(-1)?.data).toEqual({ leafEntryId: leaf });
     expect(await size()).toBe(before);
     expect((await control.state("sNavNoop")).leafEntryId).toBe(leaf);
   });
