@@ -553,6 +553,18 @@ describe("session control over HTTP (Phase 3)", () => {
     }
   });
 
+  it("activePathSlice: the replay renders the active branch, not the tree", async () => {
+    const { activePathSlice } = await import("../src/cli/commands/attach.ts");
+    const entry = (id: string, parentId?: string) => ({ id, parentId, timestamp: 0, kind: "user", data: {} });
+    // b is the abandoned branch after a navigate back to a; c hangs off a and holds the leaf.
+    const slice = [entry("a"), entry("b", "a"), entry("c", "a")];
+    expect(activePathSlice(slice, "c").map((e) => e.id)).toEqual(["a", "c"]);
+    // Nothing to reduce against: no leaf reported, or a leaf that predates the slice (its ancestors
+    // were rendered in an earlier round) — the slice stands rather than being emptied.
+    expect(activePathSlice(slice, undefined)).toEqual(slice);
+    expect(activePathSlice(slice, "older")).toEqual(slice);
+  });
+
   it("decideRound: every reconnect-loop diagnosis and budget claim, pinned", async () => {
     const { decideRound } = await import("../src/cli/commands/attach.ts");
     const err = (over: Partial<Parameters<typeof decideRound>[0] & { type: "error" }> = {}) =>
@@ -685,7 +697,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const entriesPage = {
       entries: [
         { id: "e2", timestamp: 1, kind: "user", data: { text: "question" } },
-        { id: "e3", timestamp: 2, kind: "assistant", data: { text: "answer" } },
+        { id: "e3", parentId: "e2", timestamp: 2, kind: "assistant", data: { text: "answer" } },
       ],
       leafEntryId: "e3",
     };

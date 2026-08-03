@@ -134,12 +134,13 @@ export async function activePathEntries(session: Session): Promise<SessionTreeEn
   const byId = new Map(entries.map((e) => [e.id, e]));
   // A chain that is not intact THROWS: any other disposition returns a short path that reads like a
   // short session (every override and activation above the gap gone, the next turn silently on
-  // assembly defaults). Only the PARENT links are checked here — a leaf that is not in the journal
-  // already made `getLeafId()` above throw, and re-checking it would be handling a state pi cannot
-  // hand us.
+  // assembly defaults). pi's storages already reject a leaf outside the journal in `getLeafId()`,
+  // but the port is swappable — so the walk names it here rather than dying on `undefined.parentId`.
+  const start = byId.get(leafId);
+  if (!start) throw new Error(`session leaf "${leafId}" is missing from the journal`);
   const path: SessionTreeEntry[] = [];
-  for (let cur = byId.get(leafId) as SessionTreeEntry; ; ) {
-    path.unshift(cur);
+  for (let cur = start; ; ) {
+    path.push(cur);
     // A path cannot be longer than the journal it walks; anything more is a parentId cycle, which
     // would otherwise hang the turn with no `failed` event at all.
     if (path.length > entries.length) throw new Error(`session entry "${cur.id}" cycles through its parents`);
@@ -148,7 +149,7 @@ export async function activePathEntries(session: Session): Promise<SessionTreeEn
     if (!parent) throw new Error(`session entry "${cur.parentId}" is missing from the journal (parent of "${cur.id}")`);
     cur = parent;
   }
-  return path;
+  return path.reverse(); // walked leaf→root; every consumer reads it root→leaf
 }
 
 /** In-process store (pi InMemorySessionRepo). Continuity lives and dies with the instance. */
