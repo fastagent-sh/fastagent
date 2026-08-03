@@ -255,13 +255,22 @@ export function resolveHarnessOverrides(
     );
   }
   if (recorded.thinkingLevel !== undefined) {
-    if (THINKING_LEVELS.has(recorded.thinkingLevel as ThinkingLevel)) {
-      thinkingLevel = recorded.thinkingLevel as ThinkingLevel;
-    } else {
+    // Checked against the RESOLVED model, not just the scale: a `set_thinking` is admitted against
+    // the session's model of the moment, and a later `set_model` can strip the level's support out
+    // from under it. Applying it anyway would be the silent no-op the control plane refuses to
+    // create in the other order.
+    if (!THINKING_LEVELS.has(recorded.thinkingLevel as ThinkingLevel)) {
       warnOnce(
         `${sessionId}\u0000thinking\u0000${recorded.thinkingLevel}`,
         `[fastagent] session ${sessionId}: recorded thinking level "${recorded.thinkingLevel}" is unknown — using the configured default`,
       );
+    } else if (!thinkingLevelsFor(model).includes(recorded.thinkingLevel as ThinkingLevel)) {
+      warnOnce(
+        `${sessionId}\u0000thinking\u0000${model.provider}/${model.id}\u0000${recorded.thinkingLevel}`,
+        `[fastagent] session ${sessionId}: recorded thinking level "${recorded.thinkingLevel}" is not supported by ${model.provider}/${model.id} — using the configured default`,
+      );
+    } else {
+      thinkingLevel = recorded.thinkingLevel as ThinkingLevel;
     }
   }
   return { model, thinkingLevel };

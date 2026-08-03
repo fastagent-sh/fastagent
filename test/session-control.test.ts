@@ -26,7 +26,7 @@ import {
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
 import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
 import { inProcessLease } from "../src/engines/pi/invoke.ts";
-import { resolveHarnessOverrides } from "../src/engines/pi/harness.ts";
+import { resolveHarnessOverrides, thinkingLevelsFor } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
@@ -777,8 +777,37 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sNR", { type: "set_thinking", level: "off" })).toEqual({ ok: true });
   });
 
+  it("thinkingLevelsFor: a reasoning model's explicit nulls are the unsupported levels (a missing key is a provider default)", () => {
+    const model = { reasoning: true, thinkingLevelMap: { minimal: null, max: null } } as unknown as Parameters<
+      typeof thinkingLevelsFor
+    >[0];
+    const levels = thinkingLevelsFor(model);
+    expect(levels).not.toContain("minimal");
+    expect(levels).not.toContain("max");
+    expect(levels).toEqual(expect.arrayContaining(["off", "low", "medium", "high", "xhigh"]));
+  });
+
+  it("a set_model that strips support out from under a recorded level does not leave the run applying it", () => {
+    const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
+    const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
+    // set_thinking(high) was admitted against the reasoning model; set_model then moved the session
+    // to one that cannot do it. The resolve must not hand the run a level it will ignore.
+    const out = resolveHarnessOverrides(
+      [
+        { type: "thinking_level_change", thinkingLevel: "high" },
+        { type: "model_change", provider: plain.provider, modelId: plain.id },
+      ],
+      models,
+      { model: thinker, thinkingLevel: "off" },
+      "sSwap",
+    );
+    expect(out.model).toBe(plain);
+    expect(out.thinkingLevel).toBe("off");
+  });
+
   it("set_model / set_thinking append durable overrides and emit state_changed", async () => {
-    const { agent, control, sessions, spec } = makeBoundary([fauxAssistantMessage("ok")]);
+    const { agent, control, sessions, spec, models } = makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sB1" }, { text: "hi" })); // session exists
     const seen: SessionEvent[] = [];
     const watching = (async () => {
@@ -799,8 +828,8 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const opened = await sessions.openIfExists("sB1");
     const resolved = resolveHarnessOverrides(
       ((await opened?.getEntries()) ?? []) as Parameters<typeof resolveHarnessOverrides>[0],
-      makeFaux().models,
-      { model: makeFaux().faux.getModel(), thinkingLevel: "medium" },
+      models,
+      { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
       "sB1",
     );
     expect(resolved.thinkingLevel).toBe("high");
@@ -824,7 +853,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("resolveHarnessOverrides: last entry wins; unknown recorded model falls back with the default", () => {
-    const { faux, models } = makeFaux();
+    const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
     const fallback = { model: faux.getModel(), thinkingLevel: "medium" as const };
     // Unknown model → fallback (deployment registry changed); known thinking level applies.
     const out = resolveHarnessOverrides(
