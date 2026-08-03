@@ -514,17 +514,26 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               },
             };
           }
-          if (command.type === "navigate" && !(await existing.getEntry(command.targetId))) {
-            // A target that names no entry is a permanent payload error, not a session error — the
-            // same disposition as an unknown model spec. `entries()` is where the valid ids come from.
-            return {
-              ok: false,
-              error: {
-                code: INVALID_COMMAND_CODE,
-                message: `entry "${command.targetId}" does not exist in session "${session}" — navigable ids come from entries(), whose conversation kinds (user/assistant/tool) are the meaningful targets`,
-                retryable: false,
-              },
-            };
+          if (command.type === "navigate") {
+            // A target that cannot BE a leaf is a permanent payload error, not a session error — the
+            // same disposition as an unknown model spec. Every published entry qualifies (the leaf
+            // legitimately sits on a model_change or a compaction — the engine itself puts it
+            // there) EXCEPT pi's own `leaf` records: those journal a previous move, so their
+            // parentId is the OLD leaf and pointing at one would put the branch head on a record
+            // that is on no conversation path.
+            const entry = await existing.getEntry(command.targetId);
+            if (!entry || entry.type === "leaf") {
+              return {
+                ok: false,
+                error: {
+                  code: INVALID_COMMAND_CODE,
+                  message: entry
+                    ? `entry "${command.targetId}" is a leaf-move record, not a position — navigate to the entry it points at`
+                    : `entry "${command.targetId}" does not exist in session "${session}" — entries() lists the navigable ids`,
+                  retryable: false,
+                },
+              };
+            }
           }
           if (command.type === "set_thinking") {
             // The same set `state()` showed the client. Reject here rather than record a level the

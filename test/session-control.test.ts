@@ -1057,6 +1057,23 @@ describe("session control (Phase 2b): boundary mutations", () => {
     if (!unknownSession.ok) expect(unknownSession.error.code).toBe(NO_SUCH_SESSION_CODE);
   });
 
+  it("the navigable set is every published entry EXCEPT the move bookkeeping a navigate itself writes", async () => {
+    const { agent, control, spec } = makeBoundary([fauxAssistantMessage("ok")]);
+    await drain(agent.invoke({ session: "sNavKinds" }, { text: "hi" }));
+    // A boundary record is a legitimate target: the engine itself leaves the leaf sitting on one.
+    expect(await control.dispatch("sNavKinds", { type: "set_model", model: spec })).toEqual({ ok: true });
+    const modelChange = (await control.entries("sNavKinds")).entries.find((e) => e.kind === "model_change");
+    expect(await control.dispatch("sNavKinds", { type: "navigate", targetId: modelChange!.id })).toEqual({ ok: true });
+    // The move just made left a `leaf` record behind. Pointing the branch head at it would put the
+    // leaf on a record whose parentId is the OLD leaf — on no conversation path at all.
+    const leafRecord = (await control.entries("sNavKinds")).entries.find((e) => e.kind === "leaf");
+    expect(leafRecord).toBeDefined();
+    const rejected = await control.dispatch("sNavKinds", { type: "navigate", targetId: leafRecord!.id });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    expect((await control.state("sNavKinds")).leafEntryId).toBe(modelChange!.id);
+  });
+
   it("navigate takes the run lease: mid-run it is session_busy, and the live branch stays put", async () => {
     // The stated reason navigate is gated on the boundary wiring at all: a leaf moved under a live
     // run would hang that run's next entry off a stale branch.

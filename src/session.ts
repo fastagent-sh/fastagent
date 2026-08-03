@@ -44,9 +44,11 @@ export interface SessionCapabilities {
   /** Whether `set_thinking` is servable at all. WHICH levels is per-session — see
    *  {@link SessionState.availableThinkingLevels}. */
   thinkingLevel: boolean;
-  /** Whether the session leaf can be MOVED (`navigate`). An engine whose sessions are linear
-   *  reports `false`; the tree the contract already publishes (`SessionEntry.parentId` +
-   *  `SessionEntries.leafEntryId`) is then read-only. */
+  /** Whether the session leaf can be MOVED. An engine whose sessions are linear reports `false`;
+   *  the tree the contract already publishes (`SessionEntry.parentId` + `SessionEntries.leafEntryId`)
+   *  is then read-only. Named after its COMMAND, unlike the older gates (`manualCompaction` gates
+   *  `compact`, `thinkingLevel` gates `set_thinking`): those already force a client to translate,
+   *  and a gate keyed by the command literal is the only naming a derived map could ever produce. */
   navigate: boolean;
   toolProgress: boolean;
   usage: boolean;
@@ -109,7 +111,8 @@ export type SessionCommand =
   /** Move the session's active leaf to `targetId`, an existing entry — the write verb for the tree
    *  `entries()` already publishes (and how sibling branches come to exist: the next turn hangs off
    *  the new leaf). A boundary mutation: same lease as a run, `invalid_command` when `targetId`
-   *  names no entry in this session. */
+   *  names no entry in this session or names one that cannot BE a leaf (an engine's own move
+   *  bookkeeping). */
   | { type: "navigate"; targetId: string };
 
 /**
