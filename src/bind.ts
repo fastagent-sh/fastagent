@@ -14,11 +14,25 @@ function normalize(host: string): string {
     .replace(/^::ffff:/, "");
 }
 
-/** A bindable host: an IP literal (v4/v6, brackets optional) or "localhost". No DNS names — a bind
- *  address must be an address of THIS machine, and resolving one at parse time is not our job. */
+/** A bindable host: an IP literal (v4/v6, brackets optional) or "localhost". No other DNS name — a
+ *  bind address must be an address of THIS machine, and resolving one is not this module's job. */
 export function isBindAddress(host: string): boolean {
   const h = normalize(host);
   return h === "localhost" || isIP(h) !== 0;
+}
+
+/**
+ * The ADDRESS form of an accepted bind value: `localhost` becomes `127.0.0.1`, everything else is
+ * already an address. Applied where a value ENTERS (the flag, `http.host`), so nothing downstream ever
+ * holds a name — not deferring the resolution but removing it, which is the module's whole point.
+ *
+ * Two things go wrong otherwise, and both are silent. `server.listen` hands the name to `dns.lookup`,
+ * which picks ONE of 127.0.0.1/::1 by rules we do not control — so what got bound is unknown here. And
+ * `clientHost` would then write that NAME into control.json and the copyable curl, where a consumer
+ * resolves it again, possibly to the other one.
+ */
+export function bindAddress(host: string): string {
+  return normalize(host) === "localhost" ? "127.0.0.1" : host;
 }
 
 /**
@@ -44,6 +58,14 @@ export function answersLocalhost(host: string | undefined): boolean {
   if (classifyBind(host) === "wildcard") return true;
   const h = normalize(host as string);
   return h === "localhost" || h === "127.0.0.1" || h === "::1";
+}
+
+/** How to NAME a bind in a message: the wildcard is every interface, so calling it one address would
+ *  understate it; anything else is dialable as itself. THE renderer — the ready lines, the
+ *  already-in-use refusal and the generic bind failure all read a bind through this one, so a reader
+ *  never sees the same bind described two ways. */
+export function bindLabel(host: string | undefined, port: number): string {
+  return classifyBind(host) === "wildcard" ? `port ${port}` : `${clientHost(host)}:${port}`;
 }
 
 /** The address a local client should dial for a serve bound to `host` (control.json, the ready log). */

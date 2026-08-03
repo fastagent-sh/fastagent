@@ -13,6 +13,7 @@ import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { workspaceHint } from "../../paths.ts";
+import { bindAddress } from "../../bind.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { assertTunnelBindable, maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
@@ -77,7 +78,10 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
   const routed = await routesFor(a.agentDir, traced, a.stateRoot, a.sessionControl).catch(failStartup);
-  const host = bindFlag ?? a.config.http?.host;
+  // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
+  // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
+  const configured = a.config.http?.host;
+  const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
   const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot, {
     tunnel: opts.tunnel ?? false,

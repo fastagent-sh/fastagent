@@ -529,7 +529,11 @@ describe("session control over HTTP (Phase 3)", () => {
       expect(warn).not.toHaveBeenCalled(); // loopback is not LAN-reachable — nothing to warn about
       // A specific non-wildcard bind is only reachable as itself: the client must dial that address.
       expect(await url("192.168.1.5", join(root, "b"))).toBe("http://192.168.1.5:9000");
+      // …and the warning NAMES that bind. Counting alone would stay green if the address rendered as
+      // `undefined`, which is the whole content of the claim "names the actual bind".
+      expect(warn.mock.calls.flat().join(" ")).toContain("192.168.1.5 (off this machine)");
       expect(await url(undefined, join(root, "c"))).toBe("http://127.0.0.1:9000"); // wildcard accepts loopback
+      expect(warn.mock.calls.flat().join(" ")).toContain("binds all interfaces");
       expect(warn).toHaveBeenCalledTimes(2);
       warn.mockRestore();
     } finally {

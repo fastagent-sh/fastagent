@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { answersLocalhost, classifyBind, clientHost, isBindAddress } from "../src/bind.ts";
+import { answersLocalhost, bindAddress, bindLabel, classifyBind, clientHost, isBindAddress } from "../src/bind.ts";
 
 describe("bind: one reading of a bind address", () => {
   it("accepts IP literals and localhost, rejects anything unbindable", () => {
@@ -27,6 +27,28 @@ describe("bind: one reading of a bind address", () => {
     }
     // Loopback by reach, but a dial of `localhost` never lands there — the tunnel gate must refuse it.
     for (const no of ["127.0.0.2", "127.0.1.1", "192.168.1.5"]) expect(answersLocalhost(no), no).toBe(false);
+  });
+
+  it("a NAME never leaves the parser: localhost resolves to an address at the boundary", () => {
+    // Accepting `localhost` and PASSING IT ON are different things. `server.listen` would hand the name
+    // to dns.lookup, which picks one of 127.0.0.1/::1 by rules this module does not control — so what
+    // got bound would be unknown here, while control.json and the copyable curl carried a name for the
+    // client to resolve again, possibly to the other one. Resolving at the boundary removes both.
+    expect(isBindAddress("localhost")).toBe(true); // still a legitimate thing to type
+    expect(bindAddress("localhost")).toBe("127.0.0.1");
+    expect(bindAddress("LOCALHOST")).toBe("127.0.0.1");
+    for (const already of ["127.0.0.1", "::1", "0.0.0.0", "192.168.1.5"]) {
+      expect(bindAddress(already), already).toBe(already); // an address is left exactly as written
+    }
+  });
+
+  it("renders one label for a bind, wherever a message names it", () => {
+    // The ready lines, the already-in-use refusal and the generic bind failure all read through this,
+    // so the same bind is never described two ways (a hand-built `${host}:${port}` gave `:::8787`).
+    expect(bindLabel(undefined, 8787)).toBe("port 8787"); // a wildcard IS every interface — do not name one
+    expect(bindLabel("0.0.0.0", 8787)).toBe("port 8787");
+    expect(bindLabel("127.0.0.1", 8787)).toBe("127.0.0.1:8787");
+    expect(bindLabel("::1", 8787)).toBe("[::1]:8787"); // URL form, brackets and all
   });
 
   it("derives the address a client dials", () => {

@@ -158,7 +158,12 @@ describe("cli: bind address policy", () => {
     // localhost — the very address that bind stops answering. They come from one function now; this
     // pins the property that made splitting them a bug.
     const { readyAddressLines } = await import("../src/cli/serve.ts");
-    for (const host of [undefined, "0.0.0.0", "127.0.0.1", "192.168.1.5", "::1"]) {
+    const { bindAddress } = await import("../src/bind.ts");
+    // `localhost` is IN the list on purpose: it is the only accepted input that could put a NAME in
+    // these lines, so leaving it out would make the `not.toContain("localhost")` below pass for the
+    // reason that it was never tried. It cannot get here — `parseBind`/`http.host` resolve it to an
+    // address first (bind.ts `bindAddress`) — and this is what says so.
+    for (const host of [undefined, "0.0.0.0", "127.0.0.1", "192.168.1.5", "::1", bindAddress("localhost")]) {
       const [bindLine, tryLine] = readyAddressLines(host, 8899, true);
       const dial = tryLine!.match(/curl -s (\S+?)\/invoke/)![1]!;
       expect(dial, String(host)).toContain(":8899");

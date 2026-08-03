@@ -65,6 +65,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     if (!gated.ok) expect(gated.gate).toMatch(/nothing outside the container can reach the serve/);
     // A one-interface address doesn't even exist in the container — different consequence, same gate.
     const gatedSpecific = await call(dir, cfg("192.168.1.5"), { run: true });
+    expect(gatedSpecific.ok).toBe(false); // unconditional: a gate that stops firing must fail this
     if (!gatedSpecific.ok) expect(gatedSpecific.gate).toMatch(/fails to bind at start/);
     // Plan mode only produces artifacts, so it warns and proceeds.
     const planned = await call(dir, cfg("127.0.0.1"));

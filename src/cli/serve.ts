@@ -13,7 +13,7 @@ import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
 import { text } from "../channels/respond.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/channel.ts";
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
-import { answersLocalhost, classifyBind, clientHost } from "../bind.ts";
+import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
 import { type Routes, parseRouteKey, router, serveNode } from "../host/node.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -259,7 +259,7 @@ export function assertTunnelBindable(host: string | undefined, tunnel: boolean, 
 export function readyAddressLines(host: string | undefined, boundPort: number, builtinInvoke: boolean): string[] {
   const dial = `${clientHost(host)}:${boundPort}`;
   const lines = [
-    `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : dial}`,
+    `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`,
   ];
   if (builtinInvoke) {
     lines.push(
@@ -362,15 +362,14 @@ export function serve(
         // a fix as moving the port.
         failStartup(
           new Error(
-            `${classifyBind(host) === "wildcard" ? `port ${port}` : `${clientHost(host)}:${port}`} is already ` +
-              `in use; choose another with --port${classifyBind(host) === "wildcard" ? "" : " or --bind"}`,
+            `${bindLabel(host, port)} is already in use; choose another with ` +
+              `--port${classifyBind(host) === "wildcard" ? "" : " or --bind"}`,
           ),
         );
       }
-      // Through the same renderer as the EADDRINUSE branch above: hand-concatenating gives `:::8787`
+      // Through `bindLabel`, like every other message about a bind: hand-concatenating gives `:::8787`
       // for an IPv6 bind and a bare `:8787` for the wildcard, which reads as an explicit bind of nothing.
-      const where = classifyBind(host) === "wildcard" ? `port ${port}` : `${clientHost(host)}:${port}`;
-      failStartup(new Error(`cannot bind http channel on ${where}: ${error.message}`));
+      failStartup(new Error(`cannot bind http channel on ${bindLabel(host, port)}: ${error.message}`));
     },
   );
 }

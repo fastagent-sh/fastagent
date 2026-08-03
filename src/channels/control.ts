@@ -12,8 +12,10 @@
  * beyond a shared secret (principals, per-permission split, audit) is the wrapping host's job
  * (design §14). The serving process generates a per-boot token and writes it to
  * `<stateRoot>/control.json` for local discovery — filesystem permissions guard the token, and
- * the token guards the routes: the serve binds ALL interfaces (containers require it), so the port
- * is LAN-reachable and the mount warns accordingly.
+ * the token guards the routes. How far those routes REACH is the bind address: all interfaces by
+ * default (containers require it), so the port is LAN-reachable and the mount warns accordingly —
+ * `--bind 127.0.0.1` (or `http.host`) closes exactly that reach, and the warning goes quiet because
+ * there is none left to state.
  */
 import type { ImageRef, Prompt } from "../agent.ts";
 import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type SessionEvent } from "../session.ts";

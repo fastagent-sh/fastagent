@@ -24,7 +24,7 @@ import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } fr
 import { formatAuthReport } from "./auth-view.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
-import { isBindAddress } from "../bind.ts";
+import { bindAddress, isBindAddress } from "../bind.ts";
 import { failStartup, failUsage } from "./fail.ts";
 
 /**
@@ -77,7 +77,7 @@ export function parseBind(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   if (!isBindAddress(trimmed)) failUsage(`invalid --bind "${value}": must be an IP address or "localhost"`);
-  return trimmed;
+  return bindAddress(trimmed); // a name never travels past this point — see bind.ts
 }
 
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. Non-blocking. */

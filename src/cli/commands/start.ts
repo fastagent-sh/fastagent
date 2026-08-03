@@ -17,6 +17,7 @@ import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
+import { bindAddress } from "../../bind.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import {
   assertTunnelBindable,
@@ -45,8 +46,8 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // Flag validation first: a bad --port is a USAGE error (exit 2), and reporting it must not depend on
   // the directory being an agent (which is a runtime/environment failure, exit 1).
   const portFlag = parsePort(opts.port, "--port", "flag");
-  const placement = placementOrExit(dir);
   const bindFlag = parseBind(opts.bind);
+  const placement = placementOrExit(dir);
   setLogLevel("info"); // production posture: info+, the debug turn trace (and its end-user content) gated out
   loadDotEnv(placement.agentDir);
   installProxyFetch();
@@ -132,7 +133,10 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const routed = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: !agentcore }).catch(
     failStartup,
   );
-  const host = bindFlag ?? config.http?.host;
+  // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
+  // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
+  const configured = config.http?.host;
+  const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
   const withControl = mountSessionControl(routed.routes, sessionControl, stateRoot, {
     tunnel: opts.tunnel ?? false,
