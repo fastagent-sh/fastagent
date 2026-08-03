@@ -215,12 +215,18 @@ export async function createPiAgentFromDir(
         // Skills ARE the commands a user invokes by name — the resolved set, after collisions were
         // decided first-wins, which a client cannot reconstruct from the directory. Read live: a
         // skill added while serving is invocable on the next turn, so it must be listable now.
-        commands: async () =>
-          ((await readDefinition?.())?.skills ?? []).map((skill) => ({
+        commands: async () => {
+          // Unlike `boundaryParts` (undefined is a real deployment state, gated in capabilities),
+          // an unset reader here is a WIRING BUG — the hub is unreachable until this function
+          // returns. Answering [] would spell it as "this agent has no names", which the contract
+          // defines as a complete answer.
+          if (!readDefinition) throw new Error("commands() before the assembly ran (opener invariant broken)");
+          return (await readDefinition()).skills.map((skill) => ({
             name: skill.name,
             description: skill.description,
             source: "skill",
-          })),
+          }));
+        },
         // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub
         // and never cross the data plane's observer seam — without this, an audit tap wired here
         // would miss exactly the mutations it most needs to see (set_model).
