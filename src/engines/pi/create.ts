@@ -419,7 +419,7 @@ export async function createPiAgentFromDefinition(
   // a runtime-written bad skill surfaces the moment it appears, while a static finding does not spam
   // every turn's log. The memo lives in report.ts, keyed by dir, and is SHARED with every other
   // reader of this definition (the control plane's command list) — log dedup, not session state.
-  noteFindings(dir, definition);
+  noteFindings(definition.dir, definition);
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
   const tools = withSearchTool(options.tools ?? piDefaultTools());
@@ -442,7 +442,7 @@ export async function createPiAgentFromDefinition(
     // next good edit heals both.
     live: async () => {
       const def = await loadAgentDefinition(dir, { cwd: env.cwd, env });
-      reportFindingsIfChanged(dir, def);
+      reportFindingsIfChanged(def.dir, def);
       return {
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity,

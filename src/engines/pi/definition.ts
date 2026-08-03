@@ -126,12 +126,14 @@ async function readSkills(
 export async function loadAgentSkills(
   agentDir: string,
   options: { cwd?: string; env?: ExecutionEnv } = {},
-): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[] }> {
+): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[]; dir: string }> {
   const cwd = options.cwd ?? agentDir;
   const e = options.env ?? new NodeExecutionEnv({ cwd });
   const rootResult = await e.absolutePath(agentDir);
   if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
-  return readSkills(e, rootResult.value);
+  // `dir` is the RESOLVED root, like {@link LoadedDefinition.dir}: readers key per-definition state
+  // (the findings memo) on it, and "./agent" vs an absolute path must not become two definitions.
+  return { ...(await readSkills(e, rootResult.value)), dir: rootResult.value };
 }
 
 /**

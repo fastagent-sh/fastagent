@@ -221,7 +221,7 @@ export async function createPiAgentFromDir(
           // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the
           // author's composer with no signal anywhere. The memo is SHARED with the turn path (keyed
           // by dir), so a finding is warned when it appears, not once per reader that notices it.
-          reportFindingsIfChanged(agentDir, loaded);
+          reportFindingsIfChanged(loaded.dir, loaded);
           return loaded.skills.map((skill) => ({
             name: skill.name,
             description: skill.description,

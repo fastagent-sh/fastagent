@@ -25,7 +25,9 @@ function findingsSignature(def: Findings): string {
  */
 const lastFindings = new Map<string, string>();
 
-/** Record the current findings WITHOUT printing — for a caller that already reported them (boot). */
+/** Record the current findings WITHOUT printing — for a caller that already reported them (boot).
+ *  `dir` must be the RESOLVED definition root (`LoadedDefinition.dir`), or two spellings of one path
+ *  become two memos and warn twice. */
 export function noteFindings(dir: string, def: Findings): void {
   lastFindings.set(dir, findingsSignature(def));
 }

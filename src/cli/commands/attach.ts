@@ -217,7 +217,21 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     // `/` is a reserved command prefix: a typo'd /aboort silently steering the model (injecting a
     // prompt when the user meant to STOP the run) is the dangerous direction of the ambiguity.
     if (trimmed.startsWith("/") && trimmed !== "/abort") {
-      console.log(`[unknown command ${trimmed} — /abort stops the run; a leading / is reserved]`);
+      // The agent's own names are worth showing here rather than only "unknown": this composer
+      // cannot INVOKE them (the data plane takes prompts as text), but the author asking "/x" is
+      // asking what exists — and reading it live is the only way to answer honestly.
+      void control.commands().then(
+        (commands) => {
+          const names = commands.map((c) => `/${c.name}`).join(", ");
+          console.log(
+            `[unknown command ${trimmed} — /abort stops the run; a leading / is reserved. ` +
+              `${names ? `this agent defines ${names} (send one as plain text to use it)` : "this agent defines no names"}]`,
+          );
+        },
+        // The one read that may reject (an unreadable definition): say so instead of nothing.
+        (error) =>
+          console.log(`[unknown command ${trimmed} — /abort stops the run; command list unavailable: ${error}]`),
+      );
       return;
     }
     const command =
