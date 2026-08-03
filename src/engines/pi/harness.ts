@@ -8,7 +8,7 @@
  */
 import { AgentHarness } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv, ExecutionToolContext, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model, Models } from "@earendil-works/pi-ai";
+import { type Model, type Models, clampThinkingLevel } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
@@ -156,17 +156,6 @@ const ALL_THINKING_LEVELS = {
 } satisfies Record<ThinkingLevel, true>;
 export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set(Object.keys(ALL_THINKING_LEVELS) as ThinkingLevel[]);
 
-/** The levels THIS model can actually do — the scale above is the vocabulary, not the answer. A
- *  non-reasoning model has only "off"; on a reasoning model pi-ai marks an unsupported level with an
- *  explicit `null` in `thinkingLevelMap` (a missing key means "provider default", i.e. supported).
- *  `capabilities()` and `set_thinking` both derive from here: advertising a level the model ignores
- *  makes a control that reports success and does nothing. */
-export function thinkingLevelsFor(model: AnyModel): ThinkingLevel[] {
-  if (!model.reasoning) return ["off"];
-  const map = model.thinkingLevelMap as Partial<Record<ThinkingLevel, string | null>> | undefined;
-  return [...THINKING_LEVELS].filter((level) => map?.[level] !== null);
-}
-
 /** The shape both override consumers walk — a session entry, structurally. */
 export interface OverrideEntryLike {
   type: string;
@@ -255,22 +244,25 @@ export function resolveHarnessOverrides(
     );
   }
   if (recorded.thinkingLevel !== undefined) {
-    // Checked against the RESOLVED model, not just the scale: a `set_thinking` is admitted against
-    // the session's model of the moment, and a later `set_model` can strip the level's support out
-    // from under it. Applying it anyway would be the silent no-op the control plane refuses to
-    // create in the other order.
     if (!THINKING_LEVELS.has(recorded.thinkingLevel as ThinkingLevel)) {
       warnOnce(
         `${sessionId}\u0000thinking\u0000${recorded.thinkingLevel}`,
         `[fastagent] session ${sessionId}: recorded thinking level "${recorded.thinkingLevel}" is unknown — using the configured default`,
       );
-    } else if (!thinkingLevelsFor(model).includes(recorded.thinkingLevel as ThinkingLevel)) {
-      warnOnce(
-        `${sessionId}\u0000thinking\u0000${model.provider}/${model.id}\u0000${recorded.thinkingLevel}`,
-        `[fastagent] session ${sessionId}: recorded thinking level "${recorded.thinkingLevel}" is not supported by ${model.provider}/${model.id} — using the configured default`,
-      );
     } else {
-      thinkingLevel = recorded.thinkingLevel as ThinkingLevel;
+      // Against the model resolved ABOVE: `set_thinking` is admitted against the session's model of
+      // the moment, and a later `set_model` can strip that level's support out from under it — the
+      // one order the control-plane check cannot see. pi's own clamp (the one its TUI applies), not
+      // a rule of ours. The CONFIGURED default is deliberately left alone: pi clamps it at the model
+      // call, and warning here would fire on every session of a non-reasoning deployment.
+      const level = recorded.thinkingLevel as ThinkingLevel;
+      thinkingLevel = clampThinkingLevel(model, level) as ThinkingLevel;
+      if (thinkingLevel !== level) {
+        warnOnce(
+          `${sessionId}\u0000thinking\u0000${model.provider}/${model.id}\u0000${level}`,
+          `[fastagent] session ${sessionId}: recorded thinking level "${level}" is not supported by ${model.provider}/${model.id} — running at "${thinkingLevel}"`,
+        );
+      }
     }
   }
   return { model, thinkingLevel };

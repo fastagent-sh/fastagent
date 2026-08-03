@@ -26,7 +26,7 @@ import {
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
 import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
 import { inProcessLease } from "../src/engines/pi/invoke.ts";
-import { resolveHarnessOverrides, thinkingLevelsFor } from "../src/engines/pi/harness.ts";
+import { resolveHarnessOverrides } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
@@ -777,14 +777,14 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sNR", { type: "set_thinking", level: "off" })).toEqual({ ok: true });
   });
 
-  it("thinkingLevelsFor: a reasoning model's explicit nulls are the unsupported levels (a missing key is a provider default)", () => {
-    const model = { reasoning: true, thinkingLevelMap: { minimal: null, max: null } } as unknown as Parameters<
-      typeof thinkingLevelsFor
-    >[0];
-    const levels = thinkingLevelsFor(model);
-    expect(levels).not.toContain("minimal");
-    expect(levels).not.toContain("max");
-    expect(levels).toEqual(expect.arrayContaining(["off", "low", "medium", "high", "xhigh"]));
+  it("a reasoning model still rejects a level it has no mapping for (xhigh/max need one)", async () => {
+    const { control, sessions } = makeBoundary([]); // faux-thinker: reasoning, no thinkingLevelMap
+    const caps = control.capabilities();
+    expect(caps.thinkingLevel ? caps.thinkingLevel.allowedLevels : []).not.toContain("max");
+    await sessions.openOrCreate("sMax");
+    const rejected = await control.dispatch("sMax", { type: "set_thinking", level: "max" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
   });
 
   it("a set_model that strips support out from under a recorded level does not leave the run applying it", () => {
@@ -799,11 +799,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
         { type: "model_change", provider: plain.provider, modelId: plain.id },
       ],
       models,
-      { model: thinker, thinkingLevel: "off" },
+      { model: thinker, thinkingLevel: "low" },
       "sSwap",
     );
     expect(out.model).toBe(plain);
-    expect(out.thinkingLevel).toBe("off");
+    expect(out.thinkingLevel).toBe("off"); // clamped by the model, not left at a level the run ignores
   });
 
   it("set_model / set_thinking append durable overrides and emit state_changed", async () => {
@@ -1122,10 +1122,10 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await drain(agent.invoke({ session: "sB7" }, { text: "hi" }));
     expect((await control.state("sB7")).model).toBeUndefined(); // no override → assembly default
     await control.dispatch("sB7", { type: "set_model", model: spec });
-    await control.dispatch("sB7", { type: "set_thinking", level: "xhigh" });
+    await control.dispatch("sB7", { type: "set_thinking", level: "high" });
     const state = await control.state("sB7");
     expect(state.model).toBe(spec);
-    expect(state.thinkingLevel).toBe("xhigh");
+    expect(state.thinkingLevel).toBe("high");
   });
 
   it("the override rides the next turn end to end: set_model changes which model answers", async () => {

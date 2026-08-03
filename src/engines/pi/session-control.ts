@@ -14,7 +14,7 @@
  */
 import { DEFAULT_COMPACTION_SETTINGS, compact, prepareCompaction } from "@earendil-works/pi-agent-core";
 import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
-import type { Models } from "@earendil-works/pi-ai";
+import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
   BOUNDARY_COMMAND_FAILED_CODE,
@@ -44,7 +44,6 @@ import {
   harnessSession,
   lastOverrideEntries,
   resolveSessionModel,
-  thinkingLevelsFor,
 } from "./harness.ts";
 import { log } from "../../log.ts";
 import type { PiSessionReader } from "./sessions.ts";
@@ -270,7 +269,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         // `set_thinking`, which reads the session's own model. Answering from the default is the
         // honest sessionless answer; the static scale was not (it advertised every level on a
         // non-reasoning model, and the dispatch then returned ok for a no-op).
-        thinkingLevel: b ? { allowedLevels: thinkingLevelsFor(b.defaultModel) as string[] } : false,
+        thinkingLevel: b ? { allowedLevels: getSupportedThinkingLevels(b.defaultModel) as string[] } : false,
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: false,
       };
@@ -507,7 +506,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               b.models,
               b.defaultModel,
             );
-            const allowed = thinkingLevelsFor(model) as string[];
+            const allowed = getSupportedThinkingLevels(model) as string[];
             if (!allowed.includes(command.level)) {
               return {
                 ok: false,
