@@ -354,8 +354,14 @@ describe("activePathEntries", () => {
     expect((await activePathEntries(fakeSession(entries, null))).map((e) => e.id)).toEqual(["a", "b", "c"]);
   });
 
-  it("a gap in the chain throws instead of returning a path that reads like a short session", async () => {
-    const orphan = [{ id: "leaf", parentId: "pruned" }];
-    await expect(activePathEntries(fakeSession(orphan, "leaf"))).rejects.toThrow(/pruned/);
+  it("a chain that is not intact throws instead of returning a path that reads like a short session", async () => {
+    const orphanParent = [{ id: "leaf", parentId: "pruned" }];
+    await expect(activePathEntries(fakeSession(orphanParent, "leaf"))).rejects.toThrow(/pruned/);
+    await expect(activePathEntries(fakeSession(orphanParent, "gone"))).rejects.toThrow(/gone/);
+    const cycle = [
+      { id: "x", parentId: "y" },
+      { id: "y", parentId: "x" },
+    ];
+    await expect(activePathEntries(fakeSession(cycle, "x"))).rejects.toThrow(/cycles/);
   });
 });

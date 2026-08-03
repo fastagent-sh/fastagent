@@ -127,19 +127,23 @@ async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
  */
 export async function activePathEntries(session: Session): Promise<SessionTreeEntry[]> {
   const entries = await session.getEntries();
-  // pi throws `invalid_session` when the LEAF is not in the journal, so that half already fails
-  // visibly. A broken parentId mid-chain is this walk's to catch — see below.
   const leafId = await session.getLeafId();
   if (leafId === null) return entries; // nothing recorded a leaf yet — the journal is the path
   const byId = new Map(entries.map((e) => [e.id, e]));
+  // A chain that is not intact — a missing node or a cycle — THROWS, and this walk owns both halves
+  // rather than delegating to a storage's own checks: the port is swappable, and every disposition
+  // other than throwing returns a short path that reads like a short session (every override and
+  // activation above the gap gone, the next turn silently on assembly defaults).
+  const start = byId.get(leafId);
+  if (!start) throw new Error(`session leaf "${leafId}" is missing from the journal`);
   const path: SessionTreeEntry[] = [];
-  for (let cur = byId.get(leafId); cur; ) {
+  for (let cur = start; ; ) {
     path.unshift(cur);
+    // A path cannot be longer than the journal it walks; anything more is a parentId cycle, which
+    // would otherwise hang the turn with no `failed` event at all.
+    if (path.length > entries.length) throw new Error(`session entry "${cur.id}" cycles through its parents`);
     if (!cur.parentId) break;
     const parent = byId.get(cur.parentId);
-    // Truncating here would return a PARTIAL path that reads like a short session: every override
-    // and activation above the gap would vanish and the next turn would run on assembly defaults
-    // with nothing said. pi's own path walk throws on this; so does ours.
     if (!parent) throw new Error(`session entry "${cur.parentId}" is missing from the journal (parent of "${cur.id}")`);
     cur = parent;
   }
