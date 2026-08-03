@@ -345,7 +345,7 @@ Recurring per-command options (same meaning everywhere they appear):
 
 | Option | Commands | Meaning |
 |---|---|---|
-| `--bind <addr>` | `dev`, `start` | Bind address. Default: all interfaces (containers need it); `127.0.0.1` keeps the port, `/control/*` included, off the LAN. Prefer this flag over `http.host` for a local-only bind — config travels into a deployed image, where `deploy` gates it. See [Bind address](configuration.md#bind-address). |
+| `--bind <addr>` | `dev`, `start` | Bind address — an IP literal, or `localhost` (read as `127.0.0.1`). Default: all interfaces (containers need it); `127.0.0.1` keeps the port, `/control/*` included, off the LAN. Prefer this flag over `http.host` for a local-only bind — config travels into a deployed image, where `deploy` gates it. See [Bind address](configuration.md#bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `fire`, `login`, `deploy` | Never prompt; missing information becomes an error with the flag to pass (`deploy` plan mode only warns on a missing model — `--run` gates). |
 | `--model <provider/modelId>` | assembly commands | Model override (`--model > FASTAGENT_MODEL > config`). |
 | `--auth-path <file>` | assembly commands, `login` | Credentials file override. |

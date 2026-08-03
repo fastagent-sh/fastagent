@@ -120,6 +120,10 @@ Use `PORT` in hosted environments that inject a port.
 --bind > fastagent.config.* http.host > all interfaces
 ```
 
+`localhost` is accepted and resolved to `127.0.0.1` as it is read, so what binds, what the startup
+lines print and what `control.json` records are the same address — a name would leave that to
+`dns.lookup` on one side and to the client's resolver on the other, which can disagree.
+
 All interfaces is the default because containers require it. A desktop app driving a local agent wants
 the opposite: `--bind 127.0.0.1` keeps the port — `/control/*` with it — unreachable from the LAN.
 `<stateRoot>/control.json` records the address a client should dial, so clients read it rather than

@@ -29,11 +29,15 @@ src/
 ├── cli.ts                   # the THIN entry (import-free; lazy-loads cli/program.ts)
 ├── cli/                     # the CLI, built on clig.dev: kernel.ts (CommandSpec-as-data + the commander adapter — commander appears ONLY here; help/suggestions/exit-code policy: 0 ok, 1 runtime, 2 usage), program.ts (the spec registry — the CLI surface's single source of truth; lazy per-command imports), presenters (invoke-stream.ts `invoke` stream → exit code; models-view.ts/auth-view.ts `models`/auth-report output; add-feishu.ts `add feishu|lark` app onboarding), shared.ts/serve.ts (cross-command helpers incl. mountSessionControl — per-boot token + control.json discovery file; process side effects live in the command modules), fail.ts, commands/ (one module per command)
 ├── telegram.ts, github.ts   # subpath-export shims (@fastagent-sh/fastagent/telegram etc. — the supported surface)
-├── bind.ts                  # THE reading of a bind address: parse (isBindAddress), reach
-│                           # (classifyBind), localhost-dialability (answersLocalhost), URL form
-│                           # (clientHost). The flag, http.host validation, serveNode, the ready log
-│                           # and the deploy pre-flight all read one through it — two parsers of "is
-│                           # this LAN-reachable" would disagree, and the answer gates --tunnel.
+├── bind.ts                  # THE reading of a bind address, as the six DIFFERENT questions it is:
+│                           # bindable (isBindAddress) / an address not a name (bindAddress, applied
+│                           # where a value enters) / reach (classifyBind) / dialable by the NAME
+│                           # localhost (answersLocalhost — NOT the same as reach: 127.0.0.2 is
+│                           # loopback and --tunnel still cannot reach it) / how a message names it
+│                           # (bindLabel) / what a client dials (clientHost). The flag, http.host
+│                           # validation, serveNode, the ready lines, control.json and the deploy
+│                           # pre-flight all read one through this — conflating any two of those
+│                           # questions produces a silent failure, which is why they are separate.
 ├── log.ts                   # leveled logging singleton (dev=debug, start=info)
 ├── session.ts               # engine-neutral session-control contract (SessionControl: state/entries/events + dispatch, error codes)
 ├── session-remote.ts        # remote clients over /control/*: connectSessionControl (control plane) + connectAgent (data plane)
