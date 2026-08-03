@@ -128,7 +128,9 @@ async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
 export async function activePathEntries(session: Session): Promise<SessionTreeEntry[]> {
   const entries = await session.getEntries();
   const leafId = await session.getLeafId();
-  if (leafId === null) return entries; // nothing recorded a leaf yet — the journal is the path
+  // A null leaf is pi's ROOT position (what `moveTo(null)` sets), so the active path is EMPTY — not
+  // "the whole journal", which on a branched session would mean every abandoned branch at once.
+  if (leafId === null) return [];
   const byId = new Map(entries.map((e) => [e.id, e]));
   // A chain that is not intact — a missing node or a cycle — THROWS, and this walk owns both halves
   // rather than delegating to a storage's own checks: the port is swappable, and every disposition

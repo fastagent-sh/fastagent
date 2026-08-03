@@ -351,7 +351,11 @@ describe("activePathEntries", () => {
   it("walks the leaf's chain and leaves the abandoned branch behind", async () => {
     const entries = [{ id: "a" }, { id: "b", parentId: "a" }, { id: "c", parentId: "a" }];
     expect((await activePathEntries(fakeSession(entries, "c"))).map((e) => e.id)).toEqual(["a", "c"]);
-    expect((await activePathEntries(fakeSession(entries, null))).map((e) => e.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("a null leaf is the ROOT, not the whole journal", async () => {
+    const entries = [{ id: "a" }, { id: "b", parentId: "a" }, { id: "c", parentId: "a" }];
+    expect(await activePathEntries(fakeSession(entries, null))).toEqual([]);
   });
 
   it("a chain that is not intact throws instead of returning a path that reads like a short session", async () => {
