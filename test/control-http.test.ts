@@ -25,7 +25,11 @@ const TOKEN = "test-token";
 
 /** A served control plane over a real HTTP server + the agent driving it. Reasoning-capable model:
  *  thinking levels are per model, and the default faux supports only "off". */
+/** The command list the served control answers with — mutable, so a test can change it mid-connection. */
+let commandList: Array<{ name: string; description?: string; source: string }> = [];
+
 async function serveControl() {
+  commandList = [{ name: "triage", description: "Sort an inbox", source: "skill" }];
   const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
   faux.setResponses([fauxAssistantMessage("hello over the wire")]);
   const sessions = inMemorySessionStore();
@@ -56,8 +60,10 @@ async function serveControl() {
       harnessFactory: factory,
       defaults: { model: faux.getModel(), thinkingLevel: "medium" },
     }),
-    // A non-empty list, so the isomorphism check below compares a real payload rather than [] === [].
-    commands: async () => [{ name: "triage", description: "Sort an inbox", source: "skill" }],
+    // A non-empty, MUTABLE list: non-empty so the isomorphism check compares a real payload rather
+    // than [] === [], mutable so the wire is pinned as per-call rather than prefetched-and-cached
+    // like capabilities (the definition it answers for is live).
+    commands: async () => commandList,
   });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
@@ -101,6 +107,9 @@ describe("session control over HTTP (Phase 3)", () => {
 
       expect(remote.capabilities()).toEqual(served.localControl.capabilities());
       expect(await remote.commands()).toEqual(await served.localControl.commands());
+      // Per call, not cached at connect: the definition behind it is live.
+      commandList = [...commandList, { name: "digest", source: "skill" }];
+      expect((await remote.commands()).map((c) => c.name)).toEqual(["triage", "digest"]);
       expect(await remote.state("sW")).toEqual(await served.localControl.state("sW"));
       const [remoteEntries, localEntries] = [await remote.entries("sW"), await served.localControl.entries("sW")];
       expect(remoteEntries).toEqual(localEntries);
@@ -229,6 +238,32 @@ describe("session control over HTTP (Phase 3)", () => {
         expect(rejected.ok).toBe(false);
         expect(rejected.error?.code).toBe("invalid_command");
       }
+    } finally {
+      server.close();
+    }
+  });
+
+  it("a definition it cannot read is a deployment fault: commands() rejects, and the wire has no code for it", async () => {
+    // The one failure the contract admits on this read — `[]` would claim the agent has no names.
+    // A client author should see what it looks like: an opaque non-2xx, not a coded answer. That is
+    // the read-side gap tracked on the session-lifecycle issue, not a special case of this route.
+    const { control } = createPiSessionControl({
+      sessions: inMemorySessionStore(),
+      commands: async () => {
+        throw new Error("skills/ unreadable: permission denied");
+      },
+    });
+    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const port = await server.listening;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.status).toBeGreaterThanOrEqual(500);
+      const { ControlRequestError } = await import("../src/session-remote.ts");
+      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+      await expect(remote.commands()).rejects.toBeInstanceOf(ControlRequestError);
     } finally {
       server.close();
     }

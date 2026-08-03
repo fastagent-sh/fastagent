@@ -140,12 +140,18 @@ Common options:
 function createPiAgentFromDefinition(
   dir: string,
   options: CreatePiAgentFromDefinitionOptions,
-): Promise<{ agent: Agent; definition: LoadedDefinition }>;
+): Promise<{
+  agent: Agent;
+  definition: LoadedDefinition;
+  readDefinition: () => Promise<LoadedDefinition>;
+}>;
 ```
 
 Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the agent dir — `createPiAgentFromDir` always passes the resolved workspace, which is the directory fastagent was pointed at (the agent dir's parent when the agent was found one level inside it, the agent dir itself when you aimed straight at it).
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
+
+`definition` is the BOOT snapshot (report diagnostics from it); `readDefinition()` is the same live read every invoke performs — a full directory load, side-effect free — for anything that must ANSWER for the definition while serving, such as the control plane's `commands()`. Do not close over `definition` for that: the directory is the agent, live, so a snapshot ages the moment an author edits a skill.
 
 ### `createPiAgentFromDir`
 
