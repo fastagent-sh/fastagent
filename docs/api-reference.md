@@ -486,8 +486,8 @@ await control.dispatch("s1", { type: "navigate", targetId: entryId }); // move t
 
 `navigate` is the write verb for the tree `entries()` publishes: it moves the session's active leaf,
 so the next turn hangs off `targetId` instead of the old leaf — which is also how sibling branches
-come to exist. A `targetId` naming no entry in the session rejects `invalid_command`; gate on
-`capabilities().navigate`.
+come to exist. A `targetId` that is not one of the ids `entries()` published rejects
+`invalid_command`; gate on `capabilities().navigate`.
 
 Overrides persist in the session record and every later turn's fresh harness applies them — on any
 serving path, channels included. One exception: a recorded thinking level the session's CURRENT

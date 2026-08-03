@@ -517,8 +517,24 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               if ((await s.getLeafId()) !== command.targetId) await s.moveTo(command.targetId);
               // moveTo's postcondition IS "targetId is the leaf" (it validates, then sets); a
               // failure throws and travels as boundary_command_failed, so a read-back could only
-              // re-report what this line already knows.
-              return { type: "state_changed", timestamp: Date.now(), data: { leafEntryId: command.targetId } };
+              // re-report what this line already knows. The SETTINGS ride along because a move can
+              // change them — an override recorded on the branch just left stops applying, and a
+              // client tracking model/level from the event stream would otherwise show what the
+              // next turn will not use.
+              const settings = resolveSessionSettings(
+                (await activePathEntries(s)) as Parameters<typeof resolveSessionSettings>[0],
+                b.models,
+                b.defaults,
+              );
+              return {
+                type: "state_changed",
+                timestamp: Date.now(),
+                data: {
+                  leafEntryId: command.targetId,
+                  model: `${settings.model.provider}/${settings.model.id}`,
+                  thinkingLevel: settings.thinkingLevel,
+                },
+              };
             };
           }
           // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
@@ -556,12 +572,22 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           }
           if (command.type === "set_thinking") {
             // The same set `state()` showed the client. Reject here rather than record a level the
-            // run would not use.
-            const { model, availableThinkingLevels } = resolveSessionSettings(
-              (await activePathEntries(existing)) as Parameters<typeof resolveSessionSettings>[0],
-              b.models,
-              b.defaults,
-            );
+            // run would not use. The read is guarded because `dispatch` must never REJECT — the
+            // transport promises a SessionResult, so an unreadable chain has to arrive as a code.
+            let resolved: ReturnType<typeof resolveSessionSettings>;
+            try {
+              resolved = resolveSessionSettings(
+                (await activePathEntries(existing)) as Parameters<typeof resolveSessionSettings>[0],
+                b.models,
+                b.defaults,
+              );
+            } catch (error) {
+              return {
+                ok: false,
+                error: { code: BOUNDARY_COMMAND_FAILED_CODE, message: String(error), retryable: true },
+              };
+            }
+            const { model, availableThinkingLevels } = resolved;
             if (!availableThinkingLevels.includes(command.level)) {
               return {
                 ok: false,

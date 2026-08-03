@@ -1029,7 +1029,8 @@ describe("session control (Phase 2b): boundary mutations", () => {
     })();
     expect(await control.dispatch("sNav", { type: "navigate", targetId: target.id })).toEqual({ ok: true });
     await watching;
-    expect(seen.at(-1)?.data).toEqual({ leafEntryId: target.id });
+    // The settings ride along: a move can change which model/level the next turn runs on.
+    expect(seen.at(-1)?.data).toMatchObject({ leafEntryId: target.id, thinkingLevel: "medium" });
     expect((await control.state("sNav")).leafEntryId).toBe(target.id);
 
     // The point of moving a leaf: the next turn hangs off the target, creating a sibling branch —
@@ -1088,7 +1089,13 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sNavLeak", { type: "set_model", model: spec })).toEqual({ ok: true });
     expect((await control.state("sNavLeak")).model).toBe(spec);
     // Move back to a point BEFORE the override was recorded: it is off the active path now.
+    const moved = (async () => {
+      for await (const ev of control.events("sNavLeak")) if (ev.type === "state_changed") return ev;
+    })();
     expect(await control.dispatch("sNavLeak", { type: "navigate", targetId: target.id })).toEqual({ ok: true });
+    // The event says so too — a client tracking the model from the stream must not show the one the
+    // next turn will not use.
+    expect((await moved)?.data).toMatchObject({ leafEntryId: target.id, model: `${dflt.provider}/${dflt.id}` });
     expect((await control.state("sNavLeak")).model).toBe(`${dflt.provider}/${dflt.id}`); // assembly default
     await drain(agent.invoke({ session: "sNavLeak" }, { text: "again" }));
     expect(ranWith).toBe(dflt.id); // and the RUN agrees with what state() reports
@@ -1147,7 +1154,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     await watching;
     // The event still travels: it reports the resulting POSITION, not that a record was written —
     // a concurrent client whose dispatch lost the race must not have to poll to learn where it is.
-    expect(seen.at(-1)?.data).toEqual({ leafEntryId: leaf });
+    expect(seen.at(-1)?.data).toMatchObject({ leafEntryId: leaf });
     expect(await size()).toBe(before);
     expect((await control.state("sNavNoop")).leafEntryId).toBe(leaf);
   });
