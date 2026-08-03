@@ -1,6 +1,11 @@
 import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { reportDefinitionWarnings, reportToolCollisions } from "../src/engines/pi/report.ts";
+import {
+  noteFindings,
+  reportDefinitionWarnings,
+  reportFindingsIfChanged,
+  reportToolCollisions,
+} from "../src/engines/pi/report.ts";
 
 // Locks the warning WORDING shared by the CLI runners and `chat` (the reason A1 deduped these into one
 // module: two copies could drift). Spies on console.error rather than going through a runner.
@@ -15,6 +20,32 @@ describe("report", () => {
     ] as SkillDiagnostic[]);
     expect(lines(err)).toMatch(/skill "greet" collision — using \/a\/SKILL.md, ignoring \/b\/SKILL.md/);
     expect(lines(err)).toMatch(/invalid_metadata: description is required \(\/c\/SKILL.md\)/);
+  });
+
+  it("the findings memo is per DEFINITION, not per reader: two readers of one dir warn once", () => {
+    // Why the memo is module state keyed by the resolved dir instead of a closure inside the
+    // assembly: the thing being deduped is the FINDING. A broken skill discovered by the turn's live
+    // read and then by the control plane's command list is ONE event for the author.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const findings = {
+      collisions: [],
+      diagnostics: [
+        { type: "warning", code: "invalid_metadata", message: "description is required", path: "/a/x/SKILL.md" },
+      ] as SkillDiagnostic[],
+    };
+    reportFindingsIfChanged("/agent", findings); // reader A (a turn)
+    expect(lines(err)).toMatch(/invalid_metadata/);
+    err.mockClear();
+    reportFindingsIfChanged("/agent", findings); // reader B (commands()) — same finding, same dir
+    expect(err).not.toHaveBeenCalled();
+    // A DIFFERENT definition keeps its own budget …
+    reportFindingsIfChanged("/other-agent", findings);
+    expect(lines(err)).toMatch(/invalid_metadata/);
+    err.mockClear();
+    // … and a boot report is recorded, not re-printed, by the reader that follows it.
+    noteFindings("/third-agent", findings);
+    reportFindingsIfChanged("/third-agent", findings);
+    expect(err).not.toHaveBeenCalled();
   });
 
   it("renders tool collisions to stderr", () => {

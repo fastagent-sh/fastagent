@@ -223,13 +223,12 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       console.log(`[unknown command ${trimmed} — /abort stops the run; a leading / is reserved]`);
       void control.commands().then(
         (commands) => {
-          const names = commands.map((c) => `/${c.name}`).join(", ");
-          // This composer cannot INVOKE them (the data plane takes prompts as text) — but the author
-          // typing "/x" is asking what exists, and reading it live is the only honest answer.
+          // BARE names, deliberately: this composer cannot expand `/name` (the data plane takes
+          // prompts as text), so printing them with the slash would invite the user straight back
+          // into the branch that just rejected them.
+          const names = commands.map((c) => c.name).join(", ");
           console.log(
-            names
-              ? `[this agent defines ${names} — send one as plain text to use it]`
-              : "[this agent defines no names]",
+            names ? `[this agent defines: ${names} — name one in a normal message]` : "[this agent defines no names]",
           );
         },
         (error) => console.log(`[command list unavailable: ${error}]`),
