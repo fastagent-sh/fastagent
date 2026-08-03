@@ -217,24 +217,30 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     // `/` is a reserved command prefix: a typo'd /aboort silently steering the model (injecting a
     // prompt when the user meant to STOP the run) is the dangerous direction of the ambiguity.
     if (trimmed.startsWith("/") && trimmed !== "/abort") {
-      // Two answers with two certainties, printed separately: that a leading `/` is reserved here is
-      // known NOW; whether the token names something is a remote read that can be slow or fail, and
-      // waiting on it would leave the user's input unanswered. The first line therefore does not
-      // pre-judge the token as "unknown" — the read may be about to prove it is a real name.
-      console.log(`[a leading / is reserved — /abort stops the run]`);
+      // The certain half prints NOW (a leading `/` is reserved here, whatever the token turns out to
+      // be); the rest is a remote read that can be slow or fail, and waiting on it would leave the
+      // user's input unanswered. It deliberately does not pre-judge the token as unknown — the read
+      // may be about to prove it names a real skill.
+      const listing = trimmed === "/commands";
+      if (!listing)
+        console.log("[a leading / is reserved — /abort stops the run, /commands lists what this agent defines]");
       const typed = trimmed.slice(1);
       void control.commands().then(
         (commands) => {
-          // Names are printed BARE: this composer cannot expand `/name` (the data plane takes prompts
-          // as text), so a slash would invite the user straight back into this branch.
-          const hit = commands.find((c) => c.name === typed);
-          if (hit) {
-            console.log(`[${hit.name} is a ${hit.source} — name it in a normal message, without the /]`);
+          // Names print BARE: this composer cannot expand `/name` (the data plane takes prompts as
+          // text), so a slash would invite the user straight back into this branch.
+          const names = commands.map((c) => c.name);
+          if (listing) {
+            console.log(names.length ? `[this agent defines: ${names.join(", ")}]` : "[this agent defines no names]");
             return;
           }
-          const names = commands.map((c) => c.name).join(", ");
+          const hit = commands.find((c) => c.name === typed);
+          // The enumeration answers `/commands` only: dumping every skill at a mistyped `/aboort`
+          // answers an intent the typo did not express.
           console.log(
-            names ? `[this agent defines: ${names} — name one in a normal message]` : "[this agent defines no names]",
+            hit
+              ? `[${hit.name} is a ${hit.source} — name it in a normal message, without the /]`
+              : `[${trimmed} names nothing this agent defines]`,
           );
         },
         (error) => console.log(`[command list unavailable: ${error}]`),

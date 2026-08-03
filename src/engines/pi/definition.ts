@@ -121,7 +121,7 @@ async function readSkills(
  * The definition's skills ALONE, resolved the same way `loadAgentDefinition` resolves them (same
  * loader, same containment guard, same first-wins collision rule) — for readers that need only the
  * names and must not pay the full load's ② context walk (every AGENTS.md from cwd to root) for them.
- * The control plane's `commands()` is that reader, and it is called at keystroke frequency.
+ * The control plane's `commands()` is that reader, called when a composer opens its completion list.
  */
 export async function loadAgentSkills(
   agentDir: string,
