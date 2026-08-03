@@ -233,9 +233,11 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
         (commands) => {
           // Names print BARE: this composer cannot expand `/name` (the data plane takes prompts as
           // text), so a slash would invite the user straight back into this branch.
-          const names = commands.map((c) => c.name);
           if (listing) {
-            console.log(names.length ? `[this agent defines: ${names.join(", ")}]` : "[this agent defines no names]");
+            // `description` is what makes a listing usable — a bare name tells the author nothing
+            // they did not already know from the directory.
+            const listed = commands.map((c) => (c.description ? `${c.name} — ${c.description}` : c.name));
+            console.log(listed.length ? `[this agent defines: ${listed.join("; ")}]` : "[this agent defines no names]");
             return;
           }
           const hit = commands.find((c) => c.name === word);
@@ -243,7 +245,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
           // answers an intent the typo did not express.
           console.log(
             hit
-              ? `[${hit.name} is a ${hit.source} — name it in a normal message, without the /]`
+              ? `[${hit.name} is a ${hit.source}${hit.description ? ` — ${hit.description}` : ""}; name it in a normal message, without the /]`
               : `[/${word} names nothing this agent defines]`,
           );
         },
