@@ -12,7 +12,7 @@ import {
 import { resolveStateRoot, workspaceHint } from "../../paths.ts";
 import { resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
-import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
+import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { log } from "../../log.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
@@ -128,5 +128,5 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   reportModuleLoadFailures(tools.failures);
   reportModuleLoadFailures(sched.failures);
   if (tools.error) log.warn(`[fastagent] ${tools.error}`);
-  reportDefinitionWarnings(definition.collisions, definition.diagnostics);
+  reportFindingsIfChanged(definition.dir, definition);
 }

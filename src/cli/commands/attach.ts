@@ -184,7 +184,9 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     // invoke) — give the human a corrective signal.
     log.warn(`[fastagent] no durable record for "${sessionArg}" yet — a new session, or a typo?`);
   }
-  log.info(`[fastagent] type to steer the active run; /abort to stop it; Ctrl+C to detach`);
+  log.info(
+    `[fastagent] type to steer the active run; /abort to stop it; /commands to list what this agent defines; Ctrl+C to detach`,
+  );
 
   // stdin → the two planes: a line steers the ACTIVE run; with no run to join (no_active_run) it
   // falls back to STARTING one over the remote data plane (`POST /control/invoke`) — try-steer-
@@ -221,10 +223,12 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
       // be); the rest is a remote read that can be slow or fail, and waiting on it would leave the
       // user's input unanswered. It deliberately does not pre-judge the token as unknown — the read
       // may be about to prove it names a real skill.
-      const listing = trimmed === "/commands";
+      // The first WORD is the token: slash input naturally carries arguments (`/triage my inbox`),
+      // and taking the whole line would answer "names nothing" for a name the user did give.
+      const word = trimmed.slice(1).split(/\s+/)[0] ?? "";
+      const listing = word === "commands";
       if (!listing)
         console.log("[a leading / is reserved — /abort stops the run, /commands lists what this agent defines]");
-      const typed = trimmed.slice(1);
       void control.commands().then(
         (commands) => {
           // Names print BARE: this composer cannot expand `/name` (the data plane takes prompts as
@@ -234,13 +238,13 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
             console.log(names.length ? `[this agent defines: ${names.join(", ")}]` : "[this agent defines no names]");
             return;
           }
-          const hit = commands.find((c) => c.name === typed);
+          const hit = commands.find((c) => c.name === word);
           // The enumeration answers `/commands` only: dumping every skill at a mistyped `/aboort`
           // answers an intent the typo did not express.
           console.log(
             hit
               ? `[${hit.name} is a ${hit.source} — name it in a normal message, without the /]`
-              : `[${trimmed} names nothing this agent defines]`,
+              : `[/${word} names nothing this agent defines]`,
           );
         },
         (error) => console.log(`[command list unavailable: ${error}]`),

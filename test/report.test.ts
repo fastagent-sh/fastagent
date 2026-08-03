@@ -1,11 +1,6 @@
 import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  noteFindings,
-  reportDefinitionWarnings,
-  reportFindingsIfChanged,
-  reportToolCollisions,
-} from "../src/engines/pi/report.ts";
+import { reportDefinitionWarnings, reportFindingsIfChanged, reportToolCollisions } from "../src/engines/pi/report.ts";
 
 // Locks the warning WORDING shared by the CLI runners and `chat` (the reason A1 deduped these into one
 // module: two copies could drift). Spies on console.error rather than going through a runner.
@@ -42,9 +37,11 @@ describe("report", () => {
     reportFindingsIfChanged("/other-agent", findings);
     expect(lines(err)).toMatch(/invalid_metadata/);
     err.mockClear();
-    // … and a boot report is recorded, not re-printed, by the reader that follows it.
-    noteFindings("/third-agent", findings);
-    reportFindingsIfChanged("/third-agent", findings);
+    // There is no record-without-printing door: the boot report goes through this same function, so
+    // a caller that never reports cannot silently consume the announcement for every later reader.
+    reportFindingsIfChanged("/third-agent", findings); // boot
+    err.mockClear();
+    reportFindingsIfChanged("/third-agent", findings); // a turn, then commands() — already said
     expect(err).not.toHaveBeenCalled();
   });
 

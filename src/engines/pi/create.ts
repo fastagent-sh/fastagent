@@ -29,7 +29,7 @@ import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
-import { noteFindings, reportFindingsIfChanged } from "./report.ts";
+import { reportFindingsIfChanged } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import {
@@ -415,11 +415,11 @@ export async function createPiAgentFromDefinition(
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to
   // report (skills/diagnostics/collisions). Serving does NOT close over it — see `live` below.
   const definition = await loadAgentDefinition(dir, { cwd: env.cwd, env });
-  // Findings the caller already reported at boot; later reads re-report only when the set CHANGES —
-  // a runtime-written bad skill surfaces the moment it appears, while a static finding does not spam
-  // every turn's log. The memo lives in report.ts, keyed by dir, and is SHARED with every other
-  // reader of this definition (the control plane's command list) — log dedup, not session state.
-  noteFindings(definition.dir, definition);
+  // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by
+  // the resolved dir): announced once here, and re-announced by a turn or by the control plane's
+  // command list only when the set CHANGES — a runtime-written bad skill surfaces the moment it
+  // appears, a static one does not spam. Log dedup, not session state (stateless invoke holds).
+  reportFindingsIfChanged(definition.dir, definition);
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
   const tools = withSearchTool(options.tools ?? piDefaultTools());

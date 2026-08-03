@@ -25,14 +25,16 @@ function findingsSignature(def: Findings): string {
  */
 const lastFindings = new Map<string, string>();
 
-/** Record the current findings WITHOUT printing — for a caller that already reported them (boot).
- *  `dir` must be the RESOLVED definition root (`LoadedDefinition.dir`), or two spellings of one path
- *  become two memos and warn twice. */
-export function noteFindings(dir: string, def: Findings): void {
-  lastFindings.set(dir, findingsSignature(def));
-}
-
-/** Warn only if this dir's finding set changed since the last note/report. */
+/**
+ * THE door for definition findings: warns only when this dir's set CHANGED since the last report.
+ * Every reader calls it — boot, the per-turn live read, the control plane's command list — so a
+ * finding is announced when it appears and never repeated. There is deliberately no "record without
+ * printing" variant: a memo entry that trusts some other caller to have printed would silently
+ * swallow findings for a caller that does not.
+ *
+ * `dir` must be the RESOLVED definition root (`LoadedDefinition.dir`), or two spellings of one path
+ * become two memos and warn twice.
+ */
 export function reportFindingsIfChanged(dir: string, def: Findings): void {
   const sig = findingsSignature(def);
   if (lastFindings.get(dir) === sig) return;
