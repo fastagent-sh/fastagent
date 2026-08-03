@@ -95,6 +95,17 @@ function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
   return { ...base, kind: entry.type, data: {} };
 }
 
+/**
+ * THE invariant the client's rule rests on: everything `entries()` publishes is a legal `navigate`
+ * target. pi's `leaf` records are the exception — they journal a MOVE rather than mark a position
+ * (their parentId is the OLD leaf, nothing is ever chained onto them), so navigating to one would
+ * put the branch head off every conversation path. Withheld from the published plane and refused as
+ * a target THROUGH THIS ONE PREDICATE, so a second exclusion cannot make the two disagree.
+ */
+function isNavigable(entry: SessionTreeEntry): boolean {
+  return entry.type !== "leaf";
+}
+
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
 
 /** Ceiling for one subscriber's unconsumed backlog. A consumer this far behind (a stalled remote
@@ -306,11 +317,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     async entries(session, opts): Promise<SessionEntries> {
       const opened = await sessions.openIfExists(session);
       if (!opened) return { entries: [] };
-      // `leaf` records are pi's journal of a MOVE, not a position in the conversation: their
-      // parentId is the OLD leaf, nothing is ever chained onto them, and navigating to one would
-      // put the branch head off every conversation path. Withholding them keeps ONE rule for the
-      // client — every entry published here is a legal `navigate` target.
-      const all = (await opened.getEntries()).filter((e) => e.type !== "leaf").map(toSessionEntry);
+      const all = (await opened.getEntries()).filter(isNavigable).map(toSessionEntry);
       const leafEntryId = (await opened.getLeafId()) ?? undefined;
       let entries = all;
       if (opts?.since !== undefined) {
@@ -530,11 +537,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           }
           if (command.type === "navigate") {
             // A target that cannot BE a leaf is a permanent payload error, not a session error — the
-            // same disposition as an unknown model spec. Every entry `entries()` publishes qualifies
-            // (a model_change or a compaction is a legal leaf — the engine itself puts it there);
-            // the `leaf` records it withholds do not, and a client can only name one by inventing it.
+            // same disposition as an unknown model spec. Same predicate `entries()` publishes by, so
+            // "everything published is navigable" holds by construction rather than by two literals
+            // agreeing.
             const entry = await existing.getEntry(command.targetId);
-            if (!entry || entry.type === "leaf") {
+            if (!entry || !isNavigable(entry)) {
               return {
                 ok: false,
                 error: {

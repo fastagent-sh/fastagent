@@ -12,6 +12,9 @@ import type { Json, Prompt } from "./agent.ts";
 
 export interface SessionControl {
   capabilities(): SessionCapabilities;
+  /** Rejects (rather than answering a partial state) when the session's entry chain is unreadable:
+   *  this is the one control-plane failure with no `error.code` channel — `SessionResult` carries
+   *  codes, a read does not. `entries()` still answers for such a session; it needs no chain. */
   state(session: string): Promise<SessionState>;
   /** `since` is an APPEND-ORDER position cursor: "every record appended after the one with this
    *  id", regardless of branch structure. Reconstructing the active path in a branched session is
@@ -44,9 +47,9 @@ export interface SessionCapabilities {
   /** Whether `set_thinking` is servable at all. WHICH levels is per-session — see
    *  {@link SessionState.availableThinkingLevels}. */
   thinkingLevel: boolean;
-  /** Whether the session leaf can be MOVED. An engine whose sessions are linear reports `false`;
-   *  the tree the contract already publishes (`SessionEntry.parentId` + `SessionEntries.leafEntryId`)
-   *  is then read-only. Named after its COMMAND, unlike the older gates (`manualCompaction` gates
+  /** Whether `navigate` is servable at all — `false` both when the engine's sessions are linear and
+   *  when this deployment has no write path for them; either way the tree the contract publishes
+   *  (`SessionEntry.parentId` + `SessionEntries.leafEntryId`) is read-only here. Named after its COMMAND, unlike the older gates (`manualCompaction` gates
    *  `compact`, `thinkingLevel` gates `set_thinking`): those already force a client to translate,
    *  and a gate keyed by the command literal is the only naming a derived map could ever produce. */
   navigate: boolean;
