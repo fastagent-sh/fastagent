@@ -132,14 +132,13 @@ export async function activePathEntries(session: Session): Promise<SessionTreeEn
   // "the whole journal", which on a branched session would mean every abandoned branch at once.
   if (leafId === null) return [];
   const byId = new Map(entries.map((e) => [e.id, e]));
-  // A chain that is not intact — a missing node or a cycle — THROWS, and this walk owns both halves
-  // rather than delegating to a storage's own checks: the port is swappable, and every disposition
-  // other than throwing returns a short path that reads like a short session (every override and
-  // activation above the gap gone, the next turn silently on assembly defaults).
-  const start = byId.get(leafId);
-  if (!start) throw new Error(`session leaf "${leafId}" is missing from the journal`);
+  // A chain that is not intact THROWS: any other disposition returns a short path that reads like a
+  // short session (every override and activation above the gap gone, the next turn silently on
+  // assembly defaults). Only the PARENT links are checked here — a leaf that is not in the journal
+  // already made `getLeafId()` above throw, and re-checking it would be handling a state pi cannot
+  // hand us.
   const path: SessionTreeEntry[] = [];
-  for (let cur = start; ; ) {
+  for (let cur = byId.get(leafId) as SessionTreeEntry; ; ) {
     path.unshift(cur);
     // A path cannot be longer than the journal it walks; anything more is a parentId cycle, which
     // would otherwise hang the turn with no `failed` event at all.

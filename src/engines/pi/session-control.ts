@@ -106,16 +106,6 @@ function isNavigable(entry: SessionTreeEntry): boolean {
   return entry.type !== "leaf";
 }
 
-/** The session's leaf IF the observation plane publishes it — a leaf that is missing from the
- *  journal or is move bookkeeping is no head at all, and naming one would hand a client a target
- *  `entries()` refused to list. `state()` and `entries()` share it so they cannot disagree. */
-async function publishedLeafId(session: import("@earendil-works/pi-agent-core").Session): Promise<string | undefined> {
-  const leafId = await session.getLeafId();
-  if (leafId === null) return undefined;
-  const entry = await session.getEntry(leafId);
-  return entry && isNavigable(entry) ? leafId : undefined;
-}
-
 // ── Live fan-out (events plane) ──────────────────────────────────────────────
 
 /** Ceiling for one subscriber's unconsumed backlog. A consumer this far behind (a stalled remote
@@ -294,9 +284,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     async state(session): Promise<SessionState> {
       const run = active.get(session);
       const opened = await sessions.openIfExists(session);
-      // Same rule as `entries()`: a head that is not one of the entries the plane publishes is not
-      // reported — a client takes navigate targets from either surface, so they must agree.
-      const leafEntryId = opened ? await publishedLeafId(opened) : undefined;
+      // The head is always one of the published entries: pi's storages reject a leaf that is not in
+      // the journal (both reads then fail together), and a `leaf` record's id can never BECOME the
+      // leaf — `setLeafId` only ever receives an id that passed the dispatch gate.
+      const leafEntryId = opened ? ((await opened.getLeafId()) ?? undefined) : undefined;
       // What will RUN, not the raw record: a client steering a session needs the pair that executes.
       // Without a boundary there is no model to resolve against, and the fields are absent. A
       // corrupt chain therefore FAILS this read rather than answering a bare state: `state()` says
@@ -333,7 +324,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // A leaf the journal does not hold is not reported: a client walking parentId from a dangling
       // head would have no signal at all, and "the head is one of these entries" is the whole point
       // of publishing it.
-      const leafEntryId = await publishedLeafId(opened);
+      const leafEntryId = (await opened.getLeafId()) ?? undefined;
       let entries = all;
       if (opts?.since !== undefined) {
         const idx = all.findIndex((e) => e.id === opts.since);

@@ -361,7 +361,6 @@ describe("activePathEntries", () => {
   it("a chain that is not intact throws instead of returning a path that reads like a short session", async () => {
     const orphanParent = [{ id: "leaf", parentId: "pruned" }];
     await expect(activePathEntries(fakeSession(orphanParent, "leaf"))).rejects.toThrow(/pruned/);
-    await expect(activePathEntries(fakeSession(orphanParent, "gone"))).rejects.toThrow(/gone/);
     const cycle = [
       { id: "x", parentId: "y" },
       { id: "y", parentId: "x" },
