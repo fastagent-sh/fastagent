@@ -23,18 +23,16 @@ export interface SessionControl {
 }
 
 /**
- * Static support declaration, two kinds of flag:
+ * STATIC support declaration — sessionless, so nothing here may depend on a session. Two kinds of flag:
  * - COMMAND GATES (`steering`, `followUp`, `manualCompaction`, `modelSelection`, `thinkingLevel`):
  *   clients MUST gate dispatch on them; an unsupported command is rejected before acceptance with
- *   {@link UNSUPPORTED_CAPABILITY_CODE}. The BOOLEAN half of each gate is authoritative — what is
- *   off stays off. Their LISTS are not: `thinkingLevel.allowedLevels` is what the deployment's
- *   configured model supports, and a session that ran `set_model` runs on another one, so the list
- *   can be wrong in both directions there. Treat a list as a hint for what to offer; the dispatch is
- *   the authority and answers {@link INVALID_COMMAND_CODE} with the session's real set. (This
- *   surface is sessionless by contract; putting the session's set on `state()` is a contract change,
- *   not a fix to make here.)
+ *   {@link UNSUPPORTED_CAPABILITY_CODE}.
  * - OBSERVATION-QUALITY flags (`toolProgress`, `usage`): whether those events/state fields appear
  *   at all — nothing to dispatch, nothing to reject.
+ *
+ * `modelSelection` may carry a list because the registry is a deployment fact; thinking levels
+ * depend on the session's current model, so they live on {@link SessionState.availableThinkingLevels}.
+ *
  * `state`/`entries`/`events` are mandatory (the reconnect contract) and deliberately absent here.
  */
 export interface SessionCapabilities {
@@ -42,7 +40,9 @@ export interface SessionCapabilities {
   followUp: boolean;
   manualCompaction: boolean;
   modelSelection: false | { allowedModels: string[] };
-  thinkingLevel: false | { allowedLevels: string[] };
+  /** Whether `set_thinking` is servable at all. WHICH levels is per-session — see
+   *  {@link SessionState.availableThinkingLevels}. */
+  thinkingLevel: boolean;
   toolProgress: boolean;
   usage: boolean;
 }
@@ -124,10 +124,13 @@ export interface SessionState {
    *  compaction happens inside a run's activity window and reports as `running`. */
   status: "idle" | "running" | "compacting";
   activeRunId?: string;
-  /** The session's durable overrides (set_model / set_thinking), read from the record — so a
-   *  reconnecting client sees them without scanning entries. Absent = the assembly default. */
+  /** What this session will RUN with, not what was recorded: overrides resolved against the
+   *  deployment (a model the registry lost falls back to the configured one; a level the current
+   *  model cannot do is clamped). Absent where the implementation exposes no model control. */
   model?: string;
   thinkingLevel?: string;
+  /** What `set_thinking` accepts for THIS session — re-read after a `set_model`. */
+  availableThinkingLevels?: string[];
   pending: { steering: number; followUp: number };
   usage?: {
     inputTokens: number;

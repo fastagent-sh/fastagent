@@ -50,7 +50,12 @@ async function serveControl() {
   });
   const { control, observer } = createPiSessionControl({
     sessions,
-    boundary: () => ({ lease, models, harnessFactory: factory, defaultModel: faux.getModel() }),
+    boundary: () => ({
+      lease,
+      models,
+      harnessFactory: factory,
+      defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+    }),
   });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });

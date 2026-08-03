@@ -8,10 +8,11 @@
  */
 import { AgentHarness } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv, ExecutionToolContext, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type Model, type Models, clampThinkingLevel } from "@earendil-works/pi-ai";
+import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
+import { type OverrideEntryLike, resolveSessionSettings } from "./session-settings.ts";
 
 /**
  * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred
@@ -114,7 +115,7 @@ export const SUMMARIZATION_RETRY_POLICY = { enabled: true, maxRetries: 3, baseDe
  * here means an upstream default change in either place cannot silently alter deployments. Models
  * that don't support a level are clamped by pi per model.
  */
-const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 /**
  * Resolve the active-tool set for a fresh harness — the ONE place both fallbacks live. pi's harness
@@ -140,88 +141,11 @@ const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
  */
 const warnedRestores = new Set<string>();
 
-/** pi's ThinkingLevel scale as a checkable set — the VOCABULARY, not the answer. What a given model
- *  supports comes from pi-ai's `getSupportedThinkingLevels`; this set only says which strings are
- *  levels at all, which is what `set_thinking` needs before it has a session (a payload that is not a
- *  level is invalid independently of any model) and what a recorded string is checked against.
- *  The `satisfies Record<ThinkingLevel, …>` anchor makes it EXHAUSTIVE against pi's union: pi
- *  adding a level turns this into a type error instead of a silent drift where `set_thinking`
- *  rejects a value pi supports. */
-const ALL_THINKING_LEVELS = {
-  off: true,
-  minimal: true,
-  low: true,
-  medium: true,
-  high: true,
-  xhigh: true,
-  max: true,
-} satisfies Record<ThinkingLevel, true>;
-export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set(Object.keys(ALL_THINKING_LEVELS) as ThinkingLevel[]);
-
-/** The shape both override consumers walk — a session entry, structurally. */
-export interface OverrideEntryLike {
-  type: string;
-  provider?: string;
-  modelId?: string;
-  thinkingLevel?: string;
-}
-
 /**
- * The session's durable override FACTS — the ONE walk both surfaces consume (`state()` reports the
- * recorded truth; `resolveHarnessOverrides` below applies registry/scale fallbacks on top). The
- * LAST entry of each kind wins, and a malformed record reads as ABSENT for that kind — never
- * skipped over to an earlier record: the reporting surface and the execution surface must agree on
- * which record is "the" override.
- */
-export function lastOverrideEntries(entries: OverrideEntryLike[]): {
-  model?: { provider: string; modelId: string };
-  thinkingLevel?: string;
-} {
-  let model: { provider: string; modelId: string } | undefined;
-  let modelSeen = false;
-  let thinkingLevel: string | undefined;
-  let thinkingSeen = false;
-  for (let i = entries.length - 1; i >= 0 && !(modelSeen && thinkingSeen); i--) {
-    const e = entries[i];
-    if (!modelSeen && e?.type === "model_change") {
-      modelSeen = true;
-      if (e.provider !== undefined && e.modelId !== undefined) model = { provider: e.provider, modelId: e.modelId };
-    }
-    if (!thinkingSeen && e?.type === "thinking_level_change") {
-      thinkingSeen = true;
-      if (e.thinkingLevel !== undefined) thinkingLevel = e.thinkingLevel;
-    }
-  }
-  return { model, thinkingLevel };
-}
-
-/**
- * The model this session's next run will use: its recorded override if the registry still has it,
- * the assembly default otherwise. The ONE resolution both the execution path
- * ({@link resolveHarnessOverrides}) and the control plane (per-model thinking levels) consume — a
- * client must not be told about a model the run will not use. `missing` reports the dropped spec so
- * the execution path can warn once (fail visibly) without this becoming a logging function.
- */
-export function resolveSessionModel(
-  entries: OverrideEntryLike[],
-  models: Models,
-  fallback: AnyModel,
-): { model: AnyModel; missing?: string } {
-  const recorded = lastOverrideEntries(entries).model;
-  if (!recorded) return { model: fallback };
-  const found = models.getModel(recorded.provider, recorded.modelId);
-  if (found) return { model: found as AnyModel };
-  return { model: fallback, missing: `${recorded.provider}/${recorded.modelId}` };
-}
-
-/**
- * Resolve the session's model/thinking OVERRIDES for a fresh harness — same shape as the
- * active-tools resolve above: pi writes `model_change`/`thinking_level_change` entries on explicit
- * setModel/setThinkingLevel (the control plane's `set_model`/`set_thinking` append them directly)
- * but a fresh harness never reads them back. Override facts come from {@link lastOverrideEntries};
- * this adds the EXECUTION fallbacks: a recorded model no longer in this deployment's registry falls
- * back to the default with a deduped warn (fail visibly without bricking the session — the
- * conversation must survive a registry change across deploys); an unknown thinking level likewise.
+ * {@link resolveSessionSettings} plus the warn only the execution path owes: a recorded pair can stop
+ * being executable with no control-plane command involved (pi appends these entries itself; a
+ * deployment's configured model can change between restarts). Deduped per session+cause — it would
+ * otherwise repeat every turn.
  */
 export function resolveHarnessOverrides(
   entries: OverrideEntryLike[],
@@ -229,54 +153,31 @@ export function resolveHarnessOverrides(
   defaults: { model: AnyModel; thinkingLevel: ThinkingLevel },
   sessionId: string,
 ): { model: AnyModel; thinkingLevel: ThinkingLevel } {
-  let model = defaults.model;
-  let thinkingLevel = defaults.thinkingLevel;
+  const settings = resolveSessionSettings(entries, models, defaults);
   const warnOnce = (key: string, message: string) => {
     const emit = warnedRestores.has(key) ? log.debug : log.warn;
     warnedRestores.add(key);
     emit(message);
   };
-  const recorded = lastOverrideEntries(entries);
-  const resolved = resolveSessionModel(entries, models, defaults.model);
-  model = resolved.model;
-  if (resolved.missing) {
+  const dropped = settings.dropped;
+  if (dropped?.model) {
     warnOnce(
-      `${sessionId}\u0000model\u0000${resolved.missing}`,
-      `[fastagent] session ${sessionId}: recorded model override ${resolved.missing} is not in this deployment's registry — using the configured default`,
+      `${sessionId}\u0000model\u0000${dropped.model}`,
+      `[fastagent] session ${sessionId}: recorded model override ${dropped.model} is not in this deployment's registry — using the configured default`,
     );
   }
-  if (recorded.thinkingLevel !== undefined) {
-    if (!THINKING_LEVELS.has(recorded.thinkingLevel as ThinkingLevel)) {
-      warnOnce(
-        `${sessionId}\u0000thinking\u0000${recorded.thinkingLevel}`,
-        `[fastagent] session ${sessionId}: recorded thinking level "${recorded.thinkingLevel}" is unknown — using the configured default`,
-      );
-    } else {
-      // Against the model resolved ABOVE: `set_thinking` is admitted against the session's model of
-      // the moment, and a later `set_model` can strip that level's support out from under it — the
-      // one order the control-plane check cannot see. The boundary re-records on `set_model`, so this
-      // is the BACKSTOP for the case it cannot reach: a session with no model override whose
-      // CONFIGURED model changed between restarts.
-      //
-      // pi's own clamp (the one its TUI applies), not a rule of ours — and worth stating in the
-      // direction it actually goes: it takes the lowest supported level AT OR ABOVE the recorded one,
-      // and only falls back downward when nothing above exists. So a gap in a model's scale resolves
-      // UPWARD (`low` on a model offering off/high runs at `high`), which costs more rather than
-      // less — the reason the warn names both levels instead of just reporting a substitution.
-      // Only for a level fastagent ACCEPTED; with no override the configured default reaches pi's
-      // clamp at the model call as before.
-      const level = recorded.thinkingLevel as ThinkingLevel;
-      thinkingLevel = clampThinkingLevel(model, level) as ThinkingLevel;
-      if (thinkingLevel !== level) {
-        warnOnce(
-          `${sessionId}\u0000thinking\u0000${model.provider}/${model.id}\u0000${level}`,
-          `[fastagent] session ${sessionId}: recorded thinking level "${level}" is not supported by ${model.provider}/${model.id} — running at "${thinkingLevel}"`,
-        );
-      }
-    }
+  if (dropped?.thinkingLevel) {
+    const { recorded, running, known } = dropped.thinkingLevel;
+    warnOnce(
+      `${sessionId}\u0000thinking\u0000${settings.model.provider}/${settings.model.id}\u0000${recorded}`,
+      known
+        ? `[fastagent] session ${sessionId}: recorded thinking level "${recorded}" is not supported by ${settings.model.provider}/${settings.model.id} — running at "${running}"`
+        : `[fastagent] session ${sessionId}: recorded thinking level "${recorded}" is unknown — using the configured default`,
+    );
   }
-  return { model, thinkingLevel };
+  return { model: settings.model, thinkingLevel: settings.thinkingLevel };
 }
+
 export function resolveHarnessActiveToolNames(
   recorded: string[] | null,
   tools: MountedTool[],

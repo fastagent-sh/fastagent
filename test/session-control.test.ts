@@ -737,7 +737,12 @@ function makeBoundary(responses: FauxResponseStep[]) {
     tools: [],
     systemPrompt: "test",
   });
-  const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: faux.getModel() };
+  const boundary: PiBoundaryWiring = {
+    lease,
+    models,
+    harnessFactory: factory,
+    defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+  };
   const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
@@ -745,12 +750,14 @@ function makeBoundary(responses: FauxResponseStep[]) {
 }
 
 describe("session control (Phase 2b): boundary mutations", () => {
-  it("capabilities reflect the boundary wiring: allowed models and thinking levels", async () => {
-    const { control, spec } = makeBoundary([]);
+  it("capabilities carry only what is SESSIONLESS: the registry has a list, thinking levels do not", async () => {
+    const { control, sessions, spec } = makeBoundary([]);
     const caps = control.capabilities();
     expect(caps.manualCompaction).toBe(true);
-    expect(caps.modelSelection ? caps.modelSelection.allowedModels : []).toContain(spec);
-    expect(caps.thinkingLevel ? caps.thinkingLevel.allowedLevels : []).toContain("high");
+    expect(caps.modelSelection ? caps.modelSelection.allowedModels : []).toContain(spec); // deployment fact
+    expect(caps.thinkingLevel).toBe(true); // per-session set rides state()
+    await sessions.openOrCreate("sCaps");
+    expect((await control.state("sCaps")).availableThinkingLevels).toContain("high");
   });
 
   it("thinking levels are answered by the MODEL: a non-reasoning model offers only off, and set_thinking rejects the rest", async () => {
@@ -765,10 +772,16 @@ describe("session control (Phase 2b): boundary mutations", () => {
       tools: [],
       systemPrompt: "test",
     });
-    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: faux.getModel() };
+    const boundary: PiBoundaryWiring = {
+      lease,
+      models,
+      harnessFactory: factory,
+      defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+    };
     const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
-    expect(control.capabilities().thinkingLevel).toEqual({ allowedLevels: ["off"] });
+    expect(control.capabilities().thinkingLevel).toBe(true); // servable — WHICH levels is per-session
     await sessions.openOrCreate("sNR");
+    expect((await control.state("sNR")).availableThinkingLevels).toEqual(["off"]);
     // The lie this replaces: ok: true, a durable entry, and no effect on the run.
     const rejected = await control.dispatch("sNR", { type: "set_thinking", level: "high" });
     expect(rejected.ok).toBe(false);
@@ -779,9 +792,8 @@ describe("session control (Phase 2b): boundary mutations", () => {
 
   it("a reasoning model still rejects a level it has no mapping for (xhigh/max need one)", async () => {
     const { control, sessions } = makeBoundary([]); // faux-thinker: reasoning, no thinkingLevelMap
-    const caps = control.capabilities();
-    expect(caps.thinkingLevel ? caps.thinkingLevel.allowedLevels : []).not.toContain("max");
     await sessions.openOrCreate("sMax");
+    expect((await control.state("sMax")).availableThinkingLevels).not.toContain("max");
     const rejected = await control.dispatch("sMax", { type: "set_thinking", level: "max" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
@@ -801,17 +813,22 @@ describe("session control (Phase 2b): boundary mutations", () => {
       tools: [],
       systemPrompt: "test",
     });
-    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: thinker };
+    const boundary: PiBoundaryWiring = {
+      lease,
+      models,
+      harnessFactory: factory,
+      defaults: { model: thinker, thinkingLevel: "medium" },
+    };
     const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
     await sessions.openOrCreate("sAuth");
     expect(await control.dispatch("sAuth", { type: "set_model", model: `${plain.provider}/${plain.id}` })).toEqual({
       ok: true,
     });
-    // capabilities() is sessionless BY CONTRACT: it keeps answering for the configured model …
-    const caps = control.capabilities();
-    expect(caps.thinkingLevel ? caps.thinkingLevel.allowedLevels : []).toContain("high");
-    // … while the command that can see the session answers from the session's model. The gate is
-    // advisory, the dispatch is authoritative — a per-session capability needs a contract change.
+    // state() moved WITH the session — the levels it offers are the new model's …
+    const after = await control.state("sAuth");
+    expect(after.model).toBe(`${plain.provider}/${plain.id}`);
+    expect(after.availableThinkingLevels).toEqual(["off"]);
+    // … and the dispatch rejects exactly what that list excludes: one authority, two surfaces.
     const rejected = await control.dispatch("sAuth", { type: "set_thinking", level: "high" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
@@ -837,7 +854,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
         tools: [],
         systemPrompt: "test",
       }),
-      defaultModel: thinker,
+      defaults: { model: thinker, thinkingLevel: "medium" },
     };
     const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
     await sessions.openOrCreate("sDemote");
@@ -892,13 +909,57 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(out.thinkingLevel).toBe("off"); // clamped by the model, not left at a level the run ignores
   });
 
-  it("the clamp we borrow resolves a GAP upward — the direction the comments now state", async () => {
-    // pi's clamp takes the lowest supported level AT OR ABOVE the request and only falls back
-    // downward when nothing above exists. That is not what "nearest" suggests, and the difference is
-    // a cost increase, not a conservative degrade: on a model offering only off/high, a recorded
-    // `low` runs at `high`. The faux registry cannot express a gapped scale (FauxModelDefinition has
-    // no thinkingLevelMap), so the property is pinned against pi directly — if upstream ever makes
-    // the clamp symmetric or downward, this fails and the wording it justifies gets revisited.
+  it("one resolution answers all three surfaces — state, the dispatch gate, and execution", async () => {
+    // state(), the set_thinking gate and the fresh harness all resolve through one function.
+    const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
+    const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const sessions = inMemorySessionStore();
+    const defaults = { model: thinker, thinkingLevel: "medium" as const };
+    const boundary: PiBoundaryWiring = {
+      lease: inProcessLease(),
+      models,
+      harnessFactory: piHarnessFactory({
+        sessions,
+        env: new NodeExecutionEnv({ cwd: process.cwd() }),
+        models,
+        model: thinker,
+        tools: [],
+        systemPrompt: "test",
+      }),
+      defaults,
+    };
+    const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
+    await sessions.openOrCreate("sOne");
+    expect(await control.dispatch("sOne", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
+    expect(await control.dispatch("sOne", { type: "set_model", model: `${plain.provider}/${plain.id}` })).toEqual({
+      ok: true,
+    });
+
+    const opened = await sessions.openIfExists("sOne");
+    const entries = ((await opened?.getEntries()) ?? []) as Parameters<typeof resolveHarnessOverrides>[0];
+    const state = await control.state("sOne");
+    const executed = resolveHarnessOverrides(entries, models, defaults, "sOne");
+
+    // The record keeps the PREFERENCE — nothing rewrote it …
+    const { lastOverrideEntries } = await import("../src/engines/pi/session-settings.ts");
+    expect(lastOverrideEntries(entries).thinkingLevel).toBe("high");
+    // … while every surface agrees on what actually happens.
+    expect(state.thinkingLevel).toBe("off");
+    expect(executed.thinkingLevel).toBe("off");
+    expect(state.availableThinkingLevels).toEqual(["off"]);
+    expect(await control.dispatch("sOne", { type: "set_thinking", level: "high" })).toMatchObject({ ok: false });
+    // Back to a capable model: the preference returns, unsent.
+    expect(await control.dispatch("sOne", { type: "set_model", model: `${thinker.provider}/${thinker.id}` })).toEqual({
+      ok: true,
+    });
+    expect((await control.state("sOne")).thinkingLevel).toBe("high");
+  });
+
+  it("the clamp we borrow resolves a GAP upward, not down", async () => {
+    // A cost increase, not a conservative degrade — and invisible in a non-reasoning model's scale,
+    // which is all the faux registry can express (FauxModelDefinition has no thinkingLevelMap). So it
+    // is pinned against pi directly: an upstream change to the direction fails here.
     const { clampThinkingLevel, getSupportedThinkingLevels } = await import("@earendil-works/pi-ai");
     const gapped = {
       provider: "probe",
@@ -924,7 +985,8 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sB1", { type: "set_model", model: spec })).toEqual({ ok: true });
     expect(await control.dispatch("sB1", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
     await watching;
-    expect(seen.map((e) => e.data)).toEqual([{ model: spec }, { thinkingLevel: "high" }]);
+    // set_model reports both halves — a new model can change which level executes.
+    expect(seen.map((e) => e.data)).toEqual([{ model: spec, thinkingLevel: "medium" }, { thinkingLevel: "high" }]);
     // Durable: the overrides live in the session record (open-set kinds on the entries plane).
     const kinds = (await control.entries("sB1")).entries.map((e) => e.kind);
     expect(kinds).toContain("model_change");
@@ -996,7 +1058,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const resolved = resolveHarnessOverrides(entries, models, fallback, "sMal");
     expect(resolved.model).toBe(fallback.model);
     // Fact surface agrees: no override reported.
-    const { lastOverrideEntries } = await import("../src/engines/pi/harness.ts");
+    const { lastOverrideEntries } = await import("../src/engines/pi/session-settings.ts");
     expect(lastOverrideEntries(entries).model).toBeUndefined();
   });
 
@@ -1025,7 +1087,12 @@ describe("session control (Phase 2b): boundary mutations", () => {
       tools: [gate.tool],
       systemPrompt: "test",
     });
-    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: faux.getModel() };
+    const boundary: PiBoundaryWiring = {
+      lease,
+      models,
+      harnessFactory: factory,
+      defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+    };
     const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
     const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
     const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
@@ -1210,7 +1277,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const boundary: PiBoundaryWiring = {
       lease,
       models: broke.models,
-      defaultModel: broke.faux.getModel(),
+      defaults: { model: broke.faux.getModel(), thinkingLevel: "medium" },
       harnessFactory: async () => {
         throw new Error("no harness for you");
       },
@@ -1222,10 +1289,14 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(lease.tryAcquire("sPre")).not.toBeNull(); // released on the pre-acceptance path
   });
 
-  it("state() reports the durable overrides for a reconnecting client", async () => {
+  it("state() reports what will RUN, not what was recorded — including with no overrides at all", async () => {
+    // Reporting the raw record made "no override" indistinguishable from "no model".
     const { agent, control, spec } = makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sB7" }, { text: "hi" }));
-    expect((await control.state("sB7")).model).toBeUndefined(); // no override → assembly default
+    const fresh = await control.state("sB7");
+    expect(fresh.model).toBe(spec); // the assembly default, named — not absent
+    expect(fresh.thinkingLevel).toBe("medium");
+    expect(fresh.availableThinkingLevels).toContain("high");
     await control.dispatch("sB7", { type: "set_model", model: spec });
     await control.dispatch("sB7", { type: "set_thinking", level: "high" });
     const state = await control.state("sB7");
@@ -1254,7 +1325,12 @@ describe("session control (Phase 2b): boundary mutations", () => {
       tools: [],
       systemPrompt: "test",
     });
-    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: faux.getModel() };
+    const boundary: PiBoundaryWiring = {
+      lease,
+      models,
+      harnessFactory: factory,
+      defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+    };
     const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
     const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
 

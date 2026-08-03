@@ -494,10 +494,10 @@ level at or above the recorded one and only falls back downward if nothing above
 resolves upward, which costs more, not less. Boundary mutations require an EXISTING session (`no_such_session`
 otherwise): sessions are created by `invoke`, never by the control plane. Invalid payloads reject
 `invalid_command` before acceptance;
-`capabilities()` lists `allowedModels`/`allowedLevels` — `allowedLevels` are the levels the model
-supports, not pi's whole scale (a non-reasoning model offers only `off`). `capabilities()` is
-sessionless, so it answers for the CONFIGURED model; `set_thinking` validates against the session's
-own model (its `set_model` override, if any) and rejects an unsupported level with `invalid_command`
+`capabilities()` lists `allowedModels` (the deployment's registry — a static fact) and reports
+`thinkingLevel` as a plain boolean: WHICH levels exist depends on the model a session is running, so
+they ride `state().availableThinkingLevels`. `set_thinking` validates against that same set and
+rejects anything outside it with `invalid_command`
 rather than recording an override the run would ignore. Boundary commands require the wiring the
 agent opener provides (`sessionControl: true`); a hub without it reports them off and rejects
 with `unsupported_capability`.

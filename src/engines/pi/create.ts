@@ -27,7 +27,7 @@ import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
 import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
-import { type AnyModel, piHarnessFactory } from "./harness.ts";
+import { type AnyModel, DEFAULT_THINKING_LEVEL, piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
 import { reportDefinitionWarnings } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
@@ -241,19 +241,24 @@ function buildPiAgent(opts: {
   // Materialized here (not defaulted inside createPiAgentFromHarness) so the exposed parts carry
   // the SAME lease instance the agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
-  const defaultModel = resolveModel(models, opts.model);
+  // The assembly's configured PAIR — handed to the factory and to the control plane as ONE value, so
+  // there is no wiring in which they could disagree (which levels exist depends on the model).
+  const defaults = {
+    model: resolveModel(models, opts.model),
+    thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+  };
   const harnessFactory = piHarnessFactory({
     sessions: opts.sessions ?? inMemorySessionStore(),
     env,
     models,
-    model: defaultModel,
+    model: defaults.model,
     thinkingLevel: opts.thinkingLevel,
     systemPrompt: opts.systemPrompt,
     tools: opts.tools,
     skills: opts.skills,
     live: opts.live,
   });
-  opts.onAssembly?.({ models, harnessFactory, lease, defaultModel });
+  opts.onAssembly?.({ models, harnessFactory, lease, defaults });
   return createPiAgentFromHarness({ lease, observer: opts.observer, cwd: env.cwd, harnessFactory });
 }
 
@@ -267,8 +272,8 @@ type OnAssembly = (parts: {
   models: Models;
   harnessFactory: ReturnType<typeof piHarnessFactory>;
   lease: Lease;
-  /** The resolved configured model — the base a session without a `set_model` override runs on. */
-  defaultModel: AnyModel;
+  /** The resolved configured pair — what a session without overrides runs on. */
+  defaults: { model: AnyModel; thinkingLevel: ThinkingLevel };
 }) => void;
 
 /**
