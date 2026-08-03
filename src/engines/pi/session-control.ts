@@ -447,8 +447,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           }
           // Payload validation BEFORE the lease — an invalid value must not briefly block a run.
-          /** The entry-append for set_model/set_thinking — undefined for compact (harness path). */
-          let apply: ((session: import("@earendil-works/pi-agent-core").Session) => Promise<SessionEvent>) | undefined;
+          /** The durable write for set_model/set_thinking/navigate — undefined for compact (harness
+           *  path). Answers the event to emit, or nothing when the command was already true. */
+          let apply:
+            | ((session: import("@earendil-works/pi-agent-core").Session) => Promise<SessionEvent | undefined>)
+            | undefined;
           if (command.type === "set_model") {
             const slash = command.model.indexOf("/");
             const model =
@@ -498,16 +501,17 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           } else if (command.type === "navigate") {
             apply = async (s) => {
-              // Appends a `leaf` record (pi's move is journalled, not an in-place pointer), so the
-              // move is durable and visible on the entries plane like every other boundary write.
+              // A move to where the leaf already is writes nothing: pi journals a move as a `leaf`
+              // record, so an idempotent re-dispatch (a client retry, a UI firing on every
+              // selection) would otherwise grow the session by a record no plane publishes.
+              if ((await s.getLeafId()) === command.targetId) return undefined;
               await s.moveTo(command.targetId);
               // Read BACK, like set_model resolves rather than echoing: the event reports where the
-              // leaf now is, not what was asked for.
-              return {
-                type: "state_changed",
-                timestamp: Date.now(),
-                data: { leafEntryId: (await s.getLeafId()) ?? command.targetId },
-              };
+              // leaf now IS. A null here is engine corruption — it travels as
+              // boundary_command_failed rather than as a clean move a client cannot distinguish.
+              const leafEntryId = await s.getLeafId();
+              if (leafEntryId === null) throw new Error("moveTo left no leaf (engine invariant broken)");
+              return { type: "state_changed", timestamp: Date.now(), data: { leafEntryId } };
             };
           }
           // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
@@ -714,7 +718,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // Unreachable by construction: only set_model/set_thinking/navigate reach this branch,
             // and all three assign `apply` in validation. Throw rather than silently skip (fail visibly).
             if (!apply) throw new Error("apply unset outside the compact branch (dispatch invariant broken)");
-            emitOwn(session, await apply(fresh));
+            const event = await apply(fresh);
+            if (event) emitOwn(session, event);
           } catch (error) {
             // The append failed before anything durable landed — "nothing took effect"; the same
             // command may succeed on retry.

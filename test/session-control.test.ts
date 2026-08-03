@@ -1128,7 +1128,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("navigate rejects an entry that is not in the session, and a session that does not exist", async () => {
-    const { agent, control } = makeBoundary([fauxAssistantMessage("ok")]);
+    const { agent, control, sessions } = makeBoundary([fauxAssistantMessage("ok")]);
     expect(control.capabilities().navigate).toBe(true);
     await drain(agent.invoke({ session: "sNavBad" }, { text: "hi" }));
     const leafBefore = (await control.state("sNavBad")).leafEntryId;
@@ -1136,6 +1136,14 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(unknownEntry.ok).toBe(false);
     if (!unknownEntry.ok) expect(unknownEntry.error.code).toBe(INVALID_COMMAND_CODE);
     expect((await control.state("sNavBad")).leafEntryId).toBe(leafBefore); // rejected before acceptance
+    // A move to where the leaf already is is accepted and writes NOTHING — a client retry must not
+    // grow the session by a record no plane publishes.
+    const raw = async () => ((await (await sessions.openIfExists("sNavBad"))?.getEntries()) ?? []).length;
+    const sizeBefore = await raw();
+    expect(await control.dispatch("sNavBad", { type: "navigate", targetId: leafBefore as string })).toEqual({
+      ok: true,
+    });
+    expect(await raw()).toBe(sizeBefore);
     const unknownSession = await control.dispatch("sGhost", { type: "navigate", targetId: "x" });
     expect(unknownSession.ok).toBe(false);
     if (!unknownSession.ok) expect(unknownSession.error.code).toBe(NO_SUCH_SESSION_CODE);
@@ -1144,13 +1152,17 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("the navigable set is every published entry EXCEPT the move bookkeeping a navigate itself writes", async () => {
     const { agent, control, sessions, spec } = makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sNavKinds" }, { text: "hi" }));
-    // A boundary record is a legitimate target: the engine itself leaves the leaf sitting on one.
     expect(await control.dispatch("sNavKinds", { type: "set_model", model: spec })).toEqual({ ok: true });
-    const modelChange = (await control.entries("sNavKinds")).entries.find((e) => e.kind === "model_change");
+    const entries = (await control.entries("sNavKinds")).entries;
+    const modelChange = entries.find((e) => e.kind === "model_change");
+    const user = entries.find((e) => e.kind === "user") as SessionEntry;
+    // Move away, then back onto the boundary record: it is a legitimate target — the engine itself
+    // leaves the leaf sitting on one after every set_model.
+    expect(await control.dispatch("sNavKinds", { type: "navigate", targetId: user.id })).toEqual({ ok: true });
     expect(await control.dispatch("sNavKinds", { type: "navigate", targetId: modelChange!.id })).toEqual({ ok: true });
-    // The move just made left a `leaf` record behind. Pointing the branch head at it would put the
-    // leaf on a record whose parentId is the OLD leaf — on no conversation path at all.
-    // …and entries() does not publish it: the client's rule is "anything published is navigable".
+    // Those moves left `leaf` records behind. Pointing the branch head at one would put the leaf on
+    // a record whose parentId is the OLD leaf — on no conversation path at all — and entries() does
+    // not publish them: the client's rule is "anything published is navigable".
     const raw = (await (await sessions.openIfExists("sNavKinds"))?.getEntries()) ?? [];
     const leafRecord = raw.find((e) => e.type === "leaf");
     expect(leafRecord).toBeDefined();

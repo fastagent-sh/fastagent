@@ -112,6 +112,11 @@ describe("session control over HTTP (Phase 3)", () => {
       const applied = await remote.dispatch("sW", { type: "set_thinking", level: "low" });
       expect(applied).toEqual({ ok: true });
       expect((await remote.state("sW")).thinkingLevel).toBe("low");
+      // navigate carries a field of its own, so its wire shape needs a POSITIVE round trip: a typo
+      // in the field name would otherwise ship green behind the malformed-command assertions.
+      const target = localEntries.entries.find((e) => e.kind === "user")?.id as string;
+      expect(await remote.dispatch("sW", { type: "navigate", targetId: target })).toEqual({ ok: true });
+      expect((await remote.state("sW")).leafEntryId).toBe(target);
     } finally {
       served.close();
     }

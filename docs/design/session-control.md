@@ -145,8 +145,9 @@ type SessionCommand =
   `entries()` already publishes, and how sibling branches come to exist (the next turn hangs off the
   new leaf). Every entry `entries()` publishes is a legal target — including boundary records the
   engine already leaves the leaf on — and anything else rejects `invalid_command`; an engine's own
-  move bookkeeping is therefore withheld from `entries()` rather than published-but-unnavigable. Two
-  deliberate omissions: no
+  move bookkeeping is therefore withheld from `entries()` rather than published-but-unnavigable. A
+  move to where the leaf already is is `ok: true` and writes nothing — a re-dispatch must not grow
+  the session. Two deliberate omissions: no
   summarization of the branch being left (a model call, engine-flavoured, and not what moving a leaf
   means), and no move to the ROOT — `targetId` is a `string`, so a client rewinds to an entry, and
   "start from nothing" is a new session, not an emptied one.

@@ -358,16 +358,19 @@ describe("activePathEntries", () => {
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       // A leaf outside the journal: the flat read (the pre-navigate behavior), not an empty path —
-      // returning [] would drop every override and activation the session recorded.
+      // returning [] would drop every override and activation the session recorded. Ids are unique
+      // per scenario because the warn dedup memo is module-global and never reset.
       const orphanLeaf = [{ id: "a" }, { id: "b", parentId: "a" }];
-      expect((await activePathEntries(fakeSession(orphanLeaf, "gone"))).map((e) => e.id)).toEqual(["a", "b"]);
-      // A parentId cycle terminates instead of hanging the turn.
+      expect((await activePathEntries(fakeSession(orphanLeaf, "gone-1"))).map((e) => e.id)).toEqual(["a", "b"]);
+      expect(warn.mock.calls.flat().join(" ")).toContain("gone-1");
+      warn.mockClear();
+      // A parentId cycle terminates instead of hanging the turn — and says so.
       const cycle = [
-        { id: "x", parentId: "y" },
-        { id: "y", parentId: "x" },
+        { id: "cyc-1", parentId: "cyc-2" },
+        { id: "cyc-2", parentId: "cyc-1" },
       ];
-      expect((await activePathEntries(fakeSession(cycle, "x"))).map((e) => e.id)).toEqual(["y", "x"]);
-      expect(warn).toHaveBeenCalled();
+      expect((await activePathEntries(fakeSession(cycle, "cyc-1"))).map((e) => e.id)).toEqual(["cyc-2", "cyc-1"]);
+      expect(warn.mock.calls.flat().join(" ")).toContain("cyc-1");
     } finally {
       warn.mockRestore();
     }
