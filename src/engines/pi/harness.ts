@@ -253,8 +253,8 @@ export function resolveHarnessOverrides(
       // Against the model resolved ABOVE: `set_thinking` is admitted against the session's model of
       // the moment, and a later `set_model` can strip that level's support out from under it — the
       // one order the control-plane check cannot see. pi's own clamp (the one its TUI applies), not
-      // a rule of ours. The CONFIGURED default is deliberately left alone: pi clamps it at the model
-      // call, and warning here would fire on every session of a non-reasoning deployment.
+      // a rule of ours — and only for a level fastagent ACCEPTED; with no override, the configured
+      // default reaches pi's clamp at the model call as before.
       const level = recorded.thinkingLevel as ThinkingLevel;
       thinkingLevel = clampThinkingLevel(model, level) as ThinkingLevel;
       if (thinkingLevel !== level) {

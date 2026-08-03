@@ -787,6 +787,36 @@ describe("session control (Phase 2b): boundary mutations", () => {
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
   });
 
+  it("after set_model the SESSION's model is the authority: capabilities stays sessionless, set_thinking does not", async () => {
+    const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
+    const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const sessions = inMemorySessionStore();
+    const lease = inProcessLease();
+    const factory = piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: thinker,
+      tools: [],
+      systemPrompt: "test",
+    });
+    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: thinker };
+    const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
+    await sessions.openOrCreate("sAuth");
+    expect(await control.dispatch("sAuth", { type: "set_model", model: `${plain.provider}/${plain.id}` })).toEqual({
+      ok: true,
+    });
+    // capabilities() is sessionless BY CONTRACT: it keeps answering for the configured model …
+    const caps = control.capabilities();
+    expect(caps.thinkingLevel ? caps.thinkingLevel.allowedLevels : []).toContain("high");
+    // … while the command that can see the session answers from the session's model. The gate is
+    // advisory, the dispatch is authoritative — a per-session capability needs a contract change.
+    const rejected = await control.dispatch("sAuth", { type: "set_thinking", level: "high" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+  });
+
   it("a set_model that strips support out from under a recorded level does not leave the run applying it", () => {
     const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
     const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
