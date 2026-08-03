@@ -720,9 +720,11 @@ describe("session control (Phase 2a): run modulation", () => {
   });
 });
 
-/** Agent + control with full boundary wiring — the workspace shape, assembled by hand. */
+/** Agent + control with full boundary wiring — the workspace shape, assembled by hand. The model is
+ *  REASONING-capable: thinking levels are answered per model, so the default faux (`reasoning:
+ *  false`) supports only "off". */
 function makeBoundary(responses: FauxResponseStep[]) {
-  const { faux, models } = makeFaux();
+  const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
   faux.setResponses(responses);
   const sessions = inMemorySessionStore();
   const lease = inProcessLease();
@@ -735,7 +737,7 @@ function makeBoundary(responses: FauxResponseStep[]) {
     tools: [],
     systemPrompt: "test",
   });
-  const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
+  const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: faux.getModel() };
   const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
@@ -749,6 +751,30 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(caps.manualCompaction).toBe(true);
     expect(caps.modelSelection ? caps.modelSelection.allowedModels : []).toContain(spec);
     expect(caps.thinkingLevel ? caps.thinkingLevel.allowedLevels : []).toContain("high");
+  });
+
+  it("thinking levels are answered by the MODEL: a non-reasoning model offers only off, and set_thinking rejects the rest", async () => {
+    const { faux, models } = makeFaux(); // default faux: reasoning false
+    const sessions = inMemorySessionStore();
+    const lease = inProcessLease();
+    const factory = piHarnessFactory({
+      sessions,
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      models,
+      model: faux.getModel(),
+      tools: [],
+      systemPrompt: "test",
+    });
+    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: faux.getModel() };
+    const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
+    expect(control.capabilities().thinkingLevel).toEqual({ allowedLevels: ["off"] });
+    await sessions.openOrCreate("sNR");
+    // The lie this replaces: ok: true, a durable entry, and no effect on the run.
+    const rejected = await control.dispatch("sNR", { type: "set_thinking", level: "high" });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
+    expect((await control.entries("sNR")).entries.map((e) => e.kind)).not.toContain("thinking_level_change");
+    expect(await control.dispatch("sNR", { type: "set_thinking", level: "off" })).toEqual({ ok: true });
   });
 
   it("set_model / set_thinking append durable overrides and emit state_changed", async () => {
@@ -865,7 +891,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       tools: [gate.tool],
       systemPrompt: "test",
     });
-    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
+    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: faux.getModel() };
     const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
     const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
     const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
@@ -1046,9 +1072,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const sessions = inMemorySessionStore();
     await sessions.openOrCreate("sPre"); // must exist, or no_such_session wins
     const lease = inProcessLease();
+    const broke = makeFaux();
     const boundary: PiBoundaryWiring = {
       lease,
-      models: makeFaux().models,
+      models: broke.models,
+      defaultModel: broke.faux.getModel(),
       harnessFactory: async () => {
         throw new Error("no harness for you");
       },
@@ -1092,7 +1120,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       tools: [],
       systemPrompt: "test",
     });
-    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory };
+    const boundary: PiBoundaryWiring = { lease, models, harnessFactory: factory, defaultModel: faux.getModel() };
     const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
     const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
 

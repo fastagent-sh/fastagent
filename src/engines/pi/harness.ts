@@ -156,6 +156,17 @@ const ALL_THINKING_LEVELS = {
 } satisfies Record<ThinkingLevel, true>;
 export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set(Object.keys(ALL_THINKING_LEVELS) as ThinkingLevel[]);
 
+/** The levels THIS model can actually do — the scale above is the vocabulary, not the answer. A
+ *  non-reasoning model has only "off"; on a reasoning model pi-ai marks an unsupported level with an
+ *  explicit `null` in `thinkingLevelMap` (a missing key means "provider default", i.e. supported).
+ *  `capabilities()` and `set_thinking` both derive from here: advertising a level the model ignores
+ *  makes a control that reports success and does nothing. */
+export function thinkingLevelsFor(model: AnyModel): ThinkingLevel[] {
+  if (!model.reasoning) return ["off"];
+  const map = model.thinkingLevelMap as Partial<Record<ThinkingLevel, string | null>> | undefined;
+  return [...THINKING_LEVELS].filter((level) => map?.[level] !== null);
+}
+
 /** The shape both override consumers walk — a session entry, structurally. */
 export interface OverrideEntryLike {
   type: string;
@@ -194,6 +205,25 @@ export function lastOverrideEntries(entries: OverrideEntryLike[]): {
 }
 
 /**
+ * The model this session's next run will use: its recorded override if the registry still has it,
+ * the assembly default otherwise. The ONE resolution both the execution path
+ * ({@link resolveHarnessOverrides}) and the control plane (per-model thinking levels) consume — a
+ * client must not be told about a model the run will not use. `missing` reports the dropped spec so
+ * the execution path can warn once (fail visibly) without this becoming a logging function.
+ */
+export function resolveSessionModel(
+  entries: OverrideEntryLike[],
+  models: Models,
+  fallback: AnyModel,
+): { model: AnyModel; missing?: string } {
+  const recorded = lastOverrideEntries(entries).model;
+  if (!recorded) return { model: fallback };
+  const found = models.getModel(recorded.provider, recorded.modelId);
+  if (found) return { model: found as AnyModel };
+  return { model: fallback, missing: `${recorded.provider}/${recorded.modelId}` };
+}
+
+/**
  * Resolve the session's model/thinking OVERRIDES for a fresh harness — same shape as the
  * active-tools resolve above: pi writes `model_change`/`thinking_level_change` entries on explicit
  * setModel/setThinkingLevel (the control plane's `set_model`/`set_thinking` append them directly)
@@ -216,15 +246,13 @@ export function resolveHarnessOverrides(
     emit(message);
   };
   const recorded = lastOverrideEntries(entries);
-  if (recorded.model) {
-    const found = models.getModel(recorded.model.provider, recorded.model.modelId);
-    if (found) model = found as AnyModel;
-    else {
-      warnOnce(
-        `${sessionId}\u0000model\u0000${recorded.model.provider}/${recorded.model.modelId}`,
-        `[fastagent] session ${sessionId}: recorded model override ${recorded.model.provider}/${recorded.model.modelId} is not in this deployment's registry — using the configured default`,
-      );
-    }
+  const resolved = resolveSessionModel(entries, models, defaults.model);
+  model = resolved.model;
+  if (resolved.missing) {
+    warnOnce(
+      `${sessionId}\u0000model\u0000${resolved.missing}`,
+      `[fastagent] session ${sessionId}: recorded model override ${resolved.missing} is not in this deployment's registry — using the configured default`,
+    );
   }
   if (recorded.thinkingLevel !== undefined) {
     if (THINKING_LEVELS.has(recorded.thinkingLevel as ThinkingLevel)) {

@@ -487,7 +487,11 @@ Overrides persist in the session record and every later turn's fresh harness app
 serving path, channels included. Boundary mutations require an EXISTING session (`no_such_session`
 otherwise): sessions are created by `invoke`, never by the control plane. Invalid payloads reject
 `invalid_command` before acceptance;
-`capabilities()` lists `allowedModels`/`allowedLevels`. Boundary commands require the wiring the
+`capabilities()` lists `allowedModels`/`allowedLevels` — `allowedLevels` are the levels the model
+supports, not pi's whole scale (a non-reasoning model offers only `off`). `capabilities()` is
+sessionless, so it answers for the CONFIGURED model; `set_thinking` validates against the session's
+own model (its `set_model` override, if any) and rejects an unsupported level with `invalid_command`
+rather than recording an override the run would ignore. Boundary commands require the wiring the
 agent opener provides (`sessionControl: true`); a hub without it reports them off and rejects
 with `unsupported_capability`.
 

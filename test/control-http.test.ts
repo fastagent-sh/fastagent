@@ -23,9 +23,10 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 const TOKEN = "test-token";
 
-/** A served control plane over a real HTTP server + the agent driving it. */
+/** A served control plane over a real HTTP server + the agent driving it. Reasoning-capable model:
+ *  thinking levels are per model, and the default faux supports only "off". */
 async function serveControl() {
-  const { faux, models } = makeFaux();
+  const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
   faux.setResponses([fauxAssistantMessage("hello over the wire")]);
   const sessions = inMemorySessionStore();
   const lease = inProcessLease();
@@ -49,7 +50,7 @@ async function serveControl() {
   });
   const { control, observer } = createPiSessionControl({
     sessions,
-    boundary: () => ({ lease, models, harnessFactory: factory }),
+    boundary: () => ({ lease, models, harnessFactory: factory, defaultModel: faux.getModel() }),
   });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });

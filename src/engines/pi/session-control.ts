@@ -37,11 +37,14 @@ import {
 import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
 import {
+  type AnyModel,
   SUMMARIZATION_RETRY_POLICY,
   type PiHarnessFactory,
   THINKING_LEVELS,
   harnessSession,
   lastOverrideEntries,
+  resolveSessionModel,
+  thinkingLevelsFor,
 } from "./harness.ts";
 import { log } from "../../log.ts";
 import type { PiSessionReader } from "./sessions.ts";
@@ -177,6 +180,9 @@ export interface PiBoundaryWiring {
   lease: Lease;
   models: Models;
   harnessFactory: PiHarnessFactory;
+  /** The assembly's configured model — the base every session's thinking-level answer starts from
+   *  (a session without a `set_model` override runs on exactly this). */
+  defaultModel: AnyModel;
 }
 
 export interface CreatePiSessionControlOptions {
@@ -259,7 +265,12 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
         followUp: true,
         manualCompaction: !!b,
         modelSelection: b ? { allowedModels: listModels(b.models) } : false,
-        thinkingLevel: b ? { allowedLevels: [...THINKING_LEVELS] as string[] } : false,
+        // The DEFAULT model's levels: `capabilities()` is sessionless by contract, so it cannot
+        // answer for a session that has run `set_model` — that session's real set is enforced by
+        // `set_thinking`, which reads the session's own model. Answering from the default is the
+        // honest sessionless answer; the static scale was not (it advertised every level on a
+        // non-reasoning model, and the dispatch then returned ok for a no-op).
+        thinkingLevel: b ? { allowedLevels: thinkingLevelsFor(b.defaultModel) as string[] } : false,
         toolProgress: true, // tool_progress IS delivered (replace-semantics snapshots)
         usage: false,
       };
@@ -456,6 +467,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               return { type: "state_changed", timestamp: Date.now(), data: { model: `${model.provider}/${model.id}` } };
             };
           } else if (command.type === "set_thinking") {
+            // The SCALE check stays here (session-independent: a payload that is not a level at all
+            // is invalid before any session question). Whether THIS session's model can do the
+            // level is checked below, once the session is known.
             if (!(THINKING_LEVELS as ReadonlySet<string>).has(command.level)) {
               return {
                 ok: false,
@@ -474,7 +488,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
           // not minted into a ghost record. (Existence check before the lease — read-only; the
           // WRITE handle is re-opened under the lease below, this one is discarded.)
-          if (!(await sessions.openIfExists(session))) {
+          const existing = await sessions.openIfExists(session);
+          if (!existing) {
             return {
               ok: false,
               error: {
@@ -483,6 +498,26 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 retryable: false,
               },
             };
+          }
+          if (command.type === "set_thinking") {
+            // Against THIS session's model (its `set_model` override, else the assembly default) —
+            // still pre-lease. The scale is the vocabulary; the model is the authority.
+            const { model } = resolveSessionModel(
+              (await existing.getEntries()) as Parameters<typeof resolveSessionModel>[0],
+              b.models,
+              b.defaultModel,
+            );
+            const allowed = thinkingLevelsFor(model) as string[];
+            if (!allowed.includes(command.level)) {
+              return {
+                ok: false,
+                error: {
+                  code: INVALID_COMMAND_CODE,
+                  message: `thinking level "${command.level}" is not supported by ${model.provider}/${model.id} (allowed: ${allowed.join(", ")})`,
+                  retryable: false,
+                },
+              };
+            }
           }
           // Boundary mutations are the control plane's only writers: same lease as every run — a
           // mutation must never race one (design §9).

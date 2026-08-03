@@ -27,7 +27,7 @@ import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
 import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
-import { piHarnessFactory } from "./harness.ts";
+import { type AnyModel, piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
 import { reportDefinitionWarnings } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
@@ -241,18 +241,19 @@ function buildPiAgent(opts: {
   // Materialized here (not defaulted inside createPiAgentFromHarness) so the exposed parts carry
   // the SAME lease instance the agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
+  const defaultModel = resolveModel(models, opts.model);
   const harnessFactory = piHarnessFactory({
     sessions: opts.sessions ?? inMemorySessionStore(),
     env,
     models,
-    model: resolveModel(models, opts.model),
+    model: defaultModel,
     thinkingLevel: opts.thinkingLevel,
     systemPrompt: opts.systemPrompt,
     tools: opts.tools,
     skills: opts.skills,
     live: opts.live,
   });
-  opts.onAssembly?.({ models, harnessFactory, lease });
+  opts.onAssembly?.({ models, harnessFactory, lease, defaultModel });
   return createPiAgentFromHarness({ lease, observer: opts.observer, cwd: env.cwd, harnessFactory });
 }
 
@@ -266,6 +267,8 @@ type OnAssembly = (parts: {
   models: Models;
   harnessFactory: ReturnType<typeof piHarnessFactory>;
   lease: Lease;
+  /** The resolved configured model — the base a session without a `set_model` override runs on. */
+  defaultModel: AnyModel;
 }) => void;
 
 /**

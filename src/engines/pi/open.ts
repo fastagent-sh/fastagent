@@ -239,6 +239,7 @@ export async function createPiAgentFromDir(
             lease: parts.lease,
             models: parts.models,
             harnessFactory: parts.harnessFactory,
+            defaultModel: parts.defaultModel,
           };
         }
       : undefined,
