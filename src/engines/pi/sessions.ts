@@ -27,7 +27,7 @@ export interface PiSessionStore {
  *   returned handle; `navigate` moves its leaf) after an existence check, under the run lease.
  * `openIfExists` skips the open-time crash reconciliation (that appends repair entries — a write
  * the observation plane must not perform). The boundary writers are safe WITHOUT it only because
- * override records are not messages, and a leaf move appends nothing at all — neither can create or
+ * neither override records nor the `leaf` record a move appends are MESSAGES — none can create or
  * interact with a dangling tool_use pair. Writing MESSAGE-class records through this handle would bypass that repair: use
  * `openOrCreate` for anything that enters the transcript.
  */

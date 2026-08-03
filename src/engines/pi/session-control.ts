@@ -494,9 +494,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           } else if (command.type === "navigate") {
             apply = async (s) => {
-              // Re-validated under the lease by moveTo itself (SessionError "not_found" →
-              // boundary_command_failed): the pre-lease check below answers the client's typo,
-              // this one answers a target that vanished in the window.
+              // Appends a `leaf` record (pi's move is journalled, not an in-place pointer), so the
+              // move is durable and visible on the entries plane like every other boundary write.
               await s.moveTo(command.targetId);
               return { type: "state_changed", timestamp: Date.now(), data: { leafEntryId: command.targetId } };
             };
@@ -522,7 +521,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               ok: false,
               error: {
                 code: INVALID_COMMAND_CODE,
-                message: `entry "${command.targetId}" does not exist in session "${session}" — entries() lists the navigable ids`,
+                message: `entry "${command.targetId}" does not exist in session "${session}" — navigable ids come from entries(), whose conversation kinds (user/assistant/tool) are the meaningful targets`,
                 retryable: false,
               },
             };

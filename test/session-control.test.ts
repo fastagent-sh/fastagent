@@ -1035,7 +1035,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const path: string[] = [];
     for (let id = (await control.state("sNav")).leafEntryId; id; id = byId.get(id)?.parentId) path.unshift(id);
     expect(path).toContain(target.id);
-    expect(after.length).toBeGreaterThan(before.length); // nothing was deleted; the tree branched
+    expect(after.map((e) => e.id)).toEqual(expect.arrayContaining(before.map((e) => e.id))); // nothing deleted
     // Everything the old branch recorded past the target is off the active path now — still in the
     // repository, no longer what the next turn continues.
     const abandoned = before.slice(before.indexOf(target) + 1).map((e) => e.id);
@@ -1055,6 +1055,47 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const unknownSession = await control.dispatch("sGhost", { type: "navigate", targetId: "x" });
     expect(unknownSession.ok).toBe(false);
     if (!unknownSession.ok) expect(unknownSession.error.code).toBe(NO_SUCH_SESSION_CODE);
+  });
+
+  it("navigate takes the run lease: mid-run it is session_busy, and the live branch stays put", async () => {
+    // The stated reason navigate is gated on the boundary wiring at all: a leaf moved under a live
+    // run would hang that run's next entry off a stale branch.
+    const { faux, models } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("first"), fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
+    const sessions = inMemorySessionStore();
+    const lease = inProcessLease();
+    const gate = makeGate();
+    const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      sessions,
+      models,
+      model: faux.getModel(),
+      tools: [gate.tool],
+      systemPrompt: "test",
+    });
+    const { control, observer } = createPiSessionControl({
+      sessions,
+      boundary: () => ({
+        lease,
+        models,
+        harnessFactory: factory,
+        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
+      }),
+    });
+    const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+    await drain(agent.invoke({ session: "sNavBusy" }, { text: "hi" })); // a settled turn to aim at
+    const target = (await control.entries("sNavBusy")).entries.find((e) => e.kind === "user") as SessionEntry;
+    const leafBefore = (await control.state("sNavBusy")).leafEntryId;
+
+    const invoked = drive(agent, "sNavBusy");
+    await waitForRunning(control, "sNavBusy");
+    const busy = await control.dispatch("sNavBusy", { type: "navigate", targetId: target.id });
+    expect(busy.ok).toBe(false);
+    if (!busy.ok) expect(busy.error.code).toBe(SESSION_BUSY_CODE);
+    expect((await control.state("sNavBusy")).leafEntryId).toBe(leafBefore); // the run's branch untouched
+    gate.release();
+    await invoked;
+    expect(await control.dispatch("sNavBusy", { type: "navigate", targetId: target.id })).toEqual({ ok: true });
   });
 
   it("navigate without boundary wiring is gated off, not silently linear", async () => {
