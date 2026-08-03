@@ -140,18 +140,12 @@ Common options:
 function createPiAgentFromDefinition(
   dir: string,
   options: CreatePiAgentFromDefinitionOptions,
-): Promise<{
-  agent: Agent;
-  definition: LoadedDefinition;
-  readDefinition: () => Promise<LoadedDefinition>;
-}>;
+): Promise<{ agent: Agent; definition: LoadedDefinition }>;
 ```
 
 Load `persona.md`/`skills/` from `dir` (the agent dir) and assemble the pi prompt. `②` project context is sourced via pi's `loadProjectContextFiles({ cwd, agentDir: dir })` — the dir's own `AGENTS.md` plus every `AGENTS.md` walking `cwd` (option; default `dir`) up to root. Pass `cwd` to decouple the workspace (where tools operate, whose repo `AGENTS.md` is context) from the agent dir — `createPiAgentFromDir` always passes the resolved workspace, which is the directory fastagent was pointed at (the agent dir's parent when the agent was found one level inside it, the agent dir itself when you aimed straight at it).
 
 `LoadedDefinition` carries `contextFiles: Array<{ path; content }>` (the ② files), `persona?` (from `persona.md`, ①), `skills`, and diagnostics/collisions (`SkillDiagnostic[]` / `SkillCollision[]` — both exported).
-
-`definition` is the BOOT snapshot (report diagnostics from it); `readDefinition()` is the same live read every invoke performs — a full directory load, side-effect free — for anything that must ANSWER for the definition while serving, such as the control plane's `commands()`. Do not close over `definition` for that: the directory is the agent, live, so a snapshot ages the moment an author edits a skill.
 
 ### `createPiAgentFromDir`
 
@@ -442,8 +436,8 @@ const sessions = inMemorySessionStore();
 const { control, observer } = createPiSessionControl({ sessions });
 const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer });
 // This agent has no definition, so `control.commands()` is `[]` — true, not a gap. Over a DIRECTORY
-// agent, pass `commands` (the live read: `createPiAgentFromDefinition`'s `readDefinition`) or the
-// list would claim the definition's skills do not exist. `createPiAgentFromDir` wires it for you.
+// agent, pass `commands` (a live read, e.g. `loadAgentSkills(dir)`) or the list would claim the
+// definition's skills do not exist. `createPiAgentFromDir` wires it for you.
 
 // Live events are NOT durable history: a subscription sees only what happens while it iterates,
 // so start watching BEFORE (or while) the run is driven — never after it drained.
@@ -488,8 +482,9 @@ outcome; the settlement is the truth.
 `commands()` lists what a `/` composer completes: `{ name, description?, source }` per named thing
 the definition exposes (`source: "skill"` today). It is a LISTING, not a dispatch surface — the data
 plane takes prompts as text and nothing expands `/name`, so what typing one means is the client's
-choice. It is read live and uncached (one full definition load per call), so a skill added while
-serving appears at once; `[]` means the agent exposes none. It is also the one read that can REJECT:
+choice. It is read live and uncached — the definition's `skills/` is re-read per call (the ②
+context walk the full load does is skipped: this answers at composer-open frequency) — so a skill
+added while serving appears at once; `[]` means the agent exposes none. It is also the one read that can REJECT:
 a definition the server cannot read at all is a deployment fault with no truthful degraded value, and
 the rejection carries no stable code (remotely: an uncoded non-2xx → `ControlRequestError`). Wrap the
 call, and expect no `error.code` to branch on.

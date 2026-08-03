@@ -123,9 +123,9 @@ export async function connectSessionControl(options: RemoteEndpointOptions): Pro
     capabilities: () => capabilities,
 
     // NOT prefetched like capabilities: a live definition can grow a skill between calls, so the
-    // list is fetched per call. The endpoint is UNCACHED server-side — one full definition load
-    // (every SKILL.md, plus the context-file walk) per request, which is what keeps it honest about
-    // a directory that changes underneath it.
+    // list is fetched per call. The endpoint is UNCACHED server-side (it re-reads the definition's
+    // skills/ per request), which is what keeps it honest about a directory that changes underneath
+    // it.
     commands: () => get<AgentCommand[]>("/control/commands"),
 
     state: (session) => get<SessionState>(`/control/state?session=${encodeURIComponent(session)}`),

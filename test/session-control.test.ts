@@ -378,7 +378,7 @@ describe("session control (Phase 1): observation plane", () => {
         join(dir, "fastagent", "skills", "triage-copy", "SKILL.md"),
         `---\nname: triage\ndescription: A second claim on the same name\n---\n\nDo it differently.\n`,
       );
-      expect((await control.commands()).map((c) => c.name)).toEqual(["triage"]);
+      expect(await control.commands()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
       // Live in BOTH directions — a cached read would only ever grow the list.
       await rm(join(dir, "fastagent", "skills"), { recursive: true, force: true });
       expect(await control.commands()).toEqual([]);

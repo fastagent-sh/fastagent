@@ -409,16 +409,12 @@ function findingsSignature(def: LoadedDefinition): string {
 
 /**
  * L2: "point at a directory → agent": load + assemble (base + AGENTS.md + skills + env) + L1 in one
- * call. Returns the boot `definition` so callers can surface diagnostics/collisions, and
- * `readDefinition` — the SAME live read every invoke performs — so a caller that must ANSWER for
- * the definition (the control plane's command list) reads what the next turn will run, not a boot
- * snapshot that quietly ages. It is a full directory load and it is SIDE-EFFECT FREE: the findings
- * report rides the invoke path only.
+ * call. Returns the definition so callers can surface diagnostics/collisions.
  */
 export async function createPiAgentFromDefinition(
   dir: string,
   options: CreatePiAgentFromDefinitionOptions,
-): Promise<{ agent: Agent; definition: LoadedDefinition; readDefinition: () => Promise<LoadedDefinition> }> {
+): Promise<{ agent: Agent; definition: LoadedDefinition }> {
   // `dir` = the agent-definition dir (persona.md/skills/); `cwd` (default = dir) is the run root where
   // tools operate and whose ancestors are walked for ② context.
   const cwd = options.cwd ?? dir;
@@ -430,16 +426,7 @@ export async function createPiAgentFromDefinition(
   // runtime-written bad skill surfaces the moment it appears, while a static finding does not spam
   // every turn's log. A log-dedup memo, not session state (stateless invoke holds).
   let reportedFindings = findingsSignature(definition);
-  const readDefinition = (): Promise<LoadedDefinition> => loadAgentDefinition(dir, { cwd: env.cwd, env });
-  /** The findings edge belongs to the TURN, not to any reader: a polling control-plane call must not
-   *  consume the change and leave the next invoke silent about a skill that just broke. */
-  const reportIfChanged = (def: LoadedDefinition): void => {
-    const sig = findingsSignature(def);
-    if (sig !== reportedFindings) {
-      reportedFindings = sig;
-      reportDefinitionWarnings(def.collisions, def.diagnostics);
-    }
-  };
+
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
   const tools = withSearchTool(options.tools ?? piDefaultTools());
@@ -461,8 +448,12 @@ export async function createPiAgentFromDefinition(
     // not silently vanish from the agent, and a static one must not spam every turn's log. The
     // next good edit heals both.
     live: async () => {
-      const def = await readDefinition();
-      reportIfChanged(def);
+      const def = await loadAgentDefinition(dir, { cwd: env.cwd, env });
+      const sig = findingsSignature(def);
+      if (sig !== reportedFindings) {
+        reportedFindings = sig;
+        reportDefinitionWarnings(def.collisions, def.diagnostics);
+      }
       return {
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity,
@@ -483,5 +474,5 @@ export async function createPiAgentFromDefinition(
     observer: options.observer,
     onAssembly: options.onAssembly,
   });
-  return { agent, definition, readDefinition };
+  return { agent, definition };
 }
