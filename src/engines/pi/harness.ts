@@ -12,7 +12,7 @@ import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import type { PiSessionStore } from "./sessions.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
-import { type OverrideEntryLike, resolveSessionSettings } from "./session-settings.ts";
+import { type OverrideEntryLike, activePathEntries, resolveSessionSettings } from "./session-settings.ts";
 
 /**
  * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred
@@ -202,9 +202,10 @@ export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFac
   return async (sessionId) => {
     const session = await options.sessions.openOrCreate(sessionId);
     // One extra entry walk per invoke to collect the activation deltas — negligible against the model
-    // call, same trade as L2's per-invoke definition re-read. Serving sessions never branch, so a flat
-    // getEntries() read (no leaf-path walk) is correct.
-    const entries = await session.getEntries();
+    // call, same trade as L2's per-invoke definition re-read. The walk is over the ACTIVE PATH, not
+    // the flat journal: `navigate` moves the leaf, so the tree can hold an abandoned branch whose
+    // activations and overrides this session has left behind.
+    const entries = await activePathEntries(session);
     const activated = entries.flatMap((e) =>
       e.type === "custom" && e.customType === TOOL_ACTIVATION_ENTRY
         ? ((e.data as { names?: string[] } | undefined)?.names ?? [])

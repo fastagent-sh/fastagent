@@ -37,7 +37,7 @@ import {
 import { listModels } from "./config.ts";
 import type { Lease, RunControls, SessionObserver } from "./invoke.ts";
 import { type AnyModel, SUMMARIZATION_RETRY_POLICY, type PiHarnessFactory, harnessSession } from "./harness.ts";
-import { THINKING_LEVELS, resolveSessionSettings } from "./session-settings.ts";
+import { THINKING_LEVELS, activePathEntries, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionReader } from "./sessions.ts";
 
@@ -280,7 +280,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       const settings =
         opened && b
           ? resolveSessionSettings(
-              (await opened.getEntries()) as Parameters<typeof resolveSessionSettings>[0],
+              (await activePathEntries(opened)) as Parameters<typeof resolveSessionSettings>[0],
               b.models,
               b.defaults,
             )
@@ -303,7 +303,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
     async entries(session, opts): Promise<SessionEntries> {
       const opened = await sessions.openIfExists(session);
       if (!opened) return { entries: [] };
-      const all = (await opened.getEntries()).map(toSessionEntry);
+      // `leaf` records are pi's journal of a MOVE, not a position in the conversation: their
+      // parentId is the OLD leaf, nothing is ever chained onto them, and navigating to one would
+      // put the branch head off every conversation path. Withholding them keeps ONE rule for the
+      // client — every entry published here is a legal `navigate` target.
+      const all = (await opened.getEntries()).filter((e) => e.type !== "leaf").map(toSessionEntry);
       const leafEntryId = (await opened.getLeafId()) ?? undefined;
       let entries = all;
       if (opts?.since !== undefined) {
@@ -464,7 +468,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               // Both halves: a new model can change which level executes. Nothing is re-recorded to
               // make that true — the resolve reports it, so the preference survives a round trip.
               const settings = resolveSessionSettings(
-                (await s.getEntries()) as Parameters<typeof resolveSessionSettings>[0],
+                (await activePathEntries(s)) as Parameters<typeof resolveSessionSettings>[0],
                 b.models,
                 b.defaults,
               );
@@ -516,11 +520,9 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           }
           if (command.type === "navigate") {
             // A target that cannot BE a leaf is a permanent payload error, not a session error — the
-            // same disposition as an unknown model spec. Every published entry qualifies (the leaf
-            // legitimately sits on a model_change or a compaction — the engine itself puts it
-            // there) EXCEPT pi's own `leaf` records: those journal a previous move, so their
-            // parentId is the OLD leaf and pointing at one would put the branch head on a record
-            // that is on no conversation path.
+            // same disposition as an unknown model spec. Every entry `entries()` publishes qualifies
+            // (a model_change or a compaction is a legal leaf — the engine itself puts it there);
+            // the `leaf` records it withholds do not, and a client can only name one by inventing it.
             const entry = await existing.getEntry(command.targetId);
             if (!entry || entry.type === "leaf") {
               return {
@@ -528,7 +530,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 error: {
                   code: INVALID_COMMAND_CODE,
                   message: entry
-                    ? `entry "${command.targetId}" is a leaf-move record, not a position — navigate to the entry it points at`
+                    ? `entry "${command.targetId}" is a leaf-move record — entries() does not publish those, and they are not positions; navigate to the entry it points at`
                     : `entry "${command.targetId}" does not exist in session "${session}" — entries() lists the navigable ids`,
                   retryable: false,
                 },
@@ -539,7 +541,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // The same set `state()` showed the client. Reject here rather than record a level the
             // run would not use.
             const { model, availableThinkingLevels } = resolveSessionSettings(
-              (await existing.getEntries()) as Parameters<typeof resolveSessionSettings>[0],
+              (await activePathEntries(existing)) as Parameters<typeof resolveSessionSettings>[0],
               b.models,
               b.defaults,
             );

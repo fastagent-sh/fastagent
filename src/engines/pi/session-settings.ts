@@ -8,7 +8,7 @@
  * model. (It could not be made unrepresentable anyway: `model_change`/`thinking_level_change` are
  * pi's entries, and pi appends them itself.)
  */
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Session, SessionTreeEntry, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Models, clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { AnyModel } from "./harness.ts";
 
@@ -25,6 +25,23 @@ const ALL_THINKING_LEVELS = {
   max: true,
 } satisfies Record<ThinkingLevel, true>;
 export const THINKING_LEVELS: ReadonlySet<ThinkingLevel> = new Set(Object.keys(ALL_THINKING_LEVELS) as ThinkingLevel[]);
+
+/**
+ * The entries on the session's ACTIVE path, root→leaf — what every last-wins read must walk.
+ * `getEntries()` is the whole TREE: once `navigate` can move the leaf, the journal still carries
+ * the abandoned branch, and reading it flat would run the session on a setting it moved away from.
+ * Deliberately NOT `Session.getBranch()`, which stops at a compaction: a compaction bounds the
+ * MODEL CONTEXT, while an override recorded before one still governs the session.
+ */
+export async function activePathEntries(session: Session): Promise<SessionTreeEntry[]> {
+  const entries = await session.getEntries();
+  const leafId = await session.getLeafId();
+  if (leafId === null) return entries; // nothing recorded a leaf yet — the journal is the path
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const path: SessionTreeEntry[] = [];
+  for (let cur = byId.get(leafId); cur; cur = cur.parentId ? byId.get(cur.parentId) : undefined) path.unshift(cur);
+  return path;
+}
 
 /** The shape both override consumers walk — a session entry, structurally. */
 export interface OverrideEntryLike {

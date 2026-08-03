@@ -110,9 +110,8 @@ export type SessionCommand =
   | { type: "set_thinking"; level: string }
   /** Move the session's active leaf to `targetId`, an existing entry — the write verb for the tree
    *  `entries()` already publishes (and how sibling branches come to exist: the next turn hangs off
-   *  the new leaf). A boundary mutation: same lease as a run, `invalid_command` when `targetId`
-   *  names no entry in this session or names one that cannot BE a leaf (an engine's own move
-   *  bookkeeping). */
+   *  the new leaf). Every entry `entries()` publishes is a legal target; a `targetId` that is not
+   *  one rejects `invalid_command`. A boundary mutation otherwise: same lease as a run. */
   | { type: "navigate"; targetId: string };
 
 /**

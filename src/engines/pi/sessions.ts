@@ -26,9 +26,12 @@ export interface PiSessionStore {
  * - the control plane's BOUNDARY writers (`set_model`/`set_thinking` append override records to the
  *   returned handle; `navigate` moves its leaf) after an existence check, under the run lease.
  * `openIfExists` skips the open-time crash reconciliation (that appends repair entries — a write
- * the observation plane must not perform). The boundary writers are safe WITHOUT it only because
- * neither override records nor the `leaf` record a move appends are MESSAGES — none can create or
- * interact with a dangling tool_use pair. Writing MESSAGE-class records through this handle would bypass that repair: use
+ * the observation plane must not perform). The boundary writers are safe WITHOUT it for two
+ * different reasons: an override record is not a message, so it cannot create or pair with a
+ * dangling tool_use; a `navigate` writes no message either, but it CAN expose one — parking the
+ * leaf on an assistant entry whose tool results are now off-path is the dangling-pair state
+ * {@link reconcileInterruptedToolCalls} exists for. That is repaired at the next `openOrCreate`,
+ * which repairs AT THE LEAF — exactly where a move puts it. Writing MESSAGE-class records through this handle would bypass that repair: use
  * `openOrCreate` for anything that enters the transcript.
  */
 export interface PiSessionReader {

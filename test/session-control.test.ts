@@ -724,7 +724,7 @@ describe("session control (Phase 2a): run modulation", () => {
 /** Agent + control with full boundary wiring — the workspace shape, assembled by hand. The model is
  *  REASONING-capable: thinking levels are answered per model, so the default faux (`reasoning:
  *  false`) supports only "off". */
-function makeBoundary(responses: FauxResponseStep[]) {
+function makeBoundary(responses: FauxResponseStep[], tools: AgentTool[] = []) {
   const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
   faux.setResponses(responses);
   const sessions = inMemorySessionStore();
@@ -735,7 +735,7 @@ function makeBoundary(responses: FauxResponseStep[]) {
 
     models,
     model: faux.getModel(),
-    tools: [],
+    tools,
     systemPrompt: "test",
   });
   const boundary: PiBoundaryWiring = {
@@ -1004,10 +1004,14 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("navigate moves the leaf, so the NEXT turn branches from the target", async () => {
+    let thirdTurnContext = "";
     const { agent, control } = makeBoundary([
       fauxAssistantMessage("one"),
       fauxAssistantMessage("two"),
-      fauxAssistantMessage("three"),
+      (context) => {
+        thirdTurnContext = JSON.stringify(context.messages);
+        return fauxAssistantMessage("three");
+      },
     ]);
     await drain(agent.invoke({ session: "sNav" }, { text: "first" }));
     await drain(agent.invoke({ session: "sNav" }, { text: "second" }));
@@ -1041,6 +1045,79 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const abandoned = before.slice(before.indexOf(target) + 1).map((e) => e.id);
     expect(abandoned.length).toBeGreaterThan(0);
     expect(path.filter((id) => abandoned.includes(id))).toEqual([]);
+    // What the move is FOR: the model saw the branch it was moved to, not the one it left.
+    expect(thirdTurnContext).toContain("first");
+    expect(thirdTurnContext).toContain("third");
+    expect(thirdTurnContext).not.toContain("second");
+  });
+
+  it("a setting recorded on a branch the session LEFT does not follow it back", async () => {
+    // The silent consequence of a movable leaf: every last-wins read (state(), the fresh-harness
+    // resolve, the activation walk) reads the journal, which still holds the abandoned branch.
+    let ranWith: string | undefined;
+    const { faux, models } = makeFaux({ models: [{ id: "default-model" }, { id: "other-model" }] });
+    const dflt = faux.getModel("default-model") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const other = faux.getModel("other-model") as NonNullable<ReturnType<typeof faux.getModel>>;
+    faux.setResponses([
+      fauxAssistantMessage("one"),
+      (_context, _options, _state, model) => {
+        ranWith = model.id;
+        return fauxAssistantMessage("two");
+      },
+    ]);
+    const sessions = inMemorySessionStore();
+    const lease = inProcessLease();
+    const factory = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      sessions,
+      models,
+      model: dflt,
+      tools: [],
+      systemPrompt: "test",
+    });
+    const { control, observer } = createPiSessionControl({
+      sessions,
+      boundary: () => ({ lease, models, harnessFactory: factory, defaults: { model: dflt, thinkingLevel: "medium" } }),
+    });
+    const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+
+    await drain(agent.invoke({ session: "sNavLeak" }, { text: "hi" }));
+    const target = (await control.entries("sNavLeak")).entries.find((e) => e.kind === "user") as SessionEntry;
+    const spec = `${other.provider}/${other.id}`;
+    expect(await control.dispatch("sNavLeak", { type: "set_model", model: spec })).toEqual({ ok: true });
+    expect((await control.state("sNavLeak")).model).toBe(spec);
+    // Move back to a point BEFORE the override was recorded: it is off the active path now.
+    expect(await control.dispatch("sNavLeak", { type: "navigate", targetId: target.id })).toEqual({ ok: true });
+    expect((await control.state("sNavLeak")).model).toBe(`${dflt.provider}/${dflt.id}`); // assembly default
+    await drain(agent.invoke({ session: "sNavLeak" }, { text: "again" }));
+    expect(ranWith).toBe(dflt.id); // and the RUN agrees with what state() reports
+  });
+
+  it("navigating onto an assistant whose tool result is now off-path leaves a transcript the next turn can run", async () => {
+    // A move writes no message, but it can EXPOSE a dangling tool_use pair — the state
+    // reconcileInterruptedToolCalls exists for. It repairs AT THE LEAF, which is exactly where a
+    // move puts the gap, so the next invoke runs instead of handing the provider a rejected pair.
+    const { agent, control } = makeBoundary(
+      [
+        fauxAssistantMessage(fauxToolCall("echo", { value: "hi" }, { id: "e1" })),
+        fauxAssistantMessage("done"),
+        fauxAssistantMessage("after the move"),
+      ],
+      [echoTool],
+    );
+    await drain(agent.invoke({ session: "sNavDangle" }, { text: "call it" }));
+    const callEntry = (await control.entries("sNavDangle")).entries.find(
+      (e) => e.kind === "assistant" && (e.data as { toolCalls?: unknown[] }).toolCalls,
+    ) as SessionEntry;
+    expect(await control.dispatch("sNavDangle", { type: "navigate", targetId: callEntry.id })).toEqual({ ok: true });
+    const events = await drain(agent.invoke({ session: "sNavDangle" }, { text: "continue" }));
+    expect(events.some((e) => e.type === "failed")).toBe(false);
+    expect(events.at(-1)?.type).toBe("completed");
+    const text = events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as { delta: string }).delta)
+      .join("");
+    expect(text).toContain("after the move");
   });
 
   it("navigate rejects an entry that is not in the session, and a session that does not exist", async () => {
@@ -1058,7 +1135,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("the navigable set is every published entry EXCEPT the move bookkeeping a navigate itself writes", async () => {
-    const { agent, control, spec } = makeBoundary([fauxAssistantMessage("ok")]);
+    const { agent, control, sessions, spec } = makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sNavKinds" }, { text: "hi" }));
     // A boundary record is a legitimate target: the engine itself leaves the leaf sitting on one.
     expect(await control.dispatch("sNavKinds", { type: "set_model", model: spec })).toEqual({ ok: true });
@@ -1066,8 +1143,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(await control.dispatch("sNavKinds", { type: "navigate", targetId: modelChange!.id })).toEqual({ ok: true });
     // The move just made left a `leaf` record behind. Pointing the branch head at it would put the
     // leaf on a record whose parentId is the OLD leaf — on no conversation path at all.
-    const leafRecord = (await control.entries("sNavKinds")).entries.find((e) => e.kind === "leaf");
+    // …and entries() does not publish it: the client's rule is "anything published is navigable".
+    const raw = (await (await sessions.openIfExists("sNavKinds"))?.getEntries()) ?? [];
+    const leafRecord = raw.find((e) => e.type === "leaf");
     expect(leafRecord).toBeDefined();
+    expect((await control.entries("sNavKinds")).entries.map((e) => e.id)).not.toContain(leafRecord?.id);
     const rejected = await control.dispatch("sNavKinds", { type: "navigate", targetId: leafRecord!.id });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
