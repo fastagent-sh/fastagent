@@ -341,8 +341,26 @@ describe("session control (Phase 1): observation plane", () => {
       // Not requested → not built.
       const plain = await createPiAgentFromDir(dir, {});
       expect(plain.sessionControl).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
-      // commands(): the definition's named invocations. Empty is a complete answer …
+  it("commands() re-reads the definition per call: added and removed skills, collisions first-wins", async () => {
+    const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "fa-sc-cmd-"));
+    try {
+      await mkdir(join(dir, "fastagent"));
+      await writeFile(
+        join(dir, "fastagent", "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5" };\n`,
+      );
+      const opened = await createPiAgentFromDir(dir, { sessionControl: true });
+      const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
+
+      // Empty is a complete answer …
       expect(await control.commands()).toEqual([]);
       // … and the read is LIVE, like the definition itself: a skill written while serving is
       // invocable on the next turn, so it must be listable NOW — a boot snapshot would advertise a
