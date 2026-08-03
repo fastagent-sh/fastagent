@@ -27,6 +27,7 @@ import {
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
 import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
 import { inProcessLease } from "../src/engines/pi/invoke.ts";
+import type { PiSessionReader } from "../src/engines/pi/sessions.ts";
 import { resolveHarnessOverrides } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -1248,6 +1249,32 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect((await finished)?.data).toMatchObject({ summary: expect.any(String) });
     expect((await control.entries("sNavCompact")).entries.map((e) => e.kind)).toContain("compaction");
     expect((await control.state("sNavCompact")).thinkingLevel).toBe("high");
+  });
+
+  it("a gap above the leaf fails state(), the read that needs the chain, and not entries()", async () => {
+    // The contract's one read that can reject (src/session.ts): `state()` answers what a turn would
+    // RUN with, which a broken chain has no answer for; `entries()` serves the journal, which needs
+    // no chain. A corrupt journal cannot be produced through the append path, so it is injected.
+    const { models } = makeFaux();
+    const broken = {
+      getEntries: async () => [
+        { id: "leaf", parentId: "pruned", type: "message", timestamp: new Date().toISOString(), message: {} },
+      ],
+      getLeafId: async () => "leaf",
+    } as unknown as Awaited<ReturnType<PiSessionReader["openIfExists"]>>;
+    const { control } = createPiSessionControl({
+      sessions: { openIfExists: async () => broken },
+      boundary: () => ({
+        lease: inProcessLease(),
+        models,
+        harnessFactory: (() => {
+          throw new Error("unused");
+        }) as never,
+        defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
+      }),
+    });
+    await expect(control.state("sBroken")).rejects.toThrow(/pruned/);
+    expect((await control.entries("sBroken")).entries.map((e) => e.id)).toEqual(["leaf"]);
   });
 
   it("navigate without boundary wiring is gated off, not silently linear", async () => {

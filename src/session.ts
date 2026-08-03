@@ -14,7 +14,8 @@ export interface SessionControl {
   capabilities(): SessionCapabilities;
   /** Rejects (rather than answering a partial state) when the session's entry chain is unreadable:
    *  this is the one control-plane failure with no `error.code` channel — `SessionResult` carries
-   *  codes, a read does not. `entries()` still answers for such a session; it needs no chain. */
+   *  codes, a read does not. For a gap ABOVE the leaf `entries()` still answers, since serving the
+   *  journal needs no chain; a leaf that is itself missing fails both reads. */
   state(session: string): Promise<SessionState>;
   /** `since` is an APPEND-ORDER position cursor: "every record appended after the one with this
    *  id", regardless of branch structure. Reconstructing the active path in a branched session is
