@@ -380,22 +380,6 @@ describe("session control (Phase 1): observation plane", () => {
         `---\nname: triage\ndescription: A second claim on the same name\n---\n\nDo it differently.\n`,
       );
       expect(await control.commands()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
-      // A skill that FAILED to load is simply absent from the list, so the read is also the only
-      // place that can say so — warned when the finding set changes, silent when it has not (a
-      // composer opening twice must not spam).
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      try {
-        await mkdir(join(dir, "fastagent", "skills", "broken"), { recursive: true });
-        await writeFile(join(dir, "fastagent", "skills", "broken", "SKILL.md"), `no frontmatter here\n`);
-        expect((await control.commands()).map((c) => c.name)).toEqual(["triage"]); // the broken one is gone …
-        expect(warn.mock.calls.flat().join(" ")).toContain("broken"); // … and said so, once
-        warn.mockClear();
-        await control.commands();
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        warn.mockRestore();
-      }
-
       // Live in BOTH directions — a cached read would only ever grow the list.
       await rm(join(dir, "fastagent", "skills"), { recursive: true, force: true });
       expect(await control.commands()).toEqual([]);
@@ -1060,6 +1044,38 @@ describe("session control (Phase 2b): boundary mutations", () => {
       "sB1",
     );
     expect(resolved.thinkingLevel).toBe("high");
+  });
+
+  it("a skill that failed to load is absent from commands() and warned once", async () => {
+    const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "fa-sc-bad-"));
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      await mkdir(join(dir, "fastagent"), { recursive: true });
+      await writeFile(
+        join(dir, "fastagent", "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5" };\n`,
+      );
+      const opened = await createPiAgentFromDir(dir, { sessionControl: true });
+      const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
+      // Broken AFTER boot — which is the case the read exists for: a finding already present at
+      // startup was reported by the caller's boot report, and re-printing it is the spam the memo
+      // prevents (test/report.test.ts pins that half).
+      await mkdir(join(dir, "fastagent", "skills", "broken"), { recursive: true });
+      await writeFile(join(dir, "fastagent", "skills", "broken", "SKILL.md"), `no frontmatter here\n`);
+      // The broken file cannot be listed — so this read is the only place that can say it exists.
+      expect(await control.commands()).toEqual([]);
+      expect(warn.mock.calls.flat().join(" ")).toContain("broken");
+      // … once: a composer opening twice must not spam a finding that has not changed.
+      warn.mockClear();
+      await control.commands();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("navigate moves the leaf, so the NEXT turn branches from the target", async () => {

@@ -217,15 +217,21 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     // `/` is a reserved command prefix: a typo'd /aboort silently steering the model (injecting a
     // prompt when the user meant to STOP the run) is the dangerous direction of the ambiguity.
     if (trimmed.startsWith("/") && trimmed !== "/abort") {
-      // Two answers with two certainties, so they are printed separately: that `/foo` is not a
-      // command is known HERE and now; which names the agent defines is a remote read that can be
-      // slow or fail, and waiting on it would leave the user's input unanswered.
-      console.log(`[unknown command ${trimmed} — /abort stops the run; a leading / is reserved]`);
+      // Two answers with two certainties, printed separately: that a leading `/` is reserved here is
+      // known NOW; whether the token names something is a remote read that can be slow or fail, and
+      // waiting on it would leave the user's input unanswered. The first line therefore does not
+      // pre-judge the token as "unknown" — the read may be about to prove it is a real name.
+      console.log(`[a leading / is reserved — /abort stops the run]`);
+      const typed = trimmed.slice(1);
       void control.commands().then(
         (commands) => {
-          // BARE names, deliberately: this composer cannot expand `/name` (the data plane takes
-          // prompts as text), so printing them with the slash would invite the user straight back
-          // into the branch that just rejected them.
+          // Names are printed BARE: this composer cannot expand `/name` (the data plane takes prompts
+          // as text), so a slash would invite the user straight back into this branch.
+          const hit = commands.find((c) => c.name === typed);
+          if (hit) {
+            console.log(`[${hit.name} is a ${hit.source} — name it in a normal message, without the /]`);
+            return;
+          }
           const names = commands.map((c) => c.name).join(", ");
           console.log(
             names ? `[this agent defines: ${names} — name one in a normal message]` : "[this agent defines no names]",
