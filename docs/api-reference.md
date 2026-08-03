@@ -484,9 +484,10 @@ await control.dispatch("s1", { type: "compact", instructions: "keep the decision
 ```
 
 Overrides persist in the session record and every later turn's fresh harness applies them — on any
-serving path, channels included. One exception, warned not silent: a recorded thinking level the
-session's CURRENT model cannot do (a later `set_model` moved it) is clamped to the nearest level
-that model supports (pi's own clamp) instead of riding a run that would ignore it. Boundary mutations require an EXISTING session (`no_such_session`
+serving path, channels included. One exception: a recorded thinking level the session's CURRENT
+model cannot do (a later `set_model` moved it) is clamped to the nearest level that model supports
+(pi's own clamp) instead of riding a run that would ignore it — with a server-side warn; `state()`
+keeps reporting the RECORDED level, since it reports session truth, not the execution fallback. Boundary mutations require an EXISTING session (`no_such_session`
 otherwise): sessions are created by `invoke`, never by the control plane. Invalid payloads reject
 `invalid_command` before acceptance;
 `capabilities()` lists `allowedModels`/`allowedLevels` — `allowedLevels` are the levels the model

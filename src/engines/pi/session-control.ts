@@ -500,7 +500,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           }
           if (command.type === "set_thinking") {
             // Against THIS session's model (its `set_model` override, else the assembly default) —
-            // still pre-lease. The scale is the vocabulary; the model is the authority.
+            // still pre-lease. The scale is the vocabulary; the model is the authority. ADVISORY by
+            // construction (a `set_model` can land between this read and the append): it exists to
+            // reject at the boundary instead of recording a no-op; the resolve's clamp is what
+            // actually keeps the executed pair valid.
             const { model } = resolveSessionModel(
               (await existing.getEntries()) as Parameters<typeof resolveSessionModel>[0],
               b.models,
