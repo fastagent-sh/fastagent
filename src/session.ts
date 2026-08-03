@@ -215,8 +215,9 @@ export type QueueChangedEvent = SessionEvent<"queue_changed", { steering: number
 };
 
 /** A boundary mutation changed durable session state (L2; no runId — boundary mutations happen
- *  between runs). `leafEntryId` carries a `navigate`: a second attached client learns the branch
- *  moved without polling `state()`. */
+ *  between runs). `leafEntryId` reports a `navigate` — a deliberate move of the branch head, which
+ *  a second attached client would otherwise have no signal for. It is NOT a general leaf feed:
+ *  every turn advances the leaf too, and that is read from `entries()`/`state()` after the run. */
 export type StateChangedEvent = SessionEvent<
   "state_changed",
   { model?: string; thinkingLevel?: string; leafEntryId?: string }

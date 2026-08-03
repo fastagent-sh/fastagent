@@ -317,7 +317,7 @@ compare. The vocabulary, grouped by the client maturity level that needs it:
 | L2 | `turn_started`, `turn_finished` | Group tool activity under one assistant turn. |
 | L2 | `compaction_started/finished` | Manual compaction bounds: between runs, no `runId`; every started is closed (`summary`, `error`, or `aborted` — a deliberate stop is not a failure). Automatic overflow compaction stays inside its run and does not emit these. |
 | L2 | `retry_scheduled { operation, attempt, maxAttempts, delayMs, error }` | A transient provider failure scheduled a summarization retry backoff — explains a quiet gap that would otherwise read as a hang. Inside a run (auto-compaction / branch summary, `runId`) or during manual compaction (no `runId`). No closing event: the next event is the closure. |
-| L2 | `state_changed { model?, thinkingLevel?, leafEntryId? }` | Material state changes — `leafEntryId` carries a `navigate`, so a second attached client sees the branch move without polling `state()`. |
+| L2 | `state_changed { model?, thinkingLevel?, leafEntryId? }` | Material state changes. `leafEntryId` reports a `navigate` — a deliberate move of the branch head, not a general leaf feed: a turn advances the leaf too, and that is read from `entries()`/`state()` after the run. |
 
 Consumers MUST forward or ignore unknown event types; the vocabulary is additive. The contract
 deliberately excludes editor replacement, themes, widgets, and all other TUI presentation surfaces.

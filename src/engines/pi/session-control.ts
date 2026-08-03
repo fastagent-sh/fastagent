@@ -505,13 +505,11 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
               // record, so an idempotent re-dispatch (a client retry, a UI firing on every
               // selection) would otherwise grow the session by a record no plane publishes.
               if ((await s.getLeafId()) === command.targetId) return undefined;
+              // moveTo's postcondition IS "targetId is the leaf" (it validates, then sets); a
+              // failure throws and travels as boundary_command_failed, so a read-back could only
+              // re-report what this line already knows.
               await s.moveTo(command.targetId);
-              // Read BACK, like set_model resolves rather than echoing: the event reports where the
-              // leaf now IS. A null here is engine corruption — it travels as
-              // boundary_command_failed rather than as a clean move a client cannot distinguish.
-              const leafEntryId = await s.getLeafId();
-              if (leafEntryId === null) throw new Error("moveTo left no leaf (engine invariant broken)");
-              return { type: "state_changed", timestamp: Date.now(), data: { leafEntryId } };
+              return { type: "state_changed", timestamp: Date.now(), data: { leafEntryId: command.targetId } };
             };
           }
           // Sessions are created by invoke, never here: a mutation on an unknown id is rejected,
