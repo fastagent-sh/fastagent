@@ -29,7 +29,7 @@ import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
-import { reportDefinitionWarnings } from "./report.ts";
+import { findingsSignature, reportDefinitionWarnings } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import {
@@ -400,13 +400,6 @@ export interface CreatePiAgentFromDefinitionOptions {
   onAssembly?: OnAssembly;
 }
 
-/** Stable identity of a definition's non-fatal findings, for change-detection in `live` (dedup only). */
-function findingsSignature(def: LoadedDefinition): string {
-  const collisions = def.collisions.map((c) => `c:${c.name}:${c.winnerPath}:${c.loserPath}`);
-  const diagnostics = def.diagnostics.map((d) => `d:${d.code}:${d.path}`);
-  return [...collisions, ...diagnostics].sort().join("\n");
-}
-
 /**
  * L2: "point at a directory → agent": load + assemble (base + AGENTS.md + skills + env) + L1 in one
  * call. Returns the definition so callers can surface diagnostics/collisions.
@@ -426,7 +419,6 @@ export async function createPiAgentFromDefinition(
   // runtime-written bad skill surfaces the moment it appears, while a static finding does not spam
   // every turn's log. A log-dedup memo, not session state (stateless invoke holds).
   let reportedFindings = findingsSignature(definition);
-
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
   const tools = withSearchTool(options.tools ?? piDefaultTools());

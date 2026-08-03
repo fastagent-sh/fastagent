@@ -8,6 +8,14 @@ import type { SkillCollision } from "./definition.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import type { ToolCollision } from "./tool.ts";
 
+/** Stable identity of a definition's non-fatal findings — the dedup key every reporter of them uses,
+ *  so a finding is warned when it APPEARS and not on every read that happens to notice it. */
+export function findingsSignature(def: { collisions: SkillCollision[]; diagnostics: SkillDiagnostic[] }): string {
+  const collisions = def.collisions.map((c) => `c:${c.name}:${c.winnerPath}:${c.loserPath}`);
+  const diagnostics = def.diagnostics.map((d) => `d:${d.code}:${d.path}`);
+  return [...collisions, ...diagnostics].sort().join("\n");
+}
+
 export function reportDefinitionWarnings(collisions: SkillCollision[], diagnostics: SkillDiagnostic[]): void {
   for (const c of collisions) {
     log.warn(`[fastagent] skill "${c.name}" collision — using ${c.winnerPath}, ignoring ${c.loserPath}`);

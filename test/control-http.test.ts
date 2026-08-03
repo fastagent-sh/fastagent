@@ -67,11 +67,13 @@ async function serveControl() {
     commands: async () => [...commandList],
   });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
-  const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
+  const mounted = controlRoutes(control, { token: TOKEN, agent });
+  const server = serveNode(router(mounted), { port: 0 });
   const port = await server.listening;
   return {
     agent,
     commandList,
+    routeKeys: Object.keys(mounted),
     localControl: control,
     url: `http://127.0.0.1:${port}`,
     close: () => server.close(),
@@ -89,12 +91,11 @@ describe("session control over HTTP (Phase 3)", () => {
   it("fails closed: no/wrong token is 401 on every route, and connect() rejects", async () => {
     const served = await serveControl();
     try {
-      // DERIVED from the mounted route keys, not a hand-kept list: "every control route requires the
-      // token" must fail when a NEW route forgets `guard`, which a literal array cannot do.
-      const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
-      const keys = Object.keys(controlRoutes(control, { token: TOKEN, agent: served.agent }));
-      expect(keys.length).toBeGreaterThan(5);
-      for (const key of keys) {
+      // DERIVED from the routes this server actually MOUNTS — not a hand-kept list, and not a second
+      // controlRoutes() call that could drift from it: "every control route requires the token" has
+      // to fail when a NEW route forgets `guard`, which a literal array cannot do.
+      expect(served.routeKeys.length).toBeGreaterThan(5);
+      for (const key of served.routeKeys) {
         const [method, path] = key.split(" ") as [string, string];
         const url = `${served.url}${path}?session=s`;
         expect((await fetch(url, { method, body: method === "POST" ? "{}" : undefined })).status).toBe(401);
