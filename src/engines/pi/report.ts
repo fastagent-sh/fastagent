@@ -8,12 +8,34 @@ import type { SkillCollision } from "./definition.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import type { ToolCollision } from "./tool.ts";
 
-/** Stable identity of a definition's non-fatal findings — the dedup key every reporter of them uses,
- *  so a finding is warned when it APPEARS and not on every read that happens to notice it. */
-export function findingsSignature(def: { collisions: SkillCollision[]; diagnostics: SkillDiagnostic[] }): string {
+type Findings = { collisions: SkillCollision[]; diagnostics: SkillDiagnostic[] };
+
+/** Stable identity of a definition's non-fatal findings — the dedup key below. */
+function findingsSignature(def: Findings): string {
   const collisions = def.collisions.map((c) => `c:${c.name}:${c.winnerPath}:${c.loserPath}`);
   const diagnostics = def.diagnostics.map((d) => `d:${d.code}:${d.path}`);
   return [...collisions, ...diagnostics].sort().join("\n");
+}
+
+/**
+ * The last reported finding set PER DEFINITION DIR. One memo for every reader of a definition (the
+ * per-turn live read, the control plane's command list), because the thing being deduped is the
+ * FINDING, not the reader: a newly broken skill deserves one warning, not one per code path that
+ * noticed it, and a static one deserves none at all.
+ */
+const lastFindings = new Map<string, string>();
+
+/** Record the current findings WITHOUT printing — for a caller that already reported them (boot). */
+export function noteFindings(dir: string, def: Findings): void {
+  lastFindings.set(dir, findingsSignature(def));
+}
+
+/** Warn only if this dir's finding set changed since the last note/report. */
+export function reportFindingsIfChanged(dir: string, def: Findings): void {
+  const sig = findingsSignature(def);
+  if (lastFindings.get(dir) === sig) return;
+  lastFindings.set(dir, sig);
+  reportDefinitionWarnings(def.collisions, def.diagnostics);
 }
 
 export function reportDefinitionWarnings(collisions: SkillCollision[], diagnostics: SkillDiagnostic[]): void {

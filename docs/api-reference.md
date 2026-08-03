@@ -436,8 +436,9 @@ const sessions = inMemorySessionStore();
 const { control, observer } = createPiSessionControl({ sessions });
 const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer });
 // This agent has no definition, so `control.commands()` is `[]` — true, not a gap. Over a DIRECTORY
-// agent, pass `commands` (a live read, e.g. `loadAgentSkills(dir)`) or the list would claim the
-// definition's skills do not exist. `createPiAgentFromDir` wires it for you.
+// agent, pass `commands: async () => …` returning one `AgentCommand` per name the definition
+// exposes, re-read per call; otherwise the list claims the definition's skills do not exist.
+// `createPiAgentFromDir` wires it for you.
 
 // Live events are NOT durable history: a subscription sees only what happens while it iterates,
 // so start watching BEFORE (or while) the run is driven — never after it drained.
