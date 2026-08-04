@@ -366,7 +366,7 @@ async function maybeCompact(harness: PiHarness, message: AssistantMessage): Prom
  * loads the TUI module graph). A null resize (unresizable / Photon unavailable) keeps the original
  * bytes — the provider then applies its own limit.
  */
-async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: ImageContent[] } | undefined> {
+export async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: ImageContent[] } | undefined> {
   if (!prompt.images || prompt.images.length === 0) return undefined;
   const { resizeImage } = await import("@earendil-works/pi-coding-agent");
   const images = await Promise.all(

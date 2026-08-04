@@ -42,6 +42,8 @@ async function sessionAssembly(options: {
   cwd: string;
   /** Inline extensions, standing in for the definition's `extensions/` directory. */
   extensionFactories?: unknown[];
+  /** Off by default: pi's backoff would otherwise make a failing model look like a hang. */
+  autoRetry?: boolean;
 }) {
   const { faux } = makeFaux();
   faux.setResponses(options.responses);
@@ -95,7 +97,7 @@ async function sessionAssembly(options: {
       // model wait out pi's backoff before the terminal, which is exactly the "hang" a conformance
       // suite must not mistake for engine behavior. The reference harness path sets its own policy
       // the same way (SUMMARIZATION_RETRY_POLICY / PROVIDER_MAX_RETRIES).
-      session.setAutoRetryEnabled(false);
+      session.setAutoRetryEnabled(options.autoRetry ?? false);
       return session;
     },
   };
@@ -219,11 +221,82 @@ describe("session engine class: what the class buys", () => {
   });
 });
 
+describe("session engine class: this L0's own responsibilities", () => {
+  it("a factory that throws becomes a failed EVENT, not a thrown iteration", async () => {
+    const agent = createPiAgentFromSession({
+      sessionFactory: async () => {
+        throw new Error("auth.json unreadable");
+      },
+    });
+    const events = [];
+    // The iteration itself must not reject — the module's stated setup-failure discipline.
+    for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "failed", details: expect.stringContaining("auth.json unreadable") });
+  });
+
+  it("one turn per session: a second concurrent invoke is refused session_busy", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-busy-"));
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const { sessionFactory } = await sessionAssembly({
+      responses: [
+        (async () => {
+          await held;
+          return fauxAssistantMessage("done");
+        }) as unknown as FauxResponseStep,
+        fauxAssistantMessage("second"),
+      ],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const first = (async () => {
+      const out = [];
+      for await (const e of agent.invoke({ session: "s" }, { text: "one" })) out.push(e);
+      return out;
+    })();
+    // Give the first turn time to take the lease before the second asks for it.
+    await new Promise((r) => setTimeout(r, 50));
+    const second = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "two" })) second.push(e);
+    expect(second).toEqual([
+      { type: "failed", details: expect.stringContaining("session busy"), retryable: true, code: "session_busy" },
+    ]);
+    release();
+    expect((await first).at(-1)?.type).toBe("completed");
+  });
+
+  it("an auto-retried failure projects `retrying` and settles on the recovered turn, once", async () => {
+    // The one path auto-retry owns: pi ends the agent loop with an error, retries, and succeeds.
+    // `agent_end{willRetry:true}` must NOT be taken as the settle, or the turn would be classified
+    // on an error the engine went on to recover from.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-retry-"));
+    const { sessionFactory } = await sessionAssembly({
+      responses: [
+        fauxAssistantMessage("x", { stopReason: "error", errorMessage: "transient 503" }),
+        fauxAssistantMessage("recovered"),
+      ],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      autoRetry: true,
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+    expect(events.filter((e) => e.type === "retrying").length).toBeGreaterThan(0);
+    expect(events.filter((e) => e.type === "completed" || e.type === "failed")).toHaveLength(1);
+    expect(events.at(-1)?.type).toBe("completed");
+  });
+});
+
 describe("session engine class: per-invoke discipline", () => {
   it("nothing resident survives a turn — the record is the only continuity", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-record-"));
     const sessionsRoot = join(cwd, "sessions");
-    const built: string[] = [];
+    const built: object[] = [];
     const { sessionFactory } = await sessionAssembly({
       responses: [fauxAssistantMessage("one"), fauxAssistantMessage("two")],
       sessionsRoot,
@@ -231,8 +304,9 @@ describe("session engine class: per-invoke discipline", () => {
     });
     const agent: Agent = createPiAgentFromSession({
       sessionFactory: async (id) => {
-        built.push(id);
-        return sessionFactory(id);
+        const session = await sessionFactory(id);
+        built.push(session);
+        return session;
       },
     });
     for (const text of ["turn one", "turn two"]) {
@@ -240,8 +314,10 @@ describe("session engine class: per-invoke discipline", () => {
       for await (const e of agent.invoke({ session: "s" }, { text })) events.push(e);
       expect(events.at(-1)?.type).toBe("completed");
     }
-    // A fresh session object per turn (the assumption that made residency look mandatory) …
-    expect(built).toEqual(["s", "s"]);
+    // A DIFFERENT session object per turn — identity, not call count: a factory handing back one
+    // cached instance would be the resident level wearing this one's clothes.
+    expect(built).toHaveLength(2);
+    expect(built[0]).not.toBe(built[1]);
     // … and ONE record carrying both turns.
     const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot });
     const meta = (await repo.list({ cwd })).find((m) => m.id === "s");

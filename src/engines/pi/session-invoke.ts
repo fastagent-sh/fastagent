@@ -19,7 +19,7 @@ import type { AgentEvent, Agent, Json, Prompt, Scope } from "../../agent.ts";
 import { SESSION_BUSY_CODE } from "../../agent.ts";
 import { abortFirstIterator } from "../../collect.ts";
 import { log } from "../../log.ts";
-import { EventQueue, type Lease, errorToTerminal, inProcessLease, toTerminal } from "./invoke.ts";
+import { EventQueue, type Lease, errorToTerminal, inProcessLease, toPiPromptOptions, toTerminal } from "./invoke.ts";
 
 /**
  * Build a session object bound to `sessionId`'s durable record. Called once per invoke; the returned
@@ -36,11 +36,12 @@ export interface CreatePiAgentFromSessionOptions {
 function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
   switch (event.type) {
     case "message_update": {
-      // The delta channel: pi reports the accumulated message plus the event that changed it.
-      const e = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
-      if (!e || typeof e.delta !== "string" || e.delta === "") return null;
-      if (e.type === "thinking_delta" || e.type === "thinking") return { type: "thinking", delta: e.delta };
-      if (e.type === "text_delta" || e.type === "text") return { type: "text", delta: e.delta };
+      // The delta channel: pi reports the accumulated message plus the typed event that changed it.
+      // Switched on the UNION, not a hand-written shape: a renamed member must break the build here
+      // rather than silently stop projecting.
+      const e = event.assistantMessageEvent;
+      if (e.type === "thinking_delta") return { type: "thinking", delta: e.delta };
+      if (e.type === "text_delta") return { type: "text", delta: e.delta };
       return null;
     }
     case "tool_execution_start":
@@ -131,14 +132,12 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
 
       const queue = new EventQueue<AgentEvent>();
       let settled: Parameters<typeof toTerminal>[0] | undefined;
-      let sawEnd = false;
       const unsub = session.subscribe((event) => {
         if (event.type === "agent_end") {
-          // `willRetry` means pi will run again for this same prompt — not a settle.
-          if (!(event as { willRetry?: boolean }).willRetry) {
-            sawEnd = true;
-            settled = lastAssistant(event);
-          }
+          // `willRetry` means pi will run again for this same prompt — an auto-retry, not a settle.
+          // Taking the message from a retried end would classify the turn on an error pi is about
+          // to recover from.
+          if (!event.willRetry) settled = lastAssistant(event);
           return;
         }
         const projected = projectSessionEvent(event);
@@ -148,8 +147,11 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         // prompt() resolves when the turn is accepted-and-run; waitForIdle() closes the window in
         // which pi is still draining its own queues (a follow-up, a retry), so the terminal below
         // describes the whole activity window rather than the first response inside it.
+        // Images ride the same conversion the harness L0 uses (resize + provider shape); dropping
+        // them here would make an attachment invisible to the model AND silent to the author.
+        const opts = await toPiPromptOptions(prompt);
         const run = (async () => {
-          await session.prompt(prompt.text);
+          await session.prompt(prompt.text, opts);
           await session.waitForIdle();
         })();
         yield* queue.drainUntil(run);
@@ -163,7 +165,6 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         } catch (error) {
           terminal = errorToTerminal(error);
         }
-        void sawEnd;
         yield terminal;
       } finally {
         try {
