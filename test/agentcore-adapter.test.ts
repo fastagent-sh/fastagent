@@ -85,9 +85,53 @@ describe("agentcore adapter: /ping", () => {
     let busy = false;
     const routes = adapter({ isBusy: () => busy });
     const ping = routes["GET /ping"]!;
-    expect(await (await ping(new Request("http://x/ping"))).json()).toEqual({ status: "Healthy" });
+    expect(await (await ping(new Request("http://x/ping"))).json()).toMatchObject({ status: "Healthy" });
     busy = true;
-    expect(await (await ping(new Request("http://x/ping"))).json()).toEqual({ status: "HealthyBusy" });
+    expect(await (await ping(new Request("http://x/ping"))).json()).toMatchObject({ status: "HealthyBusy" });
+  });
+
+  it("always carries time_of_last_update, updated ONLY on a real status transition", async () => {
+    // The platform's idle measurement reads ONLY this field (measured live: with it omitted, a
+    // session answering HealthyBusy every ~2s was still reclaimed mid-turn at exactly the idle
+    // timeout after the last invocation — the documented "the platform tracks status changes on
+    // its own" omission path is not implemented). A value advancing on EVERY ping is the opposite
+    // failure: a perpetual "status change" that never lets idle fire, so sessions live to
+    // MaxLifetime and exhaust the quota. Required shape: always present, frozen between transitions.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-04T06:37:00Z"));
+      let busy = false;
+      const routes = adapter({ isBusy: () => busy });
+      const ping = async () => {
+        const res = await routes["GET /ping"]!(new Request("http://x/ping"));
+        return (await res.json()) as { status: string; time_of_last_update: number };
+      };
+
+      const idle1 = await ping();
+      expect(typeof idle1.time_of_last_update).toBe("number");
+
+      vi.advanceTimersByTime(10_000); // pings keep coming while nothing changes
+      const idle2 = await ping();
+      expect(idle2.time_of_last_update).toBe(idle1.time_of_last_update); // frozen — not "now"
+
+      busy = true; // a turn starts
+      vi.advanceTimersByTime(5_000);
+      const busy1 = await ping();
+      expect(busy1.status).toBe("HealthyBusy");
+      expect(busy1.time_of_last_update).toBe(idle1.time_of_last_update + 15); // stamped at the flip
+
+      vi.advanceTimersByTime(120_000); // a long turn: well past a 60s idle timeout
+      const busy2 = await ping();
+      expect(busy2.time_of_last_update).toBe(busy1.time_of_last_update); // still frozen mid-turn
+
+      busy = false; // turn settles
+      vi.advanceTimersByTime(2_000);
+      const settled = await ping();
+      expect(settled.status).toBe("Healthy");
+      expect(settled.time_of_last_update).toBe(busy2.time_of_last_update + 122); // re-stamped once
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

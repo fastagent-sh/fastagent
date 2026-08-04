@@ -53,7 +53,9 @@ describe("mountAgentcore", () => {
       { agent, stateRoot: dir, schedules: [] },
     );
     expect(Object.keys(routes).sort()).toEqual(["GET /ping", "POST /invocations", "POST /telegram"]);
-    expect(await (await routes["GET /ping"]!(new Request("http://x/ping"))).json()).toEqual({ status: "Healthy" });
+    expect(await (await routes["GET /ping"]!(new Request("http://x/ping"))).json()).toMatchObject({
+      status: "Healthy",
+    });
   });
 
   it("fails startup on a channel colliding with the adapter's paths", () => {

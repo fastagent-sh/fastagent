@@ -590,7 +590,11 @@ unwraps the envelope — a webhook is reconstructed verbatim and dispatched to t
 reply so the forwarder re-emits it byte-exact), a schedule fire goes through `fireScheduleOnce` with the
 slot as the idempotency key (EventBridge delivery is at-least-once), and an invoke streams back as SSE.
 `GET /ping` reports `HealthyBusy` while background turns run (the shared turn-queue/task-tracker report
-into `channels/busy.ts`) so an idle reclaim cannot kill a post-ACK turn. All ingress traffic shares ONE
+into `channels/busy.ts`) so an idle reclaim cannot kill a post-ACK turn — and it always carries
+`time_of_last_update` (updated only on real status transitions). The field is documented as optional,
+but measured platform behavior reads ONLY it: without the field, the idle timer counts from the last
+`InvokeAgentRuntime` and reclaims mid-turn regardless of `HealthyBusy` (see the handler comment in
+`channels/agentcore.ts`). All ingress traffic shares ONE
 fixed runtime session — channel state is single-writer by design, and a stopped session's id stays valid
 until the runtime is deleted.
 

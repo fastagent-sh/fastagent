@@ -99,8 +99,9 @@ export const SECRETS_DIR = `${MOUNT}/${SECRETS_DIRNAME}`;
  * — idle included, at the peak level reached — so this tail is the standing cost of every burst of
  * activity, while CPU stops billing the moment the agent stops working. 3 minutes rather than the
  * platform's 15: the tail shrinks 5×, and the cost is a cold start (image + Node + snapshot restore)
- * for anyone who returns after a longer gap. `/ping` reports HealthyBusy while work is in flight, so
- * this timer only ever starts once the agent has genuinely settled — a long turn is never cut short.
+ * for anyone who returns after a longer gap. `/ping` reports HealthyBusy + time_of_last_update while
+ * work is in flight (the FIELD is what the platform's idle measurement actually reads — agentcore.ts),
+ * so this timer only ever starts once the agent has genuinely settled — a long turn is never cut short.
  * AWS accepts 60–28800.
  */
 export const IDLE_TIMEOUT_SECONDS = 180;
@@ -642,7 +643,7 @@ function template(input: AgentcorePlanInput, translated: { fact: ScheduleFact; e
     `      # forces a NAT gateway for model/channel egress (~$33/mo) — deliberately not the default.`,
     `      FilesystemConfigurations:`,
     `        - SessionStorage: { MountPath: ${MOUNT} }`,
-    `      # Idle ${IDLE_TIMEOUT_SECONDS}s (the ping's HealthyBusy keeps BUSY sessions alive regardless), max compute`,
+    `      # Idle ${IDLE_TIMEOUT_SECONDS}s (the ping's HealthyBusy + time_of_last_update keeps BUSY sessions alive), max compute`,
     `      # lifetime ${MAX_LIFETIME_SECONDS}s — the platform ceiling; the session id stays valid, so the next invoke`,
     `      # just gets fresh compute with the same storage. Memory bills per second for the whole`,
     `      # session INCLUDING the idle tail, so a shorter tail is the main cost lever here.`,
@@ -1014,7 +1015,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
       `# Set the GitHub webhook (repo Settings → Webhooks): Payload URL = <ForwarderUrl>/webhook,`,
       `#   content type application/json, secret = GITHUB_WEBHOOK_SECRET.`,
       `# NOTE: github turns are fire-and-forget with no replay — a compute reclaimed mid-review drops it`,
-      `#   (the ping's HealthyBusy holds the session while turns run, but the 8 h compute ceiling is hard).`,
+      `#   (the ping's HealthyBusy + time_of_last_update holds the session while turns run, but the 8 h compute ceiling is hard).`,
     );
   }
   if (channels.includes("slack")) {

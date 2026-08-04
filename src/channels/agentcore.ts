@@ -19,7 +19,8 @@
  *  - `{ kind: "invoke", session, text }` — the programmatic data plane; streams the invoke back as
  *    SSE (AgentCore's streaming response form), reusing the HTTP channel's handler wholesale.
  *
- * `/ping` reports `HealthyBusy` while process-wide background work is in flight (busy.ts) — webhook
+ * `/ping` reports `HealthyBusy` (+ `time_of_last_update`, required — see the handler) while
+ * process-wide background work is in flight (busy.ts) — webhook
  * channels ACK fast and run turns fire-and-forget, and AgentCore ends an idle session, so without
  * this signal a long turn would be killed mid-flight right after its ACK. `Healthy` when idle lets
  * the platform reclaim the microVM (that idle-to-zero IS the point of this deployment).
@@ -328,12 +329,30 @@ export function agentcoreRoutes(options: AgentcoreAdapterOptions): Routes {
     return response;
   };
 
+  // The Runtime ping contract: Healthy = reclaimable, HealthyBusy = keep the session alive
+  // (background turns in flight). `time_of_last_update` is REQUIRED for the keep-alive to work,
+  // despite the contract documenting it as optional ("If you omit the field, the platform tracks
+  // status changes on its own"): measured on a live Runtime (us-east-1, 2026-08-04), the platform's
+  // idle measurement reads ONLY this field — with it omitted, a session polling every ~2s and
+  // receiving HealthyBusy 200s was still reclaimed at exactly IdleRuntimeSessionTimeout after the
+  // last InvokeAgentRuntime, mid-turn, 2s after the last HealthyBusy answer; with the field present
+  // the same turn survived 3.5× the idle timeout with zero invocations and completed. The value
+  // updates ONLY on a real status change: a timestamp advancing on every ping declares a perpetual
+  // status change, so the idle timeout never fires and dead-idle sessions live to MaxLifetime
+  // (quota exhaustion — the failure mode the contract's warning describes).
+  let lastStatus = "Healthy";
+  let lastTransition = Math.floor(Date.now() / 1000);
   return {
     "POST /invocations": invocations,
-    // The Runtime ping contract: Healthy = reclaimable, HealthyBusy = keep the session alive
-    // (background turns in flight). No time_of_last_update — the platform tracks status changes
-    // itself, and a timestamp advancing every ping would defeat the idle timeout (their docs warn).
-    "GET /ping": () => json({ status: isBusy() ? "HealthyBusy" : "Healthy" }, 200),
+    "GET /ping": () => {
+      const status = isBusy() ? "HealthyBusy" : "Healthy";
+      if (status !== lastStatus) {
+        lastTransition = Math.floor(Date.now() / 1000);
+        log.debug(`[agentcore] ping status: ${lastStatus} → ${status}`);
+        lastStatus = status;
+      }
+      return json({ status, time_of_last_update: lastTransition }, 200);
+    },
   };
 }
 
