@@ -49,7 +49,7 @@ import { log } from "../../log.ts";
 import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
-import { sessionToolActivation, toolChatSessionManager } from "./session-bridge.ts";
+import { sessionToolActivation, toolSessionManagerFromSession } from "./session-bridge.ts";
 
 export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -243,7 +243,7 @@ export async function buildAgentSessionRuntime(
     });
     sessionRef.current = {
       session: result.session,
-      sessionManager: toolChatSessionManager(result.session),
+      sessionManager: toolSessionManagerFromSession(result.session),
       activation: sessionToolActivation(result.session),
     };
     // Deferral emulation: pi's session starts with everything active — narrow it by SUBTRACTING

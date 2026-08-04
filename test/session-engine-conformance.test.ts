@@ -17,7 +17,8 @@ import {
   createAgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { log } from "../src/log.ts";
 import type { Agent } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/session-invoke.ts";
 import { makeFaux } from "./faux.ts";
@@ -254,6 +255,37 @@ describe("session engine class: what the class buys", () => {
     const events = [];
     for await (const e of agent.invoke({ session: "s" }, { text: "/boom" })) events.push(e);
     expect(events.at(-1)).toMatchObject({ type: "failed", details: expect.stringContaining("exploded") });
+  });
+
+  it("an extension hook that throws warns but does not overturn a model answer the caller received", async () => {
+    // The other side of the same listener: pi reports EVERY extension-dispatch failure, so the
+    // question is what a turn does with one. With a model response in hand, flipping it to `failed`
+    // would deny the caller an answer it already streamed — so it warns instead.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-hook-"));
+    const extension = {
+      name: "noisy",
+      factory: (api: { on: (e: string, h: () => void) => void }) => {
+        api.on("agent_settled", () => {
+          throw new Error("hook went wrong");
+        });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("the answer")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const events = [];
+      for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+      expect(events.at(-1)?.type).toBe("completed");
+      expect(warn.mock.calls.flat().join(" ")).toContain("hook went wrong");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {

@@ -10,13 +10,14 @@ import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { type ReadonlySessionManager, type ToolActivation, additiveActivation } from "./tool-context.ts";
 
-/** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
-export function toolChatSessionManager(session: AgentSession): ReadonlySessionManager {
+/** Adapt a pi-coding-agent session's SessionManager to FastAgent's shared tool-runtime manager port
+ *  — the session-class counterpart of invoke.ts's `toolSessionManager`. */
+export function toolSessionManagerFromSession(session: AgentSession): ReadonlySessionManager {
   return {
     getSessionId: () => session.sessionManager.getSessionId(),
     async getHeader() {
       const header = session.sessionManager.getHeader();
-      if (!header) throw new Error("chat session has no metadata header");
+      if (!header) throw new Error("session record has no metadata header");
       return { id: header.id, timestamp: header.timestamp };
     },
     async getBranch() {

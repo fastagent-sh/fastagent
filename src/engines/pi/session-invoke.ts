@@ -25,7 +25,7 @@ import type { AgentEvent, Agent, Json, Prompt, Scope } from "../../agent.ts";
 import { SESSION_BUSY_CODE } from "../../agent.ts";
 import { abortFirstIterator } from "../../collect.ts";
 import { log } from "../../log.ts";
-import { sessionToolActivation, toolChatSessionManager } from "./session-bridge.ts";
+import { sessionToolActivation, toolSessionManagerFromSession } from "./session-bridge.ts";
 import { turnContext } from "./tool-context.ts";
 import {
   EventQueue,
@@ -208,17 +208,27 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
 
       const queue = new EventQueue<AgentEvent>();
       let settled: AssistantMessage | undefined;
-      // An extension command handler that THROWS is caught by pi and reported here — there is no
-      // assistant message and no agent_end, so without this the turn would settle `completed` and
-      // report success for work that failed. Bound (not replaced): bindExtensions merges, so the
-      // assembly's uiContext/mode/actions stay as they were.
+      // EVERY extension-dispatch failure, not just a command handler's: pi reports them all here,
+      // and one that vanished would be a silent failure inside a turn we are about to call
+      // completed. How it is CONSUMED depends on what else the turn produced — see the terminal
+      // below. Bound, not replaced: bindExtensions merges, so the assembly's uiContext/mode/actions
+      // stay as they were.
       let extensionError: string | undefined;
-      await session.bindExtensions({
-        onError: (error: { event: string; error: string }) => {
-          extensionError ??= `extension ${error.event} failed: ${error.error}`;
-        },
-      });
-      const unsub = session.subscribe((event) => {
+      let unsub: () => void = () => {};
+      try {
+        await session.bindExtensions({
+          onError: (error: { event: string; error: string }) => {
+            extensionError ??= `extension ${error.event} failed: ${error.error}`;
+          },
+        });
+      } catch (error) {
+        // Binding is this engine class's own setup step, and its failures obey the same rule as the
+        // factory's: an EVENT, never a thrown iteration — and the session still gets torn down.
+        await session.abort().catch(() => {});
+        yield errorToTerminal(error);
+        return;
+      }
+      unsub = session.subscribe((event) => {
         if (event.type === "agent_end") {
           // `willRetry` means pi will run again for this same prompt — an auto-retry, not a settle.
           // Taking the message from a retried end would classify the turn on an error pi is about
@@ -238,6 +248,10 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         queue.push(projected);
       });
       try {
+        // The cancel latch again: binding extensions and converting images are awaits, and a cancel
+        // arriving in that window would knock a door that is a no-op on a session which has not
+        // prompted yet — then the model call would start anyway. Checked once more right before it.
+        if (wasCancelled()) return;
         // prompt() resolves when the turn is accepted-and-run; waitForIdle() closes the window in
         // which pi is still draining its own queues (a follow-up, a retry), so the terminal below
         // describes the whole activity window rather than the first response inside it.
@@ -251,7 +265,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         const run = turnContext.run(
           {
             cwd: session.sessionManager.getCwd(),
-            sessionManager: toolChatSessionManager(session),
+            sessionManager: toolSessionManagerFromSession(session),
             tools: sessionToolActivation(session),
           },
           async () => {
@@ -263,14 +277,18 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         let terminal: AgentEvent;
         try {
           await run;
-          terminal = settled
-            ? toTerminal(settled)
-            : extensionError
-              ? errorToTerminal(new Error(extensionError))
-              : // No settled assistant message and no extension failure: the turn produced no model
-                // response at all (an extension command handled the input) — a completed turn with
-                // nothing to classify.
-                { type: "completed" };
+          if (settled) {
+            // The turn ran the model: its own outcome decides the terminal. An extension failure
+            // alongside it is real but not the turn's verdict — surfaced as a warn rather than
+            // flipping a model answer the caller did receive into a failure.
+            if (extensionError) log.warn(`[fastagent] session ${scope.session}: ${extensionError}`);
+            terminal = toTerminal(settled);
+          } else {
+            // No model response at all: the input was handled by an extension (a command), so an
+            // extension failure IS the turn's outcome — without this the turn reports success for
+            // work that threw.
+            terminal = extensionError ? errorToTerminal(new Error(extensionError)) : { type: "completed" };
+          }
         } catch (error) {
           terminal = errorToTerminal(error);
         }
