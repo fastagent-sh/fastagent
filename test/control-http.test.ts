@@ -649,6 +649,57 @@ describe("session control over HTTP (Phase 3)", () => {
     expect(activePathSlice(slice, "older")).toEqual([]);
   });
 
+  it("answerSlashInput: every reserved-slash answer, and the order they arrive in", async () => {
+    const { answerSlashInput } = await import("../src/cli/commands/attach.ts");
+    const commands = [
+      { name: "triage", description: "Sort an inbox", source: "skill" },
+      { name: "digest", source: "skill" },
+    ];
+    const say = (list: typeof commands | Error) => {
+      const lines: string[] = [];
+      const control = {
+        commands: async () => {
+          if (list instanceof Error) throw list;
+          return list;
+        },
+      };
+      return { lines, run: (input: string) => answerSlashInput(input, control as never, (l) => lines.push(l)) };
+    };
+
+    // A mistyped control command: the reserved-prefix line is certain and lands FIRST (before the
+    // remote read resolves), and the token is reported as naming nothing — not answered with a dump
+    // of every skill, which is an intent the typo did not express.
+    const typo = say(commands);
+    const pending = typo.run("/aboort");
+    expect(typo.lines).toEqual([
+      "[a leading / is reserved — /abort stops the run, /commands lists what this agent defines]",
+    ]);
+    await pending;
+    expect(typo.lines[1]).toBe("[/aboort names nothing this agent defines]");
+
+    // A real name, WITH arguments: the first word is the token — the whole line would answer "names
+    // nothing" for a name the user did give.
+    const named = say(commands);
+    await named.run("/triage summarize my inbox");
+    expect(named.lines[1]).toBe("[triage is a skill — Sort an inbox; name it in a normal message, without the /]");
+
+    // The enumeration: `/commands` alone, with descriptions, and NO reserved-prefix preamble (its
+    // whole answer is the read).
+    const listed = say(commands);
+    await listed.run("/commands");
+    expect(listed.lines).toEqual(["[this agent defines: triage — Sort an inbox; digest]"]);
+
+    const none = say([]);
+    await none.run("/commands");
+    expect(none.lines).toEqual(["[this agent defines no names]"]);
+
+    // The read may reject (an unreadable definition, or a serve predating the route): said, not
+    // swallowed — an unhandled rejection here would leave the user with only the preamble.
+    const broken = say(new Error("boom"));
+    await broken.run("/triage");
+    expect(broken.lines[1]).toContain("command list unavailable");
+  });
+
   it("decideRound: every reconnect-loop diagnosis and budget claim, pinned", async () => {
     const { decideRound } = await import("../src/cli/commands/attach.ts");
     const err = (over: Partial<Parameters<typeof decideRound>[0] & { type: "error" }> = {}) =>

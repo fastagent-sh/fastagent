@@ -396,7 +396,7 @@ FastAgent adapts pi's concepts, never proxies `pi --mode rpc` unchanged:
 | `bash`, `abort_bash` | Exclude | Unsafe remote-shell bypass; duplicates tools. |
 | `new_session`, `switch_session` by path | Exclude | Sessions are opaque ids; paths are not portable. |
 | `export_html`, session naming | Exclude | Product presentation concerns. |
-| slash/TUI command discovery | Exclude | Conflicts with definition-as-truth. |
+| `get_commands` | Adapt to `commands()` (§5.1.1) | The definition-derived LISTING is included — it is the one thing a client cannot reconstruct. pi's execution and presentation of slash commands stay out: fastagent's data plane takes prompts as text and does not expand `/name`. |
 | extension UI dialogs | Defer behind a future `interactions` capability | Permission/input gates have serving value, but not in the first contract. |
 | extension UI presentation | Exclude | TUI chrome. |
 | `fork`, `clone`, `get_tree` | Defer behind a future `branching` capability | Not required to serve a session. |
