@@ -70,8 +70,45 @@ const DELTA_CHANNELS: Record<AssistantMessageEvent["type"], "project" | "ignore"
   error: "ignore",
 };
 
+/**
+ * EXHAUSTIVE map of pi's session-class event vocabulary, same discipline as {@link DELTA_CHANNELS}
+ * one level down. This union is the one pi extends most (bash execution, compaction phases,
+ * summarization retries), and an added member that nobody projects is exactly the drift a bare
+ * `default:` waves through — here it stops the build instead.
+ */
+const SESSION_EVENTS: Record<AgentSessionEvent["type"], "project" | "ignore"> = {
+  // Projected below into the Agent Handler vocabulary.
+  message_update: "project",
+  tool_execution_start: "project",
+  tool_execution_end: "project",
+  auto_retry_start: "project",
+  summarization_retry_scheduled: "project",
+  // The turn's OUTCOME, read by the turn loop rather than projected as a stream event.
+  agent_end: "ignore",
+  // Bookkeeping with no Agent Handler counterpart: run/turn/message boundaries, durable-record and
+  // queue notifications, and the richer-plane material the control plane projects separately.
+  agent_start: "ignore",
+  agent_settled: "ignore",
+  turn_start: "ignore",
+  turn_end: "ignore",
+  message_start: "ignore",
+  message_end: "ignore",
+  tool_execution_update: "ignore",
+  queue_update: "ignore",
+  entry_appended: "ignore",
+  session_info_changed: "ignore",
+  thinking_level_changed: "ignore",
+  compaction_start: "ignore",
+  compaction_end: "ignore",
+  auto_retry_end: "ignore",
+  summarization_retry_attempt_start: "ignore",
+  summarization_retry_finished: "ignore",
+  bash_execution_update: "ignore",
+};
+
 /** pi's session-class event → the Agent Handler vocabulary. `null` = nothing to project. */
 function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
+  if (SESSION_EVENTS[event.type] === "ignore") return null;
   switch (event.type) {
     case "message_update": {
       // The delta channel: pi reports the accumulated message plus the typed event that changed it.
@@ -107,9 +144,6 @@ function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
         reason: event.errorMessage,
       };
     default:
-      // Everything else is either session-class bookkeeping (entry_appended, queue_update) or
-      // richer-plane material the control plane will project separately. Terminal events are NOT
-      // derived here — the turn's outcome comes from the settled assistant message.
       return null;
   }
 }
@@ -174,6 +208,16 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
 
       const queue = new EventQueue<AgentEvent>();
       let settled: AssistantMessage | undefined;
+      // An extension command handler that THROWS is caught by pi and reported here — there is no
+      // assistant message and no agent_end, so without this the turn would settle `completed` and
+      // report success for work that failed. Bound (not replaced): bindExtensions merges, so the
+      // assembly's uiContext/mode/actions stay as they were.
+      let extensionError: string | undefined;
+      await session.bindExtensions({
+        onError: (error: { event: string; error: string }) => {
+          extensionError ??= `extension ${error.event} failed: ${error.error}`;
+        },
+      });
       const unsub = session.subscribe((event) => {
         if (event.type === "agent_end") {
           // `willRetry` means pi will run again for this same prompt — an auto-retry, not a settle.
@@ -219,10 +263,14 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         let terminal: AgentEvent;
         try {
           await run;
-          // No settled assistant message means the turn produced no model response at all (an
-          // extension command handled the input, or pi ended without one) — a completed turn with
-          // nothing to classify, not a failure.
-          terminal = settled ? toTerminal(settled) : { type: "completed" };
+          terminal = settled
+            ? toTerminal(settled)
+            : extensionError
+              ? errorToTerminal(new Error(extensionError))
+              : // No settled assistant message and no extension failure: the turn produced no model
+                // response at all (an extension command handled the input) — a completed turn with
+                // nothing to classify.
+                { type: "completed" };
         } catch (error) {
           terminal = errorToTerminal(error);
         }

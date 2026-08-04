@@ -168,10 +168,10 @@ describeSpecConformance("pi session engine class (faux model, per-invoke AgentSe
     // carried instance A's turn.
     const bAssembly = await sessionAssembly({
       responses: [
-        ((context: { messages: unknown[] }) => {
+        (context) => {
           sawHistory = JSON.stringify(context.messages).includes("turn one");
           return fauxAssistantMessage("second");
-        }) as unknown as FauxResponseStep,
+        },
       ],
       sessionsRoot,
       cwd,
@@ -231,15 +231,40 @@ describe("session engine class: what the class buys", () => {
     expect(JSON.stringify((ended as { content: unknown }).content)).toContain("it went wrong");
   });
 
+  it("an extension command that throws fails the turn instead of reporting success", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-cmdfail-"));
+    const extension = {
+      name: "spike",
+      factory: (api: { registerCommand: (n: string, o: unknown) => void }) => {
+        api.registerCommand("boom", {
+          description: "throws",
+          handler: async () => {
+            throw new Error("the command exploded");
+          },
+        });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("never")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "/boom" })) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "failed", details: expect.stringContaining("exploded") });
+  });
+
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-img-"));
     let sawImage = false;
     const { sessionFactory } = await sessionAssembly({
       responses: [
-        ((context: { messages: unknown[] }) => {
+        (context) => {
           sawImage = JSON.stringify(context.messages).includes('"type":"image"');
           return fauxAssistantMessage("saw it");
-        }) as unknown as FauxResponseStep,
+        },
       ],
       sessionsRoot: join(cwd, "sessions"),
       cwd,
@@ -274,10 +299,10 @@ describe("session engine class: what the class buys", () => {
     };
     const { sessionFactory } = await sessionAssembly({
       responses: [
-        (() => {
+        () => {
           modelSaw++;
           return fauxAssistantMessage("the model answered");
-        }) as unknown as FauxResponseStep,
+        },
       ],
       sessionsRoot: join(cwd, "sessions"),
       cwd,
@@ -361,11 +386,11 @@ describe("session engine class: this L0's own responsibilities", () => {
     });
     const { sessionFactory } = await sessionAssembly({
       responses: [
-        (async () => {
+        async () => {
           started();
           await held;
           return fauxAssistantMessage("done");
-        }) as unknown as FauxResponseStep,
+        },
         fauxAssistantMessage("second"),
       ],
       sessionsRoot: join(cwd, "sessions"),
@@ -484,20 +509,29 @@ describe("session engine class: the turn context fastagent tools depend on", () 
     const { turnContext } = await import("../src/engines/pi/tool-context.ts");
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-ctx-"));
     let seen: { cwd?: string; sessionId?: string; canActivate?: boolean } = {};
+    // Read from a TOOL's execute, not from the model call: the tool path is the one the binding
+    // exists for (`wake`, `search_tools`, cwd), and it is a different resumption of pi's stack.
+    const probe = {
+      name: "probe",
+      label: "Probe",
+      description: "Reports the turn context it sees",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        const store = turnContext.getStore();
+        seen = {
+          cwd: store?.cwd,
+          sessionId: store?.sessionManager?.getSessionId(),
+          canActivate: typeof store?.tools?.activate === "function",
+        };
+        return { content: [{ type: "text", text: "ok" }], details: undefined };
+      },
+    };
     const { sessionFactory } = await sessionAssembly({
-      responses: [
-        (() => {
-          const store = turnContext.getStore();
-          seen = {
-            cwd: store?.cwd,
-            sessionId: store?.sessionManager?.getSessionId(),
-            canActivate: typeof store?.tools?.activate === "function",
-          };
-          return fauxAssistantMessage("ok");
-        }) as unknown as FauxResponseStep,
-      ],
+      responses: [fauxAssistantMessage(fauxToolCall("probe", {}, { id: "p1" })), fauxAssistantMessage("done")],
       sessionsRoot: join(cwd, "sessions"),
       cwd,
+      customTools: [probe],
+      tools: ["probe"],
     });
     const agent = createPiAgentFromSession({ sessionFactory });
     for await (const e of agent.invoke({ session: "ctx" }, { text: "go" })) void e;
