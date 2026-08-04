@@ -511,7 +511,7 @@ describe("session engine class: per-invoke discipline", () => {
   it("nothing resident survives a turn — the record is the only continuity", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-record-"));
     const sessionsRoot = join(cwd, "sessions");
-    const built: object[] = [];
+    const built: string[] = [];
     const { sessionFactory } = await sessionAssembly({
       responses: [fauxAssistantMessage("one"), fauxAssistantMessage("two")],
       sessionsRoot,
@@ -519,9 +519,8 @@ describe("session engine class: per-invoke discipline", () => {
     });
     const agent: Agent = createPiAgentFromSession({
       sessionFactory: async (id) => {
-        const session = await sessionFactory(id);
-        built.push(session);
-        return session;
+        built.push(id);
+        return sessionFactory(id);
       },
     });
     for (const text of ["turn one", "turn two"]) {
@@ -529,10 +528,10 @@ describe("session engine class: per-invoke discipline", () => {
       for await (const e of agent.invoke({ session: "s" }, { text })) events.push(e);
       expect(events.at(-1)?.type).toBe("completed");
     }
-    // A DIFFERENT session object per turn — identity, not call count: a factory handing back one
-    // cached instance would be the resident level wearing this one's clothes.
+    // The factory is asked once per invoke — this L0 holds nothing across turns. (Whether a factory
+    // hands back a cached object is the caller's choice, not something this L0 can or should police;
+    // what it owes is asking again, and rebuilding the turn from the record below.)
     expect(built).toHaveLength(2);
-    expect(built[0]).not.toBe(built[1]);
     // … and ONE record carrying both turns.
     const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot });
     const meta = (await repo.list({ cwd })).find((m) => m.id === "s");

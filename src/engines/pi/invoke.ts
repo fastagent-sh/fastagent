@@ -37,22 +37,7 @@ import {
 import { TOOL_ACTIVATION_ENTRY, harnessSession, type PiHarnessFactory } from "./harness.ts";
 import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
 
-// ── §2 translate: the single pi↔SPEC translation point ───────────────────────
-//
-// `retryable` = worth re-sending with the same session (SPEC §6: advisory, not a session-atomicity
-// guarantee). Classify from the STRUCTURED signal first, prose only as the last-resort ceiling. What
-// is actually available differs by path, and the two are NOT symmetric:
-//   - thrown error (errorToTerminal): an HTTP `.status`/`.statusCode` AND a network `.code` (incl.
-//     `.cause.code`) — this is where a numeric status genuinely drives the decision.
-//   - failed message (toTerminal): ONLY `diagnostics[].error.code`. pi's `DiagnosticErrorInfo` carries
-//     a `code` (a network code, or a status delivered as a code), with no separate HTTP-status field —
-//     so a message whose provider `code` is a string label (e.g. "rate_limit_exceeded") is not
-//     decisive here and falls to prose.
-// The prose fallback is bounded, not a cop-out: pi-ai already ran its own status-code-based client
-// retries (harness.ts PROVIDER_MAX_RETRIES) before surfacing, so an error that reaches this point has
-// already exhausted the cleanly-retryable cases. The regex is the narrow ceiling, not the classifier.
-// Upstream ask: a first-class `retryable`/`kind` on pi's terminal error would retire the prose path
-// entirely (mirrors the §11 "the deeper fix is upstream in pi" pattern).
+// ── §1 translate: pi's rich events → the SPEC stream ─────────────────────────
 
 /**
  * In-stream event mapping — pi events are translated ONCE into the rich `SessionEvent` vocabulary;
@@ -253,7 +238,7 @@ async function maybeCompact(harness: PiHarness, message: AssistantMessage): Prom
   }
 }
 
-// ── §4 createPiAgentFromHarness ──────────────────────────────────────────────
+// ── §2 createPiAgentFromHarness ──────────────────────────────────────────────
 
 export interface CreatePiAgentFromHarnessOptions {
   harnessFactory: PiHarnessFactory;

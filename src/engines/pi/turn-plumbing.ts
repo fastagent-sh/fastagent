@@ -11,7 +11,7 @@
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Prompt } from "../../agent.ts";
 
-// ── §1 Lease: single-writer concurrency floor ───────────────────────────────
+// ── §1 Lease: single-writer concurrency floor ────────────────────────────────
 //
 // Corruption-prevention floor only: it does not pick a UX. Fail-fast over queueing because real
 // same-session concurrency is mostly duplicate intent or a user firing follow-ups, not two real
@@ -40,6 +40,23 @@ export function inProcessLease(): Lease {
     },
   };
 }
+
+// ── §2 Terminal classification: the pi→SPEC decision ─────────────────────────
+//
+// `retryable` = worth re-sending with the same session (SPEC §6: advisory, not a session-atomicity
+// guarantee). Classify from the STRUCTURED signal first, prose only as the last-resort ceiling. What
+// is actually available differs by path, and the two are NOT symmetric:
+//   - thrown error (errorToTerminal): an HTTP `.status`/`.statusCode` AND a network `.code` (incl.
+//     `.cause.code`) — this is where a numeric status genuinely drives the decision.
+//   - failed message (toTerminal): ONLY `diagnostics[].error.code`. pi's `DiagnosticErrorInfo` carries
+//     a `code` (a network code, or a status delivered as a code), with no separate HTTP-status field —
+//     so a message whose provider `code` is a string label (e.g. "rate_limit_exceeded") is not
+//     decisive here and falls to prose.
+// The prose fallback is bounded, not a cop-out: pi-ai already ran its own status-code-based client
+// retries (harness.ts PROVIDER_MAX_RETRIES) before surfacing, so an error that reaches this point has
+// already exhausted the cleanly-retryable cases. The regex is the narrow ceiling, not the classifier.
+// Upstream ask: a first-class `retryable`/`kind` on pi's terminal error would retire the prose path
+// entirely (mirrors the §11 "the deeper fix is upstream in pi" pattern).
 
 /** Clearly-transient network error codes (Node/undici), decisive on their own. */
 const RETRYABLE_CODES = new Set([
@@ -126,6 +143,8 @@ export function errorToTerminal(error: unknown): Extract<AgentEvent, { type: "fa
   return { type: "failed", details, retryable: classifyRetryable(details, errorSignal(error)) };
 }
 
+// ── §3 Prompt images: one conversion for both classes ────────────────────────
+
 /**
  * Map prompt images to pi ImageContent, resizing each to model-friendly dimensions/size with pi's
  * Photon resizer (reused from pi-coding-agent, lazy-imported so the common no-image headless path never
@@ -150,7 +169,7 @@ export async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: Imag
   return { images };
 }
 
-// ── §3 EventQueue: push→pull plumbing for pi's two-port shape ────────────────
+// ── §4 EventQueue: push→pull plumbing for pi's two-port shape ────────────────
 //
 // Single-consumer async queue; single-threaded JS means no await interleaves between push and
 // drain, so no locking. Engines that are natively async-iterable would not need it. Exported for
