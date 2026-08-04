@@ -10,7 +10,14 @@
  * of that class is the `ResourceLoader` (extension modules, skills), which is built ONCE with the
  * assembly and shared across turns. What is per-turn is binding a session object to a record.
  *
- * This module owns the turn mechanism only. The assembly that produces a {@link PiSessionFactory}
+ * KNOWN GAP (see the `it.todo` in test/session-engine-conformance.test.ts): a cancel that lands
+ * while a TOOL is executing does not stop that tool — `AgentSession.abort()` does not settle from
+ * this call site, though the same call settles in ~3ms from ordinary code with the same tool in
+ * flight. A cancel during the model stream is correct (pi never starts the tool), which is the case
+ * the SPEC suite exercises. Do not wire this L0 into a serving path where long tool calls are normal
+ * until that is resolved.
+ *
+ * This module owns the turn mechanism only. The assembly that produces the session factory
  * (models, auth, tools, definition, extensions) is a caller's concern, exactly as
  * `piHarnessFactory` is for the harness class.
  */
@@ -125,8 +132,12 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       }
       // Arm the cancellation door before any model work, then honour a cancel that arrived while
       // the session was still being built (the latch) — the same ordering the harness L0 uses.
+      let doorFired = false;
       onCancelReady(() => {
-        void session.abort().catch(() => {});
+        doorFired = true;
+        void session.abort().catch((error: unknown) => {
+          log.warn(`[fastagent] session abort failed at cancellation: ${String(error)}`);
+        });
       });
       if (wasCancelled()) {
         await session.abort().catch((error: unknown) => {
@@ -146,7 +157,15 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           return;
         }
         const projected = projectSessionEvent(event);
-        if (projected) queue.push(projected);
+        if (!projected) return;
+        if (projected.type === "retrying") {
+          // Same reason the harness L0 logs it: the event only reaches an ATTACHED consumer, while
+          // an operator tailing logs must also see a backoff that would otherwise read as a hang.
+          log.warn(
+            `[fastagent] retry ${projected.attempt}/${projected.maxAttempts} in ${projected.delayMs}ms (session ${scope.session}): ${projected.reason}`,
+          );
+        }
+        queue.push(projected);
       });
       try {
         // prompt() resolves when the turn is accepted-and-run; waitForIdle() closes the window in
@@ -190,10 +209,16 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         }
         // Fresh-session discipline: the object dies with the turn. Aborting first releases any work
         // still in flight after a consumer break.
-        try {
-          await session.abort();
-        } catch (error) {
-          log.warn(`[fastagent] session abort failed during cleanup: ${String(error)}`);
+        // Teardown aborts only when the DOOR did not: on a cancelled turn the door already issued
+        // the abort that stops in-flight work, and awaiting a second one here wedges the
+        // generator's own finalization (return() then never settles, which is exactly the deadlock
+        // the door exists to prevent for a pull-driven consumer).
+        if (!doorFired) {
+          try {
+            await session.abort();
+          } catch (error) {
+            log.warn(`[fastagent] session abort failed during cleanup: ${String(error)}`);
+          }
         }
       }
     } finally {

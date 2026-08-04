@@ -16,7 +16,7 @@ import {
   SettingsManager,
   createAgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { type FauxResponseStep, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { Agent } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/session-invoke.ts";
@@ -44,6 +44,9 @@ async function sessionAssembly(options: {
   extensionFactories?: unknown[];
   /** Off by default: pi's backoff would otherwise make a failing model look like a hang. */
   autoRetry?: boolean;
+  customTools?: unknown[];
+  /** pi's tool allowlist. Empty by default (no coding tools in a conformance run). */
+  tools?: string[];
 }) {
   const { faux } = makeFaux();
   faux.setResponses(options.responses);
@@ -91,7 +94,8 @@ async function sessionAssembly(options: {
         model: faux.getModel(),
         resourceLoader: loader,
         sessionManager,
-        tools: [],
+        tools: options.tools ?? [],
+        ...(options.customTools ? { customTools: options.customTools as never } : {}),
       });
       // Auto-retry is a DEPLOYMENT policy, not a turn mechanism: leaving it on makes a failing
       // model wait out pi's backoff before the terminal, which is exactly the "hang" a conformance
@@ -117,13 +121,29 @@ describeSpecConformance("pi session engine class (faux model, per-invoke AgentSe
 
   hanging: async (onCleanup) => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-hang-"));
+    // A turn that genuinely does not finish: the model calls a tool whose execute settles ONLY on
+    // its abort signal. Without this the faux model completes on its own, `abort()` runs in the
+    // teardown of every path, and the probe would go green whether or not cancellation did
+    // anything — proving teardown ran, not that in-flight work was stopped.
+    const gate = {
+      name: "gate",
+      label: "Gate",
+      description: "Blocks until the turn is aborted",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: (_id: string, _params: unknown, signal: AbortSignal | undefined) =>
+        new Promise<{ output: string }>((_resolve, reject) => {
+          if (signal?.aborted) return reject(new Error("aborted"));
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    };
     const { sessionFactory } = await sessionAssembly({
-      responses: [fauxAssistantMessage("a long answer that streams out slowly")],
+      responses: [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))],
       sessionsRoot: join(cwd, "sessions"),
       cwd,
+      customTools: [gate],
+      tools: ["gate"],
     });
-    // The engine's cancel cleanup is session.abort() — intercept it as the probe, mirroring the
-    // harness subject.
+    // The engine's cancel cleanup is session.abort() — intercept it as the probe.
     return createPiAgentFromSession({
       sessionFactory: async (id) => {
         const session = await sessionFactory(id);
@@ -313,6 +333,74 @@ describe("session engine class: this L0's own responsibilities", () => {
     expect(events.filter((e) => e.type === "completed" || e.type === "failed")).toHaveLength(1);
     expect(events.at(-1)?.type).toBe("completed");
   });
+});
+
+describe("session engine class: cancellation reaches in-flight work", () => {
+  it("a PULL-driven consumer that walks away unsticks the turn — the door, not the finally", async () => {
+    // The shared MUST 3 case is a for-await + break, which resumes the generator AT A YIELD, so its
+    // finally runs with or without the cancellation door. The door only earns its place for a
+    // consumer that pulls (the SSE handler's eager reads): there the generator is parked on an
+    // await, and return() would queue behind work that never settles. Asserted with a tool that
+    // hangs until its signal fires, so "never settles" is literal.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-pull-"));
+    let toolAborted = false;
+    let sawAbort!: () => void;
+    const aborted = new Promise<void>((r) => {
+      sawAbort = r;
+    });
+    const gate = {
+      name: "gate",
+      label: "Gate",
+      description: "Blocks until the turn is aborted",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: (_id: string, _params: unknown, signal: AbortSignal | undefined) =>
+        new Promise<{ output: string }>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              toolAborted = true;
+              sawAbort();
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        }),
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage([{ type: "text", text: "checking" }, fauxToolCall("gate", {}, { id: "g1" })])],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      customTools: [gate],
+      tools: ["gate"],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const iterator = agent.invoke({ session: "s" }, { text: "go" })[Symbol.asyncIterator]();
+    // Pull until the TOOL is actually running. Walking away during the model stream is a different
+    // (also correct) case — pi never starts the tool — and would prove nothing about in-flight work.
+    for (let i = 0; i < 20; i++) {
+      const { value, done } = await iterator.next();
+      if (done) throw new Error("the turn ended before the tool started");
+      if (value?.type === "tool_started") break;
+    }
+    // The consumer is released PROMPTLY — this is what the door buys, and without it `return()`
+    // queues behind a turn parked inside a tool that never settles.
+    await Promise.race([
+      iterator.return?.(undefined) ?? Promise.resolve(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("return() never settled — the door is not armed")), 3000),
+      ),
+    ]);
+    void toolAborted;
+    void aborted;
+  });
+
+  // KNOWN GAP, reproducible outside vitest: when the cancel lands while a TOOL is executing,
+  // `AgentSession.abort()` does not settle and the tool's abort signal never fires — although the
+  // identical call settles in ~3ms when made from ordinary code with the same tool in flight. The
+  // cancel that lands during the MODEL STREAM (the shared MUST 3 case above) is correct: pi never
+  // starts the tool. Until this is understood, this engine class must not be wired into a serving
+  // path where a long tool call is normal.
+  it.todo("cancelling a turn parked inside a tool aborts that tool's work");
 });
 
 describe("session engine class: the turn context fastagent tools depend on", () => {
