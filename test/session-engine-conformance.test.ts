@@ -704,7 +704,6 @@ describe("session engine class: per-invoke discipline", () => {
     await iterator.return?.(undefined);
   });
 
-
   it("nothing resident survives a turn — the record is the only continuity", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-record-"));
     const sessionsRoot = join(cwd, "sessions");
