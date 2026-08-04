@@ -77,6 +77,13 @@ must not also choose which module graph loads.
 - **The assembly ladder, the definition, tools, channels, schedules** — level-agnostic. They produce
   inputs; the level decides who consumes them.
 
+What the two classes do NOT yet share is the SERVING surface. `createPiAgentFromHarness` accepts an
+observer and registers per-run modulation handles, which is what the session control plane
+(`session-control.ts`, `/control/*`, `fastagent attach`) consumes; the session L0 has neither yet. The
+`Agent` contract is satisfied by both, the control plane is not — so an engine-class choice is today
+also a choice about session control, and closing that is the wiring work between this L0 and any
+serving use of it.
+
 ## 5. What each level owes
 
 **`per-invoke` owes MUST 6**: state reconstructible from the store, no process affinity. Nothing more —

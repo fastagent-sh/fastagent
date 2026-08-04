@@ -10,6 +10,11 @@
  * of that class is the `ResourceLoader` (extension modules, skills), which is built ONCE with the
  * assembly and shared across turns. What is per-turn is binding a session object to a record.
  *
+ * NOT YET WIRED: the harness L0 accepts a `SessionObserver` and registers per-run modulation handles
+ * (steer/follow_up/abort), which is what the session control plane consumes. This L0 has neither, so
+ * an agent built here serves invokes but cannot be observed or steered through `/control/*` — the
+ * gap to close before it backs a serving path, not an omission to discover later.
+ *
  * This module owns the turn mechanism only. The assembly that produces the session factory
  * (models, auth, tools, definition, extensions) is a caller's concern, exactly as
  * `piHarnessFactory` is for the harness class.
