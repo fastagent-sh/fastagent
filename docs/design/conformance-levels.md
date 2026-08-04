@@ -62,7 +62,11 @@ a stated bill (§5).
 
 ## 4. What does not change
 
-The seam is **L0 only** ([core.md](core.md) §3: `createPiAgentFromHarness` is the L0 rung).
+The seam is **L0 only** ([core.md](core.md) §3). There are now two L0s — `createPiAgentFromHarness`
+(`invoke.ts`) and `createPiAgentFromSession` (`session-invoke.ts`) — siblings behind one contract, with
+the turn plumbing neither may own alone (lease, terminal classification, image conversion, the
+promise+subscription fan-in) in `turn-plumbing.ts`. Neither imports the other: choosing an engine class
+must not also choose which module graph loads.
 
 - **`Agent`** — `invoke(scope, prompt) => AsyncIterable<AgentEvent>`. Both engine classes satisfy it;
   the SPEC calls the Agent "a black box to the Caller".

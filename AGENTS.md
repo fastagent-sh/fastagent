@@ -118,7 +118,17 @@ src/
 │   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
 └── engines/pi/              # the pi reference implementation
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
-    ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
+    ├── invoke.ts            # L0 for the HARNESS engine class + its request-time turn mechanism
+    ├── session-invoke.ts    # L0 for the SESSION engine class (per-invoke AgentSession): the class
+    │                       # that has extensions, /name dispatch and branch ops. Same state
+    │                       # locality as invoke.ts (SPEC MUST 6) — the two axes are independent,
+    │                       # see docs/design/conformance-levels.md
+    ├── turn-plumbing.ts     # what BOTH L0s need and neither may own: the single-writer lease, the
+    │                       # pi→SPEC terminal classification, prompt→pi image conversion, and the
+    │                       # push→pull fan-in (pi exposes a turn as promise + subscription).
+    │                       # Siblings never import each other
+    ├── session-bridge.ts    # the session class's tool-runtime bridges (session manager + activation),
+    │                       # shared by its two consumers: the resident runtime and the per-invoke L0
     ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
     ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
     ├── open.ts              # shared opener: directory → agent for dev/start/invoke

@@ -122,9 +122,10 @@ describeSpecConformance("pi session engine class (faux model, per-invoke AgentSe
   hanging: async (onCleanup) => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-hang-"));
     // A turn that genuinely does not finish: the model calls a tool whose execute settles ONLY on
-    // its abort signal. Without this the faux model completes on its own, `abort()` runs in the
-    // teardown of every path, and the probe would go green whether or not cancellation did
-    // anything — proving teardown ran, not that in-flight work was stopped.
+    // its abort signal, so there is real in-flight work when the consumer walks away. It does NOT
+    // discriminate between the cancellation door and the generator's finally — this case breaks at
+    // a yield, so the finally runs either way; the dedicated pull-driven test below is what
+    // separates the two.
     const gate = {
       name: "gate",
       label: "Gate",

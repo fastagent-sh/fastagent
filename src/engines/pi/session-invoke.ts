@@ -14,7 +14,7 @@
  * (models, auth, tools, definition, extensions) is a caller's concern, exactly as
  * `piHarnessFactory` is for the harness class.
  */
-import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentEvent, Agent, Json, Prompt, Scope } from "../../agent.ts";
 import { SESSION_BUSY_CODE } from "../../agent.ts";
@@ -110,12 +110,12 @@ function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
 }
 
 /** The assistant message a settled turn ended on, for terminal classification. */
-function lastAssistant(event: AgentSessionEvent): Parameters<typeof toTerminal>[0] | undefined {
+function lastAssistant(event: AgentSessionEvent): AssistantMessage | undefined {
   if (event.type !== "agent_end") return undefined;
   const messages = event.messages;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m?.role === "assistant") return m as Parameters<typeof toTerminal>[0];
+    if (m?.role === "assistant") return m as AssistantMessage;
   }
   return undefined;
 }
@@ -168,7 +168,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       }
 
       const queue = new EventQueue<AgentEvent>();
-      let settled: Parameters<typeof toTerminal>[0] | undefined;
+      let settled: AssistantMessage | undefined;
       const unsub = session.subscribe((event) => {
         if (event.type === "agent_end") {
           // `willRetry` means pi will run again for this same prompt — an auto-retry, not a settle.
