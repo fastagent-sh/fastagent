@@ -90,6 +90,15 @@ export async function loadAgentDefinition(
   }
   const persona = personaRead.ok ? personaRead.value : undefined;
 
+  const { skills, diagnostics, collisions } = await readSkills(e, root);
+  return { contextFiles, persona, skills, diagnostics, collisions, dir: root };
+}
+
+/** The skills half, shared by the full load and {@link loadAgentSkills}. `root` is already resolved. */
+async function readSkills(
+  e: ExecutionEnv,
+  root: string,
+): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[] }> {
   // Skills come ONLY from the definition's own skills/ (no external/global mount), so the same
   // definition loads the same skills on every machine — and, like tools/channels/schedules, a symlink
   // that escapes the agent dir is refused rather than followed (the fourth of four surfaces).
@@ -105,8 +114,26 @@ export async function loadAgentDefinition(
       byName.set(skill.name, skill);
     }
   }
+  return { skills: [...byName.values()], diagnostics, collisions };
+}
 
-  return { contextFiles, persona, skills: [...byName.values()], diagnostics, collisions, dir: root };
+/**
+ * The definition's skills ALONE, resolved the same way `loadAgentDefinition` resolves them (same
+ * loader, same containment guard, same first-wins collision rule) — for readers that need only the
+ * names and must not pay the full load's ② context walk (every AGENTS.md from cwd to root) for them.
+ * The control plane's `commands()` is that reader, called when a composer opens its completion list.
+ */
+export async function loadAgentSkills(
+  agentDir: string,
+  options: { cwd?: string; env?: ExecutionEnv } = {},
+): Promise<{ skills: Skill[]; diagnostics: SkillDiagnostic[]; collisions: SkillCollision[]; dir: string }> {
+  const cwd = options.cwd ?? agentDir;
+  const e = options.env ?? new NodeExecutionEnv({ cwd });
+  const rootResult = await e.absolutePath(agentDir);
+  if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
+  // `dir` is the RESOLVED root, like {@link LoadedDefinition.dir}: readers key per-definition state
+  // (the findings memo) on it, and "./agent" vs an absolute path must not become two definitions.
+  return { ...(await readSkills(e, rootResult.value)), dir: rootResult.value };
 }
 
 /**

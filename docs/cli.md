@@ -152,7 +152,8 @@ fastagent attach <session> [dir] [--url url --token token]
 Attach to a session served by a running `dev`/`start` with `sessionControl: true` in the config:
 stream its live events (text, tool activity, run boundaries), steer the active run by typing a
 line — or, with no run active, start one (the line becomes a new prompt over the remote data
-plane) — `/abort` to stop a run, Ctrl+C to detach. A run YOU started from attach is driven by
+plane) — `/abort` to stop a run, `/commands` to list the names the agent defines (skills; name one in
+a normal message — this composer does not expand `/name`), Ctrl+C to detach. A run YOU started from attach is driven by
 attach's own connection, so detaching cancels it (channel-started runs are unaffected). Discovers the local endpoint from
 `<stateRoot>/control.json`; `--url`/`--token` reach a remote serve. Speaks the same wire protocol a
 Web panel or desktop app uses (`connectSessionControl`).

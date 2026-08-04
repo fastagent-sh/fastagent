@@ -17,6 +17,7 @@ import type { SessionTreeEntry, ThinkingLevel } from "@earendil-works/pi-agent-c
 import type { Models } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
+  type AgentCommand,
   BOUNDARY_COMMAND_FAILED_CODE,
   INVALID_COMMAND_CODE,
   NO_ACTIVE_RUN_CODE,
@@ -198,6 +199,16 @@ export interface CreatePiSessionControlOptions {
    *  (assembly completes before any dispatch can arrive). Absent / undefined → boundary commands
    *  are gated off in `capabilities()` and rejected `unsupported_capability`. */
   boundary?: () => PiBoundaryWiring | undefined;
+  /** The definition's names, as a LAZY thunk for the same reason {@link boundary} is one (the hub
+   *  exists before the assembly that can read a definition) — and async because the definition is
+   *  live: this must re-read it, not close over a boot snapshot, or `commands()` would advertise a
+   *  list the next turn no longer runs.
+   *
+   *  OPTIONAL because absence is a TRUE answer for the assembly that omits it: a hub over an L1
+   *  agent (`createPiAgent({ model, instructions, tools })`) has no definition and therefore no
+   *  names, and `[]` says exactly that. Wire it whenever the agent came from a DIRECTORY — there
+   *  `[]` would be a lie; the directory constructor (`createPiAgentFromDir`) always does. */
+  commands?: () => Promise<AgentCommand[]>;
   /** Tap for the events the HUB ITSELF generates (boundary mutations: `state_changed`,
    *  `compaction_*`) — those never pass through the data plane's observer seam, so a consumer
    *  composing a full-vocabulary tap wires the run events via the observer AND this. Called after
@@ -263,6 +274,10 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
   };
 
   const control: SessionControl = {
+    async commands(): Promise<AgentCommand[]> {
+      return (await options.commands?.()) ?? [];
+    },
+
     capabilities: (): SessionCapabilities => {
       const b = boundary?.();
       return {

@@ -435,6 +435,10 @@ import { createPiAgent, createPiSessionControl, inMemorySessionStore } from "@fa
 const sessions = inMemorySessionStore();
 const { control, observer } = createPiSessionControl({ sessions });
 const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer });
+// This agent has no definition, so `control.commands()` is `[]` — true, not a gap. Over a DIRECTORY
+// agent, pass `commands: async () => …` returning one `AgentCommand` per name the definition
+// exposes, re-read per call; otherwise the list claims the definition's skills do not exist.
+// `createPiAgentFromDir` wires it for you.
 
 // Live events are NOT durable history: a subscription sees only what happens while it iterates,
 // so start watching BEFORE (or while) the run is driven — never after it drained.
@@ -446,6 +450,10 @@ const watching = (async () => {
 })();
 for await (const e of agent.invoke({ session: "s1" }, { text: "hi" })) void e; // the data plane
 await watching;
+
+// What a `/` composer LISTS (read live, so a skill added while serving appears at once). A listing
+// only — the data plane takes prompts as text, so what typing `/triage` means is the client's.
+await control.commands(); // [{ name: "triage", description: "Sort an inbox", source: "skill" }]
 
 // After a disconnect, missed history comes from the durable plane, not the live stream:
 const { entries, leafEntryId } = await control.entries("s1", { since: cursor });
@@ -471,6 +479,16 @@ reached a run but could not take effect (the run raced to settlement) rejects wi
 accepted `abort` can still settle `completed`, and an accepted `steer`/`follow_up` can settle
 without its prompt being consumed, when the run finishes inside the window — acceptance is not
 outcome; the settlement is the truth.
+
+`commands()` lists what a `/` composer completes: `{ name, description?, source }` per named thing
+the definition exposes (`source: "skill"` today). It is a LISTING, not a dispatch surface — the data
+plane takes prompts as text and nothing expands `/name`, so what typing one means is the client's
+choice. It is read live and uncached — the definition's `skills/` is re-read per call (the ②
+context walk the full load does is skipped: this answers at composer-open frequency) — so a skill
+added while serving appears at once; `[]` means the agent exposes none. It is also the one read that can REJECT:
+a definition the server cannot read at all is a deployment fault with no truthful degraded value, and
+the rejection carries no stable code (remotely: an uncoded non-2xx → `ControlRequestError`). Wrap the
+call, and expect no `error.code` to branch on.
 
 Boundary mutations run between runs, under the SAME lease (`session_busy` while a run is active,
 retryable at idle):

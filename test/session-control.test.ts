@@ -6,7 +6,8 @@
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { log } from "../src/log.ts";
 import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
@@ -318,6 +319,38 @@ describe("session control (Phase 1): observation plane", () => {
     expect(text).toBe("resilient");
   });
 
+  it("a skill that failed to load is absent from commands() and warned once", async () => {
+    const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "fa-sc-bad-"));
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      await mkdir(join(dir, "fastagent"), { recursive: true });
+      await writeFile(
+        join(dir, "fastagent", "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5" };\n`,
+      );
+      const opened = await createPiAgentFromDir(dir, { sessionControl: true });
+      const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
+      // Broken AFTER boot — which is the case the read exists for: a finding already present at
+      // startup was reported by the caller's boot report, and re-printing it is the spam the memo
+      // prevents (test/report.test.ts pins that half).
+      await mkdir(join(dir, "fastagent", "skills", "broken"), { recursive: true });
+      await writeFile(join(dir, "fastagent", "skills", "broken", "SKILL.md"), `no frontmatter here\n`);
+      // The broken file cannot be listed — so this read is the only place that can say it exists.
+      expect(await control.commands()).toEqual([]);
+      expect(warn.mock.calls.flat().join(" ")).toContain("broken");
+      // … once: a composer opening twice must not spam a finding that has not changed.
+      warn.mockClear();
+      await control.commands();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("workspace opener wires the hub itself (sessionControl: true) — the seam is executable", async () => {
     const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
@@ -341,6 +374,47 @@ describe("session control (Phase 1): observation plane", () => {
       // Not requested → not built.
       const plain = await createPiAgentFromDir(dir, {});
       expect(plain.sessionControl).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("commands() re-reads the definition per call: added and removed skills, collisions first-wins", async () => {
+    const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "fa-sc-cmd-"));
+    try {
+      await mkdir(join(dir, "fastagent"));
+      await writeFile(
+        join(dir, "fastagent", "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5" };\n`,
+      );
+      const opened = await createPiAgentFromDir(dir, { sessionControl: true });
+      const control = opened.sessionControl as NonNullable<typeof opened.sessionControl>;
+
+      // Empty is a complete answer …
+      expect(await control.commands()).toEqual([]);
+      // … and the read is LIVE, like the definition itself: a skill written while serving is
+      // invocable on the next turn, so it must be listable NOW — a boot snapshot would advertise a
+      // command set the running agent has already left behind.
+      await mkdir(join(dir, "fastagent", "skills", "triage"), { recursive: true });
+      await writeFile(
+        join(dir, "fastagent", "skills", "triage", "SKILL.md"),
+        `---\nname: triage\ndescription: Sort an inbox\n---\n\nDo the thing.\n`,
+      );
+      expect(await control.commands()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
+      // The RESOLVED set, which is the reason this read exists: a same-name collision is decided
+      // first-wins at assembly, and a client reading the directory would list the name twice.
+      await mkdir(join(dir, "fastagent", "skills", "triage-copy"), { recursive: true });
+      await writeFile(
+        join(dir, "fastagent", "skills", "triage-copy", "SKILL.md"),
+        `---\nname: triage\ndescription: A second claim on the same name\n---\n\nDo it differently.\n`,
+      );
+      expect(await control.commands()).toEqual([{ name: "triage", description: "Sort an inbox", source: "skill" }]);
+      // Live in BOTH directions — a cached read would only ever grow the list.
+      await rm(join(dir, "fastagent", "skills"), { recursive: true, force: true });
+      expect(await control.commands()).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

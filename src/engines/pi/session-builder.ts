@@ -48,7 +48,7 @@ import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
 import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
-import { reportDefinitionWarnings, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
+import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
 
 /** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
@@ -151,7 +151,7 @@ export async function buildAgentSessionRuntime(
     const model = resolveModel(modelRuntime, modelSpec);
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(agentDir, { cwd, env });
-    reportDefinitionWarnings(definition.collisions, definition.diagnostics);
+    reportFindingsIfChanged(definition.dir, definition);
     const defaultNames = piDefaultTools().map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts

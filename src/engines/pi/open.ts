@@ -26,7 +26,8 @@ import { type PiBoundaryWiring, createPiSessionControl } from "./session-control
 import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
-import type { LoadedDefinition } from "./definition.ts";
+import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
+import { reportFindingsIfChanged } from "./report.ts";
 import { jsonlSessionStore } from "./sessions.ts";
 import type { ToolCollision } from "./tool.ts";
 import type { MountedTool } from "./tool.ts";
@@ -210,6 +211,23 @@ export async function createPiAgentFromDir(
     ? createPiSessionControl({
         sessions,
         boundary: () => boundaryParts,
+        // Skills ARE the names a client offers — the resolved set, after collisions were decided
+        // first-wins, which a client cannot reconstruct from the directory. Read LIVE (the directory
+        // is the agent: a skill added while serving is in play on the next turn, so it must be
+        // listable now) and SKILLS-ONLY: this is called when a composer opens its completion list,
+        // and the full load's ② context walk buys nothing here.
+        commands: async () => {
+          const loaded = await loadAgentSkills(agentDir, { cwd: workspace });
+          // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the
+          // author's composer with no signal anywhere. The memo is SHARED with the turn path (keyed
+          // by dir), so a finding is warned when it appears, not once per reader that notices it.
+          reportFindingsIfChanged(loaded.dir, loaded);
+          return loaded.skills.map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            source: "skill",
+          }));
+        },
         // The caller tap's boundary-event half: state_changed/compaction_* originate in the hub
         // and never cross the data plane's observer seam — without this, an audit tap wired here
         // would miss exactly the mutations it most needs to see (set_model).

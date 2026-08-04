@@ -29,7 +29,7 @@ import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, piHarnessFactory } from "./harness.ts";
 import { createPiModels } from "./models.ts";
-import { reportDefinitionWarnings } from "./report.ts";
+import { reportFindingsIfChanged } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import {
@@ -400,13 +400,6 @@ export interface CreatePiAgentFromDefinitionOptions {
   onAssembly?: OnAssembly;
 }
 
-/** Stable identity of a definition's non-fatal findings, for change-detection in `live` (dedup only). */
-function findingsSignature(def: LoadedDefinition): string {
-  const collisions = def.collisions.map((c) => `c:${c.name}:${c.winnerPath}:${c.loserPath}`);
-  const diagnostics = def.diagnostics.map((d) => `d:${d.code}:${d.path}`);
-  return [...collisions, ...diagnostics].sort().join("\n");
-}
-
 /**
  * L2: "point at a directory → agent": load + assemble (base + AGENTS.md + skills + env) + L1 in one
  * call. Returns the definition so callers can surface diagnostics/collisions.
@@ -422,10 +415,11 @@ export async function createPiAgentFromDefinition(
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to
   // report (skills/diagnostics/collisions). Serving does NOT close over it — see `live` below.
   const definition = await loadAgentDefinition(dir, { cwd: env.cwd, env });
-  // Findings the caller already reported at boot; `live` re-reports only when the set CHANGES — a
-  // runtime-written bad skill surfaces the moment it appears, while a static finding does not spam
-  // every turn's log. A log-dedup memo, not session state (stateless invoke holds).
-  let reportedFindings = findingsSignature(definition);
+  // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by
+  // the resolved dir): announced once here, and re-announced by a turn or by the control plane's
+  // command list only when the set CHANGES — a runtime-written bad skill surfaces the moment it
+  // appears, a static one does not spam. Log dedup, not session state (stateless invoke holds).
+  reportFindingsIfChanged(definition.dir, definition);
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
   const tools = withSearchTool(options.tools ?? piDefaultTools());
@@ -448,11 +442,7 @@ export async function createPiAgentFromDefinition(
     // next good edit heals both.
     live: async () => {
       const def = await loadAgentDefinition(dir, { cwd: env.cwd, env });
-      const sig = findingsSignature(def);
-      if (sig !== reportedFindings) {
-        reportedFindings = sig;
-        reportDefinitionWarnings(def.collisions, def.diagnostics);
-      }
+      reportFindingsIfChanged(def.dir, def);
       return {
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity,

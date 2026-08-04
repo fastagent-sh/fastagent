@@ -26,6 +26,11 @@ const TOKEN = "test-token";
 /** A served control plane over a real HTTP server + the agent driving it. Reasoning-capable model:
  *  thinking levels are per model, and the default faux supports only "off". */
 async function serveControl() {
+  /** What the served control answers `commands()` with — mutable, so a test can change it while a
+   *  client is connected (the definition behind it is live). */
+  const commandList: Array<{ name: string; description?: string; source: string }> = [
+    { name: "triage", description: "Sort an inbox", source: "skill" },
+  ];
   const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
   faux.setResponses([fauxAssistantMessage("hello over the wire")]);
   const sessions = inMemorySessionStore();
@@ -56,12 +61,19 @@ async function serveControl() {
       harnessFactory: factory,
       defaults: { model: faux.getModel(), thinkingLevel: "medium" },
     }),
+    // A non-empty, MUTABLE list: non-empty so the isomorphism check compares a real payload rather
+    // than [] === [], mutable so the wire is pinned as per-call rather than prefetched-and-cached
+    // like capabilities (the definition it answers for is live).
+    commands: async () => [...commandList],
   });
   const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
-  const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
+  const mounted = controlRoutes(control, { token: TOKEN, agent });
+  const server = serveNode(router(mounted), { port: 0 });
   const port = await server.listening;
   return {
     agent,
+    commandList,
+    routeKeys: Object.keys(mounted),
     localControl: control,
     url: `http://127.0.0.1:${port}`,
     close: () => server.close(),
@@ -79,12 +91,24 @@ describe("session control over HTTP (Phase 3)", () => {
   it("fails closed: no/wrong token is 401 on every route, and connect() rejects", async () => {
     const served = await serveControl();
     try {
-      for (const path of ["/control/capabilities", "/control/state?session=s", "/control/events?session=s"]) {
-        expect((await fetch(`${served.url}${path}`)).status).toBe(401);
-        expect((await fetch(`${served.url}${path}`, { headers: { authorization: "Bearer wrong" } })).status).toBe(401);
+      // DERIVED from the routes this server actually MOUNTS — not a hand-kept list, and not a second
+      // controlRoutes() call that could drift from it: "every control route requires the token" has
+      // to fail when a NEW route forgets `guard`, which a literal array cannot do.
+      expect(served.routeKeys).toContain("GET /control/commands"); // the route this PR adds is in the sweep
+      for (const key of served.routeKeys) {
+        const [method, path] = key.split(" ") as [string, string];
+        const url = `${served.url}${path}?session=s`;
+        expect((await fetch(url, { method, body: method === "POST" ? "{}" : undefined })).status).toBe(401);
+        expect(
+          (
+            await fetch(url, {
+              method,
+              body: method === "POST" ? "{}" : undefined,
+              headers: { authorization: "Bearer wrong" },
+            })
+          ).status,
+        ).toBe(401);
       }
-      const dispatch = await fetch(`${served.url}/control/dispatch`, { method: "POST", body: "{}" });
-      expect(dispatch.status).toBe(401);
       await expect(connectSessionControl({ url: served.url, token: "wrong" })).rejects.toThrow(/401/);
     } finally {
       served.close();
@@ -98,6 +122,7 @@ describe("session control over HTTP (Phase 3)", () => {
       const remote = await connectSessionControl({ url: served.url, token: TOKEN });
 
       expect(remote.capabilities()).toEqual(served.localControl.capabilities());
+      expect(await remote.commands()).toEqual(await served.localControl.commands());
       expect(await remote.state("sW")).toEqual(await served.localControl.state("sW"));
       const [remoteEntries, localEntries] = [await remote.entries("sW"), await served.localControl.entries("sW")];
       expect(remoteEntries).toEqual(localEntries);
@@ -117,6 +142,35 @@ describe("session control over HTTP (Phase 3)", () => {
       const target = localEntries.entries.find((e) => e.kind === "user")?.id as string;
       expect(await remote.dispatch("sW", { type: "navigate", targetId: target })).toEqual({ ok: true });
       expect((await remote.state("sW")).leafEntryId).toBe(target);
+    } finally {
+      served.close();
+    }
+  });
+
+  it("a serve without the route reads as SKEW, not as an unreadable definition", async () => {
+    // Both arrive as an uncoded non-2xx; without the distinction a client reports "this agent's
+    // skills are unreadable" about a serve that simply predates the route.
+    const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const { "GET /control/commands": _dropped, ...withoutCommands } = controlRoutes(control, { token: TOKEN });
+    const server = serveNode(router(withoutCommands), { port: 0 });
+    const port = await server.listening;
+    try {
+      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+      await expect(remote.commands()).rejects.toThrow(/predates the route/);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("commands() is read per call, not cached at connect like capabilities", async () => {
+    // Why the method is async at all: the definition behind it is live, so a list fetched once at
+    // connect would advertise names the running agent has already left behind.
+    const served = await serveControl();
+    try {
+      const remote = await connectSessionControl({ url: served.url, token: TOKEN });
+      expect((await remote.commands()).map((c) => c.name)).toEqual(["triage"]);
+      served.commandList.push({ name: "digest", source: "skill" });
+      expect((await remote.commands()).map((c) => c.name)).toEqual(["triage", "digest"]);
     } finally {
       served.close();
     }
@@ -226,6 +280,32 @@ describe("session control over HTTP (Phase 3)", () => {
         expect(rejected.ok).toBe(false);
         expect(rejected.error?.code).toBe("invalid_command");
       }
+    } finally {
+      server.close();
+    }
+  });
+
+  it("a definition it cannot read is a deployment fault: commands() rejects, and the wire has no code for it", async () => {
+    // The one failure the contract admits on this read — `[]` would claim the agent has no names.
+    // A client author should see what it looks like: an opaque non-2xx, not a coded answer. That is
+    // the read-side gap tracked on the session-lifecycle issue, not a special case of this route.
+    const { control } = createPiSessionControl({
+      sessions: inMemorySessionStore(),
+      commands: async () => {
+        throw new Error("skills/ unreadable: permission denied");
+      },
+    });
+    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const port = await server.listening;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.status).toBeGreaterThanOrEqual(500);
+      const { ControlRequestError } = await import("../src/session-remote.ts");
+      const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
+      await expect(remote.commands()).rejects.toBeInstanceOf(ControlRequestError);
     } finally {
       server.close();
     }
@@ -567,6 +647,57 @@ describe("session control over HTTP (Phase 3)", () => {
     // A leaf BEHIND the slice (navigate backwards, no turn since): everything here was appended and
     // then abandoned, so there is nothing on the active path to replay.
     expect(activePathSlice(slice, "older")).toEqual([]);
+  });
+
+  it("answerSlashInput: every reserved-slash answer, and the order they arrive in", async () => {
+    const { answerSlashInput } = await import("../src/cli/commands/attach.ts");
+    const commands = [
+      { name: "triage", description: "Sort an inbox", source: "skill" },
+      { name: "digest", source: "skill" },
+    ];
+    const say = (list: typeof commands | Error) => {
+      const lines: string[] = [];
+      const control = {
+        commands: async () => {
+          if (list instanceof Error) throw list;
+          return list;
+        },
+      };
+      return { lines, run: (input: string) => answerSlashInput(input, control as never, (l) => lines.push(l)) };
+    };
+
+    // A mistyped control command: the reserved-prefix line is certain and lands FIRST (before the
+    // remote read resolves), and the token is reported as naming nothing — not answered with a dump
+    // of every skill, which is an intent the typo did not express.
+    const typo = say(commands);
+    const pending = typo.run("/aboort");
+    expect(typo.lines).toEqual([
+      "[a leading / is reserved — /abort stops the run, /commands lists what this agent defines]",
+    ]);
+    await pending;
+    expect(typo.lines[1]).toBe("[/aboort names nothing this agent defines]");
+
+    // A real name, WITH arguments: the first word is the token — the whole line would answer "names
+    // nothing" for a name the user did give.
+    const named = say(commands);
+    await named.run("/triage summarize my inbox");
+    expect(named.lines[1]).toBe("[triage is a skill — Sort an inbox; name it in a normal message, without the /]");
+
+    // The enumeration: `/commands` alone, with descriptions, and NO reserved-prefix preamble (its
+    // whole answer is the read).
+    const listed = say(commands);
+    await listed.run("/commands");
+    expect(listed.lines).toEqual(["[this agent defines: triage — Sort an inbox; digest]"]);
+
+    const none = say([]);
+    await none.run("/commands");
+    expect(none.lines).toEqual(["[this agent defines no names]"]);
+
+    // The read may reject (an unreadable definition, or a serve predating the route): said, not
+    // swallowed — an unhandled rejection here would leave the user with only the preamble.
+    const broken = say(new Error("boom"));
+    await broken.run("/triage");
+    expect(broken.lines[1]).toContain("command list unavailable");
   });
 
   it("decideRound: every reconnect-loop diagnosis and budget claim, pinned", async () => {

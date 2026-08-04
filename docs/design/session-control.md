@@ -101,6 +101,7 @@ implementation lives under `engines/pi/` (`session-control.ts`, exported from `/
 ```ts
 interface SessionControl {
   capabilities(): SessionCapabilities;
+  commands(): Promise<AgentCommand[]>;
   state(session: string): Promise<SessionState>;
   entries(session: string, options?: { since?: string }): Promise<SessionEntries>;
   events(session: string): AsyncIterable<SessionEvent>;
@@ -108,8 +109,9 @@ interface SessionControl {
 }
 ```
 
-All methods are session-scoped and flat: no lifecycle calls, no stateful client-visible object.
-Each of the four non-capability methods survives a deletion test:
+`capabilities` and `commands` are sessionless; the rest are session-scoped, and all are flat: no
+lifecycle calls, no stateful client-visible object. Each of the four session-scoped methods survives
+a deletion test:
 
 - delete `state` → a reconnecting client cannot learn whether work is still active (the durable
   record does not know whether the process died);
@@ -152,6 +154,28 @@ type SessionCommand =
   means), and no move to the ROOT — `targetId` is a `string`, so a client rewinds to an entry, and
   "start from nothing" is a new session, not an emptied one.
 - There are no `cycle_*` commands: cycling is a TUI input affordance.
+
+### 5.1.1 Commands
+
+```ts
+interface AgentCommand { name: string; description?: string; source: string }
+```
+
+What a composer's `/` completion LISTS. A listing, deliberately not a dispatch surface: the data
+plane takes prompts as text, and nothing in it expands `/name` — so what typing one means (expanding
+the skill, sending "use the X skill", filtering a menu) is the client's business, and the contract
+says so rather than implying an invocation path that does not exist.
+
+It still cannot be reconstructed client-side: the assembly is the only place that knows the set after
+collisions were resolved first-wins, and there is no way to discover it by trying.
+
+ASYNC on purpose: a definition is allowed to be LIVE (fastagent re-reads the directory per turn), so
+the list must come from that same read. A boot snapshot would advertise names the running agent has
+already left behind. `source` is free-form because which kinds exist is an engine's business
+(`"skill"` today; extension commands and prompt templates as they land), and an engine with none
+answers `[]` — a complete answer, not a missing one. A definition that cannot be READ at all is a
+deployment fault, and this read may reject: unlike a session-scoped condition, there is no truthful
+degraded value (`[]` would claim the agent has no names).
 
 ### 5.2 Acceptance is not outcome
 
@@ -372,7 +396,7 @@ FastAgent adapts pi's concepts, never proxies `pi --mode rpc` unchanged:
 | `bash`, `abort_bash` | Exclude | Unsafe remote-shell bypass; duplicates tools. |
 | `new_session`, `switch_session` by path | Exclude | Sessions are opaque ids; paths are not portable. |
 | `export_html`, session naming | Exclude | Product presentation concerns. |
-| slash/TUI command discovery | Exclude | Conflicts with definition-as-truth. |
+| `get_commands` | Adapt to `commands()` (§5.1.1) | The definition-derived LISTING is included — it is the one thing a client cannot reconstruct. pi's execution and presentation of slash commands stay out: fastagent's data plane takes prompts as text and does not expand `/name`. |
 | extension UI dialogs | Defer behind a future `interactions` capability | Permission/input gates have serving value, but not in the first contract. |
 | extension UI presentation | Exclude | TUI chrome. |
 | `fork`, `clone`, `get_tree` | Defer behind a future `branching` capability | Not required to serve a session. |
@@ -425,7 +449,7 @@ safe for untrusted users; `ExecutionEnv` is still not a complete sandbox boundar
 | 1 | **Done.** Observation plane: pi events translate ONCE to `SessionEvent` inside the invoke path (`toSessionEvent`), `AgentEvent` is its projection (`projectAgentEvent`); the `session` subpath types + pi `createPiSessionControl` (`state`/`entries`/`events` over a read-only `PiSessionReader`); conformance tests for projection fidelity, run boundaries (incl. cancellation → exactly-one `run_settled{aborted}`), reconnect, and single-writer. | An L0 client can watch and reconnect to any invoke-driven run. |
 | 2a | **Done.** Run modulation: `dispatch` routes `steer`/`follow_up`/`abort` to the live run via {@link RunControls} registered with `run_started`; the settle window spans steered/queued continuations inside one invoke (pi's agent loop drains both queues within one `prompt()`); `queue_changed` + live `pending` in state; a control-plane abort terminates as `failed{code: "aborted"}` / `run_settled{aborted}`; idle-session run commands reject `no_active_run` before acceptance. | L1 clients. |
 | 2b | **Done.** Boundary mutations under the lease: `set_model`/`set_thinking` append durable session overrides (validated against the registry / the MODEL's own thinking levels — `reasoning` + `thinkingLevelMap`, not the bare scale; `invalid_command` before acceptance) and the fresh-harness resolve (`resolveHarnessOverrides`, the active-tools precedent) applies them on every later turn — a registry change across deploys falls back to the default with a deduped warn instead of bricking the session. `compact` is ACCEPT-FAST (§5.2 has no exceptions: a summarization is a full model call, so the dispatch answers on admission — lease held, harness built — and the outcome travels as `compaction_finished{summary|error|aborted}`, emitted after the lease frees); pre-acceptance failures (the harness build and the local preparation — admission ends where the work becomes a model call) reject `boundary_command_failed` with nothing durable landed, and a session with no compactable history rejects `nothing_to_compact` (a no-op, not a failure — the `no_active_run` pattern: re-dispatch once the session grows); an in-flight compaction is abortable — `abort` during `compacting` aborts the summarization's controller (run/compaction symmetry: both are model calls a client must be able to stop) and converges as `compaction_finished{aborted}` with the lease released, mirroring `run_settled{aborted}`. Mutations contend on the SAME lease as runs (`session_busy` when busy); capabilities report `allowedModels` from the live wiring (`PiBoundaryWiring`, a lazy thunk — the hub exists before the assembly that produces the parts), while the session's model, executing level and available levels come from ONE resolution (`resolveSessionSettings`) that `state()`, the `set_thinking` gate and the fresh-harness resolve all read — model and thinking level are one setting, so deriving them separately is what let the surfaces disagree. `navigate` moves the leaf through pi's `Session.moveTo` (the `SessionStorage.setLeafId` primitive) under the same lease — an unknown `targetId` rejects `invalid_command` before it, and the move rides out as `state_changed{leafEntryId, model, thinkingLevel}` (a move can change which settings apply). Because the leaf is now MOVABLE, every last-wins read — the fresh-harness activation/override walk, `state()`, the `set_thinking` gate — reads the ACTIVE PATH rather than the flat journal: a record on an abandoned branch no longer governs the session. An unreadable chain never resolves silently to the assembly defaults: `state()` stays TOTAL but leaves the settings pair ABSENT, and the fault surfaces where an error code exists — the next invoke's `failed` event and a boundary dispatch's `boundary_command_failed`. | L2 clients. |
-| 3 | **Done** (HTTP+SSE; subprocess adapter stays demand-driven). One transport serves every remote consumer — Web panel, desktop app, `fastagent attach`: `controlRoutes` (engine-neutral, bearer-token REQUIRED) serves `/control/capabilities\|state\|entries\|dispatch\|events`, with the envelope born at the wire (`{sessionId, epoch, seq, event}` per SSE message; HTTP itself is the request correlation). `connectSessionControl` re-exposes the SAME `SessionControl` interface and consumes the envelope internally — a seq gap ends the iterator into the standard reconnect steps; a server restart is covered by the same rule (its connections drop), and `epoch` is informational for consumers correlating ACROSS connections — within one connection it cannot change, so the client does not compare it. The DATA plane travels too: `POST /control/invoke` (the standard invoke handler behind the same token, mounted when the serve wires an agent) + `connectAgent` client-side — a remote consumer holds a full fastagent instance through the same two contracts local code uses. Serve wiring: `config.sessionControl: true` → dev/start mount the routes, mint a per-boot token, and write `<stateRoot>/control.json` (0600) for local discovery; product runners still own real authentication, idempotency, event persistence, and routing (§14). | Remote `SessionControl` is isomorphic to local (conformance-tested). |
+| 3 | **Done** (HTTP+SSE; subprocess adapter stays demand-driven). One transport serves every remote consumer — Web panel, desktop app, `fastagent attach`: `controlRoutes` (engine-neutral, bearer-token REQUIRED) serves `/control/capabilities\|commands\|state\|entries\|dispatch\|events`, with the envelope born at the wire (`{sessionId, epoch, seq, event}` per SSE message; HTTP itself is the request correlation). `connectSessionControl` re-exposes the SAME `SessionControl` interface and consumes the envelope internally — a seq gap ends the iterator into the standard reconnect steps; a server restart is covered by the same rule (its connections drop), and `epoch` is informational for consumers correlating ACROSS connections — within one connection it cannot change, so the client does not compare it. The DATA plane travels too: `POST /control/invoke` (the standard invoke handler behind the same token, mounted when the serve wires an agent) + `connectAgent` client-side — a remote consumer holds a full fastagent instance through the same two contracts local code uses. Serve wiring: `config.sessionControl: true` → dev/start mount the routes, mint a per-boot token, and write `<stateRoot>/control.json` (0600) for local discovery; product runners still own real authentication, idempotency, event persistence, and routing (§14). | Remote `SessionControl` is isomorphic to local (conformance-tested). |
 
 Phase 1 modifies the existing invoke pipeline incrementally (translation + projection); it does not
 build a parallel runtime that later needs reconciling. Demand-driven follow-ons, explicitly not

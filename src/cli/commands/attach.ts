@@ -18,7 +18,7 @@ import { log, setLogLevel } from "../../log.ts";
 import { ABORTED_CODE, SESSION_BUSY_CODE } from "../../agent.ts";
 import { NO_ACTIVE_RUN_CODE } from "../../session.ts";
 import { ControlRequestError, connectAgent, connectSessionControl } from "../../session-remote.ts";
-import type { SessionControl, SessionEntry, SessionEvent, SessionState } from "../../session.ts";
+import type { AgentCommand, SessionControl, SessionEntry, SessionEvent, SessionState } from "../../session.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 
 export interface AttachOptions {
@@ -184,7 +184,9 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     // invoke) — give the human a corrective signal.
     log.warn(`[fastagent] no durable record for "${sessionArg}" yet — a new session, or a typo?`);
   }
-  log.info(`[fastagent] type to steer the active run; /abort to stop it; Ctrl+C to detach`);
+  log.info(
+    `[fastagent] type to steer the active run; /abort to stop it; /commands to list what this agent defines; Ctrl+C to detach`,
+  );
 
   // stdin → the two planes: a line steers the ACTIVE run; with no run to join (no_active_run) it
   // falls back to STARTING one over the remote data plane (`POST /control/invoke`) — try-steer-
@@ -217,7 +219,7 @@ export async function runAttach(sessionArg: string, dirArg: string | undefined, 
     // `/` is a reserved command prefix: a typo'd /aboort silently steering the model (injecting a
     // prompt when the user meant to STOP the run) is the dangerous direction of the ambiguity.
     if (trimmed.startsWith("/") && trimmed !== "/abort") {
-      console.log(`[unknown command ${trimmed} — /abort stops the run; a leading / is reserved]`);
+      void answerSlashInput(trimmed, control, (l) => console.log(l));
       return;
     }
     const command =
@@ -478,6 +480,55 @@ export function activePathSlice(entries: SessionEntry[], leafEntryId: string | u
     onPath.add(cur.id);
   }
   return entries.filter((e) => onPath.has(e.id));
+}
+
+/**
+ * Answer a RESERVED-SLASH line (anything starting with `/` that is not `/abort`). Two intents share
+ * the prefix — a mistyped control command and an attempt to invoke a name — and they are answered
+ * differently:
+ *
+ * - a mistyped slash gets the certain half NOW (a leading `/` is reserved here, whatever the token
+ *   turns out to be), because waiting on a remote read that can be slow or fail would leave the
+ *   input unanswered; it deliberately does not pre-judge the token as unknown — the read may be
+ *   about to prove it names a real skill;
+ * - `/commands` prints nothing first: its whole answer IS the read, and a placeholder is noise;
+ * - the enumeration answers `/commands` ONLY — dumping every skill at a mistyped `/aboort` answers
+ *   an intent the typo did not express.
+ *
+ * Names print BARE: this composer cannot expand `/name` (the data plane takes prompts as text), so
+ * printing them with a slash would invite the user straight back into this branch. Returns the
+ * promise for the remote half, so a caller (or a test) can await the second line.
+ */
+export async function answerSlashInput(
+  trimmed: string,
+  control: Pick<SessionControl, "commands">,
+  println: (line: string) => void,
+): Promise<void> {
+  // The first WORD is the token: slash input naturally carries arguments (`/triage my inbox`), and
+  // taking the whole line would answer "names nothing" for a name the user did give.
+  const word = trimmed.slice(1).split(/\s+/)[0] ?? "";
+  const listing = word === "commands";
+  if (!listing) println("[a leading / is reserved — /abort stops the run, /commands lists what this agent defines]");
+  let commands: AgentCommand[];
+  try {
+    commands = await control.commands();
+  } catch (error) {
+    println(`[command list unavailable: ${error}]`);
+    return;
+  }
+  if (listing) {
+    // `description` is what makes a listing usable — a bare name tells the author nothing they did
+    // not already know from the directory.
+    const listed = commands.map((c) => (c.description ? `${c.name} — ${c.description}` : c.name));
+    println(listed.length ? `[this agent defines: ${listed.join("; ")}]` : "[this agent defines no names]");
+    return;
+  }
+  const hit = commands.find((c) => c.name === word);
+  println(
+    hit
+      ? `[${hit.name} is a ${hit.source}${hit.description ? ` — ${hit.description}` : ""}; name it in a normal message, without the /]`
+      : `[/${word} names nothing this agent defines]`,
+  );
 }
 
 /**
