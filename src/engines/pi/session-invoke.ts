@@ -84,19 +84,19 @@ const SESSION_EVENTS: Record<AgentSessionEvent["type"], "project" | "ignore"> = 
   tool_execution_end: "project",
   auto_retry_start: "project",
   summarization_retry_scheduled: "project",
+  // A COMMAND's output arrives as a custom-role message (an extension's `sendMessage`), and it is
+  // the only output such a turn has — ignoring it would make "the command ran" indistinguishable
+  // from "nothing happened" to a stream consumer. Model text keeps arriving as deltas.
+  message_end: "project",
   // The turn's OUTCOME, read by the turn loop rather than projected as a stream event.
   agent_end: "ignore",
-  // Bookkeeping with no Agent Handler counterpart: run/turn/message boundaries, durable-record and
-  // queue notifications, and the richer-plane material the control plane projects separately.
+  // Bookkeeping with no Agent Handler counterpart: run/turn boundaries and message STARTS,
+  // durable-record and queue notifications, and richer-plane material the control plane projects.
   agent_start: "ignore",
   agent_settled: "ignore",
   turn_start: "ignore",
   turn_end: "ignore",
   message_start: "ignore",
-  // A COMMAND's output arrives as a custom-role message (an extension's `sendMessage`), and it is
-  // the only output such a turn has — ignoring it would make "the command ran" indistinguishable
-  // from "nothing happened" to a stream consumer. Model text keeps arriving as deltas.
-  message_end: "project",
   tool_execution_update: "ignore",
   queue_update: "ignore",
   entry_appended: "ignore",

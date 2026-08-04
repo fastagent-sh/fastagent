@@ -331,6 +331,43 @@ describe("session engine class: what the class buys", () => {
     expect(events.at(-1)?.type).toBe("completed");
   });
 
+  it("a silent command completes with an empty stream; an UNKNOWN slash is just text for the model", async () => {
+    // The two neighbours of the command path, both deliberate: a handler that only changes state has
+    // nothing to say, and an unregistered `/name` is not a command — so there is no "ran or not?"
+    // ambiguity left for a consumer to resolve.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-silent-"));
+    let modelSaw = 0;
+    const extension = {
+      name: "quiet",
+      factory: (api: { registerCommand: (n: string, o: unknown) => void }) => {
+        api.registerCommand("mute", { description: "changes state, says nothing", handler: async () => {} });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [
+        () => {
+          modelSaw++;
+          return fauxAssistantMessage("I do not know that command");
+        },
+      ],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+
+    const silent = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "/mute" })) silent.push(e);
+    expect(silent).toEqual([{ type: "completed" }]);
+    expect(modelSaw).toBe(0);
+
+    const unknown = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "/nope" })) unknown.push(e);
+    expect(modelSaw).toBe(1); // reached the model as ordinary text …
+    expect(unknown.at(-1)?.type).toBe("completed");
+    expect(unknown.some((e) => e.type === "text")).toBe(true); // … and its answer streamed
+  });
+
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-img-"));
     let sawImage = false;
