@@ -553,8 +553,8 @@ const logs: CommandSpec = {
   summary: "find and tail a deployed host's application logs",
   description:
     "Find the CloudWatch log group for the AgentCore stack derived from dir, then run aws logs tail. " +
-    "The default Runtime source selects only [runtime-logs], so application stdout/stderr is not mixed " +
-    "with OTEL/spans in the same AWS log group; the forwarder source shows Lambda ingress transport logs.",
+    "The default Runtime source shows the agent process's own stdout/stderr; the forwarder source shows " +
+    "the Lambda ingress transport logs.",
   args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, DIR_ARG],
   flags: [
     { flags: "--source <source>", description: "agentcore log source: runtime (default) or forwarder" },

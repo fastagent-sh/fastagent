@@ -1,9 +1,14 @@
 /**
- * AgentCore log discovery + tailing. AWS puts the container's stdout/stderr and its OTEL telemetry
- * in the same per-endpoint CloudWatch log group, while the forwarder Lambda has a separate group.
- * This operator surface resolves the stack's RuntimeArn, discovers the endpoint group by prefix, and
- * tails ONLY `[runtime-logs]` for the runtime source — the same application lines shown locally,
- * without mixing in spans/otel-rt-logs.
+ * AgentCore log discovery + tailing. The container's stdout/stderr lives in a per-endpoint CloudWatch
+ * log group, while the forwarder Lambda has a separate group. This operator surface resolves the
+ * stack's RuntimeArn, discovers the endpoint group by prefix, and tails it.
+ *
+ * NO STREAM FILTER, deliberately: AgentCore names its streams `YYYY/MM/DD/[runtime-logs]<session-id>`
+ * (the Lambda `2024/01/01/[$LATEST]abc` convention), so `[runtime-logs]` is an INFIX after the UTC date
+ * path, not a prefix. `--log-stream-name-prefix` is a literal prefix match, and the AWS CLI has no
+ * substring filter (`--log-stream-names` takes exact names, which `--follow` could never extend to the
+ * new session streams). Passing the marker as a prefix therefore matches zero streams and `aws logs
+ * tail` prints nothing and exits 0 — a silent empty tail. Do not add it back.
  */
 import type { CliRunner } from "../runner.ts";
 import { parseStackOutputs } from "./run.ts";
@@ -128,9 +133,8 @@ export async function tailAgentcoreLogs(
     return {
       ok: false,
       gate:
-        `several Runtime log groups match this stack: ${matches.join(", ")} — tail the intended one with the ` +
-        `same stream filter this command applies: aws logs tail <group> --log-stream-name-prefix '[runtime-logs]' ` +
-        `(quote the prefix — [...] is a shell glob)`,
+        `several Runtime log groups match this stack: ${matches.join(", ")} — tail the intended one directly: ` +
+        `aws logs tail <group> --format short --follow`,
     };
   }
 
@@ -138,7 +142,6 @@ export async function tailAgentcoreLogs(
   announce(`${plan.source} → ${logGroup}`);
   const tailArgs = ["logs", "tail", logGroup, "--format", "short"];
   if (plan.since) tailArgs.push("--since", plan.since);
-  if (plan.source === "runtime") tailArgs.push("--log-stream-name-prefix", "[runtime-logs]");
   if (plan.follow) tailArgs.push("--follow");
   const tailed = await aws(tailArgs);
   if (tailed.code !== 0) {

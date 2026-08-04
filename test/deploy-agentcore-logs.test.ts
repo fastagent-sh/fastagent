@@ -20,7 +20,7 @@ function fakeAws(script: (args: string[]) => { code?: number; stdout?: string } 
 }
 
 describe("agentcore logs", () => {
-  it("discovers the Runtime group and tails only application stdout/stderr", async () => {
+  it("discovers the Runtime group and tails it without a stream filter", async () => {
     const group = "/aws/bedrock-agentcore/runtimes/my_agent-abc-DEFAULT";
     const aws = fakeAws((args) => {
       if (args[0] === "cloudformation") return { stdout: outputs() };
@@ -41,8 +41,27 @@ describe("agentcore logs", () => {
       "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
       "logs describe-log-groups --log-group-name-prefix /aws/bedrock-agentcore/runtimes/my_agent-abc- " +
         "--query logGroups[].logGroupName --output json",
-      `logs tail ${group} --format short --since 2h --log-stream-name-prefix [runtime-logs] --follow`,
+      `logs tail ${group} --format short --since 2h --follow`,
     ]);
+  });
+
+  it("never filters Runtime streams by the [runtime-logs] marker", async () => {
+    // REGRESSION: AgentCore names streams `YYYY/MM/DD/[runtime-logs]<session-id>`, so the marker is an
+    // INFIX after the UTC date path. `--log-stream-name-prefix` is a literal prefix match, so passing it
+    // matched zero streams and `aws logs tail` printed nothing and exited 0 — a silent empty tail that
+    // this command reported as success. There is no substring stream filter in the AWS CLI.
+    const group = "/aws/bedrock-agentcore/runtimes/my_agent-abc-DEFAULT";
+    const aws = fakeAws((args) => {
+      if (args[0] === "cloudformation") return { stdout: outputs() };
+      if (args[1] === "describe-log-groups") return { stdout: JSON.stringify([group]) };
+      return {};
+    });
+
+    await tailAgentcoreLogs({ name: "my-agent", source: "runtime", follow: true }, aws.cli);
+
+    const tail = aws.calls.find((args) => args[1] === "tail") as string[];
+    expect(tail).not.toContain("--log-stream-name-prefix");
+    expect(tail.some((arg) => arg.includes("runtime-logs"))).toBe(false);
   });
 
   it("tails the forwarder Lambda as a separate source", async () => {
@@ -128,9 +147,9 @@ describe("agentcore logs", () => {
     const result = await tailAgentcoreLogs({ name: "my-agent", source: "runtime", follow: false }, aws.cli);
 
     expect(result).toMatchObject({ ok: false, gate: expect.stringContaining(groups[0] as string) });
-    // The handoff must carry the POLICY too, not just discovery: a bare `aws logs tail` would mix in
-    // otel-rt-logs/spans — the exact thing this command exists to exclude.
-    expect(result).toMatchObject({ ok: false, gate: expect.stringContaining("--log-stream-name-prefix") });
+    // The handoff must hand over a command that WORKS — the gate used to teach the broken stream prefix.
+    expect(result).toMatchObject({ ok: false, gate: expect.stringContaining("aws logs tail <group>") });
+    expect(result).toMatchObject({ ok: false, gate: expect.not.stringContaining("--log-stream-name-prefix") });
     expect(aws.commands().some((command) => command.startsWith("logs tail"))).toBe(false);
   });
 });

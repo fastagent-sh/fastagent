@@ -158,7 +158,7 @@ After deployment, read the agent process logs without hunting through CloudWatch
 fastagent logs agentcore --follow
 ```
 
-The command resolves the same workspace-derived CloudFormation stack, reads its `RuntimeArn`, discovers the actual per-endpoint log group, and tails only its `[runtime-logs]` streams. AgentCore stores OTEL/spans in that log group too; excluding those streams keeps the output to the same FastAgent stdout/stderr messages emitted locally. It does not change logging behavior or `FASTAGENT_LOG_LEVEL` (`start` remains `info`; set the existing environment knob to `debug` when the detailed turn trace is needed). The public ingress is a separate Lambda and therefore a separate source:
+The command resolves the same workspace-derived CloudFormation stack, reads its `RuntimeArn`, discovers the actual per-endpoint log group, and tails it — the same FastAgent stdout/stderr messages emitted locally. It does not change logging behavior or `FASTAGENT_LOG_LEVEL` (`start` remains `info`; set the existing environment knob to `debug` when the detailed turn trace is needed). The public ingress is a separate Lambda and therefore a separate source:
 
 ```bash
 fastagent logs agentcore --source forwarder --follow

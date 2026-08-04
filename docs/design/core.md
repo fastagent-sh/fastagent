@@ -596,8 +596,9 @@ until the runtime is deleted.
 
 The two process boundaries remain two explicit log sources: Runtime application stdout/stderr and the
 forwarder Lambda's ingress log. `fastagent logs agentcore` derives the stack from the same workspace name,
-discovers the Runtime endpoint log group from its `RuntimeArn`, and selects only `[runtime-logs]` streams
-(the group may also contain OTEL/spans); `--source forwarder` selects the Lambda group. It changes neither
+discovers the Runtime endpoint log group from its `RuntimeArn`, and tails it; `--source forwarder` selects
+the Lambda group. It applies no stream filter: AgentCore names streams `YYYY/MM/DD/[runtime-logs]<session>`,
+so the marker is an infix after the UTC date path and a `--log-stream-name-prefix` match is always empty. It changes neither
 log content nor `FASTAGENT_LOG_LEVEL` — it is discovery plus `aws logs tail`, not another logger.
 
 **State durability is an S3 snapshot, not the mount.** The platform's SessionStorage (`/mnt/state`) is

@@ -977,7 +977,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws cloudformation describe-stacks --stack-name ${stack} --query "Stacks[0].Outputs"`,
     ``,
     `# 5. Tail the Runtime's application stdout/stderr (same fastagent messages + log level as locally).`,
-    `#    Discovery filters to [runtime-logs], excluding OTEL/spans AWS stores in the same log group:`,
+    `#    Discovery resolves the per-endpoint log group from the stack's RuntimeArn:`,
     `fastagent logs agentcore --follow`,
     ...(needsForwarder
       ? [
