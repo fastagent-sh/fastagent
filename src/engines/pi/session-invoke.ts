@@ -19,6 +19,7 @@
  * (models, auth, tools, definition, extensions) is a caller's concern, exactly as
  * `piHarnessFactory` is for the harness class.
  */
+import type { CustomMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentEvent, Agent, Json, Prompt, Scope } from "../../agent.ts";
@@ -124,7 +125,7 @@ function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
     case "message_end": {
       // Only the DISPLAY-worthy custom messages: an assistant message already streamed as deltas,
       // and a non-display custom message is extension bookkeeping the user was never meant to read.
-      const m = event.message as { role?: string; display?: boolean; content?: unknown };
+      const m = event.message;
       if (m.role !== "custom" || m.display === false) return null;
       const delta = customText(m.content);
       return delta === "" ? null : { type: "text", delta };
@@ -159,14 +160,15 @@ function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
   }
 }
 
-/** Plain text of a custom message's content (string, or the text blocks of a content array). */
-function customText(content: unknown): string {
+/**
+ * A custom message's content rendered for the Agent Handler's text channel. Non-text blocks become a
+ * bracketed placeholder rather than nothing: the vocabulary has no image event, and this projection
+ * exists precisely so a command's turn is not an empty stream — an image-only reply must not
+ * reintroduce that silence one content shape over.
+ */
+function customText(content: CustomMessage["content"]): string {
   if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return (content as Array<{ type?: string; text?: string }>)
-    .filter((b) => b.type === "text" && typeof b.text === "string")
-    .map((b) => b.text as string)
-    .join("");
+  return content.map((block) => (block.type === "text" ? block.text : `[${block.type}]`)).join("");
 }
 
 /** The assistant message a settled turn ended on, for terminal classification. */
@@ -226,14 +228,17 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       let settled: AssistantMessage | undefined;
       // EVERY extension-dispatch failure, not just a command handler's: pi reports them all here,
       // and one that vanished would be a silent failure inside a turn we are about to call
-      // completed. How it is CONSUMED depends on what else the turn produced — see the terminal
-      // below. Bound, not replaced: bindExtensions merges, so the assembly's uiContext/mode/actions
-      // stay as they were.
-      let extensionError: string | undefined;
+      // completed — so they ACCUMULATE (a second failing hook must not be swallowed by the first)
+      // and each is warned as it arrives, whatever the turn's terminal turns out to be. How they are
+      // CONSUMED depends on what else the turn produced — see the terminal below. Bound, not
+      // replaced: bindExtensions merges, so the assembly's uiContext/mode/actions stay as they were.
+      const extensionErrors: string[] = [];
       try {
         await session.bindExtensions({
           onError: (error: { event: string; error: string }) => {
-            extensionError ??= `extension ${error.event} failed: ${error.error}`;
+            const message = `extension ${error.event} failed: ${error.error}`;
+            extensionErrors.push(message);
+            log.warn(`[fastagent] session ${scope.session}: ${message}`);
           },
         });
       } catch (error) {
@@ -294,10 +299,9 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         try {
           await run;
           if (settled) {
-            // The turn ran the model: its own outcome decides the terminal. An extension failure
-            // alongside it is real but not the turn's verdict — surfaced as a warn rather than
-            // flipping a model answer the caller did receive into a failure.
-            if (extensionError) log.warn(`[fastagent] session ${scope.session}: ${extensionError}`);
+            // The turn ran the model: its own outcome decides the terminal. Extension failures
+            // alongside it are real (and already warned) but not the turn's verdict — flipping a
+            // model answer the caller did receive into a failure would deny them the result.
             terminal = toTerminal(settled);
           } else {
             // No model response at all: the input was handled by an extension (a command), so an
@@ -307,9 +311,10 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             // "timed out"/"rate limit"/5xx out of a message, which would tell a caller to re-run a
             // handler whose code throws identically every time. An in-process dispatch failure is a
             // determinate local outcome.
-            terminal = extensionError
-              ? { type: "failed", details: extensionError, retryable: false }
-              : { type: "completed" };
+            terminal =
+              extensionErrors.length > 0
+                ? { type: "failed", details: extensionErrors.join("; "), retryable: false }
+                : { type: "completed" };
           }
         } catch (error) {
           terminal = errorToTerminal(error);

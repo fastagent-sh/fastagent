@@ -294,6 +294,43 @@ describe("session engine class: what the class buys", () => {
     }
   });
 
+  it("a command whose reply is non-text still produces a stream, not silence", async () => {
+    // The projection exists so a command's turn is not an empty stream; an image-only reply must
+    // not reintroduce that silence, and the Agent Handler vocabulary has no image event.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-imgmsg-"));
+    let send: ((m: unknown) => Promise<void>) | undefined;
+    const extension = {
+      name: "shot",
+      factory: (api: {
+        registerCommand: (n: string, o: unknown) => void;
+        sendMessage: (m: unknown) => Promise<void>;
+      }) => {
+        send = api.sendMessage;
+        api.registerCommand("shot", {
+          description: "replies with an image",
+          handler: async () => {
+            await send?.({
+              customType: "shot",
+              content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+              display: true,
+            });
+          },
+        });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("never")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "/shot" })) events.push(e);
+    expect(events.filter((e) => e.type === "text").map((e) => (e as { delta: string }).delta)).toEqual(["[image]"]);
+    expect(events.at(-1)?.type).toBe("completed");
+  });
+
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-img-"));
     let sawImage = false;
