@@ -669,6 +669,42 @@ describe("session engine class: the turn context fastagent tools depend on", () 
 });
 
 describe("session engine class: per-invoke discipline", () => {
+  it("the user's turn is durable BEFORE the answer exists", async () => {
+    // A property of how the factory addresses the record, not of the turn loop: a SessionManager that
+    // opens its own file buffers everything until the first assistant message (the file is not even
+    // created), so a crash in the window between question and answer loses the question. The factory
+    // binds to a record the session store created, which is what makes a channel's at-least-once
+    // delivery safe here — and what a "simplification" to SessionManager.create() would silently undo.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-durable-"));
+    const sessionsRoot = join(cwd, "sessions");
+    const { sessionFactory } = await sessionAssembly({
+      // The model never answers: this IS the crash window. It honours its abort signal (checking
+      // `aborted` first — the same trap the cancellation test documents) so the test can end.
+      responses: [
+        async (_context, options) => {
+          await new Promise<void>((_resolve, reject) => {
+            const stop = () => reject(new Error("aborted"));
+            if (options?.signal?.aborted) return stop();
+            options?.signal?.addEventListener("abort", stop, { once: true });
+          });
+          return fauxAssistantMessage("never");
+        },
+      ],
+      sessionsRoot,
+      cwd,
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const iterator = agent.invoke({ session: "s" }, { text: "the question nobody answered" })[Symbol.asyncIterator]();
+    await Promise.race([iterator.next(), new Promise((r) => setTimeout(r, 500))]);
+
+    const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot });
+    const meta = (await repo.list({ cwd })).find((m) => m.id === "s");
+    const record = await repo.open(meta as NonNullable<typeof meta>);
+    expect(JSON.stringify(await record.getEntries())).toContain("the question nobody answered");
+    await iterator.return?.(undefined);
+  });
+
+
   it("nothing resident survives a turn — the record is the only continuity", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-record-"));
     const sessionsRoot = join(cwd, "sessions");

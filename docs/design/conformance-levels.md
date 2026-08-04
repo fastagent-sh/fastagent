@@ -97,10 +97,13 @@ rebind path when the definition changes (an `AgentSession` snapshots its assembl
 owes honesty in `capabilities()`: a resident deployment is not portable, and a client that migrates
 between the two must not discover this from behavior.
 
-**Both owe the same durable record.** One known gap, measured: `SessionManager` buffers a NEW session's
-entries until the first assistant message arrives, so a crash between "the user asked" and "the model
-answered" loses the question — pi-agent-core's storage persists it immediately. Any `session`-class
-implementation must close this gap (or state it) before it serves a channel.
+**Both owe the same durable record**, and for the `session` class that is a property of HOW the record
+is addressed rather than of the turn loop. Measured: a `SessionManager` that opens its own file buffers
+everything until the first assistant message — a crash between "the user asked" and "the model answered"
+loses the question, and the file is not even created. Binding it to a record the session store already
+created (`setSessionFile`) persists the user's turn immediately, matching the harness class. A
+`session`-class factory therefore MUST bind to an existing record; the shared jsonl format (§2) is what
+makes that possible, and the same property is what makes a channel's at-least-once delivery safe.
 
 The engineering bill for `resident`, measured: ~25 KB per idle `AgentSession`, and the real cost is
 transcript retention at roughly the size of the record on disk (~8.6 KB per turn of ~8 KB text) — about

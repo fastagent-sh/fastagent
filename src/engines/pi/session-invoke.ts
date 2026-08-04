@@ -41,6 +41,13 @@ import {
  * Build a session object bound to `sessionId`'s durable record. Called once per invoke; the returned
  * object is discarded when the turn ends, so an implementation must NOT cache it across turns (that
  * would be the resident level, with a different bill).
+ *
+ * BIND TO AN EXISTING RECORD (`SessionManager.setSessionFile` over a file the session store created),
+ * do not let `SessionManager` open one of its own. This is not a style preference: a SessionManager
+ * that starts a fresh file BUFFERS everything until the first assistant message, so a crash between
+ * "the user asked" and "the model answered" loses the question — the file is not even created.
+ * Binding to a record that already exists persists the user's turn immediately, which is what the
+ * harness class has always done and what a channel's at-least-once delivery assumes.
  */
 export interface CreatePiAgentFromSessionOptions {
   sessionFactory: (sessionId: string) => Promise<AgentSession>;
