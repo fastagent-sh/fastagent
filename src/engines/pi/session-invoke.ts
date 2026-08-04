@@ -248,10 +248,6 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         queue.push(projected);
       });
       try {
-        // The cancel latch again: binding extensions and converting images are awaits, and a cancel
-        // arriving in that window would knock a door that is a no-op on a session which has not
-        // prompted yet — then the model call would start anyway. Checked once more right before it.
-        if (wasCancelled()) return;
         // prompt() resolves when the turn is accepted-and-run; waitForIdle() closes the window in
         // which pi is still draining its own queues (a follow-up, a retry), so the terminal below
         // describes the whole activity window rather than the first response inside it.
@@ -262,6 +258,11 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         // turn, session-builder.ts per session): without it every fastagent-defined tool degrades
         // SILENTLY — `wake` writes nowhere, `search_tools` activates nothing, cwd falls back to the
         // process's.
+        // The cancel latch again, and this is its real window: binding extensions and converting
+        // images (a Photon resize) are awaits, and a cancel arriving in either knocks a door that
+        // no-ops on a session which has not prompted yet — the model call would then start anyway.
+        // Checked here, after the last await before it.
+        if (wasCancelled()) return;
         const run = turnContext.run(
           {
             cwd: session.sessionManager.getCwd(),
@@ -287,7 +288,13 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             // No model response at all: the input was handled by an extension (a command), so an
             // extension failure IS the turn's outcome — without this the turn reports success for
             // work that threw.
-            terminal = extensionError ? errorToTerminal(new Error(extensionError)) : { type: "completed" };
+            // NOT through errorToTerminal: that classifier's last-resort prose match reads
+            // "timed out"/"rate limit"/5xx out of a message, which would tell a caller to re-run a
+            // handler whose code throws identically every time. An in-process dispatch failure is a
+            // determinate local outcome.
+            terminal = extensionError
+              ? { type: "failed", details: extensionError, retryable: false }
+              : { type: "completed" };
           }
         } catch (error) {
           terminal = errorToTerminal(error);

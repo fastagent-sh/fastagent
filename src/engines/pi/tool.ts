@@ -20,7 +20,10 @@ import { type ReadonlySessionManager, type ToolActivation, turnContext } from ".
 export interface ToolContext {
   /** Working directory for this execution. */
   cwd: string;
-  /** Abort signal for the current turn — honor it to cancel in-flight work on cancellation. */
+  /** Abort signal for the current turn — honor it to cancel in-flight work on cancellation. It can
+   *  ALREADY be aborted when `execute` is called (a caller may cancel between the `tool_started`
+   *  event and the tool running), and an already-aborted signal never fires `abort` again: check
+   *  `signal.aborted` first, then listen, or a listener-only tool hangs forever. */
   signal?: AbortSignal;
   /** Current conversation manager. Present during serving/chat; absent for sessionless direct calls. */
   sessionManager?: ReadonlySessionManager;

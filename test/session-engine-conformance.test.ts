@@ -254,7 +254,13 @@ describe("session engine class: what the class buys", () => {
     const agent = createPiAgentFromSession({ sessionFactory });
     const events = [];
     for await (const e of agent.invoke({ session: "s" }, { text: "/boom" })) events.push(e);
-    expect(events.at(-1)).toMatchObject({ type: "failed", details: expect.stringContaining("exploded") });
+    expect(events.at(-1)).toMatchObject({
+      type: "failed",
+      details: expect.stringContaining("exploded"),
+      // NOT retryable: a handler that throws throws again. (The provider-error classifier would read
+      // words like "timed out" out of the message and say otherwise.)
+      retryable: false,
+    });
   });
 
   it("an extension hook that throws warns but does not overturn a model answer the caller received", async () => {
