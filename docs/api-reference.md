@@ -211,6 +211,11 @@ interface ReadonlySessionManager {
 }
 ```
 
+`signal` can ALREADY be aborted when `execute` is called: a caller may cancel in the window between
+the `tool_started` event and the tool actually running. A tool that only registers an `abort` listener
+hangs forever in that case, because an already-aborted signal never fires the event again — check
+`signal.aborted` first, then listen.
+
 During serving and `fastagent chat`, `sessionManager` is FastAgent's read-only adapter over the current
 conversation. It is undefined in a sessionless direct call such as `fastagent tool`. Current bindings
 ride `AsyncLocalStorage`, not definition closures, because a tool is built once and reused across turns.

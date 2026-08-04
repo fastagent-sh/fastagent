@@ -355,15 +355,17 @@ describe("session engine class: cancellation reaches in-flight work", () => {
       parameters: { type: "object", properties: {}, additionalProperties: false },
       execute: (_id: string, _params: unknown, signal: AbortSignal | undefined) =>
         new Promise<{ output: string }>((_resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () => {
-              toolAborted = true;
-              sawAbort();
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
+          // The ALREADY-ABORTED check is not defensive boilerplate here, it is the case under test:
+          // `tool_started` is emitted BEFORE pi calls execute, so a consumer that walks away on that
+          // event cancels in the window between the two — and an already-aborted signal never fires
+          // its `abort` event. A tool that only listens would hang forever.
+          const stop = () => {
+            toolAborted = true;
+            sawAbort();
+            reject(new Error("aborted"));
+          };
+          if (signal?.aborted) return stop();
+          signal?.addEventListener("abort", stop, { once: true });
         }),
     };
     const { sessionFactory } = await sessionAssembly({
@@ -390,17 +392,14 @@ describe("session engine class: cancellation reaches in-flight work", () => {
         setTimeout(() => reject(new Error("return() never settled — the door is not armed")), 3000),
       ),
     ]);
-    void toolAborted;
-    void aborted;
+    // … and the work it walked away from is actually stopped. Awaited rather than asserted inline:
+    // the abort is in flight when return() resolves.
+    await Promise.race([
+      aborted,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("in-flight tool was never stopped")), 3000)),
+    ]);
+    expect(toolAborted).toBe(true);
   });
-
-  // KNOWN GAP, reproducible outside vitest: when the cancel lands while a TOOL is executing,
-  // `AgentSession.abort()` does not settle and the tool's abort signal never fires — although the
-  // identical call settles in ~3ms when made from ordinary code with the same tool in flight. The
-  // cancel that lands during the MODEL STREAM (the shared MUST 3 case above) is correct: pi never
-  // starts the tool. Until this is understood, this engine class must not be wired into a serving
-  // path where a long tool call is normal.
-  it.todo("cancelling a turn parked inside a tool aborts that tool's work");
 });
 
 describe("session engine class: the turn context fastagent tools depend on", () => {
