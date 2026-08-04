@@ -14,6 +14,7 @@
  * (models, auth, tools, definition, extensions) is a caller's concern, exactly as
  * `piHarnessFactory` is for the harness class.
  */
+import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentEvent, Agent, Json, Prompt, Scope } from "../../agent.ts";
 import { SESSION_BUSY_CODE } from "../../agent.ts";
@@ -34,13 +35,20 @@ export interface CreatePiAgentFromSessionOptions {
   lease?: Lease;
 }
 
+/** The two `AssistantMessageEvent` members this projection reads. COMPILE-TIME drift guard: if pi
+ *  renames either, the extract narrows and this object literal stops type-checking — without it a
+ *  rename would silently stop projecting every delta, with only a test to notice. */
+const _deltaDriftGuard: Record<
+  Extract<AssistantMessageEvent, { type: "text_delta" | "thinking_delta" }>["type"],
+  true
+> = { text_delta: true, thinking_delta: true };
+void _deltaDriftGuard;
+
 /** pi's session-class event → the Agent Handler vocabulary. `null` = nothing to project. */
 function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
   switch (event.type) {
     case "message_update": {
       // The delta channel: pi reports the accumulated message plus the typed event that changed it.
-      // Switched on the UNION, not a hand-written shape: a renamed member must break the build here
-      // rather than silently stop projecting.
       const e = event.assistantMessageEvent;
       if (e.type === "thinking_delta") return { type: "thinking", delta: e.delta };
       if (e.type === "text_delta") return { type: "text", delta: e.delta };

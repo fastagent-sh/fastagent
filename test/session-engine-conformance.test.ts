@@ -272,6 +272,42 @@ describe("session engine class: this L0's own responsibilities", () => {
     expect(events[0]).toMatchObject({ type: "failed", details: expect.stringContaining("auth.json unreadable") });
   });
 
+  it("a cancel that lands DURING the build never starts the model", async () => {
+    // The latch: the cancellation door is armed only after the session exists, so a consumer that
+    // walks away while the factory is still running would otherwise have its turn start anyway —
+    // a model call nobody is reading, on a session about to be discarded.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-latch-"));
+    let prompted = 0;
+    let releaseFactory!: () => void;
+    const factoryHeld = new Promise<void>((r) => {
+      releaseFactory = r;
+    });
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("should never run")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+    });
+    const agent = createPiAgentFromSession({
+      sessionFactory: async (id) => {
+        const session = await sessionFactory(id);
+        const prompt = session.prompt.bind(session);
+        session.prompt = async (...args: Parameters<typeof prompt>) => {
+          prompted++;
+          return prompt(...args);
+        };
+        await factoryHeld; // the consumer cancels while we are in here
+        return session;
+      },
+    });
+    const iterator = agent.invoke({ session: "s" }, { text: "go" })[Symbol.asyncIterator]();
+    const first = iterator.next();
+    const returned = iterator.return?.(undefined); // cancels before the session exists
+    releaseFactory();
+    expect(await first).toEqual({ done: true, value: undefined });
+    await returned;
+    expect(prompted).toBe(0);
+  });
+
   it("one turn per session: a second concurrent invoke is refused session_busy", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-busy-"));
     let release!: () => void;

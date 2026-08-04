@@ -10,10 +10,6 @@ import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { type ReadonlySessionManager, type ToolActivation, additiveActivation } from "./tool-context.ts";
 
-/** One activation chain per AgentSession, so two bridges over one session serialize against each
- *  other rather than each holding a private (and therefore useless) chain. */
-const activationChains = new WeakMap<AgentSession, Promise<string[]>>();
-
 /** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
 export function toolChatSessionManager(session: AgentSession): ReadonlySessionManager {
   return {
@@ -36,11 +32,11 @@ export function toolChatSessionManager(session: AgentSession): ReadonlySessionMa
 export function sessionToolActivation(session: AgentSession): ToolActivation {
   // Same serialization as invoke.ts's bridge: the read-modify-write below is only race-free while
   // nothing awaits between read and write, and pi's session setters happening to be synchronous
-  // today is not a contract worth betting parallel tool batches on. The chain is keyed by the
-  // SESSION OBJECT, not by this call: two bridges over one session must serialize against each
-  // other, which a per-call chain would only appear to do.
-  let chain = activationChains.get(session) ?? Promise.resolve<string[]>([]);
-  activationChains.set(session, chain);
+  // today is not a contract worth betting parallel tool batches on. One chain per BRIDGE, which is
+  // sufficient because each consumer builds exactly one bridge per session object (the resident
+  // runtime one per createAgentSession, the per-invoke L0 one per turn's session) — a second bridge
+  // over the same session would not serialize against this one, and nothing constructs that.
+  let chain: Promise<string[]> = Promise.resolve([]);
   return {
     active: () => session.getActiveToolNames(),
     registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
@@ -57,7 +53,6 @@ export function sessionToolActivation(session: AgentSession): ToolActivation {
       };
       const result = chain.then(run, run); // run after the predecessor settles, success or failure
       chain = result.catch(() => []); // the caller sees a rejection on `result`; the chain stays usable
-      activationChains.set(session, chain);
       return result;
     },
   };
