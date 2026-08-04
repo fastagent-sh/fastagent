@@ -46,7 +46,7 @@ import {
   thinkingLine,
   toolLines,
 } from "../preview-kit.ts";
-import { truncateCodePointSuffix, truncateUtf8 } from "../text.ts";
+import { truncateCodePointPrefix, truncateUtf8 } from "../text.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
 export type FeishuFailure = ChannelFailure;
@@ -62,9 +62,9 @@ const STREAM_THROTTLE_MS = 1000;
 const THINKING_PREVIEW = 280;
 
 /** Cap (code points) on the whole process block — thinking tail + tool lines + retry notice. It
- *  redraws wholly on change anyway (it is volatile by nature), so an over-long block keeps its TAIL:
- *  the newest tools are the ones worth showing. ≤1000 points is ≤4 KB UTF-8, which together with the
- *  answer's byte cap stays inside the 30 KB entity budget. */
+ *  redraws wholly on change anyway (it is volatile by nature), so over budget the newest COMPLETE
+ *  lines win (see tailLines). ≤1000 points is ≤4 KB UTF-8, which together with the answer's byte cap
+ *  stays inside the 30 KB entity budget. */
 const PROCESS_MAX_POINTS = 1000;
 
 /** Cap the live answer to the card budget, PREFIX-STABLE: the streaming client animates only when the
@@ -72,6 +72,28 @@ const PROCESS_MAX_POINTS = 1000;
  *  tail window (which would re-type the element every frame). The full answer still lands at settle. */
 function capBytes(s: string, maxBytes: number): string {
   return truncateUtf8(s, maxBytes);
+}
+
+/** Tail-select COMPLETE lines within a code-point budget — the process block's cap. The block's
+ *  lines are semantic units (a `🔧` tool call, the `💭` peek, the `⏳` notice): cutting mid-line
+ *  would orphan a marker or tear a label, so elision happens only at line boundaries, newest lines
+ *  kept, with a leading `…` line marking what was dropped. The in-line guard cannot trigger with the
+ *  bounded renderers (a thinking tail ≤ ~283 points, a tool line ≤ ~135) — it exists so a future
+ *  unbounded line degrades to a head-preserving cut instead of an empty block. */
+function tailLines(text: string, maxPoints: number): string {
+  if (Array.from(text).length <= maxPoints) return text;
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  let used = 2; // the leading "…\n" elision marker
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i] ?? "";
+    const cost = Array.from(line).length + (kept.length > 0 ? 1 : 0); // +1 joining newline
+    if (used + cost > maxPoints) break;
+    used += cost;
+    kept.unshift(line);
+  }
+  if (kept.length === 0) return truncateCodePointPrefix(lines.at(-1) ?? "", maxPoints);
+  return `…\n${kept.join("\n")}`;
 }
 
 /** A visible preview mounted into the chat. Exported only for the channel wiring: a queued turn mounts
@@ -227,9 +249,13 @@ export async function streamFeishuReply(
       toolLines(turn),
       turn.retrying ? RETRY_NOTICE : "",
     ]);
-    // Empty → the stable placeholder (never an empty-content write; it also keeps the block from
-    // flickering away between thinking bursts). The settle drops the block entirely.
-    return v === "" ? THINKING_PLACEHOLDER : truncateCodePointSuffix(v, PROCESS_MAX_POINTS);
+    if (v !== "") return tailLines(v, PROCESS_MAX_POINTS);
+    // No process content: the placeholder covers only the silence BEFORE the answer reveals — once
+    // the answer is streaming, an empty block goes (stays) empty; "Thinking…" pinned above a live
+    // answer would misstate the phase. The empty frame is a real write: it clears a mounted
+    // placeholder. (The block cannot otherwise flicker: thinking and tools only grow — only the
+    // retry notice toggles, and its empty state resolves through this same rule.)
+    return revealedAnswer(turn, STREAM_THROTTLE_MS).trim() === "" ? THINKING_PLACEHOLDER : "";
   };
   const answerView = (): string => capBytes(revealedAnswer(turn, STREAM_THROTTLE_MS), CARD_MARKDOWN_MAX_BYTES);
 
@@ -259,7 +285,8 @@ export async function streamFeishuReply(
     if (preview.kind !== "card" || streamDead) return; // text tier / dead stream: frozen until the terminal write
     try {
       // `last*` advances BEFORE each write: a frame that fails for a non-streaming reason is logged
-      // once (the pump's onError) and not re-sent until its content actually changes.
+      // once (the pump's onError) and not re-sent until its content actually changes. An EMPTY
+      // process frame is written like any other — it is the placeholder being cleared (processView).
       if (process !== lastProcess) {
         lastProcess = process;
         await api.updateCardElement(preview.cardId, PROCESS_ELEMENT_ID, process, nextSeq());
