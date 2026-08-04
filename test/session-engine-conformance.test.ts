@@ -292,6 +292,36 @@ describe("session engine class: this L0's own responsibilities", () => {
   });
 });
 
+describe("session engine class: the turn context fastagent tools depend on", () => {
+  it("a fastagent tool sees this session and this turn's activation, not the process defaults", async () => {
+    // The binding degrades SILENTLY when missing (cwd → process.cwd(), manager/activation →
+    // undefined), so it is asserted rather than assumed.
+    const { turnContext } = await import("../src/engines/pi/tool-context.ts");
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-ctx-"));
+    let seen: { cwd?: string; sessionId?: string; canActivate?: boolean } = {};
+    const { sessionFactory } = await sessionAssembly({
+      responses: [
+        (() => {
+          const store = turnContext.getStore();
+          seen = {
+            cwd: store?.cwd,
+            sessionId: store?.sessionManager?.getSessionId(),
+            canActivate: typeof store?.tools?.activate === "function",
+          };
+          return fauxAssistantMessage("ok");
+        }) as unknown as FauxResponseStep,
+      ],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    for await (const e of agent.invoke({ session: "ctx" }, { text: "go" })) void e;
+    expect(seen.cwd).toBe(cwd);
+    expect(seen.sessionId).toBeTruthy();
+    expect(seen.canActivate).toBe(true);
+  });
+});
+
 describe("session engine class: per-invoke discipline", () => {
   it("nothing resident survives a turn — the record is the only continuity", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-record-"));

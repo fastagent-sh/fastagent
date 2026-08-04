@@ -19,6 +19,8 @@ import type { AgentEvent, Agent, Json, Prompt, Scope } from "../../agent.ts";
 import { SESSION_BUSY_CODE } from "../../agent.ts";
 import { abortFirstIterator } from "../../collect.ts";
 import { log } from "../../log.ts";
+import { sessionToolActivation, toolChatSessionManager } from "./session-bridge.ts";
+import { turnContext } from "./tool-context.ts";
 import { EventQueue, type Lease, errorToTerminal, inProcessLease, toPiPromptOptions, toTerminal } from "./invoke.ts";
 
 /**
@@ -58,7 +60,10 @@ function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
         isError: event.isError,
         content: (event.result ?? null) as Json,
       };
+    // BOTH backoffs, for one reason: a quiet tail reads as a hang. The turn-level auto-retry and
+    // the summarization retry (compaction / branch summary) are the same silence to a consumer.
     case "auto_retry_start":
+    case "summarization_retry_scheduled":
       return {
         type: "retrying",
         attempt: event.attempt,
@@ -150,10 +155,21 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         // Images ride the same conversion the harness L0 uses (resize + provider shape); dropping
         // them here would make an attachment invisible to the model AND silent to the author.
         const opts = await toPiPromptOptions(prompt);
-        const run = (async () => {
-          await session.prompt(prompt.text, opts);
-          await session.waitForIdle();
-        })();
+        // Bind the turn context for the duration of the turn, like both siblings do (invoke.ts per
+        // turn, session-builder.ts per session): without it every fastagent-defined tool degrades
+        // SILENTLY — `wake` writes nowhere, `search_tools` activates nothing, cwd falls back to the
+        // process's.
+        const run = turnContext.run(
+          {
+            cwd: session.sessionManager.getCwd(),
+            sessionManager: toolChatSessionManager(session),
+            tools: sessionToolActivation(session),
+          },
+          async () => {
+            await session.prompt(prompt.text, opts);
+            await session.waitForIdle();
+          },
+        );
         yield* queue.drainUntil(run);
         let terminal: AgentEvent;
         try {

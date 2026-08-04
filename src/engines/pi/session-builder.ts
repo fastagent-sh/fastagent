@@ -29,7 +29,6 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSession,
@@ -47,24 +46,10 @@ import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts"
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
-import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
+import { type ReadonlySessionManager, type ToolActivation, turnContext } from "./tool-context.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
-
-/** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
-function toolChatSessionManager(session: AgentSession): ReadonlySessionManager {
-  return {
-    getSessionId: () => session.sessionManager.getSessionId(),
-    async getHeader() {
-      const header = session.sessionManager.getHeader();
-      if (!header) throw new Error("chat session has no metadata header");
-      return { id: header.id, timestamp: header.timestamp };
-    },
-    async getBranch() {
-      return session.sessionManager.getBranch() as SessionTreeEntry[];
-    },
-  };
-}
+import { sessionToolActivation, toolChatSessionManager } from "./session-bridge.ts";
 
 export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -85,38 +70,6 @@ export async function buildAgentSessionRuntime(
   /** Session backend. Defaults to pi's project-scoped store; tests inject SessionManager.inMemory(). */
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
-  /** The turn's {@link ToolActivation} over pi's AgentSession — the counterpart of invoke.ts's
-   *  harness bridge, so the SAME builtin search_tools serves both paths. Additive; unknown names
-   *  filtered (`setActiveToolsByName` is authoritative on the session and rebuilds its prompt — our
-   *  static override keeps the prompt identical to serving). */
-  function sessionToolActivation(session: AgentSession): ToolActivation {
-    // Same serialization as invoke.ts's bridge (there per turn; here per session — interactive turns
-    // make per-session equivalent): the read-modify-write below is only race-free while nothing awaits
-    // between read and write, and pi's session setters happening to be synchronous today is not a
-    // contract worth betting parallel tool batches on. Built ONCE per session (createRuntime), so
-    // parallel calls actually share the chain.
-    let chain: Promise<string[]> = Promise.resolve([]);
-    return {
-      active: () => session.getActiveToolNames(),
-      registered: () => session.getAllTools().map((t) => ({ name: t.name, description: t.description ?? "" })),
-      activate(names) {
-        const run = async (): Promise<string[]> => {
-          const current = session.getActiveToolNames();
-          const added = additiveActivation(
-            session.getAllTools().map((t) => t.name),
-            current,
-            names,
-          );
-          if (added.length > 0) session.setActiveToolsByName([...current, ...added]);
-          return added;
-        };
-        const result = chain.then(run, run); // run after the predecessor settles, success or failure
-        chain = result.catch(() => []); // the caller sees a rejection on `result`; the chain stays usable
-        return result;
-      },
-    };
-  }
-
   async function resolveAssembly(cwd: string) {
     // The shared front half — the SAME placement/config/model-spec/tool/auth resolution the serving
     // opener uses (open.ts); those inputs cannot drift between the two consumption shapes.
