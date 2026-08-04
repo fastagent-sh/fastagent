@@ -166,7 +166,7 @@ fastagent logs agentcore --source forwarder --follow
 
 AWS creates each log group on first use. Before the first Runtime invocation or forwarder event, the command says which trigger is missing instead of sending `aws logs tail` to a nonexistent group. Pass the same `[dir]` used for deploy when running from somewhere else.
 
-AgentCore differs from the resident-box hosts in kind — the platform has **no public URL** (ingress is the SigV4 `InvokeAgentRuntime` API only) and **no resident process** (compute is per-session microVMs, reclaimed 3 minutes after the agent goes idle). The stack therefore carries:
+AgentCore differs from the resident-box hosts in kind — the platform has **no public URL** (ingress is the SigV4 `InvokeAgentRuntime` API only) and **no resident process** (compute is per-session microVMs, reclaimed 3 minutes after the agent goes idle). The second half is a hard constraint on the agent, not just on the host: a turn here cannot require the previous turn's process, which is SPEC MUST 6 — see [conformance levels](design/conformance-levels.md). The stack therefore carries:
 
 - the **Runtime** (your container, unchanged — the AgentCore adapter mounts `POST /invocations` + `GET /ping` via `FASTAGENT_AGENTCORE=1`);
 - a **forwarder Lambda** with a public Function URL fronting the webhooks (channels verify signatures exactly as on every host);
