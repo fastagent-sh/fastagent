@@ -30,11 +30,11 @@ export function toolChatSessionManager(session: AgentSession): ReadonlySessionMa
  *  filtered (`setActiveToolsByName` is authoritative on the session and rebuilds its prompt — our
  *  static override keeps the prompt identical to serving). */
 export function sessionToolActivation(session: AgentSession): ToolActivation {
-  // Same serialization as invoke.ts's bridge (there per turn; here per session — interactive turns
-  // make per-session equivalent): the read-modify-write below is only race-free while nothing awaits
-  // between read and write, and pi's session setters happening to be synchronous today is not a
-  // contract worth betting parallel tool batches on. Built ONCE per session (createRuntime), so
-  // parallel calls actually share the chain.
+  // Same serialization as invoke.ts's bridge: the read-modify-write below is only race-free while
+  // nothing awaits between read and write, and pi's session setters happening to be synchronous
+  // today is not a contract worth betting parallel tool batches on. The invariant is ONE chain per
+  // AgentSession object — whether that object lives for a session (the resident runtime) or for a
+  // turn (the per-invoke L0), parallel activations within it share this chain.
   let chain: Promise<string[]> = Promise.resolve([]);
   return {
     active: () => session.getActiveToolNames(),

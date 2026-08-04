@@ -172,11 +172,28 @@ describe("session engine class: what the class buys", () => {
     expect(text).toBe("hello world");
   });
 
-  it("an engine failure arrives as a failed event carrying the engine's own message", async () => {
-    const agent = await sessionAgent([fauxAssistantMessage("x", { stopReason: "error", errorMessage: "boom 500" })]);
-    const events = [];
-    for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
-    expect(events.at(-1)).toMatchObject({ type: "failed", details: expect.stringContaining("boom 500") });
+  it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-img-"));
+    let sawImage = false;
+    const { sessionFactory } = await sessionAssembly({
+      responses: [
+        ((context: { messages: unknown[] }) => {
+          sawImage = JSON.stringify(context.messages).includes('"type":"image"');
+          return fauxAssistantMessage("saw it");
+        }) as unknown as FauxResponseStep,
+      ],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    // A 1x1 PNG — enough to travel the whole conversion path.
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    for await (const e of agent.invoke(
+      { session: "s" },
+      { text: "what is this?", images: [{ mimeType: "image/png", data: png }] },
+    ))
+      void e;
+    expect(sawImage).toBe(true);
   });
 
   it("THE point of this class: an extension command runs instead of reaching the model", async () => {
@@ -238,12 +255,19 @@ describe("session engine class: this L0's own responsibilities", () => {
   it("one turn per session: a second concurrent invoke is refused session_busy", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-busy-"));
     let release!: () => void;
+    let started!: () => void;
     const held = new Promise<void>((r) => {
       release = r;
+    });
+    // The first turn announces itself from INSIDE the model call, so the second invoke races the
+    // lease deterministically instead of racing a timer.
+    const inFlight = new Promise<void>((r) => {
+      started = r;
     });
     const { sessionFactory } = await sessionAssembly({
       responses: [
         (async () => {
+          started();
           await held;
           return fauxAssistantMessage("done");
         }) as unknown as FauxResponseStep,
@@ -258,8 +282,7 @@ describe("session engine class: this L0's own responsibilities", () => {
       for await (const e of agent.invoke({ session: "s" }, { text: "one" })) out.push(e);
       return out;
     })();
-    // Give the first turn time to take the lease before the second asks for it.
-    await new Promise((r) => setTimeout(r, 50));
+    await inFlight;
     const second = [];
     for await (const e of agent.invoke({ session: "s" }, { text: "two" })) second.push(e);
     expect(second).toEqual([

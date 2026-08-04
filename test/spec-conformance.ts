@@ -67,6 +67,10 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
       expect(last?.type).toBe("failed");
       if (last?.type === "failed") {
         expect(typeof last.details).toBe("string");
+        // NON-EMPTY: `details` is the only place the engine's own message survives to the caller,
+        // so an implementation that translates a failure into an empty string is conforming on
+        // types and useless in practice.
+        expect(last.details.length).toBeGreaterThan(0);
         expect(typeof last.retryable).toBe("boolean");
       }
     });
