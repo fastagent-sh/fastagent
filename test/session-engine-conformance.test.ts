@@ -192,6 +192,44 @@ describe("session engine class: what the class buys", () => {
     expect(text).toBe("hello world");
   });
 
+  it("tool activity projects with its args and result, error result included", async () => {
+    // The two tool projections carry payloads (`args`, `content`, `isError`) that nothing else in
+    // the suite reads — a stream consumer renders exactly these.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-tool-"));
+    const boom = {
+      name: "boom",
+      label: "Boom",
+      description: "Always fails",
+      parameters: { type: "object", properties: { why: { type: "string" } }, required: ["why"] },
+      // pi's `AgentToolResult` has NO isError field: a tool reports failure by THROWING, and pi
+      // marks the event. Returning `{ isError: true }` is silently a success.
+      execute: async () => {
+        throw new Error("it went wrong");
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [
+        fauxAssistantMessage(fauxToolCall("boom", { why: "testing" }, { id: "b1" })),
+        fauxAssistantMessage("recovered"),
+      ],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      customTools: [boom],
+      tools: ["boom"],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+    expect(events.find((e) => e.type === "tool_started")).toMatchObject({
+      id: "b1",
+      name: "boom",
+      args: { why: "testing" },
+    });
+    const ended = events.find((e) => e.type === "tool_ended");
+    expect(ended).toMatchObject({ id: "b1", isError: true });
+    expect(JSON.stringify((ended as { content: unknown }).content)).toContain("it went wrong");
+  });
+
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-img-"));
     let sawImage = false;

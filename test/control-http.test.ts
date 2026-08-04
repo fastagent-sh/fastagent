@@ -10,7 +10,8 @@ import { Type, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai"
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { controlRoutes } from "../src/channels/control.ts";
-import { createPiAgentFromHarness, inProcessLease } from "../src/engines/pi/invoke.ts";
+import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
+import { inProcessLease } from "../src/engines/pi/turn-plumbing.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";

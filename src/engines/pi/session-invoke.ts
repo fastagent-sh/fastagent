@@ -22,7 +22,14 @@ import { abortFirstIterator } from "../../collect.ts";
 import { log } from "../../log.ts";
 import { sessionToolActivation, toolChatSessionManager } from "./session-bridge.ts";
 import { turnContext } from "./tool-context.ts";
-import { EventQueue, type Lease, errorToTerminal, inProcessLease, toPiPromptOptions, toTerminal } from "./invoke.ts";
+import {
+  EventQueue,
+  type Lease,
+  errorToTerminal,
+  inProcessLease,
+  toPiPromptOptions,
+  toTerminal,
+} from "./turn-plumbing.ts";
 
 /**
  * Build a session object bound to `sessionId`'s durable record. Called once per invoke; the returned
@@ -35,14 +42,28 @@ export interface CreatePiAgentFromSessionOptions {
   lease?: Lease;
 }
 
-/** The two `AssistantMessageEvent` members this projection reads. COMPILE-TIME drift guard: if pi
- *  renames either, the extract narrows and this object literal stops type-checking — without it a
- *  rename would silently stop projecting every delta, with only a test to notice. */
-const _deltaDriftGuard: Record<
-  Extract<AssistantMessageEvent, { type: "text_delta" | "thinking_delta" }>["type"],
-  true
-> = { text_delta: true, thinking_delta: true };
-void _deltaDriftGuard;
+/**
+ * EXHAUSTIVE map of pi's delta-event vocabulary: which members this projection reads, and which it
+ * deliberately ignores. A rename narrows the key set and a NEW member widens it — either way this
+ * literal stops type-checking, which is the point: an added delta channel that nobody projects is
+ * exactly the drift a two-name guard would wave through.
+ */
+const DELTA_CHANNELS: Record<AssistantMessageEvent["type"], "project" | "ignore"> = {
+  text_delta: "project",
+  thinking_delta: "project",
+  // Boundaries and tool-call assembly: the Agent Handler stream carries tool activity from pi's
+  // tool_execution_* events instead, and message boundaries have no SPEC counterpart.
+  start: "ignore",
+  text_start: "ignore",
+  text_end: "ignore",
+  thinking_start: "ignore",
+  thinking_end: "ignore",
+  toolcall_start: "ignore",
+  toolcall_delta: "ignore",
+  toolcall_end: "ignore",
+  done: "ignore",
+  error: "ignore",
+};
 
 /** pi's session-class event → the Agent Handler vocabulary. `null` = nothing to project. */
 function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
@@ -50,6 +71,7 @@ function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
     case "message_update": {
       // The delta channel: pi reports the accumulated message plus the typed event that changed it.
       const e = event.assistantMessageEvent;
+      if (DELTA_CHANNELS[e.type] === "ignore") return null;
       if (e.type === "thinking_delta") return { type: "thinking", delta: e.delta };
       if (e.type === "text_delta") return { type: "text", delta: e.delta };
       return null;

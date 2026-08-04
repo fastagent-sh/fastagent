@@ -10,14 +10,8 @@ import { fauxAssistantMessage, fauxThinking, fauxToolCall, Type, type FauxRespon
 import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
 import { defineTool, inMemorySessionStore, inProcessLease, type AgentEvent, z } from "../src/index.ts";
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
-import {
-  classifyRetryable,
-  createPiAgentFromHarness,
-  errorToTerminal,
-  projectAgentEvent,
-  toSessionEvent,
-  toTerminal,
-} from "../src/engines/pi/invoke.ts";
+import { createPiAgentFromHarness, projectAgentEvent, toSessionEvent } from "../src/engines/pi/invoke.ts";
+import { classifyRetryable, errorToTerminal, toTerminal } from "../src/engines/pi/turn-plumbing.ts";
 import { type PiHarnessFactory, piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";

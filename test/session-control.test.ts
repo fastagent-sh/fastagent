@@ -27,7 +27,7 @@ import {
 } from "../src/session.ts";
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
 import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
-import { inProcessLease } from "../src/engines/pi/invoke.ts";
+import { inProcessLease } from "../src/engines/pi/turn-plumbing.ts";
 import type { PiSessionReader } from "../src/engines/pi/sessions.ts";
 import { resolveHarnessOverrides } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
@@ -588,7 +588,7 @@ describe("session control (Phase 2a): run modulation", () => {
   });
 
   it("toTerminal attributes pi's own stopReason 'aborted' without any control-plane intent", async () => {
-    const { toTerminal } = await import("../src/engines/pi/invoke.ts");
+    const { toTerminal } = await import("../src/engines/pi/turn-plumbing.ts");
     const terminal = toTerminal({
       role: "assistant",
       content: [],
