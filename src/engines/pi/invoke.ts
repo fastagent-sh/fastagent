@@ -387,9 +387,11 @@ async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: ImageConten
 // ── §3 EventQueue: push→pull plumbing for pi's two-port shape ────────────────
 //
 // Single-consumer async queue; single-threaded JS means no await interleaves between push and
-// drain, so no locking. Engines that are natively async-iterable would not need it.
+// drain, so no locking. Engines that are natively async-iterable would not need it. Exported for
+// the sibling L0 (`session-invoke.ts`): both engine classes have pi's two-port shape (a promise for
+// the turn + a subscription for the stream), so the fan-in is the same plumbing.
 
-class EventQueue<T> {
+export class EventQueue<T> {
   private buffer: T[] = [];
   private wake?: () => void;
 
