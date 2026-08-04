@@ -324,13 +324,20 @@ describe("session engine class: what the class buys", () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-ext-"));
     let ran = 0;
     let modelSaw = 0;
+    let sendMessage: ((m: unknown) => Promise<void>) | undefined;
     const extension = {
       name: "spike",
-      factory: (api: { registerCommand: (n: string, o: unknown) => void }) => {
+      factory: (api: {
+        registerCommand: (n: string, o: unknown) => void;
+        sendMessage: (m: unknown) => Promise<void>;
+      }) => {
+        sendMessage = api.sendMessage;
         api.registerCommand("ping", {
           description: "answer without the model",
           handler: async () => {
             ran++;
+            // `sendMessage` is on the extension API (pi.sendMessage), not on the command context.
+            await sendMessage?.({ customType: "ping", content: "pong", display: true });
           },
         });
       },
@@ -350,6 +357,14 @@ describe("session engine class: what the class buys", () => {
 
     const events = [];
     for await (const e of agent.invoke({ session: "s" }, { text: "/ping" })) events.push(e);
+    // What the command SAID has to cross the contract too: a turn that ran work and yielded no
+    // events is indistinguishable from one that did nothing.
+    expect(
+      events
+        .filter((e) => e.type === "text")
+        .map((e) => (e as { delta: string }).delta)
+        .join(""),
+    ).toContain("pong");
     expect(ran).toBe(1);
     expect(modelSaw).toBe(0); // the model never saw it …
     expect(events.at(-1)?.type).toBe("completed"); // … and the turn still settles cleanly

@@ -14,15 +14,7 @@
 import type { AgentHarnessEvent } from "@earendil-works/pi-agent-core";
 import { DEFAULT_COMPACTION_SETTINGS, calculateContextTokens, shouldCompact } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import {
-  ABORTED_CODE,
-  type Agent,
-  type AgentEvent,
-  type Json,
-  type Prompt,
-  type Scope,
-  SESSION_BUSY_CODE,
-} from "../../agent.ts";
+import { ABORTED_CODE, type Agent, type AgentEvent, type Json, type Prompt, type Scope } from "../../agent.ts";
 import { abortFirstIterator } from "../../collect.ts";
 import type { RetryScheduledEvent, RunSettledEvent, SessionEvent } from "../../session.ts";
 import { log } from "../../log.ts";
@@ -31,6 +23,7 @@ import {
   type Lease,
   errorToTerminal,
   inProcessLease,
+  sessionBusyFailure,
   toPiPromptOptions,
   toTerminal,
 } from "./turn-plumbing.ts";
@@ -297,12 +290,7 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
     const release = lease.tryAcquire(scope.session);
     if (!release) {
       // Rejected BEFORE acceptance: no run exists, so the observer sees nothing (replay-safe).
-      yield {
-        type: "failed",
-        details: "session busy: a turn is already in flight for this session",
-        retryable: true,
-        code: SESSION_BUSY_CODE,
-      };
+      yield sessionBusyFailure();
       return;
     }
     // The run exists from here: one run_started, exactly one run_settled. Terminal points only

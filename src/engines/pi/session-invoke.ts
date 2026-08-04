@@ -22,7 +22,6 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentEvent, Agent, Json, Prompt, Scope } from "../../agent.ts";
-import { SESSION_BUSY_CODE } from "../../agent.ts";
 import { abortFirstIterator } from "../../collect.ts";
 import { log } from "../../log.ts";
 import { sessionToolActivation, toolSessionManagerFromSession } from "./session-bridge.ts";
@@ -32,6 +31,7 @@ import {
   type Lease,
   errorToTerminal,
   inProcessLease,
+  sessionBusyFailure,
   toPiPromptOptions,
   toTerminal,
 } from "./turn-plumbing.ts";
@@ -92,7 +92,10 @@ const SESSION_EVENTS: Record<AgentSessionEvent["type"], "project" | "ignore"> = 
   turn_start: "ignore",
   turn_end: "ignore",
   message_start: "ignore",
-  message_end: "ignore",
+  // A COMMAND's output arrives as a custom-role message (an extension's `sendMessage`), and it is
+  // the only output such a turn has — ignoring it would make "the command ran" indistinguishable
+  // from "nothing happened" to a stream consumer. Model text keeps arriving as deltas.
+  message_end: "project",
   tool_execution_update: "ignore",
   queue_update: "ignore",
   entry_appended: "ignore",
@@ -117,6 +120,14 @@ function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
       if (e.type === "thinking_delta") return { type: "thinking", delta: e.delta };
       if (e.type === "text_delta") return { type: "text", delta: e.delta };
       return null;
+    }
+    case "message_end": {
+      // Only the DISPLAY-worthy custom messages: an assistant message already streamed as deltas,
+      // and a non-display custom message is extension bookkeeping the user was never meant to read.
+      const m = event.message as { role?: string; display?: boolean; content?: unknown };
+      if (m.role !== "custom" || m.display === false) return null;
+      const delta = customText(m.content);
+      return delta === "" ? null : { type: "text", delta };
     }
     case "tool_execution_start":
       return {
@@ -148,6 +159,16 @@ function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
   }
 }
 
+/** Plain text of a custom message's content (string, or the text blocks of a content array). */
+function customText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return (content as Array<{ type?: string; text?: string }>)
+    .filter((b) => b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text as string)
+    .join("");
+}
+
 /** The assistant message a settled turn ended on, for terminal classification. */
 function lastAssistant(event: AgentSessionEvent): AssistantMessage | undefined {
   if (event.type !== "agent_end") return undefined;
@@ -175,12 +196,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
   ): AsyncGenerator<AgentEvent> {
     const release = lease.tryAcquire(scope.session);
     if (!release) {
-      yield {
-        type: "failed",
-        details: "session busy: a turn is already in flight for this session",
-        retryable: true,
-        code: SESSION_BUSY_CODE,
-      };
+      yield sessionBusyFailure();
       return;
     }
     try {
@@ -214,7 +230,6 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // below. Bound, not replaced: bindExtensions merges, so the assembly's uiContext/mode/actions
       // stay as they were.
       let extensionError: string | undefined;
-      let unsub: () => void = () => {};
       try {
         await session.bindExtensions({
           onError: (error: { event: string; error: string }) => {
@@ -228,7 +243,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         yield errorToTerminal(error);
         return;
       }
-      unsub = session.subscribe((event) => {
+      const unsub = session.subscribe((event) => {
         if (event.type === "agent_end") {
           // `willRetry` means pi will run again for this same prompt — an auto-retry, not a settle.
           // Taking the message from a retried end would classify the turn on an error pi is about

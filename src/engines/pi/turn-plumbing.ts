@@ -9,7 +9,7 @@
  * because pi exposes a turn as a promise PLUS a subscription.
  */
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
-import { ABORTED_CODE, type AgentEvent, type Prompt } from "../../agent.ts";
+import { ABORTED_CODE, type AgentEvent, type Prompt, SESSION_BUSY_CODE } from "../../agent.ts";
 
 // ── §1 Lease: single-writer concurrency floor ────────────────────────────────
 //
@@ -38,6 +38,17 @@ export function inProcessLease(): Lease {
         busy.delete(session);
       };
     },
+  };
+}
+
+/** The refusal a lease collision produces — ONE literal, because it is contract-visible (a channel
+ *  may branch on `code`) and both engine classes emit it. Rejected before any turn exists. */
+export function sessionBusyFailure(): Extract<AgentEvent, { type: "failed" }> {
+  return {
+    type: "failed",
+    details: "session busy: a turn is already in flight for this session",
+    retryable: true,
+    code: SESSION_BUSY_CODE,
   };
 }
 
