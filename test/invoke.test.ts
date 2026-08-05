@@ -55,6 +55,31 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   return out;
 }
 
+describe("failure details are never empty (SPEC §5: the only account of a failure)", () => {
+  it("an error with no message still says something", () => {
+    expect(errorToTerminal(new Error("")).details).toBe("unknown engine error");
+    expect(errorToTerminal(new Error()).details).toBe("unknown engine error");
+    expect(errorToTerminal("").details).toBe("unknown engine error");
+    // A real message is passed through untouched.
+    expect(errorToTerminal(new Error("boom 500")).details).toBe("boom 500");
+  });
+
+  it("a failed message with no errorMessage falls back to its stopReason", () => {
+    const terminal = toTerminal({
+      role: "assistant",
+      content: [],
+      api: "openai-completions",
+      provider: "faux",
+      model: "m",
+      usage: { input: 0, output: 0 },
+      stopReason: "error",
+      timestamp: Date.now(),
+    } as never);
+    expect(terminal).toMatchObject({ type: "failed" });
+    if (terminal.type === "failed") expect(terminal.details).toContain("model stopped");
+  });
+});
+
 describe("invoke fan-in", () => {
   it("plain text produces exactly one completed terminal", async () => {
     const { agent } = makeAgent([fauxAssistantMessage("hello world")]);

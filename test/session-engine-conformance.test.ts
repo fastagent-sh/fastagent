@@ -470,6 +470,44 @@ describe("session engine class: what the class buys", () => {
     expect(seen).toEqual(["start:resume", "shutdown", "start:resume", "shutdown"]);
   });
 
+  it("an input handler that throws does NOT consume the turn: the model answers, the failure warns", async () => {
+    // Why `input` is not a turn-consuming dispatch: pi catches a throwing input handler, records it,
+    // and CONTINUES the loop — so the prompt reaches the model and settles on its answer. Treating
+    // that failure as the turn's verdict would overturn a result the caller received.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-input-"));
+    let modelSaw = 0;
+    const extension = {
+      name: "interceptor",
+      factory: (api: { on: (e: string, h: () => void) => void }) => {
+        api.on("input", () => {
+          throw new Error("interceptor blew up");
+        });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [
+        () => {
+          modelSaw++;
+          return fauxAssistantMessage("answered anyway");
+        },
+      ],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const events = [];
+      for await (const e of agent.invoke({ session: "s" }, { text: "hello" })) events.push(e);
+      expect(modelSaw).toBe(1);
+      expect(events.at(-1)?.type).toBe("completed");
+      expect(warn.mock.calls.flat().join(" ")).toContain("interceptor blew up");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-img-"));
     let sawImage = false;

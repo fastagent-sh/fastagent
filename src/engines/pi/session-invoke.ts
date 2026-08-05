@@ -148,10 +148,16 @@ type ProjectedType = {
   [K in keyof typeof SESSION_EVENTS]: (typeof SESSION_EVENTS)[K] extends "project" ? K : never;
 }[keyof typeof SESSION_EVENTS];
 
-/** pi's labels for the dispatches that can END A TURN with no model call (`prompt()` returns early
- *  for both) — the ones whose failure is therefore the turn's outcome rather than a warning beside
- *  it. A hook failing is not: the turn it accompanies has its own verdict. */
-const TURN_CONSUMING_DISPATCH = new Set(["command", "input"]);
+/**
+ * pi's label for the dispatch that can END A TURN with no model call — the one whose failure is
+ * therefore the turn's outcome rather than a warning beside it.
+ *
+ * `input` is deliberately NOT here, despite also being able to consume a turn (`action: "handled"`):
+ * a handler that THROWS does not consume it. pi catches, records `event: "input"`, and continues the
+ * loop, so the turn reaches the model and settles on its answer — which makes that failure exactly
+ * the kind that must warn beside a delivered result rather than overturn it.
+ */
+const TURN_CONSUMING_DISPATCH = new Set(["command"]);
 
 /** pi's session-class event → the Agent Handler vocabulary. `null` = nothing to project. */
 function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {

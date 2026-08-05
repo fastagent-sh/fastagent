@@ -143,15 +143,24 @@ export function toTerminal(message: AssistantMessage): AgentEvent {
     return { type: "failed", details, retryable: false, code: ABORTED_CODE };
   }
   if (message.stopReason === "error") {
-    const details = message.errorMessage ?? `model stopped: ${message.stopReason}`;
+    const details = failureDetails(message.errorMessage ?? "", `model stopped: ${message.stopReason}`);
     return { type: "failed", details, retryable: classifyRetryable(details, messageSignal(message)) };
   }
   return { type: "completed" };
 }
 
 export function errorToTerminal(error: unknown): Extract<AgentEvent, { type: "failed" }> {
-  const details = error instanceof Error ? error.message : String(error);
+  const details = failureDetails(error instanceof Error ? error.message : String(error), error);
   return { type: "failed", details, retryable: classifyRetryable(details, errorSignal(error)) };
+}
+
+/** `details` is the ONLY place an engine's own account of a failure reaches the caller (SPEC §5), so
+ *  it must never be empty: a `new Error("")` or a message-less rejection would otherwise conform on
+ *  types and tell the caller nothing. Fall through the shapes that carry meaning. */
+function failureDetails(message: string, error: unknown): string {
+  if (message !== "") return message;
+  const stringified = String(error);
+  return stringified === "" || stringified === "Error" ? "unknown engine error" : stringified;
 }
 
 // ── §3 Prompt images: one conversion for both classes ────────────────────────
