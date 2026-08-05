@@ -187,7 +187,16 @@ export function inMemorySessionStore(): PiSessionStore & PiSessionReader {
  * Disk-backed store (pi JsonlSessionRepo under `dir`): restart the process, conversations continue.
  * `cwd` is recorded in session metadata; defaults to process.cwd().
  */
-export function jsonlSessionStore(options: {
+export function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore & PiSessionReader {
+  return jsonlRecordStore(options);
+}
+
+/**
+ * INTERNAL: the same store, plus the locator the `session` engine class binds a `SessionManager` to.
+ * A separate entry point rather than a wider public return type, so "hand me the jsonl path for this
+ * session id" does not become supported API before anything public can use it.
+ */
+export function jsonlRecordStore(options: {
   dir: string;
   cwd?: string;
 }): PiSessionStore & PiSessionReader & PiRecordLocator {
@@ -226,7 +235,7 @@ export function jsonlSessionStore(options: {
 /** Injective filename-safe encoding: [A-Za-z0-9._-] verbatim, the rest %-escaped. THE encoding for
  *  this repository's records, and private on purpose: both engine classes reach a record through
  *  this module's own lookups, so there is no second spelling to drift — the session class asks
- *  {@link PiRecordLocator.recordPath} rather than encoding an id itself. */
+ *  {@link PiRecordLocator.ensureRecordPath} rather than encoding an id itself. */
 function encodeSessionId(id: string): string {
   return id.replace(/[^A-Za-z0-9._-]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
 }

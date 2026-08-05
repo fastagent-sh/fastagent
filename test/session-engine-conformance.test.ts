@@ -21,7 +21,7 @@ import { log } from "../src/log.ts";
 import type { Agent } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/session-invoke.ts";
 import { sessionRecordBinder } from "../src/engines/pi/session-record.ts";
-import { jsonlSessionStore } from "../src/engines/pi/sessions.ts";
+import { jsonlRecordStore, jsonlSessionStore } from "../src/engines/pi/sessions.ts";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 
@@ -72,7 +72,7 @@ async function sessionAssembly(options: {
   // The record is addressed the way a deployment must address it — through the shipped binder, so
   // this suite exercises the same code a serving path would, not a parallel fixture of it.
   const bindRecord = sessionRecordBinder({
-    store: jsonlSessionStore({ dir: options.sessionsRoot, cwd: options.cwd }),
+    store: jsonlRecordStore({ dir: options.sessionsRoot, cwd: options.cwd }),
     sessionsRoot: options.sessionsRoot,
     cwd: options.cwd,
   });

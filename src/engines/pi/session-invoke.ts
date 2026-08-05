@@ -54,6 +54,10 @@ import {
  * object is discarded when the turn ends, so an implementation must NOT cache it across turns (that
  * would be the resident level, with a different bill).
  *
+ * DO NOT BIND `onError`: unlike `uiContext`/`mode`/`commandContextActions`, which pi merges, the
+ * extension-error listener is a single slot — this L0 claims it to classify a command turn, and a
+ * factory that set its own would have it dropped every turn with no signal.
+ *
  * BIND TO AN EXISTING RECORD — use `sessionRecordBinder` (session-record.ts), do not let
  * `SessionManager` open a file of its own. Not a style preference: a SessionManager that starts a
  * fresh file BUFFERS everything until the first assistant message, so a crash between "the user
@@ -290,8 +294,9 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // and each is warned as it arrives, whatever the turn's terminal turns out to be. Only the
       // COMMAND dispatch (`event: "command"`, pi's own label) can decide the terminal: a hook that
       // throws is not the work the caller asked for, and blaming their `/mute` for it would be the
-      // same conflation the model branch refuses. Bound, not replaced: bindExtensions merges, so the
-      // assembly's uiContext/mode/actions stay as they were.
+      // same conflation the model branch refuses. bindExtensions MERGES uiContext/mode/actions, so
+      // the assembly's stay as they were — but `onError` is a single slot, not a merge, so this L0
+      // CLAIMS it (stated in the factory contract above).
       const commandErrors: string[] = [];
       try {
         await session.bindExtensions({
