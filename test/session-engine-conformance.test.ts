@@ -463,9 +463,8 @@ describe("session engine class: what the class buys", () => {
     for (const text of ["first", "second"]) {
       for await (const e of agent.invoke({ session: "s" }, { text })) void e;
     }
-    // The FIRST turn created the record, so it is a startup; every later one resumes. A blanket
-    // "resume" would mean an extension that seeds on startup never fires at all.
-    expect(seen).toEqual(["start:startup", "shutdown", "start:resume", "shutdown"]);
+    // Every turn resumes a durable record — including the first, which resumes an empty one.
+    expect(seen).toEqual(["start:resume", "shutdown", "start:resume", "shutdown"]);
   });
 
   it("a binding that fails AFTER the birth still reports the death", async () => {
@@ -513,7 +512,7 @@ describe("session engine class: what the class buys", () => {
     expect(observed).toEqual([{ event: "bind", error: expect.stringContaining("blew up") }]);
   });
 
-  it("a turn cancelled during the build reports NO lifecycle, and does not consume the startup", async () => {
+  it("a turn cancelled during the build reports NO lifecycle at all", async () => {
     // The mirror of the same invariant: a death for a birth that never happened. The extension
     // runner and its handlers exist from construction, so "does anyone listen" cannot be the
     // predicate — only whether THIS turn bound them.
@@ -554,18 +553,6 @@ describe("session engine class: what the class buys", () => {
     await first;
     await returned;
     expect(seen).toEqual([]);
-
-    // … and the startup it never announced is not LOST: the record it left behind is empty, so the
-    // conversation's first real turn still opens with a startup rather than a resume.
-    const { sessionFactory: second } = await sessionAssembly({
-      responses: [fauxAssistantMessage("hello")],
-      sessionsRoot: join(cwd, "sessions"),
-      cwd,
-      extensionFactories: [extension],
-    });
-    const next = createPiAgentFromSession({ sessionFactory: second });
-    for await (const e of next.invoke({ session: "s" }, { text: "go" })) void e;
-    expect(seen).toEqual(["start:startup", "shutdown"]);
   });
 
   it("an input handler that throws does NOT consume the turn: the model answers, the failure warns", async () => {
@@ -648,8 +635,7 @@ describe("session engine class: what the class buys", () => {
     const extension: InlineExtension = {
       name: "greeter",
       factory: (pi) => {
-        pi.on("session_start", (event) => {
-          if (event.reason !== "startup") return;
+        pi.on("session_start", () => {
           pi.sendMessage({ customType: "greeting", content: "welcome aboard", display: true });
         });
       },

@@ -22,13 +22,20 @@ import type { PiRecordLocator } from "./sessions.ts";
 export interface BoundSessionRecord {
   sessionManager: SessionManager;
   /**
-   * The lifecycle this turn opens, from the STORE's own answer: `startup` while the conversation has
-   * no history, `resume` once it does. Both halves matter and both are silent when wrong — pi's
-   * default (`startup`) would tell an extension that turn 500 is the session's first, while a
-   * blanket `resume` would mean anything that seeds or greets on startup never fires at all. Keyed
-   * on history rather than on file creation, so a first turn that died before writing does not take
-   * the startup announcement with it. It travels WITH the manager so a factory cannot take one rule
-   * and forget the other.
+   * ALWAYS `resume`, and that is the honest description rather than a shortcut: at per-invoke
+   * locality a session object exists for one turn, and every one of them picks a durable record back
+   * up — including the first, which resumes an empty one. pi's default (`startup`) would instead tell
+   * an extension that turn 500 of a conversation is its first, every turn.
+   *
+   * What it deliberately does NOT try to be is "once per conversation". Three record-shaped
+   * heuristics for that were tried and each lost or duplicated the announcement at a different edge
+   * (the file exists but the turn died; the user's message persisted before the model was reached; an
+   * aborted turn leaves an error-stopped assistant message), because "has this been announced" is a
+   * fact about announcements, not about content. An extension that needs once-per-conversation setup
+   * can read the record it is given; whether this engine class should offer more than that is part of
+   * wiring it (#321), not something to invent before its first consumer exists.
+   *
+   * It travels WITH the manager so a factory cannot take one rule and forget the other.
    */
   sessionStartEvent: SessionStartEvent;
 }
@@ -43,12 +50,8 @@ export interface BoundSessionRecord {
 export function sessionRecordBinder(store: PiRecordLocator): (sessionId: string) => Promise<BoundSessionRecord> {
   const { sessionsRoot, cwd } = store.recordLayout;
   return async (sessionId) => {
-    const { path, hasHistory } = await store.ensureRecordPath(sessionId);
     const sessionManager = SessionManager.create(cwd, sessionsRoot);
-    sessionManager.setSessionFile(path);
-    return {
-      sessionManager,
-      sessionStartEvent: { type: "session_start", reason: hasHistory ? "resume" : "startup" },
-    };
+    sessionManager.setSessionFile(await store.ensureRecordPath(sessionId));
+    return { sessionManager, sessionStartEvent: { type: "session_start", reason: "resume" } };
   };
 }
