@@ -12,7 +12,6 @@ import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-cor
 import {
   DefaultResourceLoader,
   ModelRuntime,
-  SessionManager,
   SettingsManager,
   createAgentSession,
 } from "@earendil-works/pi-coding-agent";
@@ -21,6 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
 import type { Agent } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/session-invoke.ts";
+import { sessionRecordBinder } from "../src/engines/pi/session-record.ts";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 
@@ -68,26 +68,18 @@ async function sessionAssembly(options: {
     ...(options.extensionFactories ? { extensionFactories: options.extensionFactories as never } : {}),
   });
   await loader.reload();
-  // The record is addressed the way fastagent already addresses it — through the repo, so a session
-  // written by either engine class is found by the other.
-  const repo = new JsonlSessionRepo({
-    fs: new NodeExecutionEnv({ cwd: options.cwd }),
+  // The record is addressed the way a deployment must address it — through the shipped binder, so
+  // this suite exercises the same code a serving path would, not a parallel fixture of it.
+  const bindRecord = sessionRecordBinder({
     sessionsRoot: options.sessionsRoot,
+    cwd: options.cwd,
+    env: new NodeExecutionEnv({ cwd: options.cwd }),
   });
-  const filePath = async (sessionId: string): Promise<string> => {
-    const existing = (await repo.list({ cwd: options.cwd })).find((m) => m.id === sessionId);
-    if (existing) return existing.path;
-    await repo.create({ id: sessionId, cwd: options.cwd });
-    const created = (await repo.list({ cwd: options.cwd })).find((m) => m.id === sessionId);
-    if (!created) throw new Error(`session record for "${sessionId}" was not created`);
-    return created.path;
-  };
   return {
     faux,
     /** Per invoke: a fresh AgentSession over that id's record, discarded when the turn ends. */
     sessionFactory: async (sessionId: string) => {
-      const sessionManager = SessionManager.create(options.cwd, options.sessionsRoot);
-      sessionManager.setSessionFile(await filePath(sessionId));
+      const sessionManager = await bindRecord(sessionId);
       const { session } = await createAgentSession({
         cwd: options.cwd,
         agentDir,
@@ -366,6 +358,39 @@ describe("session engine class: what the class buys", () => {
     expect(modelSaw).toBe(1); // reached the model as ordinary text …
     expect(unknown.at(-1)?.type).toBe("completed");
     expect(unknown.some((e) => e.type === "text")).toBe(true); // … and its answer streamed
+  });
+
+  it("a non-display command message stays out of the reply", async () => {
+    // The filter that decides extension bookkeeping is not the answer. Inverted, it lands in every
+    // channel's chat: a channel builds its reply from `text` deltas.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-quietmsg-"));
+    let send: ((m: unknown) => Promise<void>) | undefined;
+    const extension = {
+      name: "bookkeeper",
+      factory: (api: {
+        registerCommand: (n: string, o: unknown) => void;
+        sendMessage: (m: unknown) => Promise<void>;
+      }) => {
+        send = api.sendMessage;
+        api.registerCommand("note", {
+          description: "records something the user must not see",
+          handler: async () => {
+            await send?.({ customType: "audit", content: "internal bookkeeping", display: false });
+          },
+        });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("never")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "/note" })) events.push(e);
+    expect(events.some((e) => e.type === "text")).toBe(false);
+    expect(events.at(-1)?.type).toBe("completed");
   });
 
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {

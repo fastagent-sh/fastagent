@@ -102,8 +102,9 @@ is addressed rather than of the turn loop. Measured: a `SessionManager` that ope
 everything until the first assistant message — a crash between "the user asked" and "the model answered"
 loses the question, and the file is not even created. Binding it to a record the session store already
 created (`setSessionFile`) persists the user's turn immediately, matching the harness class. A
-`session`-class factory therefore MUST bind to an existing record; the shared jsonl format (§2) is what
-makes that possible, and the same property is what makes a channel's at-least-once delivery safe.
+`session`-class factory therefore MUST bind to an existing record — `sessionRecordBinder` is that rule
+as code, so a deployment inherits it rather than re-deriving it. The shared jsonl format (§2) is what
+makes it possible, and the same property is what makes a channel's at-least-once delivery safe.
 
 The engineering bill for `resident`, measured: ~25 KB per idle `AgentSession`, and the real cost is
 transcript retention at roughly the size of the record on disk (~8.6 KB per turn of ~8 KB text) — about

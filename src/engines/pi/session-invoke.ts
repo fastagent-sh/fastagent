@@ -42,12 +42,11 @@ import {
  * object is discarded when the turn ends, so an implementation must NOT cache it across turns (that
  * would be the resident level, with a different bill).
  *
- * BIND TO AN EXISTING RECORD (`SessionManager.setSessionFile` over a file the session store created),
- * do not let `SessionManager` open one of its own. This is not a style preference: a SessionManager
- * that starts a fresh file BUFFERS everything until the first assistant message, so a crash between
- * "the user asked" and "the model answered" loses the question — the file is not even created.
- * Binding to a record that already exists persists the user's turn immediately, which is what the
- * harness class has always done and what a channel's at-least-once delivery assumes.
+ * BIND TO AN EXISTING RECORD — use `sessionRecordBinder` (session-record.ts), do not let
+ * `SessionManager` open a file of its own. Not a style preference: a SessionManager that starts a
+ * fresh file BUFFERS everything until the first assistant message, so a crash between "the user
+ * asked" and "the model answered" loses the question and the file is never created. The binder is
+ * where that rule is implemented; this contract is where it is required.
  */
 export interface CreatePiAgentFromSessionOptions {
   sessionFactory: (sessionId: string) => Promise<AgentSession>;
@@ -84,7 +83,7 @@ const DELTA_CHANNELS: Record<AssistantMessageEvent["type"], "project" | "ignore"
  * summarization retries), and an added member that nobody projects is exactly the drift a bare
  * `default:` waves through — here it stops the build instead.
  */
-const SESSION_EVENTS: Record<AgentSessionEvent["type"], "project" | "ignore"> = {
+const SESSION_EVENTS = {
   // Projected below into the Agent Handler vocabulary.
   message_update: "project",
   tool_execution_start: "project",
@@ -115,11 +114,23 @@ const SESSION_EVENTS: Record<AgentSessionEvent["type"], "project" | "ignore"> = 
   summarization_retry_attempt_start: "ignore",
   summarization_retry_finished: "ignore",
   bash_execution_update: "ignore",
-};
+} as const satisfies Record<AgentSessionEvent["type"], "project" | "ignore">;
+
+/** The members {@link SESSION_EVENTS} declares projectable — what the switch below must handle. */
+type ProjectedType = {
+  [K in keyof typeof SESSION_EVENTS]: (typeof SESSION_EVENTS)[K] extends "project" ? K : never;
+}[keyof typeof SESSION_EVENTS];
 
 /** pi's session-class event → the Agent Handler vocabulary. `null` = nothing to project. */
 function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
+  // The runtime filter and the type narrowing are the same decision, made once: everything past
+  // this line is a member {@link SESSION_EVENTS} declared projectable, which is what lets the
+  // switch below be exhaustively checked.
   if (SESSION_EVENTS[event.type] === "ignore") return null;
+  return projectProjectable(event as Extract<AgentSessionEvent, { type: ProjectedType }>);
+}
+
+function projectProjectable(event: Extract<AgentSessionEvent, { type: ProjectedType }>): AgentEvent | null {
   switch (event.type) {
     case "message_update": {
       // The delta channel: pi reports the accumulated message plus the typed event that changed it.
@@ -162,8 +173,14 @@ function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
         delayMs: event.delayMs,
         reason: event.errorMessage,
       };
-    default:
+    default: {
+      // Declaring a member "project" and forgetting its case would otherwise project nothing — the
+      // same silent drift the map exists to stop, one step later. This assignment is `never` only
+      // while every projectable member has a case above.
+      const unhandled: never = event;
+      void unhandled;
       return null;
+    }
   }
 }
 
