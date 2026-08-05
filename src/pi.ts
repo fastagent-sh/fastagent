@@ -44,6 +44,7 @@ export type { AnyModel } from "./engines/pi/harness.ts";
 export {
   inMemorySessionStore,
   jsonlSessionStore,
+  type PiRecordLocator,
   type PiSessionReader,
   type PiSessionStore,
 } from "./engines/pi/sessions.ts";

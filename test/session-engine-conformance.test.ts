@@ -848,11 +848,17 @@ describe("session engine class: per-invoke discipline", () => {
     // delivery safe here — and what a "simplification" to SessionManager.create() would silently undo.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-durable-"));
     const sessionsRoot = join(cwd, "sessions");
+    let modelEntered!: () => void;
+    const asking = new Promise<void>((r) => {
+      modelEntered = r;
+    });
     const { sessionFactory } = await sessionAssembly({
-      // The model never answers: this IS the crash window. It honours its abort signal (checking
-      // `aborted` first — the same trap the cancellation test documents) so the test can end.
+      // The model never answers: this IS the crash window. It ANNOUNCES that it was entered, so the
+      // assertion waits for the real trigger instead of a timer, and it honours its abort signal
+      // (checking `aborted` first — the same trap the cancellation test documents) so the test ends.
       responses: [
         async (_context, options) => {
+          modelEntered();
           await new Promise<void>((_resolve, reject) => {
             const stop = () => reject(new Error("aborted"));
             if (options?.signal?.aborted) return stop();
@@ -866,7 +872,8 @@ describe("session engine class: per-invoke discipline", () => {
     });
     const agent = createPiAgentFromSession({ sessionFactory });
     const iterator = agent.invoke({ session: "s" }, { text: "the question nobody answered" })[Symbol.asyncIterator]();
-    await Promise.race([iterator.next(), new Promise((r) => setTimeout(r, 500))]);
+    void iterator.next();
+    await asking; // the model call has been entered and will never return: the crash window is open
 
     const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot });
     const meta = (await repo.list({ cwd })).find((m) => m.id === "s");
