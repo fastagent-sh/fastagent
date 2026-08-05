@@ -272,9 +272,13 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // one, release the object. Written once because the three exits differ only in how far setup
       // got — three hand-written subsets drift the moment a line moves between them.
       let unsub: (() => void) | undefined;
-      /** Whether THIS turn bound the extensions — i.e. whether a `session_start` was emitted for it.
-       *  `hasHandlers` cannot answer that: the runner and its handlers exist from construction, so it
-       *  would send a shutdown for a lifecycle that never began (the cancel-during-build path). */
+      /** Whether THIS turn began the extension lifecycle — set BEFORE the call, because pi emits
+       *  `session_start` inside `bindExtensions` and then does more work that can throw: a flag set
+       *  after it resolves would miss a birth that already reached the handlers. Pessimistic on
+       *  purpose — a shutdown for a birth that only partly landed is cheaper than a handler holding
+       *  what it acquired until the process exits. `hasHandlers` cannot answer this at all: the
+       *  runner and its handlers exist from construction, so it would also fire for a turn cancelled
+       *  before binding. */
       let bound = false;
       const teardown = async (): Promise<void> => {
         try {
@@ -332,6 +336,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // CLAIMS it (stated in the factory contract above).
       const consumingErrors: string[] = [];
       try {
+        bound = true;
         await session.bindExtensions({
           onError: (error: { event: string; error: string }) => {
             const message = `extension ${error.event} failed: ${error.error}`;
@@ -344,7 +349,6 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             }
           },
         });
-        bound = true;
       } catch (error) {
         // Binding is this engine class's own setup step, and its failures obey the same rule as the
         // factory's: an EVENT, never a thrown iteration — and the session still gets torn down.

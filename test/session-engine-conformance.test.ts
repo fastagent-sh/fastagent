@@ -470,6 +470,42 @@ describe("session engine class: what the class buys", () => {
     expect(seen).toEqual(["start:startup", "shutdown", "start:resume", "shutdown"]);
   });
 
+  it("a binding that fails AFTER the birth still reports the death", async () => {
+    // pi emits session_start inside bindExtensions and then does more work that can throw. A flag
+    // set only on success would miss a birth that already reached the handlers, so whatever they
+    // acquired would live until the process exits.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-life3-"));
+    const seen: string[] = [];
+    const extension = {
+      name: "lifecycle",
+      factory: (api: { on: (e: string, h: () => void) => void }) => {
+        api.on("session_start", () => seen.push("start"));
+        api.on("session_shutdown", () => seen.push("shutdown"));
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("never")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({
+      sessionFactory: async (id) => {
+        const session = await sessionFactory(id);
+        const bind = session.bindExtensions.bind(session);
+        session.bindExtensions = async (bindings) => {
+          await bind(bindings); // the birth lands …
+          throw new Error("resource discovery blew up"); // … and then binding fails
+        };
+        return session;
+      },
+    });
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "failed", details: expect.stringContaining("blew up") });
+    expect(seen).toEqual(["start", "shutdown"]);
+  });
+
   it("a turn cancelled during the build reports NO lifecycle at all", async () => {
     // The mirror of the same invariant: a death for a birth that never happened. The extension
     // runner and its handlers exist from construction, so "does anyone listen" cannot be the
@@ -542,6 +578,40 @@ describe("session engine class: what the class buys", () => {
       expect(modelSaw).toBe(1);
       expect(events.at(-1)?.type).toBe("completed");
       expect(warn.mock.calls.flat().join(" ")).toContain("interceptor blew up");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a factory's own extension-error listener cannot break the turn", async () => {
+    // The contract calls it an observer; a throwing observer must not become the turn's problem.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-obs-"));
+    const extension = {
+      name: "noisy",
+      factory: (api: { on: (e: string, h: () => void) => void }) => {
+        api.on("session_start", () => {
+          throw new Error("hook went wrong");
+        });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("the answer")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({
+      sessionFactory,
+      onExtensionError: () => {
+        throw new Error("listener itself blew up");
+      },
+    });
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const events = [];
+      for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+      expect(events.at(-1)?.type).toBe("completed");
+      expect(warn.mock.calls.flat().join(" ")).toContain("listener itself blew up");
     } finally {
       warn.mockRestore();
     }
