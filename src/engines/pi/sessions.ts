@@ -40,10 +40,13 @@ export interface PiSessionReader {
   openIfExists(sessionId: string): Promise<Session | undefined>;
 }
 
-/** Where a session's record LIVES, for a consumer that must hand the file to another reader (the
- *  session engine class binds a `SessionManager` to it). Only a file-backed store can answer. */
+/** The file a session's record lives in, for a consumer that must hand it to another reader (the
+ *  session engine class binds a `SessionManager` to it). ASKING CREATES: an unknown id is opened
+ *  through the store's own `openOrCreate`, so the record, its metadata and its crash repair all
+ *  exist by the time a path comes back — which is the point (a caller must never be handed a path
+ *  to a file that is not yet a session). Only a file-backed store can answer. */
 export interface PiRecordLocator {
-  recordPath(sessionId: string): Promise<string>;
+  ensureRecordPath(sessionId: string): Promise<string>;
 }
 
 /**
@@ -191,7 +194,7 @@ export function jsonlSessionStore(options: {
   const cwd = options.cwd ?? process.cwd();
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: options.dir });
   return {
-    async recordPath(sessionId) {
+    async ensureRecordPath(sessionId) {
       // Deliberately THROUGH openOrCreate: the id encoding, the cwd scoping, the create metadata and
       // the crash repair are one sequence, and a second copy of it would eventually address a
       // different file — two records for one conversation, which is the failure the session class's

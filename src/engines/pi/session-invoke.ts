@@ -10,6 +10,12 @@
  * of that class is the `ResourceLoader` (extension modules, skills), which is built ONCE with the
  * assembly and shared across turns. What is per-turn is binding a session object to a record.
  *
+ * That trade has a consequence the factory owns: a shared loader is a SNAPSHOT, so "the directory is
+ * the agent, live" (what the harness path gets by re-reading the definition every turn) is not free
+ * here. A factory that wants it must rebuild or reload the loader; one that shares it trades
+ * definition freshness for the ~1ms turn cost. Either is a legitimate deployment choice — silence
+ * about which one is in force is not.
+ *
  * NOT YET WIRED, twice over. This module has no consumer in `src/`: the assembly that would produce
  * a session factory for a real definition (models, auth, tools, extensions) does not exist yet, and
  * neither this L0 nor `sessionRecordBinder` is exported from `src/pi.ts` — pi-coupled L0s stay
@@ -298,8 +304,13 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       } catch (error) {
         // Binding is this engine class's own setup step, and its failures obey the same rule as the
         // factory's: an EVENT, never a thrown iteration — and the session still gets torn down.
+        // NOT through errorToTerminal: extension module code throwing in-process is as determinate
+        // as a command handler throwing (the branch below), and that classifier's prose fallback
+        // would read "timed out" out of an extension's message and invite a re-run that throws
+        // identically. The FACTORY's failures keep the classifier: record open, auth and network
+        // genuinely mix transient with permanent.
         await teardown();
-        yield errorToTerminal(error);
+        yield { type: "failed", details: String(error), retryable: false };
         return;
       }
       unsub = session.subscribe((event) => {

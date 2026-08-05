@@ -597,7 +597,13 @@ describe("session engine class: this L0's own responsibilities", () => {
     const events = [];
     for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: "failed", details: expect.stringContaining("binding blew up") });
+    expect(events[0]).toMatchObject({
+      type: "failed",
+      details: expect.stringContaining("binding blew up"),
+      // Determinate, like a command handler's throw: extension module code that throws in-process
+      // throws again. (The prose classifier would have read a retry out of the message.)
+      retryable: false,
+    });
     expect(disposed).toBe(1);
   });
 

@@ -34,7 +34,7 @@ export function sessionRecordBinder(
   const { store, sessionsRoot, cwd } = options;
   return async (sessionId) => {
     const manager = SessionManager.create(cwd, sessionsRoot);
-    manager.setSessionFile(await store.recordPath(sessionId));
+    manager.setSessionFile(await store.ensureRecordPath(sessionId));
     return manager;
   };
 }
