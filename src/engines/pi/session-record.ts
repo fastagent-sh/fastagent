@@ -15,20 +15,33 @@
  * of it would eventually address a different file — two records for one conversation, the exact
  * failure this module exists to prevent.
  */
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import type { PiRecordLocator } from "./sessions.ts";
 
+/** What a factory spreads into `createAgentSession` — both halves of "bind an existing record". */
+export interface BoundSessionRecord {
+  sessionManager: SessionManager;
+  /**
+   * ALWAYS a resume: the record exists before the session is built, and binding emits this event on
+   * every turn. pi's default (`reason: "startup"`) would tell an extension that turn 500 of a
+   * conversation is its first, so anything that greets, seeds or logs on startup would do it every
+   * turn. It travels WITH the manager so a factory cannot take one rule and forget the other.
+   */
+  sessionStartEvent: SessionStartEvent;
+}
+
 /**
- * A binder for one deployment: `sessionId → SessionManager` over that id's record in `store`. ONE
- * argument on purpose — the layout comes from the store rather than being re-supplied beside it, so
- * a manager cannot be constructed over a root the records do not live in (branch and fork write
- * through that root, and a mismatch would make a second record for one conversation).
+ * A binder for one deployment: `sessionId →` what `createAgentSession` needs to speak to that id's
+ * record in `store`. ONE argument on purpose — the layout comes from the store rather than being
+ * re-supplied beside it, so a manager cannot be constructed over a root the records do not live in
+ * (branch and fork write through that root, and a mismatch would make a second record for one
+ * conversation).
  */
-export function sessionRecordBinder(store: PiRecordLocator): (sessionId: string) => Promise<SessionManager> {
+export function sessionRecordBinder(store: PiRecordLocator): (sessionId: string) => Promise<BoundSessionRecord> {
   const { sessionsRoot, cwd } = store.recordLayout;
   return async (sessionId) => {
-    const manager = SessionManager.create(cwd, sessionsRoot);
-    manager.setSessionFile(await store.ensureRecordPath(sessionId));
-    return manager;
+    const sessionManager = SessionManager.create(cwd, sessionsRoot);
+    sessionManager.setSessionFile(await store.ensureRecordPath(sessionId));
+    return { sessionManager, sessionStartEvent: { type: "session_start", reason: "resume" } };
   };
 }

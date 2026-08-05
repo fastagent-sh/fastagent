@@ -60,16 +60,12 @@ import {
  * {@link CreatePiAgentFromSessionOptions.onExtensionError}, which is forwarded every failure; binding
  * pi's slot directly would instead be dropped every turn with no signal.
  *
- * PASS `sessionStartEvent: { type: "session_start", reason: "resume" }`: the record always exists
- * before the session is built (the binder ensures it), and binding emits this event on EVERY turn —
- * pi's default `reason: "startup"` would tell an extension that turn 500 of a conversation is its
- * first, so anything that greets, seeds or logs on startup would do it every turn.
- *
- * BIND TO AN EXISTING RECORD — use `sessionRecordBinder` (session-record.ts), do not let
- * `SessionManager` open a file of its own. Not a style preference: a SessionManager that starts a
- * fresh file BUFFERS everything until the first assistant message, so a crash between "the user
- * asked" and "the model answered" loses the question and the file is never created. The binder is
- * where that rule is implemented; this contract is where it is required.
+ * BIND TO AN EXISTING RECORD — spread `sessionRecordBinder`'s result (session-record.ts) into
+ * `createAgentSession`, do not let `SessionManager` open a file of its own. Not a style preference:
+ * a SessionManager that starts a fresh file BUFFERS everything until the first assistant message, so
+ * a crash between "the user asked" and "the model answered" loses the question and the file is never
+ * created. The binder carries the matching `sessionStartEvent` too, so the two rules cannot come
+ * apart; both are implemented there, and this contract is where they are required.
  */
 export interface CreatePiAgentFromSessionOptions {
   sessionFactory: (sessionId: string) => Promise<AgentSession>;
@@ -276,6 +272,10 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // one, release the object. Written once because the three exits differ only in how far setup
       // got — three hand-written subsets drift the moment a line moves between them.
       let unsub: (() => void) | undefined;
+      /** Whether THIS turn bound the extensions — i.e. whether a `session_start` was emitted for it.
+       *  `hasHandlers` cannot answer that: the runner and its handlers exist from construction, so it
+       *  would send a shutdown for a lifecycle that never began (the cancel-during-build path). */
+      let bound = false;
       const teardown = async (): Promise<void> => {
         try {
           await session.abort();
@@ -290,10 +290,9 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         try {
           // Extensions saw a `session_start` when this turn bound them; without its counterpart they
           // would see a birth every turn and never a death, so anything acquired there (a handle, a
-          // timer, a subscription) would live until the process exits.
-          // pi's own helper is not on the package's public surface, and its whole body is this
-          // guard plus the emit (runner.js: `hasHandlers` → `emit`) — both public.
-          if (session.extensionRunner.hasHandlers("session_shutdown")) {
+          // timer, a subscription) would live until the process exits. Only when this turn actually
+          // bound them: a death for a birth that never happened is the same asymmetry mirrored.
+          if (bound && session.extensionRunner.hasHandlers("session_shutdown")) {
             await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
           }
         } catch (error) {
@@ -345,6 +344,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             }
           },
         });
+        bound = true;
       } catch (error) {
         // Binding is this engine class's own setup step, and its failures obey the same rule as the
         // factory's: an EVENT, never a thrown iteration — and the session still gets torn down.

@@ -76,17 +76,15 @@ async function sessionAssembly(options: {
     faux,
     /** Per invoke: a fresh AgentSession over that id's record, discarded when the turn ends. */
     sessionFactory: async (sessionId: string) => {
-      const sessionManager = await bindRecord(sessionId);
+      const record = await bindRecord(sessionId);
       const { session } = await createAgentSession({
         cwd: options.cwd,
         agentDir,
         modelRuntime,
         model: faux.getModel(),
         resourceLoader: loader,
-        sessionManager,
-        // The record always exists by now (the binder ensures it), so every turn is a RESUME — pi's
-        // default would tell an extension that turn 500 is the session's first.
-        sessionStartEvent: { type: "session_start", reason: "resume" },
+        // Both halves of "bind an existing record", spread together — they cannot come apart.
+        ...record,
         tools: options.tools ?? [],
         ...(options.customTools ? { customTools: options.customTools as never } : {}),
       });
@@ -468,6 +466,45 @@ describe("session engine class: what the class buys", () => {
       for await (const e of agent.invoke({ session: "s" }, { text })) void e;
     }
     expect(seen).toEqual(["start:resume", "shutdown", "start:resume", "shutdown"]);
+  });
+
+  it("a turn cancelled during the build reports NO lifecycle at all", async () => {
+    // The mirror of the same invariant: a death for a birth that never happened. The extension
+    // runner and its handlers exist from construction, so "does anyone listen" cannot be the
+    // predicate — only whether THIS turn bound them.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-life2-"));
+    const seen: string[] = [];
+    const extension = {
+      name: "lifecycle",
+      factory: (api: { on: (e: string, h: () => void) => void }) => {
+        api.on("session_start", () => seen.push("start"));
+        api.on("session_shutdown", () => seen.push("shutdown"));
+      },
+    };
+    let releaseFactory!: () => void;
+    const held = new Promise<void>((r) => {
+      releaseFactory = r;
+    });
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("never")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({
+      sessionFactory: async (id) => {
+        const session = await sessionFactory(id);
+        await held; // the consumer walks away while we are still in here
+        return session;
+      },
+    });
+    const iterator = agent.invoke({ session: "s" }, { text: "go" })[Symbol.asyncIterator]();
+    const first = iterator.next();
+    const returned = iterator.return?.(undefined);
+    releaseFactory();
+    await first;
+    await returned;
+    expect(seen).toEqual([]);
   });
 
   it("an input handler that throws does NOT consume the turn: the model answers, the failure warns", async () => {
