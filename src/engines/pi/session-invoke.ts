@@ -55,8 +55,10 @@ import {
  * would be the resident level, with a different bill).
  *
  * DO NOT BIND `onError`: unlike `uiContext`/`mode`/`commandContextActions`, which pi merges, the
- * extension-error listener is a single slot — this L0 claims it to classify a command turn, and a
- * factory that set its own would have it dropped every turn with no signal.
+ * extension-error listener is a single slot — this L0 claims it to classify a command turn. A
+ * factory that wants its own (logging, metrics, a toast) passes
+ * {@link CreatePiAgentFromSessionOptions.onExtensionError}, which is forwarded every failure; binding
+ * pi's slot directly would instead be dropped every turn with no signal.
  *
  * BIND TO AN EXISTING RECORD — use `sessionRecordBinder` (session-record.ts), do not let
  * `SessionManager` open a file of its own. Not a style preference: a SessionManager that starts a
@@ -66,6 +68,10 @@ import {
  */
 export interface CreatePiAgentFromSessionOptions {
   sessionFactory: (sessionId: string) => Promise<AgentSession>;
+  /** Every extension-dispatch failure of every turn, forwarded. The supported place for a factory's
+   *  own listener, since pi's `onError` is a single slot this L0 owns (see the factory contract).
+   *  A throwing listener is contained — it is an observer, not part of the turn. */
+  onExtensionError?: (error: { event: string; error: string }) => void;
   /** One in-flight turn per session, like the harness L0. A collision fails `session_busy`. */
   lease?: Lease;
 }
@@ -304,6 +310,11 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             const message = `extension ${error.event} failed: ${error.error}`;
             if (error.event === "command") commandErrors.push(message);
             log.warn(`[fastagent] session ${scope.session}: ${message}`);
+            try {
+              options.onExtensionError?.(error);
+            } catch (listenerError) {
+              log.warn(`[fastagent] onExtensionError threw: ${String(listenerError)}`);
+            }
           },
         });
       } catch (error) {

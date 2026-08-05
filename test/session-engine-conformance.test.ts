@@ -71,11 +71,7 @@ async function sessionAssembly(options: {
   await loader.reload();
   // The record is addressed the way a deployment must address it — through the shipped binder, so
   // this suite exercises the same code a serving path would, not a parallel fixture of it.
-  const bindRecord = sessionRecordBinder({
-    store: jsonlRecordStore({ dir: options.sessionsRoot, cwd: options.cwd }),
-    sessionsRoot: options.sessionsRoot,
-    cwd: options.cwd,
-  });
+  const bindRecord = sessionRecordBinder(jsonlRecordStore({ dir: options.sessionsRoot, cwd: options.cwd }));
   return {
     faux,
     /** Per invoke: a fresh AgentSession over that id's record, discarded when the turn ends. */
@@ -426,7 +422,11 @@ describe("session engine class: what the class buys", () => {
       cwd,
       extensionFactories: [extension],
     });
-    const agent = createPiAgentFromSession({ sessionFactory });
+    const observed: { event: string }[] = [];
+    const agent = createPiAgentFromSession({
+      sessionFactory,
+      onExtensionError: (error) => observed.push(error),
+    });
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
       const events = [];
@@ -434,6 +434,8 @@ describe("session engine class: what the class buys", () => {
       expect(ran).toBe(1);
       expect(warn.mock.calls.flat().join(" ")).toContain("unrelated hook blew up"); // the hook IS reported …
       expect(events.at(-1)?.type).toBe("completed"); // … and the command is not blamed for it
+      // … and a factory's own listener sees it, since pi's single onError slot belongs to this L0.
+      expect(observed.map((e) => e.event)).toContain("session_start");
     } finally {
       warn.mockRestore();
     }

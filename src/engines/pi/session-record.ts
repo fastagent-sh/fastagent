@@ -18,20 +18,14 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { PiRecordLocator } from "./sessions.ts";
 
-export interface SessionRecordBinderOptions {
-  /** The store that OWNS the records — the same one the harness class serves from. */
-  store: PiRecordLocator;
-  /** Where its records live, and the workspace they are grouped by: `SessionManager` is constructed
-   *  with both, then pointed at the file the store resolved. */
-  sessionsRoot: string;
-  cwd: string;
-}
-
-/** A binder for one deployment: `sessionId → SessionManager` over that id's record in `store`. */
-export function sessionRecordBinder(
-  options: SessionRecordBinderOptions,
-): (sessionId: string) => Promise<SessionManager> {
-  const { store, sessionsRoot, cwd } = options;
+/**
+ * A binder for one deployment: `sessionId → SessionManager` over that id's record in `store`. ONE
+ * argument on purpose — the layout comes from the store rather than being re-supplied beside it, so
+ * a manager cannot be constructed over a root the records do not live in (branch and fork write
+ * through that root, and a mismatch would make a second record for one conversation).
+ */
+export function sessionRecordBinder(store: PiRecordLocator): (sessionId: string) => Promise<SessionManager> {
+  const { sessionsRoot, cwd } = store.recordLayout;
   return async (sessionId) => {
     const manager = SessionManager.create(cwd, sessionsRoot);
     manager.setSessionFile(await store.ensureRecordPath(sessionId));

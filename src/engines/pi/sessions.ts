@@ -47,6 +47,10 @@ export interface PiSessionReader {
  *  to a file that is not yet a session). Only a file-backed store can answer. */
 export interface PiRecordLocator {
   ensureRecordPath(sessionId: string): Promise<string>;
+  /** The layout those records live in. Carried on the store so a consumer building ANOTHER reader
+   *  over the same files cannot point it somewhere else: a `SessionManager` constructed with a
+   *  different root would write branch/fork operations into a second record for one conversation. */
+  readonly recordLayout: { sessionsRoot: string; cwd: string };
 }
 
 /**
@@ -203,6 +207,7 @@ export function jsonlRecordStore(options: {
   const cwd = options.cwd ?? process.cwd();
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: options.dir });
   return {
+    recordLayout: { sessionsRoot: options.dir, cwd },
     async ensureRecordPath(sessionId) {
       // Deliberately THROUGH openOrCreate: the id encoding, the cwd scoping, the create metadata and
       // the crash repair are one sequence, and a second copy of it would eventually address a
