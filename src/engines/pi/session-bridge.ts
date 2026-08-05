@@ -22,7 +22,9 @@ export function toolSessionManagerFromSession(session: AgentSession, sessionId: 
     async getHeader() {
       const header = session.sessionManager.getHeader();
       if (!header) throw new Error("session record has no metadata header");
-      return { id: header.id, timestamp: header.timestamp };
+      // `id` is the CALLER's, for the same reason as `getSessionId` above — the header's own id is
+      // the filename-safe encoding, and one port must not answer "what is this session" two ways.
+      return { id: sessionId, timestamp: header.timestamp };
     },
     async getBranch() {
       return session.sessionManager.getBranch() as SessionTreeEntry[];

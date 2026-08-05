@@ -448,8 +448,8 @@ describe("session engine class: what the class buys", () => {
         pi.on("session_start", (event) => {
           seen.push(`start:${event.reason}`);
         });
-        pi.on("session_shutdown", () => {
-          seen.push("shutdown");
+        pi.on("session_shutdown", (event) => {
+          seen.push(`shutdown:${event.reason}`);
         });
       },
     };
@@ -463,8 +463,9 @@ describe("session engine class: what the class buys", () => {
     for (const text of ["first", "second"]) {
       for await (const e of agent.invoke({ session: "s" }, { text })) void e;
     }
-    // Every turn resumes a durable record — including the first, which resumes an empty one.
-    expect(seen).toEqual(["start:resume", "shutdown", "start:resume", "shutdown"]);
+    // Every turn resumes a durable record — including the first, which resumes an empty one — and
+    // the death pairs the birth: the record is picked up again, the process is not ending.
+    expect(seen).toEqual(["start:resume", "shutdown:resume", "start:resume", "shutdown:resume"]);
   });
 
   it("a binding that fails AFTER the birth still reports the death", async () => {
@@ -958,7 +959,7 @@ describe("session engine class: the turn context fastagent tools depend on", () 
     // undefined), so it is asserted rather than assumed.
     const { turnContext } = await import("../src/engines/pi/tool-context.ts");
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-ctx-"));
-    let seen: { cwd?: string; sessionId?: string; canActivate?: boolean } = {};
+    let seen: { cwd?: string; sessionId?: string; headerId?: string; canActivate?: boolean } = {};
     // Read from a TOOL's execute, not from the model call: the tool path is the one the binding
     // exists for (`wake`, `search_tools`, cwd), and it is a different resumption of pi's stack.
     const probe: ToolDefinition = {
@@ -971,6 +972,7 @@ describe("session engine class: the turn context fastagent tools depend on", () 
         seen = {
           cwd: store?.cwd,
           sessionId: store?.sessionManager?.getSessionId(),
+          headerId: (await store?.sessionManager?.getHeader())?.id,
           canActivate: typeof store?.tools?.activate === "function",
         };
         return { content: [{ type: "text", text: "ok" }], details: undefined };
@@ -989,6 +991,9 @@ describe("session engine class: the turn context fastagent tools depend on", () 
     for await (const e of agent.invoke({ session: "telegram:-100/42" }, { text: "go" })) void e;
     expect(seen.cwd).toBe(cwd);
     expect(seen.sessionId).toBe("telegram:-100/42");
+    // Both answers to "which session is this" agree, across the port's two methods AND across the
+    // engine classes: the harness bridge returns the caller's id from both.
+    expect(seen.headerId).toBe("telegram:-100/42");
     expect(seen.canActivate).toBe(true);
   });
 });

@@ -300,7 +300,10 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           // timer, a subscription) would live until the process exits. Only when this turn actually
           // bound them: a death for a birth that never happened is the same asymmetry mirrored.
           if (bound && session.extensionRunner.hasHandlers("session_shutdown")) {
-            await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+            // `resume`, pairing the birth: the same record is picked up again by the next turn in
+            // this same process. pi's `quit` means the process is ending, which would tell an
+            // extension to flush and release for good — every turn.
+            await session.extensionRunner.emit({ type: "session_shutdown", reason: "resume" });
           }
         } catch (error) {
           log.warn(`[fastagent] session shutdown event failed during cleanup: ${String(error)}`);
