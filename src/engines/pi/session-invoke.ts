@@ -43,6 +43,7 @@ import {
   EventQueue,
   type Lease,
   errorToTerminal,
+  failureDetails,
   inProcessLease,
   sessionBusyFailure,
   toPiPromptOptions,
@@ -358,7 +359,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         // identically. The FACTORY's failures keep the classifier: record open, auth and network
         // genuinely mix transient with permanent.
         await teardown();
-        yield { type: "failed", details: String(error), retryable: false };
+        yield { type: "failed", details: failureDetails(error), retryable: false };
         return;
       }
       unsub = session.subscribe((event) => {

@@ -11,11 +11,13 @@ import { join } from "node:path";
 import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   DefaultResourceLoader,
+  type InlineExtension,
   ModelRuntime,
   SettingsManager,
+  type ToolDefinition,
   createAgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { type FauxResponseStep, Type, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
 import type { Agent } from "../src/agent.ts";
@@ -42,11 +44,13 @@ async function sessionAssembly(options: {
   responses: FauxResponseStep[];
   sessionsRoot: string;
   cwd: string;
-  /** Inline extensions, standing in for the definition's `extensions/` directory. */
-  extensionFactories?: unknown[];
+  /** Inline extensions, standing in for the definition's `extensions/` directory. Typed with pi's
+   *  own shape on purpose: this suite is the only consumer of the session L0, so it is the only
+   *  place a pi API change can surface as a compile error — a cast here would erase exactly that. */
+  extensionFactories?: InlineExtension[];
   /** Off by default: pi's backoff would otherwise make a failing model look like a hang. */
   autoRetry?: boolean;
-  customTools?: unknown[];
+  customTools?: ToolDefinition[];
   /** pi's tool allowlist. Empty by default (no coding tools in a conformance run). */
   tools?: string[];
 }) {
@@ -66,7 +70,7 @@ async function sessionAssembly(options: {
     noContextFiles: true,
     noExtensions: true,
     noPromptTemplates: true,
-    ...(options.extensionFactories ? { extensionFactories: options.extensionFactories as never } : {}),
+    ...(options.extensionFactories ? { extensionFactories: options.extensionFactories } : {}),
   });
   await loader.reload();
   // The record is addressed the way a deployment must address it — through the shipped binder, so
@@ -86,7 +90,7 @@ async function sessionAssembly(options: {
         // Both halves of "bind an existing record", spread together — they cannot come apart.
         ...record,
         tools: options.tools ?? [],
-        ...(options.customTools ? { customTools: options.customTools as never } : {}),
+        ...(options.customTools ? { customTools: options.customTools } : {}),
       });
       // Auto-retry is a DEPLOYMENT policy, not a turn mechanism: leaving it on makes a failing
       // model wait out pi's backoff before the terminal, which is exactly the "hang" a conformance
@@ -117,13 +121,13 @@ describeSpecConformance("pi session engine class (faux model, per-invoke AgentSe
     // discriminate between the cancellation door and the generator's finally — this case breaks at
     // a yield, so the finally runs either way; the dedicated pull-driven test below is what
     // separates the two.
-    const gate = {
+    const gate: ToolDefinition = {
       name: "gate",
       label: "Gate",
       description: "Blocks until the turn is aborted",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
-      execute: (_id: string, _params: unknown, signal: AbortSignal | undefined) =>
-        new Promise<{ output: string }>((_resolve, reject) => {
+      parameters: Type.Object({}),
+      execute: (_id, _params, signal) =>
+        new Promise<never>((_resolve, reject) => {
           if (signal?.aborted) return reject(new Error("aborted"));
           signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
         }),
@@ -188,11 +192,11 @@ describe("session engine class: what the class buys", () => {
     // The two tool projections carry payloads (`args`, `content`, `isError`) that nothing else in
     // the suite reads — a stream consumer renders exactly these.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-tool-"));
-    const boom = {
+    const boom: ToolDefinition = {
       name: "boom",
       label: "Boom",
       description: "Always fails",
-      parameters: { type: "object", properties: { why: { type: "string" } }, required: ["why"] },
+      parameters: Type.Object({ why: Type.String() }),
       // pi's `AgentToolResult` has NO isError field: a tool reports failure by THROWING, and pi
       // marks the event. Returning `{ isError: true }` is silently a success.
       execute: async () => {
@@ -224,10 +228,10 @@ describe("session engine class: what the class buys", () => {
 
   it("an extension command that throws fails the turn instead of reporting success", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-cmdfail-"));
-    const extension = {
+    const extension: InlineExtension = {
       name: "spike",
-      factory: (api: { registerCommand: (n: string, o: unknown) => void }) => {
-        api.registerCommand("boom", {
+      factory: (pi) => {
+        pi.registerCommand("boom", {
           description: "throws",
           handler: async () => {
             throw new Error("the command exploded");
@@ -258,10 +262,10 @@ describe("session engine class: what the class buys", () => {
     // question is what a turn does with one. With a model response in hand, flipping it to `failed`
     // would deny the caller an answer it already streamed — so it warns instead.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-hook-"));
-    const extension = {
+    const extension: InlineExtension = {
       name: "noisy",
-      factory: (api: { on: (e: string, h: () => void) => void }) => {
-        api.on("agent_settled", () => {
+      factory: (pi) => {
+        pi.on("agent_settled", () => {
           throw new Error("hook went wrong");
         });
       },
@@ -288,18 +292,15 @@ describe("session engine class: what the class buys", () => {
     // The projection exists so a command's turn is not an empty stream; an image-only reply must
     // not reintroduce that silence, and the Agent Handler vocabulary has no image event.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-imgmsg-"));
-    let send: ((m: unknown) => Promise<void>) | undefined;
-    const extension = {
+    let send: ((m: unknown) => void) | undefined;
+    const extension: InlineExtension = {
       name: "shot",
-      factory: (api: {
-        registerCommand: (n: string, o: unknown) => void;
-        sendMessage: (m: unknown) => Promise<void>;
-      }) => {
-        send = api.sendMessage;
-        api.registerCommand("shot", {
+      factory: (pi) => {
+        send = (m) => pi.sendMessage(m as Parameters<typeof pi.sendMessage>[0]);
+        pi.registerCommand("shot", {
           description: "replies with an image",
           handler: async () => {
-            await send?.({
+            send?.({
               customType: "shot",
               content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
               display: true,
@@ -327,10 +328,10 @@ describe("session engine class: what the class buys", () => {
     // ambiguity left for a consumer to resolve.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-silent-"));
     let modelSaw = 0;
-    const extension = {
+    const extension: InlineExtension = {
       name: "quiet",
-      factory: (api: { registerCommand: (n: string, o: unknown) => void }) => {
-        api.registerCommand("mute", { description: "changes state, says nothing", handler: async () => {} });
+      factory: (pi) => {
+        pi.registerCommand("mute", { description: "changes state, says nothing", handler: async () => {} });
       },
     };
     const { sessionFactory } = await sessionAssembly({
@@ -362,18 +363,15 @@ describe("session engine class: what the class buys", () => {
     // The filter that decides extension bookkeeping is not the answer. Inverted, it lands in every
     // channel's chat: a channel builds its reply from `text` deltas.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-quietmsg-"));
-    let send: ((m: unknown) => Promise<void>) | undefined;
-    const extension = {
+    let send: ((m: unknown) => void) | undefined;
+    const extension: InlineExtension = {
       name: "bookkeeper",
-      factory: (api: {
-        registerCommand: (n: string, o: unknown) => void;
-        sendMessage: (m: unknown) => Promise<void>;
-      }) => {
-        send = api.sendMessage;
-        api.registerCommand("note", {
+      factory: (pi) => {
+        send = (m) => pi.sendMessage(m as Parameters<typeof pi.sendMessage>[0]);
+        pi.registerCommand("note", {
           description: "records something the user must not see",
           handler: async () => {
-            await send?.({ customType: "audit", content: "internal bookkeeping", display: false });
+            send?.({ customType: "audit", content: "internal bookkeeping", display: false });
           },
         });
       },
@@ -396,23 +394,19 @@ describe("session engine class: what the class buys", () => {
     // work the caller asked for. It warns; the command's own outcome stands.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-hookmix-"));
     let ran = 0;
-    const extension = {
+    const extension: InlineExtension = {
       name: "mixed",
-      factory: (api: {
-        registerCommand: (n: string, o: unknown) => void;
-        on: (e: string, h: () => void) => void;
-        sendMessage: (m: unknown) => Promise<void>;
-      }) => {
+      factory: (pi) => {
         // Fires on EVERY turn of this L0 (binding emits session_start), so it is the reachable shape
         // of "something else in the extension layer failed while the command itself was fine".
-        api.on("session_start", () => {
+        pi.on("session_start", () => {
           throw new Error("unrelated hook blew up");
         });
-        api.registerCommand("mute", {
+        pi.registerCommand("mute", {
           description: "succeeds",
           handler: async () => {
             ran++;
-            await api.sendMessage({ customType: "mute", content: "muted", display: true });
+            pi.sendMessage({ customType: "mute", content: "muted", display: true });
           },
         });
       },
@@ -448,11 +442,15 @@ describe("session engine class: what the class buys", () => {
     // get its counterpart or it lives until the process exits.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-life-"));
     const seen: string[] = [];
-    const extension = {
+    const extension: InlineExtension = {
       name: "lifecycle",
-      factory: (api: { on: (e: string, h: (event: { reason?: string }) => void) => void }) => {
-        api.on("session_start", (event) => seen.push(`start:${event.reason}`));
-        api.on("session_shutdown", () => seen.push("shutdown"));
+      factory: (pi) => {
+        pi.on("session_start", (event) => {
+          seen.push(`start:${event.reason}`);
+        });
+        pi.on("session_shutdown", () => {
+          seen.push("shutdown");
+        });
       },
     };
     const { sessionFactory } = await sessionAssembly({
@@ -476,11 +474,15 @@ describe("session engine class: what the class buys", () => {
     // acquired would live until the process exits.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-life3-"));
     const seen: string[] = [];
-    const extension = {
+    const extension: InlineExtension = {
       name: "lifecycle",
-      factory: (api: { on: (e: string, h: () => void) => void }) => {
-        api.on("session_start", () => seen.push("start"));
-        api.on("session_shutdown", () => seen.push("shutdown"));
+      factory: (pi) => {
+        pi.on("session_start", () => {
+          seen.push("start");
+        });
+        pi.on("session_shutdown", () => {
+          seen.push("shutdown");
+        });
       },
     };
     const { sessionFactory } = await sessionAssembly({
@@ -512,11 +514,15 @@ describe("session engine class: what the class buys", () => {
     // predicate — only whether THIS turn bound them.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-life2-"));
     const seen: string[] = [];
-    const extension = {
+    const extension: InlineExtension = {
       name: "lifecycle",
-      factory: (api: { on: (e: string, h: (event: { reason?: string }) => void) => void }) => {
-        api.on("session_start", (event) => seen.push(`start:${event.reason}`));
-        api.on("session_shutdown", () => seen.push("shutdown"));
+      factory: (pi) => {
+        pi.on("session_start", (event) => {
+          seen.push(`start:${event.reason}`);
+        });
+        pi.on("session_shutdown", () => {
+          seen.push("shutdown");
+        });
       },
     };
     let releaseFactory!: () => void;
@@ -563,10 +569,10 @@ describe("session engine class: what the class buys", () => {
     // that failure as the turn's verdict would overturn a result the caller received.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-input-"));
     let modelSaw = 0;
-    const extension = {
+    const extension: InlineExtension = {
       name: "interceptor",
-      factory: (api: { on: (e: string, h: () => void) => void }) => {
-        api.on("input", () => {
+      factory: (pi) => {
+        pi.on("input", () => {
           throw new Error("interceptor blew up");
         });
       },
@@ -598,10 +604,10 @@ describe("session engine class: what the class buys", () => {
   it("a factory's own extension-error listener cannot break the turn", async () => {
     // The contract calls it an observer; a throwing observer must not become the turn's problem.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-obs-"));
-    const extension = {
+    const extension: InlineExtension = {
       name: "noisy",
-      factory: (api: { on: (e: string, h: () => void) => void }) => {
-        api.on("session_start", () => {
+      factory: (pi) => {
+        pi.on("session_start", () => {
           throw new Error("hook went wrong");
         });
       },
@@ -659,20 +665,17 @@ describe("session engine class: what the class buys", () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-ext-"));
     let ran = 0;
     let modelSaw = 0;
-    let sendMessage: ((m: unknown) => Promise<void>) | undefined;
-    const extension = {
+    let sendMessage: ((m: unknown) => void) | undefined;
+    const extension: InlineExtension = {
       name: "spike",
-      factory: (api: {
-        registerCommand: (n: string, o: unknown) => void;
-        sendMessage: (m: unknown) => Promise<void>;
-      }) => {
-        sendMessage = api.sendMessage;
-        api.registerCommand("ping", {
+      factory: (pi) => {
+        sendMessage = (m) => pi.sendMessage(m as Parameters<typeof pi.sendMessage>[0]);
+        pi.registerCommand("ping", {
           description: "answer without the model",
           handler: async () => {
             ran++;
             // `sendMessage` is on the extension API (pi.sendMessage), not on the command context.
-            await sendMessage?.({ customType: "ping", content: "pong", display: true });
+            sendMessage?.({ customType: "ping", content: "pong", display: true });
           },
         });
       },
@@ -873,13 +876,13 @@ describe("session engine class: cancellation reaches in-flight work", () => {
     const aborted = new Promise<void>((r) => {
       sawAbort = r;
     });
-    const gate = {
+    const gate: ToolDefinition = {
       name: "gate",
       label: "Gate",
       description: "Blocks until the turn is aborted",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
-      execute: (_id: string, _params: unknown, signal: AbortSignal | undefined) =>
-        new Promise<{ output: string }>((_resolve, reject) => {
+      parameters: Type.Object({}),
+      execute: (_id, _params, signal) =>
+        new Promise<never>((_resolve, reject) => {
           // The ALREADY-ABORTED check is not defensive boilerplate here, it is the case under test:
           // `tool_started` is emitted BEFORE pi calls execute, so a consumer that walks away on that
           // event cancels in the window between the two — and an already-aborted signal never fires
@@ -936,11 +939,11 @@ describe("session engine class: the turn context fastagent tools depend on", () 
     let seen: { cwd?: string; sessionId?: string; canActivate?: boolean } = {};
     // Read from a TOOL's execute, not from the model call: the tool path is the one the binding
     // exists for (`wake`, `search_tools`, cwd), and it is a different resumption of pi's stack.
-    const probe = {
+    const probe: ToolDefinition = {
       name: "probe",
       label: "Probe",
       description: "Reports the turn context it sees",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
+      parameters: Type.Object({}),
       execute: async () => {
         const store = turnContext.getStore();
         seen = {

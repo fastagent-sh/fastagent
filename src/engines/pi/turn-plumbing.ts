@@ -150,8 +150,14 @@ export function toTerminal(message: AssistantMessage): AgentEvent {
 }
 
 export function errorToTerminal(error: unknown): Extract<AgentEvent, { type: "failed" }> {
-  const details = nonEmptyDetails(error instanceof Error ? error.message : String(error), describeThrown(error));
+  const details = failureDetails(error);
   return { type: "failed", details, retryable: classifyRetryable(details, errorSignal(error)) };
+}
+
+/** What a thrown value says for itself, never empty — for a caller that classifies `retryable`
+ *  differently but must describe the failure the same way. */
+export function failureDetails(error: unknown): string {
+  return nonEmptyDetails(error instanceof Error ? error.message : String(error), describeThrown(error));
 }
 
 /** `details` is the ONLY place an engine's own account of a failure reaches the caller (SPEC §5), so
