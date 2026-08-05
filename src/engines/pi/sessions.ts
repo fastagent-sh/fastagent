@@ -46,7 +46,10 @@ export interface PiSessionReader {
  *  exist by the time a path comes back — which is the point (a caller must never be handed a path
  *  to a file that is not yet a session). Only a file-backed store can answer. */
 export interface PiRecordLocator {
-  ensureRecordPath(sessionId: string): Promise<string>;
+  /** `created` distinguishes a conversation's FIRST turn from its later ones — the store is the only
+   *  place that knows, and a consumer announcing a session's lifecycle needs it (an extension that
+   *  seeds or greets on startup must fire once, not never and not every turn). */
+  ensureRecordPath(sessionId: string): Promise<{ path: string; created: boolean }>;
   /** The layout those records live in. Carried on the store so a consumer building ANOTHER reader
    *  over the same files cannot point it somewhere else: a `SessionManager` constructed with a
    *  different root would write branch/fork operations into a second record for one conversation. */
@@ -206,29 +209,29 @@ export function jsonlRecordStore(options: {
 }): PiSessionStore & PiSessionReader & PiRecordLocator {
   const cwd = options.cwd ?? process.cwd();
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: options.dir });
-  const openOrCreate = async (sessionId: string): Promise<Session> => {
+  const openOrCreate = async (sessionId: string): Promise<{ session: Session; created: boolean }> => {
     // Caller-provided ids land in jsonl FILENAMES — encode anything unsafe before it reaches disk.
     const id = encodeSessionId(sessionId);
     // Scope the lookup to this store's cwd: two stores sharing a sessionsRoot must not open each
     // other's sessions (pi groups sessions by project dir).
     const existing = (await repo.list({ cwd })).find((m) => m.id === id);
-    if (!existing) return repo.create({ id, cwd });
+    if (!existing) return { session: await repo.create({ id, cwd }), created: true };
     const session = await repo.open(existing);
     await reconcileInterruptedToolCalls(session);
-    return session;
+    return { session, created: false };
   };
   return {
     recordLayout: { sessionsRoot: options.dir, cwd },
-    openOrCreate,
+    openOrCreate: async (sessionId) => (await openOrCreate(sessionId)).session,
     async ensureRecordPath(sessionId) {
       // Deliberately THROUGH openOrCreate: the id encoding, the cwd scoping, the create metadata and
       // the crash repair are one sequence, and a second copy of it would eventually address a
       // different file — two records for one conversation, which is the failure the session class's
       // binder exists to prevent.
-      const session = await openOrCreate(sessionId);
+      const { session, created } = await openOrCreate(sessionId);
       // The repo's own metadata shape (JsonlSessionMetadata) — narrowed here rather than widening
       // the shared PiSessionStore return type, which must stay backend-agnostic.
-      return (await (session as Session<JsonlSessionMetadata>).getMetadata()).path;
+      return { path: (await (session as Session<JsonlSessionMetadata>).getMetadata()).path, created };
     },
     async openIfExists(sessionId) {
       const id = encodeSessionId(sessionId);

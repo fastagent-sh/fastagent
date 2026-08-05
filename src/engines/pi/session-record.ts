@@ -22,10 +22,11 @@ import type { PiRecordLocator } from "./sessions.ts";
 export interface BoundSessionRecord {
   sessionManager: SessionManager;
   /**
-   * ALWAYS a resume: the record exists before the session is built, and binding emits this event on
-   * every turn. pi's default (`reason: "startup"`) would tell an extension that turn 500 of a
-   * conversation is its first, so anything that greets, seeds or logs on startup would do it every
-   * turn. It travels WITH the manager so a factory cannot take one rule and forget the other.
+   * The lifecycle this turn opens, from the STORE's own answer: `startup` on the turn that created
+   * the record, `resume` on every later one. Both halves matter and both are silent when wrong —
+   * pi's default (`startup`) would tell an extension that turn 500 is the session's first, while a
+   * blanket `resume` would mean anything that seeds or greets on startup never fires at all. It
+   * travels WITH the manager so a factory cannot take one rule and forget the other.
    */
   sessionStartEvent: SessionStartEvent;
 }
@@ -40,8 +41,12 @@ export interface BoundSessionRecord {
 export function sessionRecordBinder(store: PiRecordLocator): (sessionId: string) => Promise<BoundSessionRecord> {
   const { sessionsRoot, cwd } = store.recordLayout;
   return async (sessionId) => {
+    const { path, created } = await store.ensureRecordPath(sessionId);
     const sessionManager = SessionManager.create(cwd, sessionsRoot);
-    sessionManager.setSessionFile(await store.ensureRecordPath(sessionId));
-    return { sessionManager, sessionStartEvent: { type: "session_start", reason: "resume" } };
+    sessionManager.setSessionFile(path);
+    return {
+      sessionManager,
+      sessionStartEvent: { type: "session_start", reason: created ? "startup" : "resume" },
+    };
   };
 }

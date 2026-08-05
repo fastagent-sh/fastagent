@@ -465,7 +465,9 @@ describe("session engine class: what the class buys", () => {
     for (const text of ["first", "second"]) {
       for await (const e of agent.invoke({ session: "s" }, { text })) void e;
     }
-    expect(seen).toEqual(["start:resume", "shutdown", "start:resume", "shutdown"]);
+    // The FIRST turn created the record, so it is a startup; every later one resumes. A blanket
+    // "resume" would mean an extension that seeds on startup never fires at all.
+    expect(seen).toEqual(["start:startup", "shutdown", "start:resume", "shutdown"]);
   });
 
   it("a turn cancelled during the build reports NO lifecycle at all", async () => {
