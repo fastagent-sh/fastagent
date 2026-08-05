@@ -46,9 +46,6 @@ export interface PiSessionReader {
  *  exist by the time a path comes back — which is the point (a caller must never be handed a path
  *  to a file that is not yet a session). Only a file-backed store can answer. */
 export interface PiRecordLocator {
-  /** ASKING CREATES: an unknown id is opened through the store's own `openOrCreate`, so the record,
-   *  its metadata and its crash repair all exist by the time a path comes back — a caller must never
-   *  be handed a path to a file that is not yet a session. */
   ensureRecordPath(sessionId: string): Promise<string>;
   /** The layout those records live in. Carried on the store so a consumer building ANOTHER reader
    *  over the same files cannot point it somewhere else: a `SessionManager` constructed with a

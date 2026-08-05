@@ -629,8 +629,8 @@ describe("session engine class: what the class buys", () => {
 
   it("what an extension says while STARTING UP reaches the stream", async () => {
     // The subscription has to be armed before binding: pi emits session_start inside
-    // bindExtensions, and a handler that speaks there lands a message immediately — the one case
-    // `reason: "startup"` exists to enable (a greeting, a seeded note on the first turn).
+    // bindExtensions, and a handler that speaks there lands its message immediately — with the
+    // subscription armed afterwards it would be projected to nobody.
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-greet-"));
     const extension: InlineExtension = {
       name: "greeter",
