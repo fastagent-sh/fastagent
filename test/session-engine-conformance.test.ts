@@ -635,6 +635,37 @@ describe("session engine class: what the class buys", () => {
     }
   });
 
+  it("what an extension says while STARTING UP reaches the stream", async () => {
+    // The subscription has to be armed before binding: pi emits session_start inside
+    // bindExtensions, and a handler that speaks there lands a message immediately — the one case
+    // `reason: "startup"` exists to enable (a greeting, a seeded note on the first turn).
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-greet-"));
+    const extension: InlineExtension = {
+      name: "greeter",
+      factory: (pi) => {
+        pi.on("session_start", (event) => {
+          if (event.reason !== "startup") return;
+          pi.sendMessage({ customType: "greeting", content: "welcome aboard", display: true });
+        });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("hello back")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "hi" })) events.push(e);
+    const text = events
+      .filter((e) => e.type === "text")
+      .map((e) => (e as { delta: string }).delta)
+      .join("");
+    expect(text).toContain("welcome aboard");
+    expect(text).toContain("hello back");
+  });
+
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-img-"));
     let sawImage = false;

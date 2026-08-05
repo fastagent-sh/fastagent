@@ -325,6 +325,11 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
 
       const queue = new EventQueue<AgentEvent>();
       let settled: AssistantMessage | undefined;
+      // SUBSCRIBED BEFORE BINDING (below): pi emits `session_start` inside `bindExtensions`, and a
+      // handler's `sendMessage` lands as a `message_end` right there — a subscription armed
+      // afterwards would drop it, which is the silence this projection exists to prevent, in the one
+      // case `reason: "startup"` exists to enable (an extension that greets or seeds on a
+      // conversation's first turn).
 
       // EVERY extension-dispatch failure, not just a command handler's: pi reports them all here,
       // and one that vanished would be a silent failure inside a turn we are about to call
@@ -336,6 +341,26 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // the assembly's stay as they were — but `onError` is a single slot, not a merge, so this L0
       // CLAIMS it (stated in the factory contract above).
       const consumingErrors: string[] = [];
+      unsub = session.subscribe((event) => {
+        if (event.type === "agent_end") {
+          // `willRetry` means pi will run again for this same prompt — an auto-retry, not a settle.
+          // Taking the message from a retried end would classify the turn on an error pi is about
+          // to recover from.
+          if (!event.willRetry) settled = lastAssistant(event);
+          return;
+        }
+        const projected = projectSessionEvent(event);
+        if (!projected) return;
+        if (projected.type === "retrying") {
+          // Same reason the harness L0 logs it: the event only reaches an ATTACHED consumer, while
+          // an operator tailing logs must also see a backoff that would otherwise read as a hang.
+          log.warn(
+            `[fastagent] retry ${projected.attempt}/${projected.maxAttempts} in ${projected.delayMs}ms (session ${scope.session}): ${projected.reason}`,
+          );
+        }
+        queue.push(projected);
+      });
+
       try {
         bound = true;
         await session.bindExtensions({
@@ -362,25 +387,6 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         yield { type: "failed", details: failureDetails(error), retryable: false };
         return;
       }
-      unsub = session.subscribe((event) => {
-        if (event.type === "agent_end") {
-          // `willRetry` means pi will run again for this same prompt — an auto-retry, not a settle.
-          // Taking the message from a retried end would classify the turn on an error pi is about
-          // to recover from.
-          if (!event.willRetry) settled = lastAssistant(event);
-          return;
-        }
-        const projected = projectSessionEvent(event);
-        if (!projected) return;
-        if (projected.type === "retrying") {
-          // Same reason the harness L0 logs it: the event only reaches an ATTACHED consumer, while
-          // an operator tailing logs must also see a backoff that would otherwise read as a hang.
-          log.warn(
-            `[fastagent] retry ${projected.attempt}/${projected.maxAttempts} in ${projected.delayMs}ms (session ${scope.session}): ${projected.reason}`,
-          );
-        }
-        queue.push(projected);
-      });
       try {
         // prompt() resolves when the turn is accepted-and-run; waitForIdle() closes the window in
         // which pi is still draining its own queues (a follow-up, a retry), so the terminal below
