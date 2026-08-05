@@ -733,6 +733,7 @@ describe("session engine class: per-invoke discipline", () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-record-"));
     const sessionsRoot = join(cwd, "sessions");
     const built: string[] = [];
+    let disposed = 0;
     const { sessionFactory } = await sessionAssembly({
       responses: [fauxAssistantMessage("one"), fauxAssistantMessage("two")],
       sessionsRoot,
@@ -741,7 +742,13 @@ describe("session engine class: per-invoke discipline", () => {
     const agent: Agent = createPiAgentFromSession({
       sessionFactory: async (id) => {
         built.push(id);
-        return sessionFactory(id);
+        const session = await sessionFactory(id);
+        const dispose = session.dispose.bind(session);
+        session.dispose = () => {
+          disposed++;
+          dispose();
+        };
+        return session;
       },
     });
     for (const text of ["turn one", "turn two"]) {
@@ -753,6 +760,9 @@ describe("session engine class: per-invoke discipline", () => {
     // hands back a cached object is the caller's choice, not something this L0 can or should police;
     // what it owes is asking again, and rebuilding the turn from the record below.)
     expect(built).toHaveLength(2);
+    // … and each turn's session is RELEASED, not merely stopped: a process serving thousands of
+    // turns would otherwise leak one wired-up session per turn.
+    expect(disposed).toBe(2);
     // … and ONE record carrying both turns.
     const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot });
     const meta = (await repo.list({ cwd })).find((m) => m.id === "s");

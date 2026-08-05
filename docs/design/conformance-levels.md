@@ -77,6 +77,10 @@ must not also choose which module graph loads.
 - **The assembly ladder, the definition, tools, channels, schedules** — level-agnostic. They produce
   inputs; the level decides who consumes them.
 
+Neither class's L0 is a public export, and neither is wired into a serving path yet — what exists
+today is the engine seam and its conformance, with the assembly (models, auth, tools, definition) and
+the exports that would follow still to come.
+
 What the two classes do NOT yet share is the SERVING surface. `createPiAgentFromHarness` accepts an
 observer and registers per-run modulation handles, which is what the session control plane
 (`session-control.ts`, `/control/*`, `fastagent attach`) consumes; the session L0 has neither yet. The
@@ -103,8 +107,10 @@ everything until the first assistant message — a crash between "the user asked
 loses the question, and the file is not even created. Binding it to a record the session store already
 created (`setSessionFile`) persists the user's turn immediately, matching the harness class. A
 `session`-class factory therefore MUST bind to an existing record — `sessionRecordBinder` is that rule
-as code, so a deployment inherits it rather than re-deriving it. The shared jsonl format (§2) is what
-makes it possible, and the same property is what makes a channel's at-least-once delivery safe.
+as code, so its consumers inherit it rather than re-deriving it. (Like the harness class's L0 and
+`piHarnessFactory`, both stay pi-coupled internals rather than public exports; the repo's own
+consumers import them from their modules.) The shared jsonl format (§2) is what makes it possible, and
+the same property is what makes a channel's at-least-once delivery safe.
 
 The engineering bill for `resident`, measured: ~25 KB per idle `AgentSession`, and the real cost is
 transcript retention at roughly the size of the record on disk (~8.6 KB per turn of ~8 KB text) — about

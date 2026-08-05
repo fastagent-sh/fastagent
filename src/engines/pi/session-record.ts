@@ -34,15 +34,10 @@ export function sessionRecordBinder(
   const { sessionsRoot, cwd, env } = options;
   const repo = new JsonlSessionRepo({ fs: env, sessionsRoot });
   const recordPath = async (sessionId: string): Promise<string> => {
-    const find = async () => (await repo.list({ cwd })).find((meta) => meta.id === sessionId);
-    const existing = await find();
+    const existing = (await repo.list({ cwd })).find((meta) => meta.id === sessionId);
     if (existing) return existing.path;
-    await repo.create({ id: sessionId, cwd });
-    const created = await find();
-    // The repo just created it; a miss means the store and the lookup disagree about identity, which
-    // must not degrade into "SessionManager opens its own file" (the silent-loss shape above).
-    if (!created) throw new Error(`session record for "${sessionId}" was created but not found`);
-    return created.path;
+    const created = await repo.create({ id: sessionId, cwd });
+    return (await created.getMetadata()).path;
   };
   return async (sessionId) => {
     const manager = SessionManager.create(cwd, sessionsRoot);

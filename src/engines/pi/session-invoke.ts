@@ -245,6 +245,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         await session.abort().catch((error: unknown) => {
           log.warn(`[fastagent] session abort failed during cleanup: ${String(error)}`);
         });
+        session.dispose();
         return;
       }
 
@@ -268,7 +269,10 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       } catch (error) {
         // Binding is this engine class's own setup step, and its failures obey the same rule as the
         // factory's: an EVENT, never a thrown iteration — and the session still gets torn down.
-        await session.abort().catch(() => {});
+        await session.abort().catch((abortError: unknown) => {
+          log.warn(`[fastagent] session abort failed after a binding failure: ${String(abortError)}`);
+        });
+        session.dispose();
         yield errorToTerminal(error);
         return;
       }
@@ -350,12 +354,19 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         } catch (error) {
           log.warn(`[fastagent] session unsubscribe failed during cleanup: ${String(error)}`);
         }
-        // Fresh-session discipline: the object dies with the turn. Aborting first releases any work
-        // still in flight after a consumer break.
+        // Fresh-session discipline: the object dies with the turn. Abort stops work still in flight
+        // after a consumer break; dispose RELEASES the object (pi: "remove all listeners and
+        // disconnect from agent") — without it a process serving thousands of turns leaks one
+        // wired-up session per turn, which is precisely this L0's deployment posture.
         try {
           await session.abort();
         } catch (error) {
           log.warn(`[fastagent] session abort failed during cleanup: ${String(error)}`);
+        }
+        try {
+          session.dispose();
+        } catch (error) {
+          log.warn(`[fastagent] session dispose failed during cleanup: ${String(error)}`);
         }
       }
     } finally {
