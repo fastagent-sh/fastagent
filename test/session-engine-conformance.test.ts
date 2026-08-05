@@ -394,6 +394,51 @@ describe("session engine class: what the class buys", () => {
     expect(events.at(-1)?.type).toBe("completed");
   });
 
+  it("a command that SUCCEEDS is not failed by an unrelated hook that throws", async () => {
+    // The conflation the model branch refuses, in the command branch: a hook that throws is not the
+    // work the caller asked for. It warns; the command's own outcome stands.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-hookmix-"));
+    let ran = 0;
+    const extension = {
+      name: "mixed",
+      factory: (api: {
+        registerCommand: (n: string, o: unknown) => void;
+        on: (e: string, h: () => void) => void;
+        sendMessage: (m: unknown) => Promise<void>;
+      }) => {
+        // Fires on EVERY turn of this L0 (binding emits session_start), so it is the reachable shape
+        // of "something else in the extension layer failed while the command itself was fine".
+        api.on("session_start", () => {
+          throw new Error("unrelated hook blew up");
+        });
+        api.registerCommand("mute", {
+          description: "succeeds",
+          handler: async () => {
+            ran++;
+            await api.sendMessage({ customType: "mute", content: "muted", display: true });
+          },
+        });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("never")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const events = [];
+      for await (const e of agent.invoke({ session: "s" }, { text: "/mute" })) events.push(e);
+      expect(ran).toBe(1);
+      expect(warn.mock.calls.flat().join(" ")).toContain("unrelated hook blew up"); // the hook IS reported …
+      expect(events.at(-1)?.type).toBe("completed"); // … and the command is not blamed for it
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "fa-se-img-"));
     let sawImage = false;

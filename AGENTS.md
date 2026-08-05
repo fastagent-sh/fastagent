@@ -129,6 +129,10 @@ src/
     │                       # Siblings never import each other
     ├── session-bridge.ts    # the session class's tool-runtime bridges (session manager + activation),
     │                       # shared by its two consumers: the resident runtime and the per-invoke L0
+    ├── session-record.ts    # sessionId → a SessionManager BOUND to the record the store owns (same
+    │                       # encoded id, same crash repair). Load-bearing: a SessionManager left to
+    │                       # open its own file buffers until the first answer, losing the user's
+    │                       # question on a crash — and would address a different record entirely
     ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
     ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
     ├── open.ts              # shared opener: directory → agent for dev/start/invoke

@@ -281,15 +281,17 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // EVERY extension-dispatch failure, not just a command handler's: pi reports them all here,
       // and one that vanished would be a silent failure inside a turn we are about to call
       // completed — so they ACCUMULATE (a second failing hook must not be swallowed by the first)
-      // and each is warned as it arrives, whatever the turn's terminal turns out to be. How they are
-      // CONSUMED depends on what else the turn produced — see the terminal below. Bound, not
-      // replaced: bindExtensions merges, so the assembly's uiContext/mode/actions stay as they were.
-      const extensionErrors: string[] = [];
+      // and each is warned as it arrives, whatever the turn's terminal turns out to be. Only the
+      // COMMAND dispatch (`event: "command"`, pi's own label) can decide the terminal: a hook that
+      // throws is not the work the caller asked for, and blaming their `/mute` for it would be the
+      // same conflation the model branch refuses. Bound, not replaced: bindExtensions merges, so the
+      // assembly's uiContext/mode/actions stay as they were.
+      const commandErrors: string[] = [];
       try {
         await session.bindExtensions({
           onError: (error: { event: string; error: string }) => {
             const message = `extension ${error.event} failed: ${error.error}`;
-            extensionErrors.push(message);
+            if (error.event === "command") commandErrors.push(message);
             log.warn(`[fastagent] session ${scope.session}: ${message}`);
           },
         });
@@ -356,16 +358,17 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             // model answer the caller did receive into a failure would deny them the result.
             terminal = toTerminal(settled);
           } else {
-            // No model response at all: the input was handled by an extension (a command), so an
-            // extension failure IS the turn's outcome — without this the turn reports success for
-            // work that threw.
+            // No model response at all: the input was handled by a COMMAND, so that command's own
+            // failure IS the turn's outcome — without this the turn reports success for work that
+            // threw. A hook that threw alongside it stays a warning, for the same reason the model
+            // branch keeps its answer.
             // NOT through errorToTerminal: that classifier's last-resort prose match reads
             // "timed out"/"rate limit"/5xx out of a message, which would tell a caller to re-run a
             // handler whose code throws identically every time. An in-process dispatch failure is a
             // determinate local outcome.
             terminal =
-              extensionErrors.length > 0
-                ? { type: "failed", details: extensionErrors.join("; "), retryable: false }
+              commandErrors.length > 0
+                ? { type: "failed", details: commandErrors.join("; "), retryable: false }
                 : { type: "completed" };
           }
         } catch (error) {
