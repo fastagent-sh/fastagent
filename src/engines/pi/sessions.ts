@@ -206,28 +206,29 @@ export function jsonlRecordStore(options: {
 }): PiSessionStore & PiSessionReader & PiRecordLocator {
   const cwd = options.cwd ?? process.cwd();
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: options.dir });
+  const openOrCreate = async (sessionId: string): Promise<Session> => {
+    // Caller-provided ids land in jsonl FILENAMES — encode anything unsafe before it reaches disk.
+    const id = encodeSessionId(sessionId);
+    // Scope the lookup to this store's cwd: two stores sharing a sessionsRoot must not open each
+    // other's sessions (pi groups sessions by project dir).
+    const existing = (await repo.list({ cwd })).find((m) => m.id === id);
+    if (!existing) return repo.create({ id, cwd });
+    const session = await repo.open(existing);
+    await reconcileInterruptedToolCalls(session);
+    return session;
+  };
   return {
     recordLayout: { sessionsRoot: options.dir, cwd },
+    openOrCreate,
     async ensureRecordPath(sessionId) {
       // Deliberately THROUGH openOrCreate: the id encoding, the cwd scoping, the create metadata and
       // the crash repair are one sequence, and a second copy of it would eventually address a
       // different file — two records for one conversation, which is the failure the session class's
       // binder exists to prevent.
-      const session = await this.openOrCreate(sessionId);
+      const session = await openOrCreate(sessionId);
       // The repo's own metadata shape (JsonlSessionMetadata) — narrowed here rather than widening
       // the shared PiSessionStore return type, which must stay backend-agnostic.
       return (await (session as Session<JsonlSessionMetadata>).getMetadata()).path;
-    },
-    async openOrCreate(sessionId) {
-      // Caller-provided ids land in jsonl FILENAMES — encode anything unsafe before it reaches disk.
-      const id = encodeSessionId(sessionId);
-      // Scope the lookup to this store's cwd: two stores sharing a sessionsRoot must not open each
-      // other's sessions (pi groups sessions by project dir).
-      const existing = (await repo.list({ cwd })).find((m) => m.id === id);
-      if (!existing) return repo.create({ id, cwd });
-      const session = await repo.open(existing);
-      await reconcileInterruptedToolCalls(session);
-      return session;
     },
     async openIfExists(sessionId) {
       const id = encodeSessionId(sessionId);

@@ -60,6 +60,11 @@ import {
  * {@link CreatePiAgentFromSessionOptions.onExtensionError}, which is forwarded every failure; binding
  * pi's slot directly would instead be dropped every turn with no signal.
  *
+ * PASS `sessionStartEvent: { type: "session_start", reason: "resume" }`: the record always exists
+ * before the session is built (the binder ensures it), and binding emits this event on EVERY turn —
+ * pi's default `reason: "startup"` would tell an extension that turn 500 of a conversation is its
+ * first, so anything that greets, seeds or logs on startup would do it every turn.
+ *
  * BIND TO AN EXISTING RECORD — use `sessionRecordBinder` (session-record.ts), do not let
  * `SessionManager` open a file of its own. Not a style preference: a SessionManager that starts a
  * fresh file BUFFERS everything until the first assistant message, so a crash between "the user
@@ -142,6 +147,11 @@ const SESSION_EVENTS = {
 type ProjectedType = {
   [K in keyof typeof SESSION_EVENTS]: (typeof SESSION_EVENTS)[K] extends "project" ? K : never;
 }[keyof typeof SESSION_EVENTS];
+
+/** pi's labels for the dispatches that can END A TURN with no model call (`prompt()` returns early
+ *  for both) — the ones whose failure is therefore the turn's outcome rather than a warning beside
+ *  it. A hook failing is not: the turn it accompanies has its own verdict. */
+const TURN_CONSUMING_DISPATCH = new Set(["command", "input"]);
 
 /** pi's session-class event → the Agent Handler vocabulary. `null` = nothing to project. */
 function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {
@@ -272,6 +282,18 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           log.warn(`[fastagent] session unsubscribe failed during cleanup: ${String(error)}`);
         }
         try {
+          // Extensions saw a `session_start` when this turn bound them; without its counterpart they
+          // would see a birth every turn and never a death, so anything acquired there (a handle, a
+          // timer, a subscription) would live until the process exits.
+          // pi's own helper is not on the package's public surface, and its whole body is this
+          // guard plus the emit (runner.js: `hasHandlers` → `emit`) — both public.
+          if (session.extensionRunner.hasHandlers("session_shutdown")) {
+            await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+          }
+        } catch (error) {
+          log.warn(`[fastagent] session shutdown event failed during cleanup: ${String(error)}`);
+        }
+        try {
           // pi: "remove all listeners and disconnect from agent". Without it a process serving
           // thousands of turns leaks one wired-up session per turn — this L0's whole posture.
           session.dispose();
@@ -297,18 +319,18 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // EVERY extension-dispatch failure, not just a command handler's: pi reports them all here,
       // and one that vanished would be a silent failure inside a turn we are about to call
       // completed — so they ACCUMULATE (a second failing hook must not be swallowed by the first)
-      // and each is warned as it arrives, whatever the turn's terminal turns out to be. Only the
-      // COMMAND dispatch (`event: "command"`, pi's own label) can decide the terminal: a hook that
-      // throws is not the work the caller asked for, and blaming their `/mute` for it would be the
-      // same conflation the model branch refuses. bindExtensions MERGES uiContext/mode/actions, so
+      // and each is warned as it arrives, whatever the turn's terminal turns out to be. Only a
+      // TURN-CONSUMING dispatch can decide the terminal (see {@link TURN_CONSUMING_DISPATCH}): a hook
+      // that throws is not the work the caller asked for, and blaming their `/mute` for it would be
+      // the same conflation the model branch refuses. bindExtensions MERGES uiContext/mode/actions, so
       // the assembly's stay as they were — but `onError` is a single slot, not a merge, so this L0
       // CLAIMS it (stated in the factory contract above).
-      const commandErrors: string[] = [];
+      const consumingErrors: string[] = [];
       try {
         await session.bindExtensions({
           onError: (error: { event: string; error: string }) => {
             const message = `extension ${error.event} failed: ${error.error}`;
-            if (error.event === "command") commandErrors.push(message);
+            if (TURN_CONSUMING_DISPATCH.has(error.event)) consumingErrors.push(message);
             log.warn(`[fastagent] session ${scope.session}: ${message}`);
             try {
               options.onExtensionError?.(error);
@@ -385,8 +407,9 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             // model answer the caller did receive into a failure would deny them the result.
             terminal = toTerminal(settled);
           } else {
-            // No model response at all: the input was handled by a COMMAND, so that command's own
-            // failure IS the turn's outcome — without this the turn reports success for work that
+            // No model response at all: the input was CONSUMED by an extension dispatch (a slash
+            // command, or an `input` handler that answered "handled"), so that dispatch's failure
+            // IS the turn's outcome — without this the turn reports success for work that
             // threw. A hook that threw alongside it stays a warning, for the same reason the model
             // branch keeps its answer.
             // NOT through errorToTerminal: that classifier's last-resort prose match reads
@@ -394,8 +417,8 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             // handler whose code throws identically every time. An in-process dispatch failure is a
             // determinate local outcome.
             terminal =
-              commandErrors.length > 0
-                ? { type: "failed", details: commandErrors.join("; "), retryable: false }
+              consumingErrors.length > 0
+                ? { type: "failed", details: consumingErrors.join("; "), retryable: false }
                 : { type: "completed" };
           }
         } catch (error) {

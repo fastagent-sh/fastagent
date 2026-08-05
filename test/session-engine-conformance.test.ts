@@ -84,6 +84,9 @@ async function sessionAssembly(options: {
         model: faux.getModel(),
         resourceLoader: loader,
         sessionManager,
+        // The record always exists by now (the binder ensures it), so every turn is a RESUME — pi's
+        // default would tell an extension that turn 500 is the session's first.
+        sessionStartEvent: { type: "session_start", reason: "resume" },
         tools: options.tools ?? [],
         ...(options.customTools ? { customTools: options.customTools as never } : {}),
       });
@@ -439,6 +442,32 @@ describe("session engine class: what the class buys", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("extensions see a resume and a shutdown on every turn, not a birth without a death", async () => {
+    // Per-invoke locality means the extension lifecycle runs once per TURN. Both halves matter: the
+    // reason must not claim a 500th turn is the session's first, and anything acquired on start must
+    // get its counterpart or it lives until the process exits.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-life-"));
+    const seen: string[] = [];
+    const extension = {
+      name: "lifecycle",
+      factory: (api: { on: (e: string, h: (event: { reason?: string }) => void) => void }) => {
+        api.on("session_start", (event) => seen.push(`start:${event.reason}`));
+        api.on("session_shutdown", () => seen.push("shutdown"));
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("one"), fauxAssistantMessage("two")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    for (const text of ["first", "second"]) {
+      for await (const e of agent.invoke({ session: "s" }, { text })) void e;
+    }
+    expect(seen).toEqual(["start:resume", "shutdown", "start:resume", "shutdown"]);
   });
 
   it("an image prompt reaches the model — the conversion the harness path uses, not a dropped field", async () => {
