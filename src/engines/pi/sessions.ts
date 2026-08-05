@@ -46,10 +46,13 @@ export interface PiSessionReader {
  *  exist by the time a path comes back — which is the point (a caller must never be handed a path
  *  to a file that is not yet a session). Only a file-backed store can answer. */
 export interface PiRecordLocator {
-  /** `created` distinguishes a conversation's FIRST turn from its later ones — the store is the only
-   *  place that knows, and a consumer announcing a session's lifecycle needs it (an extension that
-   *  seeds or greets on startup must fire once, not never and not every turn). */
-  ensureRecordPath(sessionId: string): Promise<{ path: string; created: boolean }>;
+  /** `hasHistory` distinguishes a conversation's first turn from its later ones — the store is the
+   *  only place that knows, and a consumer announcing a session's lifecycle needs it (an extension
+   *  that seeds or greets on startup must fire once: not never, not every turn). Keyed on whether
+   *  anything was ever SAID, not on whether this call created the file: a first turn that died
+   *  before it got anywhere leaves a record with only bookkeeping in it, and the conversation's
+   *  startup has still not been announced. */
+  ensureRecordPath(sessionId: string): Promise<{ path: string; hasHistory: boolean }>;
   /** The layout those records live in. Carried on the store so a consumer building ANOTHER reader
    *  over the same files cannot point it somewhere else: a `SessionManager` constructed with a
    *  different root would write branch/fork operations into a second record for one conversation. */
@@ -228,10 +231,14 @@ export function jsonlRecordStore(options: {
       // the crash repair are one sequence, and a second copy of it would eventually address a
       // different file — two records for one conversation, which is the failure the session class's
       // binder exists to prevent.
-      const { session, created } = await openOrCreate(sessionId);
+      const { session } = await openOrCreate(sessionId);
       // The repo's own metadata shape (JsonlSessionMetadata) — narrowed here rather than widening
       // the shared PiSessionStore return type, which must stay backend-agnostic.
-      return { path: (await (session as Session<JsonlSessionMetadata>).getMetadata()).path, created };
+      const path = (await (session as Session<JsonlSessionMetadata>).getMetadata()).path;
+      // MESSAGES, not entries: building a session appends bookkeeping (model_change,
+      // thinking_level_change) before anyone has said anything, so an entry count would call an
+      // abandoned first attempt "history" and swallow the conversation's startup announcement.
+      return { path, hasHistory: (await session.getEntries()).some((entry) => entry.type === "message") };
     },
     async openIfExists(sessionId) {
       const id = encodeSessionId(sessionId);

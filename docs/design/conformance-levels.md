@@ -77,7 +77,8 @@ must not also choose which module graph loads.
 - **The assembly ladder, the definition, tools, channels, schedules** — level-agnostic. They produce
   inputs; the level decides who consumes them.
 
-Neither class's L0 is a public export, and neither is wired into a serving path yet — what exists
+Neither class's L0 is a public export, and the SESSION class's is not wired into a serving path yet
+(the harness class's is: it is the assembly ladder `dev`/`start`/`invoke` consume) — what exists
 today is the engine seam and its conformance, with the assembly (models, auth, tools, definition) and
 the exports that would follow still to come.
 

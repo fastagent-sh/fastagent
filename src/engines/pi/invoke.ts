@@ -2,10 +2,12 @@
  * The turn mechanism (request-time): fan pi AgentHarness's two ports (subscribe event side-channel
  * + prompt final value) into SPEC's single event stream, under a single-writer-per-session lease.
  *
- *   §1 Lease       — single-writer concurrency floor (injectable port + in-process default)
- *   §2 translate   — the single pi↔SPEC translation point (both directions)
- *   §3 EventQueue  — push→pull plumbing for pi's two-port shape
- *   §4 createPiAgentFromHarness — composes §1–§3 into Agent.invoke
+ *   §1 translate   — the single pi↔SPEC translation point for THIS engine class (both directions)
+ *   §2 createPiAgentFromHarness — the turn loop itself
+ *
+ * What both engine classes share — the lease, the terminal classification, the prompt→pi image
+ * conversion and the push→pull fan-in — lives in `turn-plumbing.ts`, not here: a sibling L0 must
+ * not have to import this one.
  *
  * Concurrency: at most one in-flight turn per session; a second invoke fails fast with
  * `failed{retryable}` ("session busy"), leaving dedupe/queueing/steering to the channel. Each

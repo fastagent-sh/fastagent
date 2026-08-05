@@ -22,11 +22,13 @@ import type { PiRecordLocator } from "./sessions.ts";
 export interface BoundSessionRecord {
   sessionManager: SessionManager;
   /**
-   * The lifecycle this turn opens, from the STORE's own answer: `startup` on the turn that created
-   * the record, `resume` on every later one. Both halves matter and both are silent when wrong —
-   * pi's default (`startup`) would tell an extension that turn 500 is the session's first, while a
-   * blanket `resume` would mean anything that seeds or greets on startup never fires at all. It
-   * travels WITH the manager so a factory cannot take one rule and forget the other.
+   * The lifecycle this turn opens, from the STORE's own answer: `startup` while the conversation has
+   * no history, `resume` once it does. Both halves matter and both are silent when wrong — pi's
+   * default (`startup`) would tell an extension that turn 500 is the session's first, while a
+   * blanket `resume` would mean anything that seeds or greets on startup never fires at all. Keyed
+   * on history rather than on file creation, so a first turn that died before writing does not take
+   * the startup announcement with it. It travels WITH the manager so a factory cannot take one rule
+   * and forget the other.
    */
   sessionStartEvent: SessionStartEvent;
 }
@@ -41,12 +43,12 @@ export interface BoundSessionRecord {
 export function sessionRecordBinder(store: PiRecordLocator): (sessionId: string) => Promise<BoundSessionRecord> {
   const { sessionsRoot, cwd } = store.recordLayout;
   return async (sessionId) => {
-    const { path, created } = await store.ensureRecordPath(sessionId);
+    const { path, hasHistory } = await store.ensureRecordPath(sessionId);
     const sessionManager = SessionManager.create(cwd, sessionsRoot);
     sessionManager.setSessionFile(path);
     return {
       sessionManager,
-      sessionStartEvent: { type: "session_start", reason: created ? "startup" : "resume" },
+      sessionStartEvent: { type: "session_start", reason: hasHistory ? "resume" : "startup" },
     };
   };
 }
