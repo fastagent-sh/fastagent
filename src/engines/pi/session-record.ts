@@ -15,6 +15,7 @@
  */
 import { JsonlSessionRepo, type NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { encodeSessionId } from "./sessions.ts";
 
 export interface SessionRecordBinderOptions {
   /** Where the jsonl records live — the same directory the harness class's store is pointed at. */
@@ -34,9 +35,14 @@ export function sessionRecordBinder(
   const { sessionsRoot, cwd, env } = options;
   const repo = new JsonlSessionRepo({ fs: env, sessionsRoot });
   const recordPath = async (sessionId: string): Promise<string> => {
-    const existing = (await repo.list({ cwd })).find((meta) => meta.id === sessionId);
+    // The SAME encoding `jsonlSessionStore` applies: session ids are caller-owned and land in
+    // filenames (`telegram:-100/42` carries a path separator). Encoding differently here would give
+    // the two engine classes two records for one conversation — the record they are supposed to
+    // share is addressed by this string.
+    const id = encodeSessionId(sessionId);
+    const existing = (await repo.list({ cwd })).find((meta) => meta.id === id);
     if (existing) return existing.path;
-    const created = await repo.create({ id: sessionId, cwd });
+    const created = await repo.create({ id, cwd });
     return (await created.getMetadata()).path;
   };
   return async (sessionId) => {

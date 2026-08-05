@@ -10,7 +10,13 @@
  * of that class is the `ResourceLoader` (extension modules, skills), which is built ONCE with the
  * assembly and shared across turns. What is per-turn is binding a session object to a record.
  *
- * NOT YET WIRED: the harness L0 accepts a `SessionObserver` and registers per-run modulation handles
+ * NOT YET WIRED, twice over. This module has no consumer in `src/`: the assembly that would produce
+ * a session factory for a real definition (models, auth, tools, extensions) does not exist yet, and
+ * neither this L0 nor `sessionRecordBinder` is exported from `src/pi.ts` — pi-coupled L0s stay
+ * internal by convention (AGENTS.md), so selecting this engine class is an in-repo capability until
+ * the assembly and the exports land together.
+ *
+ * And: the harness L0 accepts a `SessionObserver` and registers per-run modulation handles
  * (steer/follow_up/abort), which is what the session control plane consumes. This L0 has neither, so
  * an agent built here serves invokes but cannot be observed or steered through `/control/*` — the
  * gap to close before it backs a serving path, not an omission to discover later.
@@ -234,6 +240,29 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         yield errorToTerminal(error);
         return;
       }
+      // ONE teardown for every exit path: abort what is in flight, drop the subscription if there is
+      // one, release the object. Written once because the three exits differ only in how far setup
+      // got — three hand-written subsets drift the moment a line moves between them.
+      let unsub: (() => void) | undefined;
+      const teardown = async (): Promise<void> => {
+        try {
+          await session.abort();
+        } catch (error) {
+          log.warn(`[fastagent] session abort failed during cleanup: ${String(error)}`);
+        }
+        try {
+          unsub?.();
+        } catch (error) {
+          log.warn(`[fastagent] session unsubscribe failed during cleanup: ${String(error)}`);
+        }
+        try {
+          // pi: "remove all listeners and disconnect from agent". Without it a process serving
+          // thousands of turns leaks one wired-up session per turn — this L0's whole posture.
+          session.dispose();
+        } catch (error) {
+          log.warn(`[fastagent] session dispose failed during cleanup: ${String(error)}`);
+        }
+      };
       // Arm the cancellation door before any model work, then honour a cancel that arrived while
       // the session was still being built (the latch) — the same ordering the harness L0 uses.
       onCancelReady(() => {
@@ -242,15 +271,13 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         });
       });
       if (wasCancelled()) {
-        await session.abort().catch((error: unknown) => {
-          log.warn(`[fastagent] session abort failed during cleanup: ${String(error)}`);
-        });
-        session.dispose();
+        await teardown();
         return;
       }
 
       const queue = new EventQueue<AgentEvent>();
       let settled: AssistantMessage | undefined;
+
       // EVERY extension-dispatch failure, not just a command handler's: pi reports them all here,
       // and one that vanished would be a silent failure inside a turn we are about to call
       // completed — so they ACCUMULATE (a second failing hook must not be swallowed by the first)
@@ -269,14 +296,11 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       } catch (error) {
         // Binding is this engine class's own setup step, and its failures obey the same rule as the
         // factory's: an EVENT, never a thrown iteration — and the session still gets torn down.
-        await session.abort().catch((abortError: unknown) => {
-          log.warn(`[fastagent] session abort failed after a binding failure: ${String(abortError)}`);
-        });
-        session.dispose();
+        await teardown();
         yield errorToTerminal(error);
         return;
       }
-      const unsub = session.subscribe((event) => {
+      unsub = session.subscribe((event) => {
         if (event.type === "agent_end") {
           // `willRetry` means pi will run again for this same prompt — an auto-retry, not a settle.
           // Taking the message from a retried end would classify the turn on an error pi is about
@@ -349,25 +373,8 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         }
         yield terminal;
       } finally {
-        try {
-          unsub();
-        } catch (error) {
-          log.warn(`[fastagent] session unsubscribe failed during cleanup: ${String(error)}`);
-        }
-        // Fresh-session discipline: the object dies with the turn. Abort stops work still in flight
-        // after a consumer break; dispose RELEASES the object (pi: "remove all listeners and
-        // disconnect from agent") — without it a process serving thousands of turns leaks one
-        // wired-up session per turn, which is precisely this L0's deployment posture.
-        try {
-          await session.abort();
-        } catch (error) {
-          log.warn(`[fastagent] session abort failed during cleanup: ${String(error)}`);
-        }
-        try {
-          session.dispose();
-        } catch (error) {
-          log.warn(`[fastagent] session dispose failed during cleanup: ${String(error)}`);
-        }
+        // Fresh-session discipline: the object dies with the turn.
+        await teardown();
       }
     } finally {
       release();

@@ -21,6 +21,7 @@ import { log } from "../src/log.ts";
 import type { Agent } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/session-invoke.ts";
 import { sessionRecordBinder } from "../src/engines/pi/session-record.ts";
+import { jsonlSessionStore } from "../src/engines/pi/sessions.ts";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 
@@ -690,6 +691,38 @@ describe("session engine class: the turn context fastagent tools depend on", () 
     expect(seen.cwd).toBe(cwd);
     expect(seen.sessionId).toBeTruthy();
     expect(seen.canActivate).toBe(true);
+  });
+});
+
+describe("session engine class: one record, both engine classes", () => {
+  it("a real channel session id resolves to the SAME record the harness class opens", async () => {
+    // The claim the whole two-class design rests on, with an id of the shape channels actually use
+    // (a path separator, a colon, a leading dash). Addressed differently, the two classes would hold
+    // two records for one conversation and neither would be wrong on its own — which is why this is
+    // asserted across the classes rather than within one.
+    const sessionId = "telegram:-100/42";
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-id-"));
+    const sessionsRoot = join(cwd, "sessions");
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("noted"), fauxAssistantMessage("still here")],
+      sessionsRoot,
+      cwd,
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    for await (const e of agent.invoke({ session: sessionId }, { text: "remember the kettle" })) void e;
+
+    // The harness class's own port, pointed at the same directory.
+    const store = jsonlSessionStore({ dir: sessionsRoot, cwd });
+    const opened = await store.openIfExists(sessionId);
+    expect(opened).toBeDefined();
+    expect(JSON.stringify(await (opened as NonNullable<typeof opened>).getEntries())).toContain("the kettle");
+
+    // … and the session class finds its own record again on the next turn (one record, not two).
+    for await (const e of agent.invoke({ session: sessionId }, { text: "and again" })) void e;
+    const after = await store.openIfExists(sessionId);
+    const text = JSON.stringify(await (after as NonNullable<typeof after>).getEntries());
+    expect(text).toContain("the kettle");
+    expect(text).toContain("and again");
   });
 });
 
