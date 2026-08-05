@@ -16,16 +16,11 @@
  * definition freshness for the ~1ms turn cost. Either is a legitimate deployment choice — silence
  * about which one is in force is not.
  *
- * NOT YET WIRED, twice over. This module has no consumer in `src/`: the assembly that would produce
- * a session factory for a real definition (models, auth, tools, extensions) does not exist yet, and
- * neither this L0 nor `sessionRecordBinder` is exported from `src/pi.ts` — pi-coupled L0s stay
- * internal by convention (AGENTS.md), so selecting this engine class is an in-repo capability until
- * the assembly and the exports land together.
- *
- * And: the harness L0 accepts a `SessionObserver` and registers per-run modulation handles
- * (steer/follow_up/abort), which is what the session control plane consumes. This L0 has neither, so
- * an agent built here serves invokes but cannot be observed or steered through `/control/*` — the
- * gap to close before it backs a serving path, not an omission to discover later.
+ * NOT WIRED into the control plane: the harness L0 accepts a `SessionObserver` and registers per-run
+ * modulation handles (steer/follow_up/abort), which is what `/control/*` consumes. This L0 has
+ * neither, so an agent built here serves invokes but cannot be observed or steered. That and the
+ * rest of the wiring (the assembly, the export decision) are one list, kept in
+ * design/conformance-levels.md §4 rather than restated here.
  *
  * This module owns the turn mechanism only. The assembly that produces the session factory
  * (models, auth, tools, definition, extensions) is a caller's concern, exactly as
@@ -70,7 +65,10 @@ import {
  */
 export interface CreatePiAgentFromSessionOptions {
   sessionFactory: (sessionId: string) => Promise<AgentSession>;
-  /** Every extension-dispatch failure of every turn, forwarded. The supported place for a factory's
+  /** Every extension failure of every turn, forwarded: pi's own dispatch failures (`event` is its
+   *  label — `command`, `input`, a hook name) AND a failure of the binding itself, which pi THROWS
+   *  rather than dispatching (`event: "bind"`, this L0's label for it) — the coarsest of them all,
+   *  and the one a metrics or toast listener would most miss. The supported place for a factory's
    *  own listener, since pi's `onError` is a single slot this L0 owns (see the factory contract).
    *  A throwing listener is contained — it is an observer, not part of the turn. */
   onExtensionError?: (error: { event: string; error: string }) => void;
@@ -288,6 +286,10 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           log.warn(`[fastagent] session abort failed during cleanup: ${String(error)}`);
         }
         try {
+          // Unsubscribed BEFORE the shutdown emit below, deliberately and asymmetrically with the
+          // startup side: teardown runs after the terminal was yielded, so anything a
+          // `session_shutdown` handler says has no stream left to reach — pushing it into a queue
+          // nobody drains would only look like delivery.
           unsub?.();
         } catch (error) {
           log.warn(`[fastagent] session unsubscribe failed during cleanup: ${String(error)}`);
@@ -341,6 +343,14 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       // the assembly's stay as they were — but `onError` is a single slot, not a merge, so this L0
       // CLAIMS it (stated in the factory contract above).
       const consumingErrors: string[] = [];
+      /** Forward to the factory's observer, contained: a listener is not part of the turn. */
+      const reportExtensionError = (error: { event: string; error: string }): void => {
+        try {
+          options.onExtensionError?.(error);
+        } catch (listenerError) {
+          log.warn(`[fastagent] onExtensionError threw: ${String(listenerError)}`);
+        }
+      };
       unsub = session.subscribe((event) => {
         if (event.type === "agent_end") {
           // `willRetry` means pi will run again for this same prompt — an auto-retry, not a settle.
@@ -368,11 +378,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
             const message = `extension ${error.event} failed: ${error.error}`;
             if (TURN_CONSUMING_DISPATCH.has(error.event)) consumingErrors.push(message);
             log.warn(`[fastagent] session ${scope.session}: ${message}`);
-            try {
-              options.onExtensionError?.(error);
-            } catch (listenerError) {
-              log.warn(`[fastagent] onExtensionError threw: ${String(listenerError)}`);
-            }
+            reportExtensionError(error);
           },
         });
       } catch (error) {
@@ -383,6 +389,9 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         // would read "timed out" out of an extension's message and invite a re-run that throws
         // identically. The FACTORY's failures keep the classifier: record open, auth and network
         // genuinely mix transient with permanent.
+        // The listener hears this one too: it is an extension failure like the dispatched ones, and
+        // the only reason it arrives as a throw is that pi has no dispatch for binding itself.
+        reportExtensionError({ event: "bind", error: failureDetails(error) });
         await teardown();
         yield { type: "failed", details: failureDetails(error), retryable: false };
         return;

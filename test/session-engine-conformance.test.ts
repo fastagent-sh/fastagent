@@ -491,7 +491,9 @@ describe("session engine class: what the class buys", () => {
       cwd,
       extensionFactories: [extension],
     });
+    const observed: { event: string; error: string }[] = [];
     const agent = createPiAgentFromSession({
+      onExtensionError: (error) => observed.push(error),
       sessionFactory: async (id) => {
         const session = await sessionFactory(id);
         const bind = session.bindExtensions.bind(session);
@@ -506,6 +508,9 @@ describe("session engine class: what the class buys", () => {
     for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
     expect(events.at(-1)).toMatchObject({ type: "failed", details: expect.stringContaining("blew up") });
     expect(seen).toEqual(["start", "shutdown"]);
+    // The coarsest extension failure reaches a factory's listener too, though pi throws it rather
+    // than dispatching it.
+    expect(observed).toEqual([{ event: "bind", error: expect.stringContaining("blew up") }]);
   });
 
   it("a turn cancelled during the build reports NO lifecycle, and does not consume the startup", async () => {
