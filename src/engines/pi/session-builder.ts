@@ -243,7 +243,8 @@ export async function buildAgentSessionRuntime(
     });
     sessionRef.current = {
       session: result.session,
-      sessionManager: toolSessionManagerFromSession(result.session),
+      // The resident runtime IS the id's owner — pi's session id is the caller-facing one here.
+      sessionManager: toolSessionManagerFromSession(result.session, result.session.sessionManager.getSessionId()),
       activation: sessionToolActivation(result.session),
     };
     // Deferral emulation: pi's session starts with everything active — narrow it by SUBTRACTING

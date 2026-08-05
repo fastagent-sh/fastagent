@@ -415,7 +415,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         const run = turnContext.run(
           {
             cwd: session.sessionManager.getCwd(),
-            sessionManager: toolSessionManagerFromSession(session),
+            sessionManager: toolSessionManagerFromSession(session, scope.session),
             tools: sessionToolActivation(session),
           },
           async () => {

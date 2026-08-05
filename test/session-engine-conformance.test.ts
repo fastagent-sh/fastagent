@@ -984,9 +984,11 @@ describe("session engine class: the turn context fastagent tools depend on", () 
       tools: ["probe"],
     });
     const agent = createPiAgentFromSession({ sessionFactory });
-    for await (const e of agent.invoke({ session: "ctx" }, { text: "go" })) void e;
+    // A channel-shaped id, so "whose session" is actually asserted rather than "a string exists" —
+    // and the tool sees the id the CALLER used, not the encoding the record is filed under.
+    for await (const e of agent.invoke({ session: "telegram:-100/42" }, { text: "go" })) void e;
     expect(seen.cwd).toBe(cwd);
-    expect(seen.sessionId).toBeTruthy();
+    expect(seen.sessionId).toBe("telegram:-100/42");
     expect(seen.canActivate).toBe(true);
   });
 });

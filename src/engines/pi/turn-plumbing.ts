@@ -139,7 +139,7 @@ export function toTerminal(message: AssistantMessage): AgentEvent {
   if (message.stopReason === "aborted") {
     // A deliberate stop (control-plane abort / harness abort), not an error — see {@link ABORTED_CODE}
     // for the consumer contract (design §6).
-    const details = message.errorMessage ?? "run aborted";
+    const details = nonEmptyDetails(message.errorMessage ?? "", "run aborted");
     return { type: "failed", details, retryable: false, code: ABORTED_CODE };
   }
   if (message.stopReason === "error") {

@@ -12,9 +12,13 @@ import { type ReadonlySessionManager, type ToolActivation, additiveActivation } 
 
 /** Adapt a pi-coding-agent session's SessionManager to FastAgent's shared tool-runtime manager port
  *  — the session-class counterpart of invoke.ts's `toolSessionManager`. */
-export function toolSessionManagerFromSession(session: AgentSession): ReadonlySessionManager {
+export function toolSessionManagerFromSession(session: AgentSession, sessionId: string): ReadonlySessionManager {
   return {
-    getSessionId: () => session.sessionManager.getSessionId(),
+    // The CALLER's id, not the record's: ids are opaque and caller-owned, and the store files them
+    // under a filename-safe encoding. A tool that keys anything on this (channel state, an external
+    // store) must see the same string on both engine classes — the harness bridge passes the invoke
+    // scope's id for exactly this reason.
+    getSessionId: () => sessionId,
     async getHeader() {
       const header = session.sessionManager.getHeader();
       if (!header) throw new Error("session record has no metadata header");
