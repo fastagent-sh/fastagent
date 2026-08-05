@@ -10,7 +10,7 @@
  * jsonl survives process restarts (disk is the truth).
  */
 import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
-import type { AgentMessage, Session, SessionTreeEntry } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, JsonlSessionMetadata, Session, SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { log } from "../../log.ts";
 
@@ -40,6 +40,12 @@ export interface PiSessionReader {
   openIfExists(sessionId: string): Promise<Session | undefined>;
 }
 
+/** Where a session's record LIVES, for a consumer that must hand the file to another reader (the
+ *  session engine class binds a `SessionManager` to it). Only a file-backed store can answer. */
+export interface PiRecordLocator {
+  recordPath(sessionId: string): Promise<string>;
+}
+
 /**
  * Crash-safety reconciliation, run on every OPEN of an existing session.
  *
@@ -61,7 +67,7 @@ export interface PiSessionReader {
  * stays neutral — it must NOT say "aborted" (pi's word for a user cancellation) or leak infra detail;
  * `details` carries the operational marker for developers and is never sent to the provider.
  */
-export async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
+async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
   const { messages } = await session.buildContext();
 
   let leafIdx = -1;
@@ -178,10 +184,23 @@ export function inMemorySessionStore(): PiSessionStore & PiSessionReader {
  * Disk-backed store (pi JsonlSessionRepo under `dir`): restart the process, conversations continue.
  * `cwd` is recorded in session metadata; defaults to process.cwd().
  */
-export function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore & PiSessionReader {
+export function jsonlSessionStore(options: {
+  dir: string;
+  cwd?: string;
+}): PiSessionStore & PiSessionReader & PiRecordLocator {
   const cwd = options.cwd ?? process.cwd();
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: options.dir });
   return {
+    async recordPath(sessionId) {
+      // Deliberately THROUGH openOrCreate: the id encoding, the cwd scoping, the create metadata and
+      // the crash repair are one sequence, and a second copy of it would eventually address a
+      // different file — two records for one conversation, which is the failure the session class's
+      // binder exists to prevent.
+      const session = await this.openOrCreate(sessionId);
+      // The repo's own metadata shape (JsonlSessionMetadata) — narrowed here rather than widening
+      // the shared PiSessionStore return type, which must stay backend-agnostic.
+      return (await (session as Session<JsonlSessionMetadata>).getMetadata()).path;
+    },
     async openOrCreate(sessionId) {
       // Caller-provided ids land in jsonl FILENAMES — encode anything unsafe before it reaches disk.
       const id = encodeSessionId(sessionId);
@@ -202,8 +221,9 @@ export function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSes
 }
 
 /** Injective filename-safe encoding: [A-Za-z0-9._-] verbatim, the rest %-escaped. THE encoding for
- *  this repository's records: both engine classes address the same jsonl by the same opaque session
- *  id, so a second spelling of it would silently give them two records for one conversation. */
-export function encodeSessionId(id: string): string {
+ *  this repository's records, and private on purpose: both engine classes reach a record through
+ *  this module's own lookups, so there is no second spelling to drift — the session class asks
+ *  {@link PiRecordLocator.recordPath} rather than encoding an id itself. */
+function encodeSessionId(id: string): string {
   return id.replace(/[^A-Za-z0-9._-]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
 }

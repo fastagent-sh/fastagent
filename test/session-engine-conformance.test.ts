@@ -72,9 +72,9 @@ async function sessionAssembly(options: {
   // The record is addressed the way a deployment must address it — through the shipped binder, so
   // this suite exercises the same code a serving path would, not a parallel fixture of it.
   const bindRecord = sessionRecordBinder({
+    store: jsonlSessionStore({ dir: options.sessionsRoot, cwd: options.cwd }),
     sessionsRoot: options.sessionsRoot,
     cwd: options.cwd,
-    env: new NodeExecutionEnv({ cwd: options.cwd }),
   });
   return {
     faux,
@@ -568,6 +568,37 @@ describe("session engine class: this L0's own responsibilities", () => {
     expect(await first).toEqual({ done: true, value: undefined });
     await returned;
     expect(prompted).toBe(0);
+  });
+
+  it("a binding failure yields a failed event AND releases the session", async () => {
+    // The only setup branch that has both a session to release and a terminal to emit: yielding the
+    // event without disposing would leak a wired-up session on every failing turn, invisibly.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-bindfail-"));
+    let disposed = 0;
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("never")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+    });
+    const agent = createPiAgentFromSession({
+      sessionFactory: async (id) => {
+        const session = await sessionFactory(id);
+        const dispose = session.dispose.bind(session);
+        session.dispose = () => {
+          disposed++;
+          dispose();
+        };
+        session.bindExtensions = async () => {
+          throw new Error("extension binding blew up");
+        };
+        return session;
+      },
+    });
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "failed", details: expect.stringContaining("binding blew up") });
+    expect(disposed).toBe(1);
   });
 
   it("one turn per session: a second concurrent invoke is refused session_busy", async () => {
