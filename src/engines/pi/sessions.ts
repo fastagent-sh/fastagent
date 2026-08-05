@@ -61,7 +61,7 @@ export interface PiSessionReader {
  * stays neutral — it must NOT say "aborted" (pi's word for a user cancellation) or leak infra detail;
  * `details` carries the operational marker for developers and is never sent to the provider.
  */
-async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
+export async function reconcileInterruptedToolCalls(session: Session): Promise<void> {
   const { messages } = await session.buildContext();
 
   let leafIdx = -1;

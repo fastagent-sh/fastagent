@@ -11,11 +11,12 @@
  * delivery assumes it can reconcile against.
  *
  * A rule with one implementation, not one description: `session-invoke.ts`'s factory contract states
- * it, and every caller gets it by calling this.
+ * it, and every caller gets it by calling this. The crash-safety REPAIR travels the same way — both
+ * classes write this record, so both must open it through the same reconciliation.
  */
 import { JsonlSessionRepo, type NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { encodeSessionId } from "./sessions.ts";
+import { encodeSessionId, reconcileInterruptedToolCalls } from "./sessions.ts";
 
 export interface SessionRecordBinderOptions {
   /** Where the jsonl records live — the same directory the harness class's store is pointed at. */
@@ -41,7 +42,16 @@ export function sessionRecordBinder(
     // share is addressed by this string.
     const id = encodeSessionId(sessionId);
     const existing = (await repo.list({ cwd })).find((meta) => meta.id === id);
-    if (existing) return existing.path;
+    if (existing) {
+      // The SAME repair `jsonlSessionStore.openOrCreate` performs, from the one implementation of
+      // it: a turn that died mid tool-execution left an assistant `tool_use` with no result, which
+      // providers reject outright. Both classes write this record, so a crash under either leaves a
+      // transcript the other must be able to open — skipping the repair here would mean a session
+      // the harness class self-heals and this one fails on forever. Runs BEFORE the SessionManager
+      // binds, since that loads the file as it stands.
+      await reconcileInterruptedToolCalls(await repo.open(existing));
+      return existing.path;
+    }
     const created = await repo.create({ id, cwd });
     return (await created.getMetadata()).path;
   };

@@ -726,6 +726,43 @@ describe("session engine class: one record, both engine classes", () => {
   });
 });
 
+describe("session engine class: opening a record another turn broke", () => {
+  it("an interrupted tool call is repaired before the next turn, as the harness class repairs it", async () => {
+    // The crash-mid-tool shape: an assistant `tool_use` with no result. Providers reject that
+    // transcript outright, so the store repairs it on open — and because BOTH classes write this
+    // record, a crash under either must leave one the other can open. Without the repair the
+    // session class would fail on that conversation forever while its sibling self-heals.
+    const sessionId = "crashed";
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-repair-"));
+    const sessionsRoot = join(cwd, "sessions");
+    const store = jsonlSessionStore({ dir: sessionsRoot, cwd });
+    const broken = await store.openOrCreate(sessionId);
+    await broken.appendMessage({ role: "user", content: "run the tool", timestamp: Date.now() });
+    await broken.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "t1", name: "gate", arguments: {} }],
+      provider: "faux",
+      model: "faux-1",
+      timestamp: Date.now(),
+      usage: { input: 1, output: 1 },
+    } as never);
+
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("carrying on")],
+      sessionsRoot,
+      cwd,
+    });
+    const agent = createPiAgentFromSession({ sessionFactory });
+    const events = [];
+    for await (const e of agent.invoke({ session: sessionId }, { text: "still there?" })) events.push(e);
+    expect(events.at(-1)?.type).toBe("completed");
+    // The repair is IN the shared record: a synthetic result now closes the dangling call.
+    const reopened = await store.openIfExists(sessionId);
+    const text = JSON.stringify(await (reopened as NonNullable<typeof reopened>).getEntries());
+    expect(text).toContain("interrupted-tool-call");
+  });
+});
+
 describe("session engine class: per-invoke discipline", () => {
   it("the user's turn is durable BEFORE the answer exists", async () => {
     // A property of how the factory addresses the record, not of the turn loop: a SessionManager that
