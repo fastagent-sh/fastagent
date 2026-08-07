@@ -1892,6 +1892,8 @@ describe("turn flow", () => {
     expect(msgFetches).toHaveLength(1);
     const prompt = calls[0]?.prompt.text ?? "";
     expect(prompt).toContain("(msg om_s, from user ou_alice): [image]");
+    // a cycle ends SHORT of a root — the block must not read as complete
+    expect(prompt).toContain("(…the chain continues above this point)");
     // the image itself arrived through the buffered path, attributed to its chain position
     expect(prompt).toContain("vision image 1: from user ou_alice, msg om_s");
     expect(calls[0]?.prompt.images).toHaveLength(1);
@@ -1991,8 +1993,180 @@ describe("turn flow", () => {
 
     const prompt = calls[0]?.prompt.text ?? "";
     expect(prompt).toContain("(msg om_w, from user ou_bob): still here"); // the fetched part is kept
-    expect(prompt).not.toContain("om_gone"); // the unreadable one is a warn, not a marker
+    // The cut is VISIBLE but neutral: the block must not read as if om_w were the root — the model
+    // would take it for the original ask — yet the marker names no id and no error detail.
+    expect(prompt).toContain("(…the chain continues above this point)");
+    expect(prompt).not.toContain("om_gone");
     expect(fx.calls("/im/v1/messages/om_gone", "GET")).toHaveLength(1); // tried, then stopped
+  });
+
+  it("the chain's text shares one referent-sized budget, cut visibly from the far end", async () => {
+    // Ancestors are context, not the ask: the whole chain spends at most one further
+    // REFERENT_MAX_CODE_POINTS. A wall-of-text ancestor exhausts it, the walk stops — saving the
+    // fetches too — and the same truncation line keeps the cut from reading as the root.
+    const fx = feishuFetch({
+      "/im/v1/messages/om_e0": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_e0",
+                msg_type: "text",
+                parent_id: "om_e1",
+                body: { content: JSON.stringify({ text: "quoted" }) },
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+      "/im/v1/messages/om_e1": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_e1",
+                msg_type: "text",
+                parent_id: "om_e2",
+                body: { content: JSON.stringify({ text: "w".repeat(5000) }) }, // > the whole budget
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+      "/im/v1/messages/om_e2": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_e2",
+                msg_type: "text",
+                body: { content: JSON.stringify({ text: "beyond the budget" }) },
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle } = buildChannel();
+    await handler(feishuRequest(messageEvent({ id: "om_q5", text: "context?", parentId: "om_e0" })));
+    await idle();
+
+    const prompt = calls[0]?.prompt.text ?? "";
+    expect(prompt).toContain("(…the chain continues above this point)");
+    expect(prompt).not.toContain("beyond the budget");
+    expect(fx.calls("/im/v1/messages/om_e2", "GET")).toHaveLength(0); // the budget also stops the IO
+  });
+
+  it("chain attachments obey the buffered tier's cap, with chain refs taking slots first", async () => {
+    // BUFFERED means the whole tier contract, cap included: chain ancestors and the context buffer
+    // share ONE budget of BUFFER_ATTACH_MAX images. Chain refs outrank buffer refs (the direct
+    // upstream of what the user pointed at beats ambient discussion), and whatever the cap drops is
+    // counted into the note — the model must not hold references it silently cannot see.
+    const fx = feishuFetch({
+      // Resource routes FIRST — a resource URL contains its message path as a prefix (see the cycle
+      // test), and these must serve BYTES, not the message JSON.
+      "/resources/chain_a": () =>
+        new Response(Buffer.from("img-bytes"), { status: 200, headers: { "content-type": "image/png" } }),
+      "/resources/chain_b": () =>
+        new Response(Buffer.from("img-bytes"), { status: 200, headers: { "content-type": "image/png" } }),
+      "/im/v1/messages/om_g1": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_g1",
+                msg_type: "post",
+                body: {
+                  content: JSON.stringify({
+                    content: [
+                      [
+                        { tag: "text", text: "two shots " },
+                        { tag: "img", image_key: "chain_a" },
+                        { tag: "img", image_key: "chain_b" },
+                      ],
+                    ],
+                  }),
+                },
+                sender: { id: "ou_carol", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+      "/im/v1/messages/om_g0": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_g0",
+                msg_type: "text",
+                parent_id: "om_g1",
+                body: { content: JSON.stringify({ text: "see the shots above" }) },
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    // Two un-summoned group images land in the context buffer…
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_buf1",
+          chatType: "group",
+          msgType: "image",
+          content: JSON.stringify({ image_key: "buf_one" }),
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_buf2",
+          chatType: "group",
+          msgType: "image",
+          content: JSON.stringify({ image_key: "buf_two" }),
+        }),
+      ),
+    );
+    // …then a reply summon whose chain ancestor carries two more. 4 background refs, budget 3.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_g_ask",
+          chatType: "group",
+          parentId: "om_g0",
+          content: JSON.stringify({ text: "@_bot what do the shots show" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    const prompt = calls[0]?.prompt.text ?? "";
+    expect(calls[0]?.prompt.images).toHaveLength(3); // the tier's cap, not 4
+    expect(prompt).toContain("1 attachment(s) from the earlier discussion are not loaded");
+    // chain first: both chain images made it, one buffered image was dropped
+    expect(fx.calls("/im/v1/messages/om_g1/resources/chain_a", "GET")).toHaveLength(1);
+    expect(fx.calls("/im/v1/messages/om_g1/resources/chain_b", "GET")).toHaveLength(1);
+    const bufferFetches = [
+      ...fx.calls("/im/v1/messages/om_buf1/resources/buf_one", "GET"),
+      ...fx.calls("/im/v1/messages/om_buf2/resources/buf_two", "GET"),
+    ];
+    expect(bufferFetches).toHaveLength(1);
   });
 
   it("a custom route's null remains a full ignore and does not enter the default context buffer", async () => {

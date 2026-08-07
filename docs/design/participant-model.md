@@ -238,7 +238,7 @@ A thread must start from something. Four rungs, increasing in cost:
 | Rung | Mechanism | Gives the thread |
 |---|---|---|
 | 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound |
-| **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`), plus its reply chain up to the root** |
+| **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** |
 | 3 | seed injection | the room's last N exchanges, in the thread's first prompt |
 | 4 | session fork | the room's entire history, reasoning and tool results included |
 
@@ -255,17 +255,26 @@ while the record is durable. Every way of gating it failed toward a silently mis
 price of one extra read.) An unreadable referent degrades to a marker in
 the prompt: context is not the ask, and losing it must not cost the answer.
 
-The anchor resolves the referent's whole reply CHAIN, not just its last link: quoting a reply points
-at one link of an exchange, and the pointer is only fully resolved when the model can read what that
-link was replying to — walked to the platform-defined root (every reply threads back to one), capped
-at 8 ancestors as an IO guard that says so visibly when it trips. Ancestors' attachments ride the
-BUFFERED tier: nobody pointed at them, so an unloadable one costs a note, never the turn — only the
-referent's own resources stay primary. A one-hop version of this walk was once added and removed as a
-memory substitute; the questions that killed it (how many levels? deduplicated against the session
-how? an image two levels up serialised into prompt text how?) dissolved when the walk was rescoped to
-pointer resolution — the bound is the chain's own root rather than a picked number, attachments have
-a degradable tier, and history stays the session's job (the rungs below). Rung 3 is the next
-increment if anchors prove too narrow.
+On Feishu/Lark — and only there, because that platform threads every reply to a parent while
+Telegram's update embeds exactly one `reply_to_message` object (no chain to walk) and Slack carries
+none — the anchor also resolves the referent's reply CHAIN: the ancestors above the quoted message,
+walked to the platform-defined root and rendered oldest-first as context. Ancestors are context, not
+the ask, and every bound follows from that: their text shares ONE further `REFERENT_MAX_CODE_POINTS`
+budget across the whole chain (the referent itself keeps its full fidelity bound), their attachments
+share the buffered tier's `BUFFER_ATTACH_MAX` budget with the context buffer (chain refs take slots
+first — the direct upstream of what the user pointed at outranks ambient discussion), and an
+unloadable one costs a note, never the turn. Any walk that ends short of the root — the 8-ancestor
+IO cap, an exhausted budget, an unreadable ancestor, a cycle in corrupt data — leaves the same
+visible truncation line: a chain rendered without it would read as complete, and the model would
+take the oldest fetched node for the original ask. One cost is carried deliberately: the walk
+repeats per reply turn, so an established session re-reads chain text it may already hold
+(attachments are deduplicated by message identity; text cannot be, from a layer that cannot read
+the session). Bounded to one referent's worth per turn by the shared budget, that is the price of an
+unconditional, stateless guarantee that what a quote points into is visible. A one-hop version of
+this walk was once added and removed as a memory substitute; what changed is the job — resolving
+the pointer, with history left to the rungs below — and the bounds, which are the chain's own root
+plus explicit budgets rather than a picked level count. Rung 3 is the next increment if anchors
+prove too narrow.
 
 Rung 4 (`SessionRepo.fork`, which would need an optional lineage field on `Scope`) is **not planned**:
 it over-delivers by copying the whole room — including everyone's unrelated conversations — into a

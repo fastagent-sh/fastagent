@@ -316,7 +316,8 @@ Message payloads are resolved by the channel before the agent turn runs — all 
 
 - images (`image` messages, or images inside a rich-text `post`) are downloaded and passed as `prompt.images` — the selected model must support vision,
 - files / audio / video are downloaded to `<state root>/channels/<kind>/files/<chat>/` and listed in the prompt so the agent reads them with its tools,
-- a **reply summon** fetches the replied-to message (its content is not in the event), injects its text into the prompt, and loads its attachments too — "@bot summarize this" as a reply to a file works.
+- a **reply summon** fetches the replied-to message (its content is not in the event), injects its text into the prompt, and loads its attachments too — "@bot summarize this" as a reply to a file works,
+- the **reply chain above** the quoted message is resolved as background context: up to 8 ancestors, oldest first, sharing one referent-sized text budget; their images/files load degradably like buffered attachments (a failure becomes a note, not an error). A chain cut short for any reason — cap, budget, an unreadable message — is marked visibly in the prompt so a partial chain never reads as the whole conversation.
 
 ## State & restarts
 

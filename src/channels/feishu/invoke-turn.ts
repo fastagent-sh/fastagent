@@ -23,6 +23,7 @@ import {
   missingAttachmentsNote,
   streamTurnWithBusyRetry,
 } from "../invoke-turn-kit.ts";
+import { BUFFER_ATTACH_MAX } from "../context-buffer.ts";
 import type { FeishuBufferedRef } from "./context-buffer.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
@@ -122,11 +123,19 @@ interface ReplyChain {
  * different track (design/participant-model.md §8): a one-hop version of this walk was removed once
  * for trying to be that substitute; it returns doing only the pointer's job, which is also why it
  * walks through ANY author's message — the chain is the platform's structure, not a conversation the
- * agent took part in.
+ * agent took part in. The repetition this implies (an established session re-reads chain text it may
+ * already hold, each reply turn) is accepted deliberately and bounded: ancestors are CONTEXT, not
+ * the ask, so their text shares ONE further `REFERENT_MAX_CODE_POINTS` budget across the whole chain
+ * — the walk costs at most one more referent — while the pointed-at referent keeps its own full
+ * fidelity bound.
  *
- * Fail-open at every edge: an unreadable ancestor ends the walk keeping the part already fetched (a
- * warn, not a marker — nobody pointed at it); a cycle ends it silently (platform-data corruption, and
- * ending is the whole fix); a capped walk says so in the block, visibly.
+ * Fail-open at every edge, but never silently at the model: any walk that ends short of the root —
+ * the ancestor cap, an exhausted text budget, an unreadable ancestor, a cycle — leaves the same
+ * neutral truncation line at the top of the block, because a chain rendered without it READS as
+ * complete and the model would take the oldest fetched node for the original ask. Unreadable
+ * ancestors and cycles also warn the operator; a cycle is corrupt platform data (reply chains are
+ * temporally acyclic by construction — a reply can only point at an EARLIER message — so one firing
+ * means the data, not the walk, is wrong).
  */
 async function walkReplyChain(
   t: FeishuTurnTransport,
@@ -136,15 +145,22 @@ async function walkReplyChain(
   const nodes: { id: string; label?: string; text: string }[] = [];
   const images: FeishuBufferedRef[] = [];
   const files: FeishuBufferedRef[] = [];
-  let capped = false;
-  let next = start;
+  // No parent above the referent = no chain — not a truncated one. The marker below is only for
+  // walks that END SHORT of a root that exists.
+  if (start === undefined) return { block: "", images, files };
+  let reachedRoot = false;
+  let textBudget = REFERENT_MAX_CODE_POINTS;
+  let next: string | undefined = start;
   while (next !== undefined) {
-    if (visited.has(next)) break;
-    if (nodes.length >= MAX_CHAIN_ANCESTORS) {
-      capped = true;
+    if (visited.has(next)) {
+      log.warn(
+        `${t.label} reply chain points back to already-visited message ${next} — corrupt platform data; the walk ends here`,
+      );
       break;
     }
-    const id = next;
+    if (nodes.length >= MAX_CHAIN_ANCESTORS || textBudget <= 0) break;
+    // The annotation breaks a control-flow-analysis cycle (id → msg → next → id) that trips TS7022.
+    const id: string = next;
     visited.add(id);
     let failure: string | undefined;
     const msg = await t.api.getMessage(id).catch((error) => {
@@ -166,13 +182,17 @@ async function walkReplyChain(
     const from = label ?? "reply chain";
     for (const key of parsed.imageKeys) images.push({ messageId: id, key, from });
     for (const ref of parsed.fileRefs) files.push({ messageId: id, key: ref.key, name: ref.name, from });
-    nodes.push({ id, label, text: truncateCodePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)" });
+    const text = truncateCodePointPrefix(parsed.text, textBudget) || "(empty)";
+    textBudget -= [...text].length;
+    nodes.push({ id, label, text });
+    if (msg.parent_id === undefined) reachedRoot = true;
     next = msg.parent_id;
   }
-  if (nodes.length === 0) return { block: "", images, files };
   nodes.reverse(); // fetched leaf→root; rendered oldest first, the way a transcript reads
   const lines = nodes.map((node) => `(msg ${node.id}${node.label ? `, from ${node.label}` : ""}): ${node.text}`);
-  if (capped) lines.unshift("(…the chain continues above this point)");
+  // One line for every way of ending short of the root — cap, budget, unreadable, cycle. It names no
+  // cause on purpose: the model needs the SHAPE (there is more above), the operator log has the why.
+  if (!reachedRoot) lines.unshift("(…the chain continues above this point)");
   return { block: `\n[reply chain above it, oldest first:\n${lines.join("\n")}]`, images, files };
 }
 
@@ -235,19 +255,27 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   // downloaded twice or rendered twice in the manifest.
   const primaryImages = new Set(images.map((ref) => `${ref.msg}\u0000${ref.key}`));
   const primaryFiles = new Set(files.map((ref) => `${ref.msg}\u0000${ref.key}`));
-  // Chain ancestors join the buffered tier BEHIND the context buffer's refs, deduplicated by the
-  // same message-scoped identity — a reply chain can point back into discussion that is still
-  // sitting in the buffer, and one download is enough.
-  const seenImages = new Set(attachments.buffered.images.map((ref) => `${ref.messageId}\u0000${ref.key}`));
-  const seenFiles = new Set(attachments.buffered.files.map((ref) => `${ref.messageId}\u0000${ref.key}`));
-  const bufferedImages = [
-    ...attachments.buffered.images,
-    ...chain.images.filter((ref) => !seenImages.has(`${ref.messageId}\u0000${ref.key}`)),
-  ].filter((ref) => !primaryImages.has(`${ref.messageId}\u0000${ref.key}`));
-  const bufferedFiles = [
-    ...attachments.buffered.files,
-    ...chain.files.filter((ref) => !seenFiles.has(`${ref.messageId}\u0000${ref.key}`)),
-  ].filter((ref) => !primaryFiles.has(`${ref.messageId}\u0000${ref.key}`));
+  // Chain ancestors and the context buffer share ONE background budget: BUFFER_ATTACH_MAX per kind.
+  // The cap is part of the tier's meaning, not an accident of who collected the ref — a rich-text
+  // ancestor must not turn the walk into an unbounded fan-out of downloads. Chain refs take slots
+  // FIRST: they are the direct upstream of the message the user pointed at, buffer refs are ambient
+  // discussion. Duplicates (a chain that points back into still-buffered discussion) count once, and
+  // what the cap drops is counted into the missing-attachments note like every other unloaded ref.
+  const capMerge = (chainRefs: FeishuBufferedRef[], bufferRefs: FeishuBufferedRef[], primary: Set<string>) => {
+    const seen = new Set<string>();
+    const merged: FeishuBufferedRef[] = [];
+    for (const ref of [...chainRefs, ...bufferRefs]) {
+      const identity = `${ref.messageId}\u0000${ref.key}`;
+      if (primary.has(identity) || seen.has(identity)) continue;
+      seen.add(identity);
+      merged.push(ref);
+    }
+    return { kept: merged.slice(0, BUFFER_ATTACH_MAX), dropped: Math.max(0, merged.length - BUFFER_ATTACH_MAX) };
+  };
+  const mergedImages = capMerge(chain.images, attachments.buffered.images, primaryImages);
+  const mergedFiles = capMerge(chain.files, attachments.buffered.files, primaryFiles);
+  const bufferedImages = mergedImages.kept;
+  const bufferedFiles = mergedFiles.kept;
   const backgroundImages: { image: ImageRef; ref: FeishuBufferedRef }[] = [];
   const backgroundFiles: { file: DownloadedFile; ref: FeishuBufferedRef }[] = [];
   let lost = 0;
@@ -274,7 +302,9 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       log.warn(`${t.label} could not load an earlier (buffered) attachment: ${String(result.reason)}`);
     }
   }
-  const missingNote = missingAttachmentsNote(lost + attachments.buffered.skipped);
+  const missingNote = missingAttachmentsNote(
+    lost + attachments.buffered.skipped + mergedImages.dropped + mergedFiles.dropped,
+  );
   const backgroundImageManifest = backgroundImagesManifest(
     imageRefs.length,
     backgroundImages.map(({ ref }) => ref),
