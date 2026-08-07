@@ -8,8 +8,9 @@
  *
  * Inputs have two tiers. PRIMARY is the summoning message plus the message it explicitly replied to;
  * any load failure there aborts visibly so the Agent never runs without an input the user pointed at.
- * BUFFERED resources come from earlier un-summoned thread/group discussion and degrade per attachment:
- * one expired background file must not block the current ask or hide its still-readable siblings.
+ * BUFFERED resources come from earlier un-summoned thread/group discussion and from reply-chain
+ * ancestors, and degrade per attachment: one expired background file must not block the current ask
+ * or hide its still-readable siblings.
  */
 import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
@@ -75,14 +76,116 @@ interface ResolvedInputs {
   promptSuffix: string;
 }
 
+/** How far up a reply chain the walk reads, beyond the replied-to message itself. The chain's natural
+ *  end is its ROOT — the platform threads every reply back to one — so this is an IO guard, not a
+ *  semantic boundary: each ancestor costs one serial `getMessage`, and a pathological chain must not
+ *  stall the turn. Field chains are 1–3 long; a capped walk says so in the block. */
+const MAX_CHAIN_ANCESTORS = 8;
+
+/** Attribution for a FETCHED message. getMessage's sender is `{ id, id_type, sender_type }` — a
+ *  DIFFERENT shape from the event's sender (`{ sender_id: { open_id } }`) — so the label is built
+ *  here, not via parse.senderLabel.
+ *
+ *  OWN means THIS app, not "an app". A group can hold several bots, and `sender_type === "app"` is
+ *  true for every one of them — matching on it alone would tell the model it wrote another bot's
+ *  message. The identity to compare is the app id, because an app sender carries `id_type: "app_id"`:
+ *  the cached bot open_id answers a different question (who was @mentioned) and would never match
+ *  here. A missing or unexpected id fails CLOSED — labelled by id, never claimed as the agent's own.
+ *  And an app is not a person: labelling another bot's message "user cli_…" is the same
+ *  misattribution in a quieter form, so the noun follows the sender type. */
+function fetchedSenderLabel(
+  sender: { id?: string; id_type?: string; sender_type?: string } | undefined,
+  appId: string,
+): string | undefined {
+  const appSender = sender?.sender_type === "app";
+  const senderId = sender?.id;
+  if (appSender && senderId === appId) return "you, the agent";
+  return senderId ? `${appSender ? "app" : "user"} ${senderId}` : undefined;
+}
+
+/** One walk's yield: the rendered chain block (empty when there are no ancestors), plus the
+ *  ancestors' attachments as BUFFERED-tier refs — context, not the ask, so an unloadable one costs a
+ *  note, never the turn. */
+interface ReplyChain {
+  block: string;
+  images: FeishuBufferedRef[];
+  files: FeishuBufferedRef[];
+}
+
 /**
- * Resolve a turn's inputs (module header): fetch the reply referent's content, then load every image
- * (vision) and file (disk). Primary failures throw; buffered resources degrade independently.
+ * Walk the reply chain ABOVE the replied-to message, to its root. Quoting a reply points at one link
+ * of an exchange; the pointer is only fully resolved when the model can read what that link was
+ * replying to — all the way up, because the platform defines where the chain ends (its root), which
+ * is what makes the walk bounded by STRUCTURE rather than by a level count someone picked.
+ *
+ * This is pointer resolution, not history. Session memory — what this place already knows — is a
+ * different track (design/participant-model.md §8): a one-hop version of this walk was removed once
+ * for trying to be that substitute; it returns doing only the pointer's job, which is also why it
+ * walks through ANY author's message — the chain is the platform's structure, not a conversation the
+ * agent took part in.
+ *
+ * Fail-open at every edge: an unreadable ancestor ends the walk keeping the part already fetched (a
+ * warn, not a marker — nobody pointed at it); a cycle ends it silently (platform-data corruption, and
+ * ending is the whole fix); a capped walk says so in the block, visibly.
+ */
+async function walkReplyChain(
+  t: FeishuTurnTransport,
+  start: string | undefined,
+  visited: Set<string>,
+): Promise<ReplyChain> {
+  const nodes: { id: string; label?: string; text: string }[] = [];
+  const images: FeishuBufferedRef[] = [];
+  const files: FeishuBufferedRef[] = [];
+  let capped = false;
+  let next = start;
+  while (next !== undefined) {
+    if (visited.has(next)) break;
+    if (nodes.length >= MAX_CHAIN_ANCESTORS) {
+      capped = true;
+      break;
+    }
+    const id = next;
+    visited.add(id);
+    let failure: string | undefined;
+    const msg = await t.api.getMessage(id).catch((error) => {
+      failure = String(error);
+      return undefined;
+    });
+    if (!msg) {
+      log.warn(
+        `${t.label} could not read reply-chain message ${id} (${failure ?? "no such message"}) — the chain is rendered up to it`,
+      );
+      break;
+    }
+    const parsed = parseContent({
+      message_type: msg.msg_type ?? "unknown",
+      content: msg.body?.content ?? "",
+      mentions: msg.mentions as FeishuMention[] | undefined,
+    });
+    const label = fetchedSenderLabel(msg.sender, t.appId);
+    const from = label ?? "reply chain";
+    for (const key of parsed.imageKeys) images.push({ messageId: id, key, from });
+    for (const ref of parsed.fileRefs) files.push({ messageId: id, key: ref.key, name: ref.name, from });
+    nodes.push({ id, label, text: truncateCodePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)" });
+    next = msg.parent_id;
+  }
+  if (nodes.length === 0) return { block: "", images, files };
+  nodes.reverse(); // fetched leaf→root; rendered oldest first, the way a transcript reads
+  const lines = nodes.map((node) => `(msg ${node.id}${node.label ? `, from ${node.label}` : ""}): ${node.text}`);
+  if (capped) lines.unshift("(…the chain continues above this point)");
+  return { block: `\n[reply chain above it, oldest first:\n${lines.join("\n")}]`, images, files };
+}
+
+/**
+ * Resolve a turn's inputs (module header): fetch the reply referent's content and resolve its reply
+ * chain, then load every image (vision) and file (disk). Primary failures throw; buffered resources
+ * degrade independently.
  */
 async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurnAttachments): Promise<ResolvedInputs> {
   const images = [...attachments.primary.images];
   const files = [...attachments.primary.files];
   let referentBlock = "";
+  let chain: ReplyChain = { block: "", images: [], files: [] };
   if (attachments.primary.parentId !== undefined) {
     const parentId = attachments.primary.parentId;
     // A referent is CONTEXT, not the ask. Losing it (deleted, restricted, unreadable) must not cost
@@ -113,32 +216,11 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       // The referent's own resources join the turn as primary inputs, carried by the PARENT message id.
       for (const key of parsed.imageKeys) images.push({ msg: parentId, key });
       for (const ref of parsed.fileRefs) files.push({ msg: parentId, key: ref.key, name: ref.name });
-      // getMessage's sender is `{ id, id_type, sender_type }` — a DIFFERENT shape from the event's
-      // sender (`{ sender_id: { open_id } }`), so the label is built here, not via parse.senderLabel.
-      //
-      // OWN means THIS app, not "an app". A group can hold several bots, and `sender_type === "app"`
-      // is true for every one of them — matching on it alone would tell the model it wrote another
-      // bot's message. The identity to compare is the app id, because an app sender carries
-      // `id_type: "app_id"`: the cached bot open_id answers a different question (who was @mentioned)
-      // and would never match here. A missing or unexpected id fails CLOSED — labelled by id, never
-      // claimed as the agent's own.
-      const appSender = parent.sender?.sender_type === "app";
-      const senderId = parent.sender?.id;
-      const ownMessage = appSender && senderId === t.appId;
-      // An app is not a person: labelling another bot's message "user cli_…" is the same misattribution
-      // in a quieter form, so the noun follows the sender type.
-      const from = ownMessage ? "you, the agent" : senderId ? `${appSender ? "app" : "user"} ${senderId}` : undefined;
+      const from = fetchedSenderLabel(parent.sender, t.appId);
       referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${truncateCodePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)"}]`;
-      // The chain STOPS here, at the one message the user pointed at. Walking further — to what that
-      // message was itself replying to — was built and removed: it reconstructs HISTORY out of reply
-      // pointers, and history is the session's job. That framing has no non-arbitrary answers (how
-      // many levels? what about the level above that? how is it deduplicated against what the session
-      // already holds? how does an IMAGE two levels up become prompt text at all?), and every one of
-      // those questions is a symptom of solving a session-layer problem in the prompt layer. The real
-      // gap it was papering over — a thread opened on a room answer starts with an EMPTY session while
-      // the room's session holds the exchange — belongs to memory inheritance (design/participant-
-      // model.md §8, rungs 3-4), where images and tool results come along for free because they are
-      // already in the history rather than being re-serialised into a prompt string.
+      // The referent's own parent starts the chain walk; the referent id seeds the cycle guard.
+      chain = await walkReplyChain(t, parent.parent_id, new Set([parentId]));
+      referentBlock += chain.block;
     }
   }
 
@@ -153,12 +235,19 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   // downloaded twice or rendered twice in the manifest.
   const primaryImages = new Set(images.map((ref) => `${ref.msg}\u0000${ref.key}`));
   const primaryFiles = new Set(files.map((ref) => `${ref.msg}\u0000${ref.key}`));
-  const bufferedImages = attachments.buffered.images.filter(
-    (ref) => !primaryImages.has(`${ref.messageId}\u0000${ref.key}`),
-  );
-  const bufferedFiles = attachments.buffered.files.filter(
-    (ref) => !primaryFiles.has(`${ref.messageId}\u0000${ref.key}`),
-  );
+  // Chain ancestors join the buffered tier BEHIND the context buffer's refs, deduplicated by the
+  // same message-scoped identity — a reply chain can point back into discussion that is still
+  // sitting in the buffer, and one download is enough.
+  const seenImages = new Set(attachments.buffered.images.map((ref) => `${ref.messageId}\u0000${ref.key}`));
+  const seenFiles = new Set(attachments.buffered.files.map((ref) => `${ref.messageId}\u0000${ref.key}`));
+  const bufferedImages = [
+    ...attachments.buffered.images,
+    ...chain.images.filter((ref) => !seenImages.has(`${ref.messageId}\u0000${ref.key}`)),
+  ].filter((ref) => !primaryImages.has(`${ref.messageId}\u0000${ref.key}`));
+  const bufferedFiles = [
+    ...attachments.buffered.files,
+    ...chain.files.filter((ref) => !seenFiles.has(`${ref.messageId}\u0000${ref.key}`)),
+  ].filter((ref) => !primaryFiles.has(`${ref.messageId}\u0000${ref.key}`));
   const backgroundImages: { image: ImageRef; ref: FeishuBufferedRef }[] = [];
   const backgroundFiles: { file: DownloadedFile; ref: FeishuBufferedRef }[] = [];
   let lost = 0;

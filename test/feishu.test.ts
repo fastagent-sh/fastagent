@@ -1684,15 +1684,11 @@ describe("turn flow", () => {
     expect(readFileSync(join(home, "files", "oc_1", "spec.pdf")).toString()).toBe("pdf-bytes");
   });
 
-  it("a thread opened on the agent's own card reads that card, and stops at it", async () => {
-    // Two halves. The card is READ (its own answers are cards, so a follow-up on one used to quote a
-    // bare `[interactive message]` marker), and it is attributed to the agent itself.
-    //
-    // The second half is the boundary: the referent's own `parent_id` is NOT followed. Walking it
-    // reconstructs history out of reply pointers, which is the session's job — and the question has no
-    // non-arbitrary answer (how many levels? deduplicated against the session how? an image two levels
-    // up serialised into prompt text how?). A thread starting with an empty session is a memory-
-    // inheritance gap (§8), not a referent-depth one.
+  it("a thread opened on the agent's own card reads that card AND the chain up to the ask", async () => {
+    // Three halves of pointer resolution. The card is READ (its own answers are cards, so a follow-up
+    // on one used to quote a bare `[interactive message]` marker); it is attributed to the agent
+    // itself; and the chain above it is walked to its root — the ask the card answered — so the model
+    // sees the exchange the user is pointing INTO, not just its last link.
     const fx = feishuFetch({
       "/im/v1/messages/om_bot_card": () =>
         Response.json({
@@ -1703,7 +1699,7 @@ describe("turn flow", () => {
               {
                 message_id: "om_bot_card",
                 msg_type: "interactive",
-                parent_id: "om_original_ask", // present, and deliberately NOT followed
+                parent_id: "om_original_ask", // the chain's next link — walked
                 body: {
                   content: JSON.stringify({
                     elements: [[{ tag: "text", text: "确认后我会给出方案；批准后再实现 SVG 足球页面。" }]],
@@ -1750,13 +1746,17 @@ describe("turn flow", () => {
     expect(prompt).toContain("SVG 足球页面"); // the card is READ, not reported as unreadable
     expect(prompt).not.toContain("[interactive message]");
     expect(prompt).toContain("from you, the agent"); // its own message, not "user cli_self"
-    expect(fx.calls("/im/v1/messages/om_original_ask", "GET")).toHaveLength(0); // the chain is not walked
+    // the ask arrives as the chain above the card, reaching its root
+    expect(prompt).toContain("[reply chain above it, oldest first:");
+    expect(prompt).toContain("(msg om_original_ask, from user ou_alice): 加一个新的页面，用 svg 构建一个足球的页面");
+    expect(fx.calls("/im/v1/messages/om_original_ask", "GET")).toHaveLength(1);
   });
 
-  it("another BOT's message is not the agent's own: no self-attribution", async () => {
+  it("another BOT's message is not the agent's own: no self-attribution, chain still walked", async () => {
     // A group can hold several bots, so `sender_type === "app"` answers "some app", not "this app".
     // Matching on it alone would tell the model it wrote a message it never sent. The identity
-    // compared is the app id the sender carries.
+    // compared is the app id the sender carries. The chain walks through the stranger's message all
+    // the same — it is the platform's structure, not a conversation the agent took part in.
     const fx = feishuFetch({
       "/im/v1/messages/om_other_bot": () =>
         Response.json({
@@ -1767,9 +1767,24 @@ describe("turn flow", () => {
               {
                 message_id: "om_other_bot",
                 msg_type: "interactive",
-                parent_id: "om_other_bots_ask", // present, and deliberately NOT followed
+                parent_id: "om_stranger_ask", // no shared prefix with om_other_bot — feishuFetch matches by substring
                 body: { content: JSON.stringify({ elements: [[{ tag: "text", text: "another bot's card" }]] }) },
                 sender: { id: "cli_someone_else", id_type: "app_id", sender_type: "app" },
+              },
+            ],
+          },
+        }),
+      "/im/v1/messages/om_stranger_ask": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_stranger_ask",
+                msg_type: "text",
+                body: { content: JSON.stringify({ text: "what the other bot answered" }) },
+                sender: { id: "ou_carol", id_type: "open_id", sender_type: "user" },
               },
             ],
           },
@@ -1783,7 +1798,201 @@ describe("turn flow", () => {
     expect(prompt).toContain("another bot's card"); // still decoded — the card branch is identity-blind
     expect(prompt).not.toContain("you, the agent"); // …but not claimed as its own
     expect(prompt).toContain("from app cli_someone_else"); // an app is not a person either
-    expect(fx.calls("/im/v1/messages/om_other_bots_ask", "GET")).toHaveLength(0);
+    expect(prompt).toContain("(msg om_stranger_ask, from user ou_carol): what the other bot answered");
+    expect(fx.calls("/im/v1/messages/om_stranger_ask", "GET")).toHaveLength(1);
+  });
+
+  it("resolves a reply chain to its root, capped visibly at 8 ancestors", async () => {
+    // The chain's natural bound is the platform's root; the cap is an IO guard. When it trips, the
+    // block SAYS the chain continues — a silent cut would read as the root.
+    const chainMsg = (id: string, text: string, parentId?: string) => () =>
+      Response.json({
+        code: 0,
+        msg: "ok",
+        data: {
+          items: [
+            {
+              message_id: id,
+              msg_type: "text",
+              ...(parentId ? { parent_id: parentId } : {}),
+              body: { content: JSON.stringify({ text }) },
+              sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+            },
+          ],
+        },
+      });
+    const routes: Record<string, () => Response> = {};
+    // om_c0 (the referent) … om_c9: each replies to the next — 9 ancestors above the referent.
+    for (let i = 0; i <= 9; i++)
+      routes[`/im/v1/messages/om_c${i}`] = chainMsg(`om_c${i}`, `hop ${i}`, i < 9 ? `om_c${i + 1}` : undefined);
+    const fx = feishuFetch(routes);
+    const { handler, calls, idle } = buildChannel();
+    await handler(feishuRequest(messageEvent({ id: "om_q1", text: "context?", parentId: "om_c0" })));
+    await idle();
+
+    const prompt = calls[0]?.prompt.text ?? "";
+    expect(prompt).toContain("[replied-to message (msg om_c0, from user ou_bob): hop 0]");
+    expect(prompt).toContain("(…the chain continues above this point)");
+    expect(prompt).toContain("(msg om_c8, from user ou_bob): hop 8"); // the 8th ancestor made it
+    expect(prompt).not.toContain("hop 9"); // the 9th did not…
+    expect(fx.calls("/im/v1/messages/om_c9", "GET")).toHaveLength(0); // …and was never fetched
+    // oldest first: the deepest fetched ancestor renders before the referent's immediate parent
+    expect(prompt.indexOf("hop 8")).toBeLessThan(prompt.indexOf("hop 1"));
+  });
+
+  it("a reply-chain cycle terminates, and a chain ancestor's image rides the buffered tier", async () => {
+    // Two boundaries in one walk. The cycle guard: om_r replies to om_s which replies back to om_r —
+    // corrupt platform data must end the walk, not the process. And the ancestor's image: chain
+    // attachments are CONTEXT, so they load on the buffered path (attributed in the manifest), never
+    // as primary inputs.
+    const fx = feishuFetch({
+      // Resource routes FIRST: a resource URL contains its message path as a prefix, and feishuFetch
+      // matches by substring in insertion order — a message route listed earlier would intercept it.
+      "/resources/chain_img": () =>
+        new Response(Buffer.from("img-bytes"), { status: 200, headers: { "content-type": "image/png" } }),
+      "/im/v1/messages/om_r": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_r",
+                msg_type: "text",
+                parent_id: "om_s",
+                body: { content: JSON.stringify({ text: "the quoted reply" }) },
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+      "/im/v1/messages/om_s": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_s",
+                msg_type: "image",
+                parent_id: "om_r", // the cycle
+                body: { content: JSON.stringify({ image_key: "chain_img" }) },
+                sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle } = buildChannel();
+    await handler(feishuRequest(messageEvent({ id: "om_q2", text: "what image?", parentId: "om_r" })));
+    await idle();
+
+    // fetched once — the cycle ended the walk (the resources fetch shares the URL prefix, so exclude it)
+    const msgFetches = fx.calls("/im/v1/messages/om_s", "GET").filter((c) => !c.url.includes("/resources/"));
+    expect(msgFetches).toHaveLength(1);
+    const prompt = calls[0]?.prompt.text ?? "";
+    expect(prompt).toContain("(msg om_s, from user ou_alice): [image]");
+    // the image itself arrived through the buffered path, attributed to its chain position
+    expect(prompt).toContain("vision image 1: from user ou_alice, msg om_s");
+    expect(calls[0]?.prompt.images).toHaveLength(1);
+    expect(fx.calls("/im/v1/messages/om_s/resources/chain_img", "GET")).toHaveLength(1);
+  });
+
+  it("an unloadable chain-ancestor attachment costs a note, never the turn", async () => {
+    // The referent's own resources are primary (fail-fast: the user pointed at them). A chain
+    // ancestor's are not — nobody pointed at them — so losing one degrades exactly like a buffered
+    // attachment: the turn runs and the model is told what is missing.
+    const fx = feishuFetch({
+      // Resource route FIRST — see the cycle test for why insertion order matters here.
+      "/resources/gone_img": () => Response.json({ code: 234001, msg: "resource expired" }, { status: 410 }),
+      "/im/v1/messages/om_t": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_t",
+                msg_type: "text",
+                parent_id: "om_u",
+                body: { content: JSON.stringify({ text: "about that picture" }) },
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+      "/im/v1/messages/om_u": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_u",
+                msg_type: "image",
+                body: { content: JSON.stringify({ image_key: "gone_img" }) },
+                sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+    });
+    const { handler, calls, idle } = buildChannel();
+    await handler(feishuRequest(messageEvent({ id: "om_q3", text: "that pic?", parentId: "om_t" })));
+    await idle();
+
+    expect(calls).toHaveLength(1); // the turn ran — a chain attachment is never primary
+    const prompt = calls[0]?.prompt.text ?? "";
+    expect(prompt).toContain("(msg om_u, from user ou_alice): [image]");
+    expect(prompt).toContain("1 attachment(s) from the earlier discussion are not loaded");
+    expect(calls[0]?.prompt.images ?? []).toHaveLength(0);
+    expect(fx.calls("/resources/gone_img", "GET")).toHaveLength(1);
+  });
+
+  it("an unreadable chain ancestor ends the walk with the fetched part kept", async () => {
+    const fx = feishuFetch({
+      "/im/v1/messages/om_v": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_v",
+                msg_type: "text",
+                parent_id: "om_w",
+                body: { content: JSON.stringify({ text: "quoted" }) },
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+      "/im/v1/messages/om_w": () =>
+        Response.json({
+          code: 0,
+          msg: "ok",
+          data: {
+            items: [
+              {
+                message_id: "om_w",
+                msg_type: "text",
+                parent_id: "om_gone", // resolves to an empty item list — deleted or invisible
+                body: { content: JSON.stringify({ text: "still here" }) },
+                sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+              },
+            ],
+          },
+        }),
+      // om_gone: the default GET handler answers { items: [] }
+    });
+    const { handler, calls, idle } = buildChannel();
+    await handler(feishuRequest(messageEvent({ id: "om_q4", text: "context?", parentId: "om_v" })));
+    await idle();
+
+    const prompt = calls[0]?.prompt.text ?? "";
+    expect(prompt).toContain("(msg om_w, from user ou_bob): still here"); // the fetched part is kept
+    expect(prompt).not.toContain("om_gone"); // the unreadable one is a warn, not a marker
+    expect(fx.calls("/im/v1/messages/om_gone", "GET")).toHaveLength(1); // tried, then stopped
   });
 
   it("a custom route's null remains a full ignore and does not enter the default context buffer", async () => {

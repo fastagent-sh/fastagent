@@ -238,7 +238,7 @@ A thread must start from something. Four rungs, increasing in cost:
 | Rung | Mechanism | Gives the thread |
 |---|---|---|
 | 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound |
-| **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** |
+| **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`), plus its reply chain up to the root** |
 | 3 | seed injection | the room's last N exchanges, in the thread's first prompt |
 | 4 | session fork | the room's entire history, reasoning and tool results included |
 
@@ -253,7 +253,18 @@ already answered in was tried: deciding whether the session really held it needs
 the channel RECEIVED the messages in between, which depends on a permission that changes over time
 while the record is durable. Every way of gating it failed toward a silently missing quote, for the
 price of one extra read.) An unreadable referent degrades to a marker in
-the prompt: context is not the ask, and losing it must not cost the answer. Rung 3 is the next
+the prompt: context is not the ask, and losing it must not cost the answer.
+
+The anchor resolves the referent's whole reply CHAIN, not just its last link: quoting a reply points
+at one link of an exchange, and the pointer is only fully resolved when the model can read what that
+link was replying to — walked to the platform-defined root (every reply threads back to one), capped
+at 8 ancestors as an IO guard that says so visibly when it trips. Ancestors' attachments ride the
+BUFFERED tier: nobody pointed at them, so an unloadable one costs a note, never the turn — only the
+referent's own resources stay primary. A one-hop version of this walk was once added and removed as a
+memory substitute; the questions that killed it (how many levels? deduplicated against the session
+how? an image two levels up serialised into prompt text how?) dissolved when the walk was rescoped to
+pointer resolution — the bound is the chain's own root rather than a picked number, attachments have
+a degradable tier, and history stays the session's job (the rungs below). Rung 3 is the next
 increment if anchors prove too narrow.
 
 Rung 4 (`SessionRepo.fork`, which would need an optional lineage field on `Scope`) is **not planned**:

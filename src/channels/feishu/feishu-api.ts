@@ -164,12 +164,14 @@ export interface FeishuApi {
    *
    *  `sender` is typed rather than `unknown` because the referent path READS it: an app-sent message
    *  whose id is THIS app's is the agent's own, which the prompt must say instead of attributing it to
-   *  "user cli_…". The message object carries more (`parent_id`, `root_id`, `thread_id`); they stay
-   *  unnamed until something reads them — this type is the surface in use, not a mirror of the wire. */
+   *  "user cli_…". `parent_id` is read by the reply-chain walk (invoke-turn): the message this one
+   *  itself replied to. The message object carries more (`root_id`, `thread_id`); they stay unnamed
+   *  until something reads them — this type is the surface in use, not a mirror of the wire. */
   getMessage(messageId: string): Promise<
     | {
         message_id?: string;
         msg_type?: string;
+        parent_id?: string;
         body?: { content?: string };
         mentions?: unknown[];
         sender?: { id?: string; id_type?: string; sender_type?: string };
