@@ -1750,6 +1750,22 @@ describe("turn flow", () => {
     expect(prompt).toContain("[reply chain above it, oldest first:");
     expect(prompt).toContain("(msg om_original_ask, from user ou_alice): 加一个新的页面，用 svg 构建一个足球的页面");
     expect(fx.calls("/im/v1/messages/om_original_ask", "GET")).toHaveLength(1);
+    // …and the scope names the thread's LINEAGE: the room it branched from, plus the ids that can
+    // locate the branch point in the room's session — the referent (whose id is unfindable there:
+    // the card was sent after its turn) and then the chain, whose ids DID pass through room turns.
+    expect(calls[0]?.scope.session).toBe("feishu:oc_1:omt_on_card");
+    expect(calls[0]?.scope.parentSession).toBe("feishu:oc_1");
+    expect(calls[0]?.scope.branchHints).toEqual(["om_bot_card", "om_original_ask"]);
+  });
+
+  it("a main-timeline turn carries no lineage — the room branched from nothing", async () => {
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await handler(feishuRequest(messageEvent({ id: "om_plain", text: "hello" })));
+    await idle();
+    expect(calls[0]?.scope.session).toBe("feishu:oc_1");
+    expect(calls[0]?.scope.parentSession).toBeUndefined();
+    expect(calls[0]?.scope.branchHints).toBeUndefined();
   });
 
   it("another BOT's message is not the agent's own: no self-attribution, chain still walked", async () => {

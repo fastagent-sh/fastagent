@@ -252,7 +252,11 @@ place rather than the individual ask ([design note](design/participant-model.md)
 | Direct-message thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | always answered — a p2p chat has one human, so there is nothing to disambiguate and no participation is recorded |
 
 There are no session modes to choose. A room has one memory that everyone in it shares, so a colleague
-can follow up on someone else's question; a thread is a separate place with its own.
+can follow up on someone else's question; a thread is a separate place with its own — **started from
+what the room knew**: a new thread's session inherits the room's recent history (up to the message the
+thread branched from, windowed to the newest ≈50 exchanges), including images and tool results. The
+inheritance happens once, when the thread's session is created; after that the two places are
+independent, and the room never sees what the thread discusses.
 
 **Starting a thread.** Mention the Agent inside a thread once (typically by replying to one of its
 messages and creating a topic). It answers there, which makes it a participant, and every later bare

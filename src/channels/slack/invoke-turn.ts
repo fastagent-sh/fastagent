@@ -108,5 +108,5 @@ export async function* invokeSlackTurn(
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };
-  yield* streamTurnWithBusyRetry(agent, session, prompt, { label: transport.label, onCompleted, busyRetry });
+  yield* streamTurnWithBusyRetry(agent, { session }, prompt, { label: transport.label, onCompleted, busyRetry });
 }

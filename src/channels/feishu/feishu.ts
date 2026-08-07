@@ -45,6 +45,7 @@ import {
   cloudEnvelope,
   defaultFeishuRoute,
   feishuEnvelope,
+  parentPlaceKey,
   placeKey,
   senderId,
   senderLabel,
@@ -462,13 +463,23 @@ function createFeishuRuntimeFactory(
           images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
           files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key, name: ref.name })),
         });
+        // A thread place names the room it branched from; a main place has no parent. Derived from
+        // the session key by its format owner (parse.parentPlaceKey) — the key IS the place identity.
+        const parentSession = parentPlaceKey(rec.session);
         try {
           await streamFeishuReply(
             invokeFeishuTurn(
               agent,
               rec.session,
               prompt,
-              { api, chatId: rec.chatId, filesDir: join(stateHome, "files"), label, appId },
+              {
+                api,
+                chatId: rec.chatId,
+                filesDir: join(stateHome, "files"),
+                label,
+                appId,
+                ...(parentSession !== undefined ? { parentSession } : {}),
+              },
               { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
               () => {
                 // Drop intent first: a crash between these writes may re-fold answered context later,

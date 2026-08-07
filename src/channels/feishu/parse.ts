@@ -68,6 +68,17 @@ export function placeKey(kind: string, message: Pick<FeishuMessage, "chat_id" | 
   return message.thread_id ? `${chat}:${message.thread_id}` : chat;
 }
 
+/**
+ * The place a THREAD place branched from — its chat's main place — or undefined for a main place,
+ * which branched from nothing. Lives here because this module owns the key format: the split is
+ * safe exactly because {@link placeKey} built the key (the kind brand and Feishu's ids carry no
+ * `:`), and no other module may assume that.
+ */
+export function parentPlaceKey(key: string): string | undefined {
+  const parts = key.split(":");
+  return parts.length === 3 ? `${parts[0]}:${parts[1]}` : undefined;
+}
+
 /** The canonical Feishu-branded prompt envelope. */
 export function feishuEnvelope(event: FeishuMessageEvent): string {
   return cloudEnvelope(event, "feishu");
