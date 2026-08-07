@@ -10,7 +10,8 @@
  * Continuity = same backing store + same session id: in-memory continuity dies with the instance;
  * jsonl survives process restarts (disk is the truth).
  */
-import { stat } from "node:fs/promises";
+import { rename, stat } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
 import type { AgentMessage, Session, SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -187,8 +188,15 @@ export async function activePathEntries(session: Session): Promise<SessionTreeEn
 
 /** Inheritance window: at most this many exchanges of the parent reach the child's model context. */
 const INHERIT_MAX_EXCHANGES = 50;
-/** …and at most roughly this many tokens (~1/4 of a 200K context: generous, not everything). */
+/** …and at most roughly this many tokens (~1/4 of a 200K context: generous, not everything). Both
+ *  limits govern how far the window EXTENDS into older history — the newest exchange is a FLOOR,
+ *  kept whole even when it alone exceeds the budget: the mark's boundary is entry-granular, and an
+ *  inheritance that drops the exchange the thread branched off would be no inheritance at all. */
 const INHERIT_MAX_TOKENS = 50_000;
+/** Branch hints are IDS, not payloads: each one costs a scan over the parent's serialized path, and
+ *  the wire accepts arbitrary arrays — so the engine caps them where the cost lives. */
+const MAX_BRANCH_HINTS = 16;
+const MAX_BRANCH_HINT_CHARS = 128;
 /** A vision image is priced FLAT — what a provider bills for a resized image, roughly — because its
  *  base64 length (~1M chars for a photo) measures storage, not context: pricing it by chars would
  *  let one photo evict the whole text window. */
@@ -203,10 +211,9 @@ function isUserMessage(entry: SessionTreeEntry | undefined): boolean {
 
 /** Rough token estimate for windowing — text at chars/4, images flat. Precision is not the point:
  *  the window is a budget, and being 20% off moves a boundary by an exchange, not correctness. */
-function estimateEntryTokens(entry: SessionTreeEntry): number {
-  if (entry.type !== "message") return 0;
+function estimateMessageTokens(message: AgentMessage): number {
   // AgentMessage is a role-keyed union and not every member carries `content` — read it loosely.
-  const content = (entry.message as { content?: unknown }).content;
+  const content = (message as { content?: unknown }).content;
   if (typeof content === "string") return Math.ceil(content.length / 4);
   if (!Array.isArray(content)) return 0;
   let tokens = 0;
@@ -219,6 +226,20 @@ function estimateEntryTokens(entry: SessionTreeEntry): number {
   return tokens;
 }
 
+function estimateEntryTokens(entry: SessionTreeEntry): number {
+  if (entry.type !== "message") return 0;
+  return estimateMessageTokens(entry.message);
+}
+
+/** A compaction entry's summary and retained tail DO reach the model — they are the floor under
+ *  every window that starts above the compaction, so the budget must count them. */
+function estimateCompactionTokens(entry: SessionTreeEntry | undefined): number {
+  if (entry?.type !== "compaction") return 0;
+  let tokens = Math.ceil(entry.summary.length / 4);
+  for (const message of entry.retainedTail ?? []) tokens += estimateMessageTokens(message);
+  return tokens;
+}
+
 /**
  * Find the fork target on the parent's active path: the LAST message whose content carries a hint
  * (the most recent turn that talked about that message), extended forward to the end of its exchange
@@ -226,14 +247,22 @@ function estimateEntryTokens(entry: SessionTreeEntry): number {
  * order; the first that matches anywhere wins. No match → undefined (the caller forks the present).
  */
 function locateBranchPoint(path: SessionTreeEntry[], hints: string[]): string | undefined {
-  for (const hint of hints) {
-    if (!hint) continue;
+  const usable = hints
+    .filter((hint) => hint.length > 0 && hint.length <= MAX_BRANCH_HINT_CHARS)
+    .slice(0, MAX_BRANCH_HINTS);
+  if (usable.length < hints.length) {
+    log.warn(
+      `[fastagent] ignored ${hints.length - usable.length} branch hint(s) (over ${MAX_BRANCH_HINTS} hints or ${MAX_BRANCH_HINT_CHARS} chars each) — hints are message ids, not payloads`,
+    );
+  }
+  if (usable.length === 0) return undefined;
+  // Serialize each message ONCE — the scan is hints × entries, and stringify must not sit in the
+  // inner loop. The whole message, not just content: shape-agnostic, and a hint is a platform id —
+  // a false positive would need the id to appear outside content, which is where ids live anyway.
+  const serialized = path.map((entry) => (entry.type === "message" ? JSON.stringify(entry.message) : ""));
+  for (const hint of usable) {
     for (let i = path.length - 1; i >= 0; i--) {
-      const entry = path[i];
-      if (entry?.type !== "message") continue;
-      // The whole message, not just content: shape-agnostic, and a hint is a platform id — a false
-      // positive would need the id to appear outside content, which is where ids live anyway.
-      if (!JSON.stringify(entry.message).includes(hint)) continue;
+      if (!serialized[i]?.includes(hint)) continue;
       let j = i + 1;
       while (j < path.length && !isUserMessage(path[j])) j++;
       return path[j - 1]?.id;
@@ -258,6 +287,9 @@ async function markInheritanceWindow(child: Session): Promise<void> {
     }
   }
   const scanned = path.slice(scanFrom);
+  // The compaction's own summary + retained tail reach the model regardless of where the window
+  // lands, so they charge the budget as a base cost — not estimating them would over-admit.
+  const baseTokens = estimateCompactionTokens(path[scanFrom - 1]);
   const starts: number[] = [];
   scanned.forEach((entry, i) => {
     if (isUserMessage(entry)) starts.push(i);
@@ -273,7 +305,7 @@ async function markInheritanceWindow(child: Session): Promise<void> {
     const exchanges = starts.length - k;
     const startIdx = starts[k];
     if (startIdx === undefined) break;
-    if (exchanges > INHERIT_MAX_EXCHANGES || (suffixTokens[startIdx] ?? 0) > INHERIT_MAX_TOKENS) break;
+    if (exchanges > INHERIT_MAX_EXCHANGES || baseTokens + (suffixTokens[startIdx] ?? 0) > INHERIT_MAX_TOKENS) break;
     chosen = k;
   }
   if (chosen === 0) return; // the whole visible history fits the window
@@ -293,7 +325,13 @@ interface InheritRepo<M> {
   find(id: string): Promise<M | undefined>;
   open(meta: M): Promise<Session>;
   create(id: string): Promise<Session>;
-  fork(meta: M, id: string, atEntryId: string): Promise<Session>;
+  /** Fork the parent into a DRAFT that the store's normal lookups cannot discover — pi's fork
+   *  creates the target file first and appends entries after, so a discoverable half-written child
+   *  would read as "the decision was taken" forever (openOrCreate short-circuits on existence). */
+  forkDraft(meta: M, id: string, atEntryId: string): Promise<Session>;
+  /** Atomically publish a FINISHED draft (repaired + window-marked) under its real id. Everything
+   *  before this is invisible and repeatable; everything after it is complete. */
+  publish(draft: Session, parentMeta: M): Promise<Session>;
   /** Journal size, when the backend has one — guards the read-everything fork. */
   bytes?(meta: M): Promise<number>;
 }
@@ -338,11 +376,13 @@ async function createInheriting<M>(
         `[fastagent] no branch hint matched in parent "${parentId}" — inheriting from its present instead of the branch point`,
       );
     }
-    const child = await repo.fork(parentMeta, id, at ?? leaf.id);
-    await reconcileInterruptedToolCalls(child);
-    await markInheritanceWindow(child);
-    return child;
+    const draft = await repo.forkDraft(parentMeta, id, at ?? leaf.id);
+    await reconcileInterruptedToolCalls(draft);
+    await markInheritanceWindow(draft);
+    return await repo.publish(draft, parentMeta);
   } catch (error) {
+    // A failure ANYWHERE above leaves no discoverable child (drafts live outside the store's
+    // lookups), so falling back to create cannot produce a second file under the same id.
     log.warn(`[fastagent] could not fork parent session "${parentId}" (${String(error)}) — starting empty`);
     return repo.create(id);
   }
@@ -355,7 +395,10 @@ export function inMemorySessionStore(): PiSessionStore & PiSessionReader {
     find: async (id) => (await repo.list()).find((m) => m.id === id),
     open: (m) => repo.open(m),
     create: (id) => repo.create({ id }),
-    fork: (m, id, atEntryId) => repo.fork(m, { id, entryId: atEntryId, position: "at" }),
+    // In-memory needs no draft indirection: partial state cannot outlive the process, which is the
+    // only reader — the crash the jsonl dance guards against has nothing durable to poison here.
+    forkDraft: (m, id, atEntryId) => repo.fork(m, { id, entryId: atEntryId, position: "at" }),
+    publish: async (draft) => draft,
   };
   return {
     async openOrCreate(sessionId, inherit) {
@@ -388,11 +431,34 @@ export function jsonlSessionStore(options: {
   const cwd = options.cwd ?? process.cwd();
   const forkMaxBytes = options.forkMaxBytes ?? FORK_MAX_BYTES;
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: options.dir });
+  // Drafts are forked into a sibling root INSIDE the store dir but OUTSIDE every lookup: `list({
+  // cwd })` scans only `<dir>/<encodedCwd>`, and a cwd-less `list()` scans `<dir>/*/​*.jsonl` — one
+  // level, which `.inherit-tmp/<encodedCwd>/*.jsonl` sits below. A crash mid-inheritance therefore
+  // leaves only invisible garbage (bounded by crash count; the next attempt forks a fresh draft —
+  // never resumed, so staleness cannot poison anything), and the real directory gains the child in
+  // exactly one atomic rename, already repaired and window-marked.
+  const draftRepo = new JsonlSessionRepo({
+    fs: new NodeExecutionEnv({ cwd }),
+    sessionsRoot: join(options.dir, ".inherit-tmp"),
+  });
   const adapter: InheritRepo<Awaited<ReturnType<JsonlSessionRepo["list"]>>[number]> = {
     find: async (id) => (await repo.list({ cwd })).find((m) => m.id === id),
     open: (m) => repo.open(m),
     create: (id) => repo.create({ id, cwd }),
-    fork: (m, id, atEntryId) => repo.fork(m, { cwd, id, entryId: atEntryId, position: "at" }),
+    // `fork` opens the source by its metadata's absolute path, so the draft repo reads the real
+    // repo's parent file directly while writing into its own root.
+    forkDraft: (m, id, atEntryId) => draftRepo.fork(m, { cwd, id, entryId: atEntryId, position: "at" }),
+    publish: async (draft, parentMeta) => {
+      // The interface erases the metadata generic; a jsonl draft's metadata always carries `path`.
+      const draftPath = ((await draft.getMetadata()) as unknown as { path: string }).path;
+      // The parent lives in the REAL cwd directory — its metadata is the authoritative way to name
+      // it (no re-deriving pi's cwd encoding). Same filesystem, so the rename is atomic.
+      const target = join(dirname(parentMeta.path), basename(draftPath));
+      await rename(draftPath, target);
+      const published = (await repo.list({ cwd })).find((m) => m.path === target);
+      if (!published) throw new Error(`published session vanished: ${target}`);
+      return repo.open(published);
+    },
     bytes: async (m) => (await stat(m.path)).size,
   };
   return {

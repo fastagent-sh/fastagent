@@ -505,7 +505,7 @@ describe("turn flow", () => {
     // not a round number: worst-case platform ids stay far under it.
     const worstCase = `feishu:oc_${"a".repeat(32)}:omt_${"b".repeat(32)}`;
     expect(encodeURIComponent(worstCase).length).toBeLessThan(255);
-    expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice]");
+    expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice, msg om_dm1]");
     expect(calls[0]?.prompt.text).toContain("hello there");
     // The reply contract rides every chat prompt: the channel owns delivery — no send-tool answering.
     expect(calls[0]?.prompt.text).toContain("delivered to the current chat by the channel itself");
@@ -1765,6 +1765,23 @@ describe("turn flow", () => {
     await idle();
     expect(calls[0]?.scope.session).toBe("feishu:oc_1");
     expect(calls[0]?.scope.parentSession).toBeUndefined();
+    expect(calls[0]?.scope.branchHints).toBeUndefined();
+  });
+
+  it("a ROUTED session is opaque: no lineage, even when its id looks like a place key", async () => {
+    // route().session's contract is opaque. A three-segment id like "tenant:user:alice" must not be
+    // re-parsed as `<kind>:<chat>:<thread>` — that would let a thread message inherit from a session
+    // ("tenant:user") that belongs to someone else entirely: cross-session injection.
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel({
+      route: () => ({ session: "tenant:user:alice" }),
+    });
+    await handler(
+      feishuRequest(messageEvent({ id: "om_routed", threadId: "omt_x", parentId: "om_root", text: "in a topic" })),
+    );
+    await idle();
+    expect(calls[0]?.scope.session).toBe("tenant:user:alice");
+    expect(calls[0]?.scope.parentSession).toBeUndefined(); // opaque — never split
     expect(calls[0]?.scope.branchHints).toBeUndefined();
   });
 

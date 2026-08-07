@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
+import { feishuEnvelope } from "../src/channels/feishu/parse.ts";
 import { inMemorySessionStore, jsonlSessionStore, type PiSessionStore } from "../src/engines/pi/sessions.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -97,6 +98,32 @@ describe("session inheritance (fork-on-first-open)", () => {
     expect(seen).not.toContain("q3 unrelated"); // nothing after the branch point
   });
 
+  it("the REAL feishu envelope carries the id the hints search for — no hand-written markers", async () => {
+    // The whole hint mechanism stands on one fact: a summoning message's own id enters the parent
+    // session via the prompt envelope. This test builds the parent text with the actual envelope
+    // (channel code, not a test-crafted string), so if the envelope ever drops the id, THIS fails —
+    // not just the field.
+    const { store } = await freshStore();
+    const parent = await store.openOrCreate("room");
+    const envelope = feishuEnvelope({
+      sender: { sender_id: { open_id: "ou_alice" }, sender_type: "user" },
+      message: { message_id: "om_real_ask", chat_id: "oc_1", chat_type: "group", message_type: "text", content: "{}" },
+    } as never);
+    await parent.appendMessage(um(`${envelope}\n加一个足球页面`));
+    await parent.appendMessage(am("a1 方案如下"));
+    await parent.appendMessage(um("q2 later unrelated"));
+    await parent.appendMessage(am("a2 later answer"));
+
+    // The thread's hints: the card id (never in any session — sent after its turn) then the ask.
+    const child = await store.openOrCreate("thread", {
+      parentSession: "room",
+      branchHints: ["om_bot_card_unfindable", "om_real_ask"],
+    });
+    const seen = await contextText(child);
+    expect(seen).toContain("a1 方案如下"); // fork landed at the hinted exchange…
+    expect(seen).not.toContain("later unrelated"); // …not at the leaf
+  });
+
   it("no hint match inherits the parent's present, not nothing", async () => {
     const { store } = await freshStore();
     await buildParent(store, "room", 3);
@@ -183,6 +210,87 @@ describe("session inheritance (fork-on-first-open)", () => {
 
     const child = await store.openOrCreate("thread", { parentSession: "room" });
     expect(await child.getEntries()).toHaveLength(0);
+  });
+
+  it("a crashed draft cannot poison the store — drafts live outside every lookup", async () => {
+    // Simulates a crash mid-inheritance: garbage under `.inherit-tmp` (where drafts are forked)
+    // must be invisible — openIfExists finds nothing, and the next inheritance attempt runs afresh
+    // and publishes a complete child. Exactly ONE file under the real directory afterwards.
+    const { dir, store } = await freshStore();
+    await buildParent(store, "room", 2);
+    const realCwdDir = readdirSync(dir)
+      .filter((d) => d !== ".inherit-tmp")
+      .map((d) => join(dir, d))[0] as string;
+    const tmpCwdDir = join(dir, ".inherit-tmp", realCwdDir.split("/").at(-1) as string);
+    mkdirSync(tmpCwdDir, { recursive: true });
+    writeFileSync(join(tmpCwdDir, "2020-01-01T00-00-00-000Z_thread.jsonl"), "{torn garbage");
+
+    expect(await store.openIfExists("thread")).toBeUndefined(); // the draft realm is not discoverable
+    const child = await store.openOrCreate("thread", { parentSession: "room" });
+    expect(await contextText(child)).toContain("a2 answer"); // inheritance ran to completion
+    const published = readdirSync(realCwdDir).filter((f) => f.endsWith("_thread.jsonl"));
+    expect(published).toHaveLength(1); // one atomic publish, no duplicates
+  });
+
+  it("a failed inheritance leaves exactly one file — the empty fallback, never a half-child", async () => {
+    const { dir, store } = await freshStore();
+    await buildParent(store, "room", 2);
+    const realCwdDir = readdirSync(dir)
+      .filter((d) => d !== ".inherit-tmp")
+      .map((d) => join(dir, d))[0] as string;
+    // Tear the parent so the fork's read throws mid-inheritance.
+    const parentFile = readdirSync(realCwdDir)
+      .filter((f) => f.includes("_room"))
+      .map((f) => join(realCwdDir, f))[0] as string;
+    const whole = readFileSync(parentFile, "utf8");
+    writeFileSync(parentFile, whole.slice(0, whole.length - 20));
+
+    const child = await store.openOrCreate("thread", { parentSession: "room" });
+    expect(await child.getEntries()).toHaveLength(0);
+    const files = readdirSync(realCwdDir).filter((f) => f.endsWith("_thread.jsonl"));
+    expect(files).toHaveLength(1);
+  });
+
+  it("branch hints are capped — ids, not payloads", async () => {
+    const { store } = await freshStore();
+    const parent = await store.openOrCreate("room");
+    await parent.appendMessage(um(`q1 wall ${"L".repeat(300)}`));
+    await parent.appendMessage(am("a1 the early answer"));
+    await parent.appendMessage(um("q2 about (msg om_target)"));
+    await parent.appendMessage(am("a2 the hinted answer"));
+    await parent.appendMessage(um("q3 later"));
+    await parent.appendMessage(am("a3 the leaf answer"));
+
+    // An over-long "hint" (a payload, not an id) WOULD match the wall-of-text message — the length
+    // cap must drop it BEFORE it scans. And a matching id sitting beyond the 16-hint cap is ignored
+    // too. Both dropped → leaf fallback.
+    const child = await store.openOrCreate("thread", {
+      parentSession: "room",
+      branchHints: ["L".repeat(200), ...Array.from({ length: 16 }, (_, i) => `om_nope_${i}`), "om_target"],
+    });
+    const seen = await contextText(child);
+    expect(seen).toContain("a3 the leaf answer"); // fell back to the present
+    expect(seen).toContain("a1 the early answer"); // …which includes everything (no early-fork cut)
+  });
+
+  it("a parent compaction's summary charges the window budget — it reaches the model too", async () => {
+    // The scan starts BELOW the parent's last compaction, but that compaction's summary (and
+    // retained tail) still enter the child's model context. Estimating them as zero would over-admit:
+    // here the summary alone is ~40K of the 50K budget, so only the newest heavy exchange fits.
+    const { store } = await freshStore();
+    const parent = await store.openOrCreate("room");
+    await parent.appendMessage(um("q0 pre-compaction"));
+    await parent.appendMessage(am("a0 pre-compaction"));
+    await parent.appendCompaction(`ROOM SUMMARY ${"S".repeat(160_000)}`, undefined, 99_000);
+    for (let i = 1; i <= 5; i++) {
+      await parent.appendMessage(um(`q${i} ${"x".repeat(30_000)}`)); // ≈7.5K tokens each
+      await parent.appendMessage(am(`a${i} short`));
+    }
+    const child = await store.openOrCreate("thread", { parentSession: "room" });
+    const seen = await contextText(child);
+    expect(seen).toContain("4 earlier exchange(s) are not shown"); // only the newest exchange fit
+    expect(seen).toContain("a5 short");
+    expect(seen).not.toContain("a4 short");
   });
 
   it("an oversize parent is skipped — inheriting nothing beats stalling the first turn", async () => {

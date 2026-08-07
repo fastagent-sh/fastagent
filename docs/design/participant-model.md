@@ -287,7 +287,9 @@ to the end of its exchange — a mid-exchange fork inherits a question without i
 falls back to the room's present, with a warn). What the model sees is then bounded by one
 mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, images priced
 flat — which IS rung 3's seed, generated from real session entries instead of re-serialized prompt
-text, so images and tool results come along for free. Every edge (missing parent, oversize journal,
+text, so images and tool results come along for free. Both limits govern how far the window extends
+into older history; the newest exchange is a floor, kept whole even when it alone exceeds the
+budget — an inheritance that drops the exchange the thread branched off would be no inheritance. Every edge (missing parent, oversize journal,
 torn tail line, a dangling tool call from forking a mid-turn room) fails toward an empty session
 with a warn: context is not the ask, and a thread must not lose its first turn to it.
 

@@ -68,17 +68,6 @@ export function placeKey(kind: string, message: Pick<FeishuMessage, "chat_id" | 
   return message.thread_id ? `${chat}:${message.thread_id}` : chat;
 }
 
-/**
- * The place a THREAD place branched from — its chat's main place — or undefined for a main place,
- * which branched from nothing. Lives here because this module owns the key format: the split is
- * safe exactly because {@link placeKey} built the key (the kind brand and Feishu's ids carry no
- * `:`), and no other module may assume that.
- */
-export function parentPlaceKey(key: string): string | undefined {
-  const parts = key.split(":");
-  return parts.length === 3 ? `${parts[0]}:${parts[1]}` : undefined;
-}
-
 /** The canonical Feishu-branded prompt envelope. */
 export function feishuEnvelope(event: FeishuMessageEvent): string {
   return cloudEnvelope(event, "feishu");
@@ -93,6 +82,12 @@ export function cloudEnvelope(event: FeishuMessageEvent, tag: FeishuCloudKind): 
     `chat ${message.chat_id} (${message.chat_type})`,
     message.thread_id ? `topic ${message.thread_id}` : undefined,
     from ? `from ${from}` : undefined,
+    // The message's own id is LOAD-BEARING, not decoration: it is the only way this message's id
+    // enters the session transcript, and session inheritance locates a thread's branch point by
+    // searching the parent transcript for exactly these ids (scope.branchHints — sessions.ts).
+    // Remove it and every thread quietly inherits from the room's present instead of the branch
+    // point. It also lets the model name what it is answering in a busy chat.
+    `msg ${message.message_id}`,
   ]
     .filter(Boolean)
     .join(", ");
