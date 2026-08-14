@@ -4,11 +4,23 @@
  * it into the harness alongside the selected `model`; the two must come from the same collection so
  * the model's provider auth is in scope.
  */
+import { join } from "node:path";
 import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
+import { resolveStateRoot } from "../../paths.ts";
+
+/** The DEFINITION-LOCAL custom-endpoint file, in pi's own models.json schema (see pi's docs/models.md):
+ *  declare a self-hosted / gateway endpoint as `{ providers: { <id>: { baseUrl, api, apiKey, models } } }`
+ *  and select it with a `<id>/<modelId>` model spec. Keys belong in the environment — `apiKey` supports
+ *  `"$ENV_VAR"` interpolation and `"!command"` — with the NAME listed in `deploy.secrets` so the value
+ *  travels to the host. Living in the agent dir is the whole point: it is part of the definition, so it
+ *  is baked into the deployed image. pi's MACHINE-GLOBAL `~/.pi/agent/models.json` stays unread — that
+ *  one is builder-machine state, and reading it would make an agent work locally and lose its model on
+ *  deploy. */
+const AGENT_MODELS_JSON = "models.json";
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
   /** Credentials file path. Defaults to the global `~/.fastagent/.secrets/auth.json`; the directory opener passes
@@ -37,20 +49,41 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
 /**
  * The `ModelRuntime`-shaped sibling of {@link createPiModels} — the SAME hub semantics (built-in
  * providers + fastagent's credential store at `authPath`) in the type pi's session services require
- * (`createAgentSessionServices({ modelRuntime })`). Builtins only (`modelsPath: null` — pi's
- * machine-global models.json is definition-foreign) and no availability network, so the model
- * surface equals serving's. No `providers` option: `ModelRuntime` registers providers by config
- * record, not `Provider` instance — accepting the option and dropping it would be a silent no-op;
- * add the mapping when a consumer actually needs it.
+ * (`createAgentSessionServices({ modelRuntime })`). Built-ins PLUS the agent's own
+ * {@link AGENT_MODELS_JSON} when `agentDir` is given (a dir-less caller gets built-ins only), and no
+ * availability network, so the model surface equals serving's.
+ *
+ * `ModelRuntime` also takes `Provider` INSTANCES via `registerNativeProvider` (pi 0.83); the
+ * declarative file is what this rung wires because it is data that travels with the definition.
  */
-export function createPiModelRuntime(
-  options: FastagentAuthOptions & { authPath?: string } = {},
+export async function createPiModelRuntime(
+  options: FastagentAuthOptions & {
+    authPath?: string;
+    /** The agent dir, whose {@link AGENT_MODELS_JSON} declares custom endpoints. Omit for built-ins only. */
+    agentDir?: string;
+    /** Where the dynamic model-catalog cache goes; defaults to the agent's resolved state root. */
+    stateRoot?: string;
+  } = {},
 ): Promise<ModelRuntime> {
-  return ModelRuntime.create({
+  const { agentDir } = options;
+  const runtime = await ModelRuntime.create({
     credentials: fastagentCredentialStore(options.authPath, { warn: options.warn }),
-    modelsPath: null,
+    modelsPath: agentDir ? join(agentDir, AGENT_MODELS_JSON) : null,
+    // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`,
+    // which would write a generated cache INTO the author's agent dir — and `deploy` bakes the whole
+    // tree, so it would travel into the image as stale state. Machinery belongs under the state root.
+    ...(agentDir
+      ? { modelsStorePath: join(options.stateRoot ?? resolveStateRoot(agentDir), "models-store.json") }
+      : {}),
     allowModelNetwork: false,
   });
+  // A malformed models.json does NOT throw upstream — `create` resolves with the built-ins and parks the
+  // reason in getError(). Left unread, a typo'd endpoint would silently degrade to "provider not in
+  // registry" at model-resolution time, i.e. the silent fallback this codebase forbids. The upstream
+  // message already names both the reason and the file, so it is surfaced verbatim.
+  const error = runtime.getError();
+  if (error) throw new Error(error);
+  return runtime;
 }
 
 /** Per-provider auth status for the first-run model picker: usable now (with the source label), not

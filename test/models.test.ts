@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
-import { probeApiKey, providerAuthStatuses } from "../src/engines/pi/models.ts";
+import { createPiModelRuntime, probeApiKey, probeAuthSource, providerAuthStatuses } from "../src/engines/pi/models.ts";
+import { resolveModel } from "../src/engines/pi/config.ts";
 
 type FakeProvider = {
   id: string;
@@ -92,5 +97,76 @@ describe("probeApiKey (the post-login quick-fail check)", () => {
       message: "forbidden",
     });
     expect(await probeApiKey(stub("throw"), model)).toEqual({ state: "unknown", message: "store unreadable" });
+  });
+});
+
+describe("models.json: definition-local custom endpoints (createPiModelRuntime)", () => {
+  /** An agent dir with `models.json` — the file that declares a self-hosted / gateway endpoint. */
+  async function agentWith(modelsJson: string | undefined): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-modelsjson-"));
+    await writeFile(join(dir, "fastagent.config.ts"), "export default {};");
+    if (modelsJson !== undefined) await writeFile(join(dir, "models.json"), modelsJson);
+    return dir;
+  }
+
+  const GATEWAY = JSON.stringify({
+    providers: {
+      mygw: {
+        baseUrl: "http://vllm.internal:8000/v1",
+        api: "openai-completions",
+        apiKey: "$FASTAGENT_TEST_GW_KEY",
+        models: [{ id: "deepseek-v3", contextWindow: 65536 }],
+      },
+    },
+  });
+
+  it("a declared endpoint becomes a resolvable model, and its key comes from the environment", async () => {
+    const dir = await agentWith(GATEWAY);
+    const runtime = await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") });
+
+    // The point of the feature: `<id>/<modelId>` resolves, carrying the AUTHOR's endpoint — not a
+    // built-in's. contextWindow is the declared one; maxTokens is pi's documented default (16384),
+    // which is what makes "endpoint + key + model name" a complete config.
+    const model = resolveModel(runtime, "mygw/deepseek-v3");
+    expect(model.baseUrl).toBe("http://vllm.internal:8000/v1");
+    expect(model.contextWindow).toBe(65536);
+    expect(model.maxTokens).toBe(16384);
+    // Built-ins are kept alongside, so a custom endpoint is additive, never a replacement.
+    expect(runtime.getProvider("anthropic")).toBeDefined();
+
+    // `apiKey: "$ENV"` must interpolate on the SERVING path too (pi documents it for the TUI): the key
+    // stays out of the file, which is what lets models.json be committed and baked into an image.
+    process.env.FASTAGENT_TEST_GW_KEY = "sk-from-env";
+    try {
+      expect(await probeAuthSource(runtime, "mygw/deepseek-v3")).toBeDefined();
+    } finally {
+      delete process.env.FASTAGENT_TEST_GW_KEY;
+    }
+  });
+
+  it("a malformed models.json fails visibly instead of degrading to the built-ins", async () => {
+    // Upstream `ModelRuntime.create` RESOLVES on a parse error and parks the reason in getError(),
+    // so an unread error would surface later as a bare "unknown model" — the silent fallback this
+    // codebase forbids. The throw must name the file so the typo is findable.
+    const dir = await agentWith("{ not json");
+    await expect(createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") })).rejects.toThrow(
+      /models\.json/,
+    );
+  });
+
+  it("no models.json is the normal case: built-ins load, nothing throws", async () => {
+    const dir = await agentWith(undefined);
+    const runtime = await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") });
+    expect(runtime.getProvider("anthropic")).toBeDefined();
+  });
+
+  it("pi's generated catalog cache lands in the state root, never in the agent dir", async () => {
+    // pi defaults modelsStorePath to `<dirname(modelsPath)>/models-store.json` — i.e. inside the agent
+    // dir, which `deploy` bakes wholesale into the image. The definition dir holds authored files only.
+    const dir = await agentWith(GATEWAY);
+    const stateRoot = join(dir, ".state");
+    await mkdir(stateRoot, { recursive: true });
+    await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json"), stateRoot });
+    expect(existsSync(join(dir, "models-store.json"))).toBe(false);
   });
 });

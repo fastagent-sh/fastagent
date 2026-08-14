@@ -127,13 +127,15 @@ export async function buildAgentSessionRuntime(
     // on the session in createRuntime — pi's session starts all-active), and the activation bridge
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
     // instead of fastagent's harness.
-    const { config, modelSpec, agentDir, authPath, tools, deferredToolNames, toolCollisions, toolFailures } =
+    const { config, modelSpec, agentDir, authPath, stateRoot, tools, deferredToolNames, toolCollisions, toolFailures } =
       await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
     // ONE hub owns model resolution AND per-request auth — the ModelRuntime-shaped sibling of
     // serving's createPiModels; see models.ts.
-    const modelRuntime = await createPiModelRuntime({ authPath });
+    // agentDir carries the agent's own models.json (custom endpoints); stateRoot keeps pi's generated
+    // catalog cache out of the definition dir. See createPiModelRuntime.
+    const modelRuntime = await createPiModelRuntime({ authPath, agentDir, stateRoot });
     // MIGRATION HINT (deliberate breaking change): chat historically used pi's own `~/.pi` auth;
     // it now reads the agent's credential file like every other command. Probe the RESOLVED
     // model's provider through the normal resolution path (stored credential OR env var — an
