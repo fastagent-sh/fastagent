@@ -75,8 +75,11 @@ The seam is **L0 only** ([core.md](core.md) §3: `createPiAgentFromHarness` is t
 
 ## 5. What each level owes
 
-**`per-invoke` owes MUST 6**: state reconstructible from the store, no process affinity, and — because
-fastagent's directory is the agent, live — a fresh definition read per turn.
+**`per-invoke` owes MUST 6**: state reconstructible from the store, no process affinity. Nothing more —
+in particular, "the directory is the agent, LIVE" is a fastagent product property, not part of this
+level: the harness path buys it by re-reading the definition every turn, while a `session`-class
+factory that shares one `ResourceLoader` across turns (what makes its per-turn cost ~1ms) trades that
+freshness away. Which one is in force is the factory's choice and must be stated by it.
 
 **`resident` owes an explicit lifecycle**: when a session is created, evicted, and rebuilt, plus a
 rebind path when the definition changes (an `AgentSession` snapshots its assembly at build). It also
