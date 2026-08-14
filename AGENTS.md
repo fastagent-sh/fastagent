@@ -132,7 +132,8 @@ src/
     ├── definition.ts        # AGENTS.md + skills loading and bundling
     ├── config.ts            # fastagent.config.ts loading + model/precedence (placement lives in paths.ts)
     ├── auth.ts, login.ts    # credential store/resolution (project-level auth.json default) + `login` flow
-    ├── models.ts            # Models collection wiring
+    ├── models.ts            # Models collection wiring + the agent's OWN models.json (custom endpoints:
+    │                         # definition-local so it travels; the machine-global ~/.pi one stays unread)
     ├── report.ts            # startup report (auth/model/skills/tools surface)
     └── sessions.ts          # PiSessionStore port + in-memory/jsonl backends
 test/                        # vitest; faux models by default + reusable SPEC conformance
