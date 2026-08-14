@@ -253,8 +253,28 @@ already answered in was tried: deciding whether the session really held it needs
 the channel RECEIVED the messages in between, which depends on a permission that changes over time
 while the record is durable. Every way of gating it failed toward a silently missing quote, for the
 price of one extra read.) An unreadable referent degrades to a marker in
-the prompt: context is not the ask, and losing it must not cost the answer. Rung 3 is the next
-increment if anchors prove too narrow.
+the prompt: context is not the ask, and losing it must not cost the answer.
+
+On Feishu/Lark — and only there, because that platform threads every reply to a parent while
+Telegram's update embeds exactly one `reply_to_message` object (no chain to walk) and Slack carries
+none — the anchor also resolves the referent's reply CHAIN: the ancestors above the quoted message,
+walked to the platform-defined root and rendered oldest-first as context. Ancestors are context, not
+the ask, and every bound follows from that: their text shares ONE further `REFERENT_MAX_CODE_POINTS`
+budget across the whole chain (the referent itself keeps its full fidelity bound), their attachments
+share the buffered tier's `BUFFER_ATTACH_MAX` budget with the context buffer (chain refs take slots
+first — the direct upstream of what the user pointed at outranks ambient discussion), and an
+unloadable one costs a note, never the turn. Any walk that ends short of the root — the 8-ancestor
+IO cap, an exhausted budget, an unreadable ancestor, a cycle in corrupt data — leaves the same
+visible truncation line: a chain rendered without it would read as complete, and the model would
+take the oldest fetched node for the original ask. One cost is carried deliberately: the walk
+repeats per reply turn, so an established session re-reads chain text it may already hold
+(attachments are deduplicated by message identity; text cannot be, from a layer that cannot read
+the session). Bounded to one referent's worth per turn by the shared budget, that is the price of an
+unconditional, stateless guarantee that what a quote points into is visible. A one-hop version of
+this walk was once added and removed as a memory substitute; what changed is the job — resolving
+the pointer, with history left to the rungs below — and the bounds, which are the chain's own root
+plus explicit budgets rather than a picked level count. Rung 3 is the next increment if anchors
+prove too narrow.
 
 Rung 4 (`SessionRepo.fork`, which would need an optional lineage field on `Scope`) is **not planned**:
 it over-delivers by copying the whole room — including everyone's unrelated conversations — into a
