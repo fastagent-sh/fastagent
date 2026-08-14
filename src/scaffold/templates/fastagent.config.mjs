@@ -5,6 +5,8 @@
 // No model is preset: `fastagent dev` shows the full model catalog (models you already have
 // credentials for come first; picking one that needs auth logs you in inline) and writes your choice
 // below. Or set it by hand to a "provider/modelId" (`fastagent models` lists them).
+// Self-hosted model (vLLM/Ollama/…) or your own gateway? Declare it in a models.json next to this
+// file and select it like any other spec — see docs/configuration.md "Custom model endpoints".
 export default {
   // model: "openai-codex/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
