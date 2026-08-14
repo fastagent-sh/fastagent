@@ -204,7 +204,10 @@ model, auth, tools, sessions, and machinery paths. `dev`, `start`, `invoke`, and
 assembly rather than carrying parallel implementations.
 
 Each invocation builds a fresh harness for its session and discards it after the turn. Conversation
-continuity comes from `PiSessionStore`, not a resident harness. Reopening is faithful to the whole
+continuity comes from `PiSessionStore`, not a resident harness. That is L0's choice on two axes a
+deployment owns rather than the architecture: per-invoke state (SPEC MUST 6 — what AgentCore and every
+scaled channel host require) and the `harness` engine class. Both are swappable at this rung alone;
+[conformance-levels.md](conformance-levels.md) states what each combination owes. Reopening is faithful to the whole
 record, not just the messages: pi's harness writes active-tool changes to the session but never reads
 them back (its own TUI harness is resident), so `piHarnessFactory` resolves the active-tool set itself
 (`harness.ts` `resolveHarnessActiveToolNames`): the UNION of the initial set (every non-deferred tool;
