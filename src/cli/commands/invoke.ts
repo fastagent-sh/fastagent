@@ -29,7 +29,7 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
   // BOTH directories, like dev/start: from the workspace, `placement.workspace` alone equals the dir you
   // typed, so it cannot tell you which agent actually ran.
   console.error(`[fastagent] invoke: ${placement.agentDir} (workspace ${placement.workspace}, ${modelSpec})`);
-  await reportAuth(modelSpec, authPath);
+  await reportAuth(placement.agentDir, modelSpec, authPath);
   // Fresh session per invoke (one-shot, no resume). runInvokeStream maps events→IO: reply→stdout,
   // tool/failure→stderr, exit 1 iff the turn failed (so CI can gate on it).
   const exitCode = await runInvokeStream(

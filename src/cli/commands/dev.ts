@@ -72,7 +72,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   reportWorkspaceHint(workspaceHint(a));
   reportLine("config", a.configPath ?? "(none)");
   reportLine("model", `${a.modelSpec}${a.config.thinkingLevel ? ` (thinking: ${a.config.thinkingLevel})` : ""}`);
-  await reportAuth(a.modelSpec, a.authPath);
+  await reportAuth(a.agentDir, a.modelSpec, a.authPath);
   reportAgentsSkillsTools(a);
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.

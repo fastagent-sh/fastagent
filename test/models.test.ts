@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { createPiModelRuntime, probeApiKey, probeAuthSource, providerAuthStatuses } from "../src/engines/pi/models.ts";
 import { resolveModel } from "../src/engines/pi/config.ts";
+import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
 type FakeProvider = {
   id: string;
@@ -168,5 +169,37 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     await mkdir(stateRoot, { recursive: true });
     await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json"), stateRoot });
     expect(existsSync(join(dir, "models-store.json"))).toBe(false);
+  });
+});
+
+describe("models.json on the serving path (createPiAgentFromDir)", () => {
+  it("dev/start/invoke assemble against a models.json endpoint, and leave no generated file in the agent dir", async () => {
+    // The Phase-2 claim: the SERVING opener — not just `chat` — resolves a custom endpoint. Before this,
+    // the opener ran on pi-ai's builtinModels(), which cannot see models.json, so assembly died with
+    // `unknown model "mygw/deepseek-v3"` no matter what the file said.
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-serving-modelsjson-"));
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "mygw/deepseek-v3" };`);
+    await writeFile(
+      join(dir, "models.json"),
+      JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: "http://vllm.internal:8000/v1",
+            api: "openai-completions",
+            apiKey: "$FASTAGENT_TEST_GW_KEY",
+            models: [{ id: "deepseek-v3" }],
+          },
+        },
+      }),
+    );
+
+    const { agent, modelSpec, stateRoot } = await createPiAgentFromDir(dir);
+    expect(agent).toBeDefined();
+    expect(modelSpec).toBe("mygw/deepseek-v3");
+
+    // The agent dir holds AUTHORED files only. L2 does not pass stateRoot explicitly, so this also pins
+    // that its default derivation keeps pi's catalog cache out of what `deploy` bakes into the image.
+    expect(existsSync(join(dir, "models-store.json"))).toBe(false);
+    expect(stateRoot.startsWith(dir)).toBe(true);
   });
 });

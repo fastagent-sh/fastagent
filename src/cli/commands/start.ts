@@ -87,7 +87,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   reportLine("workspace", workspace);
   reportWorkspaceHint(workspaceHint({ agentDir, workspace }));
   reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
-  await reportAuth(modelSpec, authPath);
+  await reportAuth(agentDir, modelSpec, authPath);
   reportLine("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   if (definition.persona) reportLine("persona", "persona.md");
   reportLine("skills", definition.skills.map((s) => s.name).join(", ") || "(none)");

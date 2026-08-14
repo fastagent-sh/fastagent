@@ -49,7 +49,7 @@ export async function runFire(name: string, dirArg: string, opts: FireOptions): 
     authPath: opts.authPath, // flag > FASTAGENT_AUTH_PATH > default — resolved by the opener (one owner)
   }).catch(failStartup);
   console.error(`[fastagent] fire: ${name} (${modelSpec})`);
-  await reportAuth(modelSpec, authPath);
+  await reportAuth(placement.agentDir, modelSpec, authPath);
   const exitCode = await runInvokeStream(
     agent.invoke({ session: scheduleSession(name) }, { text: schedule.prompt }),
     (text) => process.stdout.write(text),

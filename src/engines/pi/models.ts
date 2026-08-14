@@ -63,6 +63,10 @@ export async function createPiModelRuntime(
     agentDir?: string;
     /** Where the dynamic model-catalog cache goes; defaults to the agent's resolved state root. */
     stateRoot?: string;
+    /** Extra providers registered on top of the built-ins and models.json (same id overrides). The
+     *  CODE-shaped sibling of models.json: embedding callers that build a `Provider` (per-request
+     *  token minting, a test fake) inject it here. */
+    providers?: Provider[];
   } = {},
 ): Promise<ModelRuntime> {
   const { agentDir } = options;
@@ -83,6 +87,7 @@ export async function createPiModelRuntime(
   // message already names both the reason and the file, so it is surfaced verbatim.
   const error = runtime.getError();
   if (error) throw new Error(error);
+  for (const provider of options.providers ?? []) runtime.registerNativeProvider(provider);
   return runtime;
 }
 

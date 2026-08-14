@@ -18,7 +18,7 @@ import { resolveAuthPath } from "../engines/pi/config.ts";
 import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
 import { inspectChannels } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
-import { createPiModels, probeAuthSource } from "../engines/pi/models.ts";
+import { createPiModelRuntime, probeAuthSource } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS, type ChannelKind } from "../scaffold/add-channel.ts";
 import { exists } from "../paths.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
@@ -194,9 +194,13 @@ export async function preflightDeploy(input: {
   }
 
   // Probe auth from the SAME project-level file the opener/login use — not the global default, which would
-  // miss a `fastagent login` credential and falsely report "none configured".
+  // miss a `fastagent login` credential and falsely report "none configured". Through the AGENT's model
+  // surface too (its models.json travels into the image), so a custom endpoint is not read as an unknown
+  // provider — this probe feeds the gate that decides whether `--run` may proceed.
   const authPath = resolveAuthPath(agentDir, authPathFlag);
-  const modelAuth = modelSpec ? await probeAuthSource(createPiModels({ authPath }), modelSpec) : undefined;
+  const modelAuth = modelSpec
+    ? await probeAuthSource(await createPiModelRuntime({ agentDir, authPath }), modelSpec)
+    : undefined;
 
   // Container facts (shared by every host) + the warnings that follow. The facts describe the AGENT —
   // its package.json/runtime/lockfile drive the image's install step — never the workspace's (the bake

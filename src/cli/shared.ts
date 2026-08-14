@@ -20,7 +20,13 @@ import {
   rewriteConfigModel,
 } from "../engines/pi/config.ts";
 import { LoginCancelled, type LoginIO, type LoginMethod, type LoginResult, loginFlow } from "../engines/pi/login.ts";
-import { createPiModels, probeApiKey, probeAuthSource, providerAuthStatuses } from "../engines/pi/models.ts";
+import {
+  createPiModelRuntime,
+  createPiModels,
+  probeApiKey,
+  probeAuthSource,
+  providerAuthStatuses,
+} from "../engines/pi/models.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
@@ -80,10 +86,13 @@ export function parseBind(value: string | undefined): string | undefined {
   return bindAddress(trimmed); // a name never travels past this point — see bind.ts
 }
 
-/** Report which source provides the model's credentials, surfacing a remediation hint at startup. Non-blocking. */
-export async function reportAuth(modelSpec: string, authPath: string): Promise<void> {
+/** Report which source provides the model's credentials, surfacing a remediation hint at startup. Non-blocking.
+ *  Probes through the AGENT's model surface (`agentDir` carries its models.json), so a custom endpoint is
+ *  reported like any built-in rather than as an unknown provider. */
+export async function reportAuth(agentDir: string, modelSpec: string, authPath: string): Promise<void> {
   const provider = providerOf(modelSpec);
-  const source = await probeAuthSource(createPiModels({ authPath }), modelSpec);
+  const models = await createPiModelRuntime({ agentDir, authPath }).catch(failStartup);
+  const source = await probeAuthSource(models, modelSpec);
   // Only when nothing satisfies auth do we read the store (refresh-FREE) to tell "nothing stored" from
   // "stored but unusable" — see formatAuthReport for why. store.read warns on a corrupt file itself.
   const stored =
@@ -119,7 +128,9 @@ export async function resolveFirstRunModel(
   if (!isInteractive()) return; // CI/deploy: the opener throws the actionable missing-model error
 
   const authPath = resolveAuthPath(agentDir, options.authPath);
-  const models = createPiModels({ authPath });
+  // The picker lists the AGENT's surface: built-ins plus whatever its models.json declares, so a
+  // self-hosted endpoint is pickable on first run instead of being invisible until hand-set.
+  const models = await createPiModelRuntime({ agentDir, authPath }).catch(failStartup);
   const chosen = await pickWithCredentials(models, authPath);
   if (chosen === undefined) return; // cancelled (or auth probe failed): the caller raises its clear missing-model error
   process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
@@ -234,6 +245,8 @@ async function verifyApiKeyLogin(
   authPath: string,
   spec?: string,
 ): Promise<"ok" | "rejected" | "unknown"> {
+  // Built-ins only: `login` itself offers built-in providers (login.ts), and a models.json endpoint
+  // authenticates from its own `apiKey` (env/command), so there is no stored credential to verify here.
   const models = createPiModels({ authPath });
   const model = spec ? resolveModel(models, spec) : models.getProvider(provider)?.getModels()[0];
   if (!model) {
