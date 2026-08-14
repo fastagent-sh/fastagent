@@ -10,7 +10,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
 import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
-import { resolveStateRoot } from "../../paths.ts";
+import { AGENT_MODELS_FILE, resolveStateRoot } from "../../paths.ts";
 
 /** The DEFINITION-LOCAL custom-endpoint file, in pi's own models.json schema (see pi's docs/models.md):
  *  declare a self-hosted / gateway endpoint as `{ providers: { <id>: { baseUrl, api, apiKey, models } } }`
@@ -19,8 +19,8 @@ import { resolveStateRoot } from "../../paths.ts";
  *  travels to the host. Living in the agent dir is the whole point: it is part of the definition, so it
  *  is baked into the deployed image. pi's MACHINE-GLOBAL `~/.pi/agent/models.json` stays unread — that
  *  one is builder-machine state, and reading it would make an agent work locally and lose its model on
- *  deploy. */
-const AGENT_MODELS_JSON = "models.json";
+ *  deploy. The NAME itself lives in the neutral paths.ts — `dev`'s watcher needs the same one, and a
+ *  second spelling would let the restart scope drift from what the worker loads. */
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
   /** Credentials file path. Defaults to the global `~/.fastagent/.secrets/auth.json`; the directory opener passes
@@ -50,7 +50,7 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
  * The `ModelRuntime`-shaped sibling of {@link createPiModels} — the SAME hub semantics (built-in
  * providers + fastagent's credential store at `authPath`) in the type pi's session services require
  * (`createAgentSessionServices({ modelRuntime })`). Built-ins PLUS the agent's own
- * {@link AGENT_MODELS_JSON} when `agentDir` is given (a dir-less caller gets built-ins only), and no
+ * {@link AGENT_MODELS_FILE} when `agentDir` is given (a dir-less caller gets built-ins only), and no
  * availability network, so the model surface equals serving's.
  *
  * `ModelRuntime` also takes `Provider` INSTANCES via `registerNativeProvider` (pi 0.83); the
@@ -59,20 +59,24 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
 export async function createPiModelRuntime(
   options: FastagentAuthOptions & {
     authPath?: string;
-    /** The agent dir, whose {@link AGENT_MODELS_JSON} declares custom endpoints. Omit for built-ins only. */
+    /** The agent dir, whose {@link AGENT_MODELS_FILE} declares custom endpoints. Omit for built-ins only. */
     agentDir?: string;
     /** Where the dynamic model-catalog cache goes; defaults to the agent's resolved state root. */
     stateRoot?: string;
-    /** Extra providers registered on top of the built-ins and models.json (same id overrides). The
-     *  CODE-shaped sibling of models.json: embedding callers that build a `Provider` (per-request
-     *  token minting, a test fake) inject it here. */
+    /** Extra providers for the ids the built-ins do not cover — the CODE-shaped sibling of models.json,
+     *  for what a file cannot express (minting a token per request, a test fake).
+     *
+     *  On an id COLLISION the file wins, not this: upstream installs a native provider as the BASE and
+     *  composes the models.json entry over it. Right way round — where a deployed agent's traffic goes
+     *  is a property of the definition, not of the program that embedded it — but it does mean a same-id
+     *  file entry silently replaces the endpoint injected here. Use a distinct id to keep both. */
     providers?: Provider[];
   } = {},
 ): Promise<ModelRuntime> {
   const { agentDir } = options;
   const runtime = await ModelRuntime.create({
     credentials: fastagentCredentialStore(options.authPath, { warn: options.warn }),
-    modelsPath: agentDir ? join(agentDir, AGENT_MODELS_JSON) : null,
+    modelsPath: agentDir ? join(agentDir, AGENT_MODELS_FILE) : null,
     // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`,
     // which would write a generated cache INTO the author's agent dir — and `deploy` bakes the whole
     // tree, so it would travel into the image as stale state. Machinery belongs under the state root.

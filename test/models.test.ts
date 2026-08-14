@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Api, Model, Models } from "@earendil-works/pi-ai";
+import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
 import { createPiModelRuntime, probeApiKey, probeAuthSource, providerAuthStatuses } from "../src/engines/pi/models.ts";
 import { resolveModel } from "../src/engines/pi/config.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
@@ -143,6 +143,43 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     } finally {
       delete process.env.FASTAGENT_TEST_GW_KEY;
     }
+  });
+
+  it("on an id collision the file wins over an injected Provider (models.json composes over the native base)", async () => {
+    // Upstream installs a registerNativeProvider() provider as the BASE and composes the models.json
+    // entry over it — the opposite of the built-in case, where an injected provider overrides. Pinned
+    // because the docs promise it and because it is the direction that keeps a DEPLOYED agent's traffic
+    // decided by its definition rather than by the program that embedded it.
+    const dir = await agentWith(GATEWAY); // declares "mygw" at http://vllm.internal:8000/v1
+    const injected = createProvider({
+      id: "mygw",
+      baseUrl: "https://from-injected-code/v1",
+      auth: { apiKey: { name: "k", resolve: async () => ({ auth: { apiKey: "x" }, source: "code" }) } },
+      models: [
+        {
+          id: "deepseek-v3",
+          name: "injected",
+          api: "openai-completions",
+          provider: "mygw",
+          baseUrl: "https://from-injected-code/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 111,
+          maxTokens: 222,
+        },
+      ],
+      api: { stream: () => undefined, streamSimple: () => undefined } as never,
+    });
+
+    const runtime = await createPiModelRuntime({
+      agentDir: dir,
+      authPath: join(dir, "auth.json"),
+      providers: [injected],
+    });
+    const model = resolveModel(runtime, "mygw/deepseek-v3");
+    expect(model.baseUrl).toBe("http://vllm.internal:8000/v1"); // the file, not the injected code
+    expect(model.contextWindow).toBe(65536); // the file's value, not the injected 111
   });
 
   it("a malformed models.json fails visibly instead of degrading to the built-ins", async () => {

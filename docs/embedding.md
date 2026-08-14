@@ -194,7 +194,9 @@ const myGateway = createProvider({
 const agent = createPiAgent({ model: "acme/gpt-x", providers: [myGateway] });
 ```
 
-`providers` are registered on top of the built-ins and the agent's `models.json` (a matching id overrides). An "auth service" is modeled as a provider — its per-request credential logic lives in the provider's `auth.…resolve()`, not as a separate credential option.
+`providers` are registered on top of the built-ins (a matching id overrides a built-in). Against the agent's own `models.json` the precedence is the other way round: an injected provider is the BASE and a same-id `models.json` entry composes over it, so the file wins. That is deliberate — where a deployed agent's traffic goes is a property of the definition, not of the program that embedded it — but it does mean a same-id entry silently replaces the endpoint you injected. Use a distinct id when you mean both to exist.
+
+An "auth service" is modeled as a provider — its per-request credential logic lives in the provider's `auth.…resolve()`, not as a separate credential option.
 
 ## How embed and CLI relate
 

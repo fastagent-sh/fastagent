@@ -52,6 +52,13 @@ export const STATE_DIRNAME = ".state";
  *  already-an-agent refusal both read this, so "is there a config?" can't diverge between them. */
 export const AGENT_CONFIG_NAMES = ["fastagent.config.ts", "fastagent.config.js", "fastagent.config.mjs"] as const;
 
+/** The optional custom-model-endpoint file inside an agent dir (pi's models.json schema). Definition
+ *  data, not machinery: it declares WHICH endpoint the agent talks to, so it belongs beside the config
+ *  and travels into the deployed image. The name lives HERE, with the other placement facts, because
+ *  two neutral readers need it — the loader in engines/pi/models.ts and `dev`'s watcher, whose restart
+ *  scope must not silently drift from what the worker actually loads. */
+export const AGENT_MODELS_FILE = "models.json";
+
 export interface ResolvedPlacement {
   /** The AGENT directory — where the definition (persona.md/skills/tools/channels/schedules), the
    *  config, and the machinery dirs (`.secrets/`, `.state/`) live. Absolute. */

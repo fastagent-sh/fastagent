@@ -6,9 +6,11 @@ import {
   defaultSessionsDir,
   loadConfig,
   resolveAuthPath,
+  resolveModel,
   resolveModelSpec,
   resolveSessionsDirOverride,
 } from "../../engines/pi/config.ts";
+import { createPiModelRuntime } from "../../engines/pi/models.ts";
 import { resolveStateRoot, workspaceHint } from "../../paths.ts";
 import { resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
@@ -70,6 +72,21 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const sessionsDir = resolveSessionsDirOverride(opts.sessionsDir) ?? defaultSessionsDir(stateRoot);
   const authPath = resolveAuthPath(agentDir, opts.authPath); // flag > FASTAGENT_AUTH_PATH > default — the one owner
 
+  // RESOLVE the spec, do not just echo it: a spec is only real once its provider/model exist in the
+  // agent's own surface (built-ins + its models.json), which is exactly what a custom endpoint changes.
+  // Reporting a healthy-looking spec that `dev`/`start` then reject is the failure this pre-empts.
+  // Reported as DATA rather than thrown — a broken agent is what `info` is for — and read-only: the
+  // runtime reads models.json without creating anything (its catalog cache is written on refresh, and
+  // there is none here).
+  const modelError = modelSpec
+    ? await createPiModelRuntime({ agentDir, authPath })
+        .then((models) => {
+          resolveModel(models, modelSpec);
+          return undefined as string | undefined;
+        })
+        .catch((error: unknown) => (error as Error).message)
+    : undefined;
+
   if (opts.json) {
     console.log(
       JSON.stringify(
@@ -78,6 +95,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           workspace,
           configPath: configPath ?? null,
           model: modelSpec ?? null,
+          modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
           context: definition.contextFiles.map((f) => f.path),
           persona: definition.persona !== undefined,
@@ -106,12 +124,15 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // One padded label writer: hand-spaced labels drifted out of alignment the moment a longer one
   // (agent/workspace/selfSchedule) joined the report.
   const line = (label: string, value: string): void => console.log(`${`${label}:`.padEnd(13)} ${value}`);
+  /** A continuation under the previous line, aligned to the same column (no label, so no bare colon). */
+  const cont = (value: string): void => console.log(`${"".padEnd(13)} ${value}`);
   line("agent", agentDir);
   line("workspace", workspace);
   const hint = workspaceHint({ agentDir, workspace });
   if (hint) line("hint", hint);
   line("config", configPath ?? "(none)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
+  if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
   line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   line("persona", definition.persona ? "persona.md" : "(none)");
