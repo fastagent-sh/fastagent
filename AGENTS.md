@@ -184,4 +184,4 @@ Full version: `CONTRIBUTING.md`. The essentials:
 
 The reader is a senior engineer with full project context. Lead with the conclusion, use tables for structured comparisons, skip obvious reasoning, do not restate, and do not add decorative formatting or meta-narration. Density check: if cutting half the text loses no information, cut it.
 
-优先使用中文回答；面向仓库的产物（代码、注释、文档、commit/PR）一律英文。
+Direct chat with the user may be in Chinese. Everything that lands in or on the repository is English — code, comments, documentation, commit messages, PR titles and bodies, code reviews and review replies, issue discussion, and release notes.
