@@ -82,6 +82,12 @@ export function cloudEnvelope(event: FeishuMessageEvent, tag: FeishuCloudKind): 
     `chat ${message.chat_id} (${message.chat_type})`,
     message.thread_id ? `topic ${message.thread_id}` : undefined,
     from ? `from ${from}` : undefined,
+    // The message's own id is LOAD-BEARING, not decoration: it is the only way this message's id
+    // enters the session transcript, and session inheritance locates a thread's branch point by
+    // searching the parent transcript for exactly these ids (scope.branchHints — sessions.ts).
+    // Remove it and every thread quietly inherits from the room's present instead of the branch
+    // point. It also lets the model name what it is answering in a busy chat.
+    `msg ${message.message_id}`,
   ]
     .filter(Boolean)
     .join(", ");

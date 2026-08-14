@@ -10,7 +10,7 @@
  * Attachment RESOLUTION stays per channel — the platform resource models (Bot API file_ids,
  * message-scoped Feishu keys, Slack file objects) are real differences.
  */
-import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE } from "../agent.ts";
+import { type Agent, type AgentEvent, type Prompt, SESSION_BUSY_CODE, type Scope } from "../agent.ts";
 import { log } from "../log.ts";
 
 /** How the busy-wait paces: retry the invoke every `delayMs` while the session's lease is held by an
@@ -45,16 +45,19 @@ export const DEFAULT_BUSY_RETRY: BusyRetry = { delayMs: 5_000, maxWaitMs: 600_00
  */
 export async function* streamTurnWithBusyRetry(
   agent: Agent,
-  session: string,
+  /** The full scope, not a session string — channels that set extension fields (lineage) pass them
+   *  through here; channels that don't pass `{ session }` and nothing changes. */
+  scope: Scope,
   prompt: Prompt,
   options: { label: string; onCompleted?: () => void; busyRetry?: BusyRetry },
 ): AsyncIterable<AgentEvent> {
   const { label, onCompleted, busyRetry = DEFAULT_BUSY_RETRY } = options;
+  const session = scope.session;
   const deadline = Date.now() + busyRetry.maxWaitMs;
   for (;;) {
     let retryBusy = false;
     let first = true;
-    for await (const e of agent.invoke({ session }, prompt)) {
+    for await (const e of agent.invoke(scope, prompt)) {
       if (first && e.type === "failed" && e.code === SESSION_BUSY_CODE && Date.now() + busyRetry.delayMs < deadline) {
         retryBusy = true; // fail-fast reject — the stream ends after this event; wait and re-invoke
         break;

@@ -12,7 +12,7 @@
  * ancestors, and degrade per attachment: one expired background file must not block the current ask
  * or hide its still-readable siblings.
  */
-import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import type { Agent, AgentEvent, ImageRef, Scope } from "../../agent.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -49,6 +49,11 @@ export interface FeishuTurnTransport {
    *  sender is an app. Needed to tell the agent's OWN messages from any other bot's in the same chat:
    *  `sender_type` alone says "some app", which is not the question the referent path asks. */
   appId: string;
+  /** The place this thread branched from (the chat's main place), when the turn runs in a thread —
+   *  rides the Scope's lineage extension so a NEW thread session starts from what the room knew
+   *  (participant-model.md §5). The engine reads it once, at session creation; every later turn
+   *  carries it inertly. */
+  parentSession?: string;
 }
 
 /** An attachment reference: the resource key inside its CARRYING message (the resource API addresses
@@ -75,6 +80,8 @@ export interface FeishuTurnAttachments {
 interface ResolvedInputs {
   images: ImageRef[] | undefined;
   promptSuffix: string;
+  /** Branch hints for the scope's lineage extension: the referent + its chain, nearest first. */
+  referentIds: string[];
 }
 
 /** How far up a reply chain the walk reads, beyond the replied-to message itself. The chain's natural
@@ -111,6 +118,10 @@ interface ReplyChain {
   block: string;
   images: FeishuBufferedRef[];
   files: FeishuBufferedRef[];
+  /** The walked ancestors' message ids, nearest first — the natural branch hints: a thread rooted on
+   *  the agent's own answer has an UNFINDABLE root id (the answer was sent after its turn, so its id
+   *  never entered the parent session), but the chain above it is exactly the ids that did. */
+  ids: string[];
 }
 
 /**
@@ -147,7 +158,7 @@ async function walkReplyChain(
   const files: FeishuBufferedRef[] = [];
   // No parent above the referent = no chain — not a truncated one. The marker below is only for
   // walks that END SHORT of a root that exists.
-  if (start === undefined) return { block: "", images, files };
+  if (start === undefined) return { block: "", images, files, ids: [] };
   let reachedRoot = false;
   let textBudget = REFERENT_MAX_CODE_POINTS;
   let next: string | undefined = start;
@@ -193,7 +204,14 @@ async function walkReplyChain(
   // One line for every way of ending short of the root — cap, budget, unreadable, cycle. It names no
   // cause on purpose: the model needs the SHAPE (there is more above), the operator log has the why.
   if (!reachedRoot) lines.unshift("(…the chain continues above this point)");
-  return { block: `\n[reply chain above it, oldest first:\n${lines.join("\n")}]`, images, files };
+  return {
+    block: `\n[reply chain above it, oldest first:\n${lines.join("\n")}]`,
+    images,
+    files,
+    // Walked (fetched) order = nearest first — nodes were reversed for RENDERING above, so read the
+    // hint order off the rendered list backwards.
+    ids: nodes.map((node) => node.id).reverse(),
+  };
 }
 
 /**
@@ -205,7 +223,7 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   const images = [...attachments.primary.images];
   const files = [...attachments.primary.files];
   let referentBlock = "";
-  let chain: ReplyChain = { block: "", images: [], files: [] };
+  let chain: ReplyChain = { block: "", images: [], files: [], ids: [] };
   if (attachments.primary.parentId !== undefined) {
     const parentId = attachments.primary.parentId;
     // A referent is CONTEXT, not the ask. Losing it (deleted, restricted, unreadable) must not cost
@@ -320,6 +338,7 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   return {
     images: allImages.length ? allImages : undefined,
     promptSuffix: `${referentBlock}${missingNote}${backgroundImageManifest}${attachedFilesManifest(allFiles)}`,
+    referentIds: [...(attachments.primary.parentId !== undefined ? [attachments.primary.parentId] : []), ...chain.ids],
   };
 }
 
@@ -345,5 +364,12 @@ export async function* invokeFeishuTurn(
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, images: resolved.images };
-  yield* streamTurnWithBusyRetry(agent, session, prompt, { label: transport.label, onCompleted, busyRetry });
+  // A thread turn names its lineage: parent place + the message ids that can locate the branch point
+  // (the referent and its chain — nearest first). The engine reads them ONCE, when the thread's
+  // session does not exist yet; on every later turn they ride along inertly.
+  const scope: Scope =
+    transport.parentSession === undefined
+      ? { session }
+      : { session, parentSession: transport.parentSession, branchHints: resolved.referentIds };
+  yield* streamTurnWithBusyRetry(agent, scope, prompt, { label: transport.label, onCompleted, busyRetry });
 }

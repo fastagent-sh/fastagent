@@ -505,7 +505,7 @@ describe("turn flow", () => {
     // not a round number: worst-case platform ids stay far under it.
     const worstCase = `feishu:oc_${"a".repeat(32)}:omt_${"b".repeat(32)}`;
     expect(encodeURIComponent(worstCase).length).toBeLessThan(255);
-    expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice]");
+    expect(calls[0]?.prompt.text).toContain("[feishu: chat oc_1 (p2p), from user ou_alice, msg om_dm1]");
     expect(calls[0]?.prompt.text).toContain("hello there");
     // The reply contract rides every chat prompt: the channel owns delivery — no send-tool answering.
     expect(calls[0]?.prompt.text).toContain("delivered to the current chat by the channel itself");
@@ -1750,6 +1750,39 @@ describe("turn flow", () => {
     expect(prompt).toContain("[reply chain above it, oldest first:");
     expect(prompt).toContain("(msg om_original_ask, from user ou_alice): 加一个新的页面，用 svg 构建一个足球的页面");
     expect(fx.calls("/im/v1/messages/om_original_ask", "GET")).toHaveLength(1);
+    // …and the scope names the thread's LINEAGE: the room it branched from, plus the ids that can
+    // locate the branch point in the room's session — the referent (whose id is unfindable there:
+    // the card was sent after its turn) and then the chain, whose ids DID pass through room turns.
+    expect(calls[0]?.scope.session).toBe("feishu:oc_1:omt_on_card");
+    expect(calls[0]?.scope.parentSession).toBe("feishu:oc_1");
+    expect(calls[0]?.scope.branchHints).toEqual(["om_bot_card", "om_original_ask"]);
+  });
+
+  it("a main-timeline turn carries no lineage — the room branched from nothing", async () => {
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await handler(feishuRequest(messageEvent({ id: "om_plain", text: "hello" })));
+    await idle();
+    expect(calls[0]?.scope.session).toBe("feishu:oc_1");
+    expect(calls[0]?.scope.parentSession).toBeUndefined();
+    expect(calls[0]?.scope.branchHints).toBeUndefined();
+  });
+
+  it("a ROUTED session is opaque: no lineage, even when its id looks like a place key", async () => {
+    // route().session's contract is opaque. A three-segment id like "tenant:user:alice" must not be
+    // re-parsed as `<kind>:<chat>:<thread>` — that would let a thread message inherit from a session
+    // ("tenant:user") that belongs to someone else entirely: cross-session injection.
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel({
+      route: () => ({ session: "tenant:user:alice" }),
+    });
+    await handler(
+      feishuRequest(messageEvent({ id: "om_routed", threadId: "omt_x", parentId: "om_root", text: "in a topic" })),
+    );
+    await idle();
+    expect(calls[0]?.scope.session).toBe("tenant:user:alice");
+    expect(calls[0]?.scope.parentSession).toBeUndefined(); // opaque — never split
+    expect(calls[0]?.scope.branchHints).toBeUndefined();
   });
 
   it("another BOT's message is not the agent's own: no self-attribution, chain still walked", async () => {

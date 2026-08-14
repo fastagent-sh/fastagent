@@ -235,12 +235,12 @@ commit on `completed`.
 
 A thread must start from something. Four rungs, increasing in cost:
 
-| Rung | Mechanism | Gives the thread |
-|---|---|---|
-| 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound |
-| **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** |
-| 3 | seed injection | the room's last N exchanges, in the thread's first prompt |
-| 4 | session fork | the room's entire history, reasoning and tool results included |
+| Rung | Mechanism | Gives the thread | Status |
+|---|---|---|---|
+| 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound | rejected |
+| **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** | implemented |
+| 3 | seed injection | the room's last N exchanges, in the thread's first prompt | subsumed by rung 4 |
+| **4** | **session inheritance (fork at the branch point)** | **the room's history up to where the thread branched — text, images, tool results — windowed** | **implemented** |
 
 Rung 1 fails the model's own main path: following up on the agent's answer, where the answer is
 routinely longer than the cut. **Rung 2 is implemented**, with one bound for every channel, derived
@@ -276,11 +276,33 @@ the pointer, with history left to the rungs below — and the bounds, which are 
 plus explicit budgets rather than a picked level count. Rung 3 is the next increment if anchors
 prove too narrow.
 
-Rung 4 (`SessionRepo.fork`, which would need an optional lineage field on `Scope`) is **not planned**:
-it over-delivers by copying the whole room — including everyone's unrelated conversations — into a
-focused side discussion, and it pays that cost on every turn rather than once. Its only exclusive
-capability is preserving the agent's reasoning and tool results; that is worth revisiting when a real
-case appears, not before.
+**Rungs 3 and 4 turned out to be one mechanism with two parameters, and it is implemented as
+session inheritance.** The channel states two facts only it knows — which place this one branched
+from (`scope.parentSession`, SPEC §8's extension mechanism) and which message ids may locate the
+branch point (`scope.branchHints`: the referent and its reply chain, whose ids passed through the
+room's turns) — and the engine does the rest, ONCE, when the thread's session is first created: the
+session existing is the record that the decision was taken, so there is no marker to persist and no
+decision to retry. The fork copies the room's active path up to the branch point (a hit is extended
+to the end of its exchange — a mid-exchange fork inherits a question without its answer; a miss
+falls back to the room's present, with a warn). What the model sees is then bounded by one
+mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, images priced
+flat — which IS rung 3's seed, generated from real session entries instead of re-serialized prompt
+text, so images and tool results come along for free. Both limits govern how far the window extends
+into older history; the newest exchange is a floor, kept whole even when it alone exceeds the
+budget — an inheritance that drops the exchange the thread branched off would be no inheritance. Every edge (missing parent, oversize journal,
+torn tail line, a dangling tool call from forking a mid-turn room) fails toward an empty session
+with a warn: context is not the ask, and a thread must not lose its first turn to it.
+
+An earlier revision of this section declared rung 4 "not planned" on two assumptions, both wrong
+and both corrected by measurement: a fork does not "pay on every turn" (it is one-time by
+construction — fork, then the two sessions never touch again), and "copying the whole room"
+conflated storage with context (disk keeps the full inspectable copy; the mark governs what reaches
+the model — different budgets). The one prediction it got right — preserving reasoning and tool
+results is fork's exclusive capability — is the reason rung 3 never shipped as prompt text.
+
+Adoption is per channel, because only a channel knows its places' lineage: Feishu/Lark set the
+scope fields (threads inherit); Telegram and Slack do not yet (their threads still start empty —
+the fields are one wiring change away).
 
 *Known asymmetry, accepted:* room → thread transfers once, when the thread starts, and nothing flows
 back (§7). A thread neither learns about later room activity nor reports its own.
