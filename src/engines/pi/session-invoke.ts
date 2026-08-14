@@ -144,15 +144,34 @@ type ProjectedType = {
 }[keyof typeof SESSION_EVENTS];
 
 /**
- * pi's label for the dispatch that can END A TURN with no model call — the one whose failure is
- * therefore the turn's outcome rather than a warning beside it.
+ * pi's labels for the dispatches that END A TURN with no model call — the ones whose failure IS the
+ * turn's outcome rather than a warning beside it. Everything else pi surfaces via `onError` (a hook,
+ * a provider registration, an input transform, a message_end handler, before_*, resources_discover,
+ * project_trust, session_before_*) rides alongside a model result: pi caught the throw and continued
+ * the loop, so the turn still reaches the model — flipping its answer to `failed` would deny the
+ * caller a result they received. Warned, not blamed.
  *
- * `input` is deliberately NOT here, despite also being able to consume a turn (`action: "handled"`):
- * a handler that THROWS does not consume it. pi catches, records `event: "input"`, and continues the
- * loop, so the turn reaches the model and settles on its answer — which makes that failure exactly
- * the kind that must warn beside a delivered result rather than overturn it.
+ * `input` is a specific instance of that rule: a handler CAN consume a turn via `action: "handled"`,
+ * but a handler that THROWS does not — pi records `event: "input"` and continues, and the model
+ * answers. So a throwing input handler is a warning, not the verdict.
+ *
+ * Silent-drift ceiling. pi does not export the label enum; `ExtensionError.event` is `string`. A
+ * NEW pi dispatch verb that consumes a turn will be misclassified here as non-consuming, and this
+ * L0 will report `completed` for a turn that died in extension code — the exact silent drift the
+ * DELTA_CHANNELS / SESSION_EVENTS maps above use `satisfies Record<..., "project"|"ignore">` to stop
+ * one level down. Upstream ask (mirrors turn-plumbing.ts §2 pattern): expose the label union so this
+ * set becomes `Record<Label, "consuming"|"non-consuming"> satisfies …` and drift stops the build.
+ *
+ * Known pi labels today, for the next reader who has to re-audit this against a new pi:
+ *   - CONSUMING:     "command"
+ *   - NON-consuming: "input", "register_provider", "tool_call", "tool_result", "user_bash",
+ *                    "context", "message_end", "before_provider_request", "before_provider_headers",
+ *                    "before_agent_start", "resources_discover", "project_trust",
+ *                    "session_before_switch" / "_fork" / "_compact" / "_tree"
+ *   - Plus this L0's own synthetic label "bind" (thrown by bindExtensions, not dispatched), which is
+ *     handled as a failed EVENT with teardown before this set is consulted — so it never lands here.
  */
-const TURN_CONSUMING_DISPATCH = new Set(["command"]);
+const TURN_CONSUMING_DISPATCH = new Set<string>(["command"]);
 
 /** pi's session-class event → the Agent Handler vocabulary. `null` = nothing to project. */
 function projectSessionEvent(event: AgentSessionEvent): AgentEvent | null {

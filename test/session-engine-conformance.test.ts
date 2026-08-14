@@ -513,6 +513,49 @@ describe("session engine class: what the class buys", () => {
     expect(observed).toEqual([{ event: "bind", error: expect.stringContaining("blew up") }]);
   });
 
+  it("a binding that fails BEFORE the birth still fires shutdown — the pessimism the module documents", async () => {
+    // Mirror of the AFTER case: bindExtensions throws BEFORE it would have emitted session_start,
+    // so no handler ever sees a birth. `bound = true` is set pessimistically before the call, so
+    // teardown still fires shutdown — a shutdown for a birth that never happened is cheaper than
+    // leaking whatever a partly-landed birth would have acquired. This test pins that trade: a
+    // "fix" that moves `bound = true` to after bindExtensions succeeds would still pass the AFTER
+    // case above and quietly reintroduce the leak this case guards.
+    const cwd = await mkdtemp(join(tmpdir(), "fa-se-life4-"));
+    const seen: string[] = [];
+    const extension: InlineExtension = {
+      name: "lifecycle",
+      factory: (pi) => {
+        pi.on("session_start", () => {
+          seen.push("start");
+        });
+        pi.on("session_shutdown", () => {
+          seen.push("shutdown");
+        });
+      },
+    };
+    const { sessionFactory } = await sessionAssembly({
+      responses: [fauxAssistantMessage("never")],
+      sessionsRoot: join(cwd, "sessions"),
+      cwd,
+      extensionFactories: [extension],
+    });
+    const agent = createPiAgentFromSession({
+      sessionFactory: async (id) => {
+        const session = await sessionFactory(id);
+        // Replace bindExtensions WITHOUT calling the real one: no session_start ever emits.
+        session.bindExtensions = async () => {
+          throw new Error("resource discovery blew up");
+        };
+        return session;
+      },
+    });
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "go" })) events.push(e);
+    expect(events.at(-1)).toMatchObject({ type: "failed", details: expect.stringContaining("blew up") });
+    // No `start` reached the handler; `shutdown` fires anyway — the pessimism this test pins.
+    expect(seen).toEqual(["shutdown"]);
+  });
+
   it("a turn cancelled during the build reports NO lifecycle at all", async () => {
     // The mirror of the same invariant: a death for a birth that never happened. The extension
     // runner and its handlers exist from construction, so "does anyone listen" cannot be the
