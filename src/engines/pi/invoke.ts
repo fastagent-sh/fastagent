@@ -576,7 +576,17 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
     try {
       let harness: Awaited<ReturnType<PiHarnessFactory>>;
       try {
-        harness = await harnessFactory(scope.session);
+        // Scope's lineage extension flows to the store's CREATE path only — an existing session
+        // opens exactly as before, whatever the scope names (inheritance is one-time by construction).
+        harness = await harnessFactory(
+          scope.session,
+          scope.parentSession === undefined
+            ? undefined
+            : {
+                parentSession: scope.parentSession,
+                ...(scope.branchHints !== undefined ? { branchHints: scope.branchHints } : {}),
+              },
+        );
       } catch (error) {
         // Setup failures (session open / auth / …) MUST surface as a failed event, never a throw.
         harnessFailed(error); // a pending dispatch learns the run cannot take commands

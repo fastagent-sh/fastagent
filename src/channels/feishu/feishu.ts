@@ -95,6 +95,9 @@ interface StoredFeishuTurn {
   queueReplyTo?: string;
   replyInThread?: boolean;
   parentId?: string;
+  /** The place this thread branched from (§5 lineage) — recorded at ingress, where the session's
+   *  routed-ness is known; absent for main places, routed (opaque) sessions, and pre-upgrade records. */
+  parentSession?: string;
   images: { msg: string; key: string }[];
   files: { msg: string; key: string; name?: string }[];
   attempts: number;
@@ -119,6 +122,7 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
     (r.queueReplyTo === undefined || typeof r.queueReplyTo === "string") &&
     (r.replyInThread === undefined || typeof r.replyInThread === "boolean") &&
     (r.parentId === undefined || typeof r.parentId === "string") &&
+    (r.parentSession === undefined || typeof r.parentSession === "string") &&
     refs(r.images) &&
     refs(r.files) &&
     typeof r.attempts === "number"
@@ -462,13 +466,23 @@ function createFeishuRuntimeFactory(
           images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
           files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key, name: ref.name })),
         });
+        // Recorded at ingress (see submit) — never re-derived from the session key, which may be a
+        // routed OPAQUE id that only looks like a place key.
+        const parentSession = rec.parentSession;
         try {
           await streamFeishuReply(
             invokeFeishuTurn(
               agent,
               rec.session,
               prompt,
-              { api, chatId: rec.chatId, filesDir: join(stateHome, "files"), label, appId },
+              {
+                api,
+                chatId: rec.chatId,
+                filesDir: join(stateHome, "files"),
+                label,
+                appId,
+                ...(parentSession !== undefined ? { parentSession } : {}),
+              },
               { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },
               () => {
                 // Drop intent first: a crash between these writes may re-fold answered context later,
@@ -637,7 +651,15 @@ function createFeishuRuntimeFactory(
       // Memory follows the place (participant model §5): one session per chat, and one per thread.
       // Keyed by `thread_id`, never `root_id` — the platform's root_id tracks the reply chain and can
       // differ between messages of ONE thread, which would split a side conversation in two.
-      const session = r.session ?? placeKey(kind, m);
+      const routed = r.session;
+      const session = routed ?? placeKey(kind, m);
+      // Lineage is recorded ONLY for the default place-derived session. A routed session id is
+      // OPAQUE (the route contract), and re-parsing it as a place key would let a three-segment id
+      // like "tenant:user:alice" masquerade as a thread and inherit from "tenant:user" — a
+      // cross-session injection. Derived from the MESSAGE (the fact this channel owns), at record
+      // time, where routed-ness is still known; the dequeue path only reads it back.
+      const parentSession =
+        routed === undefined && m.thread_id !== undefined ? placeKey(kind, { chat_id: m.chat_id }) : undefined;
       const chatId = r.chatId ?? m.chat_id;
       const sameTarget = chatId === m.chat_id;
       // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers,
@@ -692,6 +714,7 @@ function createFeishuRuntimeFactory(
           // already have; it also pins WHICH message is being answered, which a long thread benefits
           // from anyway.
           parentId: m.parent_id,
+          ...(parentSession !== undefined ? { parentSession } : {}),
           images,
           files,
         },

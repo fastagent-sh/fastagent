@@ -143,7 +143,7 @@ describe("envelope + keys", () => {
   it("feishuEnvelope carries meta, the group note, the reply marker, and the decoded body", () => {
     const e = event({ parent_id: "om_prev", thread_id: "omt_2", content: '{"text":"summarize"}' });
     const env = feishuEnvelope(e);
-    expect(env).toContain("[feishu: chat oc_1 (group), topic omt_2, from user ou_alice]");
+    expect(env).toContain("[feishu: chat oc_1 (group), topic omt_2, from user ou_alice, msg om_1]");
     expect(env).toContain("[group chat — multiple people; each message is prefixed with its sender]");
     expect(env).toContain("[in reply to msg om_prev]");
     expect(env).toContain("summarize");

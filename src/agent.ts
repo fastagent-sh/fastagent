@@ -21,6 +21,17 @@ export interface Prompt {
 export interface Scope {
   /** Opaque session anchor: turns of the same logical conversation MUST reuse the same value. */
   session: string;
+  /** EXTENSION (SPEC §8): the session this one branched from — a channel sets it when the place it
+   *  is invoking for was born out of another place (a thread opened in a room). Read ONLY when
+   *  `session` does not exist yet: an engine that understands it seeds the NEW session from the
+   *  parent once, at creation; after that the field is ignored, and an engine that does not
+   *  understand it ignores it entirely (the session starts empty, yesterday's behavior). */
+  parentSession?: string;
+  /** EXTENSION (SPEC §8): opaque markers that MAY locate the branch point inside `parentSession` —
+   *  e.g. platform message ids its transcript embeds. Best-effort by design: the first marker found
+   *  in the parent's transcript wins, and no match falls back to the parent's present. Meaningless
+   *  without `parentSession`. */
+  branchHints?: string[];
 }
 
 export type AgentEvent =

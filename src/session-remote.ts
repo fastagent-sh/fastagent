@@ -273,8 +273,9 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
   // (carry it or reject it), never vanish on the wire while the client believes it was sent.
   const _invokeDriftGuard: Record<Exclude<keyof Prompt, "text" | "images">, never> = {};
   void _invokeDriftGuard;
-  // Same guard for Scope: the body carries session only — a new Scope field must force a decision.
-  const _scopeDriftGuard: Record<Exclude<keyof Scope, "session">, never> = {};
+  // Same guard for Scope: the body carries session + the lineage extension — a new Scope field must
+  // force a decision (carry it or reject it), never vanish on the wire.
+  const _scopeDriftGuard: Record<Exclude<keyof Scope, "session" | "parentSession" | "branchHints">, never> = {};
   void _scopeDriftGuard;
   return {
     invoke(scope, prompt): AsyncIterable<AgentEvent> {
@@ -301,7 +302,14 @@ export function connectAgent(options: RemoteEndpointOptions): Agent {
             const res = await fetchFn(`${base}/control/invoke`, {
               method: "POST",
               headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-              body: JSON.stringify({ session: scope.session, text: prompt.text }),
+              body: JSON.stringify({
+                session: scope.session,
+                text: prompt.text,
+                // Lineage rides the wire so a remote thread scope inherits server-side; the server
+                // reads it on the session-create path only, same as in-process.
+                ...(scope.parentSession !== undefined ? { parentSession: scope.parentSession } : {}),
+                ...(scope.branchHints !== undefined ? { branchHints: scope.branchHints } : {}),
+              }),
               signal: abort.signal,
             });
             watchdog.disarm(); // headers arrived

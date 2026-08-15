@@ -146,6 +146,7 @@ The core stays small. The following extensions attach through additional `scope`
 |---|---|
 | Identity / multi-tenancy | `scope.principal`, e.g. `{ type, issuer, subject }` |
 | Source / trace | `scope.source` and other identifying fields |
+| Session lineage | `scope.parentSession` (+ optional `scope.branchHints`) — read once, when the named session is first CREATED, to seed it from the session it branched off; ignored for existing sessions and by engines without the capability |
 | Execution constraints such as deadline / budget | Middleware; for example, `budget_exceeded` becomes a `failed` event produced by Middleware |
 | Mid-turn steering | **Extension, not part of the v0.1 core signature** — provided by the [session control plane](design/session-control.md): `dispatch(session, { type: "steer" \| "follow_up" \| "abort", … })` modulates the run an invoke is driving, beside the invoke rather than through its signature. (An earlier sketch — an optional third `input?: AsyncIterable<Prompt>` parameter — was rejected in favor of the control plane.) If the desired behavior is “discard the current turn and go another way”, cancel + a new `invoke` with the same `session` still works without any extension. |
 | Thinking / citations / artifact streaming | Add new non-terminal `AgentEvent` types |
