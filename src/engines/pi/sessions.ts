@@ -321,15 +321,11 @@ async function markInheritanceWindow(child: Session): Promise<void> {
 }
 
 /**
- * The backend surface session creation needs, with `createAtomically` the load-bearing verb.
- *
- * A newborn session is never just a file: it may carry forked entries, a crash repair and a window
- * mark, while `openOrCreate` short-circuits on EXISTENCE — so a session that becomes discoverable
- * before all of that is written reads as "the decision was taken" forever, holding whatever half it
- * had. pi's repo API cannot express that (`create` and `fork` publish first and append after), so
- * the contract lives here: **`id` resolves to a complete session or to nothing, never to a half.**
- * Retrying is therefore always safe, and "exactly one creation" does not rest on callers sequencing
- * anything.
+ * The backend surface session creation needs. Its one contract: **`id` resolves to a complete
+ * session or to nothing, never to a half** — `openOrCreate` short-circuits on EXISTENCE, so a
+ * newborn discovered before its entries, repair and window mark are written reads as "the decision
+ * was taken" forever. pi's own `create`/`fork` publish first and append after, which is why this
+ * seam exists. Retrying is therefore always safe.
  */
 interface SessionBackend<M> {
   find(id: string): Promise<M | undefined>;
@@ -351,13 +347,12 @@ interface SessionBackend<M> {
 
 /**
  * The create-with-parent path (the open path never reaches here) — SEMANTICS only: where to branch
- * and what the newborn is born with. Where that is written, and how it becomes visible, is
- * {@link SessionBackend.createAtomically}'s single contract.
+ * and what the newborn is born with. Writing and publishing it is
+ * {@link SessionBackend.createAtomically}'s contract.
  *
  * Every failure lands on "start empty + warn": a thread must not lose its first turn to an
- * inheritance edge — a missing parent, an oversize journal, a torn tail line from forking WHILE the
- * parent's own turn is appending. Because each attempt is a complete transaction, the fallback is
- * simply the next attempt: the one before it left nothing behind to collide with.
+ * inheritance edge. The fallback is simply the next attempt — each one is a complete transaction, so
+ * the failed one left nothing to collide with.
  */
 async function createInheriting<M>(
   backend: SessionBackend<M>,
@@ -413,10 +408,8 @@ export function inMemorySessionStore(): PiSessionStore & PiSessionReader {
   const backend: SessionBackend<Awaited<ReturnType<InMemorySessionRepo["list"]>>[number]> = {
     find: async (id) => (await repo.list()).find((m) => m.id === id),
     open: (m) => repo.open(m),
-    // In-memory needs no draft realm: partial state cannot outlive the process, which is the only
-    // reader — the crash the jsonl dance guards against has nothing durable to poison here. The
-    // contract still holds within a process: `fill` runs before anyone can be handed the session,
-    // and a throw leaves an unreferenced object for GC rather than a discoverable half.
+    // No draft realm needed: nothing partial outlives the process, and `fill` still runs before the
+    // session reaches any caller.
     createAtomically: async (id, from, fill) => {
       const draft = from
         ? await repo.fork(from.meta, { id, entryId: from.atEntryId, position: "at" })
@@ -455,10 +448,8 @@ export function jsonlSessionStore(options: {
 }): PiSessionStore & PiSessionReader {
   const cwd = options.cwd ?? process.cwd();
   const forkMaxBytes = options.forkMaxBytes ?? FORK_MAX_BYTES;
-  // ONE path base for the whole store, pinned to pi's own rule (`NodeExecutionEnv.absolutePath` is
-  // `resolve(cwd, path)`): a RELATIVE `dir` means "inside the workspace", not "inside whatever
-  // process.cwd() happens to be". Every direct `fs` call below (mkdir/rename/stat) uses node's
-  // default base instead, so the two only agree once this is resolved here.
+  // Resolve ONCE, by pi's rule (`NodeExecutionEnv.absolutePath` is `resolve(cwd, path)`): the direct
+  // fs calls below resolve against process.cwd() instead, and a relative `dir` would straddle both.
   const root = resolve(cwd, options.dir);
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: root });
   // The draft realm: a sibling root INSIDE the store root but OUTSIDE every lookup — `list({ cwd })`
