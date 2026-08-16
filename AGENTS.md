@@ -166,7 +166,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
    npm run lint && npm run typecheck && npm test
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
-3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. `main` enforces linear history; force-push is forbidden.
+3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. Branch commits are working state, the PR is the design asset: put the durable *why* there, not in per-commit narration. `main` enforces linear history; force-push is forbidden.
 4. **Review policy.** Merging is an explicit maintainer decision — agents never merge. Green CI makes a PR eligible; report "ready to merge" and stop. External-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**
    ```bash
@@ -184,4 +184,4 @@ Full version: `CONTRIBUTING.md`. The essentials:
 
 The reader is a senior engineer with full project context. Lead with the conclusion, use tables for structured comparisons, skip obvious reasoning, do not restate, and do not add decorative formatting or meta-narration. Density check: if cutting half the text loses no information, cut it.
 
-优先使用中文回答；面向仓库的产物（代码、注释、文档、commit/PR）一律英文。
+Everything that lands in or on the repository is English — code, comments, documentation, commit messages, PR titles and bodies, code reviews and review replies, issue discussion, and release notes.
