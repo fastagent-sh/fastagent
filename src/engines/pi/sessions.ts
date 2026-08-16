@@ -10,8 +10,8 @@
  * Continuity = same backing store + same session id: in-memory continuity dies with the instance;
  * jsonl survives process restarts (disk is the truth).
  */
-import { rename, stat } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { mkdir, rename, stat } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { InMemorySessionRepo } from "@earendil-works/pi-agent-core";
 import type { AgentMessage, Session, SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -320,91 +320,119 @@ async function markInheritanceWindow(child: Session): Promise<void> {
   );
 }
 
-/** The backend surface inheritance needs — two repos, one decision table. */
-interface InheritRepo<M> {
+/**
+ * The backend surface session creation needs. `createAtomically` is the load-bearing one, and it is
+ * ONE verb on purpose.
+ *
+ * A newborn session is never just a file: it may carry forked entries, a crash repair and a window
+ * mark, and `openOrCreate` short-circuits on EXISTENCE — so a session that becomes discoverable
+ * before all of that is written reads as "the decision was taken" forever, with whatever half it
+ * happened to have. pi's repo API cannot express that: `create` and `fork` both publish first and
+ * append after. Spelling the workaround out at each call site is what this used to do, and the
+ * sequencing then lived in the callers as a rule rather than in the type as a structure. Here it is
+ * one primitive with one contract: **`id` resolves to a complete session or to nothing, never to a
+ * half.** Retrying is therefore always safe, so a failed attempt needs no cleanup and the "exactly
+ * one creation" invariant no longer depends on how many times callers call.
+ */
+interface SessionBackend<M> {
   find(id: string): Promise<M | undefined>;
   open(meta: M): Promise<Session>;
-  create(id: string): Promise<Session>;
-  /** Fork the parent into a DRAFT that the store's normal lookups cannot discover — pi's fork
-   *  creates the target file first and appends entries after, so a discoverable half-written child
-   *  would read as "the decision was taken" forever (openOrCreate short-circuits on existence). */
-  forkDraft(meta: M, id: string, atEntryId: string): Promise<Session>;
-  /** Atomically publish a FINISHED draft (repaired + window-marked) under its real id. Everything
-   *  before this is invisible and repeatable; everything after it is complete. */
-  publish(draft: Session, parentMeta: M): Promise<Session>;
+  /**
+   * Build the session for `id` where nothing can observe it, then publish it in one indivisible
+   * step. `from` forks the parent's active path up to `atEntryId`; omitted, the session starts
+   * empty. `fill` writes everything the newborn must be born with — a throw from it publishes
+   * nothing.
+   */
+  createAtomically(
+    id: string,
+    from: { meta: M; atEntryId: string } | undefined,
+    fill: (draft: Session) => Promise<void>,
+  ): Promise<Session>;
   /** Journal size, when the backend has one — guards the read-everything fork. */
   bytes?(meta: M): Promise<number>;
 }
 
 /**
- * The create-with-parent path (the open path never reaches here). Every failure lands on "start
- * empty + warn": a thread must not lose its first turn to an inheritance edge — a missing parent, an
- * oversize journal, a torn tail line from forking WHILE the parent's own turn is appending. The one
- * repair that must run is {@link reconcileInterruptedToolCalls}: a mid-turn parent forks with a
- * dangling tool call at its leaf, and the child would hand the provider an invalid transcript.
+ * The create-with-parent path (the open path never reaches here) — SEMANTICS only: where to branch
+ * and what the newborn is born with. Where that is written, and how it becomes visible, is
+ * {@link SessionBackend.createAtomically}'s single contract.
+ *
+ * Every failure lands on "start empty + warn": a thread must not lose its first turn to an
+ * inheritance edge — a missing parent, an oversize journal, a torn tail line from forking WHILE the
+ * parent's own turn is appending. Because each attempt is a complete transaction, the fallback is
+ * simply the next attempt: the one before it left nothing behind to collide with.
  */
 async function createInheriting<M>(
-  repo: InheritRepo<M>,
+  backend: SessionBackend<M>,
   id: string,
   inherit: SessionInheritance,
   parentId: string,
   maxBytes: number,
 ): Promise<Session> {
-  const parentMeta = await repo.find(parentId);
+  const startEmpty = (): Promise<Session> => backend.createAtomically(id, undefined, async () => {});
+  const parentMeta = await backend.find(parentId);
   if (!parentMeta) {
     log.warn(`[fastagent] session "${id}" names parent "${parentId}", which does not exist — starting empty`);
-    return repo.create(id);
+    return startEmpty();
   }
-  if (repo.bytes) {
-    const bytes = await repo.bytes(parentMeta).catch(() => 0);
+  if (backend.bytes) {
+    const bytes = await backend.bytes(parentMeta).catch(() => 0);
     if (bytes > maxBytes) {
       log.warn(
         `[fastagent] parent session "${parentId}" is ${bytes} bytes (limit ${maxBytes}) — starting empty rather than stalling the first turn`,
       );
-      return repo.create(id);
+      return startEmpty();
     }
   }
   try {
-    const parent = await repo.open(parentMeta);
+    const parent = await backend.open(parentMeta);
     const path = await activePathEntries(parent);
     const leaf = path[path.length - 1];
-    if (leaf === undefined) return repo.create(id); // an empty parent has nothing to inherit
-    const hints = inherit.branchHints ?? [];
-    const at = locateBranchPoint(path, hints);
-    if (at === undefined && hints.length > 0) {
-      log.warn(
-        `[fastagent] no branch hint matched in parent "${parentId}" — inheriting from its present instead of the branch point`,
-      );
+    if (leaf !== undefined) {
+      const hints = inherit.branchHints ?? [];
+      const at = locateBranchPoint(path, hints);
+      if (at === undefined && hints.length > 0) {
+        log.warn(
+          `[fastagent] no branch hint matched in parent "${parentId}" — inheriting from its present instead of the branch point`,
+        );
+      }
+      // The one repair that must run before the child is visible: a mid-turn parent forks with a
+      // dangling tool call at its leaf, which would hand the provider an invalid transcript.
+      return await backend.createAtomically(id, { meta: parentMeta, atEntryId: at ?? leaf.id }, async (draft) => {
+        await reconcileInterruptedToolCalls(draft);
+        await markInheritanceWindow(draft);
+      });
     }
-    const draft = await repo.forkDraft(parentMeta, id, at ?? leaf.id);
-    await reconcileInterruptedToolCalls(draft);
-    await markInheritanceWindow(draft);
-    return await repo.publish(draft, parentMeta);
+    log.debug(`[fastagent] parent session "${parentId}" is empty — nothing to inherit`);
   } catch (error) {
-    // A failure ANYWHERE above leaves no discoverable child (drafts live outside the store's
-    // lookups), so falling back to create cannot produce a second file under the same id.
     log.warn(`[fastagent] could not fork parent session "${parentId}" (${String(error)}) — starting empty`);
-    return repo.create(id);
   }
+  return startEmpty();
 }
 
 /** In-process store (pi InMemorySessionRepo). Continuity lives and dies with the instance. */
 export function inMemorySessionStore(): PiSessionStore & PiSessionReader {
   const repo = new InMemorySessionRepo();
-  const adapter: InheritRepo<Awaited<ReturnType<InMemorySessionRepo["list"]>>[number]> = {
+  const backend: SessionBackend<Awaited<ReturnType<InMemorySessionRepo["list"]>>[number]> = {
     find: async (id) => (await repo.list()).find((m) => m.id === id),
     open: (m) => repo.open(m),
-    create: (id) => repo.create({ id }),
-    // In-memory needs no draft indirection: partial state cannot outlive the process, which is the
-    // only reader — the crash the jsonl dance guards against has nothing durable to poison here.
-    forkDraft: (m, id, atEntryId) => repo.fork(m, { id, entryId: atEntryId, position: "at" }),
-    publish: async (draft) => draft,
+    // In-memory needs no draft realm: partial state cannot outlive the process, which is the only
+    // reader — the crash the jsonl dance guards against has nothing durable to poison here. The
+    // contract still holds within a process: `fill` runs before anyone can be handed the session,
+    // and a throw leaves an unreferenced object for GC rather than a discoverable half.
+    createAtomically: async (id, from, fill) => {
+      const draft = from
+        ? await repo.fork(from.meta, { id, entryId: from.atEntryId, position: "at" })
+        : await repo.create({ id });
+      await fill(draft);
+      return draft;
+    },
   };
   return {
     async openOrCreate(sessionId, inherit) {
       const existing = (await repo.list()).find((m) => m.id === sessionId);
       if (!existing) {
-        if (inherit) return createInheriting(adapter, sessionId, inherit, inherit.parentSession, FORK_MAX_BYTES);
+        if (inherit) return createInheriting(backend, sessionId, inherit, inherit.parentSession, FORK_MAX_BYTES);
         return repo.create({ id: sessionId });
       }
       const session = await repo.open(existing);
@@ -430,30 +458,42 @@ export function jsonlSessionStore(options: {
 }): PiSessionStore & PiSessionReader {
   const cwd = options.cwd ?? process.cwd();
   const forkMaxBytes = options.forkMaxBytes ?? FORK_MAX_BYTES;
-  const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: options.dir });
-  // Drafts are forked into a sibling root INSIDE the store dir but OUTSIDE every lookup: `list({
-  // cwd })` scans only `<dir>/<encodedCwd>`, and a cwd-less `list()` scans `<dir>/*/​*.jsonl` — one
-  // level, which `.inherit-tmp/<encodedCwd>/*.jsonl` sits below. A crash mid-inheritance therefore
-  // leaves only invisible garbage (bounded by crash count; the next attempt forks a fresh draft —
-  // never resumed, so staleness cannot poison anything), and the real directory gains the child in
-  // exactly one atomic rename, already repaired and window-marked.
+  // ONE path base for the whole store, pinned to pi's own rule (`NodeExecutionEnv.absolutePath` is
+  // `resolve(cwd, path)`): a RELATIVE `dir` means "inside the workspace", not "inside whatever
+  // process.cwd() happens to be". Every direct `fs` call below (mkdir/rename/stat) uses node's
+  // default base instead, so the two only agree once this is resolved here.
+  const root = resolve(cwd, options.dir);
+  const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: root });
+  // The draft realm: a sibling root INSIDE the store root but OUTSIDE every lookup — `list({ cwd })`
+  // scans only `<root>/<encodedCwd>`, and a cwd-less `list()` scans `<root>/*/​*.jsonl`, one level,
+  // which `.inherit-tmp/<encodedCwd>/*.jsonl` sits below. This is what makes creation atomic on a
+  // backend that has no transactions: everything before the rename is invisible and repeatable,
+  // everything after it is complete. A crash mid-creation therefore leaves only invisible garbage
+  // (bounded by crash count; the next attempt starts a fresh draft — never resumed, so staleness
+  // cannot poison anything).
   const draftRepo = new JsonlSessionRepo({
     fs: new NodeExecutionEnv({ cwd }),
-    sessionsRoot: join(options.dir, ".inherit-tmp"),
+    sessionsRoot: join(root, ".inherit-tmp"),
   });
-  const adapter: InheritRepo<Awaited<ReturnType<JsonlSessionRepo["list"]>>[number]> = {
+  const backend: SessionBackend<Awaited<ReturnType<JsonlSessionRepo["list"]>>[number]> = {
     find: async (id) => (await repo.list({ cwd })).find((m) => m.id === id),
     open: (m) => repo.open(m),
-    create: (id) => repo.create({ id, cwd }),
-    // `fork` opens the source by its metadata's absolute path, so the draft repo reads the real
-    // repo's parent file directly while writing into its own root.
-    forkDraft: (m, id, atEntryId) => draftRepo.fork(m, { cwd, id, entryId: atEntryId, position: "at" }),
-    publish: async (draft, parentMeta) => {
+    createAtomically: async (id, from, fill) => {
+      // `fork` opens the source by its metadata's absolute path, so the draft repo reads the real
+      // repo's parent file directly while writing into its own root.
+      const draft = from
+        ? await draftRepo.fork(from.meta, { cwd, id, entryId: from.atEntryId, position: "at" })
+        : await draftRepo.create({ id, cwd });
+      await fill(draft);
       // The interface erases the metadata generic; a jsonl draft's metadata always carries `path`.
       const draftPath = ((await draft.getMetadata()) as unknown as { path: string }).path;
-      // The parent lives in the REAL cwd directory — its metadata is the authoritative way to name
-      // it (no re-deriving pi's cwd encoding). Same filesystem, so the rename is atomic.
-      const target = join(dirname(parentMeta.path), basename(draftPath));
+      // `<root>/.inherit-tmp/<encodedCwd>/<file>` → `<root>/<encodedCwd>/<file>`: the draft's own
+      // parent directory NAME is pi's cwd encoding, already computed — read it back rather than
+      // re-deriving it, and rather than borrowing the parent session's path (a parentless draft has
+      // none). Same filesystem, so the rename is atomic; the real directory may not exist yet when
+      // this store has never created a session for this cwd.
+      const target = join(root, basename(dirname(draftPath)), basename(draftPath));
+      await mkdir(dirname(target), { recursive: true });
       await rename(draftPath, target);
       const published = (await repo.list({ cwd })).find((m) => m.path === target);
       if (!published) throw new Error(`published session vanished: ${target}`);
@@ -470,7 +510,7 @@ export function jsonlSessionStore(options: {
       const existing = (await repo.list({ cwd })).find((m) => m.id === id);
       if (!existing) {
         if (inherit)
-          return createInheriting(adapter, id, inherit, encodeSessionId(inherit.parentSession), forkMaxBytes);
+          return createInheriting(backend, id, inherit, encodeSessionId(inherit.parentSession), forkMaxBytes);
         return repo.create({ id, cwd });
       }
       const session = await repo.open(existing);
@@ -485,7 +525,23 @@ export function jsonlSessionStore(options: {
   };
 }
 
-/** Injective filename-safe encoding: [A-Za-z0-9._-] verbatim, the rest %-escaped. */
+/**
+ * Filename-safe encoding, INJECTIVE: `[A-Za-z0-9._-]` verbatim, everything else `%XX` (one byte) or
+ * `%uXXXX` (above it). Two different ids must never name one file — they would share a conversation,
+ * and since `parentSession` is encoded the same way, one could inherit from the wrong room.
+ *
+ * Injectivity is what the previous form lacked: it padded to a MINIMUM of two hex digits, so an
+ * escape run could be re-split — `"\u0100"` and `"\u0010" + "0"` both produced `"%100"`. Every
+ * escape now has a self-describing width, so no two inputs can produce one output. ASCII ids — every
+ * id the built-in channels mint — encode exactly as before, so existing session FILES keep their
+ * names; only non-ASCII ids (a custom `route()` could mint one) change, and those are the ones that
+ * were unsafe anyway.
+ */
 function encodeSessionId(id: string): string {
-  return id.replace(/[^A-Za-z0-9._-]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
+  return id.replace(/[^A-Za-z0-9._-]/g, (c) => {
+    const code = c.charCodeAt(0);
+    return code < 0x100
+      ? `%${code.toString(16).toUpperCase().padStart(2, "0")}`
+      : `%u${code.toString(16).toUpperCase().padStart(4, "0")}`;
+  });
 }

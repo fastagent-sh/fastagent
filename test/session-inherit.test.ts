@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,6 +80,24 @@ describe("session inheritance (fork-on-first-open)", () => {
     const { store } = await freshStore();
     const child = await store.openOrCreate("thread", { parentSession: "ghost" });
     expect(await child.getEntries()).toHaveLength(0);
+  });
+
+  it("a RELATIVE dir is resolved like pi resolves it — against the store's cwd, not process.cwd()", async () => {
+    // pi's NodeExecutionEnv resolves a relative sessionsRoot against the store's `cwd`, while every
+    // direct fs call here (mkdir/rename/stat) resolves against process.cwd(). Publishing off the raw
+    // option would build a second, undiscoverable session tree beside the one pi reads — the child
+    // would vanish from `list({ cwd })`, and "the session exists" would stop being the record that
+    // inheritance already ran.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-rel-cwd-"));
+    const store = jsonlSessionStore({ dir: ".state/sessions", cwd: workspace });
+    await buildParent(store, "room", 2);
+    const child = await store.openOrCreate("thread", { parentSession: "room" });
+    expect(await contextText(child)).toContain("a2 answer");
+
+    // Discoverable by the store's own lookup, and living under the workspace — not under the
+    // process's cwd, where a raw relative join would have put it.
+    expect(await store.openIfExists("thread")).toBeDefined();
+    expect(existsSync(join(workspace, ".state", "sessions"))).toBe(true);
   });
 
   it("a branch hint picks the fork point — extended to the end of its exchange", async () => {
