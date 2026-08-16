@@ -60,16 +60,10 @@ export interface ThreadParticipants {
    */
   admitsBareMessage(key: string): boolean;
   /**
-   * Has the agent answered into this thread before? A DIFFERENT question from
-   * {@link ThreadParticipants.admitsBareMessage}, which also weighs the second-human rule: this one
-   * is only "is this the thread's first answered turn", the moment a channel folds the room's
-   * pending discussion into it (participant-model.md §8).
-   *
-   * A caller must tolerate a false from an EVICTED record (this store is a cache — see the header):
-   * gate a repeatable read on it, never a durable claim about when a thread began.
-   *
-   * False for threads the store has never seen, p2p included — participation is not recorded there,
-   * and a p2p main place never buffers anyway.
+   * Has the agent answered into this thread before — the "first answered turn" fact
+   * (participant-model.md §8), unlike {@link ThreadParticipants.admitsBareMessage} which also weighs
+   * the second-human rule. An evicted record answers false (this store is a cache — see the header),
+   * so gate a repeatable read on it, never a durable claim.
    */
   agentSpokeIn(key: string): boolean;
   /**

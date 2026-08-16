@@ -98,10 +98,8 @@ interface StoredFeishuTurn {
   /** The place this thread branched from (§5 lineage) — recorded at ingress, where the session's
    *  routed-ness is known; absent for main places, routed (opaque) sessions, and pre-upgrade records. */
   parentSession?: string;
-  /** The ROOM's bucket to fold READ-ONLY into this turn — the half of "what the room knew" that no
-   *  session has absorbed (§8). Recorded at ingress, where both facts live: the source chat (a route
-   *  may answer elsewhere) and whether this is the thread's first answered turn. Absent = nothing to
-   *  fold, for either reason. */
+  /** The ROOM's bucket to fold read-only into this turn (§8). Decided at ingress — only there are the
+   *  source chat and the first-turn fact known. */
   roomBufferKey?: string;
   images: { msg: string; key: string }[];
   files: { msg: string; key: string; name?: string }[];
@@ -467,18 +465,15 @@ function createFeishuRuntimeFactory(
         // this snapshot before either commits it. That fan-out loses nothing; claiming by buffer key
         // would instead couple otherwise-independent root sessions and require failure rollback.
         const { text: recent, consumed } = buffer.peek(rec.bufferKey);
-        // The ROOM's pending discussion, on a thread's first answered turn only (§8). PEEKED, never
-        // committed: the room's own next answered turn still delivers the same messages to its own
-        // memory. Folding it again later would duplicate the block — and its images — inside one
-        // context window, since this turn's prompt is itself in the session from then on.
+        // PEEK and never commit: the room still owes this discussion to its OWN memory (§8).
         const room = rec.roomBufferKey !== undefined ? buffer.peek(rec.roomBufferKey) : undefined;
         const roomBlock = room?.text
           ? `[recent discussion in the room this thread branched from — not yet answered there:\n${room.text}\n]\n\n`
           : "";
         const threadBlock = recent ? `[recent group discussion:\n${recent}\n]\n\n` : "";
         const prompt = `${roomBlock}${threadBlock}${rec.baseText}`;
-        // Room entries FIRST: the collector keeps the tail under its cap, so the thread's own
-        // discussion outranks the parent room's when both compete for attachment slots.
+        // Room entries FIRST: the collector keeps the TAIL under its cap, so the thread's own
+        // attachments win the slots.
         const buffered = collectFeishuBufferedAttachments([...(room?.consumed ?? []), ...consumed], {
           images: rec.images.map((ref) => ({ messageId: ref.msg, key: ref.key })),
           files: rec.files.map((ref) => ({ messageId: ref.msg, key: ref.key, name: ref.name })),
@@ -677,11 +672,8 @@ function createFeishuRuntimeFactory(
       // time, where routed-ness is still known; the dequeue path only reads it back.
       const parentSession =
         routed === undefined && m.thread_id !== undefined ? placeKey(kind, { chat_id: m.chat_id }) : undefined;
-      // The room's pending discussion, folded into this thread's first answered turn (§8).
-      // `agentSpokeIn` is read HERE, before this turn records its own participation below. Keyed by
-      // the SOURCE chat: a route may answer elsewhere, but a thread branches from where it was said.
-      // Gating on an evictable cache is sound for this and not for a durable claim — the fold is
-      // repeatable prompt text, so a forgotten record costs one extra fold (§8).
+      // Read BEFORE this turn records its own participation below, or it is always true. Keyed by the
+      // SOURCE chat, never the answer target a route may name (§8).
       const roomBufferKey =
         parentSession !== undefined && !threadParticipants.agentSpokeIn(session)
           ? feishuBufferPlaceKey({ chatId: m.chat_id })
