@@ -333,10 +333,8 @@ interface SessionBackend<M> {
   find(id: string): Promise<M | undefined>;
   open(meta: M): Promise<Session>;
   /**
-   * Build the session for `id` where nothing can observe it, then publish it in one indivisible
-   * step. `from` forks the parent's active path up to `atEntryId`; omitted, the session starts
-   * empty. `fill` writes everything the newborn must be born with — a throw from it publishes
-   * nothing.
+   * `from` forks the parent's active path up to `atEntryId`; omitted, the session starts empty.
+   * `fill` writes everything the newborn must be born with, before anything can observe it.
    */
   createAtomically(
     id: string,
@@ -353,8 +351,7 @@ interface SessionBackend<M> {
  * {@link SessionBackend.createAtomically}'s contract.
  *
  * Every failure lands on "start empty + warn": a thread must not lose its first turn to an
- * inheritance edge. The fallback is simply the next attempt — each one is a complete transaction, so
- * the failed one left nothing to collide with.
+ * inheritance edge.
  */
 async function createInheriting<M>(
   backend: SessionBackend<M>,
@@ -397,7 +394,6 @@ async function createInheriting<M>(
         await markInheritanceWindow(draft);
       });
     }
-    log.debug(`[fastagent] parent session "${parentId}" is empty — nothing to inherit`);
   } catch (error) {
     // Unattributed on purpose: this spans reading the parent AND writing the child, so the fault may
     // belong to either — a torn parent journal, or a store that cannot publish.
@@ -456,16 +452,9 @@ export function jsonlSessionStore(options: {
   // fs calls below resolve against process.cwd() instead, and a relative `dir` would straddle both.
   const root = resolve(cwd, options.dir);
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: root });
-  // The draft realm: a sibling root INSIDE the store root but OUTSIDE every lookup — `list({ cwd })`
-  // scans only `<root>/<encodedCwd>`, and a cwd-less `list()` scans `<root>/*/​*.jsonl`, one level,
-  // which `.drafts/<encodedCwd>/*.jsonl` sits below. This is what makes creation atomic on a backend
-  // that has no transactions: everything before the rename is invisible and repeatable, everything
-  // after it is complete.
-  //
-  // What stages here is creation reached through {@link createInheriting} — the fork, and that path's
-  // empty fallback. An ordinary create (no parent) writes straight into the store, because there is
-  // nothing to stage: an empty session is complete the moment its file exists, so no reader can catch
-  // it half-made. Two paths, and only one of them has a window to protect.
+  // Where {@link SessionBackend.createAtomically} stages: a sibling root INSIDE the store root but
+  // OUTSIDE every lookup — `list({ cwd })` scans only `<root>/<encodedCwd>`, and a cwd-less `list()`
+  // scans `<root>/*/​*.jsonl`, one level, which `.drafts/<encodedCwd>/*.jsonl` sits below.
   //
   // A crash, or a handled failure once the draft file exists (a throw from `fill`, or from the
   // rename), leaves it behind. Drafts are never resumed, so staleness cannot poison anything — but
@@ -510,6 +499,8 @@ export function jsonlSessionStore(options: {
       if (!existing) {
         if (inherit)
           return createInheriting(backend, id, inherit, encodeSessionId(inherit.parentSession), forkMaxBytes);
+        // Straight into the store, unstaged: an empty session is complete the moment its file
+        // exists, so there is no half for a reader to catch.
         return repo.create({ id, cwd });
       }
       const session = await repo.open(existing);
