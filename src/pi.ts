@@ -45,6 +45,7 @@ export {
   jsonlSessionStore,
   type PiSessionReader,
   type PiSessionStore,
+  type SessionInheritance,
 } from "./engines/pi/sessions.ts";
 
 export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./engines/pi/auth.ts";

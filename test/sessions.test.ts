@@ -82,6 +82,33 @@ describe("jsonlSessionStore (persistent sessions, first K-axis backend)", () => 
     expect(JSON.stringify(other)).not.toContain("hunter2");
   });
 
+  it("two ids that differ only in escaping do not share one session file", async () => {
+    // Session ids become jsonl FILENAMES, so the escaping must be injective. It was not: padding to a
+    // MINIMUM of two hex digits let an escape run be re-split, and "\u0100" collided with
+    // "\u0010" + "0". Two conversations would then share one file — and since `parentSession` is
+    // encoded the same way, a thread could inherit from the wrong room.
+    const dir = await mkdtemp(join(tmpdir(), "fa-sessions-"));
+    const store = jsonlSessionStore({ dir });
+
+    await drain(
+      makeAgent(store, [fauxAssistantMessage("secret hunter2")]).invoke(
+        { session: "\u0100" },
+        { text: "remember the secret" },
+      ),
+    );
+    let other: unknown;
+    await drain(
+      makeAgent(store, [
+        (context) => {
+          other = context.messages;
+          return fauxAssistantMessage("nothing");
+        },
+      ]).invoke({ session: "\u0010" + "0" }, { text: "what do you know?" }),
+    );
+
+    expect(JSON.stringify(other)).not.toContain("hunter2");
+  });
+
   it("two stores with the same sessionsRoot but different cwd do not open each other sessions (project isolation)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-sessions-"));
     const cwdA = await mkdtemp(join(tmpdir(), "fa-proj-a-"));
