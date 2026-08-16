@@ -302,18 +302,28 @@ results is fork's exclusive capability — is the reason rung 3 never shipped as
 
 **Rungs 3 and 4 are both implemented, and they carry different halves.** The fork carries what the
 room's SESSION knew; a room's session only advances when the agent is summoned, so discussion since
-its last answered turn sits in the context buffer, absorbed by nothing. A thread turn folds that
-bucket into its prompt, read-only — the room's own next answered turn still commits it, so each place
-sees the discussion exactly once in its own memory, and the fold's attachments cross as real
-attachments on the buffered tier.
+its last answered turn sits in the context buffer, absorbed by nothing. The thread's FIRST turn folds
+that bucket into its prompt, read-only — the room's own next answered turn still commits it, so each
+place sees the discussion exactly once in its own memory, and the fold's attachments cross as real
+attachments on the buffered tier rather than as marker lines.
 
-Folded on EVERY thread turn, not just the first. "First" is the tighter fold, and it was built and
-reverted: every way for a channel to know it is a memory that can be lost (the participants store is
-a cache by contract — bounded, evictable, deletable), and a forgotten entry re-labels an old thread's
-turn as newborn, injecting the room's CURRENT chatter under "what this thread branched from".
-Unconditional folding needs no such memory: it repeats the block while the room stays un-answered,
-and stops by itself the moment the room absorbs its bucket. The cost is a repeated block in a few
-prompts, bounded by the buffer's own char budget.
+**Once, not per turn**, and this is not an optimisation — a prompt is not an independent request. It
+lands in the session, so the thread's second turn already has the first turn's fold in its context;
+re-folding puts a second identical copy of the block, and of its images, in ONE context window
+(measured: three turns, three copies of each). Several copies of one screenshot read as several
+postings. After the first turn the content is already present, so only newly arrived chatter would
+carry any information, and it reaches the thread the ordinary ways — someone says it there, or the
+room answers and the thread's own buffer carries on.
+
+The first-turn fact comes from the participants store, which is a cache by contract (bounded,
+evictable, deletable) — and that is acceptable HERE precisely because the fold is prompt-bound. An
+evicted record costs one extra fold of a block whose label ("discussion in the room this thread
+branched from, not yet answered there") is true whenever it is written, and the record is rewritten
+as soon as that turn answers. The same cache may not gate anything whose label would become a LIE
+after eviction: an earlier revision wrote this content into the newborn session's birth mark under
+"when this thread started", where a forgotten record would permanently attribute the room's CURRENT
+chatter to a thread that branched long before. That is why the room's discussion is folded into a
+prompt and not into a session.
 
 *Rejected: making the room absorb eagerly* — writing each un-summoned message into the room's session
 at ingress. It would delete this rung entirely (the fork would see everything), and it fails on three

@@ -259,9 +259,9 @@ inheritance happens once, when the thread's session is created; after that the t
 independent, and the room never sees what the thread discusses.
 
 Discussion the room heard but never answered has not entered its session yet, so the fork cannot
-carry it — a thread's turns fold that pending discussion into their prompt instead, attachments
-included. Reading it does not consume it: the room's own next answer still folds the same messages,
-and once it does, the thread stops repeating them.
+carry it — the thread's first turn reads that pending discussion instead, attachments included.
+Reading it does not consume it: the room's own next answer still folds the same messages, so each
+place sees the discussion once.
 
 **Starting a thread.** Mention the Agent inside a thread once (typically by replying to one of its
 messages and creating a topic). It answers there, which makes it a participant, and every later bare

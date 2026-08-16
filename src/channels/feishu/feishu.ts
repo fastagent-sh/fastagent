@@ -98,10 +98,12 @@ interface StoredFeishuTurn {
   /** The place this thread branched from (§5 lineage) — recorded at ingress, where the session's
    *  routed-ness is known; absent for main places, routed (opaque) sessions, and pre-upgrade records. */
   parentSession?: string;
-  /** The ROOM's buffer bucket, folded READ-ONLY into this thread turn (§5's other half: the room's
+  /** The ROOM's buffer bucket, folded READ-ONLY into this turn (§5's other half: the room's
    *  not-yet-answered discussion is part of "what the room knew", and the session fork cannot carry
-   *  what no session has absorbed). Recorded at ingress because only there is the SOURCE chat known
-   *  — a route may point the answer at a different one. Never committed from here. */
+   *  what no session has absorbed). Set only on a thread's FIRST turn, and recorded at ingress
+   *  because only there are both facts known — whether the agent has answered here before, and which
+   *  chat the message came FROM (a route may point the answer at a different one). Never committed
+   *  from here. */
   roomBufferKey?: string;
   images: { msg: string; key: string }[];
   files: { msg: string; key: string; name?: string }[];
@@ -467,14 +469,17 @@ function createFeishuRuntimeFactory(
         // this snapshot before either commits it. That fan-out loses nothing; claiming by buffer key
         // would instead couple otherwise-independent root sessions and require failure rollback.
         const { text: recent, consumed } = buffer.peek(rec.bufferKey);
-        // A thread turn also reads the ROOM's bucket — READ-ONLY, and on EVERY turn, not just the
-        // first. "First turn" would be the tighter fold, but every way of knowing it is a
-        // channel-side memory that can be lost (the participants store is a cache by contract:
-        // bounded, evictable, deletable), and a forgotten entry re-labels an old thread's turn as
-        // newborn. Folding unconditionally needs no such memory: it repeats the block while the room
-        // stays un-answered, and stops by itself the moment the room's own next turn commits its
-        // bucket. Committing from HERE would steal it from the room, so each place still sees the
-        // discussion exactly once in its own memory.
+        // A thread's FIRST turn also reads the ROOM's bucket — READ-ONLY. Committing from HERE would
+        // steal it from the room, so each place still sees the discussion exactly once in its own
+        // memory: the room's own next answered turn folds AND commits the same messages.
+        //
+        // First turn only, because a prompt is not an independent request — it lands in the session
+        // and every later turn's context contains it. Re-folding would put a second identical copy of
+        // the block, and of its images, in ONE context window (measured: three turns → three copies),
+        // which reads as three separate postings rather than one. After turn one the content is
+        // already there; only newly arrived chatter would be new, and it reaches the thread the same
+        // way anything else does — by someone saying it there, or by the room answering and the
+        // thread's own buffer carrying on.
         const room = rec.roomBufferKey !== undefined ? buffer.peek(rec.roomBufferKey) : undefined;
         const roomBlock = room?.text
           ? `[recent discussion in the room this thread branched from — not yet answered there:\n${room.text}\n]\n\n`
@@ -681,13 +686,23 @@ function createFeishuRuntimeFactory(
       // time, where routed-ness is still known; the dequeue path only reads it back.
       const parentSession =
         routed === undefined && m.thread_id !== undefined ? placeKey(kind, { chat_id: m.chat_id }) : undefined;
-      // The room's un-summoned chatter is the half of "what the room knew" that no session holds yet.
-      // Recorded here because the SOURCE chat is only known here (a route may answer elsewhere), and
-      // derived FROM the lineage rather than beside it: a place with no parent has no room to read,
-      // and an opaque routed session must get neither. (Untested on purpose — the two cannot diverge,
-      // and a routed deployment never fills a room bucket anyway: route-null messages are dropped,
-      // not buffered.)
-      const roomBufferKey = parentSession !== undefined ? feishuBufferPlaceKey({ chatId: m.chat_id }) : undefined;
+      // The room's un-summoned chatter is the half of "what the room knew" that no session holds yet
+      // — folded into the thread's FIRST turn. `agentSpokeIn` read HERE, before this turn's own
+      // participation is recorded below, is exactly that fact.
+      //
+      // The store is a cache (bounded, evictable, deletable) and that is ACCEPTABLE for this gate,
+      // unlike for anything that would outlive the turn: an evicted record costs one extra fold of a
+      // block whose label stays true whenever it is written, and the record is rewritten the moment
+      // this turn answers. Gating a session-BOUND copy on the same cache is what made an earlier
+      // revision lie about which room a thread branched from; a prompt-bound copy cannot.
+      //
+      // Derived FROM the lineage rather than beside it: a place with no parent has no room to read,
+      // and an opaque routed session must get neither. Keyed by the SOURCE chat — a route may answer
+      // elsewhere, but a thread branches from where its message was said.
+      const roomBufferKey =
+        parentSession !== undefined && !threadParticipants.agentSpokeIn(session)
+          ? feishuBufferPlaceKey({ chatId: m.chat_id })
+          : undefined;
       const chatId = r.chatId ?? m.chat_id;
       const sameTarget = chatId === m.chat_id;
       // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers,
