@@ -319,11 +319,13 @@ The first-turn fact comes from the participants store, which is a cache by contr
 evictable, deletable) — and that is acceptable HERE precisely because the fold is prompt-bound. An
 evicted record costs one extra fold of a block whose label ("discussion in the room this thread
 branched from, not yet answered there") is true whenever it is written, and the record is rewritten
-as soon as that turn answers. The same cache may not gate anything whose label would become a LIE
-after eviction: an earlier revision wrote this content into the newborn session's birth mark under
-"when this thread started", where a forgotten record would permanently attribute the room's CURRENT
-chatter to a thread that branched long before. That is why the room's discussion is folded into a
-prompt and not into a session.
+as soon as that turn answers.
+
+The converse is the rule worth keeping: **this cache may not gate a claim that outlives the turn.**
+Write the same content into the newborn session instead — as a birth mark reading "when this thread
+started" — and a forgotten record permanently attributes the room's CURRENT chatter to a thread that
+branched long before. Repetition degrades an answer; a stale durable label misstates the past. That
+is the whole reason this rung is prompt-bound and rung 4 is not.
 
 *Rejected: making the room absorb eagerly* — writing each un-summoned message into the room's session
 at ingress. It would delete this rung entirely (the fork would see everything), and it fails on three

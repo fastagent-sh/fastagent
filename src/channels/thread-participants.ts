@@ -61,21 +61,15 @@ export interface ThreadParticipants {
   admitsBareMessage(key: string): boolean;
   /**
    * Has the agent answered into this thread before? A DIFFERENT question from
-   * {@link ThreadParticipants.admitsBareMessage} (which also weighs the second-human rule): this one
-   * marks the thread's FIRST turn — the moment it is born out of its room — which is when a channel
-   * folds the room's not-yet-answered discussion into it (read-only; see the feishu channel).
+   * {@link ThreadParticipants.admitsBareMessage}, which also weighs the second-human rule: this one
+   * is only "is this the thread's first answered turn", the moment a channel folds the room's
+   * pending discussion into it (participant-model.md §8).
    *
-   * This reader tolerates the store's forgetting in a way the summon rule's does not, and the
-   * difference is worth stating because it is what makes the read legitimate here: the fold is
-   * prompt text under a label that is true whenever it is written ("discussion in the room this
-   * thread branched from, not yet answered there"), so an evicted record costs ONE extra fold and
-   * then self-heals when this turn records participation again. The same store may not gate anything
-   * whose label would become a LIE after eviction — which is why the room's discussion is folded into
-   * a prompt rather than written into a session's birth mark.
+   * A caller must tolerate a false from an EVICTED record (this store is a cache — see the header):
+   * gate a repeatable read on it, never a durable claim about when a thread began.
    *
-   * False for threads the store has never seen, including p2p threads, where participation is
-   * deliberately not recorded — harmless there, because a p2p main place never buffers (every message
-   * answers).
+   * False for threads the store has never seen, p2p included — participation is not recorded there,
+   * and a p2p main place never buffers anyway.
    */
   agentSpokeIn(key: string): boolean;
   /**
