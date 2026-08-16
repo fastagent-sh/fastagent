@@ -45,13 +45,18 @@ async function buildParent(store: PiSessionStore, id: string, n: number): Promis
 
 describe("session inheritance (fork-on-first-open)", () => {
   it("a new session naming a parent forks it once, then lives independently", async () => {
-    const { store } = await freshStore();
+    const { dir, store } = await freshStore();
     const parent = await buildParent(store, "room", 2);
 
     const child = await store.openOrCreate("thread", { parentSession: "room" });
     const seen = await contextText(child);
     expect(seen).toContain("q1 ask");
     expect(seen).toContain("a2 answer");
+    // Staged outside the store's lookups, then published — not written in place. Without this, moving
+    // the draft realm INTO the real directory passes every other test: publish's rename becomes a
+    // no-op on the same path, so only the crash window differs and nothing else observes it. A
+    // structural check that the mechanism ran, not proof of crash safety.
+    expect(existsSync(join(dir, ".drafts"))).toBe(true);
 
     // Independence, both directions: later parent writes are invisible to the child, and the
     // child's writes never reach the parent.
@@ -231,15 +236,16 @@ describe("session inheritance (fork-on-first-open)", () => {
   });
 
   it("a crashed draft cannot poison the store — drafts live outside every lookup", async () => {
-    // Simulates a crash mid-inheritance: garbage under `.inherit-tmp` (where drafts are forked)
+    // Simulates a crash mid-creation: garbage under `.drafts` (where every creation stages)
     // must be invisible — openIfExists finds nothing, and the next inheritance attempt runs afresh
     // and publishes a complete child. Exactly ONE file under the real directory afterwards.
+
     const { dir, store } = await freshStore();
     await buildParent(store, "room", 2);
     const realCwdDir = readdirSync(dir)
-      .filter((d) => d !== ".inherit-tmp")
+      .filter((d) => d !== ".drafts")
       .map((d) => join(dir, d))[0] as string;
-    const tmpCwdDir = join(dir, ".inherit-tmp", realCwdDir.split("/").at(-1) as string);
+    const tmpCwdDir = join(dir, ".drafts", realCwdDir.split("/").at(-1) as string);
     mkdirSync(tmpCwdDir, { recursive: true });
     writeFileSync(join(tmpCwdDir, "2020-01-01T00-00-00-000Z_thread.jsonl"), "{torn garbage");
 
@@ -254,7 +260,7 @@ describe("session inheritance (fork-on-first-open)", () => {
     const { dir, store } = await freshStore();
     await buildParent(store, "room", 2);
     const realCwdDir = readdirSync(dir)
-      .filter((d) => d !== ".inherit-tmp")
+      .filter((d) => d !== ".drafts")
       .map((d) => join(dir, d))[0] as string;
     // Tear the parent so the fork's read throws mid-inheritance.
     const parentFile = readdirSync(realCwdDir)

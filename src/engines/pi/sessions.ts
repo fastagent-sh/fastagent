@@ -325,7 +325,9 @@ async function markInheritanceWindow(child: Session): Promise<void> {
  * session or to nothing, never to a half** — `openOrCreate` short-circuits on EXISTENCE, so a
  * newborn discovered before its entries, repair and window mark are written reads as "the decision
  * was taken" forever. pi's own `create`/`fork` publish first and append after, which is why this
- * seam exists. Retrying is therefore always safe.
+ * seam exists. Re-attempting after a failure is therefore safe — the failed attempt left nothing to
+ * collide with. CONCURRENT creation of one id is a different question, not answered here: the
+ * serving path serializes it with the single-writer lease before reaching any store.
  */
 interface SessionBackend<M> {
   find(id: string): Promise<M | undefined>;
@@ -397,7 +399,9 @@ async function createInheriting<M>(
     }
     log.debug(`[fastagent] parent session "${parentId}" is empty — nothing to inherit`);
   } catch (error) {
-    log.warn(`[fastagent] could not fork parent session "${parentId}" (${String(error)}) — starting empty`);
+    // Unattributed on purpose: this spans reading the parent AND writing the child, so the fault may
+    // belong to either — a torn parent journal, or a store that cannot publish.
+    log.warn(`[fastagent] could not inherit from "${parentId}" into "${id}" (${String(error)}) — starting empty`);
   }
   return startEmpty();
 }
@@ -454,14 +458,17 @@ export function jsonlSessionStore(options: {
   const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd }), sessionsRoot: root });
   // The draft realm: a sibling root INSIDE the store root but OUTSIDE every lookup — `list({ cwd })`
   // scans only `<root>/<encodedCwd>`, and a cwd-less `list()` scans `<root>/*/​*.jsonl`, one level,
-  // which `.inherit-tmp/<encodedCwd>/*.jsonl` sits below. This is what makes creation atomic on a
-  // backend that has no transactions: everything before the rename is invisible and repeatable,
-  // everything after it is complete. A crash mid-creation therefore leaves only invisible garbage
-  // (bounded by crash count; the next attempt starts a fresh draft — never resumed, so staleness
-  // cannot poison anything).
+  // which `.drafts/<encodedCwd>/*.jsonl` sits below. This is what makes creation atomic on a backend
+  // that has no transactions: everything before the rename is invisible and repeatable, everything
+  // after it is complete. EVERY creation stages here, forked or empty — hence `.drafts`, not a name
+  // about inheritance.
+  //
+  // A crash, or a handled failure once the draft file exists (a throw from `fill`, or from the
+  // rename), leaves it behind. Drafts are never resumed, so staleness cannot poison anything — but
+  // nothing unlinks them either.
   const draftRepo = new JsonlSessionRepo({
     fs: new NodeExecutionEnv({ cwd }),
-    sessionsRoot: join(root, ".inherit-tmp"),
+    sessionsRoot: join(root, ".drafts"),
   });
   const backend: SessionBackend<Awaited<ReturnType<JsonlSessionRepo["list"]>>[number]> = {
     find: async (id) => (await repo.list({ cwd })).find((m) => m.id === id),
@@ -475,7 +482,7 @@ export function jsonlSessionStore(options: {
       await fill(draft);
       // The interface erases the metadata generic; a jsonl draft's metadata always carries `path`.
       const draftPath = ((await draft.getMetadata()) as unknown as { path: string }).path;
-      // `<root>/.inherit-tmp/<encodedCwd>/<file>` → `<root>/<encodedCwd>/<file>`: the draft's own
+      // `<root>/.drafts/<encodedCwd>/<file>` → `<root>/<encodedCwd>/<file>`: the draft's own
       // parent directory NAME is pi's cwd encoding, already computed — read it back rather than
       // re-deriving it, and rather than borrowing the parent session's path (a parentless draft has
       // none). Same filesystem, so the rename is atomic; the real directory may not exist yet when
@@ -515,8 +522,11 @@ export function jsonlSessionStore(options: {
 
 /**
  * Filename-safe encoding, INJECTIVE: `[A-Za-z0-9._-]` verbatim, everything else `%XX` (one byte) or
- * `%uXXXX` (above it). Two different ids must never name one file — they would share a conversation,
- * and since `parentSession` is encoded the same way, one could inherit from the wrong room.
+ * `%uXXXX` (above it). Two different ids must never encode alike: the encoded id is what
+ * `openOrCreate` matches on, so a collision is two conversations resolving to ONE session, and —
+ * since `parentSession` comes through the same encoder — one inheriting from the wrong room. Not the
+ * same thing as a filename clash: a file is `<timestamp>_<id>.jsonl`, and identity is the `id` its
+ * metadata carries, not the name on disk.
  *
  * Injectivity is what the previous form lacked: it padded to a MINIMUM of two hex digits, so an
  * escape run could be re-split — `"\u0100"` and `"\u0010" + "0"` both produced `"%100"`. Every
