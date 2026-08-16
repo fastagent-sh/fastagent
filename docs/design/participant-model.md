@@ -311,9 +311,10 @@ attachments on the buffered tier rather than as marker lines.
 lands in the session, so the thread's second turn already has the first turn's fold in its context;
 re-folding puts a second identical copy of the block, and of its images, in ONE context window
 (measured: three turns, three copies of each). Several copies of one screenshot read as several
-postings. After the first turn the content is already present, so only newly arrived chatter would
-carry any information, and it reaches the thread the ordinary ways — someone says it there, or the
-room answers and the thread's own buffer carries on.
+postings. After the first turn the content is already present, so only chatter arriving LATER could
+carry anything new — and that does not reach the thread at all. It is the same asymmetry stated at
+the end of this section: what a room says after a thread branches stays in the room, until someone
+repeats it there or an asker quotes the message and rung 2 loads it.
 
 The first-turn fact comes from the participants store, which is a cache by contract (bounded,
 evictable, deletable) — and that is acceptable HERE precisely because the fold is prompt-bound. An
