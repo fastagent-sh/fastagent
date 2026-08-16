@@ -239,7 +239,7 @@ A thread must start from something. Four rungs, increasing in cost:
 |---|---|---|---|
 | 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound | rejected |
 | **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** | implemented |
-| 3 | seed injection | the room's last N exchanges, in the thread's first prompt | subsumed by rung 4 |
+| **3** | **room-buffer fold, in the prompt** | **what the room heard but no session absorbed — text and attachments** | **implemented** |
 | **4** | **session inheritance (fork at the branch point)** | **the room's history up to where the thread branched — text, images, tool results — windowed** | **implemented** |
 
 Rung 1 fails the model's own main path: following up on the agent's answer, where the answer is
@@ -300,9 +300,34 @@ conflated storage with context (disk keeps the full inspectable copy; the mark g
 the model — different budgets). The one prediction it got right — preserving reasoning and tool
 results is fork's exclusive capability — is the reason rung 3 never shipped as prompt text.
 
+**Rungs 3 and 4 are both implemented, and they carry different halves.** The fork carries what the
+room's SESSION knew; a room's session only advances when the agent is summoned, so discussion since
+its last answered turn sits in the context buffer, absorbed by nothing. A thread turn folds that
+bucket into its prompt, read-only — the room's own next answered turn still commits it, so each place
+sees the discussion exactly once in its own memory, and the fold's attachments cross as real
+attachments on the buffered tier.
+
+Folded on EVERY thread turn, not just the first. "First" is the tighter fold, and it was built and
+reverted: every way for a channel to know it is a memory that can be lost (the participants store is
+a cache by contract — bounded, evictable, deletable), and a forgotten entry re-labels an old thread's
+turn as newborn, injecting the room's CURRENT chatter under "what this thread branched from".
+Unconditional folding needs no such memory: it repeats the block while the room stays un-answered,
+and stops by itself the moment the room absorbs its bucket. The cost is a repeated block in a few
+prompts, bounded by the buffer's own char budget.
+
+*Rejected: making the room absorb eagerly* — writing each un-summoned message into the room's session
+at ingress. It would delete this rung entirely (the fork would see everything), and it fails on three
+counts, all measured rather than assumed: durable session writes take the run lease
+([session-control.md](session-control.md) §9), so ingress would block behind a multi-minute turn; that
+blocking sits on the PRE-ACK path, where the webhook must answer before the platform re-pushes; and
+consecutive ambient user entries reach the provider unmerged — the direct Anthropic API now combines
+same-role turns, but Bedrock still rejects them (`roles must alternate`), and `deploy agentcore` is a
+shipped host. The room's session advancing only when summoned is therefore a constraint, not an
+oversight.
+
 Adoption is per channel, because only a channel knows its places' lineage: Feishu/Lark set the
-scope fields (threads inherit); Telegram and Slack do not yet (their threads still start empty —
-the fields are one wiring change away).
+scope fields and fold the room bucket (threads inherit); Telegram and Slack do not yet (their threads
+still start empty — the fields are one wiring change away).
 
 *Known asymmetry, accepted:* room → thread transfers once, when the thread starts, and nothing flows
 back (§7). A thread neither learns about later room activity nor reports its own.

@@ -1768,6 +1768,117 @@ describe("turn flow", () => {
     expect(calls[0]?.scope.branchHints).toBeUndefined();
   });
 
+  it("a thread turn folds the room's un-answered discussion, and stops when the room absorbs it", async () => {
+    // The fork (scope.parentSession) carries what the room's SESSION knew; chatter since the room's
+    // last answered turn sits only in its context buffer, absorbed by no session. A thread turn
+    // folds that bucket read-only.
+    //
+    // Folded on EVERY turn, not just the thread's first. "First" is the tighter fold, but every way
+    // of knowing it is a channel-side memory that can be lost — the participants store is a cache by
+    // contract — and a forgotten entry re-labels an old thread's turn as newborn. Unconditional
+    // folding needs no such memory: it repeats while the room stays un-answered and stops by itself
+    // once the room's own turn commits its bucket. The thread never commits, so nothing is stolen:
+    // the room still folds the same chatter into its own next answer.
+    feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    // Two un-summoned ROOM messages → the main bucket.
+    await handler(feishuRequest(messageEvent({ id: "om_room1", chatType: "group", text: "我们该用蓝色背景" })));
+    await handler(feishuRequest(messageEvent({ id: "om_room2", chatType: "group", text: "同意，蓝色好" })));
+    // First message of a NEW topic summons the agent.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_t1",
+          chatType: "group",
+          threadId: "omt_new",
+          content: JSON.stringify({ text: "@_bot 背景色定了吗？" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    const first = calls[0]?.prompt.text ?? "";
+    expect(first).toContain("[recent discussion in the room this thread branched from — not yet answered there:");
+    expect(first).toContain("蓝色背景");
+    expect(first).toContain("同意，蓝色好");
+
+    // A SECOND thread turn still folds it: the room has not answered, so the discussion is still
+    // absorbed by nobody, and the channel does not claim to know which turn was the thread's first.
+    await handler(
+      feishuRequest(messageEvent({ id: "om_t2", chatType: "group", threadId: "omt_new", text: "那用深蓝还是浅蓝" })),
+    );
+    await idle();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt.text ?? "").toContain("蓝色背景");
+
+    // The ROOM's own next answered turn folds AND commits the chatter — nothing was stolen from it.
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_room_ask",
+          chatType: "group",
+          content: JSON.stringify({ text: "@_bot 总结一下大家的意见" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+    expect(calls).toHaveLength(3);
+    const roomTurn = calls[2]?.prompt.text ?? "";
+    expect(roomTurn).toContain("[recent group discussion:");
+    expect(roomTurn).toContain("蓝色背景");
+
+    // …after which the fold stops by itself: the bucket is the only source of truth, and it is empty.
+    await handler(
+      feishuRequest(messageEvent({ id: "om_t3", chatType: "group", threadId: "omt_new", text: "好，定了" })),
+    );
+    await idle();
+    expect(calls).toHaveLength(4);
+    expect(calls[3]?.prompt.text ?? "").not.toContain("branched from");
+  });
+
+  it("the room fold's attachments ride the buffered tier into a thread turn", async () => {
+    // The fold is prompt text plus real attachments — the room's image crosses as an image, not as a
+    // marker line. This is what a session-bound seed could not do.
+    const fx = feishuFetch();
+    const { handler, calls, idle } = buildChannel();
+    await flush();
+    const mention = [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }];
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_room_img",
+          chatType: "group",
+          msgType: "image",
+          content: JSON.stringify({ image_key: "room_shot" }),
+        }),
+      ),
+    );
+    await handler(
+      feishuRequest(
+        messageEvent({
+          id: "om_t_first",
+          chatType: "group",
+          threadId: "omt_pic",
+          content: JSON.stringify({ text: "@_bot 那张图里是什么" }),
+          mentions: mention,
+        }),
+      ),
+    );
+    await idle();
+
+    expect(calls).toHaveLength(1);
+    const prompt = calls[0]?.prompt.text ?? "";
+    expect(prompt).toContain("branched from"); // the fold is there…
+    expect(calls[0]?.prompt.images).toHaveLength(1); // …and the image crossed with it
+    expect(prompt).toContain("vision image 1: from user ou_alice, msg om_room_img");
+    expect(fx.calls("/im/v1/messages/om_room_img/resources/room_shot", "GET")).toHaveLength(1);
+  });
+
   it("a ROUTED session is opaque: no lineage, even when its id looks like a place key", async () => {
     // route().session's contract is opaque. A three-segment id like "tenant:user:alice" must not be
     // re-parsed as `<kind>:<chat>:<thread>` — that would let a thread message inherit from a session
