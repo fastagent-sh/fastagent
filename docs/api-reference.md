@@ -397,7 +397,13 @@ function createProvider(...): Provider;
 
 ```ts
 interface PiSessionStore {
-  openOrCreate(sessionId: string): Promise<Session>;
+  openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<Session>;
+}
+
+/** Where a NEW session starts from. Read only on the create path; an existing session ignores it. */
+interface SessionInheritance {
+  parentSession: string;
+  branchHints?: string[];
 }
 
 /** Read-only sibling for the observation plane: unknown session → undefined, never created. */
@@ -408,6 +414,11 @@ interface PiSessionReader {
 function inMemorySessionStore(): PiSessionStore & PiSessionReader;
 function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore & PiSessionReader;
 ```
+
+`jsonlSessionStore`'s `dir` is resolved against `cwd` (which itself defaults to `process.cwd()`), so a
+relative path means "inside the workspace this store serves", not "inside whatever directory the
+process happens to be in". `cwd` also scopes lookups: two stores sharing one `dir` but serving
+different workspaces never open each other's sessions.
 
 Lease:
 
