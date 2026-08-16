@@ -321,18 +321,15 @@ async function markInheritanceWindow(child: Session): Promise<void> {
 }
 
 /**
- * The backend surface session creation needs. `createAtomically` is the load-bearing one, and it is
- * ONE verb on purpose.
+ * The backend surface session creation needs, with `createAtomically` the load-bearing verb.
  *
  * A newborn session is never just a file: it may carry forked entries, a crash repair and a window
- * mark, and `openOrCreate` short-circuits on EXISTENCE — so a session that becomes discoverable
- * before all of that is written reads as "the decision was taken" forever, with whatever half it
- * happened to have. pi's repo API cannot express that: `create` and `fork` both publish first and
- * append after. Spelling the workaround out at each call site is what this used to do, and the
- * sequencing then lived in the callers as a rule rather than in the type as a structure. Here it is
- * one primitive with one contract: **`id` resolves to a complete session or to nothing, never to a
- * half.** Retrying is therefore always safe, so a failed attempt needs no cleanup and the "exactly
- * one creation" invariant no longer depends on how many times callers call.
+ * mark, while `openOrCreate` short-circuits on EXISTENCE — so a session that becomes discoverable
+ * before all of that is written reads as "the decision was taken" forever, holding whatever half it
+ * had. pi's repo API cannot express that (`create` and `fork` publish first and append after), so
+ * the contract lives here: **`id` resolves to a complete session or to nothing, never to a half.**
+ * Retrying is therefore always safe, and "exactly one creation" does not rest on callers sequencing
+ * anything.
  */
 interface SessionBackend<M> {
   find(id: string): Promise<M | undefined>;
