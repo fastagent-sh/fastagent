@@ -460,8 +460,12 @@ export function jsonlSessionStore(options: {
   // scans only `<root>/<encodedCwd>`, and a cwd-less `list()` scans `<root>/*/​*.jsonl`, one level,
   // which `.drafts/<encodedCwd>/*.jsonl` sits below. This is what makes creation atomic on a backend
   // that has no transactions: everything before the rename is invisible and repeatable, everything
-  // after it is complete. EVERY creation stages here, forked or empty — hence `.drafts`, not a name
-  // about inheritance.
+  // after it is complete.
+  //
+  // What stages here is creation reached through {@link createInheriting} — the fork, and that path's
+  // empty fallback. An ordinary create (no parent) writes straight into the store, because there is
+  // nothing to stage: an empty session is complete the moment its file exists, so no reader can catch
+  // it half-made. Two paths, and only one of them has a window to protect.
   //
   // A crash, or a handled failure once the draft file exists (a throw from `fill`, or from the
   // rename), leaves it behind. Drafts are never resumed, so staleness cannot poison anything — but
