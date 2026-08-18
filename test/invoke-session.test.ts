@@ -95,11 +95,16 @@ describe("AgentSession L0: cancelling before the model call", () => {
     // Park the generator INSIDE prompt-option resolution: the session exists and is idle, so the
     // armed door has nothing to abort — only a latch read after this await can stop the turn.
     let leaveTheWindow!: () => void;
-    duringPromptPrep.value = () => new Promise<void>((resolve) => (leaveTheWindow = resolve));
+    let entered!: () => void;
+    const inTheWindow = new Promise<void>((resolve) => (entered = resolve));
+    duringPromptPrep.value = () => {
+      entered();
+      return new Promise<void>((resolve) => (leaveTheWindow = resolve));
+    };
 
     const iterator = agent.invoke({ session: "resize-cancel" }, { text: "go" })[Symbol.asyncIterator]();
     const first = iterator.next();
-    await Promise.resolve();
+    await inTheWindow;
     const cancelled = iterator.return?.(undefined);
     leaveTheWindow();
     await cancelled;
@@ -112,12 +117,16 @@ describe("AgentSession L0: cancelling before the model call", () => {
     const { session, prompted } = promptRecordingSession();
     const agent = createPiAgentFromSession({ sessionFactory: async () => session });
     let failPreparation!: () => void;
-    duringPromptPrep.value = () =>
-      new Promise<void>((_, reject) => (failPreparation = () => reject(new Error("image pipeline unavailable"))));
+    let entered!: () => void;
+    const inTheWindow = new Promise<void>((resolve) => (entered = resolve));
+    duringPromptPrep.value = () => {
+      entered();
+      return new Promise<void>((_, reject) => (failPreparation = () => reject(new Error("image pipeline unavailable"))));
+    };
 
     const iterator = agent.invoke({ session: "cancel-then-fail" }, { text: "go" })[Symbol.asyncIterator]();
     const first = iterator.next();
-    await Promise.resolve();
+    await inTheWindow;
     const cancelled = iterator.return?.(undefined);
     failPreparation(); // the failure races the cancellation, and loses: nobody is listening
     await cancelled;
