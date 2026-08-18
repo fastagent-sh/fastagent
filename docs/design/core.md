@@ -204,7 +204,10 @@ model, auth, tools, sessions, and machinery paths. `dev`, `start`, `invoke`, and
 assembly rather than carrying parallel implementations.
 
 Each invocation builds a fresh harness for its session and discards it after the turn. Conversation
-continuity comes from `PiSessionStore`, not a resident harness. Reopening is faithful to the whole
+continuity comes from `PiSessionStore`, not a resident harness. That is L0's choice on two axes a
+deployment owns rather than the architecture: per-invoke state (SPEC MUST 6 — what AgentCore and every
+scaled channel host require) and the `harness` engine class. Both are swappable at this rung alone;
+[conformance-levels.md](conformance-levels.md) states what each combination owes. Reopening is faithful to the whole
 record, not just the messages: pi's harness writes active-tool changes to the session but never reads
 them back (its own TUI harness is resident), so `piHarnessFactory` resolves the active-tool set itself
 (`harness.ts` `resolveHarnessActiveToolNames`): the UNION of the initial set (every non-deferred tool;
@@ -506,8 +509,11 @@ a stable hand-authored surface. What is platform-different:
   place's next answered turn. The Telegram consume invariant carries over: peek at dequeue, commit only
   on `completed`, and retain failures plus messages arriving in-flight. Non-`user` senders are dropped.
   Summon matches the `mentions` array by the bot's open_id (fail-closed until resolved). A reply summon
-  carries only `parent_id` — the referent's content and attachments are fetched as primary input;
-  buffered attachments are background input and degrade per resource.
+  carries only `parent_id` — the referent's content and attachments are fetched as primary input, and
+  the chain ABOVE the referent is resolved as context (oldest-first; one shared text budget;
+  ancestors' attachments join the buffered tier under its cap; a walk ending short of the root leaves
+  a visible truncation line — participant-model.md §8); buffered attachments are background input and
+  degrade per resource.
 - **Ingress is an onboarding-time app choice.** `add feishu|lark` asks for WebSocket or webhook and
   writes the corresponding transport-specific factory into the channel module. WebSocket needs only App ID/Secret, skips token capture,
   tunnel, Request URL registration, and platform crypto; the official SDK authenticates the outbound

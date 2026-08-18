@@ -124,5 +124,5 @@ export async function* invokeTurn(
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images };
-  yield* streamTurnWithBusyRetry(agent, session, prompt, { label: "[telegram]", onCompleted, busyRetry });
+  yield* streamTurnWithBusyRetry(agent, { session }, prompt, { label: "[telegram]", onCompleted, busyRetry });
 }

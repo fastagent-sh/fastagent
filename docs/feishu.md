@@ -252,7 +252,16 @@ place rather than the individual ask ([design note](design/participant-model.md)
 | Direct-message thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | always answered — a p2p chat has one human, so there is nothing to disambiguate and no participation is recorded |
 
 There are no session modes to choose. A room has one memory that everyone in it shares, so a colleague
-can follow up on someone else's question; a thread is a separate place with its own.
+can follow up on someone else's question; a thread is a separate place with its own — **started from
+what the room knew**: a new thread's session inherits the room's recent history (up to the message the
+thread branched from, windowed to the newest ≈50 exchanges), including images and tool results. The
+inheritance happens once, when the thread's session is created; after that the two places are
+independent, and the room never sees what the thread discusses.
+
+Discussion the room heard but never answered has not entered its session yet, so the fork cannot
+carry it — the thread's first turn reads that pending discussion instead, attachments included.
+Reading it does not consume it: the room's own next answer still folds the same messages, so each
+place sees the discussion once.
 
 **Starting a thread.** Mention the Agent inside a thread once (typically by replying to one of its
 messages and creating a topic). It answers there, which makes it a participant, and every later bare
@@ -316,7 +325,8 @@ Message payloads are resolved by the channel before the agent turn runs — all 
 
 - images (`image` messages, or images inside a rich-text `post`) are downloaded and passed as `prompt.images` — the selected model must support vision,
 - files / audio / video are downloaded to `<state root>/channels/<kind>/files/<chat>/` and listed in the prompt so the agent reads them with its tools,
-- a **reply summon** fetches the replied-to message (its content is not in the event), injects its text into the prompt, and loads its attachments too — "@bot summarize this" as a reply to a file works.
+- a **reply summon** fetches the replied-to message (its content is not in the event), injects its text into the prompt, and loads its attachments too — "@bot summarize this" as a reply to a file works,
+- the **reply chain above** the quoted message is resolved as background context: up to 8 ancestors, oldest first, sharing one referent-sized text budget; their images/files load degradably like buffered attachments (a failure becomes a note, not an error). A chain cut short for any reason — cap, budget, an unreadable message — is marked visibly in the prompt so a partial chain never reads as the whole conversation.
 
 ## State & restarts
 

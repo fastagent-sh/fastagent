@@ -153,7 +153,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 
 - **The contract is engine-neutral.** `src/agent.ts` must not import any engine (`@earendil-works/pi-*` only under `src/engines/`).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. On the invoke path, failures become `failed` events (SPEC MUST 2), never thrown iteration errors.
-- **Stateless invoke.** Each invoke builds a fresh harness and discards it; durable state lives behind `PiSessionStore`. Do not introduce in-process session state.
+- **Per-invoke state is the DEFAULT level, not an axiom.** Today's serving path builds a fresh harness per invoke and discards it; durable state lives behind `PiSessionStore`. Do not introduce in-process session state *into that path* — it is what satisfies SPEC MUST 6 (no location dependence), which AgentCore and every horizontally-scaled channel host require. The SPEC permits a resident Agent at the cost of portable conformance; if a deployment posture wants one, that is a deliberate level choice with its own bill ([conformance-levels.md](docs/design/conformance-levels.md)), never a quiet drift in this one.
 - **Public surface is scoped on purpose.** `src/core.ts` is engine-neutral, `src/pi.ts` is the pi reference surface, and `src/index.ts` combines them. Pi-coupled internals (L0 `createPiAgentFromHarness`, `piHarnessFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **The artifact is the truth.** Deployment behavior must come from the bundled definition, not the builder machine's global state.
 
@@ -166,7 +166,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
    npm run lint && npm run typecheck && npm test
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
-3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. `main` enforces linear history; force-push is forbidden.
+3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. Branch commits are working state, the PR is the design asset: put the durable *why* there, not in per-commit narration. `main` enforces linear history; force-push is forbidden.
 4. **Review policy.** Merging is an explicit maintainer decision — agents never merge. Green CI makes a PR eligible; report "ready to merge" and stop. External-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**
    ```bash
@@ -184,4 +184,4 @@ Full version: `CONTRIBUTING.md`. The essentials:
 
 The reader is a senior engineer with full project context. Lead with the conclusion, use tables for structured comparisons, skip obvious reasoning, do not restate, and do not add decorative formatting or meta-narration. Density check: if cutting half the text loses no information, cut it.
 
-优先使用中文回答；面向仓库的产物（代码、注释、文档、commit/PR）一律英文。
+Everything that lands in or on the repository is English — code, comments, documentation, commit messages, PR titles and bodies, code reviews and review replies, issue discussion, and release notes.

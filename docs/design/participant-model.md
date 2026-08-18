@@ -235,12 +235,12 @@ commit on `completed`.
 
 A thread must start from something. Four rungs, increasing in cost:
 
-| Rung | Mechanism | Gives the thread |
-|---|---|---|
-| 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound |
-| **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** |
-| 3 | seed injection | the room's last N exchanges, in the thread's first prompt |
-| 4 | session fork | the room's entire history, reasoning and tool results included |
+| Rung | Mechanism | Gives the thread | Status |
+|---|---|---|---|
+| 1 | referent anchor, truncated | the followed-up message, cut at some display-sized bound | rejected |
+| **2** | **referent anchor, bounded by the platform** | **the followed-up message in full (`REFERENT_MAX_CODE_POINTS`)** | implemented |
+| **3** | **room-buffer fold, in the prompt** | **what the room heard but no session absorbed — text and attachments** | **implemented** |
+| **4** | **session inheritance (fork at the branch point)** | **the room's history up to where the thread branched — text, images, tool results — windowed** | **implemented** |
 
 Rung 1 fails the model's own main path: following up on the agent's answer, where the answer is
 routinely longer than the cut. **Rung 2 is implemented**, with one bound for every channel, derived
@@ -253,14 +253,94 @@ already answered in was tried: deciding whether the session really held it needs
 the channel RECEIVED the messages in between, which depends on a permission that changes over time
 while the record is durable. Every way of gating it failed toward a silently missing quote, for the
 price of one extra read.) An unreadable referent degrades to a marker in
-the prompt: context is not the ask, and losing it must not cost the answer. Rung 3 is the next
-increment if anchors prove too narrow.
+the prompt: context is not the ask, and losing it must not cost the answer.
 
-Rung 4 (`SessionRepo.fork`, which would need an optional lineage field on `Scope`) is **not planned**:
-it over-delivers by copying the whole room — including everyone's unrelated conversations — into a
-focused side discussion, and it pays that cost on every turn rather than once. Its only exclusive
-capability is preserving the agent's reasoning and tool results; that is worth revisiting when a real
-case appears, not before.
+On Feishu/Lark — and only there, because that platform threads every reply to a parent while
+Telegram's update embeds exactly one `reply_to_message` object (no chain to walk) and Slack carries
+none — the anchor also resolves the referent's reply CHAIN: the ancestors above the quoted message,
+walked to the platform-defined root and rendered oldest-first as context. Ancestors are context, not
+the ask, and every bound follows from that: their text shares ONE further `REFERENT_MAX_CODE_POINTS`
+budget across the whole chain (the referent itself keeps its full fidelity bound), their attachments
+share the buffered tier's `BUFFER_ATTACH_MAX` budget with the context buffer (chain refs take slots
+first — the direct upstream of what the user pointed at outranks ambient discussion), and an
+unloadable one costs a note, never the turn. Any walk that ends short of the root — the 8-ancestor
+IO cap, an exhausted budget, an unreadable ancestor, a cycle in corrupt data — leaves the same
+visible truncation line: a chain rendered without it would read as complete, and the model would
+take the oldest fetched node for the original ask. One cost is carried deliberately: the walk
+repeats per reply turn, so an established session re-reads chain text it may already hold
+(attachments are deduplicated by message identity; text cannot be, from a layer that cannot read
+the session). Bounded to one referent's worth per turn by the shared budget, that is the price of an
+unconditional, stateless guarantee that what a quote points into is visible. A one-hop version of
+this walk was once added and removed as a memory substitute; what changed is the job — resolving
+the pointer, with history left to the rungs below — and the bounds, which are the chain's own root
+plus explicit budgets rather than a picked level count. Rung 3 is the next increment if anchors
+prove too narrow.
+
+**Rungs 3 and 4 turned out to be one mechanism with two parameters, and it is implemented as
+session inheritance.** The channel states two facts only it knows — which place this one branched
+from (`scope.parentSession`, SPEC §8's extension mechanism) and which message ids may locate the
+branch point (`scope.branchHints`: the referent and its reply chain, whose ids passed through the
+room's turns) — and the engine does the rest, ONCE, when the thread's session is first created: the
+session existing is the record that the decision was taken, so there is no marker to persist and no
+decision to retry. The fork copies the room's active path up to the branch point (a hit is extended
+to the end of its exchange — a mid-exchange fork inherits a question without its answer; a miss
+falls back to the room's present, with a warn). What the model sees is then bounded by one
+mechanical compaction mark — the newest 50 exchanges within a ~50K-token estimate, images priced
+flat — which IS rung 3's seed, generated from real session entries instead of re-serialized prompt
+text, so images and tool results come along for free. Both limits govern how far the window extends
+into older history; the newest exchange is a floor, kept whole even when it alone exceeds the
+budget — an inheritance that drops the exchange the thread branched off would be no inheritance. Every edge (missing parent, oversize journal,
+torn tail line, a dangling tool call from forking a mid-turn room) fails toward an empty session
+with a warn: context is not the ask, and a thread must not lose its first turn to it.
+
+An earlier revision of this section declared rung 4 "not planned" on two assumptions, both wrong
+and both corrected by measurement: a fork does not "pay on every turn" (it is one-time by
+construction — fork, then the two sessions never touch again), and "copying the whole room"
+conflated storage with context (disk keeps the full inspectable copy; the mark governs what reaches
+the model — different budgets). The one prediction it got right — preserving reasoning and tool
+results is fork's exclusive capability — is the reason rung 3 never shipped as prompt text.
+
+**Rungs 3 and 4 are both implemented, and they carry different halves.** The fork carries what the
+room's SESSION knew; a room's session only advances when the agent is summoned, so discussion since
+its last answered turn sits in the context buffer, absorbed by nothing. The thread's FIRST turn folds
+that bucket into its prompt, read-only — the room's own next answered turn still commits it, so each
+place sees the discussion exactly once in its own memory, and the fold's attachments cross as real
+attachments on the buffered tier rather than as marker lines.
+
+**Once, not per turn**, and this is not an optimisation — a prompt is not an independent request. It
+lands in the session, so the thread's second turn already has the first turn's fold in its context;
+re-folding puts a second identical copy of the block, and of its images, in ONE context window
+(measured: three turns, three copies of each). Several copies of one screenshot read as several
+postings. After the first turn the content is already present, so only chatter arriving LATER could
+carry anything new — and that does not reach the thread at all. It is the same asymmetry stated at
+the end of this section: what a room says after a thread branches stays in the room, until someone
+repeats it there or an asker quotes the message and rung 2 loads it.
+
+The first-turn fact comes from the participants store, which is a cache by contract (bounded,
+evictable, deletable) — and that is acceptable HERE precisely because the fold is prompt-bound. An
+evicted record costs one extra fold of a block whose label ("discussion in the room this thread
+branched from, not yet answered there") is true whenever it is written, and the record is rewritten
+as soon as that turn answers.
+
+The converse is the rule worth keeping: **this cache may not gate a claim that outlives the turn.**
+Write the same content into the newborn session instead — as a birth mark reading "when this thread
+started" — and a forgotten record permanently attributes the room's CURRENT chatter to a thread that
+branched long before. Repetition degrades an answer; a stale durable label misstates the past. That
+is the whole reason this rung is prompt-bound and rung 4 is not.
+
+*Rejected: making the room absorb eagerly* — writing each un-summoned message into the room's session
+at ingress. It would delete this rung entirely (the fork would see everything), and it fails on three
+counts, all measured rather than assumed: durable session writes take the run lease
+([session-control.md](session-control.md) §9), so ingress would block behind a multi-minute turn; that
+blocking sits on the PRE-ACK path, where the webhook must answer before the platform re-pushes; and
+consecutive ambient user entries reach the provider unmerged — the direct Anthropic API now combines
+same-role turns, but Bedrock still rejects them (`roles must alternate`), and `deploy agentcore` is a
+shipped host. The room's session advancing only when summoned is therefore a constraint, not an
+oversight.
+
+Adoption is per channel, because only a channel knows its places' lineage: Feishu/Lark set the
+scope fields and fold the room bucket (threads inherit); Telegram and Slack do not yet (their threads
+still start empty — the fields are one wiring change away).
 
 *Known asymmetry, accepted:* room → thread transfers once, when the thread starts, and nothing flows
 back (§7). A thread neither learns about later room activity nor reports its own.

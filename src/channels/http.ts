@@ -62,15 +62,37 @@ export function createInvokeHandler(agent: Agent): (req: Request) => Promise<Res
     } catch {
       return text("invalid json\n", 400);
     }
-    const { session, text: promptText } = (payload ?? {}) as { session?: unknown; text?: unknown };
+    const {
+      session,
+      text: promptText,
+      parentSession,
+      branchHints,
+    } = (payload ?? {}) as { session?: unknown; text?: unknown; parentSession?: unknown; branchHints?: unknown };
     if (typeof session !== "string" || typeof promptText !== "string") {
       return text('need { "session": string, "text": string }\n', 400);
     }
     // ^ the request shape INVOKE_EXAMPLE_BODY (below) must keep satisfying.
+    // The OPTIONAL lineage extension (Scope): malformed values are a 400, not a silent drop — a
+    // caller that sent them meant them.
+    if (parentSession !== undefined && typeof parentSession !== "string") {
+      return text('"parentSession" must be a string\n', 400);
+    }
+    if (branchHints !== undefined && !(Array.isArray(branchHints) && branchHints.every((h) => typeof h === "string"))) {
+      return text('"branchHints" must be an array of strings\n', 400);
+    }
 
     // Take the iterator explicitly so the stream's cancel() (consumer disconnect) can return() it and
     // run invoke's cancellation cleanup (SPEC MUST 3). pull = backpressure: the next event is produced on demand.
-    const iterator = agent.invoke({ session }, { text: promptText })[Symbol.asyncIterator]();
+    const iterator = agent
+      .invoke(
+        {
+          session,
+          ...(parentSession !== undefined ? { parentSession } : {}),
+          ...(branchHints !== undefined ? { branchHints } : {}),
+        },
+        { text: promptText },
+      )
+      [Symbol.asyncIterator]();
     // Heartbeats: a QUIET stream (a long tool call, no events) is normal here — remote consumers
     // distinguish "quiet but alive" from a dead connection by byte arrival, so silence must not
     // look identical to a black hole (SSE comments are ignored by spec-conforming parsers).

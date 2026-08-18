@@ -10,7 +10,7 @@ import { AgentHarness } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv, ExecutionToolContext, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Models } from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
-import { type PiSessionStore, activePathEntries } from "./sessions.ts";
+import { type PiSessionStore, type SessionInheritance, activePathEntries } from "./sessions.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
 import { type OverrideEntryLike, resolveSessionSettings } from "./session-settings.ts";
 
@@ -52,7 +52,11 @@ export type AnyModel = Model<any>;
  *  pi's env-backed default tools read (pi 0.83). Custom tools are context-FREE and stay assignable — a
  *  four-parameter `execute` satisfies the five-parameter one, so `defineTool` is untouched by this. */
 type PiHarness = AgentHarness<ExecutionToolContext>;
-export type PiHarnessFactory = (session: string) => PiHarness | Promise<PiHarness>;
+export type PiHarnessFactory = (
+  session: string,
+  /** Where a NEW session starts from (sessions.ts) — an existing session ignores it. */
+  inherit?: SessionInheritance,
+) => PiHarness | Promise<PiHarness>;
 
 export interface PiHarnessFactoryOptions {
   /** Session persistence. Continuity = same backing store + same session id. */
@@ -197,10 +201,11 @@ export function resolveHarnessActiveToolNames(
   return [...new Set([...initial, ...known])];
 }
 
-/** Open-or-create the session per invoke: existing → open (history via buildContext); missing → create. */
+/** Open-or-create the session per invoke: existing → open (history via buildContext); missing →
+ *  create, seeded from `inherit` when the scope names a parent. */
 export function piHarnessFactory(options: PiHarnessFactoryOptions): PiHarnessFactory {
-  return async (sessionId) => {
-    const session = await options.sessions.openOrCreate(sessionId);
+  return async (sessionId, inherit) => {
+    const session = await options.sessions.openOrCreate(sessionId, inherit);
     // One extra entry walk per invoke to collect the activation deltas — negligible against the model
     // call, same trade as L2's per-invoke definition re-read. The walk is over the ACTIVE PATH, not
     // the flat journal: `navigate` moves the leaf, so the tree can hold an abandoned branch whose
