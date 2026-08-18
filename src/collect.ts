@@ -1,8 +1,13 @@
 /**
- * Caller-side stream helpers: `collect` (buffered consumption, SPEC §7) reduces an AgentEvent
- * stream to a final value, encoding the terminal discipline (failed → throw, missing terminal →
- * error) — streaming consumers for-await themselves. `abortFirstIterator` is the shared
- * cancellation protocol for generator-backed streams.
+ * Stream helpers around the SPEC's two stream disciplines.
+ *
+ * Caller side: `collect` (buffered consumption, SPEC §7) reduces an AgentEvent stream to a final
+ * value, encoding the terminal discipline (failed → throw, missing terminal → error) — streaming
+ * consumers for-await themselves.
+ *
+ * Agent side: the cancellation protocol (SPEC MUST 3), in two halves that only work together —
+ * `abortFirstIterator` delivers the consumer's knock, `cancellableStream` is what an engine wraps
+ * its turn in to receive it.
  */
 import type { AgentEvent, Json } from "./agent.ts";
 
@@ -14,21 +19,67 @@ import type { AgentEvent, Json } from "./agent.ts";
  * settles the suspension), then delegates to `gen.return`, swallowing its rejection (the
  * generator's own catch/finally already surfaced the outcome). `throw()` tears down identically
  * and rethrows the caller's error deterministically instead of poking a completed generator.
+ *
+ * Cancellation also SILENCES the stream, and that belongs here rather than in each producer: a
+ * generator parked in an await can still reach a `yield` on its way out (an error path that
+ * yields a terminal, say), and that yield satisfies the pending `next()` — handing a terminal
+ * event to a consumer that already walked away, which SPEC MUST 3 forbids. Deciding it once, at
+ * the protocol boundary, is what keeps every producer from having to re-ask "is anyone still
+ * listening?" before each yield.
  */
 export function abortFirstIterator<T>(gen: AsyncGenerator<T>, cancel: () => void): AsyncIterator<T> {
+  let cancelled = false;
+  const teardown = async () => {
+    cancelled = true;
+    cancel();
+    await gen.return(undefined as never).catch(() => {});
+  };
   return {
-    next: () => gen.next(),
-    async return(value?: unknown) {
-      cancel();
-      await gen.return(value as never).catch(() => {});
+    async next() {
+      const result = await gen.next();
+      return cancelled ? { done: true as const, value: undefined } : result;
+    },
+    async return() {
+      await teardown();
       return { done: true as const, value: undefined };
     },
     async throw(error?: unknown): Promise<IteratorResult<T>> {
-      cancel();
-      await gen.return(undefined as never).catch(() => {});
+      await teardown();
       throw error;
     },
   };
+}
+
+/** What a turn generator gets so a consumer walking away can stop it. */
+export interface CancelHooks {
+  /** Publish the door: how to abort the engine work, once there is engine work to abort. */
+  onCancelReady: (cancel: () => void) => void;
+  /** The latch, for the window where the door is armed but the engine is still idle — knocking then
+   *  does nothing, so a turn must read this before committing to work no one is waiting for. */
+  wasCancelled: () => boolean;
+}
+
+/**
+ * Wrap a turn generator in the cancellation protocol: cancelling the returned stream latches the
+ * intent AND knocks on whatever door the generator published, in that order (the latch must be set
+ * before the knock, or a turn checking it mid-flight could miss the cancel it just received).
+ */
+export function cancellableStream<T>(start: (hooks: CancelHooks) => AsyncGenerator<T>): AsyncIterable<T> {
+  let door: (() => void) | undefined;
+  let cancelled = false;
+  const iterator = abortFirstIterator(
+    start({
+      onCancelReady: (cancel) => {
+        door = cancel;
+      },
+      wasCancelled: () => cancelled,
+    }),
+    () => {
+      cancelled = true;
+      door?.();
+    },
+  );
+  return { [Symbol.asyncIterator]: () => iterator };
 }
 
 /** Exception form of a failed event (thrown by collect). Carries the failed event's fields verbatim, so

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgentHarness,
   InMemorySessionRepo,
@@ -10,17 +10,30 @@ import { fauxAssistantMessage, fauxThinking, fauxToolCall, Type, type FauxRespon
 import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
 import { defineTool, inMemorySessionStore, inProcessLease, type AgentEvent, z } from "../src/index.ts";
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
-import {
-  classifyRetryable,
-  createPiAgentFromHarness,
-  errorToTerminal,
-  projectAgentEvent,
-  toSessionEvent,
-  toTerminal,
-} from "../src/engines/pi/invoke.ts";
+import { createPiAgentFromHarness, projectAgentEvent, toSessionEvent } from "../src/engines/pi/invoke.ts";
+import { classifyRetryable, errorToTerminal, toTerminal } from "../src/engines/pi/turn-kit.ts";
 import { type PiHarnessFactory, piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+
+/** Runs inside prompt preparation — the window between "the harness exists" and "the model call
+ *  starts", which a test cannot otherwise reach. Inert unless a test sets it. */
+const duringPromptPrep = vi.hoisted(() => ({ value: null as null | (() => Promise<void>) }));
+
+vi.mock("../src/engines/pi/turn-kit.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/engines/pi/turn-kit.ts")>();
+  return {
+    ...actual,
+    toPiPromptOptions: async (prompt: Parameters<typeof actual.toPiPromptOptions>[0]) => {
+      await duringPromptPrep.value?.();
+      return actual.toPiPromptOptions(prompt);
+    },
+  };
+});
+
+afterEach(() => {
+  duringPromptPrep.value = null;
+});
 
 /** An echo tool for the tool-call path. */
 const echoTool: AgentTool = {
@@ -267,6 +280,49 @@ describe("prompt.images passthrough (SPEC §4)", () => {
     const dump = JSON.stringify(seen);
     expect(dump).toContain("aGVsbG8="); // base64 payload reached the context
     expect(dump).toContain('"image"');
+  });
+
+  it("never starts the model call when the consumer walks away while the prompt is prepared", async () => {
+    const { faux, models } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("never reached")]);
+    let prompted = false;
+    const inner = piHarnessFactory({
+      env: new NodeExecutionEnv({ cwd: process.cwd() }),
+      sessions: inMemorySessionStore(),
+      models,
+      model: faux.getModel(),
+      systemPrompt: "test",
+    });
+    const agent = createPiAgentFromHarness({
+      harnessFactory: async (sessionId) => {
+        const harness = await inner(sessionId);
+        const prompt = harness.prompt.bind(harness);
+        harness.prompt = async (...args: Parameters<typeof prompt>) => {
+          prompted = true;
+          return prompt(...args);
+        };
+        return harness;
+      },
+    });
+    // Park the generator INSIDE prompt preparation: the harness exists and is idle, so the armed
+    // door has nothing to abort — only a latch read after this await can stop the turn.
+    let leaveTheWindow!: () => void;
+    let entered!: () => void;
+    const inTheWindow = new Promise<void>((resolve) => (entered = resolve));
+    duringPromptPrep.value = () => {
+      entered();
+      return new Promise<void>((resolve) => (leaveTheWindow = resolve));
+    };
+
+    const iterator = agent.invoke({ session: "resize-cancel" }, { text: "go" })[Symbol.asyncIterator]();
+    const first = iterator.next();
+    await inTheWindow;
+    const cancelled = iterator.return?.(undefined);
+    leaveTheWindow();
+    await cancelled;
+
+    expect((await first).done).toBe(true);
+    expect(prompted).toBe(false);
   });
 
   it("a prompt that cannot be prepared fails the turn instead of throwing at the caller", async () => {

@@ -41,7 +41,8 @@ import {
   type MountedTool,
 } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
-import { type Lease, type SessionObserver, createPiAgentFromHarness, inProcessLease } from "./invoke.ts";
+import { type SessionObserver, createPiAgentFromHarness } from "./invoke.ts";
+import { type Lease, inProcessLease } from "./turn-kit.ts";
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
