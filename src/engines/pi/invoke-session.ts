@@ -10,10 +10,14 @@
  *
  * SCOPE, deliberately narrow: the concurrency floor, the event stream, and cancellation. The
  * observation plane (SessionObserver / RunControls / the rich `SessionEvent` vocabulary), the tool
- * activation bridge and auto-compaction are NOT wired — this translates pi events straight to SPEC
- * `AgentEvent`s, which is the second parallel translation design §6 forbids. That is the price of a
- * throwaway proof; the harness L0 remains the one true path until this one grows the observation
- * plane and replaces it.
+ * activation bridge, auto-compaction and session inheritance are NOT wired.
+ *
+ * WHICH L0 SERVES: {@link createPiAgentFromHarness}, still — this one is reachable only from its
+ * conformance test (deliberately absent from `src/pi.ts`), because a serving path needs the pieces
+ * above. Its one known debt is {@link toAgentEvent}: translating pi events straight to SPEC
+ * `AgentEvent`s is the second parallel translation `docs/design/session-control.md` §6 forbids. It
+ * retires the moment this L0 grows the observation plane — the rich `SessionEvent` layer comes back
+ * with it, and the harness L0 goes away.
  */
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -71,7 +75,16 @@ function terminalFromState(session: AgentSession): AgentEvent {
     const message = messages[i];
     if (message?.role === "assistant") return toTerminal(message as AssistantMessage);
   }
-  return { type: "failed", details: "the turn produced no assistant message", retryable: false };
+  // Unreachable on a settled run: pi records an assistant message for every outcome, error and abort
+  // included. Reaching it means the engine broke its own contract — say so with what the state held,
+  // so the report names the engine rather than the turn.
+  return {
+    type: "failed",
+    details:
+      `the engine settled the run without an assistant message ` +
+      `(${messages.length} message(s), last role: ${messages.at(-1)?.role ?? "none"})`,
+    retryable: false,
+  };
 }
 
 export function createPiAgentFromSession(options: CreatePiAgentFromSessionOptions): Agent {

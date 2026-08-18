@@ -366,6 +366,7 @@ async function maybeCompact(harness: PiHarness, message: AssistantMessage): Prom
  * loads the TUI module graph). A null resize (unresizable / Photon unavailable) keeps the original
  * bytes — the provider then applies its own limit.
  */
+// Exported for the AgentSession L0 (invoke-session.ts), which drives the same pi prompt surface.
 export async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: ImageContent[] } | undefined> {
   if (!prompt.images || prompt.images.length === 0) return undefined;
   const { resizeImage } = await import("@earendil-works/pi-coding-agent");
@@ -389,6 +390,7 @@ export async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: Imag
 // Single-consumer async queue; single-threaded JS means no await interleaves between push and
 // drain, so no locking. Engines that are natively async-iterable would not need it.
 
+// Exported for the AgentSession L0 (invoke-session.ts): the same push→pull shape, same engine port.
 export class EventQueue<T> {
   private buffer: T[] = [];
   private wake?: () => void;
