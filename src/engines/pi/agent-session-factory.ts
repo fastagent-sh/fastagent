@@ -184,6 +184,12 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       //
       // Skill CONTENT is not part of this — pi reads a skill from its file at invocation time, so
       // only the declared set matters.
+      //
+      // What this deliberately does NOT provide is a per-turn snapshot. The definition is an AGENT
+      // property, not a session one: two turns running either side of an edit each get a definition
+      // that genuinely existed, and the product promise — an edit is live on the next turn — holds
+      // for both. Pinning a snapshot per turn would cost either a loader per turn or a queue in
+      // front of every bind, to buy a guarantee nothing asks for.
       const loader = (await services).resourceLoader;
       if (
         loader.getSystemPrompt() !== nextPrompt ||
