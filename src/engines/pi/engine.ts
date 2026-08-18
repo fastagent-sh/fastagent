@@ -13,5 +13,10 @@
 export type PiEngine = "harness" | "session";
 
 export function piEngine(): PiEngine {
-  return process.env.FASTAGENT_ENGINE === "session" ? "session" : "harness";
+  const value = process.env.FASTAGENT_ENGINE;
+  if (value === undefined || value === "") return "harness";
+  if (value === "harness" || value === "session") return value;
+  // A typo picking the default engine is how someone spends an afternoon wondering why their switch
+  // did nothing.
+  throw new Error(`FASTAGENT_ENGINE must be "harness" or "session" (got ${JSON.stringify(value)})`);
 }

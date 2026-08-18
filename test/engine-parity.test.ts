@@ -100,6 +100,18 @@ describe("engine parity: one definition, two engines", () => {
     expect((events[0] as { details: string }).details).toContain("inheritance");
   });
 
+  it("session: a mistyped engine name is a startup error, not a silent default", async () => {
+    process.env.FASTAGENT_ENGINE = "sesion"; // the typo that would otherwise pick the harness
+    const dir = await agentDirectory();
+    const { faux } = makeFaux();
+    await expect(
+      createPiAgentFromDefinition(dir, {
+        model: `${faux.getModel().provider}/${faux.getModel().id}`,
+        providers: [faux.provider],
+      }),
+    ).rejects.toThrow(/FASTAGENT_ENGINE must be/);
+  });
+
   it("session: refuses the harness engine's session store instead of silently going in-memory", async () => {
     process.env.FASTAGENT_ENGINE = "session";
     const dir = await agentDirectory();

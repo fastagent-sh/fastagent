@@ -5,19 +5,21 @@
  *
  * Why this exists next to {@link createPiAgentFromHarness}: pi 0.84 replaced `AgentHarness` with an
  * unimplemented lane-based skeleton, and pi does not consume that class itself — its TUI, RPC and SDK
- * all run on `AgentSession`. This is the executable proof that the SPEC's four Agent-side MUSTs hold
- * on the class pi actually maintains (test/conformance-session.test.ts).
+ * all run on `AgentSession`. The serving path is moving here; the harness L0 is still the default.
  *
- * SCOPE, deliberately narrow: the concurrency floor, the event stream, and cancellation. The
- * observation plane (SessionObserver / RunControls / the rich `SessionEvent` vocabulary), the tool
- * activation bridge, auto-compaction and session inheritance are NOT wired.
+ * WHAT SERVES ON IT: `fastagent dev`/`start` under `FASTAGENT_ENGINE=session` (engine.ts), through
+ * the directory opener, which is the only rung that can hand it durable session records. Real turns,
+ * real definitions, real providers — not a test-only path.
  *
- * WHICH L0 SERVES: {@link createPiAgentFromHarness}, still — this one is reachable only from its
- * conformance test (deliberately absent from `src/pi.ts`), because a serving path needs the pieces
- * above. Its one known debt is {@link toAgentEvent}: translating pi events straight to SPEC
- * `AgentEvent`s is the second parallel translation `docs/design/session-control.md` §6 forbids. It
- * retires the moment this L0 grows the observation plane — the rich `SessionEvent` layer comes back
- * with it, and the harness L0 goes away.
+ * WHAT IT STILL REFUSES, loudly rather than by degrading: session inheritance
+ * (`scope.parentSession`), an injected observer, and the harness engine's session store. Each throws
+ * or fails the turn naming the gap, because the alternative is a thread that quietly forgot its
+ * room, or a control plane that observes nothing.
+ *
+ * Its one silent debt is {@link toAgentEvent}: translating pi events straight to SPEC `AgentEvent`s
+ * is the second parallel translation `docs/design/session-control.md` §6 forbids. It retires when
+ * this L0 grows the observation plane — the rich `SessionEvent` layer comes back with it, and the
+ * harness L0 goes away.
  */
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";

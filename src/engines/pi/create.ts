@@ -261,6 +261,14 @@ function buildPiAgent(opts: {
           "pass sessionRecords, or unset FASTAGENT_ENGINE",
       );
     }
+    if (!opts.sessionRecords) {
+      // Reached from L1, which has no way to hand this engine a durable store: falling back to
+      // memory would answer "why did my conversations reset?" with silence.
+      throw new Error(
+        "FASTAGENT_ENGINE=session is a serving switch: it needs the session records the directory " +
+          "opener builds. Use `fastagent dev`/`start` on an agent directory, or unset FASTAGENT_ENGINE",
+      );
+    }
     if (opts.observer) {
       throw new Error(
         "FASTAGENT_ENGINE=session has no observation plane yet, so an observer would never fire — " +
