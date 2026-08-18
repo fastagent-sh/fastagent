@@ -7,7 +7,7 @@
  * harness L0.
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 /** What the AgentSession L0 needs from a session backend: open-or-create by opaque id. */
@@ -29,9 +29,10 @@ export interface PiSessionRecordStore {
  * produce one output. `_` escapes itself for the same reason. A trailing `.` or `-` is legal
  * mid-name but not at the end, so it escapes too.
  *
- * Injective WITHIN this encoding, which is not the same as unique on disk: the harness path spells
- * ids differently and its records share the directory, so `s42` is what this produces for `42` AND
- * what that path produces for `s42`. {@link recordOwner} is how a lookup tells them apart.
+ * Injective within this encoding — which is only sufficient because new records live in their own
+ * directory. The harness path draws names from the same character set (it produces `s42` for a room
+ * literally called `s42`, which is also this encoding of `42`), so sharing a directory would make
+ * some names ambiguous no matter how either side spells them.
  *
  * Readability is deliberate: `-1001234567890` becomes `s-1001234567890`, so an operator can still
  * tell which room a file belongs to.
@@ -57,6 +58,15 @@ export function piSessionId(sessionId: string): string {
  * accepts either spelling: a conversation that predates this store is found and continued rather
  * than silently restarted as an empty one. Nothing is rewritten on disk.
  *
+ * NEW records live in a subdirectory of their own, because the two engines cannot share a namespace:
+ * both spell ids into `[A-Za-z0-9._-]`, so neither can claim a prefix the other cannot produce, and
+ * a directory holding both would have names that belong to two conversations at once — in whichever
+ * direction it is read. Separate directories make each side's own injectivity sufficient.
+ *
+ * An EXISTING harness record is still continued in place: it is looked up by that path's spelling,
+ * which is injective on its own terms, and appended to where it lies. Both engines read the same v3
+ * jsonl, so a conversation started before this engine keeps going rather than restarting empty.
+ *
  * SCOPE OF "open-or-create": idempotent against a store that is serialized per session, which is what
  * the serving path provides — the single-writer lease is taken before any store call, so no two
  * turns of one conversation reach this at once. What it does NOT do is arbitrate a FIRST open racing
@@ -68,47 +78,22 @@ export function piSessionId(sessionId: string): string {
  */
 export function piSessionRecordStore(options: { dir: string; cwd?: string }): PiSessionRecordStore {
   const cwd = options.cwd ?? process.cwd();
+  const own = join(options.dir, OWN_RECORDS_DIR);
   return {
     async openOrCreate(sessionId) {
       const id = piSessionId(sessionId);
-      const records = await SessionManager.list(cwd, options.dir);
-      // A record this store wrote carries the Caller's id verbatim, so a name collision with the
-      // harness path's spelling is decided by asking rather than by hoping: `42` encodes to `s42`,
-      // and so does the harness path's own `s42`.
-      const claimed = (name: string, accept: (owner: string | undefined) => boolean): SessionManager | undefined => {
-        for (const candidate of records.filter((r) => r.id === name)) {
-          const opened = SessionManager.open(candidate.path, options.dir);
-          if (accept(recordOwner(opened))) return opened;
-        }
-        return undefined;
-      };
-      const ours = claimed(id, (owner) => owner === sessionId);
-      if (ours) return ours;
-      // Nothing of ours under our name. A record written before this store existed carries no claim
-      // and is named by the harness path's own injective spelling, so an UNCLAIMED hit there is this
-      // conversation — while a claimed one belongs to whichever Caller id claimed it.
-      const legacy = claimed(legacySessionId(sessionId), (owner) => owner === undefined || owner === sessionId);
-      if (legacy) return legacy;
-      const created = publish(SessionManager.create(cwd, options.dir, { id }), options.dir);
-      created.appendCustomEntry(SESSION_OWNER_ENTRY, { sessionId });
-      return created;
+      const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
+      if (mine) return SessionManager.open(mine.path, own);
+      const legacy = (await SessionManager.list(cwd, options.dir)).find((r) => r.id === legacySessionId(sessionId));
+      if (legacy) return SessionManager.open(legacy.path, options.dir);
+      mkdirSync(own, { recursive: true });
+      return publish(SessionManager.create(cwd, own, { id }), own);
     },
   };
 }
 
-/** Marks whose conversation a record holds — the Caller's id, not pi's spelling of it. */
-const SESSION_OWNER_ENTRY = "fastagent:session-owner";
-
-/** The Caller id a record was created for, or undefined when nothing claimed it. */
-function recordOwner(session: SessionManager): string | undefined {
-  for (const entry of session.getEntries()) {
-    const claim = entry as { type?: string; customType?: string; data?: { sessionId?: unknown } };
-    if (claim.type === "custom" && claim.customType === SESSION_OWNER_ENTRY) {
-      return typeof claim.data?.sessionId === "string" ? claim.data.sessionId : undefined;
-    }
-  }
-  return undefined;
-}
+/** Where this engine's own records live, under the sessions directory both engines are pointed at. */
+const OWN_RECORDS_DIR = "agent-session";
 
 /**
  * Make a NEW record exist on disk before anyone can act on it.

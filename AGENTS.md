@@ -125,8 +125,15 @@ src/
     ├── invoke.ts            # the harness L0: AgentHarness's two ports → one stream, plus what only it
     │                         # has — its event vocabulary translated ONCE into the rich SessionEvent
     │                         # layer, and the observation plane that layer feeds
-    ├── invoke-session.ts    # the AgentSession L0 (per-invoke): SPEC-conformance proof that pi's own
-    │                         # session class serves a turn. Not wired into serving — see its header
+    ├── invoke-session.ts    # the AgentSession L0 (per-invoke): serves dev/start under
+    │                         # FASTAGENT_ENGINE=session (engine.ts). Refuses what it cannot honor yet
+    │                         # — session inheritance, an observer, session control — rather than
+    │                         # degrading past it. harness remains the default
+    ├── session-store.ts     # session records for that L0, on pi's SessionManager: Caller ids encoded
+    │                         # into names pi accepts, new records in their own subdirectory (the two
+    │                         # engines cannot share a namespace), harness records continued in place
+    ├── agent-session-factory.ts # that L0's engine binding: the assembly (model/prompt/skills/tools)
+    │                         # bound to one record per invoke; services shared, session per turn
     ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
     ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
     ├── open.ts              # shared opener: directory → agent for dev/start/invoke

@@ -76,10 +76,11 @@ describe("piSessionRecordStore", () => {
     const after = await piSessionRecordStore({ dir, cwd }).openOrCreate("42");
 
     expect(after.getBranch().some((e) => JSON.stringify(e).includes("what did I ask?"))).toBe(true);
-    expect((await SessionManager.list(cwd, dir)).length).toBe(1); // one conversation, one record
+    // One conversation, one record - this engine keeps its own under a subdirectory of the store.
+    expect((await SessionManager.list(cwd, join(dir, "agent-session"))).length).toBe(1);
   });
 
-  it("does not hand a conversation the record another spelling of its name produced", async () => {
+  it("does not hand a conversation the record another engine's spelling of its name produced", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-store-collide-"));
     const cwd = process.cwd();
     const store = piSessionRecordStore({ dir, cwd });
