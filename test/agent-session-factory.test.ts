@@ -30,8 +30,7 @@ async function agentWith(
   return createPiAgentFromSession({
     sessionFactory: piAgentSessionFactory({
       sessions: piInMemorySessionRecordStore({ cwd }),
-      modelRuntime,
-      model: faux.getModel(),
+      engine: async () => ({ modelRuntime, model: faux.getModel() }),
       cwd,
       env: new NodeExecutionEnv({ cwd }),
       ...options,

@@ -42,6 +42,12 @@ import {
 } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
 import { type SessionObserver, createPiAgentFromHarness } from "./invoke.ts";
+import { createPiAgentFromSession } from "./invoke-session.ts";
+import { piAgentSessionFactory } from "./agent-session-factory.ts";
+import { createPiModelRuntime } from "./models.ts";
+import { piEngine } from "./engine.ts";
+import type { PiSessionRecordStore } from "./session-store.ts";
+import { piInMemorySessionRecordStore } from "./session-store.ts";
 import { type Lease, inProcessLease } from "./turn-kit.ts";
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
@@ -236,6 +242,8 @@ function buildPiAgent(opts: {
   /** Per-invoke prompt+skills source (see {@link PiHarnessFactoryOptions.live}); supersedes the two above. */
   live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
   sessions?: PiSessionStore;
+  /** Session records for the AgentSession engine; see {@link piEngine}. */
+  sessionRecords?: PiSessionRecordStore;
   env?: ExecutionEnv;
   lease?: Lease;
   observer?: SessionObserver;
@@ -243,6 +251,29 @@ function buildPiAgent(opts: {
 }): Agent {
   const models = opts.models ?? createPiModels({ providers: opts.providers, authPath: opts.authPath });
   const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
+  if (piEngine() === "session") {
+    return createPiAgentFromSession({
+      lease: opts.lease ?? inProcessLease(),
+      sessionFactory: piAgentSessionFactory({
+        sessions: opts.sessionRecords ?? piInMemorySessionRecordStore({ cwd: env.cwd }),
+        engine: async () => {
+          const modelRuntime = await createPiModelRuntime({ authPath: opts.authPath });
+          // ModelRuntime registers providers by config record, so an injected Provider INSTANCE (a
+          // gateway, a self-hosted endpoint, a test fake) goes in through its native seam - the
+          // mapping models.ts left for the first consumer that needed it.
+          for (const provider of opts.providers ?? []) modelRuntime.registerNativeProvider(provider);
+          return { modelRuntime, model: resolveModel(modelRuntime, opts.model) };
+        },
+        thinkingLevel: opts.thinkingLevel,
+        tools: opts.tools,
+        systemPrompt: opts.systemPrompt,
+        skills: opts.skills,
+        live: opts.live,
+        cwd: env.cwd,
+        env,
+      }),
+    });
+  }
   // Materialized here (not defaulted inside createPiAgentFromHarness) so the exposed parts carry
   // the SAME lease instance the agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
@@ -392,6 +423,9 @@ export interface CreatePiAgentFromDefinitionOptions {
    */
   authPath?: string;
   sessions?: PiSessionStore;
+  /** Session records for the AgentSession engine (FASTAGENT_ENGINE=session); the opener passes the
+   *  store for the same sessions directory. */
+  sessionRecords?: PiSessionRecordStore;
   /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it does more
    *  than root the default tools: persona.md and skills/ are read through it too. Two surfaces stay
    *  OUTSIDE it — ② project context (pi's loadProjectContextFiles uses node fs directly; see
@@ -467,6 +501,7 @@ export async function createPiAgentFromDefinition(
     },
     tools,
     sessions: options.sessions,
+    sessionRecords: options.sessionRecords,
     env,
     lease: options.lease,
     observer: options.observer,

@@ -35,9 +35,15 @@ type AnyModel = Model<any>;
 export interface PiAgentSessionFactoryOptions {
   /** Where conversations live. Continuity = same store + same session id. */
   sessions: PiSessionRecordStore;
-  /** Model + auth hub. Must be the one `model` was resolved against. */
-  modelRuntime: ModelRuntime;
-  model: AnyModel;
+  /**
+   * The model to run and the hub that authenticates it, resolved on FIRST USE and kept.
+   *
+   * A thunk because building a `ModelRuntime` is async while assembling an agent is not: the L1
+   * surface hands back an `Agent` synchronously, so the credential read that a runtime performs
+   * belongs on the first turn rather than in the caller's constructor. The two travel together
+   * because a model must be resolved against the runtime that holds its provider's auth.
+   */
+  engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
   thinkingLevel?: ThinkingLevel;
   tools?: MountedTool[];
   /** Final assembled prompt, or a factory re-evaluated per turn. */
@@ -124,15 +130,16 @@ function toolDefinitions(
 
 /** Open-or-create the record, then bind a fresh session to it. One call per invoke. */
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
-  const { sessions, modelRuntime, model, thinkingLevel, cwd, env } = options;
+  const { sessions, thinkingLevel, cwd, env } = options;
   const tools = options.tools ?? [];
   const deferred = tools.filter(isDeferredTool).map((t) => t.name);
   // What the shared ResourceLoader serves, refreshed per turn before the session is built.
   let prompt = typeof options.systemPrompt === "function" ? options.systemPrompt() : options.systemPrompt;
   let skills = options.skills ?? [];
   let services: Promise<AgentSessionServices> | undefined;
+  let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
 
-  const buildServices = (): Promise<AgentSessionServices> =>
+  const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> =>
     createAgentSessionServices({
       cwd,
       modelRuntime,
@@ -164,7 +171,9 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     const changed = nextPrompt !== prompt || skillSet(nextSkills) !== skillSet(skills);
     prompt = nextPrompt;
     skills = nextSkills;
-    if (services === undefined) services = buildServices();
+    engine ??= options.engine();
+    const { modelRuntime, model } = await engine;
+    if (services === undefined) services = buildServices(modelRuntime);
     else if (changed) await (await services).resourceLoader.reload();
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId);
     const bound: { session?: AgentSession } = {};

@@ -29,6 +29,9 @@ import type { ModuleLoadFailure } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { jsonlSessionStore } from "./sessions.ts";
+import { piEngine } from "./engine.ts";
+import { log } from "../../log.ts";
+import { piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision } from "./tool.ts";
 import type { MountedTool } from "./tool.ts";
 
@@ -199,6 +202,10 @@ export async function createPiAgentFromDir(
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
   const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: workspace });
+  // The AgentSession engine reads the same directory through its own store (pi's SessionManager over
+  // the same v3 jsonl), so a workspace keeps one set of conversations whichever engine serves them.
+  const sessionRecords =
+    piEngine() === "session" ? piSessionRecordStore({ dir: sessionsDir, cwd: workspace }) : undefined;
   // The hub is wired HERE because the store is created here: chicken-and-egg otherwise (the hub
   // needs the store; the agent needs the hub's observer). Boundary parts (models/factory/lease)
   // only exist after the assembly below — the hub takes them as a lazy thunk, filled by the
@@ -206,7 +213,15 @@ export async function createPiAgentFromDir(
   // dispatch sees them). An extra caller observer composes after the hub's (TRUSTED seam).
   let boundaryParts: PiBoundaryWiring | undefined;
   const caller = options.observer;
-  const wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
+  let wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
+  if (wantControl && sessionRecords) {
+    // Say it rather than serve a control plane that observes nothing: the hub reads the harness's
+    // event stream and dispatches onto its factory, neither of which the AgentSession path has yet.
+    log.warn(
+      "[fastagent] session control is not available on the AgentSession engine (FASTAGENT_ENGINE=session) — serving without it",
+    );
+    wantControl = false;
+  }
   const hub = wantControl
     ? createPiSessionControl({
         sessions,
@@ -250,6 +265,7 @@ export async function createPiAgentFromDir(
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
+    sessionRecords,
     observer,
     onAssembly: hub
       ? (parts) => {
