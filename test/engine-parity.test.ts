@@ -77,4 +77,39 @@ describe("engine parity: one definition, two engines", () => {
       expect(secondContext).toContain("the code is 47"); // history crossed the instance boundary
     });
   }
+
+  it("session: a thread that names a parent fails loudly rather than starting empty", async () => {
+    process.env.FASTAGENT_ENGINE = "session";
+    const dir = await agentDirectory();
+    const { faux } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("never reached")]);
+    const { agent } = await createPiAgentFromDefinition(dir, {
+      model: `${faux.getModel().provider}/${faux.getModel().id}`,
+      providers: [faux.provider],
+      sessionRecords: piSessionRecordStore({ dir: join(dir, "sessions"), cwd: dir }),
+    });
+
+    // What a feishu thread sends on its first turn: continue from what the room knew.
+    const events = [];
+    for await (const event of agent.invoke({ session: "thread", parentSession: "room" }, { text: "hi" })) {
+      events.push(event);
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "failed", retryable: false });
+    expect((events[0] as { details: string }).details).toContain("inheritance");
+  });
+
+  it("session: refuses the harness engine's session store instead of silently going in-memory", async () => {
+    process.env.FASTAGENT_ENGINE = "session";
+    const dir = await agentDirectory();
+    const { faux } = makeFaux();
+    await expect(
+      createPiAgentFromDefinition(dir, {
+        model: `${faux.getModel().provider}/${faux.getModel().id}`,
+        providers: [faux.provider],
+        sessions: jsonlSessionStore({ dir: join(dir, "sessions"), cwd: dir }),
+      }),
+    ).rejects.toThrow(/PiSessionStore/);
+  });
 });

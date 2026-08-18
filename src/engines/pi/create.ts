@@ -252,6 +252,21 @@ function buildPiAgent(opts: {
   const models = opts.models ?? createPiModels({ providers: opts.providers, authPath: opts.authPath });
   const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
   if (piEngine() === "session") {
+    // Refuse the ports this engine cannot honor rather than degrading past them: a caller that
+    // injected a session store would get in-memory continuity, and one that wired an observer would
+    // get silence - both while the signature still promises otherwise.
+    if (opts.sessions && !opts.sessionRecords) {
+      throw new Error(
+        "FASTAGENT_ENGINE=session cannot use a PiSessionStore (that is the harness engine's port) — " +
+          "pass sessionRecords, or unset FASTAGENT_ENGINE",
+      );
+    }
+    if (opts.observer) {
+      throw new Error(
+        "FASTAGENT_ENGINE=session has no observation plane yet, so an observer would never fire — " +
+          "unset FASTAGENT_ENGINE to use session control",
+      );
+    }
     return createPiAgentFromSession({
       lease: opts.lease ?? inProcessLease(),
       sessionFactory: piAgentSessionFactory({

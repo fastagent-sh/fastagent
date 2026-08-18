@@ -102,6 +102,19 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       return;
     }
     try {
+      if (scope.parentSession !== undefined) {
+        // A thread that names a parent expects to start from what the room knew
+        // (participant-model.md section 5). This engine has no inheritance yet, and starting empty
+        // would look like a working thread that quietly forgot everything before it.
+        yield {
+          type: "failed",
+          details:
+            "session inheritance (scope.parentSession) is not implemented on the AgentSession engine — " +
+            "unset FASTAGENT_ENGINE to serve threads that inherit",
+          retryable: false,
+        };
+        return;
+      }
       let session: AgentSession;
       try {
         session = await sessionFactory(scope.session);
