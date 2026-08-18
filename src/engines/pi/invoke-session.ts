@@ -68,10 +68,14 @@ function toAgentEvent(event: AgentSessionEvent): AgentEvent | null {
  * The turn's outcome. `prompt()` resolves void and never throws for an engine-side failure (measured:
  * a provider error and an abort both resolve normally), so the terminal comes from the last assistant
  * message's `stopReason` — the same read {@link toTerminal} performs on the harness path.
+ *
+ * Bounded to THIS turn (`from` = the message count before `prompt()`): the session is durable and
+ * carries every previous turn, so an unbounded reverse scan would answer a run that produced nothing
+ * with the PREVIOUS turn's assistant message — reporting `completed` for a turn that never ran.
  */
-function terminalFromState(session: AgentSession): AgentEvent {
+function terminalFromState(session: AgentSession, from: number): AgentEvent {
   const messages = session.state.messages;
-  for (let i = messages.length - 1; i >= 0; i--) {
+  for (let i = messages.length - 1; i >= from; i--) {
     const message = messages[i];
     if (message?.role === "assistant") return toTerminal(message as AssistantMessage);
   }
@@ -82,7 +86,7 @@ function terminalFromState(session: AgentSession): AgentEvent {
     type: "failed",
     details:
       `the engine settled the run without an assistant message ` +
-      `(${messages.length} message(s), last role: ${messages.at(-1)?.role ?? "none"})`,
+      `(${messages.length - from} message(s) this turn, last role: ${messages.at(-1)?.role ?? "none"})`,
     retryable: false,
   };
 }
@@ -150,12 +154,13 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           if (projected) queue.push(projected);
         });
         try {
+          const before = session.state.messages.length;
           const run = session.prompt(prompt.text, await toPiPromptOptions(prompt));
           yield* queue.drainUntil(run);
           let terminal: AgentEvent;
           try {
             await run;
-            terminal = terminalFromState(session);
+            terminal = terminalFromState(session, before);
           } catch (error) {
             terminal = errorToTerminal(error);
           }
