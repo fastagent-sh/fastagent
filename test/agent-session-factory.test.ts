@@ -142,6 +142,56 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     expect(seen[1]).toContain("the SECOND persona");
   });
 
+  it("concurrent turns each run on a definition that exists, and neither blocks the other", async () => {
+    const seen: string[] = [];
+    let persona = "first";
+    const record = (context: { systemPrompt?: string }) => {
+      seen.push(context.systemPrompt ?? "");
+      return fauxAssistantMessage("ok");
+    };
+    // Park turn A between "definition read" and "session bound" - the window where the shared
+    // snapshot holds A's new value but the loader has not been reloaded with it yet.
+    let openRoomA!: () => void;
+    let roomAParked!: () => void;
+    const parked = new Promise<void>((resolve) => (openRoomA = resolve));
+    const reachedPark = new Promise<void>((resolve) => (roomAParked = resolve));
+    const cwd = process.cwd();
+    const real = piInMemorySessionRecordStore({ cwd });
+    const sessions = {
+      async openOrCreate(id: string) {
+        if (id === "room-a") {
+          roomAParked();
+          await parked;
+        }
+        return real.openOrCreate(id);
+      },
+    };
+
+    const agent = await agentWith([record, record, record], {
+      sessions,
+      live: async () => ({ systemPrompt: persona }),
+    });
+
+    // Turn zero settles the shared services with "first".
+    await collect(agent.invoke({ session: "warm" }, { text: "zero" }));
+
+    persona = "second"; // the author edits between turns
+    const a = collect(agent.invoke({ session: "room-a" }, { text: "one" }));
+    await reachedPark;
+    // B runs to completion while A is still parked - the whole point is what B sees meanwhile.
+    await collect(agent.invoke({ session: "room-b" }, { text: "two" }));
+    openRoomA();
+    await a;
+
+    // B must not be held up by A (the snapshot is shared, but binding is not serialized), and must
+    // not inherit a half-applied snapshot: whichever order they land in, each turn ran on a
+    // definition some read actually produced - here, the current one.
+    expect(seen.slice(1).map((p) => (p.includes("second") ? "second" : p.includes("first") ? "first" : "?"))).toEqual([
+      "second",
+      "second",
+    ]);
+  });
+
   it("skills declared by the definition are offered to the model", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-skills-"));
     const skillFile = join(dir, "release.md");

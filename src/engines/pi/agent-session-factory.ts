@@ -163,18 +163,37 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         ? options.systemPrompt()
         : prompt;
     const nextSkills = fresh ? (fresh.skills ?? []) : skills;
-    // The ResourceLoader reads the overrides once and caches, so a re-read of the definition only
-    // reaches the model after a reload. Reload only when the definition ACTUALLY changed: an author
-    // edits persona.md far less often than the agent takes a turn, and the reload costs ~5ms against
-    // ~0.6ms to bind a session. Skill CONTENT is not part of this — pi reads a skill from its file at
-    // invocation time, so only the declared set matters here.
-    const changed = nextPrompt !== prompt || skillSet(nextSkills) !== skillSet(skills);
-    prompt = nextPrompt;
-    skills = nextSkills;
     engine ??= options.engine();
     const { modelRuntime, model } = await engine;
-    if (services === undefined) services = buildServices(modelRuntime);
-    else if (changed) await (await services).resourceLoader.reload();
+    if (services === undefined) {
+      prompt = nextPrompt;
+      skills = nextSkills;
+      services = buildServices(modelRuntime); // assigned before any await: concurrent turns share it
+    } else {
+      // The ResourceLoader reads the overrides once and caches, so a re-read of the definition only
+      // reaches the model after a reload. Reload only when the definition ACTUALLY changed — an
+      // author edits persona.md far less often than the agent takes a turn, and a reload costs ~5ms
+      // against ~0.6ms to bind a session.
+      //
+      // "Changed" is measured against the LOADER, not against what this factory last wrote. Serving
+      // is concurrent across sessions, and a shared variable makes the check lie: one turn writes
+      // its new prompt, awaits before reloading, and the next turn sees that value already present,
+      // concludes nothing changed, and skips the reload — so the edit reaches neither the loader nor
+      // any error. Asking the loader what it is actually serving cannot go stale that way. The cost
+      // of losing the race is one redundant reload, not a swallowed edit.
+      //
+      // Skill CONTENT is not part of this — pi reads a skill from its file at invocation time, so
+      // only the declared set matters.
+      const loader = (await services).resourceLoader;
+      if (
+        loader.getSystemPrompt() !== nextPrompt ||
+        loadedSkillSet(loader.getSkills().skills) !== skillSet(nextSkills)
+      ) {
+        prompt = nextPrompt;
+        skills = nextSkills;
+        await loader.reload();
+      }
+    }
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId);
     const bound: { session?: AgentSession } = {};
     const { session } = await createAgentSessionFromServices({
@@ -200,6 +219,11 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
 /** What a reload has to notice: the declared set, not the files behind it. */
 function skillSet(skills: Skill[]): string {
   return skills.map((s) => `${s.name}\u0000${s.filePath}\u0000${s.description}`).join("\u0001");
+}
+
+/** The same signature, read back off the loader. */
+function loadedSkillSet(skills: readonly { name: string; filePath?: string; description: string }[]): string {
+  return skills.map((s) => `${s.name}\u0000${s.filePath ?? ""}\u0000${s.description}`).join("\u0001");
 }
 
 /** fastagent's Skill (content inline) as pi's (read from filePath at invocation time). */

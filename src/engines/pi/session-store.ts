@@ -52,6 +52,15 @@ export function piSessionId(sessionId: string): string {
  * A record written by the harness path keeps ITS id (sessions.ts encodes differently), so the scan
  * accepts either spelling: a conversation that predates this store is found and continued rather
  * than silently restarted as an empty one. Nothing is rewritten on disk.
+ *
+ * SCOPE OF "open-or-create": idempotent against a store that is serialized per session, which is what
+ * the serving path provides — the single-writer lease is taken before any store call, so no two
+ * turns of one conversation reach this at once. What it does NOT do is arbitrate a FIRST open racing
+ * across processes: two instances that scan before either writes will both create, and the
+ * conversation forks into two records. sessions.ts states the same boundary for the same reason
+ * ("the serving path serializes it with the single-writer lease before reaching any store"), and a
+ * horizontally-scaled deployment that wants more owes a lease that spans its instances — an
+ * in-process one cannot arbitrate between them, and a file lock here would only look like it could.
  */
 export function piSessionRecordStore(options: { dir: string; cwd?: string }): PiSessionRecordStore {
   const cwd = options.cwd ?? process.cwd();
