@@ -78,15 +78,13 @@ function toAgentEvent(event: AgentSessionEvent): AgentEvent | null {
  * already happened. Auto-compaction runs its own model call outside the agent's event stream, so it
  * cannot masquerade as the turn's answer here.
  */
-function engineProducedNothing(): AgentEvent {
+const ENGINE_PRODUCED_NOTHING: AgentEvent = {
   // Unreachable on a settled run: pi ends every outcome, error and abort included, with an assistant
   // message. Reaching it means the engine broke its own contract — name the engine, not the turn.
-  return {
-    type: "failed",
-    details: "the engine settled the run without ending an assistant message",
-    retryable: false,
-  };
-}
+  type: "failed",
+  details: "the engine settled the run without ending an assistant message",
+  retryable: false,
+};
 
 export function createPiAgentFromSession(options: CreatePiAgentFromSessionOptions): Agent {
   const { sessionFactory, lease = inProcessLease() } = options;
@@ -138,21 +136,23 @@ async function* runOnSession(
   onCancelReady(() => void abort());
   const queue = new EventQueue<AgentEvent>();
   let finalAssistant: AssistantMessage | undefined;
-  let emittedOutput = false;
-  /** Set when a retry is refused because output already left — carries the error that ends the turn. */
-  let retriedAfterOutput: string | undefined;
+  /** Whether any of THIS attempt's answer has been streamed — the only output a retry would duplicate. */
+  let streamedAnswer = false;
+  /** Set when a retry is refused because the answer already streamed — carries the error that ends it. */
+  let retriedAfterAnswer: string | undefined;
   const unsub = session.subscribe((event) => {
-    if (retriedAfterOutput !== undefined) return; // the turn is decided; the retry's output is not ours
+    if (retriedAfterAnswer !== undefined) return; // the turn is decided; the retry's output is not ours
     if (event.type === "message_end" && event.message.role === "assistant") {
       finalAssistant = event.message as AssistantMessage;
     }
-    // pi retries a failed assistant request by discarding the attempt and running another one. That
-    // is free resilience while the turn is still silent, and corruption once it is not: SPEC deltas
-    // are append-only and `retrying` cannot retract them, so the second attempt's answer would
-    // arrive concatenated onto the failed one's half-sentence. Take the resilience in the silent
-    // window; end the turn honestly outside it.
-    if (event.type === "auto_retry_start" && emittedOutput) {
-      retriedAfterOutput = event.errorMessage;
+    // pi retries a failed assistant request by DISCARDING that attempt's assistant message and asking
+    // again. Everything the turn achieved before it survives - executed tools keep their persisted
+    // results, and the retry resumes from them - so the only thing a retry can duplicate is answer
+    // text this L0 already streamed, which SPEC deltas cannot retract. Refuse it exactly there:
+    // refusing on tool events instead would push the retry out to the CALLER, who can only re-run the
+    // whole prompt and execute the tool a second time.
+    if (event.type === "auto_retry_start" && streamedAnswer) {
+      retriedAfterAnswer = event.errorMessage;
       // Not synchronously: pi emits this event BEFORE creating the controller that makes its backoff
       // abortable, so an abort from inside the listener would find nothing to cancel and the turn
       // would still pay the full delay and burn a provider call on an answer we must discard.
@@ -161,7 +161,7 @@ async function* runOnSession(
     }
     const projected = toAgentEvent(event);
     if (!projected) return;
-    if (projected.type !== "retrying") emittedOutput = true;
+    if (projected.type === "text" || projected.type === "thinking") streamedAnswer = true;
     queue.push(projected);
   });
   try {
@@ -186,11 +186,11 @@ async function* runOnSession(
     yield* queue.drainUntil(run);
     try {
       await run;
-      yield retriedAfterOutput !== undefined
-        ? { type: "failed", details: retriedAfterOutput, retryable: true }
-        : finalAssistant
-          ? toTerminal(finalAssistant)
-          : engineProducedNothing();
+      if (retriedAfterAnswer !== undefined) {
+        yield { type: "failed", details: retriedAfterAnswer, retryable: true };
+      } else {
+        yield finalAssistant ? toTerminal(finalAssistant) : ENGINE_PRODUCED_NOTHING;
+      }
     } catch (error) {
       yield errorToTerminal(error);
     }

@@ -7,11 +7,12 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type FauxResponseStep, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { type FauxResponseStep, Type, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
   ModelRuntime,
   SessionManager,
+  type ToolDefinition,
   createAgentSessionFromServices,
   createAgentSessionServices,
 } from "@earendil-works/pi-coding-agent";
@@ -32,11 +33,13 @@ import { describeSpecConformance } from "./spec-conformance.ts";
 interface SubjectOptions {
   /** Where the record lives. Omitted — a fresh in-memory session per turn (no continuity needed). */
   dir?: string;
+  /** Mounted on the session, for the paths where a turn has to do something before it answers. */
+  customTools?: ToolDefinition[];
 }
 
 async function sessionFactory(
   responses: FauxResponseStep[],
-  { dir }: SubjectOptions = {},
+  { dir, customTools }: SubjectOptions = {},
 ): Promise<PiAgentSessionFactory> {
   const { faux } = makeFaux();
   faux.setResponses(responses);
@@ -70,7 +73,10 @@ async function sessionFactory(
       services,
       sessionManager,
       model: faux.getModel(),
-      noTools: "all",
+      // "builtin" not "all": the coding tools stay off (this is a protocol subject, not an agent),
+      // while a subject that mounts its own tool keeps it.
+      noTools: "builtin",
+      customTools,
     });
     return session;
   };
@@ -144,5 +150,40 @@ describe("AgentSession L0: pi's auto-retry vs. append-only deltas", () => {
     ]);
     const { text } = await collect(agent.invoke({ session: "silent-then-retried" }, { text: "go" }));
     expect(text).toBe("the answer, second attempt");
+  });
+
+  it("an executed tool does not close the window — the retry resumes from it instead of re-running it", async () => {
+    let toolRuns = 0;
+    const agent = await piSessionAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("ping", {}, { id: "call-1" })),
+        // The request that follows the tool fails before saying anything. pi retries it against the
+        // PERSISTED tool result; refusing here would hand the retry to the caller, who has no way to
+        // re-ask without running the tool again.
+        fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom 500" }),
+        fauxAssistantMessage("pong, once"),
+      ],
+      {
+        // The cast is the same one session-builder.ts makes: pi types `parameters` per-tool, so a
+        // literal only satisfies ToolDefinition after erasure.
+        customTools: [
+          {
+            name: "ping",
+            label: "ping",
+            description: "A tool with a side effect worth not repeating.",
+            parameters: Type.Object({}),
+            execute: async () => {
+              toolRuns++;
+              return { content: [{ type: "text", text: "pong" }] };
+            },
+          } as unknown as ToolDefinition,
+        ],
+      },
+    );
+
+    const { text } = await collect(agent.invoke({ session: "tool-then-retried" }, { text: "go" }));
+
+    expect(text).toBe("pong, once");
+    expect(toolRuns).toBe(1);
   });
 });
