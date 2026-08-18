@@ -79,6 +79,38 @@ describe("piSessionRecordStore", () => {
     expect((await SessionManager.list(cwd, dir)).length).toBe(1); // one conversation, one record
   });
 
+  it("does not hand a conversation the record another spelling of its name produced", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-store-collide-"));
+    const cwd = process.cwd();
+    const store = piSessionRecordStore({ dir, cwd });
+
+    // The harness path stores raw ids, so a room literally called "s42" lands on disk as "s42" -
+    // which is also what this store's encoding produces for the DIFFERENT room "42".
+    writeFileSync(
+      join(dir, "2026-01-01T00-00-00-000Z_s42.jsonl"),
+      `${[
+        { type: "session", version: 3, id: "s42", timestamp: "2026-01-01T00:00:00.000Z", cwd },
+        {
+          type: "message",
+          id: "e1",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:01.000Z",
+          message: { role: "user", content: "belongs to room s42" },
+        },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n")}\n`,
+    );
+
+    const other = await store.openOrCreate("42");
+
+    expect(other.getBranch().some((e) => JSON.stringify(e).includes("belongs to room s42"))).toBe(false);
+    // And the room that DOES own it still gets it.
+    expect(
+      (await store.openOrCreate("s42")).getBranch().some((e) => JSON.stringify(e).includes("belongs to room s42")),
+    ).toBe(true);
+  });
+
   it("continues a record the harness path wrote, instead of restarting the conversation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-store-legacy-"));
     const cwd = process.cwd();

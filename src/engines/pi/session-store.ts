@@ -29,6 +29,10 @@ export interface PiSessionRecordStore {
  * produce one output. `_` escapes itself for the same reason. A trailing `.` or `-` is legal
  * mid-name but not at the end, so it escapes too.
  *
+ * Injective WITHIN this encoding, which is not the same as unique on disk: the harness path spells
+ * ids differently and its records share the directory, so `s42` is what this produces for `42` AND
+ * what that path produces for `s42`. {@link recordOwner} is how a lookup tells them apart.
+ *
  * Readability is deliberate: `-1001234567890` becomes `s-1001234567890`, so an operator can still
  * tell which room a file belongs to.
  */
@@ -68,11 +72,42 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     async openOrCreate(sessionId) {
       const id = piSessionId(sessionId);
       const records = await SessionManager.list(cwd, options.dir);
-      const existing = records.find((r) => r.id === id) ?? records.find((r) => r.id === legacySessionId(sessionId));
-      if (existing) return SessionManager.open(existing.path, options.dir);
-      return publish(SessionManager.create(cwd, options.dir, { id }), options.dir);
+      // A record this store wrote carries the Caller's id verbatim, so a name collision with the
+      // harness path's spelling is decided by asking rather than by hoping: `42` encodes to `s42`,
+      // and so does the harness path's own `s42`.
+      const claimed = (name: string, accept: (owner: string | undefined) => boolean): SessionManager | undefined => {
+        for (const candidate of records.filter((r) => r.id === name)) {
+          const opened = SessionManager.open(candidate.path, options.dir);
+          if (accept(recordOwner(opened))) return opened;
+        }
+        return undefined;
+      };
+      const ours = claimed(id, (owner) => owner === sessionId);
+      if (ours) return ours;
+      // Nothing of ours under our name. A record written before this store existed carries no claim
+      // and is named by the harness path's own injective spelling, so an UNCLAIMED hit there is this
+      // conversation — while a claimed one belongs to whichever Caller id claimed it.
+      const legacy = claimed(legacySessionId(sessionId), (owner) => owner === undefined || owner === sessionId);
+      if (legacy) return legacy;
+      const created = publish(SessionManager.create(cwd, options.dir, { id }), options.dir);
+      created.appendCustomEntry(SESSION_OWNER_ENTRY, { sessionId });
+      return created;
     },
   };
+}
+
+/** Marks whose conversation a record holds — the Caller's id, not pi's spelling of it. */
+const SESSION_OWNER_ENTRY = "fastagent:session-owner";
+
+/** The Caller id a record was created for, or undefined when nothing claimed it. */
+function recordOwner(session: SessionManager): string | undefined {
+  for (const entry of session.getEntries()) {
+    const claim = entry as { type?: string; customType?: string; data?: { sessionId?: unknown } };
+    if (claim.type === "custom" && claim.customType === SESSION_OWNER_ENTRY) {
+      return typeof claim.data?.sessionId === "string" ? claim.data.sessionId : undefined;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -106,11 +141,12 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
   const live = new Map<string, SessionManager>();
   return {
     async openOrCreate(sessionId) {
-      const id = piSessionId(sessionId);
-      const existing = live.get(id);
+      // Keyed by the CALLER's id: the encoding exists to satisfy pi's filename rule, and in memory
+      // there are no filenames - two rooms whose encodings collide must still not share a map slot.
+      const existing = live.get(sessionId);
       if (existing) return existing;
-      const created = SessionManager.inMemory(cwd, { id });
-      live.set(id, created);
+      const created = SessionManager.inMemory(cwd, { id: piSessionId(sessionId) });
+      live.set(sessionId, created);
       return created;
     },
   };
