@@ -144,18 +144,23 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         onCancelReady(() => {
           void session.abort().catch(() => {});
         });
-        if (wasCancelled()) {
-          await session.abort().catch(() => {});
-          return;
-        }
         const queue = new EventQueue<AgentEvent>();
         const unsub = session.subscribe((event) => {
           const projected = toAgentEvent(event);
           if (projected) queue.push(projected);
         });
         try {
+          // Everything the model call needs, resolved BEFORE the latch is read: the door armed above
+          // only stops a RUNNING session, so a consumer who walks away while the session is being
+          // built or its images resized would knock on an idle one and then have the turn start
+          // anyway. One gate, placed after the last await before the call, covers both windows.
+          const options = await toPiPromptOptions(prompt);
+          if (wasCancelled()) {
+            await session.abort().catch(() => {});
+            return;
+          }
           const before = session.state.messages.length;
-          const run = session.prompt(prompt.text, await toPiPromptOptions(prompt));
+          const run = session.prompt(prompt.text, options);
           yield* queue.drainUntil(run);
           let terminal: AgentEvent;
           try {
