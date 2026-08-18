@@ -268,6 +268,20 @@ describe("prompt.images passthrough (SPEC §4)", () => {
     expect(dump).toContain("aGVsbG8="); // base64 payload reached the context
     expect(dump).toContain('"image"');
   });
+
+  it("a prompt that cannot be prepared fails the turn instead of throwing at the caller", async () => {
+    const { agent } = makeAgent([fauxAssistantMessage("never reached")]);
+    // Preparing images decodes and re-encodes every attachment; a payload that is not a string kills
+    // that step before any engine work exists to fail. MUST 2 makes it an event, not a throw.
+    const events = await drain(
+      agent.invoke(
+        { session: "bad-image" },
+        { text: "what is this?", images: [{ mimeType: "image/png", data: 42 as unknown as string }] },
+      ),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe("failed");
+  });
 });
 
 describe("session continuity (open instead of create)", () => {

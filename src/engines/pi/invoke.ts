@@ -634,8 +634,21 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       });
       let completed: AssistantMessage | undefined; // the assistant message of a cleanly completed turn
       try {
+        // Preparing the prompt lazy-loads the image pipeline and re-encodes every attachment, so it
+        // can throw BEFORE any engine work exists to fail — and a throw here would escape the
+        // generator and break iteration for the caller, which MUST 2 forbids. It settles the run the
+        // same way a setup failure does.
+        let opts: Awaited<ReturnType<typeof toPiPromptOptions>>;
+        try {
+          opts = await toPiPromptOptions(prompt);
+        } catch (error) {
+          const terminal = errorToTerminal(error);
+          outcome = { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
+          runSettled = true;
+          yield terminal;
+          return; // → outer finally emits the settlement
+        }
         // Bind current cwd/session/activation capabilities for every FastAgent-defined tool.
-        const opts = await toPiPromptOptions(prompt);
         const run = turnContext.run(
           {
             cwd: options.cwd ?? process.cwd(),
