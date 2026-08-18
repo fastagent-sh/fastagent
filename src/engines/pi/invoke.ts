@@ -2,8 +2,8 @@
  * The harness L0: fan pi AgentHarness's two ports (subscribe event side-channel + prompt final
  * value) into SPEC's single event stream, under a single-writer-per-session lease.
  *
- * The engine-neutral half of that mechanism — lease, terminals, event queue, prompt prep — is
- * turn-kit.ts. What lives here is what only the harness has: its event vocabulary, translated ONCE
+ * The half that does not care which pi class runs the turn — lease, terminals, event queue, prompt
+ * prep — is turn-kit.ts. What lives here is what only the harness has: its event vocabulary, translated ONCE
  * into the rich `SessionEvent` layer, and the observation plane that layer feeds.
  *
  * Concurrency: at most one in-flight turn per session; a second invoke fails fast with

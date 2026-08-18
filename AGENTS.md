@@ -118,7 +118,8 @@ src/
 │   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
 └── engines/pi/              # the pi reference implementation
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
-    ├── turn-kit.ts          # the engine-NEUTRAL half of the turn mechanism, shared by every pi L0:
+    ├── turn-kit.ts          # the turn mechanism's pi-CLASS-neutral half, shared by every pi L0 (it
+    │                         # speaks pi's types, so NOT engine-neutral in this repo's sense):
     │                         # lease (single-writer floor), terminals (settled message/thrown error →
     │                         # SPEC terminal + retryable), EventQueue (push→pull), prompt image prep
     ├── invoke.ts            # the harness L0: AgentHarness's two ports → one stream, plus what only it

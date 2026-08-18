@@ -1,14 +1,16 @@
 /**
- * The engine-facing half of the turn mechanism, shared by every pi L0.
+ * The turn mechanism's pi-CLASS-neutral half, shared by every pi L0. Not "engine-neutral" in this
+ * repo's sense — that term is reserved for code with no engine import at all (src/agent.ts), and
+ * everything here speaks pi's message and image types. What it is neutral about is which pi class
+ * runs the turn.
  *
  *   Lease       — single-writer concurrency floor (injectable port + in-process default)
  *   Terminals   — a settled pi message or a thrown error → the SPEC terminal, `retryable` included
  *   EventQueue  — push→pull plumbing for engines that emit events beside their result
  *   Prompt prep — SPEC images → pi's ImageContent
  *
- * These are the parts that do not care WHICH pi class runs the turn. What does — the harness's
- * event vocabulary and its observation plane — stays in invoke.ts, and the AgentSession's in
- * invoke-session.ts.
+ * What is NOT neutral — the harness's event vocabulary and its observation plane — stays in
+ * invoke.ts, and the AgentSession's in invoke-session.ts.
  */
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Prompt } from "../../agent.ts";
