@@ -65,7 +65,7 @@ export interface CreatePiAgentFromSessionOptions {
  * request itself. It reports as a `retry_scheduled` with `operation: "assistant"`, a case the
  * harness could not produce and the vocabulary therefore did not have.
  */
-export function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent | null {
+function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent | null {
   const at = Date.now();
   switch (event.type) {
     case "message_start":
