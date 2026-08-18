@@ -14,7 +14,7 @@ const optionsGate = vi.hoisted(() => {
   const gate = new Promise<void>((resolve) => {
     open = resolve;
   });
-  return { gate, open: () => open(), enabled: { value: false } };
+  return { gate, open: () => open(), enabled: { value: false }, failure: { value: null as Error | null } };
 });
 
 vi.mock("../src/engines/pi/invoke.ts", async (importOriginal) => {
@@ -23,6 +23,7 @@ vi.mock("../src/engines/pi/invoke.ts", async (importOriginal) => {
     ...actual,
     toPiPromptOptions: async (prompt: unknown) => {
       if (optionsGate.enabled.value) await optionsGate.gate;
+      if (optionsGate.failure.value) throw optionsGate.failure.value;
       return actual.toPiPromptOptions(prompt as Parameters<typeof actual.toPiPromptOptions>[0]);
     },
   };
@@ -107,6 +108,20 @@ describe("AgentSession L0: cancelling before the model call", () => {
       expect(prompted()).toBe(false);
     } finally {
       optionsGate.enabled.value = false;
+    }
+  });
+
+  it("a failure while preparing the prompt is one failed terminal, not a thrown iteration", async () => {
+    const { session, prompted } = promptRecordingSession();
+    const agent = createPiAgentFromSession({ sessionFactory: async () => session });
+    optionsGate.failure.value = new Error("image pipeline unavailable");
+    try {
+      const events = await drain(agent.invoke({ session: "prep-failure" }, { text: "go" }));
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "failed", details: "image pipeline unavailable" });
+      expect(prompted()).toBe(false);
+    } finally {
+      optionsGate.failure.value = null;
     }
   });
 });

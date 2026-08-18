@@ -154,7 +154,17 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           // only stops a RUNNING session, so a consumer who walks away while the session is being
           // built or its images resized would knock on an idle one and then have the turn start
           // anyway. One gate, placed after the last await before the call, covers both windows.
-          const options = await toPiPromptOptions(prompt);
+          //
+          // Its own failure is a turn failure, not an iteration failure (MUST 2): resolving options
+          // lazy-loads the image pipeline and re-encodes every attachment, so it can throw before any
+          // engine work exists to fail.
+          let options: Awaited<ReturnType<typeof toPiPromptOptions>>;
+          try {
+            options = await toPiPromptOptions(prompt);
+          } catch (error) {
+            yield errorToTerminal(error);
+            return;
+          }
           if (wasCancelled()) {
             await session.abort().catch(() => {});
             return;
