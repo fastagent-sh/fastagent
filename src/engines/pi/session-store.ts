@@ -67,6 +67,13 @@ export function piSessionId(sessionId: string): string {
  * which is injective on its own terms, and appended to where it lies. Both engines read the same v3
  * jsonl, so a conversation started before this engine keeps going rather than restarting empty.
  *
+ * That continuity is ONE-WAY, and cannot be otherwise while both engines exist: the harness store
+ * finds records by its own spelling, so pointing it at this subdirectory would put it back in the
+ * ambiguous namespace this separation removes — its `s42` lookup would match the record this engine
+ * wrote for `42`. So a conversation STARTED under FASTAGENT_ENGINE=session restarts empty if the
+ * switch is turned off. The switch is a migration aid, not a supported toggle, and it disappears
+ * with the harness path; a deployment that has run on it should stay on it.
+ *
  * SCOPE OF "open-or-create": idempotent against a store that is serialized per session, which is what
  * the serving path provides — the single-writer lease is taken before any store call, so no two
  * turns of one conversation reach this at once. What it does NOT do is arbitrate a FIRST open racing

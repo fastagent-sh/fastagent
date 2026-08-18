@@ -202,7 +202,7 @@ export async function createPiAgentFromDir(
   await mkdir(sessionsDir, { recursive: true });
   const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: workspace });
   // The AgentSession engine reads the same directory through its own store (pi's SessionManager over
-  // the same v3 jsonl), so a workspace keeps one set of conversations whichever engine serves them.
+  // the same v3 jsonl). Continuity across the switch is ONE-WAY by construction — see session-store.ts.
   const sessionRecords =
     piEngine() === "session" ? piSessionRecordStore({ dir: sessionsDir, cwd: workspace }) : undefined;
   // The hub is wired HERE because the store is created here: chicken-and-egg otherwise (the hub
