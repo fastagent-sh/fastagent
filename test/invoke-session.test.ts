@@ -121,7 +121,9 @@ describe("AgentSession L0: cancelling before the model call", () => {
     const inTheWindow = new Promise<void>((resolve) => (entered = resolve));
     duringPromptPrep.value = () => {
       entered();
-      return new Promise<void>((_, reject) => (failPreparation = () => reject(new Error("image pipeline unavailable"))));
+      return new Promise<void>(
+        (_, reject) => (failPreparation = () => reject(new Error("image pipeline unavailable"))),
+      );
     };
 
     const iterator = agent.invoke({ session: "cancel-then-fail" }, { text: "go" })[Symbol.asyncIterator]();
