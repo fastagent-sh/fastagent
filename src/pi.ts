@@ -34,7 +34,7 @@ export {
 export type { LoadedDefinition, SkillCollision } from "./engines/pi/definition.ts";
 
 export { defineConfig, listModels, resolveModel, type FastagentConfig } from "./engines/pi/config.ts";
-export type { SessionObserver } from "./engines/pi/invoke.ts";
+export type { SessionObserver } from "./engines/pi/turn-kit.ts";
 export { inProcessLease, type Lease, type Release } from "./engines/pi/turn-kit.ts";
 export {
   createPiSessionControl,

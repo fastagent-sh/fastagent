@@ -240,7 +240,7 @@ describe("session control over HTTP (Phase 3)", () => {
       "sImg",
       { type: "run_started", timestamp: Date.now(), runId: "r1", data: {} },
       {
-        steer: async (prompt) => {
+        steer: async (prompt: { text: string }) => {
           received.push(prompt);
         },
         followUp: async () => {},

@@ -262,7 +262,15 @@ export type CompactionFinishedEvent = SessionEvent<
  *  engine's `retry_finished` carries no outcome to forward. */
 export type RetryScheduledEvent = SessionEvent<
   "retry_scheduled",
-  { operation: "compaction" | "branch_summary"; attempt: number; maxAttempts: number; delayMs: number; error: string }
+  {
+    /** "assistant" is an engine that retries the ANSWER request itself (pi's AgentSession does;
+     *  the harness did not). The other two are summarization calls. */
+    operation: "assistant" | "compaction" | "branch_summary";
+    attempt: number;
+    maxAttempts: number;
+    delayMs: number;
+    error: string;
+  }
 >;
 
 /**

@@ -8,12 +8,15 @@
  *   Terminals   — a settled pi message or a thrown error → the SPEC terminal, `retryable` included
  *   EventQueue  — push→pull plumbing for engines that emit events beside their result
  *   Prompt prep — SPEC images → pi's ImageContent
+ *   Projection  — the rich SessionEvent stream → the narrow SPEC one
+ *   Observation — the seam a control-plane hub attaches to (RunControls + SessionObserver)
  *
  * What is NOT neutral — the harness's event vocabulary and its observation plane — stays in
  * invoke.ts, and the AgentSession's in invoke-session.ts.
  */
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
-import { ABORTED_CODE, type AgentEvent, type Prompt } from "../../agent.ts";
+import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
+import type { SessionEvent } from "../../session.ts";
 
 // ── Lease: single-writer concurrency floor ──────────────────────────────────
 //
@@ -150,6 +153,55 @@ export async function toPiPromptOptions(prompt: Prompt): Promise<{ images?: Imag
   );
   return { images };
 }
+/** Live modulation handles for one active run — what the control plane's `dispatch` routes to.
+ *  Built inside the turn (it owns the engine instance); registered with the observer at
+ *  run_started, gone after run_settled. RACE WINDOW (all three commands, symmetric): the run may
+ *  resolve between the settled-check and the engine call landing — an accepted `abort` can still
+ *  settle `completed`, and an accepted `steer`/`followUp` can settle without the prompt ever being
+ *  consumed. Acceptance is not outcome; the settlement is the truth. */
+export interface RunControls {
+  steer(prompt: Prompt): Promise<void>;
+  followUp(prompt: Prompt): Promise<void>;
+  abort(): Promise<void>;
+}
+
+/** The DATA-plane observation seam: every rich event of every run, pushed as it happens. `run`
+ *  carries the live {@link RunControls}, attached to the `run_started` event only. A hub
+ *  (session-control.ts) implements this to serve `events()`/`state()`/`dispatch`; absent = zero
+ *  overhead. Scope: RUN events only — the hub's own boundary-mutation events (`state_changed`,
+ *  `compaction_*`) originate in the hub and reach full-vocabulary taps via the hub's `tap` option,
+ *  not this seam. TRUST BOUNDARY: this seam hands every wired observer the run's modulation handles — it is the trusted hub seam, not a public fan-out point. Do not wire
+ *  untrusted taps here; give third parties the read-only `events()` stream instead. */
+export type SessionObserver = (session: string, event: SessionEvent, run?: RunControls) => void;
+
+/** The SPEC projection of the rich stream. Events with no `AgentEvent` counterpart (progress,
+ *  message boundaries, run boundaries) project to null — the invoke terminal is produced from the
+ *  resolved message ({@link toTerminal}), not from `run_settled`. */
+export function projectAgentEvent(se: SessionEvent): AgentEvent | null {
+  switch (se.type) {
+    case "message_delta": {
+      const d = se.data as { channel: "text" | "thinking"; delta: string };
+      return d.channel === "text" ? { type: "text", delta: d.delta } : { type: "thinking", delta: d.delta };
+    }
+    case "tool_started": {
+      const d = se.data as { id: string; name: string; args: Json };
+      return { type: "tool_started", id: d.id, name: d.name, args: d.args };
+    }
+    case "tool_finished": {
+      const d = se.data as { id: string; isError: boolean; content: Json };
+      return { type: "tool_ended", id: d.id, isError: d.isError, content: d.content };
+    }
+    case "retry_scheduled": {
+      // `operation` (compaction | branch_summary) stays session-plane vocabulary — a turn renderer
+      // only needs "transient failure, retrying"; the engine detail lives in the control plane.
+      const d = se.data as { attempt: number; maxAttempts: number; delayMs: number; error: string };
+      return { type: "retrying", attempt: d.attempt, maxAttempts: d.maxAttempts, delayMs: d.delayMs, reason: d.error };
+    }
+    default:
+      return null;
+  }
+}
+
 // ── EventQueue: push→pull plumbing for a two-port engine ────────────────────
 //
 // Single-consumer async queue; single-threaded JS means no await interleaves between push and

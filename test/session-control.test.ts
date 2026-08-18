@@ -611,7 +611,7 @@ describe("session control (Phase 2a): run modulation", () => {
   it("stale controls are rejected after settlement — never a silent acceptance", async () => {
     const { faux, models } = makeFaux();
     faux.setResponses([fauxAssistantMessage("done")]);
-    let captured: import("../src/engines/pi/invoke.ts").RunControls | undefined;
+    let captured: import("../src/engines/pi/turn-kit.ts").RunControls | undefined;
     const agent = createPiAgentFromHarness({
       observer: (_s, ev, run) => {
         if (ev.type === "run_started") captured = run;
@@ -1789,7 +1789,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       const seen: string[] = [];
       const opened = await createPiAgentFromDir(dir, {
         sessionControl: true,
-        observer: (_s, event) => {
+        observer: (_s: string, event: { type: string }) => {
           seen.push(event.type);
         },
       });

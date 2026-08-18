@@ -21,7 +21,7 @@ import {
 import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
 import { createPiAgentFromDefinition, resolveAgentTools } from "./create.ts";
-import type { SessionObserver } from "./invoke.ts";
+import type { SessionObserver } from "./turn-kit.ts";
 import { type PiBoundaryWiring, createPiSessionControl } from "./session-control.ts";
 import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";

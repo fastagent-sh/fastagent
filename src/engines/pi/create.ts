@@ -41,14 +41,14 @@ import {
   type MountedTool,
 } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
-import { type SessionObserver, createPiAgentFromHarness } from "./invoke.ts";
+import { createPiAgentFromHarness } from "./invoke.ts";
 import { createPiAgentFromSession } from "./invoke-session.ts";
 import { piAgentSessionFactory } from "./agent-session-factory.ts";
 import { createPiModelRuntime } from "./models.ts";
 import { piEngine } from "./engine.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import { piInMemorySessionRecordStore } from "./session-store.ts";
-import { type Lease, inProcessLease } from "./turn-kit.ts";
+import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
@@ -269,14 +269,9 @@ function buildPiAgent(opts: {
           "opener builds. Use `fastagent dev`/`start` on an agent directory, or unset FASTAGENT_ENGINE",
       );
     }
-    if (opts.observer) {
-      throw new Error(
-        "FASTAGENT_ENGINE=session has no observation plane yet, so an observer would never fire — " +
-          "unset FASTAGENT_ENGINE to use session control",
-      );
-    }
     return createPiAgentFromSession({
       lease: opts.lease ?? inProcessLease(),
+      observer: opts.observer,
       sessionFactory: piAgentSessionFactory({
         sessions: opts.sessionRecords ?? piInMemorySessionRecordStore({ cwd: env.cwd }),
         engine: async () => {

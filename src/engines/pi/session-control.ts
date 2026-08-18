@@ -36,7 +36,7 @@ import {
   UNSUPPORTED_CAPABILITY_CODE,
 } from "../../session.ts";
 import { listModels } from "./config.ts";
-import type { RunControls, SessionObserver } from "./invoke.ts";
+import type { RunControls, SessionObserver } from "./turn-kit.ts";
 import type { Lease } from "./turn-kit.ts";
 import { type AnyModel, SUMMARIZATION_RETRY_POLICY, type PiHarnessFactory, harnessSession } from "./harness.ts";
 import { THINKING_LEVELS, resolveSessionSettings } from "./session-settings.ts";

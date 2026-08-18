@@ -3,10 +3,20 @@
  * this drives a stub, because the case that matters — a run that settles without producing anything —
  * is exactly what a healthy engine never does.
  */
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import {
+  type AgentSession,
+  ModelRuntime,
+  createAgentSessionFromServices,
+  createAgentSessionServices,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
+import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import type { RunControls } from "../src/engines/pi/turn-kit.ts";
+import type { SessionEvent } from "../src/session.ts";
+import { makeFaux } from "./faux.ts";
 
 /** Runs inside prompt-option resolution — the window between "the session exists" and "the model
  *  call starts", which a test cannot otherwise reach. */
@@ -148,5 +158,76 @@ describe("AgentSession L0: cancelling before the model call", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: "failed", details: "image pipeline unavailable" });
     expect(prompted()).toBe(false);
+  });
+});
+
+describe("AgentSession L0: the observation plane", () => {
+  it("publishes one run, its rich events, and exactly one settlement", async () => {
+    const { faux } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("hello there")]);
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const cwd = process.cwd();
+    const services = await createAgentSessionServices({
+      cwd,
+      modelRuntime,
+      resourceLoaderOptions: {
+        noExtensions: true,
+        noPromptTemplates: true,
+        noContextFiles: true,
+        systemPromptOverride: () => "test",
+        appendSystemPromptOverride: () => [],
+        skillsOverride: (base) => ({ skills: [], diagnostics: base.diagnostics }),
+      },
+    });
+    const store = piInMemorySessionRecordStore({ cwd });
+    const seen: SessionEvent[] = [];
+    let controls: RunControls | undefined;
+    const agent = createPiAgentFromSession({
+      observer: (_session, event, run) => {
+        seen.push(event);
+        if (run) controls = run;
+      },
+      sessionFactory: async (id) =>
+        (
+          await createAgentSessionFromServices({
+            services,
+            sessionManager: await store.openOrCreate(id),
+            model: faux.getModel(),
+            noTools: "all",
+          })
+        ).session,
+    });
+
+    await drain(agent.invoke({ session: "observed" }, { text: "hi" }));
+
+    const types = seen.map((e) => e.type);
+    expect(types.filter((t) => t === "run_started")).toHaveLength(1);
+    expect(types.filter((t) => t === "run_settled")).toHaveLength(1);
+    expect(types.at(-1)).toBe("run_settled"); // the settlement closes the run
+    expect(types).toContain("message_started");
+    expect(types).toContain("message_delta");
+    expect(types).toContain("message_finished");
+    expect(seen.at(-1)).toMatchObject({ data: { status: "completed" } });
+    // Every run event carries the run's identity, and the controls arrive with run_started.
+    expect(new Set(seen.filter((e) => "runId" in e).map((e) => (e as { runId: string }).runId)).size).toBe(1);
+    expect(controls).toBeDefined();
+  });
+
+  it("a command dispatched after settlement is refused, not silently accepted", async () => {
+    const { session, prompted } = promptRecordingSession();
+    void prompted;
+    let controls: RunControls | undefined;
+    const agent = createPiAgentFromSession({
+      observer: (_s, _e, run) => {
+        if (run) controls = run;
+      },
+      sessionFactory: async () => session,
+    });
+
+    await drain(agent.invoke({ session: "settled" }, { text: "hi" }));
+
+    await expect(controls?.steer({ text: "too late" })).rejects.toThrow(/already settled/);
+    await expect(controls?.abort()).rejects.toThrow(/already settled/);
   });
 });
