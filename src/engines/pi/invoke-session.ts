@@ -1,0 +1,166 @@
+/**
+ * L0 over pi-coding-agent's `AgentSession`, in the `per-invoke` state locality
+ * ([conformance-levels.md](../../../docs/design/conformance-levels.md) §2, top-right cell): build a
+ * session per invoke over the SAME durable jsonl, run one turn, dispose.
+ *
+ * Why this exists next to {@link createPiAgentFromHarness}: pi 0.84 replaced `AgentHarness` with an
+ * unimplemented lane-based skeleton, and pi does not consume that class itself — its TUI, RPC and SDK
+ * all run on `AgentSession`. This is the executable proof that the SPEC's four Agent-side MUSTs hold
+ * on the class pi actually maintains (test/conformance-session.test.ts).
+ *
+ * SCOPE, deliberately narrow: the concurrency floor, the event stream, and cancellation. The
+ * observation plane (SessionObserver / RunControls / the rich `SessionEvent` vocabulary), the tool
+ * activation bridge and auto-compaction are NOT wired — this translates pi events straight to SPEC
+ * `AgentEvent`s, which is the second parallel translation design §6 forbids. That is the price of a
+ * throwaway proof; the harness L0 remains the one true path until this one grows the observation
+ * plane and replaces it.
+ */
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { SESSION_BUSY_CODE, type Agent, type AgentEvent, type Json, type Prompt, type Scope } from "../../agent.ts";
+import { abortFirstIterator } from "../../collect.ts";
+import { log } from "../../log.ts";
+import { EventQueue, type Lease, errorToTerminal, inProcessLease, toPiPromptOptions, toTerminal } from "./invoke.ts";
+
+/** Open-or-create the session behind `sessionId` and bind an `AgentSession` to it, per invoke. */
+export type PiAgentSessionFactory = (sessionId: string) => Promise<AgentSession>;
+
+export interface CreatePiAgentFromSessionOptions {
+  sessionFactory: PiAgentSessionFactory;
+  /** Single-writer lease. Defaults to the in-process per-session fail-fast lease. */
+  lease?: Lease;
+}
+
+/**
+ * SPEC events from pi's session stream. `auto_retry_start` has no harness counterpart: an
+ * `AgentSession` retries a failed assistant request itself, which the SPEC already has a word for.
+ */
+function toAgentEvent(event: AgentSessionEvent): AgentEvent | null {
+  switch (event.type) {
+    case "message_update": {
+      const ev = event.assistantMessageEvent;
+      if (ev.type === "text_delta") return { type: "text", delta: ev.delta };
+      if (ev.type === "thinking_delta") return { type: "thinking", delta: ev.delta };
+      return null;
+    }
+    case "tool_execution_start":
+      return { type: "tool_started", id: event.toolCallId, name: event.toolName, args: event.args as Json };
+    case "tool_execution_end":
+      return { type: "tool_ended", id: event.toolCallId, isError: event.isError, content: event.result as Json };
+    case "auto_retry_start":
+      return {
+        type: "retrying",
+        attempt: event.attempt,
+        maxAttempts: event.maxAttempts,
+        delayMs: event.delayMs,
+        reason: event.errorMessage,
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The turn's outcome. `prompt()` resolves void and never throws for an engine-side failure (measured:
+ * a provider error and an abort both resolve normally), so the terminal comes from the last assistant
+ * message's `stopReason` — the same read {@link toTerminal} performs on the harness path.
+ */
+function terminalFromState(session: AgentSession): AgentEvent {
+  const messages = session.state.messages;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message?.role === "assistant") return toTerminal(message as AssistantMessage);
+  }
+  return { type: "failed", details: "the turn produced no assistant message", retryable: false };
+}
+
+export function createPiAgentFromSession(options: CreatePiAgentFromSessionOptions): Agent {
+  const { sessionFactory, lease = inProcessLease() } = options;
+
+  function invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
+    // The cancellation door (SPEC MUST 3), armed once the session exists; the latch covers a consumer
+    // that walks away while the session is still being built. Same protocol as the harness L0.
+    let externalCancel: (() => void) | undefined;
+    let cancelled = false;
+    const iterator = abortFirstIterator(
+      turn(
+        scope,
+        prompt,
+        (cancel) => {
+          externalCancel = cancel;
+        },
+        () => cancelled,
+      ),
+      () => {
+        cancelled = true;
+        externalCancel?.();
+      },
+    );
+    return { [Symbol.asyncIterator]: () => iterator };
+  }
+
+  async function* turn(
+    scope: Scope,
+    prompt: Prompt,
+    onCancelReady: (cancel: () => void) => void,
+    wasCancelled: () => boolean,
+  ): AsyncGenerator<AgentEvent> {
+    const release = lease.tryAcquire(scope.session);
+    if (!release) {
+      yield {
+        type: "failed",
+        details: "session busy: a turn is already in flight for this session",
+        retryable: true,
+        code: SESSION_BUSY_CODE,
+      };
+      return;
+    }
+    try {
+      let session: AgentSession;
+      try {
+        session = await sessionFactory(scope.session);
+      } catch (error) {
+        yield errorToTerminal(error); // setup failures are events, never throws (MUST 2)
+        return;
+      }
+      try {
+        onCancelReady(() => {
+          void session.abort().catch(() => {});
+        });
+        if (wasCancelled()) {
+          await session.abort().catch(() => {});
+          return;
+        }
+        const queue = new EventQueue<AgentEvent>();
+        const unsub = session.subscribe((event) => {
+          const projected = toAgentEvent(event);
+          if (projected) queue.push(projected);
+        });
+        try {
+          const run = session.prompt(prompt.text, await toPiPromptOptions(prompt));
+          yield* queue.drainUntil(run);
+          let terminal: AgentEvent;
+          try {
+            await run;
+            terminal = terminalFromState(session);
+          } catch (error) {
+            terminal = errorToTerminal(error);
+          }
+          yield terminal;
+        } finally {
+          unsub();
+        }
+      } finally {
+        try {
+          session.dispose();
+        } catch (error) {
+          log.warn(`[fastagent] session dispose failed during cleanup: ${String(error)}`);
+        }
+      }
+    } finally {
+      release();
+    }
+  }
+
+  return { invoke };
+}
