@@ -108,6 +108,24 @@ describe("AgentSession L0: cancelling before the model call", () => {
     expect(prompted()).toBe(false);
   });
 
+  it("a cancelled consumer gets no terminal, even when preparing the prompt then fails", async () => {
+    const { session, prompted } = promptRecordingSession();
+    const agent = createPiAgentFromSession({ sessionFactory: async () => session });
+    let failPreparation!: () => void;
+    duringPromptPrep.value = () =>
+      new Promise<void>((_, reject) => (failPreparation = () => reject(new Error("image pipeline unavailable"))));
+
+    const iterator = agent.invoke({ session: "cancel-then-fail" }, { text: "go" })[Symbol.asyncIterator]();
+    const first = iterator.next();
+    await Promise.resolve();
+    const cancelled = iterator.return?.(undefined);
+    failPreparation(); // the failure races the cancellation, and loses: nobody is listening
+    await cancelled;
+
+    expect((await first).done).toBe(true);
+    expect(prompted()).toBe(false);
+  });
+
   it("a failure while preparing the prompt is one failed terminal, not a thrown iteration", async () => {
     const { session, prompted } = promptRecordingSession();
     const agent = createPiAgentFromSession({ sessionFactory: async () => session });
