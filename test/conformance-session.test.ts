@@ -16,6 +16,9 @@ import {
   createAgentSessionServices,
 } from "@earendil-works/pi-coding-agent";
 import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
+import { collect } from "../src/collect.ts";
+import { AgentFailure } from "../src/collect.ts";
+import { describe, expect, it } from "vitest";
 import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
 
@@ -29,14 +32,11 @@ import { describeSpecConformance } from "./spec-conformance.ts";
 interface SubjectOptions {
   /** Where the record lives. Omitted — a fresh in-memory session per turn (no continuity needed). */
   dir?: string;
-  /** pi's own assistant-level auto-retry. Off in the failure subject so its backoff (~14s) does not
-   *  pace the suite; whether serving keeps it on is a phase-2 policy call. */
-  autoRetry?: boolean;
 }
 
 async function sessionFactory(
   responses: FauxResponseStep[],
-  { dir, autoRetry = true }: SubjectOptions = {},
+  { dir }: SubjectOptions = {},
 ): Promise<PiAgentSessionFactory> {
   const { faux } = makeFaux();
   faux.setResponses(responses);
@@ -72,7 +72,6 @@ async function sessionFactory(
       model: faux.getModel(),
       noTools: "all",
     });
-    if (!autoRetry) session.setAutoRetryEnabled(false);
     return session;
   };
 }
@@ -84,10 +83,9 @@ async function piSessionAgent(responses: FauxResponseStep[], options?: SubjectOp
 describeSpecConformance("pi AgentSession (faux model, per-invoke L0)", {
   completing: () => piSessionAgent([fauxAssistantMessage("hello world")]),
 
-  failing: () =>
-    piSessionAgent([fauxAssistantMessage("x", { stopReason: "error", errorMessage: "boom 500" })], {
-      autoRetry: false,
-    }),
+  // The answer streams a token before it fails, so the L0 refuses pi's retry and the subject stays
+  // failed - no backoff, and the refusal itself is exercised by every conformance run.
+  failing: () => piSessionAgent([fauxAssistantMessage("x", { stopReason: "error", errorMessage: "boom 500" })]),
 
   hanging: async (onCleanup) => {
     const factory = await sessionFactory([fauxAssistantMessage("a long answer that streams out slowly")]);
@@ -122,4 +120,29 @@ describeSpecConformance("pi AgentSession (faux model, per-invoke L0)", {
     );
     return { a, b, sawHistory: () => saw };
   },
+});
+
+describe("AgentSession L0: pi's auto-retry vs. append-only deltas", () => {
+  it("a failure AFTER output was streamed is final — a retry would concatenate two answers", async () => {
+    const agent = await piSessionAgent([
+      fauxAssistantMessage("the first half of a wrong", { stopReason: "error", errorMessage: "boom 500" }),
+      fauxAssistantMessage("a complete replacement answer"),
+    ]);
+    const started = Date.now();
+    await expect(collect(agent.invoke({ session: "streamed-then-failed" }, { text: "go" }))).rejects.toBeInstanceOf(
+      AgentFailure,
+    );
+    // Refusing the retry must also CANCEL it: pi's first backoff is 2s, and letting it run would
+    // both delay the failure and spend a provider call on an answer this turn can never use.
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("a failure BEFORE any output still retries — that window is free resilience", async () => {
+    const agent = await piSessionAgent([
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom 500" }),
+      fauxAssistantMessage("the answer, second attempt"),
+    ]);
+    const { text } = await collect(agent.invoke({ session: "silent-then-retried" }, { text: "go" }));
+    expect(text).toBe("the answer, second attempt");
+  });
 });

@@ -42,9 +42,11 @@ export interface CreatePiAgentFromSessionOptions {
 function toAgentEvent(event: AgentSessionEvent): AgentEvent | null {
   switch (event.type) {
     case "message_update": {
+      // An empty delta is not output: it moves no consumer's state, and treating it as output would
+      // spend the silent window that auto-retry is allowed to use (see runOnSession).
       const ev = event.assistantMessageEvent;
-      if (ev.type === "text_delta") return { type: "text", delta: ev.delta };
-      if (ev.type === "thinking_delta") return { type: "thinking", delta: ev.delta };
+      if (ev.type === "text_delta") return ev.delta === "" ? null : { type: "text", delta: ev.delta };
+      if (ev.type === "thinking_delta") return ev.delta === "" ? null : { type: "thinking", delta: ev.delta };
       return null;
     }
     case "tool_execution_start":
@@ -66,27 +68,22 @@ function toAgentEvent(event: AgentSessionEvent): AgentEvent | null {
 
 /**
  * The turn's outcome. `prompt()` resolves void and never throws for an engine-side failure (measured:
- * a provider error and an abort both resolve normally), so the terminal comes from the last assistant
- * message's `stopReason` — the same read {@link toTerminal} performs on the harness path.
+ * a provider error and an abort both resolve normally), so the terminal comes from the assistant
+ * message the run ended on — the same read {@link toTerminal} performs on the harness path.
  *
- * Bounded to THIS turn (`from` = the message count before `prompt()`): the session is durable and
- * carries every previous turn, so an unbounded reverse scan would answer a run that produced nothing
- * with the PREVIOUS turn's assistant message — reporting `completed` for a turn that never ran.
+ * That message is taken from the EVENT STREAM, not from `session.state.messages`. Session state is
+ * mutable mid-turn: compaction replaces the array, and overflow recovery splices the last assistant
+ * message out of it outright (`state.messages = messages.slice(0, -1)`). Any index into it is a
+ * turn boundary that the engine is free to invalidate, while a `message_end` payload is a fact that
+ * already happened. Auto-compaction runs its own model call outside the agent's event stream, so it
+ * cannot masquerade as the turn's answer here.
  */
-function turnTerminal(session: AgentSession, from: number): AgentEvent {
-  const messages = session.state.messages;
-  for (let i = messages.length - 1; i >= from; i--) {
-    const message = messages[i];
-    if (message?.role === "assistant") return toTerminal(message as AssistantMessage);
-  }
-  // Unreachable on a settled run: pi records an assistant message for every outcome, error and abort
-  // included. Reaching it means the engine broke its own contract — say so with what the state held,
-  // so the report names the engine rather than the turn.
+function engineProducedNothing(): AgentEvent {
+  // Unreachable on a settled run: pi ends every outcome, error and abort included, with an assistant
+  // message. Reaching it means the engine broke its own contract — name the engine, not the turn.
   return {
     type: "failed",
-    details:
-      `the engine settled the run without an assistant message ` +
-      `(${messages.length - from} message(s) this turn, last role: ${messages.at(-1)?.role ?? "none"})`,
+    details: "the engine settled the run without ending an assistant message",
     retryable: false,
   };
 }
@@ -140,9 +137,32 @@ async function* runOnSession(
   const abort = () => session.abort().catch(() => {});
   onCancelReady(() => void abort());
   const queue = new EventQueue<AgentEvent>();
+  let finalAssistant: AssistantMessage | undefined;
+  let emittedOutput = false;
+  /** Set when a retry is refused because output already left — carries the error that ends the turn. */
+  let retriedAfterOutput: string | undefined;
   const unsub = session.subscribe((event) => {
+    if (retriedAfterOutput !== undefined) return; // the turn is decided; the retry's output is not ours
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      finalAssistant = event.message as AssistantMessage;
+    }
+    // pi retries a failed assistant request by discarding the attempt and running another one. That
+    // is free resilience while the turn is still silent, and corruption once it is not: SPEC deltas
+    // are append-only and `retrying` cannot retract them, so the second attempt's answer would
+    // arrive concatenated onto the failed one's half-sentence. Take the resilience in the silent
+    // window; end the turn honestly outside it.
+    if (event.type === "auto_retry_start" && emittedOutput) {
+      retriedAfterOutput = event.errorMessage;
+      // Not synchronously: pi emits this event BEFORE creating the controller that makes its backoff
+      // abortable, so an abort from inside the listener would find nothing to cancel and the turn
+      // would still pay the full delay and burn a provider call on an answer we must discard.
+      queueMicrotask(() => void abort());
+      return;
+    }
     const projected = toAgentEvent(event);
-    if (projected) queue.push(projected);
+    if (!projected) return;
+    if (projected.type !== "retrying") emittedOutput = true;
+    queue.push(projected);
   });
   try {
     // Resolving prompt options lazy-loads the image pipeline and re-encodes every attachment, so it
@@ -162,12 +182,15 @@ async function* runOnSession(
       await abort();
       return;
     }
-    const before = session.state.messages.length;
     const run = session.prompt(prompt.text, options);
     yield* queue.drainUntil(run);
     try {
       await run;
-      yield turnTerminal(session, before);
+      yield retriedAfterOutput !== undefined
+        ? { type: "failed", details: retriedAfterOutput, retryable: true }
+        : finalAssistant
+          ? toTerminal(finalAssistant)
+          : engineProducedNothing();
     } catch (error) {
       yield errorToTerminal(error);
     }

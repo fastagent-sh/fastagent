@@ -64,14 +64,15 @@ afterEach(() => {
 });
 
 describe("AgentSession L0: the terminal describes THIS turn", () => {
-  it("a run that produces no assistant message fails, even when the session holds a completed one", async () => {
+  it("a run that ends no assistant message fails, however complete the session's history looks", async () => {
     const agent = createPiAgentFromSession({ sessionFactory: async () => silentSessionAfterHistory() });
     const events = await drain(agent.invoke({ session: "durable" }, { text: "turn two" }));
-    // The durable session's previous turn ended `completed`; reading it here would report success for
-    // a turn that never ran.
+    // The session state holds a previous turn that ended `completed`. Deriving the terminal from that
+    // state - at any index, since compaction and overflow recovery both rewrite the array mid-turn -
+    // would report success for a turn that produced nothing.
     expect(events.at(-1)?.type).toBe("failed");
     const last = events.at(-1);
-    if (last?.type === "failed") expect(last.details).toContain("without an assistant message");
+    if (last?.type === "failed") expect(last.details).toContain("without ending an assistant message");
   });
 });
 
