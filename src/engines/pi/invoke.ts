@@ -603,20 +603,6 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       onCancelReady(() => {
         void harness.abort().catch(() => {});
       });
-      // The consumer cancelled DURING the build (latched — the door above came too late to be
-      // knocked): never start the model call; settle as aborted and let the queued return()
-      // finish the generator. Same synchronous tick as the arming — a cancel from here on
-      // reaches the armed door instead.
-      if (wasCancelled()) {
-        outcome = { status: "aborted" };
-        runSettled = true;
-        try {
-          await harness.abort(); // teardown — fresh-harness discipline
-        } catch (error) {
-          log.warn(`[fastagent] harness abort failed during cleanup: ${String(error)}`);
-        }
-        return; // → outer finally emits the settlement
-      }
       const queue = new EventQueue<AgentEvent>();
       const unsub = harness.subscribe((pe) => {
         // Summarization retries also warn to server logs: the session `retry_scheduled` event only
@@ -634,8 +620,36 @@ export function createPiAgentFromHarness(options: CreatePiAgentFromHarnessOption
       });
       let completed: AssistantMessage | undefined; // the assistant message of a cleanly completed turn
       try {
+        // Preparing the prompt lazy-loads the image pipeline and re-encodes every attachment, so it
+        // both takes time and can throw BEFORE any engine work exists to fail — and a throw here
+        // would escape the generator and break iteration for the caller, which MUST 2 forbids. It
+        // settles the run the same way a setup failure does.
+        let opts: Awaited<ReturnType<typeof toPiPromptOptions>>;
+        try {
+          opts = await toPiPromptOptions(prompt);
+        } catch (error) {
+          const terminal = errorToTerminal(error);
+          outcome = { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
+          runSettled = true;
+          yield terminal;
+          return; // → outer finally emits the settlement
+        }
+        // The consumer walked away while the harness was built or the prompt prepared (latched — the
+        // door armed above only stops a RUNNING harness, so a knock in that window is a no-op the
+        // LATER run would ignore): never start the model call. Read AFTER the last await before it,
+        // so both windows are covered; settle as aborted and let the queued return() finish the
+        // generator.
+        if (wasCancelled()) {
+          outcome = { status: "aborted" };
+          runSettled = true;
+          try {
+            await harness.abort(); // teardown — fresh-harness discipline
+          } catch (error) {
+            log.warn(`[fastagent] harness abort failed during cleanup: ${String(error)}`);
+          }
+          return; // → outer finally emits the settlement
+        }
         // Bind current cwd/session/activation capabilities for every FastAgent-defined tool.
-        const opts = await toPiPromptOptions(prompt);
         const run = turnContext.run(
           {
             cwd: options.cwd ?? process.cwd(),
