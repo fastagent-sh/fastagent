@@ -349,7 +349,7 @@ deliberately excludes editor replacement, themes, widgets, and all other TUI pre
 ## 9. Concurrency and residency
 
 - **Single writer, run-scoped.** All writers — channel invoke, scheduler fire, desktop invoke —
-  take the same `Lease` (the existing injectable port in `engines/pi/invoke.ts`) for the run's
+  take the same `Lease` (the existing injectable port in `engines/pi/turn-kit.ts`) for the run's
   activity window. A scheduler firing into a session mid-run gets `session_busy` and defers, the
   same mechanism and behavior as today.
 - **Boundary mutations take the lease.** `compact`, `set_model`, `set_thinking` and `navigate` are the

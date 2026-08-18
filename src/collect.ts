@@ -1,8 +1,13 @@
 /**
- * Caller-side stream helpers: `collect` (buffered consumption, SPEC §7) reduces an AgentEvent
- * stream to a final value, encoding the terminal discipline (failed → throw, missing terminal →
- * error) — streaming consumers for-await themselves. `abortFirstIterator` is the shared
- * cancellation protocol for generator-backed streams.
+ * Stream helpers around the SPEC's two stream disciplines.
+ *
+ * Caller side: `collect` (buffered consumption, SPEC §7) reduces an AgentEvent stream to a final
+ * value, encoding the terminal discipline (failed → throw, missing terminal → error) — streaming
+ * consumers for-await themselves.
+ *
+ * Agent side: the cancellation protocol (SPEC MUST 3), in two halves that only work together —
+ * `abortFirstIterator` delivers the consumer's knock, `cancellableStream` is what an engine wraps
+ * its turn in to receive it.
  */
 import type { AgentEvent, Json } from "./agent.ts";
 
@@ -29,6 +34,38 @@ export function abortFirstIterator<T>(gen: AsyncGenerator<T>, cancel: () => void
       throw error;
     },
   };
+}
+
+/** What a turn generator gets so a consumer walking away can stop it. */
+export interface CancelHooks {
+  /** Publish the door: how to abort the engine work, once there is engine work to abort. */
+  onCancelReady: (cancel: () => void) => void;
+  /** The latch, for the window where the door is armed but the engine is still idle — knocking then
+   *  does nothing, so a turn must read this before committing to work no one is waiting for. */
+  wasCancelled: () => boolean;
+}
+
+/**
+ * Wrap a turn generator in the cancellation protocol: cancelling the returned stream latches the
+ * intent AND knocks on whatever door the generator published, in that order (the latch must be set
+ * before the knock, or a turn checking it mid-flight could miss the cancel it just received).
+ */
+export function cancellableStream<T>(start: (hooks: CancelHooks) => AsyncGenerator<T>): AsyncIterable<T> {
+  let door: (() => void) | undefined;
+  let cancelled = false;
+  const iterator = abortFirstIterator(
+    start({
+      onCancelReady: (cancel) => {
+        door = cancel;
+      },
+      wasCancelled: () => cancelled,
+    }),
+    () => {
+      cancelled = true;
+      door?.();
+    },
+  );
+  return { [Symbol.asyncIterator]: () => iterator };
 }
 
 /** Exception form of a failed event (thrown by collect). Carries the failed event's fields verbatim, so

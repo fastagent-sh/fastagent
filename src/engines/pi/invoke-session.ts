@@ -22,9 +22,9 @@
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { SESSION_BUSY_CODE, type Agent, type AgentEvent, type Json, type Prompt, type Scope } from "../../agent.ts";
-import { abortFirstIterator } from "../../collect.ts";
+import { type CancelHooks, cancellableStream } from "../../collect.ts";
 import { log } from "../../log.ts";
-import { EventQueue, type Lease, errorToTerminal, inProcessLease, toPiPromptOptions, toTerminal } from "./invoke.ts";
+import { EventQueue, type Lease, errorToTerminal, inProcessLease, toPiPromptOptions, toTerminal } from "./turn-kit.ts";
 
 /** Open-or-create the session behind `sessionId` and bind an `AgentSession` to it, per invoke. */
 export type PiAgentSessionFactory = (sessionId: string) => Promise<AgentSession>;
@@ -73,7 +73,7 @@ function toAgentEvent(event: AgentSessionEvent): AgentEvent | null {
  * carries every previous turn, so an unbounded reverse scan would answer a run that produced nothing
  * with the PREVIOUS turn's assistant message — reporting `completed` for a turn that never ran.
  */
-function terminalFromState(session: AgentSession, from: number): AgentEvent {
+function turnTerminal(session: AgentSession, from: number): AgentEvent {
   const messages = session.state.messages;
   for (let i = messages.length - 1; i >= from; i--) {
     const message = messages[i];
@@ -94,34 +94,8 @@ function terminalFromState(session: AgentSession, from: number): AgentEvent {
 export function createPiAgentFromSession(options: CreatePiAgentFromSessionOptions): Agent {
   const { sessionFactory, lease = inProcessLease() } = options;
 
-  function invoke(scope: Scope, prompt: Prompt): AsyncIterable<AgentEvent> {
-    // The cancellation door (SPEC MUST 3), armed once the session exists; the latch covers a consumer
-    // that walks away while the session is still being built. Same protocol as the harness L0.
-    let externalCancel: (() => void) | undefined;
-    let cancelled = false;
-    const iterator = abortFirstIterator(
-      turn(
-        scope,
-        prompt,
-        (cancel) => {
-          externalCancel = cancel;
-        },
-        () => cancelled,
-      ),
-      () => {
-        cancelled = true;
-        externalCancel?.();
-      },
-    );
-    return { [Symbol.asyncIterator]: () => iterator };
-  }
-
-  async function* turn(
-    scope: Scope,
-    prompt: Prompt,
-    onCancelReady: (cancel: () => void) => void,
-    wasCancelled: () => boolean,
-  ): AsyncGenerator<AgentEvent> {
+  /** Own the session's lifetime: one writer, built here, disposed here whatever the turn did. */
+  async function* turn(scope: Scope, prompt: Prompt, hooks: CancelHooks): AsyncGenerator<AgentEvent> {
     const release = lease.tryAcquire(scope.session);
     if (!release) {
       yield {
@@ -141,48 +115,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         return;
       }
       try {
-        onCancelReady(() => {
-          void session.abort().catch(() => {});
-        });
-        const queue = new EventQueue<AgentEvent>();
-        const unsub = session.subscribe((event) => {
-          const projected = toAgentEvent(event);
-          if (projected) queue.push(projected);
-        });
-        try {
-          // Everything the model call needs, resolved BEFORE the latch is read: the door armed above
-          // only stops a RUNNING session, so a consumer who walks away while the session is being
-          // built or its images resized would knock on an idle one and then have the turn start
-          // anyway. One gate, placed after the last await before the call, covers both windows.
-          //
-          // Its own failure is a turn failure, not an iteration failure (MUST 2): resolving options
-          // lazy-loads the image pipeline and re-encodes every attachment, so it can throw before any
-          // engine work exists to fail.
-          let options: Awaited<ReturnType<typeof toPiPromptOptions>>;
-          try {
-            options = await toPiPromptOptions(prompt);
-          } catch (error) {
-            yield errorToTerminal(error);
-            return;
-          }
-          if (wasCancelled()) {
-            await session.abort().catch(() => {});
-            return;
-          }
-          const before = session.state.messages.length;
-          const run = session.prompt(prompt.text, options);
-          yield* queue.drainUntil(run);
-          let terminal: AgentEvent;
-          try {
-            await run;
-            terminal = terminalFromState(session, before);
-          } catch (error) {
-            terminal = errorToTerminal(error);
-          }
-          yield terminal;
-        } finally {
-          unsub();
-        }
+        yield* runOnSession(session, prompt, hooks);
       } finally {
         try {
           session.dispose();
@@ -195,5 +128,50 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
     }
   }
 
-  return { invoke };
+  return { invoke: (scope, prompt) => cancellableStream((hooks) => turn(scope, prompt, hooks)) };
+}
+
+/** One turn on a session someone else owns: subscribe, prompt, stream, terminal. */
+async function* runOnSession(
+  session: AgentSession,
+  prompt: Prompt,
+  { onCancelReady, wasCancelled }: CancelHooks,
+): AsyncGenerator<AgentEvent> {
+  const abort = () => session.abort().catch(() => {});
+  onCancelReady(() => void abort());
+  const queue = new EventQueue<AgentEvent>();
+  const unsub = session.subscribe((event) => {
+    const projected = toAgentEvent(event);
+    if (projected) queue.push(projected);
+  });
+  try {
+    // Resolving prompt options lazy-loads the image pipeline and re-encodes every attachment, so it
+    // both takes time and can throw before any engine work exists to fail. Hence the two guards, in
+    // this order and no earlier: its failure is a turn failure (MUST 2), and the latch has to be read
+    // after the LAST await before the call — the door armed above only stops a RUNNING session, so a
+    // consumer who walked away during the build or the resize would knock on an idle one and have
+    // the turn start anyway.
+    let options: Awaited<ReturnType<typeof toPiPromptOptions>>;
+    try {
+      options = await toPiPromptOptions(prompt);
+    } catch (error) {
+      yield errorToTerminal(error);
+      return;
+    }
+    if (wasCancelled()) {
+      await abort();
+      return;
+    }
+    const before = session.state.messages.length;
+    const run = session.prompt(prompt.text, options);
+    yield* queue.drainUntil(run);
+    try {
+      await run;
+      yield turnTerminal(session, before);
+    } catch (error) {
+      yield errorToTerminal(error);
+    }
+  } finally {
+    unsub();
+  }
 }

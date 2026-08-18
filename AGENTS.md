@@ -118,7 +118,14 @@ src/
 │   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
 └── engines/pi/              # the pi reference implementation
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
-    ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
+    ├── turn-kit.ts          # the engine-NEUTRAL half of the turn mechanism, shared by every pi L0:
+    │                         # lease (single-writer floor), terminals (settled message/thrown error →
+    │                         # SPEC terminal + retryable), EventQueue (push→pull), prompt image prep
+    ├── invoke.ts            # the harness L0: AgentHarness's two ports → one stream, plus what only it
+    │                         # has — its event vocabulary translated ONCE into the rich SessionEvent
+    │                         # layer, and the observation plane that layer feeds
+    ├── invoke-session.ts    # the AgentSession L0 (per-invoke): SPEC-conformance proof that pi's own
+    │                         # session class serves a turn. Not wired into serving — see its header
     ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
     ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
     ├── open.ts              # shared opener: directory → agent for dev/start/invoke

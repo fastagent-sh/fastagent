@@ -26,12 +26,17 @@ import { describeSpecConformance } from "./spec-conformance.ts";
  * `services` is built ONCE and shared across turns — the per-turn cost is the session binding only,
  * which is what makes this posture affordable.
  */
-async function sessionFactory(
-  responses: FauxResponseStep[],
-  dir?: string,
+interface SubjectOptions {
+  /** Where the record lives. Omitted — a fresh in-memory session per turn (no continuity needed). */
+  dir?: string;
   /** pi's own assistant-level auto-retry. Off in the failure subject so its backoff (~14s) does not
    *  pace the suite; whether serving keeps it on is a phase-2 policy call. */
-  autoRetry = true,
+  autoRetry?: boolean;
+}
+
+async function sessionFactory(
+  responses: FauxResponseStep[],
+  { dir, autoRetry = true }: SubjectOptions = {},
 ): Promise<PiAgentSessionFactory> {
   const { faux } = makeFaux();
   faux.setResponses(responses);
@@ -72,15 +77,17 @@ async function sessionFactory(
   };
 }
 
-async function piSessionAgent(responses: FauxResponseStep[], dir?: string, autoRetry = true) {
-  return createPiAgentFromSession({ sessionFactory: await sessionFactory(responses, dir, autoRetry) });
+async function piSessionAgent(responses: FauxResponseStep[], options?: SubjectOptions) {
+  return createPiAgentFromSession({ sessionFactory: await sessionFactory(responses, options) });
 }
 
 describeSpecConformance("pi AgentSession (faux model, per-invoke L0)", {
   completing: () => piSessionAgent([fauxAssistantMessage("hello world")]),
 
   failing: () =>
-    piSessionAgent([fauxAssistantMessage("x", { stopReason: "error", errorMessage: "boom 500" })], undefined, false),
+    piSessionAgent([fauxAssistantMessage("x", { stopReason: "error", errorMessage: "boom 500" })], {
+      autoRetry: false,
+    }),
 
   hanging: async (onCleanup) => {
     const factory = await sessionFactory([fauxAssistantMessage("a long answer that streams out slowly")]);
@@ -103,7 +110,7 @@ describeSpecConformance("pi AgentSession (faux model, per-invoke L0)", {
   pair: async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-session-conformance-"));
     let saw = false;
-    const a = await piSessionAgent([fauxAssistantMessage("the code is 47")], dir);
+    const a = await piSessionAgent([fauxAssistantMessage("the code is 47")], { dir });
     const b = await piSessionAgent(
       [
         (context) => {
@@ -111,7 +118,7 @@ describeSpecConformance("pi AgentSession (faux model, per-invoke L0)", {
           return fauxAssistantMessage("ok");
         },
       ],
-      dir,
+      { dir },
     );
     return { a, b, sawHistory: () => saw };
   },

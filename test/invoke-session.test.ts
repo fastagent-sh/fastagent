@@ -4,27 +4,21 @@
  * is exactly what a healthy engine never does.
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 
-/** Holds prompt-option resolution open, so a cancellation can land in that exact window. */
-const optionsGate = vi.hoisted(() => {
-  let open!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  return { gate, open: () => open(), enabled: { value: false }, failure: { value: null as Error | null } };
-});
+/** Runs inside prompt-option resolution — the window between "the session exists" and "the model
+ *  call starts", which a test cannot otherwise reach. */
+const duringPromptPrep = vi.hoisted(() => ({ value: null as null | (() => Promise<void>) }));
 
-vi.mock("../src/engines/pi/invoke.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/engines/pi/invoke.ts")>();
+vi.mock("../src/engines/pi/turn-kit.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/engines/pi/turn-kit.ts")>();
   return {
     ...actual,
-    toPiPromptOptions: async (prompt: unknown) => {
-      if (optionsGate.enabled.value) await optionsGate.gate;
-      if (optionsGate.failure.value) throw optionsGate.failure.value;
-      return actual.toPiPromptOptions(prompt as Parameters<typeof actual.toPiPromptOptions>[0]);
+    toPiPromptOptions: async (prompt: Parameters<typeof actual.toPiPromptOptions>[0]) => {
+      await duringPromptPrep.value?.();
+      return actual.toPiPromptOptions(prompt);
     },
   };
 });
@@ -65,6 +59,10 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   return out;
 }
 
+afterEach(() => {
+  duringPromptPrep.value = null;
+});
+
 describe("AgentSession L0: the terminal describes THIS turn", () => {
   it("a run that produces no assistant message fails, even when the session holds a completed one", async () => {
     const agent = createPiAgentFromSession({ sessionFactory: async () => silentSessionAfterHistory() });
@@ -94,34 +92,31 @@ describe("AgentSession L0: cancelling before the model call", () => {
   it("never starts the turn when the consumer walks away while the prompt's images are resized", async () => {
     const { session, prompted } = promptRecordingSession();
     const agent = createPiAgentFromSession({ sessionFactory: async () => session });
-    optionsGate.enabled.value = true;
-    try {
-      const iterator = agent.invoke({ session: "resize-cancel" }, { text: "go" })[Symbol.asyncIterator]();
-      const first = iterator.next();
-      // Park the generator INSIDE prompt-option resolution: the session exists and is idle, so the
-      // armed door has nothing to abort — only a latch read after this await can stop the turn.
-      await Promise.resolve();
-      const cancelled = iterator.return?.(undefined);
-      optionsGate.open();
-      await cancelled;
-      expect((await first).done).toBe(true);
-      expect(prompted()).toBe(false);
-    } finally {
-      optionsGate.enabled.value = false;
-    }
+    // Park the generator INSIDE prompt-option resolution: the session exists and is idle, so the
+    // armed door has nothing to abort — only a latch read after this await can stop the turn.
+    let leaveTheWindow!: () => void;
+    duringPromptPrep.value = () => new Promise<void>((resolve) => (leaveTheWindow = resolve));
+
+    const iterator = agent.invoke({ session: "resize-cancel" }, { text: "go" })[Symbol.asyncIterator]();
+    const first = iterator.next();
+    await Promise.resolve();
+    const cancelled = iterator.return?.(undefined);
+    leaveTheWindow();
+    await cancelled;
+
+    expect((await first).done).toBe(true);
+    expect(prompted()).toBe(false);
   });
 
   it("a failure while preparing the prompt is one failed terminal, not a thrown iteration", async () => {
     const { session, prompted } = promptRecordingSession();
     const agent = createPiAgentFromSession({ sessionFactory: async () => session });
-    optionsGate.failure.value = new Error("image pipeline unavailable");
-    try {
-      const events = await drain(agent.invoke({ session: "prep-failure" }, { text: "go" }));
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ type: "failed", details: "image pipeline unavailable" });
-      expect(prompted()).toBe(false);
-    } finally {
-      optionsGate.failure.value = null;
-    }
+    duringPromptPrep.value = () => Promise.reject(new Error("image pipeline unavailable"));
+
+    const events = await drain(agent.invoke({ session: "prep-failure" }, { text: "go" }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "failed", details: "image pipeline unavailable" });
+    expect(prompted()).toBe(false);
   });
 });

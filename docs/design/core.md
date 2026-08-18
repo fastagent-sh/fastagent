@@ -227,7 +227,8 @@ never resident process state as the source of continuity.
 ## 4. Event translation and terminal discipline
 
 Pi exposes a promise for the final assistant message and a subscription side channel for streaming
-events. `src/engines/pi/invoke.ts` combines them into one async iterable:
+events. `src/engines/pi/invoke.ts` combines them into one async iterable (over the engine-neutral
+lease/terminal/queue parts in `turn-kit.ts`):
 
 1. acquire the per-session lease;
 2. open/create the session and harness;
