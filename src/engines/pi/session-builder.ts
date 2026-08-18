@@ -29,7 +29,6 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSession,
@@ -47,24 +46,15 @@ import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts"
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
-import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
+import {
+  type ReadonlySessionManager,
+  type ToolActivation,
+  additiveActivation,
+  agentSessionManager,
+  turnContext,
+} from "./tool-context.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
-
-/** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
-function toolChatSessionManager(session: AgentSession): ReadonlySessionManager {
-  return {
-    getSessionId: () => session.sessionManager.getSessionId(),
-    async getHeader() {
-      const header = session.sessionManager.getHeader();
-      if (!header) throw new Error("chat session has no metadata header");
-      return { id: header.id, timestamp: header.timestamp };
-    },
-    async getBranch() {
-      return session.sessionManager.getBranch() as SessionTreeEntry[];
-    },
-  };
-}
 
 export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -292,7 +282,7 @@ export async function buildAgentSessionRuntime(
     });
     sessionRef.current = {
       session: result.session,
-      sessionManager: toolChatSessionManager(result.session),
+      sessionManager: agentSessionManager(result.session),
       activation: sessionToolActivation(result.session),
     };
     // Deferral emulation: pi's session starts with everything active — narrow it by SUBTRACTING

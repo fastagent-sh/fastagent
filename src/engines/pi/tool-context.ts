@@ -5,6 +5,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 /** FastAgent's read-only port over the current conversation manager. Serving and chat adapt their
  * different concrete session implementations to this one tool-runtime contract. */
@@ -12,6 +13,22 @@ export interface ReadonlySessionManager {
   getSessionId(): string;
   getHeader(): Promise<{ id: string; timestamp: string }>;
   getBranch(): Promise<SessionTreeEntry[]>;
+}
+
+/** pi's AgentSession as the port above — the SAME adapter for both of its consumers: chat's resident
+ *  session (session-builder.ts) and serving's per-invoke one (agent-session-factory.ts). */
+export function agentSessionManager(session: AgentSession): ReadonlySessionManager {
+  return {
+    getSessionId: () => session.sessionManager.getSessionId(),
+    async getHeader() {
+      const header = session.sessionManager.getHeader();
+      if (!header) throw new Error("session has no metadata header");
+      return { id: header.id, timestamp: header.timestamp };
+    },
+    async getBranch() {
+      return session.sessionManager.getBranch() as SessionTreeEntry[];
+    },
+  };
 }
 
 /**
