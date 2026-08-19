@@ -460,13 +460,12 @@ describe("upgrade from the session-mode model", () => {
     );
   });
 
-  it("removes the obsolete owned-threads.json and drops only the retired context buckets", async () => {
+  it("drops only the retired context buckets", async () => {
     feishuFetch();
     const root = mkdtempSync(join(tmpdir(), "feishu-upgrade-"));
     tempRoots.push(root);
     const home = join(root, "channels", "feishu");
     mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, "owned-threads.json"), JSON.stringify({ om_root: { rootId: "om_root" } }));
     const entry = (body: string) => [{ sender: "user ou_alice", body, messageId: `om_${body}` }];
     writeFileSync(
       join(home, "buffers.json"),
@@ -483,7 +482,6 @@ describe("upgrade from the session-mode model", () => {
       stateRoot: root,
     });
 
-    expect(existsSync(join(home, "owned-threads.json"))).toBe(false);
     const buffers = JSON.parse(readFileSync(join(home, "buffers.json"), "utf8")) as Record<string, unknown[]>;
     expect(Object.keys(buffers).sort()).toEqual(["oc_1", "oc_1:thread:omt_live"]);
   });

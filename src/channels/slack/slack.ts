@@ -8,7 +8,7 @@ import { text } from "../respond.ts";
 import { createSeenRing } from "../seen.ts";
 import { createThreadParticipants } from "../thread-participants.ts";
 import { createTaskTracker } from "../tasks.ts";
-import { ensureStateHome, removeRetiredStateFile } from "../state.ts";
+import { ensureStateHome } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
 import { codePointPrefix } from "../text.ts";
 import { createTurnQueue } from "../turn-queue.ts";
@@ -273,10 +273,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
      *  absence of a route: a route that supplies its own session records nothing here. */
     const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
       `slack:${teamId}:${channelId}:${threadTs}`;
-    // The participant model replaced the owned-thread index (a cache, so nothing is lost). REMOVE THIS
-    // after the release following the participant model ships — by then no live deployment can still
-    // be carrying the file. test/migration-deadline.test.ts fails when due.
-    removeRetiredStateFile(stateHome, "owned-threads.json", label);
     const welcomed = createWelcomedUsers(join(stateHome, "welcomed.json"), label);
     const buffer = createSlackContextBuffer(join(stateHome, "buffers.json"), label);
     const store = createTurnStore<StoredSlackTurn>(join(stateHome, "turns.json"), {
