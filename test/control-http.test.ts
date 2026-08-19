@@ -341,7 +341,7 @@ describe("session control over HTTP (Phase 3)", () => {
   });
 
   it("without an agent, /control/invoke is not mounted", async () => {
-    const { control } = await fauxControlledAgent([]);
+    const { control } = await fauxControlledAgent([], { boundary: false });
     const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
     const port = await server.listening;
     try {

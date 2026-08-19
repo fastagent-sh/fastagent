@@ -15,6 +15,7 @@ import { piAgentSessionFactory } from "../src/engines/pi/agent-session-factory.t
 import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { defineTool, z } from "../src/pi.ts";
+import { piDefaultTools } from "../src/engines/pi/create.ts";
 import { withSearchTool } from "../src/engines/pi/search-tools.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -79,9 +80,9 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
     const { text } = await collect(agent.invoke({ session: "-1001234567890" }, { text: "who am i" }));
 
     expect(text).toBe("done");
-    // pi stores the record under its own spelling of the id; what matters is that the tool was bound
-    // to THIS turn's session rather than to nothing.
-    expect(seenSessionId).toBe("s-1001234567890");
+    // The CALLER's id, not pi's spelling of it: a tool correlates its own state by the id the
+    // channel minted, and the record name is storage detail.
+    expect(seenSessionId).toBe("-1001234567890");
   });
 
   it("a deferred tool is not offered until something activates it", async () => {
@@ -208,6 +209,9 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
       ],
       {
         systemPrompt: "base",
+        // pi lists skills only when `read` is mounted — a skill is a file the model has to open, so
+        // advertising one it cannot read would be an empty offer. Serving always has it.
+        tools: piDefaultTools(),
         skills: [{ name: "release", description: "Cut a release", filePath: skillFile }] as Parameters<
           typeof piAgentSessionFactory
         >[0]["skills"],

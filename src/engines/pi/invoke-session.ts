@@ -178,8 +178,11 @@ const ENGINE_PRODUCED_NOTHING: AgentEvent = {
 export function createPiAgentFromSession(options: CreatePiAgentFromSessionOptions): Agent {
   const { sessionFactory, lease = inProcessLease(), observer } = options;
 
-  /** Own the session's lifetime: one writer, built here, disposed here whatever the turn did. */
-  async function* turn(scope: Scope, prompt: Prompt, hooks: CancelHooks): AsyncGenerator<AgentEvent> {
+  async function* turn(
+    scope: Scope,
+    prompt: Prompt,
+    { onCancelReady, wasCancelled }: CancelHooks,
+  ): AsyncGenerator<AgentEvent> {
     const release = lease.tryAcquire(scope.session);
     if (!release) {
       // Rejected BEFORE acceptance: no run exists, so the observer sees nothing (replay-safe).
@@ -193,7 +196,7 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
     }
     // The run exists from here: exactly one run_started, exactly one run_settled. The settlement is
     // emitted in the outer finally, immediately before the lease releases, so the observation
-    // plane's "running" window equals the lease window - state() must never read idle while a new
+    // plane's "running" window equals the lease window — state() must never read idle while a new
     // invoke would still be rejected session_busy. A run with no recorded outcome was cancelled by
     // the caller (SPEC: cancellation has no terminal event), which settles as aborted.
     const runId = crypto.randomUUID();
@@ -207,6 +210,57 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         log.warn(`[fastagent] session observer threw (event ${event.type}): ${String(error)}`);
       }
     };
+
+    // run_started is published BEFORE the session is built, so no early event can outrun the
+    // registration — which means the controls have to await the build rather than reject during it:
+    // a dispatch that races it simply queues on the freshly bound session. A build failure rejects
+    // the gate, so a pending dispatch learns why instead of hanging.
+    let sessionReady!: (session: AgentSession) => void;
+    let sessionFailed!: (error: unknown) => void;
+    const bound = new Promise<AgentSession>((resolve, reject) => {
+      sessionReady = resolve;
+      sessionFailed = reject;
+    });
+    bound.catch(() => {}); // observed through the controls only when a dispatch actually happens
+
+    // Stale-controls guard: after settlement pi's steer()/followUp()/abort() would still resolve
+    // (they queue onto a session about to be disposed), which is a silent acceptance of a command
+    // that can never take effect. The check and the engine call share one synchronous block — pi
+    // enqueues at method entry, so a check behind its own await would only shrink the race.
+    let settled = false;
+    const settledError = () => new Error("run already settled; the command cannot take effect");
+    // Aborted classification has two sources, either sufficient: pi's own stopReason "aborted", and
+    // control-plane INTENT — providers do not uniformly attribute an aborted stream, so an abort
+    // that was still in flight when the terminal arrived counts too.
+    let abortsInFlight = 0;
+    let abortSucceeded = false;
+    const controls: RunControls = {
+      async steer(p: Prompt) {
+        const opts = await toPiPromptOptions(p);
+        const session = await bound;
+        if (settled) throw settledError();
+        await session.steer(p.text, opts?.images);
+      },
+      async followUp(p: Prompt) {
+        const opts = await toPiPromptOptions(p);
+        const session = await bound;
+        if (settled) throw settledError();
+        await session.followUp(p.text, opts?.images);
+      },
+      async abort() {
+        const session = await bound;
+        if (settled) throw settledError();
+        abortsInFlight++;
+        try {
+          await session.abort();
+          abortSucceeded = true;
+        } finally {
+          abortsInFlight--;
+        }
+      },
+    };
+    observe({ type: "run_started", timestamp: Date.now(), runId, data: {} }, controls);
+
     try {
       let session: AgentSession;
       try {
@@ -221,17 +275,114 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
                 ...(scope.branchHints !== undefined ? { branchHints: scope.branchHints } : {}),
               },
         );
+        sessionReady(session);
       } catch (error) {
         // Setup failures (session open, auth, a broken definition) are EVENTS, never throws
         // (MUST 2) — and they settle the run as failed: an unrecorded outcome means the caller
         // cancelled, which this is not.
+        sessionFailed(error); // a pending dispatch learns the run cannot take commands
         const terminal = errorToTerminal(error);
         outcome = { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
+        settled = true;
         yield terminal;
         return;
       }
       try {
-        outcome = yield* runOnSession(session, prompt, hooks, runId, observe);
+        const abort = () => session.abort().catch(() => {});
+        onCancelReady(() => void abort());
+        const queue = new EventQueue<AgentEvent>();
+        let finalAssistant: AssistantMessage | undefined;
+        /** Whether any of THIS attempt's answer has been streamed — the only output a retry duplicates. */
+        let streamedAnswer = false;
+        /** Set when a retry is refused because the answer already streamed — carries the ending error. */
+        let retriedAfterAnswer: string | undefined;
+        const unsub = session.subscribe((event) => {
+          if (retriedAfterAnswer !== undefined) return; // decided; the retry's output is not ours
+          if (event.type === "message_end" && event.message.role === "assistant") {
+            finalAssistant = event.message as AssistantMessage;
+          }
+          // pi retries a failed assistant request by DISCARDING that attempt's assistant message and
+          // asking again. Everything the turn achieved before it survives — executed tools keep
+          // their persisted results, and the retry resumes from them — so the only thing a retry can
+          // duplicate is answer text already streamed, which SPEC deltas cannot retract. Refuse it
+          // exactly there: refusing on tool events instead would push the retry out to the CALLER,
+          // who can only re-run the whole prompt and execute the tool a second time.
+          if (event.type === "auto_retry_start" && streamedAnswer) {
+            retriedAfterAnswer = event.errorMessage;
+            // Not synchronously: pi emits this event BEFORE creating the controller that makes its
+            // backoff abortable, so an abort from inside the listener would find nothing to cancel
+            // and the turn would still pay the delay and burn a provider call on a discarded answer.
+            queueMicrotask(() => void abort());
+            return;
+          }
+          const rich = toSessionEvent(event, runId);
+          if (!rich) return;
+          observe(rich);
+          const projected = projectAgentEvent(rich);
+          if (!projected) return;
+          if (projected.type === "text" || projected.type === "thinking") streamedAnswer = true;
+          queue.push(projected);
+        });
+        try {
+          // Resolving prompt options lazy-loads the image pipeline and re-encodes every attachment,
+          // so it both takes time and can throw before any engine work exists to fail. Hence the two
+          // guards, in this order and no earlier: its failure is a turn failure (MUST 2), and the
+          // latch has to be read after the LAST await before the call — the door armed above only
+          // stops a RUNNING session, so a consumer who walked away during the build or the resize
+          // would knock on an idle one and have the turn start anyway.
+          let promptOptions: Awaited<ReturnType<typeof toPiPromptOptions>>;
+          try {
+            promptOptions = await toPiPromptOptions(prompt);
+          } catch (error) {
+            const terminal = errorToTerminal(error);
+            outcome = { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
+            settled = true;
+            yield terminal;
+            return;
+          }
+          if (wasCancelled()) {
+            settled = true;
+            await abort();
+            return; // cancelled: the outer finally settles it as aborted
+          }
+          const run = session.prompt(prompt.text, promptOptions);
+          yield* queue.drainUntil(run);
+          let terminal: AgentEvent;
+          try {
+            await run;
+            terminal =
+              retriedAfterAnswer !== undefined
+                ? { type: "failed", details: retriedAfterAnswer, retryable: true }
+                : finalAssistant
+                  ? toTerminal(finalAssistant)
+                  : ENGINE_PRODUCED_NOTHING;
+          } catch (error) {
+            terminal = errorToTerminal(error);
+          }
+          if ((abortSucceeded || abortsInFlight > 0) && terminal.type === "failed") {
+            terminal = { type: "failed", details: terminal.details, retryable: false, code: ABORTED_CODE };
+          }
+          if (terminal.type === "failed") {
+            outcome =
+              terminal.code === ABORTED_CODE
+                ? // Carry the detail: an independent error that raced an accepted abort must stay
+                  // diagnosable in the settlement, which is what audit consumers read.
+                  { status: "aborted", error: { message: terminal.details, retryable: false } }
+                : {
+                    status: "failed",
+                    error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },
+                  };
+          } else {
+            outcome = { status: "completed" };
+          }
+          // Commands become ineffective the moment the run resolved — not at the outer finally,
+          // which sits behind a consumer-paced `yield`.
+          settled = true;
+          yield terminal;
+        } finally {
+          settled = true;
+          unsub();
+        }
       } finally {
         try {
           session.dispose();
@@ -240,151 +391,11 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         }
       }
     } finally {
+      settled = true;
       observe({ type: "run_settled", timestamp: Date.now(), runId, data: outcome ?? { status: "aborted" } });
       release(); // after the settlement, so the next invoke for this session cannot outrun it
     }
   }
 
   return { invoke: (scope, prompt) => cancellableStream((hooks) => turn(scope, prompt, hooks)) };
-}
-
-/**
- * One turn on a session someone else owns: subscribe, prompt, stream, settle. Returns the run's
- * outcome so the caller can publish exactly one settlement around it.
- */
-async function* runOnSession(
-  session: AgentSession,
-  prompt: Prompt,
-  { onCancelReady, wasCancelled }: CancelHooks,
-  runId: string,
-  observe: (event: SessionEvent | null, run?: RunControls) => void,
-): AsyncGenerator<AgentEvent, RunSettledEvent["data"] | undefined> {
-  const abort = () => session.abort().catch(() => {});
-  onCancelReady(() => void abort());
-  const queue = new EventQueue<AgentEvent>();
-  let finalAssistant: AssistantMessage | undefined;
-  /** Whether any of THIS attempt's answer has been streamed — the only output a retry would duplicate. */
-  let streamedAnswer = false;
-  /** Set when a retry is refused because the answer already streamed — carries the error that ends it. */
-  let retriedAfterAnswer: string | undefined;
-  // Stale-controls guard: after settlement pi's steer()/followUp()/abort() would still resolve (they
-  // queue onto a session about to be disposed), which is a silent acceptance of a command that can
-  // never take effect. The check and the engine call share one synchronous block — pi enqueues at
-  // method entry, so a check behind its own await would only shrink the race, not close it.
-  let settled = false;
-  const settledError = () => new Error("run already settled; the command cannot take effect");
-  // Aborted classification has two sources, either sufficient: pi's own stopReason "aborted", and
-  // control-plane INTENT — providers do not uniformly attribute an aborted stream, so an abort that
-  // was still in flight when the terminal arrived counts too.
-  let abortsInFlight = 0;
-  let abortSucceeded = false;
-  const controls: RunControls = {
-    async steer(p: Prompt) {
-      const opts = await toPiPromptOptions(p);
-      if (settled) throw settledError();
-      await session.steer(p.text, opts?.images);
-    },
-    async followUp(p: Prompt) {
-      const opts = await toPiPromptOptions(p);
-      if (settled) throw settledError();
-      await session.followUp(p.text, opts?.images);
-    },
-    async abort() {
-      if (settled) throw settledError();
-      abortsInFlight++;
-      try {
-        await session.abort();
-        abortSucceeded = true;
-      } finally {
-        abortsInFlight--;
-      }
-    },
-  };
-  observe({ type: "run_started", timestamp: Date.now(), runId, data: {} }, controls);
-  const unsub = session.subscribe((event) => {
-    if (retriedAfterAnswer !== undefined) return; // the turn is decided; the retry's output is not ours
-    if (event.type === "message_end" && event.message.role === "assistant") {
-      finalAssistant = event.message as AssistantMessage;
-    }
-    // pi retries a failed assistant request by DISCARDING that attempt's assistant message and asking
-    // again. Everything the turn achieved before it survives — executed tools keep their persisted
-    // results, and the retry resumes from them — so the only thing a retry can duplicate is answer
-    // text this L0 already streamed, which SPEC deltas cannot retract. Refuse it exactly there:
-    // refusing on tool events instead would push the retry out to the CALLER, who can only re-run the
-    // whole prompt and execute the tool a second time.
-    if (event.type === "auto_retry_start" && streamedAnswer) {
-      retriedAfterAnswer = event.errorMessage;
-      // Not synchronously: pi emits this event BEFORE creating the controller that makes its backoff
-      // abortable, so an abort from inside the listener would find nothing to cancel and the turn
-      // would still pay the full delay and burn a provider call on an answer we must discard.
-      queueMicrotask(() => void abort());
-      return;
-    }
-    const rich = toSessionEvent(event, runId);
-    if (!rich) return;
-    observe(rich);
-    const projected = projectAgentEvent(rich);
-    if (!projected) return;
-    if (projected.type === "text" || projected.type === "thinking") streamedAnswer = true;
-    queue.push(projected);
-  });
-  try {
-    // Resolving prompt options lazy-loads the image pipeline and re-encodes every attachment, so it
-    // both takes time and can throw before any engine work exists to fail. Hence the two guards, in
-    // this order and no earlier: its failure is a turn failure (MUST 2), and the latch has to be read
-    // after the LAST await before the call — the door armed above only stops a RUNNING session, so a
-    // consumer who walked away during the build or the resize would knock on an idle one and have
-    // the turn start anyway.
-    let options: Awaited<ReturnType<typeof toPiPromptOptions>>;
-    try {
-      options = await toPiPromptOptions(prompt);
-    } catch (error) {
-      const terminal = errorToTerminal(error);
-      settled = true;
-      yield terminal;
-      return { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
-    }
-    if (wasCancelled()) {
-      settled = true;
-      await abort();
-      return undefined; // cancelled: the caller settles it as aborted
-    }
-    const run = session.prompt(prompt.text, options);
-    yield* queue.drainUntil(run);
-    let terminal: AgentEvent;
-    try {
-      await run;
-      terminal =
-        retriedAfterAnswer !== undefined
-          ? { type: "failed", details: retriedAfterAnswer, retryable: true }
-          : finalAssistant
-            ? toTerminal(finalAssistant)
-            : ENGINE_PRODUCED_NOTHING;
-    } catch (error) {
-      terminal = errorToTerminal(error);
-    }
-    if ((abortSucceeded || abortsInFlight > 0) && terminal.type === "failed") {
-      terminal = { type: "failed", details: terminal.details, retryable: false, code: ABORTED_CODE };
-    }
-    // Commands become ineffective the moment the run resolved — not at the caller's finally, which
-    // sits behind a consumer-paced `yield`.
-    settled = true;
-    let settlement: RunSettledEvent["data"] = { status: "completed" };
-    if (terminal.type === "failed") {
-      settlement =
-        terminal.code === ABORTED_CODE
-          ? // Carry the detail: an independent error that raced an accepted abort must stay
-            // diagnosable in the settlement, which is what audit consumers read.
-            { status: "aborted", error: { message: terminal.details, retryable: false } }
-          : {
-              status: "failed",
-              error: { code: terminal.code, message: terminal.details, retryable: terminal.retryable },
-            };
-    }
-    yield terminal;
-    return settlement;
-  } finally {
-    settled = true;
-    unsub();
-  }
 }

@@ -452,6 +452,20 @@ async function makeGated(responses: FauxResponseStep[]) {
   return { agent, control, gate };
 }
 
+/** An answer long enough that a few of them exceed pi's keep-recent window (~20k tokens) — below
+ *  that nothing is summarizable and compaction is correctly refused, so a compactable fixture has to
+ *  be genuinely large rather than merely multi-turn. */
+const LONG_ANSWER = "the quick brown fox jumps over the lazy dog ".repeat(1200);
+
+/** Drive enough turns that the session has history BEHIND the keep-recent window. */
+async function withCompactableHistory(
+  agent: { invoke: (s: { session: string }, p: { text: string }) => AsyncIterable<AgentEvent> },
+  session: string,
+  turns = 3,
+): Promise<void> {
+  for (let i = 0; i < turns; i++) await drain(agent.invoke({ session }, { text: `turn ${i}` }));
+}
+
 /** Drive invoke in the background; resolve with all events once settled. */
 function drive(
   agent: { invoke: (s: { session: string }, p: { text: string }) => AsyncIterable<AgentEvent> },
@@ -1168,14 +1182,10 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("a compaction bounds the model context, not the settings history", async () => {
     // The active-path walk is not bounded by the compaction the way the CONTEXT read is: an
     // override recorded before one is a preference, and it still governs the session after it.
-    const { agent, control } = await makeBoundary([
-      fauxAssistantMessage("a long answer worth compacting"),
-      fauxAssistantMessage("another long answer"),
-      fauxAssistantMessage("summary of the conversation"),
-    ]);
+    const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
     await drain(agent.invoke({ session: "sNavCompact" }, { text: "tell me things" }));
     expect(await control.dispatch("sNavCompact", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
-    await drain(agent.invoke({ session: "sNavCompact" }, { text: "more things" }));
+    await withCompactableHistory(agent, "sNavCompact");
     const finished = (async () => {
       for await (const ev of control.events("sNavCompact")) if (ev.type === "compaction_finished") return ev;
     })();
@@ -1364,11 +1374,8 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("compact is accept-fast: ok on admission, outcome via compaction_finished, then lease free", async () => {
-    const { agent, control } = await makeBoundary([
-      fauxAssistantMessage("a long answer worth compacting"),
-      fauxAssistantMessage("summary of the conversation"), // consumed by harness.compact()
-    ]);
-    await drain(agent.invoke({ session: "sB4" }, { text: "tell me things" }));
+    const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
+    await withCompactableHistory(agent, "sB4");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
       for await (const ev of control.events("sB4")) {
@@ -1397,13 +1404,13 @@ describe("session control (Phase 2b): boundary mutations", () => {
       releaseSummary = r;
     });
     const { agent, control } = await makeBoundary([
-      fauxAssistantMessage("seed"),
+      ...Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)),
       (async (_c: unknown, _o: unknown, _s: unknown, _m: unknown) => {
         await gate; // the summarization model call hangs until the test releases it
         return fauxAssistantMessage("the summary");
       }) as never,
     ]);
-    await drain(agent.invoke({ session: "sB8" }, { text: "hi" }));
+    await withCompactableHistory(agent, "sB8");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
       for await (const ev of control.events("sB8")) {
@@ -1458,7 +1465,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {
     // Both are model calls a client must be able to stop: `abort` is the door out of `compacting`.
     const { agent, control } = await makeBoundary([
-      fauxAssistantMessage("seed"),
+      ...Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)),
       (async (_c: unknown, o: { signal?: AbortSignal } | undefined) => {
         // The summarization call hangs until aborted — the only way this test's compaction ends.
         // Checked up front too: the abort may land BEFORE this factory runs, and an
@@ -1471,7 +1478,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
         return fauxAssistantMessage("unreachable");
       }) as never,
     ]);
-    await drain(agent.invoke({ session: "sB9" }, { text: "hi" }));
+    await withCompactableHistory(agent, "sB9");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
       for await (const ev of control.events("sB9")) {
@@ -1499,8 +1506,9 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("a failing compaction is ACCEPTED then closed with finished{error}; nothing durable, lease free", async () => {
     // ONE response seeds the conversation; the compaction's summarization call then finds the faux
     // queue empty and throws — the deterministic model-call failure, AFTER acceptance.
-    const { agent, control } = await makeBoundary([fauxAssistantMessage("seed")]);
-    await drain(agent.invoke({ session: "sB6" }, { text: "hi" }));
+    // Exactly enough answers for the history — the summarization call then finds the queue empty.
+    const { agent, control } = await makeBoundary(Array.from({ length: 3 }, () => fauxAssistantMessage(LONG_ANSWER)));
+    await withCompactableHistory(agent, "sB6");
     const seen: SessionEvent[] = [];
     const watching = (async () => {
       for await (const ev of control.events("sB6")) {

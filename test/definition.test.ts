@@ -272,6 +272,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     // pi appends its own working-directory line; what matters is that nothing else was imposed.
+    // pi appends its own working-directory line; what matters is that nothing else was imposed.
     expect((seen ?? "").split("\nCurrent working directory:")[0]).toBe("You are a support bot.");
     expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
   });
