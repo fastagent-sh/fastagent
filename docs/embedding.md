@@ -136,7 +136,7 @@ createPiAgent({
 
   // ── Tier 2: injectable ports (default values run fine) ──
   sessions,   // PiSessionStore  — persistence (default: in-memory)
-  env,        // ExecutionEnv    — harness environment (default: local Node cwd)
+  env,        // ExecutionEnv    — engine environment (default: local Node cwd)
   lease,      // Lease           — concurrency floor (default: in-process fail-fast)
   providers,  // Provider[]      — your own model source (see §5)
 });

@@ -224,7 +224,7 @@ its schema stays out of every request (and the model's sight) until discovered. 
 is mounted, fastagent automatically mounts the built-in **`search_tools`** loader (an agent's own tool
 named `search_tools` wins — the author owns the concept then): the model searches by keywords, matching
 tools are activated mid-turn, and the activation is recorded in the session, so it survives fastagent's
-per-invoke harness rebuild for the rest of that conversation.
+per-invoke session rebind for the rest of that conversation.
 
 Costs and behavior to know:
 
@@ -253,7 +253,7 @@ Costs and behavior to know:
   it.
 - **`fastagent chat` emulates deferral** like the serving path (what you iterate is what you serve):
   the session starts with deferred tools inactive, the same `search_tools` loader discovers and
-  activates them (bridged to pi's session instead of the serving harness), and the prompt is
+  activates them (bridged to chat's resident session instead of the served one), and the prompt is
   identical. One divergence: chat activations do not survive `/new`/`/resume` — pi's chat session
   does not record them, so a resumed conversation re-discovers via `search_tools` (on the serving
   path activations persist in the session for the conversation's life).
@@ -518,7 +518,7 @@ so the next turn hangs off `targetId` instead of the old leaf — which is also 
 come to exist. A `targetId` that is not one of the ids `entries()` published rejects
 `invalid_command`; gate on `capabilities().navigate`.
 
-Overrides persist in the session record and every later turn's fresh harness applies them — on any
+Overrides persist in the session record and every later turn's fresh session binding applies them — on any
 serving path, channels included. One exception: a recorded thinking level the session's CURRENT
 model cannot do is clamped by pi's own clamp instead of riding a run that would ignore it. `set_model`
 re-records the clamped level at the boundary, so `state()` and the execution agree and the client gets
