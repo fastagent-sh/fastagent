@@ -118,6 +118,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     longConnectionChannels,
     hasTimeTriggers,
     modelAuth,
+    modelKeyInDefinition,
     authPath,
     container,
     port,
@@ -174,6 +175,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         port,
         requireTunnel: requestedTunnel,
         modelAuth,
+        modelKeyInDefinition,
         authPath,
         channels,
         longConnectionChannels,
@@ -232,6 +234,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         workspace,
         name: serviceName,
         modelAuth,
+        modelKeyInDefinition,
         authPath,
         channels,
         longConnectionChannels,
@@ -346,6 +349,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
         agentPrefix: container.agentPrefix,
         name: acName,
         modelAuth,
+        modelKeyInDefinition,
         authPath,
         channels,
         extraSecrets,
@@ -445,6 +449,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       agentPrefix: container.agentPrefix,
       appName,
       modelAuth,
+      modelKeyInDefinition,
       authPath,
       channels,
       longConnectionChannels,
@@ -552,6 +557,7 @@ async function runDeployDocker(
     port: number;
     requireTunnel: boolean;
     modelAuth: string | undefined;
+    modelKeyInDefinition: boolean;
     authPath: string;
     channels: ChannelKind[];
     longConnectionChannels: string[];
@@ -565,6 +571,7 @@ async function runDeployDocker(
     port,
     requireTunnel,
     modelAuth,
+    modelKeyInDefinition,
     authPath,
     channels,
     longConnectionChannels,
@@ -572,6 +579,7 @@ async function runDeployDocker(
   } = params;
   const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
     modelAuth,
+    modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
     longConnectionChannels,
@@ -626,6 +634,7 @@ async function runDeployFly(
     agentPrefix: string;
     appName: string;
     modelAuth: string | undefined;
+    modelKeyInDefinition: boolean;
     authPath: string;
     channels: ChannelKind[];
     longConnectionChannels: string[];
@@ -639,6 +648,7 @@ async function runDeployFly(
     agentPrefix,
     appName,
     modelAuth,
+    modelKeyInDefinition,
     authPath,
     channels,
     longConnectionChannels,
@@ -654,6 +664,7 @@ async function runDeployFly(
   const region = parseFlyRegion(await readFile(flyTomlPath, "utf8")) ?? "iad";
   const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
     modelAuth,
+    modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
     longConnectionChannels,
@@ -703,6 +714,7 @@ async function runDeployAgentcore(
     agentPrefix: string;
     name: string;
     modelAuth: string | undefined;
+    modelKeyInDefinition: boolean;
     authPath: string;
     channels: ChannelKind[];
     extraSecrets: string[];
@@ -710,9 +722,21 @@ async function runDeployAgentcore(
     needsForwarder: boolean;
   },
 ): Promise<void> {
-  const { agentDir, workspace, agentPrefix, name, modelAuth, authPath, channels, extraSecrets, selfSchedule } = params;
+  const {
+    agentDir,
+    workspace,
+    agentPrefix,
+    name,
+    modelAuth,
+    modelKeyInDefinition,
+    authPath,
+    channels,
+    extraSecrets,
+    selfSchedule,
+  } = params;
   const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
     modelAuth,
+    modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
     extraSecrets,
@@ -799,6 +823,7 @@ async function runDeployRailway(
   params: ResolvedPlacement & {
     name: string;
     modelAuth: string | undefined;
+    modelKeyInDefinition: boolean;
     authPath: string;
     channels: ChannelKind[];
     longConnectionChannels: string[];
@@ -813,6 +838,7 @@ async function runDeployRailway(
     workspace,
     name,
     modelAuth,
+    modelKeyInDefinition,
     authPath,
     channels,
     longConnectionChannels,
@@ -828,6 +854,7 @@ async function runDeployRailway(
 
   const { secrets, missingSecrets, needsModelCredential } = assembleSecrets({
     modelAuth,
+    modelKeyInDefinition,
     authFile: (await exists(authPath)) ? await readFile(authPath) : undefined,
     channels,
     longConnectionChannels,

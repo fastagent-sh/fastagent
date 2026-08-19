@@ -18,12 +18,13 @@ import { resolveAuthPath } from "../engines/pi/config.ts";
 import { type ResolvedPlacement, resolveSecretsDir, resolveStateRoot } from "../paths.ts";
 import { inspectChannels } from "../engines/pi/channel.ts";
 import { discoverScheduleFiles } from "../schedule/discover.ts";
-import { createPiModelRuntime, probeAuthSource } from "../engines/pi/models.ts";
+import { createPiModelRuntime, modelCredentialCarry, probeAuthSource } from "../engines/pi/models.ts";
 import { CHANNEL_KINDS, type ChannelKind } from "../scaffold/add-channel.ts";
 import { exists } from "../paths.ts";
 import { detectRuntime, readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
 import { type ContainerInput, isGeneratedDockerfile, isGeneratedDockerignore } from "./container.ts";
+import { isEnvKey } from "./secrets.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). Host-neutral advisories. */
 interface DeployMessage {
@@ -43,9 +44,15 @@ interface DeployFacts {
    *  has no external wake-up, so the deployment must keep one machine running: the fly plan forces
    *  `min_machines_running=1`, the railway runbook forbids App Sleeping. */
   hasTimeTriggers: boolean;
-  /** What satisfies model auth locally ({@link probeAuthSource}) — an env-var name, an OAuth/stored label,
-   *  or undefined. Drives the runbook's secret guidance and `--run`'s credential carry. */
+  /** What satisfies model auth locally — an env-var name, an OAuth/stored label, or undefined. Drives the
+   *  runbook's secret guidance and `--run`'s credential carry. For a models.json endpoint keyed from the
+   *  environment this is the VARIABLE NAME (see {@link modelCredentialCarry}), not the display label, so
+   *  the value carries like any provider key. */
   modelAuth: string | undefined;
+  /** The definition itself carries the model key (a models.json literal `apiKey`, or a `!command` run on
+   *  the host), so there is nothing for `--run` to carry AND nothing to gate: `fastagent login` cannot
+   *  serve a custom provider, so gating on it would strand a correctly configured agent. */
+  modelKeyInDefinition: boolean;
   /** The project-level auth file `--run` reads to carry the credential (probed with the same path). */
   authPath: string;
   /** Container facts shared by the plan and the generated Dockerfile — ONE source, so they can't drift. */
@@ -198,9 +205,19 @@ export async function preflightDeploy(input: {
   // surface too (its models.json travels into the image), so a custom endpoint is not read as an unknown
   // provider — this probe feeds the gate that decides whether `--run` may proceed.
   const authPath = resolveAuthPath(agentDir, authPathFlag);
-  const modelAuth = modelSpec
-    ? await probeAuthSource(await createPiModelRuntime({ agentDir, authPath }), modelSpec)
-    : undefined;
+  const models = await createPiModelRuntime({ agentDir, authPath });
+  let modelAuth = modelSpec ? await probeAuthSource(models, modelSpec) : undefined;
+  let modelKeyInDefinition = false;
+  // probeAuthSource answers "is it authenticated here", which is not the deploy question ("how does the
+  // credential REACH the host"). It reports every models.json endpoint as "configured API key" — not an
+  // env-var name — so without this the gate below sees no credential and stops the deploy with two
+  // remedies that are both wrong for such an agent: `fastagent login` cannot serve a custom provider,
+  // and the key is already in the environment.
+  if (modelSpec && !isEnvKey(modelAuth)) {
+    const carry = modelCredentialCarry(models, modelSpec);
+    if (carry.envVar) modelAuth = carry.envVar;
+    else modelKeyInDefinition = carry.inDefinition;
+  }
 
   // Container facts (shared by every host) + the warnings that follow. The facts describe the AGENT —
   // its package.json/runtime/lockfile drive the image's install step — never the workspace's (the bake
@@ -488,6 +505,7 @@ export async function preflightDeploy(input: {
     longConnectionChannels,
     hasTimeTriggers,
     modelAuth,
+    modelKeyInDefinition,
     authPath,
     container,
     port,

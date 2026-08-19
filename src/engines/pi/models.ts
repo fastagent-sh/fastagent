@@ -9,6 +9,7 @@ import { type Api, type Model, type Models, type Provider, defaultProviderAuthCo
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
+import { providerOf } from "./config.ts";
 import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
 import { AGENT_MODELS_FILE, resolveStateRoot } from "../../paths.ts";
 
@@ -93,6 +94,32 @@ export async function createPiModelRuntime(
   if (error) throw new Error(error);
   for (const provider of options.providers ?? []) runtime.registerNativeProvider(provider);
   return runtime;
+}
+
+/**
+ * How a model's credential will REACH a deployed agent — the question `deploy` asks, which
+ * {@link probeAuthSource} cannot answer: it flattens every models.json endpoint to the display label
+ * "configured API key", so a self-hosted endpoint looks credential-less to the deploy gate even when
+ * its key is sitting in an env var.
+ *
+ * - `envVar`: an environment variable backs it, BY NAME — the shape `deploy` already understands, so
+ *   the value carries as a host secret with no extra declaration from the author.
+ * - `inDefinition`: the definition itself carries it (a literal `apiKey`, or a `!command` run on the
+ *   host). Nothing for `deploy` to carry — and nothing to gate on either, which is the point: the
+ *   `fastagent login` remedy is meaningless for a provider login cannot serve.
+ *
+ * Neither set = a stored credential or nothing at all; the existing auth.json / gate paths decide.
+ */
+export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { envVar?: string; inDefinition: boolean } {
+  const status = runtime.getProviderAuthStatus(providerOf(spec));
+  if (!status.configured) return { inDefinition: false };
+  // An env-var name is only useful downstream if it IS one: `"${A}_${B}"` interpolation resolves from
+  // the environment but has no single name to carry, so it falls through to the definition-carried
+  // branch, where the author's `deploy.secrets` is the mechanism.
+  if (status.source === "environment" && status.label && /^[A-Z][A-Z0-9_]*$/.test(status.label)) {
+    return { envVar: status.label, inDefinition: false };
+  }
+  return { inDefinition: status.source !== "stored" };
 }
 
 /** Per-provider auth status for the first-run model picker: usable now (with the source label), not

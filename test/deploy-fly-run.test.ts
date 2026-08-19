@@ -276,6 +276,23 @@ describe("deploy/secrets: assembleSecrets (credential wiring)", () => {
     expect(r.missingSecrets).toEqual([]);
   });
 
+  it("a definition-carried model key (models.json) satisfies the gate without carrying a secret", () => {
+    // The regression this pins: a models.json endpoint has no env-key name and no auth.json, so it fell
+    // into needsModelCredential and `--run` stopped with two impossible remedies — `fastagent login`
+    // has no flow for a custom provider, and there is no provider env key to set. The key is already
+    // inside the definition, which the image ships.
+    const r = assembleSecrets({
+      modelAuth: "configured API key",
+      modelKeyInDefinition: true,
+      authFile: undefined,
+      channels: [],
+      env: {},
+    });
+    expect(r.needsModelCredential).toBe(false);
+    expect(r.secrets).toEqual({}); // nothing to carry — and nothing invented
+    expect(r.missingSecrets).toEqual([]);
+  });
+
   it("channel secrets come from env; never minted (a re-run is stable; a human-shared secret stays known)", () => {
     const env = { OPENAI_API_KEY: "k", TELEGRAM_BOT_TOKEN: "bot", TELEGRAM_SECRET_TOKEN: "sec" };
     const r = assembleSecrets({ modelAuth: "OPENAI_API_KEY", authFile: undefined, channels: ["telegram"], env });

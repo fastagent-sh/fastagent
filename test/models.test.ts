@@ -4,7 +4,13 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
-import { createPiModelRuntime, probeApiKey, probeAuthSource, providerAuthStatuses } from "../src/engines/pi/models.ts";
+import {
+  createPiModelRuntime,
+  modelCredentialCarry,
+  probeApiKey,
+  probeAuthSource,
+  providerAuthStatuses,
+} from "../src/engines/pi/models.ts";
 import { resolveModel } from "../src/engines/pi/config.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
@@ -139,9 +145,34 @@ describe("models.json: definition-local custom endpoints (createPiModelRuntime)"
     // stays out of the file, which is what lets models.json be committed and baked into an image.
     process.env.FASTAGENT_TEST_GW_KEY = "sk-from-env";
     try {
-      expect(await probeAuthSource(runtime, "mygw/deepseek-v3")).toBeDefined();
+      // Assert the SHAPE, not just presence: probeAuthSource flattens every models.json endpoint to this
+      // display label, which is why `deploy` cannot branch on it (see modelCredentialCarry below).
+      expect(await probeAuthSource(runtime, "mygw/deepseek-v3")).toBe("configured API key");
+      // The deploy-facing question — how does the credential REACH the host — answers with the env-var
+      // NAME, the shape assembleSecrets already carries.
+      expect(modelCredentialCarry(runtime, "mygw/deepseek-v3")).toEqual({
+        envVar: "FASTAGENT_TEST_GW_KEY",
+        inDefinition: false,
+      });
     } finally {
       delete process.env.FASTAGENT_TEST_GW_KEY;
+    }
+  });
+
+  it("a key written into models.json (literal or command) is carried BY the definition, not by deploy", async () => {
+    // These travel inside the image with the file itself. Reported as such so the deploy gate does not
+    // demand a credential that is already there — its remedies (`fastagent login`, a provider env key)
+    // are both impossible for a custom provider.
+    for (const apiKey of ["sk-literal-in-file", "!echo sk-from-command"]) {
+      const dir = await agentWith(
+        JSON.stringify({
+          providers: {
+            mygw: { baseUrl: "http://x/v1", api: "openai-completions", apiKey, models: [{ id: "m1" }] },
+          },
+        }),
+      );
+      const runtime = await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") });
+      expect(modelCredentialCarry(runtime, "mygw/m1")).toEqual({ inDefinition: true });
     }
   });
 

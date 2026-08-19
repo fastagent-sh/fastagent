@@ -118,7 +118,6 @@ The provider id joins the model id into a normal spec, usable everywhere a spec 
 ```ts
 export default defineConfig({
   model: "mygw/deepseek-v3",
-  deploy: { secrets: ["MYGW_API_KEY"] },
 });
 ```
 
@@ -127,9 +126,23 @@ Custom endpoints are **additive** — built-in providers stay available alongsid
 ### Keys stay out of the file
 
 `apiKey` (and any `headers` value) resolves at request time: `"$MYGW_API_KEY"` reads an environment
-variable, `"!cmd"` runs a command and uses its stdout, anything else is a literal. Use the env form
-and list the NAME in `deploy.secrets` (above), so `deploy` carries the value to the host — the file
-itself stays safe to commit and to bake into an image.
+variable, `"!cmd"` runs a command and uses its stdout, anything else is a literal. Prefer the env
+form — the file then stays safe to commit and to bake into an image.
+
+`deploy` recognizes the variable backing the selected model and carries its value to the host like any
+provider key, listing it in the runbook and refusing `--run` when it has no local value. You do not
+need to declare it. `deploy.secrets` remains for the variables `deploy` cannot infer — a key used only
+in `headers`, or a value assembled from several variables (`"${A}_${B}"`):
+
+```ts
+export default defineConfig({
+  model: "mygw/deepseek-v3",
+  deploy: { secrets: ["MYGW_PORTKEY_KEY"] },
+});
+```
+
+A key written INTO `models.json` (a literal, or a `!command` resolved on the host) travels with the
+file itself, so there is nothing to carry — and `deploy` does not ask for one.
 
 ### Routing a built-in provider through a proxy
 
