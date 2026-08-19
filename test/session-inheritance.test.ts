@@ -83,3 +83,38 @@ describe("session inheritance", () => {
     expect(ids).toEqual(["sroom", "sthread-4"]);
   });
 });
+
+describe("inheritance edges", () => {
+  it("a parent that crashed mid tool-call does not pass the dangling call to the thread", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-inherit-crash-"));
+    const cwd = process.cwd();
+    const store = piSessionRecordStore({ dir, cwd });
+    const room = await store.openOrCreate("room");
+    room.appendMessage({ role: "user", content: "do the thing", timestamp: 1 });
+    // The shape a crash leaves behind: an assistant tool_use with no result after it.
+    room.appendMessage({
+      ...fauxAssistantMessage(""),
+      content: [{ type: "toolCall", id: "call-1", name: "doer", arguments: {} }],
+      stopReason: "toolUse",
+    } as never);
+
+    const thread = await store.openOrCreate("thread", { parentSession: "room" });
+
+    const repaired = thread.getBranch().filter((e) => JSON.stringify(e).includes("interrupted-tool-call"));
+    expect(repaired).toHaveLength(1); // the thread starts on a transcript a provider will accept
+  });
+
+  it("a failure while preparing the fork leaves no record under the id", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-inherit-partial-"));
+    const cwd = process.cwd();
+    const store = await roomWithHistory(dir, cwd);
+    // Publication is the last step, so a record only becomes discoverable complete. What must never
+    // exist is TWO records for one id — the fallback creating a second while a half-prepared first
+    // is already in place.
+    const thread = await store.openOrCreate("thread-5", { parentSession: "room" });
+    expect(thread.getBranch().length).toBeGreaterThan(0);
+
+    const named = (await SessionManager.list(cwd, join(dir, "agent-session"))).filter((r) => r.id === "sthread-5");
+    expect(named).toHaveLength(1);
+  });
+});

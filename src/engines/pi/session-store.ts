@@ -6,8 +6,8 @@
  * write the same file format; they differ in which pi class reads it. That one retires with the
  * harness L0.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
@@ -94,6 +94,9 @@ export function piSessionId(sessionId: string): string {
 export function piSessionRecordStore(options: { dir: string; cwd?: string }): PiSessionRecordStore {
   const cwd = options.cwd ?? process.cwd();
   const own = join(options.dir, OWN_RECORDS_DIR);
+  /** Where a forked record is finished before it becomes discoverable. A SUBDIRECTORY of the store,
+   *  so `list()` (one level, `*.jsonl`) never sees a record that is still being prepared. */
+  const staging = join(own, ".staging");
   /** Fork the named parent into `id`, or answer undefined so the caller starts empty. Every failure
    *  is a warn: a thread must not lose its first turn to an inheritance edge. */
   const inheritInto = async (id: string, inherit: SessionInheritance): Promise<SessionManager | undefined> => {
@@ -109,14 +112,24 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     }
     try {
       const parentDir = found.id === parentId ? own : options.dir;
-      return forkForInheritance({
-        parent: SessionManager.open(found.path, parentDir),
-        parentDir,
+      mkdirSync(staging, { recursive: true });
+      const staged = forkForInheritance({
+        // A parent that crashed mid tool-execution would otherwise pass its dangling tool_use down
+        // to the child, whose very first request the provider then rejects.
+        parent: reconcileInterruptedToolCalls(SessionManager.open(found.path, parentDir)),
         id,
         cwd,
-        dir: own,
+        stagingDir: staging,
         branchHints: inherit.branchHints,
       });
+      if (!staged) return undefined;
+      // Publish only once the record is complete: same-filesystem rename, so a reader sees the whole
+      // thing or nothing at all.
+      const stagedFile = staged.getSessionFile();
+      if (!stagedFile) return staged; // non-persisting backend: nothing to publish
+      const target = join(own, basename(stagedFile));
+      renameSync(stagedFile, target);
+      return SessionManager.open(target, own);
     } catch (error) {
       // Unattributed on purpose: this spans reading the parent AND writing the child.
       log.warn(
@@ -263,7 +276,15 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
   const cwd = options.cwd ?? process.cwd();
   const live = new Map<string, SessionManager>();
   return {
-    async openOrCreate(sessionId) {
+    async openOrCreate(sessionId, inherit) {
+      if (inherit) {
+        // Inheritance forks a RECORD, and this backend has none: pi's createBranchedSession answers
+        // nothing without a file. Stated rather than silently ignored — a thread that should have
+        // started from its room would otherwise look like one that simply had nothing to say.
+        log.warn(
+          `[fastagent] session "${sessionId}" names a parent, but the in-memory store cannot inherit — starting empty`,
+        );
+      }
       // Keyed by the CALLER's id: the encoding exists to satisfy pi's filename rule, and in memory
       // there are no filenames - two rooms whose encodings collide must still not share a map slot.
       const existing = live.get(sessionId);

@@ -168,23 +168,27 @@ function markInheritanceWindow(child: SessionManager): void {
 }
 
 /**
- * Fork `parent` into a new record named `id`, up to the branch point the hints locate.
+ * Fork `parent` into a record named `id`, up to the branch point the hints locate, in `stagingDir`.
  *
  * Two pi calls rather than one, because neither alone does it: `createBranchedSession` copies
  * exactly the path to an entry but names the result with a generated id, and `forkFrom` takes an id
  * but copies everything. The intermediate is deleted; it exists for one call.
  *
+ * STAGED, not published: the caller finishes the record (crash reconciliation) and moves it into
+ * place. Publishing here and finishing after would leave a half-prepared record under the id on any
+ * later failure — and the fallback path would then create a SECOND record with the same id, making
+ * which one a lookup finds a matter of directory order.
+ *
  * Returns undefined when inheritance cannot be honored — the caller starts the session empty.
  */
 export function forkForInheritance(options: {
   parent: SessionManager;
-  parentDir: string;
   id: string;
   cwd: string;
-  dir: string;
+  stagingDir: string;
   branchHints?: string[];
 }): SessionManager | undefined {
-  const { parent, id, cwd, dir } = options;
+  const { parent, id, cwd, stagingDir: dir } = options;
   const path = parent.getBranch() as unknown as Entry[];
   const leaf = path[path.length - 1];
   if (!leaf) return undefined; // an empty parent has nothing to inherit
