@@ -168,6 +168,61 @@ function markInheritanceWindow(child: SessionManager): void {
 }
 
 /**
+ * The branch point this inheritance should copy up to, and the parent's path — the decision half,
+ * shared by both backends because WHERE a thread branches is policy, not storage.
+ */
+export function inheritanceCut(parent: SessionManager, branchHints?: string[]): { at: string } | undefined {
+  const path = parent.getBranch() as unknown as Entry[];
+  const leaf = path[path.length - 1];
+  if (!leaf) return undefined; // an empty parent has nothing to inherit
+  const hints = branchHints ?? [];
+  const at = locateBranchPoint(path, hints);
+  if (at === undefined && hints.length > 0) {
+    log.warn("[fastagent] no branch hint matched in the parent session — inheriting from its present");
+  }
+  return { at: at ?? leaf.id };
+}
+
+/**
+ * Copy the parent's path up to `at` into `child`, entry by entry — what a backend with no FILE to
+ * fork has to do instead. Kinds pi models as facts about an entry rather than positions (labels,
+ * the session name) are not copied: they describe the parent's record, not the thread's history.
+ */
+export function copyBranchInto(parent: SessionManager, child: SessionManager, at: string): void {
+  for (const raw of parent.getBranch(at)) {
+    const entry = raw as Entry & {
+      customType?: string;
+      data?: unknown;
+      provider?: string;
+      modelId?: string;
+      thinkingLevel?: string;
+      tokensBefore?: number;
+      details?: unknown;
+    };
+    switch (entry.type) {
+      case "message":
+        if (entry.message) child.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]);
+        break;
+      case "compaction":
+        child.appendCompaction(entry.summary ?? "", child.getLeafId() ?? "", entry.tokensBefore ?? 0, entry.details);
+        break;
+      case "model_change":
+        if (entry.provider && entry.modelId) child.appendModelChange(entry.provider, entry.modelId);
+        break;
+      case "thinking_level_change":
+        if (entry.thinkingLevel) child.appendThinkingLevelChange(entry.thinkingLevel);
+        break;
+      case "custom":
+        if (entry.customType) child.appendCustomEntry(entry.customType, entry.data);
+        break;
+      default:
+        break; // label / session_info / branch_summary: the parent's facts, not the thread's history
+    }
+  }
+  markInheritanceWindow(child);
+}
+
+/**
  * Fork `parent` into a record named `id`, up to the branch point the hints locate, in `stagingDir`.
  *
  * Two pi calls rather than one, because neither alone does it: `createBranchedSession` copies
@@ -189,17 +244,11 @@ export function forkForInheritance(options: {
   branchHints?: string[];
 }): SessionManager | undefined {
   const { parent, id, cwd, stagingDir: dir } = options;
-  const path = parent.getBranch() as unknown as Entry[];
-  const leaf = path[path.length - 1];
-  if (!leaf) return undefined; // an empty parent has nothing to inherit
-  const hints = options.branchHints ?? [];
-  const at = locateBranchPoint(path, hints);
-  if (at === undefined && hints.length > 0) {
-    log.warn("[fastagent] no branch hint matched in the parent session — inheriting from its present");
-  }
+  const cut = inheritanceCut(parent, options.branchHints);
+  if (!cut) return undefined;
   let branched: string | undefined;
   try {
-    branched = parent.createBranchedSession(at ?? leaf.id);
+    branched = parent.createBranchedSession(cut.at);
     if (!branched) return undefined; // a non-persisting parent has no file to fork from
     const child = SessionManager.forkFrom(branched, cwd, dir, { id });
     markInheritanceWindow(child);

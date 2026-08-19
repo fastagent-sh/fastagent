@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { piSessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
 
 const text = (session: SessionManager) => JSON.stringify(session.getBranch());
 
@@ -81,6 +81,40 @@ describe("session inheritance", () => {
 
     const ids = (await SessionManager.list(cwd, join(dir, "agent-session"))).map((r) => r.id).sort();
     expect(ids).toEqual(["sroom", "sthread-4"]);
+  });
+});
+
+describe("the in-memory backend inherits too — the contract is not the medium", () => {
+  const memoryRoom = async () => {
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const room = await store.openOrCreate("room");
+    room.appendMessage({ role: "user", content: "first question", timestamp: 1 });
+    room.appendMessage(fauxAssistantMessage("the room answered 47"));
+    return store;
+  };
+
+  it("a thread inherits the room's history", async () => {
+    const store = await memoryRoom();
+    const thread = await store.openOrCreate("thread", { parentSession: "room" });
+    expect(text(thread)).toContain("the room answered 47");
+  });
+
+  it("inheritance is one-time here as well", async () => {
+    const store = await memoryRoom();
+    const first = await store.openOrCreate("thread", { parentSession: "room" });
+    first.appendMessage({ role: "user", content: "the thread's own message", timestamp: 5 });
+    (await store.openOrCreate("room")).appendMessage({ role: "user", content: "later room talk", timestamp: 6 });
+
+    const again = await store.openOrCreate("thread", { parentSession: "room" });
+
+    expect(text(again)).toContain("the thread's own message");
+    expect(text(again)).not.toContain("later room talk");
+  });
+
+  it("a parent it does not hold starts the thread empty rather than failing", async () => {
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const thread = await store.openOrCreate("orphan", { parentSession: "no-such-room" });
+    expect(thread.getBranch()).toHaveLength(0);
   });
 });
 

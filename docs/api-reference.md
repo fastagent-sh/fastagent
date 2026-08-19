@@ -423,8 +423,9 @@ file belongs to). A record is published complete: pi buffers a new session until
 message, which would otherwise lose the user's question to a crash AND make open-or-create
 non-idempotent.
 
-The in-memory store cannot inherit — a fork needs a record to copy — and says so rather than starting
-a thread silently empty.
+Both backends inherit: the durable one forks the parent's record, the in-memory one copies its path
+entry by entry. Inheritance is a property of the contract, not of the medium — a thread must not
+forget its room because the store happens to be in memory.
 
 Lease:
 
