@@ -720,9 +720,16 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // it, so this loop is not what makes that test pass. It is here because the window is on
             // the code path, not because it has been observed.
             let aborted = false;
+            let running = true; // cleared when the compaction settles, however it settles
             const applyAbort = async () => {
-              for (let attempt = 0; attempt < 50 && bound.isCompacting; attempt++) {
-                bound.abortCompaction();
+              // WAIT for the controller rather than requiring it: an abort that arrives before pi
+              // builds one sees isCompacting false, and a loop that only runs WHILE compacting would
+              // exit immediately — leaving the intent unapplied in exactly the window it exists for.
+              for (let attempt = 0; attempt < 200 && running; attempt++) {
+                if (bound.isCompacting) {
+                  bound.abortCompaction();
+                  if (!bound.isCompacting) return; // it took
+                }
                 await new Promise((resolve) => setTimeout(resolve, 1));
               }
             };
@@ -765,6 +772,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
                 // abort attribution (a racing real failure still reads as aborted).
                 outcome = aborted ? { aborted: true } : { error: String(error) };
               }
+              running = false;
               unsub();
               teardown();
               // Release BEFORE emitting finished: a watcher seeing finished may dispatch next —

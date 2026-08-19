@@ -1493,6 +1493,33 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect((await control.state("sB10")).status).toBe("idle"); // the lease came back
   });
 
+  it("an abort that arrives BEFORE pi can be aborted is still applied", async () => {
+    // The window this guards: pi builds its compaction controller one await after compact() starts,
+    // so an abort landing first calls a no-op. The dispatch is issued from the compaction_started
+    // handler and then re-entered immediately, which puts at least one attempt inside that window;
+    // whether it lands there is timing, but the OUTCOME must not depend on which side it lands on.
+    const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
+    await withCompactableHistory(agent, "sB11");
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB11")) {
+        seen.push(ev);
+        if (ev.type === "compaction_started") {
+          // Fire several aborts back to back, the first synchronously with the event.
+          void control.dispatch("sB11", { type: "abort" });
+          void control.dispatch("sB11", { type: "abort" });
+        }
+        if (ev.type === "compaction_finished") break;
+      }
+    })();
+
+    expect(await control.dispatch("sB11", { type: "compact" })).toEqual({ ok: true });
+    await watching;
+
+    expect(seen.at(-1)?.data).toEqual({ aborted: true });
+    expect((await control.entries("sB11")).entries.map((e) => e.kind)).not.toContain("compaction");
+  });
+
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {
     // Both are model calls a client must be able to stop: `abort` is the door out of `compacting`.
     const { agent, control } = await makeBoundary([
