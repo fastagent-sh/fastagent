@@ -15,7 +15,7 @@ import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { createSeenRing } from "../seen.ts";
 import { createTaskTracker } from "../tasks.ts";
-import { ensureStateHome, loadStateFile, removeRetiredStateFile, saveStateFile } from "../state.ts";
+import { ensureStateHome, loadStateFile, saveStateFile } from "../state.ts";
 import { dispatchStop, isStopText } from "../stop-command.ts";
 import { createTurnQueue } from "../turn-queue.ts";
 import { createTurnStore } from "../turn-store.ts";
@@ -313,10 +313,6 @@ function createFeishuRuntimeFactory(
     }
     const stateHome = join(stateRoot, "channels", kind);
     ensureStateHome(stateHome); // buffers/files may carry chat content; the agent .gitignore covers .state/
-    // The participant model replaced the owned-thread index (a cache, so nothing is lost). REMOVE THIS
-    // after the release following the participant model ships — by then no live deployment can still
-    // be carrying the file. test/migration-deadline.test.ts fails when due.
-    removeRetiredStateFile(stateHome, "owned-threads.json", label);
     // The cached bot identity (rationale at the botInfo block above): seed synchronously — the
     // factory runs to completion before any promise resolves, so botOpenId is still unset here and
     // the seed is what the first envelope's dispatch sees. Refresh keeps the file current.

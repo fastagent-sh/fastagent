@@ -464,19 +464,6 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(record?.humans.sort()).toEqual(["U1", "U2"]);
   });
 
-  it("removes the obsolete owned-threads.json on the next start", async () => {
-    vi.stubGlobal("fetch", okFetch());
-    const stateRoot = root();
-    const home = join(stateRoot, "channels", "slack");
-    mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, "owned-threads.json"), JSON.stringify({ "T1:C1:1.0": { rootTs: "1.0" } }));
-
-    const { agent } = replyingAgent();
-    mount(agent, {}, stateRoot);
-
-    expect(existsSync(join(home, "owned-threads.json"))).toBe(false);
-  });
-
   it("a bare reply reaches the agent in a thread it answered in, while one human is in it", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent();
