@@ -78,26 +78,30 @@ describe("engine parity: one definition, two engines", () => {
     });
   }
 
-  it("session: a thread that names a parent fails loudly rather than starting empty", async () => {
+  it("session: a thread that names a parent starts from what the room knew", async () => {
     process.env.FASTAGENT_ENGINE = "session";
     const dir = await agentDirectory();
+    const sessionsDir = join(dir, "sessions");
     const { faux } = makeFaux();
-    faux.setResponses([fauxAssistantMessage("never reached")]);
+    let threadContext = "";
+    faux.setResponses([
+      () => fauxAssistantMessage("the room's answer is 47"),
+      (context) => {
+        threadContext = JSON.stringify(context.messages);
+        return fauxAssistantMessage("inherited");
+      },
+    ]);
     const { agent } = await createPiAgentFromDefinition(dir, {
       model: `${faux.getModel().provider}/${faux.getModel().id}`,
       providers: [faux.provider],
-      sessionRecords: piSessionRecordStore({ dir: join(dir, "sessions"), cwd: dir }),
+      sessionRecords: piSessionRecordStore({ dir: sessionsDir, cwd: dir }),
     });
 
+    await collect(agent.invoke({ session: "room" }, { text: "remember 47" }));
     // What a feishu thread sends on its first turn: continue from what the room knew.
-    const events = [];
-    for await (const event of agent.invoke({ session: "thread", parentSession: "room" }, { text: "hi" })) {
-      events.push(event);
-    }
+    await collect(agent.invoke({ session: "thread", parentSession: "room" }, { text: "what did the room say?" }));
 
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: "failed", retryable: false });
-    expect((events[0] as { details: string }).details).toContain("inheritance");
+    expect(threadContext).toContain("the room's answer is 47");
   });
 
   it("session: a mistyped engine name is a startup error, not a silent default", async () => {

@@ -155,7 +155,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       },
     });
 
-  return async (sessionId) => {
+  return async (sessionId, inherit) => {
     const fresh = options.live ? await options.live() : undefined;
     const nextPrompt = fresh
       ? fresh.systemPrompt
@@ -200,7 +200,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         await loader.reload();
       }
     }
-    const sessionManager: SessionManager = await sessions.openOrCreate(sessionId);
+    const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
     const bound: { session?: AgentSession } = {};
     const { session } = await createAgentSessionFromServices({
       services: await services,

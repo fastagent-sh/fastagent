@@ -9,10 +9,13 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { log } from "../../log.ts";
+import { type SessionInheritance, forkForInheritance } from "./session-inheritance.ts";
 
-/** What the AgentSession L0 needs from a session backend: open-or-create by opaque id. */
+/** What the AgentSession L0 needs from a session backend: open-or-create by opaque id, plus the one
+ *  creation option — where a NEW session starts from (session-inheritance.ts). */
 export interface PiSessionRecordStore {
-  openOrCreate(sessionId: string): Promise<SessionManager>;
+  openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<SessionManager>;
 }
 
 /**
@@ -86,14 +89,51 @@ export function piSessionId(sessionId: string): string {
 export function piSessionRecordStore(options: { dir: string; cwd?: string }): PiSessionRecordStore {
   const cwd = options.cwd ?? process.cwd();
   const own = join(options.dir, OWN_RECORDS_DIR);
+  /** Fork the named parent into `id`, or answer undefined so the caller starts empty. Every failure
+   *  is a warn: a thread must not lose its first turn to an inheritance edge. */
+  const inheritInto = async (id: string, inherit: SessionInheritance): Promise<SessionManager | undefined> => {
+    const parentId = piSessionId(inherit.parentSession);
+    const found =
+      (await SessionManager.list(cwd, own)).find((r) => r.id === parentId) ??
+      (await SessionManager.list(cwd, options.dir)).find((r) => r.id === legacySessionId(inherit.parentSession));
+    if (!found) {
+      log.warn(
+        `[fastagent] session "${id}" names parent "${inherit.parentSession}", which has no record — starting empty`,
+      );
+      return undefined;
+    }
+    try {
+      const parentDir = found.id === parentId ? own : options.dir;
+      return forkForInheritance({
+        parent: SessionManager.open(found.path, parentDir),
+        parentDir,
+        id,
+        cwd,
+        dir: own,
+        branchHints: inherit.branchHints,
+      });
+    } catch (error) {
+      // Unattributed on purpose: this spans reading the parent AND writing the child.
+      log.warn(
+        `[fastagent] could not inherit from "${inherit.parentSession}" into "${id}" (${String(error)}) — starting empty`,
+      );
+      return undefined;
+    }
+  };
   return {
-    async openOrCreate(sessionId) {
+    async openOrCreate(sessionId, inherit) {
       const id = piSessionId(sessionId);
       const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
       if (mine) return SessionManager.open(mine.path, own);
       const legacy = (await SessionManager.list(cwd, options.dir)).find((r) => r.id === legacySessionId(sessionId));
       if (legacy) return SessionManager.open(legacy.path, options.dir);
       mkdirSync(own, { recursive: true });
+      // Inheritance is a CREATE-path decision: an existing session above ignores it entirely, which
+      // is what makes it one-time by construction.
+      if (inherit) {
+        const inherited = await inheritInto(id, inherit);
+        if (inherited) return inherited;
+      }
       return publish(SessionManager.create(cwd, own, { id }), own);
     },
   };

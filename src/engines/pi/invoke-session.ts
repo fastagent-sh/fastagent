@@ -11,15 +11,15 @@
  * the directory opener, which is the only rung that can hand it durable session records. Real turns,
  * real definitions, real providers — not a test-only path.
  *
- * WHAT IT STILL REFUSES, loudly rather than by degrading: session inheritance
- * (`scope.parentSession`) and the harness engine's session store. Each throws or fails the turn
- * naming the gap, because the alternative is a thread that quietly forgot its room.
+ * WHAT IT STILL REFUSES, loudly rather than by degrading: the harness engine's session store. It
+ * throws naming the gap, because the alternative is durable continuity that silently is not.
  *
  * Events are translated ONCE, into the rich `SessionEvent` vocabulary the observation plane speaks;
  * the SPEC stream is a projection of that (`docs/design/session-control.md` §6 — one translation
  * plus one projection, never two parallel ones).
  */
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { SessionInheritance } from "./session-inheritance.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   ABORTED_CODE,
@@ -45,8 +45,9 @@ import {
   toTerminal,
 } from "./turn-kit.ts";
 
-/** Open-or-create the session behind `sessionId` and bind an `AgentSession` to it, per invoke. */
-export type PiAgentSessionFactory = (sessionId: string) => Promise<AgentSession>;
+/** Open-or-create the session behind `sessionId` and bind an `AgentSession` to it, per invoke.
+ *  `inherit` reaches the CREATE path only — an existing session ignores it. */
+export type PiAgentSessionFactory = (sessionId: string, inherit?: SessionInheritance) => Promise<AgentSession>;
 
 export interface CreatePiAgentFromSessionOptions {
   sessionFactory: PiAgentSessionFactory;
@@ -207,22 +208,19 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
       }
     };
     try {
-      if (scope.parentSession !== undefined) {
-        // A thread that names a parent expects to start from what the room knew
-        // (participant-model.md section 5). This engine has no inheritance yet, and starting empty
-        // would look like a working thread that quietly forgot everything before it.
-        yield {
-          type: "failed",
-          details:
-            "session inheritance (scope.parentSession) is not implemented on the AgentSession engine — " +
-            "unset FASTAGENT_ENGINE to serve threads that inherit",
-          retryable: false,
-        };
-        return;
-      }
       let session: AgentSession;
       try {
-        session = await sessionFactory(scope.session);
+        // The scope's lineage reaches the store's CREATE path only — an existing session opens
+        // exactly as before, whatever the scope names.
+        session = await sessionFactory(
+          scope.session,
+          scope.parentSession === undefined
+            ? undefined
+            : {
+                parentSession: scope.parentSession,
+                ...(scope.branchHints !== undefined ? { branchHints: scope.branchHints } : {}),
+              },
+        );
       } catch (error) {
         yield errorToTerminal(error); // setup failures are events, never throws (MUST 2)
         return;
