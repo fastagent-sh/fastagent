@@ -1470,6 +1470,29 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(seen.map((e) => e.type)).toEqual(["state_changed"]);
   });
 
+  it("an abort that lands the instant compaction starts still stops it", async () => {
+    // What a client actually does: abort the moment it sees compaction_started. The narrower window
+    // pi opens (its controller is built one await later) is guarded in the source but not pinned
+    // here — a test cannot reliably land inside a single await.
+    const { agent, control } = await makeBoundary(Array.from({ length: 8 }, () => fauxAssistantMessage(LONG_ANSWER)));
+    await withCompactableHistory(agent, "sB10");
+    const seen: SessionEvent[] = [];
+    const watching = (async () => {
+      for await (const ev of control.events("sB10")) {
+        seen.push(ev);
+        if (ev.type === "compaction_started") await control.dispatch("sB10", { type: "abort" });
+        if (ev.type === "compaction_finished") break;
+      }
+    })();
+
+    expect(await control.dispatch("sB10", { type: "compact" })).toEqual({ ok: true });
+    await watching;
+
+    expect(seen.at(-1)?.data).toEqual({ aborted: true });
+    expect((await control.entries("sB10")).entries.map((e) => e.kind)).not.toContain("compaction");
+    expect((await control.state("sB10")).status).toBe("idle"); // the lease came back
+  });
+
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {
     // Both are model calls a client must be able to stop: `abort` is the door out of `compacting`.
     const { agent, control } = await makeBoundary([

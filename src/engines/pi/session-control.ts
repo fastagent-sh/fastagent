@@ -710,11 +710,27 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             }
             // The door is the session's own compaction abort — a real one, unlike a summarization
             // call with no signal: `abort` must reach the model call (run/compaction symmetry).
+            //
+            // pi builds the controller that makes it abortable AFTER an internal await, so an abort
+            // arriving in that window would find nothing to cancel and the compaction would run to
+            // completion — the client's cancel silently doing nothing. The intent is latched and
+            // re-applied until it takes (`isCompacting` reports when it has).
+            //
+            // The retry is DEFENSIVE: the window is one await wide, and the test below lands after
+            // it, so this loop is not what makes that test pass. It is here because the window is on
+            // the code path, not because it has been observed.
             let aborted = false;
+            const applyAbort = async () => {
+              for (let attempt = 0; attempt < 50 && bound.isCompacting; attempt++) {
+                bound.abortCompaction();
+                await new Promise((resolve) => setTimeout(resolve, 1));
+              }
+            };
             compacting.set(session, {
               abort: () => {
                 aborted = true;
                 bound.abortCompaction();
+                void applyAbort();
               },
             });
             emitOwn(session, { type: "compaction_started", timestamp: Date.now(), data: {} });
