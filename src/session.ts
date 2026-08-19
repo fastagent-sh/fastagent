@@ -97,7 +97,7 @@ export const INVALID_COMMAND_CODE = "invalid_command";
 export const NO_SUCH_SESSION_CODE = "no_such_session";
 
 /** Stable `SessionResult.error.code` for a boundary mutation rejected BEFORE acceptance with
- *  nothing durable landed — a failed override append, or compact's admission failing (the harness
+ *  nothing durable landed — a failed override append, or compact's admission failing (binding the session
  *  build, the local preparation). Acceptance sits where the work becomes asynchronous and
  *  expensive: the model call — compact is accept-fast (holding the dispatch open for a full model
  *  call would make acceptance = outcome), and post-acceptance outcomes travel as
@@ -264,7 +264,7 @@ export type RetryScheduledEvent = SessionEvent<
   "retry_scheduled",
   {
     /** "assistant" is an engine that retries the ANSWER request itself (pi's AgentSession does;
-     *  the harness did not). The other two are summarization calls. */
+     *  pi's own session does; a summarization call is the other two). */
     operation: "assistant" | "compaction" | "branch_summary";
     attempt: number;
     maxAttempts: number;

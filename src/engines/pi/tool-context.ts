@@ -38,10 +38,10 @@ export function agentSessionManager(session: AgentSession, sessionId: string): R
 }
 
 /**
- * The turn's tool-activation bridge — narrow closures over the CURRENT harness (invoke.ts builds it
- * per turn), so a loader tool can activate deferred tools mid-turn without tool.ts importing the
- * harness. pi records the change in the session (`active_tools_change`) and the per-invoke restore
- * (harness.ts) carries it into later turns; defineTool's wrapper stamps the newly-activated names on
+ * The turn's tool-activation bridge — narrow closures over the CURRENT session (bound per turn), so
+ * a loader tool can activate deferred tools mid-turn without tool.ts importing the engine. pi records
+ * the change in the session (`active_tools_change`) and the per-invoke restore
+ * (agent-session-factory.ts) carries it into later turns; defineTool's wrapper stamps the newly-activated names on
  * the tool result (`addedToolNames`) — the load point native deferred-loading providers preserve the
  * prompt-cache prefix with.
  */
@@ -61,14 +61,14 @@ export interface TurnContext {
   /** Current conversation manager. Absent outside a FastAgent-managed agent turn. */
   sessionManager?: ReadonlySessionManager;
   /** Tool activation for the current turn. Two producers, one consumer surface: invoke.ts bridges the
-   *  serving harness; chat.ts bridges pi's AgentSession (chat emulates deferral — same loader, same
+   *  served session; chat.ts bridges the resident one (chat emulates deferral — same loader, same
    *  semantics). Absent only outside any turn (a bare `fastagent tool` run). */
   tools?: ToolActivation;
 }
 
 export const turnContext = new AsyncLocalStorage<TurnContext>();
 
-/** The additive-activation contract, in ONE place for both bridges (invoke.ts over the harness,
+/** The additive-activation contract, in ONE place for both bridges (the served session,
  *  chat.ts over pi's AgentSession): dedupe → keep registered names only (pi's setters THROW on
  *  unknown) → exclude already-active → the names to actually add (empty = nothing to set). */
 export function additiveActivation(registered: string[], current: string[], names: string[]): string[] {

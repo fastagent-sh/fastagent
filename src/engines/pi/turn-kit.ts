@@ -1,8 +1,8 @@
 /**
- * The turn mechanism's pi-CLASS-neutral half, shared by every pi L0. Not "engine-neutral" in this
- * repo's sense — that term is reserved for code with no engine import at all (src/agent.ts), and
- * everything here speaks pi's message and image types. What it is neutral about is which pi class
- * runs the turn.
+ * The turn mechanism's ENGINE-agnostic half: the parts that describe a turn rather than pi. Not
+ * "engine-neutral" in this repo's sense — that term is reserved for code with no engine import at
+ * all (src/agent.ts), and the terminals here read pi's message shape. What they do not touch is how
+ * a turn is driven, which is why they survived the engine change unaltered.
  *
  *   Lease       — single-writer concurrency floor (injectable port + in-process default)
  *   Terminals   — a settled pi message or a thrown error → the SPEC terminal, `retryable` included
@@ -11,8 +11,8 @@
  *   Projection  — the rich SessionEvent stream → the narrow SPEC one
  *   Observation — the seam a control-plane hub attaches to (RunControls + SessionObserver)
  *
- * What is NOT neutral — the harness's event vocabulary and its observation plane — stays in
- * invoke.ts, and the AgentSession's in invoke-session.ts.
+ * What is NOT neutral — pi's event vocabulary and how a turn is driven — stays in invoke-session.ts,
+ * the L0 that owns it.
  */
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import { ABORTED_CODE, type AgentEvent, type Json, type Prompt } from "../../agent.ts";
@@ -114,7 +114,7 @@ function messageSignal(message: AssistantMessage): { status?: number; code?: unk
  */
 export function toTerminal(message: AssistantMessage): AgentEvent {
   if (message.stopReason === "aborted") {
-    // A deliberate stop (control-plane abort / harness abort), not an error — see {@link ABORTED_CODE}
+    // A deliberate stop (a control-plane or consumer abort), not an error — see {@link ABORTED_CODE}
     // for the consumer contract (design §6).
     const details = message.errorMessage ?? "run aborted";
     return { type: "failed", details, retryable: false, code: ABORTED_CODE };

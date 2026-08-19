@@ -76,7 +76,7 @@ export async function buildAgentSessionRuntime(
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
   /** The turn's {@link ToolActivation} over pi's AgentSession — the counterpart of invoke.ts's
-   *  harness bridge, so the SAME builtin search_tools serves both paths. Additive; unknown names
+   *  serving bridge, so the SAME builtin search_tools serves both paths. Additive; unknown names
    *  filtered (`setActiveToolsByName` is authoritative on the session and rebuilds its prompt — our
    *  static override keeps the prompt identical to serving). */
   function sessionToolActivation(session: AgentSession): ToolActivation {
@@ -116,13 +116,12 @@ export async function buildAgentSessionRuntime(
     // (what you iterate is what you serve): the initial active set excludes deferred tools (applied
     // on the session in createRuntime — pi's session starts all-active), and the activation bridge
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
-    // instead of fastagent's harness.
+    // instead of the served one.
     const { config, modelSpec, agentDir, authPath, stateRoot, tools, deferredToolNames, toolCollisions, toolFailures } =
       await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
-    // ONE hub owns model resolution AND per-request auth — the ModelRuntime-shaped sibling of
-    // serving's createPiModels; see models.ts.
+    // ONE hub owns model resolution AND per-request auth; see models.ts.
     // agentDir carries the agent's own models.json (custom endpoints); stateRoot keeps pi's generated
     // catalog cache out of the definition dir. See createPiModelRuntime.
     const modelRuntime = await createPiModelRuntime({ authPath, agentDir, stateRoot });
@@ -149,7 +148,7 @@ export async function buildAgentSessionRuntime(
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
     // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
     // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
-    // resolves through sessionRef at call time, exactly like the serving path resolves its harness.
+    // resolves through sessionRef at call time, exactly like the serving path resolves its session.
     const customToolDefs = customTools.map((t) => ({
       name: t.name,
       label: t.name,

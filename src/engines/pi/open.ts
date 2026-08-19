@@ -70,7 +70,7 @@ export interface CreatePiAgentFromDirOptions {
 
 /**
  * The agent assembly FRONT HALF — everything that is independent of how pi consumes the
- * definition (transient harness for serving vs resident AgentSession for chat / session control):
+ * definition (a per-invoke session for serving vs a resident one for chat):
  * placement resolution → config → model spec → the full tool surface ({@link resolveAgentTools} — the
  * ONE place it is computed) → state root → auth path. Both {@link createPiAgentFromDir} and the
  * session builder (session-builder.ts) consume this, so THESE inputs cannot drift between the two

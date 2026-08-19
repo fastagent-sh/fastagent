@@ -2,9 +2,9 @@
  * The AgentSession L0's engine binding: fastagent's assembled agent — model, prompt, skills, tools —
  * bound to one durable record, per invoke.
  *
- * The harness path's counterpart is `piHarnessFactory`; the chat path builds the same pi class from
- * the same assembly (session-builder.ts) but keeps ONE resident session. What is specific here is
- * the posture: many sessions, one turn each, nothing in memory between turns.
+ * The chat path builds the same pi class from the same assembly (session-builder.ts) but keeps ONE
+ * resident session. What is specific here is the posture: many sessions, one turn each, nothing in
+ * memory between turns.
  *
  * Shared once, rebuilt per turn:
  * - `services` (ResourceLoader, settings, model runtime) is built lazily and reused — it is the
@@ -101,8 +101,8 @@ function recordedActivations(session: AgentSession): string[] {
 const warnedDroppedActivations = new Set<string>();
 
 /**
- * The turn's {@link ToolActivation} over a live session — the AgentSession sibling of the harness
- * bridge, so the same built-in `search_tools` serves both.
+ * The turn's {@link ToolActivation} over a live session — the same bridge chat uses, so one
+ * built-in `search_tools` serves both.
  *
  * Activations are PERSISTED as deltas, so a tool discovered in one turn stays callable in the next.
  * pi's own chat session does not do this (it has no place to put the record); a served session does,

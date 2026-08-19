@@ -312,7 +312,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // OBSERVATION IS TOTAL: an unreadable entry chain leaves the pair absent too (the same shape a
       // control-less deployment answers with) rather than rejecting a read that has no error-code
       // channel to explain itself. The fault is not swallowed — it surfaces where codes exist: the
-      // next invoke fails (the harness build walks the same chain) and a boundary dispatch answers
+      // next invoke fails (binding a session walks the same chain) and a boundary dispatch answers
       // `boundary_command_failed`. Here it is a server-side warn.
       const b = boundary?.();
       let settings: ReturnType<typeof resolveSessionSettings> | undefined;
@@ -418,7 +418,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
           const run = active.get(session);
           if (!run) {
             // Run/compaction symmetry: an in-flight manual compaction is a model call too, and
-            // `abort` is its only door — interrupting the harness converges through the detached
+            // `abort` is its only door — interrupting it converges through the detached
             // task's catch into `compaction_finished{aborted}` with the lease released; answering
             // no_active_run against a state() that says "compacting" would be a lie.
             const comp = command.type === "abort" ? compacting.get(session) : undefined;
@@ -485,8 +485,8 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             };
           }
           // Payload validation BEFORE the lease — an invalid value must not briefly block a run.
-          /** The durable write for set_model/set_thinking/navigate — undefined for compact (harness
-           *  path). Answers the event to emit. */
+          /** The durable write for set_model/set_thinking/navigate — undefined for compact, which
+           *  writes through pi's own compaction. Answers the event to emit. */
           let apply: ((record: SessionManager) => Promise<SessionEvent>) | undefined;
           if (command.type === "set_model") {
             const slash = command.model.indexOf("/");

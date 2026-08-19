@@ -1,7 +1,7 @@
 /**
  * The pi `Models` collection — the single hub that owns BOTH model resolution (provider/modelId
  * lookup) AND auth (per-request credential resolution). fastagent builds one per opener and threads
- * it into the harness alongside the selected `model`; the two must come from the same collection so
+ * it into the engine alongside the selected `model`; the two must come from the same collection so
  * the model's provider auth is in scope.
  */
 import { join } from "node:path";

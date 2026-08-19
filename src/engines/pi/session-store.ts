@@ -2,9 +2,9 @@
  * Session persistence for the `AgentSession` L0 — open-or-create a durable record by the Caller's
  * opaque session id, on pi-coding-agent's `SessionManager` (the v3 jsonl every pi surface reads).
  *
- * The harness path's sibling is sessions.ts, which speaks pi-agent-core's `Session` instead. Both
- * write the same file format; they differ in which pi class reads it. That one retires with the
- * harness L0.
+ * Records written before this store existed (by the pi-agent-core `Session` the serving path used
+ * to run on) are the same v3 jsonl and are continued in place — see `legacySessionId`. That is a
+ * READ path for existing conversations, not a second engine.
  */
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -38,9 +38,9 @@ export interface PiSessionRecordStore {
  * mid-name but not at the end, so it escapes too.
  *
  * Injective within this encoding — which is only sufficient because new records live in their own
- * directory. The harness path draws names from the same character set (it produces `s42` for a room
- * literally called `s42`, which is also this encoding of `42`), so sharing a directory would make
- * some names ambiguous no matter how either side spells them.
+ * directory. The older spelling draws names from the same character set (it stored a room literally
+ * called `s42` as `s42`, which is also this encoding of `42`), so one directory would make some
+ * names ambiguous no matter how either side spells them.
  *
  * Readability is deliberate: `-1001234567890` becomes `s-1001234567890`, so an operator can still
  * tell which room a file belongs to.
@@ -62,25 +62,18 @@ export function piSessionId(sessionId: string): string {
  * Lookup is a directory scan (`SessionManager.list`) because pi names files `<timestamp>_<id>.jsonl`
  * and the timestamp is not ours to predict — the same trade sessions.ts makes today.
  *
- * A record written by the harness path keeps ITS id (sessions.ts encodes differently), so the scan
- * accepts either spelling: a conversation that predates this store is found and continued rather
- * than silently restarted as an empty one. Nothing is rewritten on disk.
+ * A record written before this store existed keeps ITS id (the older path spelled them differently),
+ * so the scan accepts either: a conversation that predates this store is continued rather than
+ * silently restarted as an empty one. Nothing is rewritten on disk.
  *
  * NEW records live in a subdirectory of their own, because the two engines cannot share a namespace:
  * both spell ids into `[A-Za-z0-9._-]`, so neither can claim a prefix the other cannot produce, and
  * a directory holding both would have names that belong to two conversations at once — in whichever
  * direction it is read. Separate directories make each side's own injectivity sufficient.
  *
- * An EXISTING harness record is still continued in place: it is looked up by that path's spelling,
- * which is injective on its own terms, and appended to where it lies. Both engines read the same v3
- * jsonl, so a conversation started before this engine keeps going rather than restarting empty.
- *
- * That continuity is ONE-WAY, and cannot be otherwise while both engines exist: the harness store
- * finds records by its own spelling, so pointing it at this subdirectory would put it back in the
- * ambiguous namespace this separation removes — its `s42` lookup would match the record this engine
- * wrote for `42`. So a conversation STARTED under FASTAGENT_ENGINE=session restarts empty if the
- * switch is turned off. The switch is a migration aid, not a supported toggle, and it disappears
- * with the harness path; a deployment that has run on it should stay on it.
+ * A PRE-EXISTING record is still continued in place: it is looked up by the older spelling, which is
+ * injective on its own terms, and appended to where it lies. Both spellings are the same v3 jsonl,
+ * so a conversation started before this store keeps going rather than restarting empty.
  *
  * SCOPE OF "open-or-create": idempotent against a store that is serialized per session, which is what
  * the serving path provides — the single-writer lease is taken before any store call, so no two
@@ -254,7 +247,7 @@ const OWN_RECORDS_DIR = "agent-session";
  * the second is why this cannot be left to the engine:
  *
  * - a crash between "the user asked" and "the model answered" loses the question, while the record
- *   the harness path writes has it (conformance-levels.md §5 names this gap);
+ *   pi-agent-core's storage wrote it immediately (conformance-levels.md §5 named this gap);
  * - **open-or-create stops being idempotent**: the second call cannot find the first call's record,
  *   so one conversation forks into two files, each with half the history.
  *
@@ -320,7 +313,7 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
   };
 }
 
-/** sessions.ts's spelling of the same id — read-only, so records written by the harness path resolve. */
+/** The spelling used before this store existed — read-only, so older records still resolve. */
 function legacySessionId(sessionId: string): string {
   return sessionId.replace(/[^A-Za-z0-9._-]/g, (c) => {
     const code = c.charCodeAt(0);

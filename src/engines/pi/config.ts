@@ -206,7 +206,7 @@ export function providerOf(spec: string): string {
   return slash > 0 ? spec.slice(0, slash) : spec;
 }
 
-/** Resolve "provider/modelId" → a pi Model from `models`, so the harness resolves auth from the same collection. */
+/** Resolve "provider/modelId" → a pi Model from `models`, so auth resolves from the same collection. */
 export function resolveModel(models: Models, spec: string): AnyModel {
   const slash = spec.indexOf("/");
   if (slash < 1 || slash === spec.length - 1) {
