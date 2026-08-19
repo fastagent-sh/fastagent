@@ -7,7 +7,7 @@
  * READ path for existing conversations, not a second engine.
  */
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
@@ -86,7 +86,10 @@ export function piSessionId(sessionId: string): string {
  */
 export function piSessionRecordStore(options: { dir: string; cwd?: string }): PiSessionRecordStore {
   const cwd = options.cwd ?? process.cwd();
-  const own = join(options.dir, OWN_RECORDS_DIR);
+  // Resolved against the workspace this store serves, not against wherever the process happens to
+  // have been started: a relative `dir` means "inside this agent", and a serving process may chdir.
+  const root = resolve(cwd, options.dir);
+  const own = join(root, OWN_RECORDS_DIR);
   /** Where a forked record is finished before it becomes discoverable. A SUBDIRECTORY of the store,
    *  so `list()` (one level, `*.jsonl`) never sees a record that is still being prepared. */
   const staging = join(own, ".staging");
@@ -96,7 +99,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     const parentId = piSessionId(inherit.parentSession);
     const found =
       (await SessionManager.list(cwd, own)).find((r) => r.id === parentId) ??
-      (await SessionManager.list(cwd, options.dir)).find((r) => r.id === legacySessionId(inherit.parentSession));
+      (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(inherit.parentSession));
     if (!found) {
       log.warn(
         `[fastagent] session "${id}" names parent "${inherit.parentSession}", which has no record — starting empty`,
@@ -104,7 +107,7 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       return undefined;
     }
     try {
-      const parentDir = found.id === parentId ? own : options.dir;
+      const parentDir = found.id === parentId ? own : root;
       mkdirSync(staging, { recursive: true });
       const staged = forkForInheritance({
         // A parent that crashed mid tool-execution would otherwise pass its dangling tool_use down
@@ -136,8 +139,8 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       const id = piSessionId(sessionId);
       const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
       if (mine) return reconcileInterruptedToolCalls(SessionManager.open(mine.path, own));
-      const legacy = (await SessionManager.list(cwd, options.dir)).find((r) => r.id === legacySessionId(sessionId));
-      if (legacy) return reconcileInterruptedToolCalls(SessionManager.open(legacy.path, options.dir));
+      const legacy = (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(sessionId));
+      if (legacy) return reconcileInterruptedToolCalls(SessionManager.open(legacy.path, root));
       mkdirSync(own, { recursive: true });
       // Inheritance is a CREATE-path decision: an existing session above ignores it entirely, which
       // is what makes it one-time by construction.
@@ -151,8 +154,8 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       const id = piSessionId(sessionId);
       const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
       if (mine) return SessionManager.open(mine.path, own);
-      const legacy = (await SessionManager.list(cwd, options.dir)).find((r) => r.id === legacySessionId(sessionId));
-      return legacy ? SessionManager.open(legacy.path, options.dir) : undefined;
+      const legacy = (await SessionManager.list(cwd, root)).find((r) => r.id === legacySessionId(sessionId));
+      return legacy ? SessionManager.open(legacy.path, root) : undefined;
     },
   };
 }

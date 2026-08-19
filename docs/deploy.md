@@ -205,7 +205,7 @@ The generated `Dockerfile` runs the directory on any container platform; `fastag
 
 ## Single-machine tier
 
-All shipped recipes are single-machine: state lives on **one** volume tied to **one** machine/service. Scaling to multiple instances gives each its own volume and splits sessions/turns — that needs a shared/external backend on the `PiSessionStore` / `Lease` seams (see [Embedding](embedding.md)), not this recipe. Don't scale past one instance.
+All shipped recipes are single-machine: state lives on **one** volume tied to **one** machine/service. Scaling to multiple instances gives each its own volume and splits sessions/turns — that needs a shared/external backend on the `PiSessionRecordStore` / `Lease` seams (see [Embedding](embedding.md)), not this recipe. Don't scale past one instance.
 
 ## Where next
 

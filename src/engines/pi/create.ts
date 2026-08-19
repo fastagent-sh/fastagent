@@ -247,7 +247,6 @@ function buildPiAgent(opts: {
   observer?: SessionObserver;
   onAssembly?: OnAssembly;
 }): Agent {
-
   const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
   // Materialized here (not defaulted inside the L0) so the exposed parts carry the SAME lease
   // instance the agent runs under — boundary mutations must contend on it.

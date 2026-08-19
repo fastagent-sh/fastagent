@@ -129,7 +129,7 @@ Common options:
 | `instructions` | String or function returning the system prompt. |
 | `tools` | Agent tools — `MountedTool[]`. An authored `FastagentTool[]` (what `defineTool` returns) widens into it; the wider type additionally admits pi's default coding tools, which read the turn's `ExecutionEnv` as a fifth `execute` parameter. |
 | `skills` | Loaded Agent Skills. |
-| `sessions` | `PiSessionStore`. |
+| `sessions` | `PiSessionRecordStore`. |
 | `env` | `ExecutionEnv` for the default coding tools (they take it as the turn's tool context) and the definition loader. Narrows where they touch the machine; it does not sandbox author-written `tools/`, which can import anything. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
@@ -448,9 +448,9 @@ in `@fastagent-sh/fastagent/session`; the pi implementation in `/pi`:
 
 ```ts
 import type { SessionControl, SessionEvent } from "@fastagent-sh/fastagent/session";
-import { createPiAgent, createPiSessionControl, inMemorySessionStore } from "@fastagent-sh/fastagent/pi";
+import { createPiAgent, createPiSessionControl, piInMemorySessionRecordStore } from "@fastagent-sh/fastagent/pi";
 
-const sessions = inMemorySessionStore();
+const sessions = piInMemorySessionRecordStore();
 const { control, observer } = createPiSessionControl({ sessions });
 const agent = createPiAgent({ model: "openai-codex/gpt-5.5", sessions, observer });
 // This agent has no definition, so `control.commands()` is `[]` — true, not a gap. Over a DIRECTORY

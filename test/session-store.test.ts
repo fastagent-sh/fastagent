@@ -150,3 +150,19 @@ describe("piInMemorySessionRecordStore", () => {
     expect((await store.openOrCreate("room-2")).getBranch().length).toBe(0);
   });
 });
+
+describe("a relative dir belongs to the workspace, not to the process", () => {
+  it("resolves against cwd, so a serving process that chdirs still finds its records", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "fa-store-relative-"));
+    const store = piSessionRecordStore({ dir: "sessions", cwd: workspace });
+
+    const session = await store.openOrCreate("42");
+    session.appendMessage({ role: "user", content: "relative", timestamp: 1 });
+
+    // Under the workspace, not under whatever directory the test runner started in.
+    expect(session.getSessionFile()).toContain(join(workspace, "sessions"));
+    expect(
+      (await piSessionRecordStore({ dir: "sessions", cwd: workspace }).openIfExists("42"))?.getBranch(),
+    ).toHaveLength(1);
+  });
+});

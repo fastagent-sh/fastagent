@@ -309,8 +309,8 @@ outside it entirely. A sandbox adapter provides an `ExecutionEnv` AND constrains
 
 The reference stores are:
 
-- `inMemorySessionStore()` for embedding/tests;
-- `jsonlSessionStore({ dir })` for restart-surviving local/single-machine continuity.
+- `piInMemorySessionRecordStore()` for embedding/tests;
+- `piSessionRecordStore({ dir })` for restart-surviving local/single-machine continuity.
 
 Opening an existing session reconciles a dangling leaf tool call left by an interrupted process by
 appending an explicit interrupted error result. This restores transcript validity; it does not make
