@@ -396,29 +396,35 @@ function createProvider(...): Provider;
 ## Sessions and leases
 
 ```ts
-interface PiSessionStore {
-  openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<Session>;
+interface PiSessionRecordStore {
+  openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<SessionManager>;
+  /** Read-only sibling for the observation plane: unknown session → undefined, never created. */
+  openIfExists(sessionId: string): Promise<SessionManager | undefined>;
 }
 
-/** Where a NEW session starts from. Read only on the create path; an existing session ignores it. */
+/** Where a NEW thread starts from. Read only on the create path; an existing session ignores it. */
 interface SessionInheritance {
   parentSession: string;
   branchHints?: string[];
 }
 
-/** Read-only sibling for the observation plane: unknown session → undefined, never created. */
-interface PiSessionReader {
-  openIfExists(sessionId: string): Promise<Session | undefined>;
-}
-
-function inMemorySessionStore(): PiSessionStore & PiSessionReader;
-function jsonlSessionStore(options: { dir: string; cwd?: string }): PiSessionStore & PiSessionReader;
+function piInMemorySessionRecordStore(options?: { cwd?: string }): PiSessionRecordStore;
+function piSessionRecordStore(options: { dir: string; cwd?: string }): PiSessionRecordStore;
 ```
 
-`jsonlSessionStore`'s `dir` is resolved against `cwd` (which itself defaults to `process.cwd()`), so a
-relative path means "inside the workspace this store serves", not "inside whatever directory the
-process happens to be in". `cwd` also scopes lookups: two stores sharing one `dir` but serving
-different workspaces never open each other's sessions.
+`piSessionRecordStore`'s `dir` is resolved against `cwd` (which itself defaults to `process.cwd()`), so
+a relative path means "inside the workspace this store serves". `cwd` also scopes lookups: two stores
+sharing one `dir` but serving different workspaces never open each other's sessions.
+
+Session ids are the Caller's, and arbitrary — a telegram group is `-1001234567890`, a feishu thread
+carries `:` and `/`. pi accepts none of those as a record name, so the store encodes them
+injectively (`-1001234567890` becomes `s-1001234567890` on disk, readable enough to tell which room a
+file belongs to). A record is published complete: pi buffers a new session until its first assistant
+message, which would otherwise lose the user's question to a crash AND make open-or-create
+non-idempotent.
+
+The in-memory store cannot inherit — a fork needs a record to copy — and says so rather than starting
+a thread silently empty.
 
 Lease:
 

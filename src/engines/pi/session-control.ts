@@ -5,7 +5,7 @@
  * {@link SessionObserver} to plug into the invoke pipeline (`createPiAgentFromHarness({ observer })`)
  * — the hub derives everything from the rich event stream (plus the {@link RunControls} the
  * run_started event carries), holds no durable state of its own, and never writes: durable truth
- * stays in the session repository (read via {@link PiSessionReader}), live truth in the events the
+ * stays in the session repository (read via {@link PiSessionRecordStore}), live truth in the events the
  * data plane emits, modulation in the controls the data plane registers.
  *
  * Boundary mutations (Phase 2b: compact/set_model/set_thinking/navigate) take the same lease as runs;

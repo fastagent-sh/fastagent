@@ -4,7 +4,7 @@
  *
  *   L2  createPiAgentFromDefinition(dir, options)   — load a definition directory, assemble, then L1.
  *   L1  createPiAgent(options)                       — assemble from typed parts (the canonical ctor).
- *   L0  createPiAgentFromHarness({ harnessFactory }) — in invoke.ts (its body is the turn mechanism).
+ *   L0  createPiAgentFromSession({ sessionFactory }) — in invoke-session.ts (the turn mechanism).
  *
  * Above L2 sits the agent opener createPiAgentFromDir (open.ts), which both `dev` and
  * `start` drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
@@ -52,7 +52,7 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // (a deployment posture).
 //
 // These are pi-agent-core's tools, which reach the filesystem and the shell through the
-// {@link ExecutionEnv} the harness hands them per turn — NOT pi-coding-agent's, which are the same four
+// {@link ExecutionEnv} the binding hands them per turn — NOT pi-coding-agent's, which are the same four
 // tools wired to `node:fs` directly. Going through the env is the point, and the whole of it: it makes
 // {@link CreatePiAgentOptions.env} the one seam a sandbox adapter has to implement, instead of a knob
 // that governed everything except the tools that actually touch the machine. (It buys no decoupling
@@ -66,7 +66,7 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // renders (see session-builder.ts).
 
 /** pi's core default toolset (read/bash/edit/write). Rooted at the ExecutionEnv's cwd, supplied per
- *  turn as the harness tool context — hence no argument here. */
+ *  turn as the tool context — hence no argument here. */
 export function piDefaultTools(): MountedTool[] {
   // `read` needs its image pipeline INJECTED (core ships none); see read-image.ts for what is at stake.
   return [

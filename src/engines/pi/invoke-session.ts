@@ -1,22 +1,21 @@
 /**
- * L0 over pi-coding-agent's `AgentSession`, in the `per-invoke` state locality
- * ([conformance-levels.md](../../../docs/design/conformance-levels.md) §2, top-right cell): build a
- * session per invoke over the SAME durable jsonl, run one turn, dispose.
+ * THE L0: pi's `AgentSession`, one per invoke, over the same durable record —
+ * [conformance-levels.md](../../../docs/design/conformance-levels.md) §2's `per-invoke` posture.
+ * Build a session, run one turn, dispose; continuity lives in the record, never in this process.
  *
- * Why this exists next to {@link createPiAgentFromHarness}: pi 0.84 replaced `AgentHarness` with an
- * unimplemented lane-based skeleton, and pi does not consume that class itself — its TUI, RPC and SDK
- * all run on `AgentSession`. The serving path is moving here; the harness L0 is still the default.
- *
- * WHAT SERVES ON IT: `fastagent dev`/`start` under `FASTAGENT_ENGINE=session` (engine.ts), through
- * the directory opener, which is the only rung that can hand it durable session records. Real turns,
- * real definitions, real providers — not a test-only path.
- *
- * WHAT IT STILL REFUSES, loudly rather than by degrading: the harness engine's session store. It
- * throws naming the gap, because the alternative is durable continuity that silently is not.
+ * Why this class: pi 0.84 replaced `AgentHarness` with an unimplemented lane-based skeleton, and pi
+ * does not consume that class itself — its TUI, RPC and SDK all run on `AgentSession`. Being the
+ * sole consumer of a surface nobody dogfoods is a position, not an architecture.
  *
  * Events are translated ONCE, into the rich `SessionEvent` vocabulary the observation plane speaks;
  * the SPEC stream is a projection of that (`docs/design/session-control.md` §6 — one translation
  * plus one projection, never two parallel ones).
+ *
+ * Two disciplines this file exists to hold:
+ * - the turn's outcome comes from the EVENT STREAM, never from an index into session state, which
+ *   compaction and overflow recovery both rewrite mid-turn;
+ * - `run_started` is published BEFORE the session is bound, so a dispatch racing the build queues on
+ *   the run's controls instead of finding no run.
  */
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { SessionInheritance } from "./session-inheritance.ts";
@@ -62,9 +61,8 @@ export interface CreatePiAgentFromSessionOptions {
  * pi session events into the rich `SessionEvent` vocabulary — the SINGLE translation point. Events
  * with no vocabulary yet (agent_start, turn_start, entry_appended, …) are dropped.
  *
- * `auto_retry_start` has no harness counterpart: an `AgentSession` retries a failed assistant
- * request itself. It reports as a `retry_scheduled` with `operation: "assistant"`, a case the
- * harness could not produce and the vocabulary therefore did not have.
+ * `auto_retry_start` reports as a `retry_scheduled` with `operation: "assistant"`: pi retries a
+ * failed ANSWER request itself, which the summarization-only cases of that vocabulary predate.
  */
 function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent | null {
   const at = Date.now();
@@ -158,7 +156,7 @@ function toSessionEvent(event: AgentSessionEvent, runId: string): SessionEvent |
 /**
  * The turn's outcome. `prompt()` resolves void and never throws for an engine-side failure (measured:
  * a provider error and an abort both resolve normally), so the terminal comes from the assistant
- * message the run ended on — the same read {@link toTerminal} performs on the harness path.
+ * message the run ended on.
  *
  * That message is taken from the EVENT STREAM, not from `session.state.messages`. Session state is
  * mutable mid-turn: compaction replaces the array, and overflow recovery splices the last assistant

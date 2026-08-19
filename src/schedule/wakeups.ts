@@ -230,7 +230,7 @@ export function takeFirstDueWakeup(stateRoot: string, now: Date = new Date()): W
  * already advanced the entry, and its next occurrence comes by definition — a busy one is skipped + audited.
  *
  * Known residual: between the claim (removed from the store) and this re-add there is a microtask-scale
- * window (the busy reject yields before any harness IO) where an `unwake` for this id reports "not found"
+ * window (the busy reject yields before any engine IO) where an `unwake` for this id reports "not found"
  * and the defer then resurrects it — the one-shot cousin of the recurring resurrection the advance-in-place
  * claim eliminated. Accepted: closing it needs a claim-lease with expiry, disproportionate to the window.
  */
