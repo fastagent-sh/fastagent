@@ -24,6 +24,7 @@ import {
   createAgentSessionServices,
 } from "@earendil-works/pi-coding-agent";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
+import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
 import { type ToolActivation, additiveActivation, agentSessionManager, turnContext } from "./tool-context.ts";
@@ -60,13 +61,40 @@ export interface PiAgentSessionFactoryOptions {
 }
 
 /**
- * The turn's {@link ToolActivation} over a live session — the AgentSession sibling of invoke.ts's
- * harness bridge, so the same built-in `search_tools` serves both.
+ * The session custom-entry type recording ONE activation delta: `{ names }` — exactly the deferred
+ * tools a loader activated in that call.
  *
- * NOT persisted, unlike the harness path, which records each activation in the session and restores
- * it per invoke. pi's chat session has the same gap and states it; closing it here needs a session
- * entry of our own, which belongs with the rest of the activation work rather than in this binding.
- * The consequence is bounded: a deferred tool discovered in one turn is deferred again in the next.
+ * A DEDICATED record, not pi's own `active_tools_change`: that one is a full SNAPSHOT of everything
+ * active at the moment, so replaying it would keep a tool active in old sessions after the author
+ * flips it to `deferred` — the session never discovered it. A delta carries only what was actually
+ * found, and is layered onto whatever the workspace mounts TODAY.
+ */
+const TOOL_ACTIVATION_ENTRY = "fastagent:tool-activation";
+
+/** Every deferred tool this session has ever discovered, oldest first. */
+function recordedActivations(session: AgentSession): string[] {
+  const names: string[] = [];
+  for (const entry of session.sessionManager.getBranch()) {
+    const record = entry as { type?: string; customType?: string; data?: { names?: unknown } };
+    if (record.type !== "custom" || record.customType !== TOOL_ACTIVATION_ENTRY) continue;
+    if (Array.isArray(record.data?.names)) {
+      for (const name of record.data.names) if (typeof name === "string") names.push(name);
+    }
+  }
+  return names;
+}
+
+/** Warned once per session+missing set: a fresh session is built per invoke and channel sessions run
+ *  for weeks, so an un-deduped warn would repeat every turn and dilute its own signal. */
+const warnedDroppedActivations = new Set<string>();
+
+/**
+ * The turn's {@link ToolActivation} over a live session — the AgentSession sibling of the harness
+ * bridge, so the same built-in `search_tools` serves both.
+ *
+ * Activations are PERSISTED as deltas, so a tool discovered in one turn stays callable in the next.
+ * pi's own chat session does not do this (it has no place to put the record); a served session does,
+ * because the alternative is an agent that re-discovers the same capability every single turn.
  */
 function sessionToolActivation(session: AgentSession): ToolActivation {
   // Serialize activations: the read-modify-write below is only race-free while nothing awaits
@@ -83,7 +111,10 @@ function sessionToolActivation(session: AgentSession): ToolActivation {
           current,
           names,
         );
-        if (added.length > 0) session.setActiveToolsByName([...current, ...added]);
+        if (added.length > 0) {
+          session.setActiveToolsByName([...current, ...added]);
+          session.sessionManager.appendCustomEntry(TOOL_ACTIVATION_ENTRY, { names: added });
+        }
         return added;
       };
       const result = chain.then(run, run);
@@ -210,12 +241,28 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       customTools: toolDefinitions(tools, cwd, env, bound),
     });
     bound.session = session;
-    // Deferral: pi starts every mounted tool active, so narrow by SUBTRACTING the deferred names
-    // (robust to pi mounting tools of its own, unlike an exact-set replacement).
+    // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the
+    // deferred names (robust to pi mounting tools of its own, unlike an exact-set replacement), then
+    // add back what THIS session has already discovered.
     if (deferred.length > 0) {
       const active = session.getActiveToolNames();
-      if (deferred.some((name) => active.includes(name))) {
-        session.setActiveToolsByName(active.filter((name) => !deferred.includes(name)));
+      const mounted = new Set(session.getAllTools().map((tool) => tool.name));
+      const recorded = recordedActivations(session);
+      // A recorded name that is no longer mounted is dropped rather than replayed: pi's setter
+      // THROWS on an unknown name, so replaying one would brick every future turn of this session.
+      const restored = recorded.filter((name) => mounted.has(name));
+      const dropped = recorded.filter((name) => !mounted.has(name));
+      if (dropped.length > 0) {
+        const key = `${sessionId}\u0000${[...new Set(dropped)].sort().join(",")}`;
+        const emit = warnedDroppedActivations.has(key) ? log.debug : log.warn;
+        warnedDroppedActivations.add(key);
+        emit(
+          `[fastagent] session ${sessionId}: dropping recorded activation(s) no longer mounted: ${[...new Set(dropped)].join(", ")}`,
+        );
+      }
+      const next = [...new Set([...active.filter((name) => !deferred.includes(name)), ...restored])];
+      if (next.length !== active.length || next.some((name) => !active.includes(name))) {
+        session.setActiveToolsByName(next);
       }
     }
     return session;
