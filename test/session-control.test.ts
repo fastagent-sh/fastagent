@@ -12,7 +12,7 @@ import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
 
 import { SUBSCRIBER_BUFFER_CAP, createPiSessionControl } from "../src/engines/pi/session-control.ts";
 import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
-import { resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
+import { activePath, resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import {
@@ -878,6 +878,14 @@ describe("session control (Phase 2b): boundary mutations", () => {
     });
     expect((await control.state("sKeep")).thinkingLevel).toBe("high");
     expect((await control.entries("sKeep")).entries.filter((e) => e.kind === "thinking_level_change")).toHaveLength(1);
+  });
+
+  it("a cut parent chain is refused by BOTH planes, not just the control one", () => {
+    // The failure this closes: state() rejected a broken record while the turn ran on assembly
+    // defaults, so the two planes disagreed about what the session was. One reader, one answer.
+    const cut = [{ id: "leaf", parentId: "pruned", type: "message", timestamp: new Date().toISOString(), message: {} }];
+    const record = { getBranch: () => cut } as unknown as Parameters<typeof activePath>[0];
+    expect(() => activePath(record)).toThrow(/missing from the journal/);
   });
 
   it("the resolve still clamps as a BACKSTOP — the case the boundary cannot see", () => {

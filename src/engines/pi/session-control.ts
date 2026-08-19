@@ -41,7 +41,7 @@ import type { RunControls, SessionObserver } from "./turn-kit.ts";
 import type { Lease } from "./turn-kit.ts";
 import type { AnyModel } from "./models.ts";
 import type { PiAgentSessionFactory } from "./invoke-session.ts";
-import { THINKING_LEVELS, resolveSessionSettings } from "./session-settings.ts";
+import { THINKING_LEVELS, activePath, resolveSessionSettings } from "./session-settings.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 
@@ -112,25 +112,6 @@ function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
  *  there is nothing else to exclude. */
 function isNavigable(entry: SessionTreeEntry): boolean {
   return entry.type !== "label";
-}
-
-/**
- * The entries on the session's ACTIVE path, root→leaf — what every last-wins settings read walks.
- * `getBranch()` is exactly that walk: the journal can hold abandoned branches after a `navigate`,
- * and reading it flat would run the session on a setting it moved away from.
- *
- * A chain that is not intact THROWS. `getBranch()` stops where a parent is missing and answers the
- * SHORT path, which reads exactly like a short session — every override above the gap gone, the next
- * turn silently on assembly defaults. The caller decides what to do with the fault (state() reports
- * the settings as absent, dispatch answers with a code); what it must not do is guess.
- */
-function activePath(record: SessionManager): Parameters<typeof resolveSessionSettings>[0] {
-  const path = record.getBranch();
-  const root = path[0] as { id?: string; parentId?: string | null } | undefined;
-  if (root?.parentId != null) {
-    throw new Error(`session entry "${root.parentId}" is missing from the journal (parent of "${root.id}")`);
-  }
-  return path as unknown as Parameters<typeof resolveSessionSettings>[0];
 }
 
 // ── Live fan-out (events plane) ──────────────────────────────────────────────

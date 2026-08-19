@@ -28,7 +28,7 @@ import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
-import { resolveSessionSettings } from "./session-settings.ts";
+import { activePath, resolveSessionSettings } from "./session-settings.ts";
 import { DEFAULT_THINKING_LEVEL } from "./models.ts";
 import { type ToolActivation, additiveActivation, agentSessionManager, turnContext } from "./tool-context.ts";
 
@@ -253,11 +253,14 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and
     // pi does not read them back — a binding that ignored them would silently run every turn on the
     // assembly default, and `state()` would report a setting no turn uses.
-    const settings = resolveSessionSettings(
-      sessionManager.getBranch() as unknown as Parameters<typeof resolveSessionSettings>[0],
-      modelRuntime,
-      { model, thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL },
-    );
+    // The SAME read the control plane performs, including its integrity check: a record whose chain
+    // is broken must not run on assembly defaults while `state()` rejects it — one of the two planes
+    // would be lying. A throw here becomes this turn's `failed` event, which is where the fault has
+    // a channel to be reported through.
+    const settings = resolveSessionSettings(activePath(sessionManager), modelRuntime, {
+      model,
+      thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+    });
     const bound: { session?: AgentSession } = {};
     const { session } = await createAgentSessionFromServices({
       services: await services,

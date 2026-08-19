@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { piSessionRecordStore } from "../src/engines/pi/session-store.ts";
 
 const text = (session: SessionManager) => JSON.stringify(session.getBranch());
@@ -108,13 +108,27 @@ describe("inheritance edges", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-inherit-partial-"));
     const cwd = process.cwd();
     const store = await roomWithHistory(dir, cwd);
-    // Publication is the last step, so a record only becomes discoverable complete. What must never
-    // exist is TWO records for one id — the fallback creating a second while a half-prepared first
-    // is already in place.
-    const thread = await store.openOrCreate("thread-5", { parentSession: "room" });
-    expect(thread.getBranch().length).toBeGreaterThan(0);
 
+    // The fork blows up after the intermediate exists but before anything is published. The thread
+    // must fall back to an empty session AND leave exactly one record behind — a half-prepared one
+    // under the same id would make which record a later lookup finds a matter of directory order.
+    const forkFrom = vi.spyOn(SessionManager, "forkFrom").mockImplementation(() => {
+      throw new Error("disk full while forking");
+    });
+    let thread: SessionManager;
+    try {
+      thread = await store.openOrCreate("thread-5", { parentSession: "room" });
+    } finally {
+      forkFrom.mockRestore();
+    }
+
+    expect(thread.getBranch()).toHaveLength(0); // started empty, as the fallback promises
     const named = (await SessionManager.list(cwd, join(dir, "agent-session"))).filter((r) => r.id === "sthread-5");
     expect(named).toHaveLength(1);
+
+    // And the thread is usable afterwards: the second open continues THAT record, not a third one.
+    thread.appendMessage({ role: "user", content: "after the failure", timestamp: 9 });
+    const again = await store.openOrCreate("thread-5");
+    expect(JSON.stringify(again.getBranch())).toContain("after the failure");
   });
 });
