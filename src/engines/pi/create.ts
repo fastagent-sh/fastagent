@@ -28,7 +28,7 @@ import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts
 import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
 import { type AnyModel, DEFAULT_THINKING_LEVEL, piHarnessFactory } from "./harness.ts";
-import { createPiModels } from "./models.ts";
+import { createPiModelRuntime, createPiModels } from "./models.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
@@ -226,6 +226,10 @@ function buildPiAgent(opts: {
   thinkingLevel?: ThinkingLevel;
   providers?: Provider[];
   authPath?: string;
+  /** A pre-built collection, used verbatim. The DIRECTORY rungs pass one so the agent's own
+   *  models.json is in scope (see createPiModelRuntime); building it is async, which is why it
+   *  happens in the caller — L1 has no directory, so it keeps the synchronous built-ins path. */
+  models?: Models;
   systemPrompt?: string | (() => string);
   tools?: MountedTool[];
   skills?: Skill[];
@@ -237,7 +241,7 @@ function buildPiAgent(opts: {
   observer?: SessionObserver;
   onAssembly?: OnAssembly;
 }): Agent {
-  const models = createPiModels({ providers: opts.providers, authPath: opts.authPath });
+  const models = opts.models ?? createPiModels({ providers: opts.providers, authPath: opts.authPath });
   const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
   // Materialized here (not defaulted inside createPiAgentFromHarness) so the exposed parts carry
   // the SAME lease instance the agent runs under — boundary mutations must contend on it.
@@ -424,13 +428,17 @@ export async function createPiAgentFromDefinition(
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
   const tools = withSearchTool(options.tools ?? piDefaultTools());
+  // Dir-aware default: the same secrets-dir-derived file the opener uses for this dir (the opener
+  // passes an explicit authPath, so this only affects direct L2 callers).
+  const authPath = options.authPath ?? defaultAuthPath(resolveSecretsDir(dir));
   const agent = buildPiAgent({
     model: options.model,
     thinkingLevel: options.thinkingLevel,
-    providers: options.providers,
-    // Dir-aware default: the same secrets-dir-derived file the opener uses for this dir (the opener
-    // passes an explicit authPath, so this only affects direct L2 callers).
-    authPath: options.authPath ?? defaultAuthPath(resolveSecretsDir(dir)),
+    // THE directory rung's model surface: built-ins + the agent's own models.json (custom endpoints,
+    // which are definition data and travel with the artifact) + any injected Provider instance. This
+    // is what makes `dev`/`start`/`invoke` and an embedded L2 caller resolve the same specs.
+    models: await createPiModelRuntime({ agentDir: dir, authPath, providers: options.providers }),
+    authPath,
     // The directory is the agent, LIVE: re-read the definition on every invoke, so AGENTS.md/skills
     // edits (the author's, or the agent's own self-modification) take effect on the next turn with
     // no process restart — restarts are reserved for code (tools/channels/config, module cache).

@@ -84,6 +84,97 @@ fastagent dev --model openai-codex/gpt-5.5
 FASTAGENT_MODEL=openai-codex/gpt-5.5 fastagent start
 ```
 
+## Custom model endpoints
+
+To run against something the built-in catalog does not know — a self-hosted model (vLLM, SGLang,
+Ollama, LM Studio) or your own gateway/proxy — declare it in `models.json` **next to the config
+file**, in the agent dir:
+
+```txt
+my-agent/
+├── fastagent.config.ts
+├── models.json        ← custom endpoints
+└── persona.md
+```
+
+The file's existence is the switch; there is no config key for it. An endpoint needs a URL, an API
+shape, a key, and the model ids it serves — everything else has a default:
+
+```json
+{
+  "providers": {
+    "mygw": {
+      "baseUrl": "http://vllm.internal:8000/v1",
+      "api": "openai-completions",
+      "apiKey": "$MYGW_API_KEY",
+      "models": [{ "id": "deepseek-v3", "contextWindow": 65536 }]
+    }
+  }
+}
+```
+
+The provider id joins the model id into a normal spec, usable everywhere a spec is:
+
+```ts
+export default defineConfig({
+  model: "mygw/deepseek-v3",
+});
+```
+
+Custom endpoints are **additive** — built-in providers stay available alongside them.
+
+### Keys stay out of the file
+
+`apiKey` (and any `headers` value) resolves at request time: `"$MYGW_API_KEY"` reads an environment
+variable, `"!cmd"` runs a command and uses its stdout, anything else is a literal. Prefer the env
+form — the file then stays safe to commit and to bake into an image.
+
+`deploy` recognizes the variable backing the selected model and carries its value to the host like any
+provider key, listing it in the runbook and refusing `--run` when it has no local value. You do not
+need to declare it. `deploy.secrets` remains for the variables `deploy` cannot infer — a key used only
+in `headers`, or a value assembled from several variables (`"${A}_${B}"`):
+
+```ts
+export default defineConfig({
+  model: "mygw/deepseek-v3",
+  deploy: { secrets: ["MYGW_PORTKEY_KEY"] },
+});
+```
+
+A key written INTO `models.json` (a literal, or a `!command` resolved on the host) travels with the
+file itself, so there is nothing to carry — and `deploy` does not ask for one.
+
+### Routing a built-in provider through a proxy
+
+Give an existing provider a new `baseUrl` and nothing else. Its full model list, pricing metadata and
+compatibility flags are kept, and existing OAuth / API-key auth keeps working:
+
+```json
+{
+  "providers": {
+    "deepseek": { "baseUrl": "https://llm-proxy.internal/v1" }
+  }
+}
+```
+
+### Compatibility flags
+
+OpenAI-compatible servers differ in the details. `compat` (per provider, or per model to override)
+carries the switches — e.g. `supportsDeveloperRole: false` for servers that reject the `developer`
+role, or `thinkingFormat` for reasoning models behind a chat template.
+
+The schema is pi's own; its full field reference, including every `compat` flag and per-model
+override, is in pi's `docs/models.md` (`@earendil-works/pi-coding-agent`). Two things are specific to
+FastAgent:
+
+| Behavior | Why |
+|---|---|
+| pi's machine-global `~/.pi/agent/models.json` is **not** read | Deployment behavior must come from the bundled definition, not the builder machine — a globally-defined endpoint would work locally and vanish on deploy. |
+| A malformed `models.json` fails startup | Upstream degrades silently to the built-ins; FastAgent surfaces the parse error instead of letting it resurface later as `unknown model`. |
+
+`fastagent models` lists the built-in catalog only — it answers "what does FastAgent support", not
+"what does this agent use". To confirm what an agent resolved, run `fastagent info`.
+
 ## Auth and secrets
 
 FastAgent resolves model credentials through the model provider layer. Common options:
@@ -251,7 +342,11 @@ The following are library API injection points rather than config keys:
 - custom session stores,
 - custom execution environments (a complete sandbox adapter remains future work),
 - distributed leases,
-- custom model providers,
 - base prompt overrides.
 
 Use the library API in [Embedding](embedding.md) when you need those ports.
+
+Custom model providers are the exception that proves the rule: a *declarative* endpoint is definition
+data, so it lives in the agent's own [`models.json`](#custom-model-endpoints). A provider that needs
+CODE — minting a token per request, say — is still an injection point (`providers`, see
+[Embedding](embedding.md)).

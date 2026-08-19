@@ -165,7 +165,12 @@ Static keys belong in the login file or the environment, not in code — there i
 
 ## 5. Your own model source: `providers`
 
-When you run your own **gateway** or a **self-hosted / OpenAI-compatible** endpoint, register it as a provider; a `model` spec then selects it by id. This is the one case that touches the engine's provider layer — built-in providers cover everything else.
+> Reach for this only when the provider needs **code**. An endpoint that is just a URL, a key and some
+> model ids is data: declare it in the agent's own `models.json` and every path — `dev`, `start`,
+> `invoke`, `chat`, `deploy`, and L2 embedding — picks it up with no wiring. See
+> [Custom model endpoints](configuration.md#custom-model-endpoints).
+
+When your model source needs per-request logic — minting or rotating a token, calling an auth service — register it as a provider; a `model` spec then selects it by id. This is the one case that touches the engine's provider layer — built-in providers cover everything else.
 
 ```ts
 import { createPiAgent, createProvider } from "@fastagent-sh/fastagent";
@@ -189,7 +194,9 @@ const myGateway = createProvider({
 const agent = createPiAgent({ model: "acme/gpt-x", providers: [myGateway] });
 ```
 
-`providers` are registered on top of the built-ins (a matching id overrides a built-in). An "auth service" is modeled as a provider — its per-request credential logic lives in the provider's `auth.…resolve()`, not as a separate credential option.
+`providers` are registered on top of the built-ins (a matching id overrides a built-in). Against the agent's own `models.json` the precedence is the other way round: an injected provider is the BASE and a same-id `models.json` entry composes over it, so the file wins. That is deliberate — where a deployed agent's traffic goes is a property of the definition, not of the program that embedded it — but it does mean a same-id entry silently replaces the endpoint you injected. Use a distinct id when you mean both to exist.
+
+An "auth service" is modeled as a provider — its per-request credential logic lives in the provider's `auth.…resolve()`, not as a separate credential option.
 
 ## How embed and CLI relate
 

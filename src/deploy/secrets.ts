@@ -60,6 +60,9 @@ export function deploymentSecrets(
  */
 export function assembleSecrets(input: {
   modelAuth: string | undefined;
+  /** The definition carries the model key itself (a models.json literal `apiKey` / `!command`): there is
+   *  no value to carry and no gate to raise — see {@link modelCredentialCarry}. */
+  modelKeyInDefinition?: boolean;
   authFile: Buffer | undefined;
   channels: ChannelKind[];
   longConnectionChannels?: string[];
@@ -81,6 +84,11 @@ export function assembleSecrets(input: {
     else missingSecrets.push(input.modelAuth); // an env-key name with no value — `.env` remediation fits
   } else if (input.authFile) {
     secrets.FASTAGENT_AUTH_SEED = input.authFile.toString("base64");
+  } else if (input.modelKeyInDefinition) {
+    // The definition authenticates itself (models.json literal key, or a command run on the host), so it
+    // travels in the image with everything else. Gating here would be the worst kind of wrong: both
+    // remedies we print are impossible for such an agent — `fastagent login` has no flow for a custom
+    // provider, and there is no provider env key to set.
   } else {
     needsModelCredential = true; // no env key, no auth.json — `fastagent login` remediation
   }

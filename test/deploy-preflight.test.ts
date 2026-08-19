@@ -434,3 +434,37 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     expect(pre.messages.some((m) => /does not list @fastagent-sh\/fastagent/.test(m.text))).toBe(true);
   });
 });
+
+describe("preflight: how a models.json endpoint's credential reaches the host", () => {
+  const GATEWAY = (apiKey: string) =>
+    JSON.stringify({
+      providers: {
+        mygw: { baseUrl: "http://vllm.internal:8000/v1", api: "openai-completions", apiKey, models: [{ id: "m1" }] },
+      },
+    });
+
+  it("an env-keyed endpoint reports the VARIABLE NAME, so the value carries like any provider key", async () => {
+    // What made this wrong: probeAuthSource answers "is it authenticated here" ("configured API key"),
+    // not "how does the credential reach the host". Reporting the display label left `--run` seeing no
+    // credential at all, and it stopped a correctly configured agent with two impossible remedies.
+    const dir = await workspace({ "models.json": GATEWAY("$FA_PREFLIGHT_GW_KEY") });
+    process.env.FA_PREFLIGHT_GW_KEY = "sk-x";
+    try {
+      const pre = await call(dir, { model: "mygw/m1" });
+      expect(pre.ok).toBe(true);
+      if (pre.ok) {
+        expect(pre.modelAuth).toBe("FA_PREFLIGHT_GW_KEY"); // the name, not "configured API key"
+        expect(pre.modelKeyInDefinition).toBe(false);
+      }
+    } finally {
+      delete process.env.FA_PREFLIGHT_GW_KEY;
+    }
+  });
+
+  it("a key written into the file is reported as definition-carried (nothing to carry, nothing to gate)", async () => {
+    const dir = await workspace({ "models.json": GATEWAY("sk-literal-in-file") });
+    const pre = await call(dir, { model: "mygw/m1" });
+    expect(pre.ok).toBe(true);
+    if (pre.ok) expect(pre.modelKeyInDefinition).toBe(true);
+  });
+});

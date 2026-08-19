@@ -16,6 +16,10 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.mjs"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);
+    // models.json is loaded once per worker (the model hub is built during assembly) AND a malformed one
+    // fails that assembly — unwatched, the edit that repairs a dead worker would not be the edit that
+    // restarts it, so the author would be stranded with a correct file and a broken serve.
+    expect(ignored(join(root, "models.json"))).toBe(false);
   });
 
   it(".secrets/.env is a code input (credentials are process-bound); the rest of .secrets is not", () => {

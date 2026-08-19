@@ -45,6 +45,8 @@ There is ONE agent shape and ONE marker. The shape:
 ├── channels/
 ├── schedules/
 ├── fastagent.config.mjs    # THE marker
+├── models.json             # optional: custom model endpoints (pi's schema, definition-LOCAL so it
+│                           # travels into the image — pi's machine-global ~/.pi one stays unread)
 ├── .gitignore              # scaffolded ONCE by init, yours after: node_modules, .state, a stray .env
 ├── .secrets/               # secrets: .env + auth.json; only tracked .env.example + .gitignore travel
 └── .state/                 # mutable machine state: sessions, channel state, schedule state

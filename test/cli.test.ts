@@ -322,6 +322,35 @@ describe("cli papercuts", () => {
     await expect(stat(join(dir, "fastagent", ".state"))).rejects.toThrow(); // read-only: never creates the state root
   });
 
+  it("info RESOLVES the model spec against the agent's own models.json, and says so when it does not", async () => {
+    // The docs point at `info` to confirm what an agent resolved, so it must not merely echo the spec:
+    // a custom endpoint changes which specs exist, and reporting a healthy-looking one that `dev`/`start`
+    // then reject is the failure this pre-empts. Read-only and non-fatal — diagnosing a broken agent is
+    // the job, so the verdict is DATA (exit 0), not a throw.
+    const dir = await agentWorkspace("fa-info-models-", {
+      "models.json": JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: "http://vllm.internal:8000/v1",
+            api: "openai-completions",
+            apiKey: "$FA_TEST_KEY",
+            models: [{ id: "deepseek-v3" }],
+          },
+        },
+      }),
+    });
+    const env = { ...process.env };
+    delete env.FASTAGENT_MODEL;
+
+    const ok = JSON.parse((await run(["info", dir, "--json", "--model", "mygw/deepseek-v3"], undefined, env)).stdout);
+    expect(ok.model).toBe("mygw/deepseek-v3");
+    expect(ok.modelError).toBeNull(); // declared in models.json — it resolves
+
+    const bad = await run(["info", dir, "--json", "--model", "mygw/not-declared"], undefined, env);
+    expect(bad.code).toBe(0);
+    expect(JSON.parse(bad.stdout).modelError).toMatch(/not in registry/);
+  });
+
   it("info degrades when a tool can't load (missing dep) — reports it, still shows the surface, exits 0", async () => {
     // The scaffold ships tools/ that import @fastagent-sh/fastagent; before `npm install` the import fails.
     // A broken tool file is ISOLATED (skipped + reported, not thrown) so it can't crash the load — info

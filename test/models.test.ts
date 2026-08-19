@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { Api, Model, Models } from "@earendil-works/pi-ai";
-import { probeApiKey, providerAuthStatuses } from "../src/engines/pi/models.ts";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type Api, type Model, type Models, createProvider } from "@earendil-works/pi-ai";
+import {
+  createPiModelRuntime,
+  modelCredentialCarry,
+  probeApiKey,
+  probeAuthSource,
+  providerAuthStatuses,
+} from "../src/engines/pi/models.ts";
+import { resolveModel } from "../src/engines/pi/config.ts";
+import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 
 type FakeProvider = {
   id: string;
@@ -92,5 +104,170 @@ describe("probeApiKey (the post-login quick-fail check)", () => {
       message: "forbidden",
     });
     expect(await probeApiKey(stub("throw"), model)).toEqual({ state: "unknown", message: "store unreadable" });
+  });
+});
+
+describe("models.json: definition-local custom endpoints (createPiModelRuntime)", () => {
+  /** An agent dir with `models.json` — the file that declares a self-hosted / gateway endpoint. */
+  async function agentWith(modelsJson: string | undefined): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-modelsjson-"));
+    await writeFile(join(dir, "fastagent.config.ts"), "export default {};");
+    if (modelsJson !== undefined) await writeFile(join(dir, "models.json"), modelsJson);
+    return dir;
+  }
+
+  const GATEWAY = JSON.stringify({
+    providers: {
+      mygw: {
+        baseUrl: "http://vllm.internal:8000/v1",
+        api: "openai-completions",
+        apiKey: "$FASTAGENT_TEST_GW_KEY",
+        models: [{ id: "deepseek-v3", contextWindow: 65536 }],
+      },
+    },
+  });
+
+  it("a declared endpoint becomes a resolvable model, and its key comes from the environment", async () => {
+    const dir = await agentWith(GATEWAY);
+    const runtime = await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") });
+
+    // The point of the feature: `<id>/<modelId>` resolves, carrying the AUTHOR's endpoint — not a
+    // built-in's. contextWindow is the declared one; maxTokens is pi's documented default (16384),
+    // which is what makes "endpoint + key + model name" a complete config.
+    const model = resolveModel(runtime, "mygw/deepseek-v3");
+    expect(model.baseUrl).toBe("http://vllm.internal:8000/v1");
+    expect(model.contextWindow).toBe(65536);
+    expect(model.maxTokens).toBe(16384);
+    // Built-ins are kept alongside, so a custom endpoint is additive, never a replacement.
+    expect(runtime.getProvider("anthropic")).toBeDefined();
+
+    // `apiKey: "$ENV"` must interpolate on the SERVING path too (pi documents it for the TUI): the key
+    // stays out of the file, which is what lets models.json be committed and baked into an image.
+    process.env.FASTAGENT_TEST_GW_KEY = "sk-from-env";
+    try {
+      // Assert the SHAPE, not just presence: probeAuthSource flattens every models.json endpoint to this
+      // display label, which is why `deploy` cannot branch on it (see modelCredentialCarry below).
+      expect(await probeAuthSource(runtime, "mygw/deepseek-v3")).toBe("configured API key");
+      // The deploy-facing question — how does the credential REACH the host — answers with the env-var
+      // NAME, the shape assembleSecrets already carries.
+      expect(modelCredentialCarry(runtime, "mygw/deepseek-v3")).toEqual({
+        envVar: "FASTAGENT_TEST_GW_KEY",
+        inDefinition: false,
+      });
+    } finally {
+      delete process.env.FASTAGENT_TEST_GW_KEY;
+    }
+  });
+
+  it("a key written into models.json (literal or command) is carried BY the definition, not by deploy", async () => {
+    // These travel inside the image with the file itself. Reported as such so the deploy gate does not
+    // demand a credential that is already there — its remedies (`fastagent login`, a provider env key)
+    // are both impossible for a custom provider.
+    for (const apiKey of ["sk-literal-in-file", "!echo sk-from-command"]) {
+      const dir = await agentWith(
+        JSON.stringify({
+          providers: {
+            mygw: { baseUrl: "http://x/v1", api: "openai-completions", apiKey, models: [{ id: "m1" }] },
+          },
+        }),
+      );
+      const runtime = await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") });
+      expect(modelCredentialCarry(runtime, "mygw/m1")).toEqual({ inDefinition: true });
+    }
+  });
+
+  it("on an id collision the file wins over an injected Provider (models.json composes over the native base)", async () => {
+    // Upstream installs a registerNativeProvider() provider as the BASE and composes the models.json
+    // entry over it — the opposite of the built-in case, where an injected provider overrides. Pinned
+    // because the docs promise it and because it is the direction that keeps a DEPLOYED agent's traffic
+    // decided by its definition rather than by the program that embedded it.
+    const dir = await agentWith(GATEWAY); // declares "mygw" at http://vllm.internal:8000/v1
+    const injected = createProvider({
+      id: "mygw",
+      baseUrl: "https://from-injected-code/v1",
+      auth: { apiKey: { name: "k", resolve: async () => ({ auth: { apiKey: "x" }, source: "code" }) } },
+      models: [
+        {
+          id: "deepseek-v3",
+          name: "injected",
+          api: "openai-completions",
+          provider: "mygw",
+          baseUrl: "https://from-injected-code/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 111,
+          maxTokens: 222,
+        },
+      ],
+      api: { stream: () => undefined, streamSimple: () => undefined } as never,
+    });
+
+    const runtime = await createPiModelRuntime({
+      agentDir: dir,
+      authPath: join(dir, "auth.json"),
+      providers: [injected],
+    });
+    const model = resolveModel(runtime, "mygw/deepseek-v3");
+    expect(model.baseUrl).toBe("http://vllm.internal:8000/v1"); // the file, not the injected code
+    expect(model.contextWindow).toBe(65536); // the file's value, not the injected 111
+  });
+
+  it("a malformed models.json fails visibly instead of degrading to the built-ins", async () => {
+    // Upstream `ModelRuntime.create` RESOLVES on a parse error and parks the reason in getError(),
+    // so an unread error would surface later as a bare "unknown model" — the silent fallback this
+    // codebase forbids. The throw must name the file so the typo is findable.
+    const dir = await agentWith("{ not json");
+    await expect(createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") })).rejects.toThrow(
+      /models\.json/,
+    );
+  });
+
+  it("no models.json is the normal case: built-ins load, nothing throws", async () => {
+    const dir = await agentWith(undefined);
+    const runtime = await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json") });
+    expect(runtime.getProvider("anthropic")).toBeDefined();
+  });
+
+  it("pi's generated catalog cache lands in the state root, never in the agent dir", async () => {
+    // pi defaults modelsStorePath to `<dirname(modelsPath)>/models-store.json` — i.e. inside the agent
+    // dir, which `deploy` bakes wholesale into the image. The definition dir holds authored files only.
+    const dir = await agentWith(GATEWAY);
+    const stateRoot = join(dir, ".state");
+    await mkdir(stateRoot, { recursive: true });
+    await createPiModelRuntime({ agentDir: dir, authPath: join(dir, "auth.json"), stateRoot });
+    expect(existsSync(join(dir, "models-store.json"))).toBe(false);
+  });
+});
+
+describe("models.json on the serving path (createPiAgentFromDir)", () => {
+  it("dev/start/invoke assemble against a models.json endpoint, and leave no generated file in the agent dir", async () => {
+    // The Phase-2 claim: the SERVING opener — not just `chat` — resolves a custom endpoint. Before this,
+    // the opener ran on pi-ai's builtinModels(), which cannot see models.json, so assembly died with
+    // `unknown model "mygw/deepseek-v3"` no matter what the file said.
+    const dir = await mkdtemp(join(tmpdir(), "fastagent-serving-modelsjson-"));
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "mygw/deepseek-v3" };`);
+    await writeFile(
+      join(dir, "models.json"),
+      JSON.stringify({
+        providers: {
+          mygw: {
+            baseUrl: "http://vllm.internal:8000/v1",
+            api: "openai-completions",
+            apiKey: "$FASTAGENT_TEST_GW_KEY",
+            models: [{ id: "deepseek-v3" }],
+          },
+        },
+      }),
+    );
+
+    const { agent, modelSpec, stateRoot } = await createPiAgentFromDir(dir);
+    expect(agent).toBeDefined();
+    expect(modelSpec).toBe("mygw/deepseek-v3");
+
+    // The agent dir holds AUTHORED files only. L2 does not pass stateRoot explicitly, so this also pins
+    // that its default derivation keeps pi's catalog cache out of what `deploy` bakes into the image.
+    expect(existsSync(join(dir, "models-store.json"))).toBe(false);
+    expect(stateRoot.startsWith(dir)).toBe(true);
   });
 });

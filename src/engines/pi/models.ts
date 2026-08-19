@@ -4,11 +4,24 @@
  * it into the harness alongside the selected `model`; the two must come from the same collection so
  * the model's provider auth is in scope.
  */
+import { join } from "node:path";
 import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type FastagentAuthOptions, fastagentCredentialStore } from "./auth.ts";
+import { providerOf } from "./config.ts";
 import { type InteractiveLoginKind, interactiveLoginKind } from "./login.ts";
+import { AGENT_MODELS_FILE, resolveStateRoot } from "../../paths.ts";
+
+/** The DEFINITION-LOCAL custom-endpoint file, in pi's own models.json schema (see pi's docs/models.md):
+ *  declare a self-hosted / gateway endpoint as `{ providers: { <id>: { baseUrl, api, apiKey, models } } }`
+ *  and select it with a `<id>/<modelId>` model spec. Keys belong in the environment — `apiKey` supports
+ *  `"$ENV_VAR"` interpolation and `"!command"` — with the NAME listed in `deploy.secrets` so the value
+ *  travels to the host. Living in the agent dir is the whole point: it is part of the definition, so it
+ *  is baked into the deployed image. pi's MACHINE-GLOBAL `~/.pi/agent/models.json` stays unread — that
+ *  one is builder-machine state, and reading it would make an agent work locally and lose its model on
+ *  deploy. The NAME itself lives in the neutral paths.ts — `dev`'s watcher needs the same one, and a
+ *  second spelling would let the restart scope drift from what the worker loads. */
 
 export interface CreatePiModelsOptions extends FastagentAuthOptions {
   /** Credentials file path. Defaults to the global `~/.fastagent/.secrets/auth.json`; the directory opener passes
@@ -37,20 +50,76 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
 /**
  * The `ModelRuntime`-shaped sibling of {@link createPiModels} — the SAME hub semantics (built-in
  * providers + fastagent's credential store at `authPath`) in the type pi's session services require
- * (`createAgentSessionServices({ modelRuntime })`). Builtins only (`modelsPath: null` — pi's
- * machine-global models.json is definition-foreign) and no availability network, so the model
- * surface equals serving's. No `providers` option: `ModelRuntime` registers providers by config
- * record, not `Provider` instance — accepting the option and dropping it would be a silent no-op;
- * add the mapping when a consumer actually needs it.
+ * (`createAgentSessionServices({ modelRuntime })`). Built-ins PLUS the agent's own
+ * {@link AGENT_MODELS_FILE} when `agentDir` is given (a dir-less caller gets built-ins only), and no
+ * availability network, so the model surface equals serving's.
+ *
+ * `ModelRuntime` also takes `Provider` INSTANCES via `registerNativeProvider` (pi 0.83); the
+ * declarative file is what this rung wires because it is data that travels with the definition.
  */
-export function createPiModelRuntime(
-  options: FastagentAuthOptions & { authPath?: string } = {},
+export async function createPiModelRuntime(
+  options: FastagentAuthOptions & {
+    authPath?: string;
+    /** The agent dir, whose {@link AGENT_MODELS_FILE} declares custom endpoints. Omit for built-ins only. */
+    agentDir?: string;
+    /** Where the dynamic model-catalog cache goes; defaults to the agent's resolved state root. */
+    stateRoot?: string;
+    /** Extra providers for the ids the built-ins do not cover — the CODE-shaped sibling of models.json,
+     *  for what a file cannot express (minting a token per request, a test fake).
+     *
+     *  On an id COLLISION the file wins, not this: upstream installs a native provider as the BASE and
+     *  composes the models.json entry over it. Right way round — where a deployed agent's traffic goes
+     *  is a property of the definition, not of the program that embedded it — but it does mean a same-id
+     *  file entry silently replaces the endpoint injected here. Use a distinct id to keep both. */
+    providers?: Provider[];
+  } = {},
 ): Promise<ModelRuntime> {
-  return ModelRuntime.create({
+  const { agentDir } = options;
+  const runtime = await ModelRuntime.create({
     credentials: fastagentCredentialStore(options.authPath, { warn: options.warn }),
-    modelsPath: null,
+    modelsPath: agentDir ? join(agentDir, AGENT_MODELS_FILE) : null,
+    // MUST be set whenever modelsPath is: pi defaults this to `<dirname(modelsPath)>/models-store.json`,
+    // which would write a generated cache INTO the author's agent dir — and `deploy` bakes the whole
+    // tree, so it would travel into the image as stale state. Machinery belongs under the state root.
+    ...(agentDir
+      ? { modelsStorePath: join(options.stateRoot ?? resolveStateRoot(agentDir), "models-store.json") }
+      : {}),
     allowModelNetwork: false,
   });
+  // A malformed models.json does NOT throw upstream — `create` resolves with the built-ins and parks the
+  // reason in getError(). Left unread, a typo'd endpoint would silently degrade to "provider not in
+  // registry" at model-resolution time, i.e. the silent fallback this codebase forbids. The upstream
+  // message already names both the reason and the file, so it is surfaced verbatim.
+  const error = runtime.getError();
+  if (error) throw new Error(error);
+  for (const provider of options.providers ?? []) runtime.registerNativeProvider(provider);
+  return runtime;
+}
+
+/**
+ * How a model's credential will REACH a deployed agent — the question `deploy` asks, which
+ * {@link probeAuthSource} cannot answer: it flattens every models.json endpoint to the display label
+ * "configured API key", so a self-hosted endpoint looks credential-less to the deploy gate even when
+ * its key is sitting in an env var.
+ *
+ * - `envVar`: an environment variable backs it, BY NAME — the shape `deploy` already understands, so
+ *   the value carries as a host secret with no extra declaration from the author.
+ * - `inDefinition`: the definition itself carries it (a literal `apiKey`, or a `!command` run on the
+ *   host). Nothing for `deploy` to carry — and nothing to gate on either, which is the point: the
+ *   `fastagent login` remedy is meaningless for a provider login cannot serve.
+ *
+ * Neither set = a stored credential or nothing at all; the existing auth.json / gate paths decide.
+ */
+export function modelCredentialCarry(runtime: ModelRuntime, spec: string): { envVar?: string; inDefinition: boolean } {
+  const status = runtime.getProviderAuthStatus(providerOf(spec));
+  if (!status.configured) return { inDefinition: false };
+  // An env-var name is only useful downstream if it IS one: `"${A}_${B}"` interpolation resolves from
+  // the environment but has no single name to carry, so it falls through to the definition-carried
+  // branch, where the author's `deploy.secrets` is the mechanism.
+  if (status.source === "environment" && status.label && /^[A-Z][A-Z0-9_]*$/.test(status.label)) {
+    return { envVar: status.label, inDefinition: false };
+  }
+  return { inDefinition: status.source !== "stored" };
 }
 
 /** Per-provider auth status for the first-run model picker: usable now (with the source label), not

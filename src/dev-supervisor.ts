@@ -13,7 +13,7 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { AGENT_CONFIG_NAMES, type ResolvedPlacement, resolveStateRoot } from "./paths.ts";
+import { AGENT_CONFIG_NAMES, AGENT_MODELS_FILE, type ResolvedPlacement, resolveStateRoot } from "./paths.ts";
 import { isUnderDir } from "./engines/pi/definition.ts";
 import { dotEnvPath } from "./env.ts";
 import { log } from "./log.ts";
@@ -22,7 +22,7 @@ import { openExternalUrl } from "./open-url.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
-const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.config.*, .secrets/.env";
+const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.config.*, models.json, .secrets/.env";
 
 /**
  * chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. When
@@ -48,6 +48,11 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // silently stop `dev` restarting on edits to it.
     if ((AGENT_CONFIG_NAMES as readonly string[]).includes(rel)) return false;
     if (rel === "package.json") return false;
+    // models.json is read ONCE per worker (the model hub is built during assembly), so an edit needs a
+    // restart like any other code input. It is also the one input whose breakage KILLS the worker — a
+    // malformed file fails assembly — so leaving it unwatched would strand the author: the fix that
+    // repairs it would not be the edit that restarts.
+    if (rel === AGENT_MODELS_FILE) return false;
     const segments = rel.split(sep);
     if (segments[0] === "tools" || segments[0] === "channels" || segments[0] === "schedules") return false;
     // The `.env` restarts too (credentials are process-bound). Keep it AND its ancestor directories
