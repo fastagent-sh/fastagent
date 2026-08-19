@@ -166,3 +166,35 @@ describe("inheritance edges", () => {
     expect(JSON.stringify(again.getBranch())).toContain("after the failure");
   });
 });
+
+describe("a half-inherited thread is never registered", () => {
+  it("in memory: a copy that fails mid-way leaves an EMPTY session, not a partial one", async () => {
+    const store = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const room = await store.openOrCreate("room");
+    room.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    room.appendMessage(fauxAssistantMessage("second"));
+    room.appendMessage({ role: "user", content: "third", timestamp: 3 });
+
+    // Fail after some entries have already been copied — the state the "starting empty" warn claims
+    // did not happen.
+    let copied = 0;
+    const append = SessionManager.prototype.appendMessage;
+    const spy = vi.spyOn(SessionManager.prototype, "appendMessage").mockImplementation(function (
+      this: SessionManager,
+      message: Parameters<SessionManager["appendMessage"]>[0],
+    ) {
+      if (++copied === 2) throw new Error("out of memory mid-copy"); // the second COPIED entry
+      return append.call(this, message);
+    });
+    let thread: SessionManager;
+    try {
+      thread = await store.openOrCreate("thread", { parentSession: "room" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(thread.getBranch()).toHaveLength(0); // empty, as promised — not half a room
+    // And the registered session is that same empty one, so the next open continues it.
+    expect((await store.openOrCreate("thread")).getBranch()).toHaveLength(0);
+  });
+});

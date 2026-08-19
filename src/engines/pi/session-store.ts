@@ -281,29 +281,37 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       // there are no filenames — two rooms whose encodings collide must still not share a map slot.
       const existing = live.get(sessionId);
       if (existing) return reconcileInterruptedToolCalls(existing);
-      const created = SessionManager.inMemory(cwd, { id: piSessionId(sessionId) });
-      live.set(sessionId, created);
-      if (inherit) {
-        // Same semantics as the durable store, different mechanism: with no file to fork, the
-        // parent's path is copied entry by entry. Inheritance is a property of the CONTRACT, not of
-        // the medium — a caller must not get a thread that forgot its room because the store happens
-        // to be in memory.
-        const parent = live.get(inherit.parentSession);
-        if (!parent) {
-          log.warn(
-            `[fastagent] session "${sessionId}" names parent "${inherit.parentSession}", which has no record — starting empty`,
-          );
-          return created;
-        }
+      const fresh = () => SessionManager.inMemory(cwd, { id: piSessionId(sessionId) });
+      // Same semantics as the durable store, different mechanism: with no file to fork, the parent's
+      // path is copied entry by entry. Inheritance is a property of the CONTRACT, not of the medium —
+      // a caller must not get a thread that forgot its room because the store is in memory.
+      //
+      // And the same atomicity: the session is REGISTERED only once it is complete. Registering
+      // first and copying after would leave a half-inherited thread in place on any failure, while
+      // the log claimed it started empty — the disk path stages a fork for exactly this reason.
+      const parent = inherit ? live.get(inherit.parentSession) : undefined;
+      if (inherit && !parent) {
+        log.warn(
+          `[fastagent] session "${sessionId}" names parent "${inherit.parentSession}", which has no record — starting empty`,
+        );
+      }
+      let created: SessionManager;
+      if (inherit && parent) {
         try {
+          const staged = fresh();
           const cut = inheritanceCut(reconcileInterruptedToolCalls(parent), inherit.branchHints);
-          if (cut) copyBranchInto(parent, created, cut.at);
+          if (cut) copyBranchInto(parent, staged, cut.at);
+          created = staged;
         } catch (error) {
           log.warn(
             `[fastagent] could not inherit from "${inherit.parentSession}" into "${sessionId}" (${String(error)}) — starting empty`,
           );
+          created = fresh(); // the partially-copied one is discarded, never registered
         }
+      } else {
+        created = fresh();
       }
+      live.set(sessionId, created);
       return created;
     },
     async openIfExists(sessionId) {
