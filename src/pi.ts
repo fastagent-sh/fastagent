@@ -40,14 +40,12 @@ export {
   createPiSessionControl,
   type CreatePiSessionControlOptions,
 } from "./engines/pi/session-control.ts";
-export type { AnyModel } from "./engines/pi/harness.ts";
 export {
-  inMemorySessionStore,
-  jsonlSessionStore,
-  type PiSessionReader,
-  type PiSessionStore,
-  type SessionInheritance,
-} from "./engines/pi/sessions.ts";
+  piInMemorySessionRecordStore,
+  piSessionRecordStore,
+  type PiSessionRecordStore,
+} from "./engines/pi/session-store.ts";
+export type { SessionInheritance } from "./engines/pi/session-inheritance.ts";
 
 export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./engines/pi/auth.ts";
 export { createPiModels, probeAuthSource, type CreatePiModelsOptions } from "./engines/pi/models.ts";

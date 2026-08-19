@@ -9,10 +9,11 @@ import { Type, type FauxResponseStep, fauxAssistantMessage, fauxThinking, fauxTo
 import { describe, expect, it, vi } from "vitest";
 import { log } from "../src/log.ts";
 import { ABORTED_CODE, type AgentEvent } from "../src/agent.ts";
-import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
-import { piHarnessFactory } from "../src/engines/pi/harness.ts";
+
 import { SUBSCRIBER_BUFFER_CAP, createPiSessionControl } from "../src/engines/pi/session-control.ts";
-import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
+import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { resolveSessionSettings } from "../src/engines/pi/session-settings.ts";
+import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiAgentFromDir } from "../src/engines/pi/open.ts";
 import {
   BOUNDARY_COMMAND_FAILED_CODE,
@@ -26,12 +27,11 @@ import {
   type SessionEvent,
 } from "../src/session.ts";
 import { SESSION_BUSY_CODE } from "../src/agent.ts";
+import { createPiAgentFromSession } from "../src/engines/pi/invoke-session.ts";
 import type { PiBoundaryWiring } from "../src/engines/pi/session-control.ts";
+import type { SessionControl } from "../src/session.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
-import type { PiSessionReader } from "../src/engines/pi/sessions.ts";
-import { resolveHarnessOverrides } from "../src/engines/pi/harness.ts";
 import { makeFaux } from "./faux.ts";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 const echoTool: AgentTool = {
   name: "echo",
@@ -46,23 +46,9 @@ const echoTool: AgentTool = {
 
 /** Agent + control over ONE shared store — the wiring `createPiSessionControl`'s doc prescribes. */
 function makeObserved(responses: FauxResponseStep[]) {
-  const { faux, models } = makeFaux();
-  faux.setResponses(responses);
-  const sessions = inMemorySessionStore();
-  const { control, observer } = createPiSessionControl({ sessions });
-  const agent = createPiAgentFromHarness({
-    observer,
-    harnessFactory: piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions,
-
-      models,
-      model: faux.getModel(),
-      tools: [echoTool],
-      systemPrompt: "test",
-    }),
-  });
-  return { agent, control, sessions };
+  // Observation only: the boundary commands are GATED here, which is what several of these tests
+  // assert. `makeBoundary` is the wired counterpart.
+  return fauxControlledAgent(responses, { tools: [echoTool], boundary: false });
 }
 
 async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
@@ -72,7 +58,7 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
 }
 
 /** Collect the observation stream concurrently with a run; stop once `run_settled` arrives. */
-async function watchUntilSettled(control: ReturnType<typeof makeObserved>["control"], session: string) {
+async function watchUntilSettled(control: SessionControl, session: string) {
   const seen: SessionEvent[] = [];
   for await (const ev of control.events(session)) {
     seen.push(ev);
@@ -83,7 +69,7 @@ async function watchUntilSettled(control: ReturnType<typeof makeObserved>["contr
 
 describe("session control (Phase 1): observation plane", () => {
   it("run boundaries + projection fidelity: the invoke stream is a projection of the rich stream", async () => {
-    const { agent, control } = makeObserved([
+    const { agent, control } = await makeObserved([
       fauxAssistantMessage([fauxThinking("hmm"), { type: "text", text: "answer" }]),
     ]);
     const watched = watchUntilSettled(control, "s1");
@@ -124,7 +110,7 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("tool events cross both planes; tool_finished projects to tool_ended", async () => {
-    const { agent, control } = makeObserved([
+    const { agent, control } = await makeObserved([
       fauxAssistantMessage(fauxToolCall("echo", { value: "ping" }, { id: "call-1" })),
       fauxAssistantMessage("done"),
     ]);
@@ -141,7 +127,7 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("caller cancellation still settles the run (exactly-one run_settled: aborted)", async () => {
-    const { agent, control } = makeObserved([fauxAssistantMessage("a long answer")]);
+    const { agent, control } = await makeObserved([fauxAssistantMessage("a long answer")]);
     const watched = watchUntilSettled(control, "sC");
     // Cancel mid-stream: break out of iteration on the first event (SPEC: no terminal for the caller).
     for await (const e of agent.invoke({ session: "sC" }, { text: "hi" })) {
@@ -154,11 +140,11 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("failed setup surfaces as run_settled{failed} with the failure detail", async () => {
-    const sessions = inMemorySessionStore();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const { control, observer } = createPiSessionControl({ sessions });
-    const agent = createPiAgentFromHarness({
+    const agent = createPiAgentFromSession({
       observer,
-      harnessFactory: async () => {
+      sessionFactory: async () => {
         throw new Error("boom: no auth");
       },
     });
@@ -176,7 +162,10 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("session_busy is rejected before acceptance: the observation plane sees no second run", async () => {
-    const { agent, control } = makeObserved([fauxAssistantMessage("slow answer"), fauxAssistantMessage("second")]);
+    const { agent, control } = await makeObserved([
+      fauxAssistantMessage("slow answer"),
+      fauxAssistantMessage("second"),
+    ]);
     const events: SessionEvent[] = [];
     const watching = (async () => {
       for await (const ev of control.events("sB")) {
@@ -200,7 +189,7 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("state(): running with activeRunId during the run, idle with a leaf after it", async () => {
-    const { agent, control } = makeObserved([fauxAssistantMessage("ok")]);
+    const { agent, control } = await makeObserved([fauxAssistantMessage("ok")]);
     // Unknown session: idle, empty — and NOT created by observing it (read-only plane).
     expect(await control.state("nope")).toEqual({ status: "idle", pending: { steering: 0, followUp: 0 } });
 
@@ -219,7 +208,7 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("entries(): durable reconnect — kinds, cursor, and leaf; observation never creates a session", async () => {
-    const { agent, control, sessions } = makeObserved([
+    const { agent, control, sessions } = await makeObserved([
       fauxAssistantMessage(fauxToolCall("echo", { value: "x" }, { id: "c1" })),
       fauxAssistantMessage("final answer"),
     ]);
@@ -249,7 +238,7 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("events(): multiple observers see the same stream; unsubscribe is per-consumer", async () => {
-    const { agent, control } = makeObserved([fauxAssistantMessage("shared")]);
+    const { agent, control } = await makeObserved([fauxAssistantMessage("shared")]);
     const a = watchUntilSettled(control, "sM");
     const b = watchUntilSettled(control, "sM");
     await drain(agent.invoke({ session: "sM" }, { text: "hi" }));
@@ -259,7 +248,7 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("openIfExists is strictly read-only: no crash reconciliation, no repair entries", async () => {
-    const sessions = inMemorySessionStore();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     // Simulate a turn that died mid tool-execution: assistant(toolCall) persisted, NO result.
     const s = await sessions.openOrCreate("crashed");
     await s.appendMessage({
@@ -295,20 +284,10 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("a throwing observer never breaks the data plane", async () => {
-    const { faux, models } = makeFaux();
-    faux.setResponses([fauxAssistantMessage("resilient")]);
-    const agent = createPiAgentFromHarness({
+    const { agent } = fauxAgent([fauxAssistantMessage("resilient")], {
       observer: () => {
         throw new Error("broken hub");
       },
-      harnessFactory: piHarnessFactory({
-        env: new NodeExecutionEnv({ cwd: process.cwd() }),
-        sessions: inMemorySessionStore(),
-
-        models,
-        model: faux.getModel(),
-        systemPrompt: "test",
-      }),
     });
     const invoked = await drain(agent.invoke({ session: "sX" }, { text: "hi" }));
     expect(invoked.at(-1)).toEqual({ type: "completed" });
@@ -421,7 +400,7 @@ describe("session control (Phase 1): observation plane", () => {
   });
 
   it("dispatch(): boundary mutations still reject with unsupported_capability; run commands on idle reject with no_active_run", async () => {
-    const { control } = makeObserved([]);
+    const { control } = await makeObserved([]);
     const compact = await control.dispatch("sD", { type: "compact" });
     expect(compact.ok).toBe(false);
     if (!compact.ok) expect(compact.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
@@ -467,24 +446,9 @@ function makeGate() {
 }
 
 /** Agent + control with the gate tool mounted — for mid-run dispatch tests. */
-function makeGated(responses: FauxResponseStep[]) {
-  const { faux, models } = makeFaux();
-  faux.setResponses(responses);
-  const sessions = inMemorySessionStore();
-  const { control, observer } = createPiSessionControl({ sessions });
+async function makeGated(responses: FauxResponseStep[]) {
   const gate = makeGate();
-  const agent = createPiAgentFromHarness({
-    observer,
-    harnessFactory: piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions,
-
-      models,
-      model: faux.getModel(),
-      tools: [gate.tool],
-      systemPrompt: "test",
-    }),
-  });
+  const { agent, control } = await fauxControlledAgent(responses, { tools: [gate.tool] });
   return { agent, control, gate };
 }
 
@@ -501,7 +465,7 @@ function drive(
 }
 
 /** Wait until the control plane reports an active run for the session. */
-async function waitForRunning(control: ReturnType<typeof makeGated>["control"], session: string) {
+async function waitForRunning(control: SessionControl, session: string) {
   for (let i = 0; i < 200; i++) {
     const s = await control.state(session);
     if (s.status === "running" && s.activeRunId) return s.activeRunId;
@@ -511,7 +475,7 @@ async function waitForRunning(control: ReturnType<typeof makeGated>["control"], 
 }
 
 /** Wait until the given tool is executing (its started event was observed). */
-async function waitForToolStarted(control: ReturnType<typeof makeGated>["control"], session: string) {
+async function waitForToolStarted(control: SessionControl, session: string) {
   for await (const ev of control.events(session)) {
     if (ev.type === "tool_started") return;
     if (ev.type === "run_settled") throw new Error("run settled before the tool started");
@@ -520,7 +484,7 @@ async function waitForToolStarted(control: ReturnType<typeof makeGated>["control
 
 describe("session control (Phase 2a): run modulation", () => {
   it("steer joins the active run: accepted with its runId, delivered before the next model call, settle window spans it", async () => {
-    const { agent, control, gate } = makeGated([
+    const { agent, control, gate } = await makeGated([
       fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),
       fauxAssistantMessage("steered answer"),
     ]);
@@ -554,7 +518,7 @@ describe("session control (Phase 2a): run modulation", () => {
   });
 
   it("follow_up continues the run after it would otherwise stop; queue_changed is observable", async () => {
-    const { agent, control, gate } = makeGated([
+    const { agent, control, gate } = await makeGated([
       fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" })),
       fauxAssistantMessage("first answer"),
       fauxAssistantMessage("follow-up answer"),
@@ -609,21 +573,11 @@ describe("session control (Phase 2a): run modulation", () => {
   });
 
   it("stale controls are rejected after settlement — never a silent acceptance", async () => {
-    const { faux, models } = makeFaux();
-    faux.setResponses([fauxAssistantMessage("done")]);
     let captured: import("../src/engines/pi/turn-kit.ts").RunControls | undefined;
-    const agent = createPiAgentFromHarness({
+    const { agent } = fauxAgent([fauxAssistantMessage("done")], {
       observer: (_s, ev, run) => {
         if (ev.type === "run_started") captured = run;
       },
-      harnessFactory: piHarnessFactory({
-        env: new NodeExecutionEnv({ cwd: process.cwd() }),
-        sessions: inMemorySessionStore(),
-
-        models,
-        model: faux.getModel(),
-        systemPrompt: "test",
-      }),
     });
     await drain(agent.invoke({ session: "sStale" }, { text: "hi" })); // run fully settled
     expect(captured).toBeDefined();
@@ -634,21 +588,21 @@ describe("session control (Phase 2a): run modulation", () => {
   });
 
   it("a dispatch racing a failing harness build gets run_command_failed with the setup error", async () => {
-    const sessions = inMemorySessionStore();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const { control, observer } = createPiSessionControl({ sessions });
     let releaseFactory: () => void = () => {};
     const factoryGate = new Promise<void>((r) => {
       releaseFactory = r;
     });
-    const agent = createPiAgentFromHarness({
+    const agent = createPiAgentFromSession({
       observer,
-      harnessFactory: async () => {
+      sessionFactory: async () => {
         await factoryGate;
         throw new Error("boom: setup exploded");
       },
     });
     const invoked = drive(agent, "sSetup");
-    await waitForRunning(control, "sSetup"); // run_started observed; harness still assembling
+    await waitForRunning(control, "sSetup"); // run_started observed; the session is still being built
     const pending = control.dispatch("sSetup", { type: "steer", prompt: { text: "late" } });
     releaseFactory(); // → factory throws → gate rejects → the pending dispatch learns it
     const result = await pending;
@@ -662,7 +616,9 @@ describe("session control (Phase 2a): run modulation", () => {
   });
 
   it("a subscriber far behind is closed instead of buffering without bound", async () => {
-    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
     const iterator = control.events("sSlow")[Symbol.asyncIterator]();
     const first = iterator.next(); // registration is synchronous at next() entry; the pull now stalls
     observer("sSlow", { type: "run_started", timestamp: 0, runId: "r", data: {} });
@@ -688,7 +644,9 @@ describe("session control (Phase 2a): run modulation", () => {
   }, 10_000);
 
   it("every iteration of one events iterable is a FRESH subscription (isomorphic with remote)", async () => {
-    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
     const iterable = control.events("sReIter");
     // First iteration: consume one event, then walk away.
     const first = iterable[Symbol.asyncIterator]();
@@ -705,7 +663,9 @@ describe("session control (Phase 2a): run modulation", () => {
   }, 5_000);
 
   it("concurrent next() calls on one events subscription both settle", async () => {
-    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
     const iterator = control.events("sConc")[Symbol.asyncIterator]();
     const n1 = iterator.next(); // registers synchronously, then awaits
     const n2 = iterator.next(); // a second pending pull — must not overwrite the first's waiter
@@ -720,14 +680,14 @@ describe("session control (Phase 2a): run modulation", () => {
   it("the hub's own last line: an unknown command type (in-process misuse) answers invalid_command", async () => {
     // The transport's parseWireCommand intercepts wire input first; this default branch is the
     // LAST line for in-process callers casting past the union — it must answer, never undefined.
-    const { control } = makeObserved([]);
+    const { control } = await makeObserved([]);
     const result = await control.dispatch("sD", { type: "make_coffee" } as never);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe(INVALID_COMMAND_CODE);
   });
 
   it("an observation-only run (no controls) rejects with unsupported_capability, not a run code", async () => {
-    const sessions = inMemorySessionStore();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const { control, observer } = createPiSessionControl({ sessions });
     // run_started without controls — the observer seam permits observation-only registration.
     observer("sObs", { type: "run_started", timestamp: Date.now(), runId: "r1", data: {} });
@@ -742,7 +702,7 @@ describe("session control (Phase 2a): run modulation", () => {
   });
 
   it("dispatch maps a refused run command to run_command_failed", async () => {
-    const sessions = inMemorySessionStore();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const { control, observer } = createPiSessionControl({ sessions });
     // Register a live run whose controls refuse — the observer seam is the public wiring point.
     observer(
@@ -765,7 +725,7 @@ describe("session control (Phase 2a): run modulation", () => {
   });
 
   it("abort stops the run: accepted, invoke terminal failed{code: aborted}, run_settled{aborted}", async () => {
-    const { agent, control, gate } = makeGated([fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
+    const { agent, control, gate } = await makeGated([fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
     const seen: SessionEvent[] = [];
     const watching = (async () => {
       for await (const ev of control.events("s2c")) {
@@ -799,35 +759,18 @@ describe("session control (Phase 2a): run modulation", () => {
 /** Agent + control with full boundary wiring — the workspace shape, assembled by hand. The model is
  *  REASONING-capable: thinking levels are answered per model, so the default faux (`reasoning:
  *  false`) supports only "off". */
-function makeBoundary(responses: FauxResponseStep[], tools: AgentTool[] = []) {
-  const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
-  faux.setResponses(responses);
-  const sessions = inMemorySessionStore();
-  const lease = inProcessLease();
-  const factory = piHarnessFactory({
-    env: new NodeExecutionEnv({ cwd: process.cwd() }),
-    sessions,
-
-    models,
-    model: faux.getModel(),
-    tools,
-    systemPrompt: "test",
+async function makeBoundary(responses: FauxResponseStep[], tools: AgentTool[] = []) {
+  const built = await fauxControlledAgent(responses, {
+    faux: { models: [{ id: "faux-thinker", reasoning: true }] },
+    tools: tools as NonNullable<Parameters<typeof fauxControlledAgent>[1]>["tools"],
   });
-  const boundary: PiBoundaryWiring = {
-    lease,
-    models,
-    harnessFactory: factory,
-    defaults: { model: faux.getModel(), thinkingLevel: "medium" },
-  };
-  const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
-  const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
-  const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
-  return { agent, control, sessions, spec, models };
+  const model = built.faux.getModel();
+  return { ...built, spec: `${model.provider}/${model.id}` };
 }
 
 describe("session control (Phase 2b): boundary mutations", () => {
   it("capabilities carry only what is SESSIONLESS: the registry has a list, thinking levels do not", async () => {
-    const { control, sessions, spec } = makeBoundary([]);
+    const { control, sessions, spec } = await makeBoundary([]);
     const caps = control.capabilities();
     expect(caps.manualCompaction).toBe(true);
     expect(caps.modelSelection ? caps.modelSelection.allowedModels : []).toContain(spec); // deployment fact
@@ -837,24 +780,8 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("thinking levels are answered by the MODEL: a non-reasoning model offers only off, and set_thinking rejects the rest", async () => {
-    const { faux, models } = makeFaux(); // default faux: reasoning false
-    const sessions = inMemorySessionStore();
-    const lease = inProcessLease();
-    const factory = piHarnessFactory({
-      sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      models,
-      model: faux.getModel(),
-      tools: [],
-      systemPrompt: "test",
-    });
-    const boundary: PiBoundaryWiring = {
-      lease,
-      models,
-      harnessFactory: factory,
-      defaults: { model: faux.getModel(), thinkingLevel: "medium" },
-    };
-    const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
+    // default faux: reasoning false
+    const { control, sessions } = await fauxControlledAgent([]);
     expect(control.capabilities().thinkingLevel).toBe(true); // servable — WHICH levels is per-session
     await sessions.openOrCreate("sNR");
     expect((await control.state("sNR")).availableThinkingLevels).toEqual(["off"]);
@@ -867,7 +794,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("a reasoning model still rejects a level it has no mapping for (xhigh/max need one)", async () => {
-    const { control, sessions } = makeBoundary([]); // faux-thinker: reasoning, no thinkingLevelMap
+    const { control, sessions } = await makeBoundary([]); // faux-thinker: reasoning, no thinkingLevelMap
     await sessions.openOrCreate("sMax");
     expect((await control.state("sMax")).availableThinkingLevels).not.toContain("max");
     const rejected = await control.dispatch("sMax", { type: "set_thinking", level: "max" });
@@ -876,26 +803,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("after set_model the SESSION's model is the authority: capabilities stays sessionless, set_thinking does not", async () => {
-    const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
-    const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
-    const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
-    const sessions = inMemorySessionStore();
-    const lease = inProcessLease();
-    const factory = piHarnessFactory({
-      sessions,
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      models,
-      model: thinker,
-      tools: [],
-      systemPrompt: "test",
+    const { control, sessions, faux } = await fauxControlledAgent([], {
+      faux: { models: [{ id: "thinker", reasoning: true }, { id: "plain" }] },
+      modelId: "thinker",
     });
-    const boundary: PiBoundaryWiring = {
-      lease,
-      models,
-      harnessFactory: factory,
-      defaults: { model: thinker, thinkingLevel: "medium" },
-    };
-    const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
+    const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
     await sessions.openOrCreate("sAuth");
     expect(await control.dispatch("sAuth", { type: "set_model", model: `${plain.provider}/${plain.id}` })).toEqual({
       ok: true,
@@ -915,24 +827,12 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // cannot do it, and nothing said so — `state()` went on reporting `high` (it reports what was
     // recorded), the resolve clamped at run time, and the client saw neither. The boundary re-records
     // instead, so whatever is recorded is executable and the demotion arrives in the same event.
-    const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
+    const { control, sessions, faux } = await fauxControlledAgent([], {
+      faux: { models: [{ id: "thinker", reasoning: true }, { id: "plain" }] },
+      modelId: "thinker",
+    });
     const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
     const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
-    const sessions = inMemorySessionStore();
-    const boundary: PiBoundaryWiring = {
-      lease: inProcessLease(),
-      models,
-      harnessFactory: piHarnessFactory({
-        sessions,
-        env: new NodeExecutionEnv({ cwd: process.cwd() }),
-        models,
-        model: thinker,
-        tools: [],
-        systemPrompt: "test",
-      }),
-      defaults: { model: thinker, thinkingLevel: "medium" },
-    };
-    const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
     await sessions.openOrCreate("sDemote");
     expect(await control.dispatch("sDemote", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
 
@@ -972,14 +872,13 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
     // set_thinking(high) was admitted against the reasoning model; set_model then moved the session
     // to one that cannot do it. The resolve must not hand the run a level it will ignore.
-    const out = resolveHarnessOverrides(
+    const out = resolveSessionSettings(
       [
         { type: "thinking_level_change", thinkingLevel: "high" },
         { type: "model_change", provider: plain.provider, modelId: plain.id },
       ],
       models,
       { model: thinker, thinkingLevel: "low" },
-      "sSwap",
     );
     expect(out.model).toBe(plain);
     expect(out.thinkingLevel).toBe("off"); // clamped by the model, not left at a level the run ignores
@@ -987,25 +886,12 @@ describe("session control (Phase 2b): boundary mutations", () => {
 
   it("one resolution answers all three surfaces — state, the dispatch gate, and execution", async () => {
     // state(), the set_thinking gate and the fresh harness all resolve through one function.
-    const { faux, models } = makeFaux({ models: [{ id: "thinker", reasoning: true }, { id: "plain" }] });
+    const { control, sessions, faux, models } = await fauxControlledAgent([], {
+      faux: { models: [{ id: "thinker", reasoning: true }, { id: "plain" }] },
+      modelId: "thinker",
+    });
     const thinker = faux.getModel("thinker") as NonNullable<ReturnType<typeof faux.getModel>>;
     const plain = faux.getModel("plain") as NonNullable<ReturnType<typeof faux.getModel>>;
-    const sessions = inMemorySessionStore();
-    const defaults = { model: thinker, thinkingLevel: "medium" as const };
-    const boundary: PiBoundaryWiring = {
-      lease: inProcessLease(),
-      models,
-      harnessFactory: piHarnessFactory({
-        sessions,
-        env: new NodeExecutionEnv({ cwd: process.cwd() }),
-        models,
-        model: thinker,
-        tools: [],
-        systemPrompt: "test",
-      }),
-      defaults,
-    };
-    const { control } = createPiSessionControl({ sessions, boundary: () => boundary });
     await sessions.openOrCreate("sOne");
     expect(await control.dispatch("sOne", { type: "set_thinking", level: "high" })).toEqual({ ok: true });
     expect(await control.dispatch("sOne", { type: "set_model", model: `${plain.provider}/${plain.id}` })).toEqual({
@@ -1013,9 +899,9 @@ describe("session control (Phase 2b): boundary mutations", () => {
     });
 
     const opened = await sessions.openIfExists("sOne");
-    const entries = ((await opened?.getEntries()) ?? []) as Parameters<typeof resolveHarnessOverrides>[0];
+    const entries = (opened?.getEntries() ?? []) as Parameters<typeof resolveSessionSettings>[0];
     const state = await control.state("sOne");
-    const executed = resolveHarnessOverrides(entries, models, defaults, "sOne");
+    const executed = resolveSessionSettings(entries, models, { model: thinker, thinkingLevel: "medium" });
 
     // The record keeps the PREFERENCE — nothing rewrote it …
     const { lastOverrideEntries } = await import("../src/engines/pi/session-settings.ts");
@@ -1049,7 +935,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("set_model / set_thinking append durable overrides and emit state_changed", async () => {
-    const { agent, control, sessions, spec, models } = makeBoundary([fauxAssistantMessage("ok")]);
+    const { agent, control, sessions, spec, models } = await makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sB1" }, { text: "hi" })); // session exists
     const seen: SessionEvent[] = [];
     const watching = (async () => {
@@ -1069,18 +955,17 @@ describe("session control (Phase 2b): boundary mutations", () => {
     expect(kinds).toContain("thinking_level_change");
     // And the fresh-harness resolve applies them: the recorded thinking level rides the next turn.
     const opened = await sessions.openIfExists("sB1");
-    const resolved = resolveHarnessOverrides(
-      ((await opened?.getEntries()) ?? []) as Parameters<typeof resolveHarnessOverrides>[0],
+    const resolved = resolveSessionSettings(
+      (opened?.getEntries() ?? []) as Parameters<typeof resolveSessionSettings>[0],
       models,
       { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
-      "sB1",
     );
     expect(resolved.thinkingLevel).toBe("high");
   });
 
   it("navigate moves the leaf, so the NEXT turn branches from the target", async () => {
     let thirdTurnContext = "";
-    const { agent, control } = makeBoundary([
+    const { agent, control } = await makeBoundary([
       fauxAssistantMessage("one"),
       fauxAssistantMessage("two"),
       (context) => {
@@ -1131,31 +1016,18 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // The silent consequence of a movable leaf: every last-wins read (state(), the fresh-harness
     // resolve, the activation walk) reads the journal, which still holds the abandoned branch.
     let ranWith: string | undefined;
-    const { faux, models } = makeFaux({ models: [{ id: "default-model" }, { id: "other-model" }] });
-    const dflt = faux.getModel("default-model") as NonNullable<ReturnType<typeof faux.getModel>>;
+    const { agent, control, faux } = await fauxControlledAgent(
+      [
+        fauxAssistantMessage("one"),
+        (_context, _options, _state, model) => {
+          ranWith = model.id;
+          return fauxAssistantMessage("two");
+        },
+      ],
+      { faux: { models: [{ id: "default-model" }, { id: "other-model" }] }, modelId: "default-model" },
+    );
     const other = faux.getModel("other-model") as NonNullable<ReturnType<typeof faux.getModel>>;
-    faux.setResponses([
-      fauxAssistantMessage("one"),
-      (_context, _options, _state, model) => {
-        ranWith = model.id;
-        return fauxAssistantMessage("two");
-      },
-    ]);
-    const sessions = inMemorySessionStore();
-    const lease = inProcessLease();
-    const factory = piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions,
-      models,
-      model: dflt,
-      tools: [],
-      systemPrompt: "test",
-    });
-    const { control, observer } = createPiSessionControl({
-      sessions,
-      boundary: () => ({ lease, models, harnessFactory: factory, defaults: { model: dflt, thinkingLevel: "medium" } }),
-    });
-    const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+    const dflt = faux.getModel("default-model") as NonNullable<ReturnType<typeof faux.getModel>>;
 
     await drain(agent.invoke({ session: "sNavLeak" }, { text: "hi" }));
     const target = (await control.entries("sNavLeak")).entries.find((e) => e.kind === "user") as SessionEntry;
@@ -1179,7 +1051,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // A move writes no message, but it can EXPOSE a dangling tool_use pair — the state
     // reconcileInterruptedToolCalls exists for. It repairs AT THE LEAF, which is exactly where a
     // move puts the gap, so the next invoke runs instead of handing the provider a rejected pair.
-    const { agent, control } = makeBoundary(
+    const { agent, control } = await makeBoundary(
       [
         fauxAssistantMessage(fauxToolCall("echo", { value: "hi" }, { id: "e1" })),
         fauxAssistantMessage("done"),
@@ -1212,7 +1084,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("a move to where the leaf already is is accepted and writes nothing", async () => {
     // pi journals a move as a `leaf` record, so an idempotent re-dispatch (a client retry, a UI
     // firing on every selection) would otherwise grow the session by records no plane publishes.
-    const { agent, control, sessions } = makeBoundary([fauxAssistantMessage("ok")]);
+    const { agent, control, sessions } = await makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sNavNoop" }, { text: "hi" }));
     const leaf = (await control.state("sNavNoop")).leafEntryId as string;
     const size = async () => ((await (await sessions.openIfExists("sNavNoop"))?.getEntries()) ?? []).length;
@@ -1234,7 +1106,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("navigate rejects an entry that is not in the session, and a session that does not exist", async () => {
-    const { agent, control } = makeBoundary([fauxAssistantMessage("ok")]);
+    const { agent, control } = await makeBoundary([fauxAssistantMessage("ok")]);
     expect(control.capabilities().navigate).toBe(true);
     await drain(agent.invoke({ session: "sNavBad" }, { text: "hi" }));
     const leafBefore = (await control.state("sNavBad")).leafEntryId;
@@ -1248,7 +1120,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("the navigable set is every published entry EXCEPT the move bookkeeping a navigate itself writes", async () => {
-    const { agent, control, sessions, spec } = makeBoundary([fauxAssistantMessage("ok")]);
+    const { agent, control, sessions, spec } = await makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sNavKinds" }, { text: "hi" }));
     expect(await control.dispatch("sNavKinds", { type: "set_model", model: spec })).toEqual({ ok: true });
     const entries = (await control.entries("sNavKinds")).entries;
@@ -1258,14 +1130,13 @@ describe("session control (Phase 2b): boundary mutations", () => {
     // leaves the leaf sitting on one after every set_model.
     expect(await control.dispatch("sNavKinds", { type: "navigate", targetId: user.id })).toEqual({ ok: true });
     expect(await control.dispatch("sNavKinds", { type: "navigate", targetId: modelChange!.id })).toEqual({ ok: true });
-    // Those moves left `leaf` records behind. Pointing the branch head at one would put the leaf on
-    // a record whose parentId is the OLD leaf — on no conversation path at all — and entries() does
-    // not publish them: the client's rule is "anything published is navigable".
-    const raw = (await (await sessions.openIfExists("sNavKinds"))?.getEntries()) ?? [];
-    const leafRecord = raw.find((e) => e.type === "leaf");
-    expect(leafRecord).toBeDefined();
-    expect((await control.entries("sNavKinds")).entries.map((e) => e.id)).not.toContain(leafRecord?.id);
-    const rejected = await control.dispatch("sNavKinds", { type: "navigate", targetId: leafRecord!.id });
+    // A move writes NO record — pi's branch() is a pointer move — so navigating cannot grow the
+    // session, and everything a client can see remains a position it can move to.
+    const raw = (await sessions.openIfExists("sNavKinds"))?.getEntries() ?? [];
+    const published = (await control.entries("sNavKinds")).entries.map((e) => e.id);
+    expect(raw.filter((e) => !published.includes(e.id))).toHaveLength(0);
+    // An id that is not an entry at all is still a payload error.
+    const rejected = await control.dispatch("sNavKinds", { type: "navigate", targetId: "no-such-entry" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(INVALID_COMMAND_CODE);
     expect((await control.state("sNavKinds")).leafEntryId).toBe(modelChange!.id);
@@ -1274,29 +1145,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("navigate takes the run lease: mid-run it is session_busy, and the live branch stays put", async () => {
     // The stated reason navigate is gated on the boundary wiring at all: a leaf moved under a live
     // run would hang that run's next entry off a stale branch.
-    const { faux, models } = makeFaux();
-    faux.setResponses([fauxAssistantMessage("first"), fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
-    const sessions = inMemorySessionStore();
-    const lease = inProcessLease();
     const gate = makeGate();
-    const factory = piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions,
-      models,
-      model: faux.getModel(),
-      tools: [gate.tool],
-      systemPrompt: "test",
-    });
-    const { control, observer } = createPiSessionControl({
-      sessions,
-      boundary: () => ({
-        lease,
-        models,
-        harnessFactory: factory,
-        defaults: { model: faux.getModel(), thinkingLevel: "medium" },
-      }),
-    });
-    const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+    const { agent, control } = await fauxControlledAgent(
+      [fauxAssistantMessage("first"), fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))],
+      { tools: [gate.tool] },
+    );
     await drain(agent.invoke({ session: "sNavBusy" }, { text: "hi" })); // a settled turn to aim at
     const target = (await control.entries("sNavBusy")).entries.find((e) => e.kind === "user") as SessionEntry;
     const leafBefore = (await control.state("sNavBusy")).leafEntryId;
@@ -1315,7 +1168,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("a compaction bounds the model context, not the settings history", async () => {
     // The active-path walk is not bounded by the compaction the way the CONTEXT read is: an
     // override recorded before one is a preference, and it still governs the session after it.
-    const { agent, control } = makeBoundary([
+    const { agent, control } = await makeBoundary([
       fauxAssistantMessage("a long answer worth compacting"),
       fauxAssistantMessage("another long answer"),
       fauxAssistantMessage("summary of the conversation"),
@@ -1342,16 +1195,22 @@ describe("session control (Phase 2b): boundary mutations", () => {
       { id: "leaf", parentId: "pruned", type: "message", timestamp: new Date().toISOString(), message: {} },
     ];
     const broken = {
-      getEntries: async () => brokenEntries,
-      getLeafId: async () => "leaf",
-      getEntry: async (id: string) => brokenEntries.find((e) => e.id === id),
-    } as unknown as Awaited<ReturnType<PiSessionReader["openIfExists"]>>;
+      getEntries: () => brokenEntries,
+      getBranch: () => brokenEntries,
+      getLeafId: () => "leaf",
+      getEntry: (id: string) => brokenEntries.find((e) => e.id === id),
+    } as unknown as Awaited<ReturnType<PiSessionRecordStore["openIfExists"]>>;
     const { control } = createPiSessionControl({
-      sessions: { openIfExists: async () => broken },
+      sessions: {
+        openIfExists: async () => broken,
+        openOrCreate: async () => {
+          throw new Error("the control plane never creates a session");
+        },
+      },
       boundary: () => ({
         lease: inProcessLease(),
         models,
-        harnessFactory: (() => {
+        sessionFactory: (() => {
           throw new Error("unused");
         }) as never,
         defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
@@ -1381,20 +1240,26 @@ describe("session control (Phase 2b): boundary mutations", () => {
       { id: "b", type: "message", timestamp: new Date().toISOString(), message: {} },
     ];
     const broken = {
-      getEntries: async () => entries,
-      getLeafId: async () => leafId,
-      getEntry: async (id: string) => entries.find((e) => e.id === id),
-      moveTo: async (id: string) => {
+      getEntries: () => entries,
+      getBranch: () => entries,
+      getLeafId: () => leafId,
+      getEntry: (id: string) => entries.find((e) => e.id === id),
+      branch: (id: string) => {
         leafId = id;
       },
-    } as unknown as Awaited<ReturnType<PiSessionReader["openIfExists"]>>;
+    } as unknown as Awaited<ReturnType<PiSessionRecordStore["openIfExists"]>>;
     const seen: SessionEvent[] = [];
     const { control } = createPiSessionControl({
-      sessions: { openIfExists: async () => broken },
+      sessions: {
+        openIfExists: async () => broken,
+        openOrCreate: async () => {
+          throw new Error("the control plane never creates a session");
+        },
+      },
       boundary: () => ({
         lease: inProcessLease(),
         models,
-        harnessFactory: (() => {
+        sessionFactory: (() => {
           throw new Error("unused");
         }) as never,
         defaults: { model: models.getProviders()[0]!.getModels()[0]!, thinkingLevel: "medium" },
@@ -1407,52 +1272,45 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("navigate without boundary wiring is gated off, not silently linear", async () => {
-    const { control } = makeObserved([]);
+    const { control } = await makeObserved([]);
     expect(control.capabilities().navigate).toBe(false);
     const rejected = await control.dispatch("sNavCap", { type: "navigate", targetId: "x" });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.error.code).toBe(UNSUPPORTED_CAPABILITY_CODE);
   });
 
-  it("resolveHarnessOverrides: a known recorded model override wins over the default", () => {
+  it("resolveSessionSettings: a known recorded model override wins over the default", () => {
     const { faux, models } = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
     const fallback = {
       model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>,
       thinkingLevel: "medium" as const,
     };
     const recorded = faux.getModel("faux-b") as NonNullable<ReturnType<typeof faux.getModel>>;
-    const out = resolveHarnessOverrides(
+    const out = resolveSessionSettings(
       [{ type: "model_change", provider: recorded.provider, modelId: recorded.id }],
       models,
       fallback,
-      "sRK",
     );
-    expect(out.model).toBe(recorded); // the session override rides the fresh harness
+    expect(out.model).toBe(recorded); // the session override rides the next turn
     expect(out.model).not.toBe(fallback.model);
   });
 
-  it("resolveHarnessOverrides: last entry wins; unknown recorded model falls back with the default", () => {
+  it("resolveSessionSettings: last entry wins; unknown recorded model falls back with the default", () => {
     const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
     const fallback = { model: faux.getModel(), thinkingLevel: "medium" as const };
     // Unknown model → fallback (deployment registry changed); known thinking level applies.
-    const out = resolveHarnessOverrides(
+    const out = resolveSessionSettings(
       [
         { type: "model_change", provider: "gone", modelId: "nope" },
         { type: "thinking_level_change", thinkingLevel: "low" },
       ],
       models,
       fallback,
-      "sR",
     );
     expect(out.model).toBe(fallback.model);
     expect(out.thinkingLevel).toBe("low");
     // Unknown thinking level → fallback.
-    const bad = resolveHarnessOverrides(
-      [{ type: "thinking_level_change", thinkingLevel: "ultra" }],
-      models,
-      fallback,
-      "sR2",
-    );
+    const bad = resolveSessionSettings([{ type: "thinking_level_change", thinkingLevel: "ultra" }], models, fallback);
     expect(bad.thinkingLevel).toBe("medium");
   });
 
@@ -1467,7 +1325,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
       { type: "model_change" }, // the LAST record is malformed
     ];
     // Execution surface: malformed = absent → the default, NOT the earlier valid record.
-    const resolved = resolveHarnessOverrides(entries, models, fallback, "sMal");
+    const resolved = resolveSessionSettings(entries, models, fallback);
     expect(resolved.model).toBe(fallback.model);
     // Fact surface agrees: no override reported.
     const { lastOverrideEntries } = await import("../src/engines/pi/session-settings.ts");
@@ -1475,7 +1333,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("set_model rejects an unknown spec before acceptance (invalid_command)", async () => {
-    const { control } = makeBoundary([]);
+    const { control } = await makeBoundary([]);
     const result = await control.dispatch("sB2", { type: "set_model", model: "ghost/model" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe(INVALID_COMMAND_CODE);
@@ -1485,28 +1343,11 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("boundary mutations are rejected session_busy while a run holds the lease", async () => {
-    const { faux, models } = makeFaux();
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))]);
-    const sessions = inMemorySessionStore();
-    const lease = inProcessLease();
     const gate = makeGate();
-    const factory = piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions,
-
-      models,
-      model: faux.getModel(),
-      tools: [gate.tool],
-      systemPrompt: "test",
-    });
-    const boundary: PiBoundaryWiring = {
-      lease,
-      models,
-      harnessFactory: factory,
-      defaults: { model: faux.getModel(), thinkingLevel: "medium" },
-    };
-    const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
-    const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+    const { agent, control, faux } = await fauxControlledAgent(
+      [fauxAssistantMessage(fauxToolCall("gate", {}, { id: "g1" }))],
+      { tools: [gate.tool] },
+    );
     const spec = `${faux.getModel().provider}/${faux.getModel().id}`;
 
     const invoked = drive(agent, "sB3");
@@ -1523,7 +1364,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("compact is accept-fast: ok on admission, outcome via compaction_finished, then lease free", async () => {
-    const { agent, control } = makeBoundary([
+    const { agent, control } = await makeBoundary([
       fauxAssistantMessage("a long answer worth compacting"),
       fauxAssistantMessage("summary of the conversation"), // consumed by harness.compact()
     ]);
@@ -1555,7 +1396,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const gate = new Promise<void>((r) => {
       releaseSummary = r;
     });
-    const { agent, control } = makeBoundary([
+    const { agent, control } = await makeBoundary([
       fauxAssistantMessage("seed"),
       (async (_c: unknown, _o: unknown, _s: unknown, _m: unknown) => {
         await gate; // the summarization model call hangs until the test releases it
@@ -1589,7 +1430,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("nothing-to-compact is a pre-acceptance rejection, not a finished{error} dressed as failure", async () => {
     // The preparation is a cheap local computation — it belongs to admission: the client gets the
     // answer in the dispatch, and started/finished never fire for work that never begins.
-    const { control, sessions } = makeBoundary([]);
+    const { control, sessions } = await makeBoundary([]);
     await sessions.openOrCreate("sEmpty"); // exists but has no compactable history
     const seen: SessionEvent[] = [];
     const watching = (async () => {
@@ -1616,7 +1457,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
 
   it("abort during an in-flight compaction interrupts it — run/compaction symmetry, not no_active_run", async () => {
     // Both are model calls a client must be able to stop: `abort` is the door out of `compacting`.
-    const { agent, control } = makeBoundary([
+    const { agent, control } = await makeBoundary([
       fauxAssistantMessage("seed"),
       (async (_c: unknown, o: { signal?: AbortSignal } | undefined) => {
         // The summarization call hangs until aborted — the only way this test's compaction ends.
@@ -1658,7 +1499,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   it("a failing compaction is ACCEPTED then closed with finished{error}; nothing durable, lease free", async () => {
     // ONE response seeds the conversation; the compaction's summarization call then finds the faux
     // queue empty and throws — the deterministic model-call failure, AFTER acceptance.
-    const { agent, control } = makeBoundary([fauxAssistantMessage("seed")]);
+    const { agent, control } = await makeBoundary([fauxAssistantMessage("seed")]);
     await drain(agent.invoke({ session: "sB6" }, { text: "hi" }));
     const seen: SessionEvent[] = [];
     const watching = (async () => {
@@ -1680,9 +1521,9 @@ describe("session control (Phase 2b): boundary mutations", () => {
     const retry = await control.dispatch("sB6", { type: "set_thinking", level: "low" });
     expect(retry.ok).toBe(true); // the lease was released
 
-    // PRE-acceptance failure (the harness build) still rejects with boundary_command_failed —
+    // PRE-acceptance failure (binding the session) still rejects with boundary_command_failed —
     // and releases the lease.
-    const sessions = inMemorySessionStore();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     await sessions.openOrCreate("sPre"); // must exist, or no_such_session wins
     const lease = inProcessLease();
     const broke = makeFaux();
@@ -1690,8 +1531,8 @@ describe("session control (Phase 2b): boundary mutations", () => {
       lease,
       models: broke.models,
       defaults: { model: broke.faux.getModel(), thinkingLevel: "medium" },
-      harnessFactory: async () => {
-        throw new Error("no harness for you");
+      sessionFactory: async () => {
+        throw new Error("no session for you");
       },
     };
     const { control: broken } = createPiSessionControl({ sessions, boundary: () => boundary });
@@ -1703,7 +1544,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
 
   it("state() reports what will RUN, not what was recorded — including with no overrides at all", async () => {
     // Reporting the raw record made "no override" indistinguishable from "no model".
-    const { agent, control, spec } = makeBoundary([fauxAssistantMessage("ok")]);
+    const { agent, control, spec } = await makeBoundary([fauxAssistantMessage("ok")]);
     await drain(agent.invoke({ session: "sB7" }, { text: "hi" }));
     const fresh = await control.state("sB7");
     expect(fresh.model).toBe(spec); // the assembly default, named — not absent
@@ -1718,33 +1559,16 @@ describe("session control (Phase 2b): boundary mutations", () => {
 
   it("the override rides the next turn end to end: set_model changes which model answers", async () => {
     // Two faux models in ONE registry; the response FACTORY answers with the model that was asked —
-    // this pins the factory→resolveHarnessOverrides→AgentHarness wiring, not just the resolver.
-    const { faux, models } = makeFaux({ models: [{ id: "faux-a" }, { id: "faux-b" }] });
-    faux.setResponses([
-      (_ctx: unknown, _opts: unknown, _state: unknown, model: { id: string }) =>
-        fauxAssistantMessage(`answered by ${model.id}`),
-      (_ctx: unknown, _opts: unknown, _state: unknown, model: { id: string }) =>
-        fauxAssistantMessage(`answered by ${model.id}`),
-    ] as never);
-    const sessions = inMemorySessionStore();
-    const lease = inProcessLease();
-    const factory = piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions,
-
-      models,
-      model: faux.getModel("faux-a") as NonNullable<ReturnType<typeof faux.getModel>>, // assembly default
-      tools: [],
-      systemPrompt: "test",
-    });
-    const boundary: PiBoundaryWiring = {
-      lease,
-      models,
-      harnessFactory: factory,
-      defaults: { model: faux.getModel(), thinkingLevel: "medium" },
-    };
-    const { control, observer } = createPiSessionControl({ sessions, boundary: () => boundary });
-    const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+    // this pins the factory→resolveSessionSettings→AgentSession wiring, not just the resolver.
+    const answerWithTheModelAsked = (_ctx: unknown, _opts: unknown, _state: unknown, model: { id: string }) =>
+      fauxAssistantMessage(`answered by ${model.id}`);
+    const { agent, control, faux } = await fauxControlledAgent(
+      [answerWithTheModelAsked, answerWithTheModelAsked] as never,
+      {
+        faux: { models: [{ id: "faux-a" }, { id: "faux-b" }] },
+        modelId: "faux-a", // assembly default
+      },
+    );
 
     const first = await drain(agent.invoke({ session: "sE2E" }, { text: "hi" }));
     expect(first.map((e) => (e.type === "text" ? (e as { delta: string }).delta : "")).join("")).toContain("faux-a");
@@ -1757,7 +1581,9 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("events(): detaching from a quiet stream resolves promptly and releases the subscription", async () => {
-    const { control, observer } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const { control, observer } = createPiSessionControl({
+      sessions: piInMemorySessionRecordStore({ cwd: process.cwd() }),
+    });
     const iterator = control.events("sQuiet")[Symbol.asyncIterator]();
     const pending = iterator.next(); // registers; the stream never produces
     await new Promise((r) => setTimeout(r, 20));
@@ -1806,7 +1632,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("boundary mutations never mint sessions: unknown id rejects no_such_session", async () => {
-    const { control, sessions, spec } = makeBoundary([]);
+    const { control, sessions, spec } = await makeBoundary([]);
     const result = await control.dispatch("ghost", { type: "set_model", model: spec });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe(NO_SUCH_SESSION_CODE);
@@ -1817,7 +1643,7 @@ describe("session control (Phase 2b): boundary mutations", () => {
   });
 
   it("without boundary wiring the commands stay gated off and rejected", async () => {
-    const { control } = makeObserved([]); // observation + run modulation only
+    const { control } = await makeObserved([]); // observation + run modulation only
     const caps = control.capabilities();
     expect(caps.manualCompaction).toBe(false);
     expect(caps.modelSelection).toBe(false);

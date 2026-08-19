@@ -15,15 +15,21 @@ export interface ReadonlySessionManager {
   getBranch(): Promise<SessionTreeEntry[]>;
 }
 
-/** pi's AgentSession as the port above — the SAME adapter for both of its consumers: chat's resident
- *  session (session-builder.ts) and serving's per-invoke one (agent-session-factory.ts). */
-export function agentSessionManager(session: AgentSession): ReadonlySessionManager {
+/**
+ * pi's AgentSession as the port above — the SAME adapter for both of its consumers: chat's resident
+ * session (session-builder.ts) and serving's per-invoke one (agent-session-factory.ts).
+ *
+ * `sessionId` is the CALLER's, not pi's. A tool correlates its own state by the id the channel
+ * minted; pi's is that id encoded into a filename-safe record name, and leaking the encoding here
+ * would hand a telegram tool `s-1001234567890` for a room it knows as `-1001234567890`.
+ */
+export function agentSessionManager(session: AgentSession, sessionId: string): ReadonlySessionManager {
   return {
-    getSessionId: () => session.sessionManager.getSessionId(),
+    getSessionId: () => sessionId,
     async getHeader() {
       const header = session.sessionManager.getHeader();
       if (!header) throw new Error("session has no metadata header");
-      return { id: header.id, timestamp: header.timestamp };
+      return { id: sessionId, timestamp: header.timestamp };
     },
     async getBranch() {
       return session.sessionManager.getBranch() as SessionTreeEntry[];

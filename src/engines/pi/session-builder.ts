@@ -282,7 +282,7 @@ export async function buildAgentSessionRuntime(
     });
     sessionRef.current = {
       session: result.session,
-      sessionManager: agentSessionManager(result.session),
+      sessionManager: agentSessionManager(result.session, result.session.sessionManager.getSessionId()),
       activation: sessionToolActivation(result.session),
     };
     // Deferral emulation: pi's session starts with everything active — narrow it by SUBTRACTING

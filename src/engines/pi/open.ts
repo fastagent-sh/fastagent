@@ -20,17 +20,15 @@ import {
 } from "./config.ts";
 import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
+import type { PiAssemblyParts } from "./create.ts";
 import { createPiAgentFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
 import { type PiBoundaryWiring, createPiSessionControl } from "./session-control.ts";
-import type { PiSessionReader, PiSessionStore } from "./sessions.ts";
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
-import { jsonlSessionStore } from "./sessions.ts";
-import { piEngine } from "./engine.ts";
-import { piSessionRecordStore } from "./session-store.ts";
+import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision } from "./tool.ts";
 import type { MountedTool } from "./tool.ts";
 
@@ -168,8 +166,8 @@ export async function createPiAgentFromDir(
   sessionsDir: string;
   /** Absolute credentials file in use (for the startup report). */
   authPath: string;
-  /** The session store in use — also a {@link PiSessionReader}. */
-  sessions: PiSessionStore & PiSessionReader;
+  /** The session store in use. */
+  sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. Each name
@@ -200,27 +198,16 @@ export async function createPiAgentFromDir(
   const mountedTools = withWakeTool(tools, stateRoot, !!options.serving && !!config.selfSchedule);
   const sessionsDir = options.sessionsDir ?? defaultSessionsDir(stateRoot);
   await mkdir(sessionsDir, { recursive: true });
-  const sessions = jsonlSessionStore({ dir: sessionsDir, cwd: workspace });
-  // The AgentSession engine reads the same directory through its own store (pi's SessionManager over
-  // the same v3 jsonl). Continuity across the switch is ONE-WAY by construction — see session-store.ts.
-  const sessionRecords =
-    piEngine() === "session" ? piSessionRecordStore({ dir: sessionsDir, cwd: workspace }) : undefined;
+  const sessions = piSessionRecordStore({ dir: sessionsDir, cwd: workspace });
   // The hub is wired HERE because the store is created here: chicken-and-egg otherwise (the hub
-  // needs the store; the agent needs the hub's observer). Boundary parts (models/factory/lease)
+  // needs the store; the agent needs the hub's observer). Boundary parts (factory/lease/registry)
   // only exist after the assembly below — the hub takes them as a lazy thunk, filled by the
   // assembly's onAssembly callback (assembly completes before this function returns, so every
   // dispatch sees them). An extra caller observer composes after the hub's (TRUSTED seam).
   let boundaryParts: PiBoundaryWiring | undefined;
+  let assembled: PiAssemblyParts | undefined;
   const caller = options.observer;
   const wantControl = options.sessionControl ?? (config.sessionControl === true && options.serving === true);
-  if (wantControl && sessionRecords) {
-    // Refuse rather than serve a control plane that observes nothing: the hub reads the harness's
-    // event stream and dispatches onto its factory, neither of which the AgentSession path has yet.
-    // A warning here would leave a configured capability quietly absent until a client asked for it.
-    throw new Error(
-      "session control is not implemented on the AgentSession engine — unset FASTAGENT_ENGINE, or turn off sessionControl",
-    );
-  }
   const hub = wantControl
     ? createPiSessionControl({
         sessions,
@@ -264,19 +251,26 @@ export async function createPiAgentFromDir(
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,
-    sessionRecords,
     observer,
     onAssembly: hub
       ? (parts) => {
-          boundaryParts = {
-            lease: parts.lease,
-            models: parts.models,
-            harnessFactory: parts.harnessFactory,
-            defaults: parts.defaults,
-          };
+          assembled = parts;
         }
       : undefined,
   });
+  if (hub && assembled) {
+    // The hub's surface is synchronous (`capabilities()` lists the allowed models), while building
+    // the registry reads credentials and is not. Resolve it ONCE here — the opener is async anyway,
+    // and the first turn would have paid the same read — so every boundary mutation validates
+    // against the same registry the runs use.
+    const { modelRuntime, model } = await assembled.engine();
+    boundaryParts = {
+      lease: assembled.lease,
+      models: modelRuntime,
+      sessionFactory: assembled.sessionFactory,
+      defaults: { model, thinkingLevel: assembled.thinkingLevel },
+    };
+  }
   return {
     agent,
     definition,

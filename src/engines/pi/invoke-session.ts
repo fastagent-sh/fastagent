@@ -222,7 +222,12 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
               },
         );
       } catch (error) {
-        yield errorToTerminal(error); // setup failures are events, never throws (MUST 2)
+        // Setup failures (session open, auth, a broken definition) are EVENTS, never throws
+        // (MUST 2) — and they settle the run as failed: an unrecorded outcome means the caller
+        // cancelled, which this is not.
+        const terminal = errorToTerminal(error);
+        outcome = { status: "failed", error: { message: terminal.details, retryable: terminal.retryable } };
+        yield terminal;
         return;
       }
       try {

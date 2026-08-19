@@ -12,6 +12,7 @@
  * - the `AgentSession` and its tool bindings are per turn, because a tool's `execute` closes over the
  *   session it runs in and this posture has several in flight at once.
  */
+import { join } from "node:path";
 import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import {
@@ -27,6 +28,8 @@ import type { PiAgentSessionFactory } from "./invoke-session.ts";
 import { log } from "../../log.ts";
 import type { PiSessionRecordStore } from "./session-store.ts";
 import { isDeferredTool, type MountedTool } from "./tool.ts";
+import { resolveSessionSettings } from "./session-settings.ts";
+import { DEFAULT_THINKING_LEVEL } from "./models.ts";
 import { type ToolActivation, additiveActivation, agentSessionManager, turnContext } from "./tool-context.ts";
 
 /** pi's Model with the API-shape generic erased; fastagent only passes models through. */
@@ -56,6 +59,15 @@ export interface PiAgentSessionFactoryOptions {
   live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
   /** The agent's working directory — what fastagent-defined tools see as `cwd`. */
   cwd: string;
+  /**
+   * Where pi looks for ITS settings (retry budget, compaction thresholds, default thinking level).
+   *
+   * Deliberately NOT pi's machine-global `~/.pi/agent`: a served agent must behave the same on the
+   * author's laptop and in a container, and reading the operator's personal pi configuration is the
+   * artifact losing to the machine. Point it at a definition-scoped path; a missing directory simply
+   * means pi's own defaults, which is the intended baseline.
+   */
+  agentDir?: string;
   /** Filesystem/process environment handed to pi's default coding tools. */
   env: ExecutionEnv;
 }
@@ -136,6 +148,7 @@ function toolDefinitions(
   tools: MountedTool[],
   cwd: string,
   env: ExecutionEnv,
+  sessionId: string,
   bound: { session?: AgentSession },
 ): ToolDefinition[] {
   return tools.map((tool) => ({
@@ -150,7 +163,7 @@ function toolDefinitions(
       const session = bound.session;
       if (!session) throw new Error("tool executed before its session was bound (lifecycle invariant broken)");
       return turnContext.run(
-        { cwd, sessionManager: agentSessionManager(session), tools: sessionToolActivation(session) },
+        { cwd, sessionManager: agentSessionManager(session, sessionId), tools: sessionToolActivation(session) },
         // pi's own fifth `execute` parameter is read only by its default coding tools; fastagent's
         // take theirs from turnContext. This env is here to satisfy the shape.
         () => tool.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
@@ -173,6 +186,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
   const buildServices = async (modelRuntime: ModelRuntime): Promise<AgentSessionServices> =>
     createAgentSessionServices({
       cwd,
+      agentDir: options.agentDir ?? join(cwd, ".fastagent", "pi"),
       modelRuntime,
       resourceLoaderOptions: {
         // The agent is the definition, not the authoring machine's pi setup: no ~/.pi extensions,
@@ -180,7 +194,11 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         noExtensions: true,
         noPromptTemplates: true,
         noContextFiles: true,
-        systemPromptOverride: () => prompt ?? "",
+        // A SPACE, not "", when the assembly has no prompt: pi treats an empty custom prompt as
+        // absent and substitutes its own coding-assistant identity, which an L1 agent
+        // (`createPiAgent({ model, tools })`) never asked for. pi appends its own working-directory
+        // line either way — that is engine behaviour this binding does not fight.
+        systemPromptOverride: () => prompt ?? " ",
         appendSystemPromptOverride: () => [],
         skillsOverride: (base) => ({ skills: toPiSkills(skills) as typeof base.skills, diagnostics: base.diagnostics }),
       },
@@ -232,13 +250,25 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       }
     }
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
+    // What the session RUNS on: the boundary plane records model/thinking overrides as entries, and
+    // pi does not read them back — a binding that ignored them would silently run every turn on the
+    // assembly default, and `state()` would report a setting no turn uses.
+    const settings = resolveSessionSettings(
+      sessionManager.getBranch() as unknown as Parameters<typeof resolveSessionSettings>[0],
+      modelRuntime,
+      { model, thinkingLevel: thinkingLevel ?? DEFAULT_THINKING_LEVEL },
+    );
     const bound: { session?: AgentSession } = {};
     const { session } = await createAgentSessionFromServices({
       services: await services,
       sessionManager,
-      model,
-      thinkingLevel,
-      customTools: toolDefinitions(tools, cwd, env, bound),
+      model: settings.model,
+      thinkingLevel: settings.thinkingLevel,
+      // pi would otherwise mount its own read/bash/edit/write ON TOP of ours: fastagent's default
+      // tool set already IS those four (create.ts piDefaultTools), so letting both in would offer
+      // the model each one twice, under one name.
+      noTools: "builtin",
+      customTools: toolDefinitions(tools, cwd, env, sessionId, bound),
     });
     bound.session = session;
     // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the

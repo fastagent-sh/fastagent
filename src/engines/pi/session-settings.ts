@@ -10,7 +10,7 @@
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Models, clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import type { AnyModel } from "./harness.ts";
+import type { AnyModel } from "./models.ts";
 
 /** Which strings are levels at all — the vocabulary. What a MODEL supports is
  *  `getSupportedThinkingLevels`. The `satisfies` anchor keeps this exhaustive against pi's union: a

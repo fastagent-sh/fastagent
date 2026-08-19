@@ -8,6 +8,7 @@
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { log } from "../../log.ts";
 import { type SessionInheritance, forkForInheritance } from "./session-inheritance.ts";
@@ -16,6 +17,10 @@ import { type SessionInheritance, forkForInheritance } from "./session-inheritan
  *  creation option — where a NEW session starts from (session-inheritance.ts). */
 export interface PiSessionRecordStore {
   openOrCreate(sessionId: string, inherit?: SessionInheritance): Promise<SessionManager>;
+  /** OPEN-EXISTING sibling: an unknown session answers undefined, never creates one — sessions are
+   *  the data plane's monopoly. This is what the control plane reads and writes boundary records
+   *  through, so a mutation on an unknown id is rejected rather than minted into a ghost record. */
+  openIfExists(sessionId: string): Promise<SessionManager | undefined>;
 }
 
 /**
@@ -124,9 +129,9 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
     async openOrCreate(sessionId, inherit) {
       const id = piSessionId(sessionId);
       const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
-      if (mine) return SessionManager.open(mine.path, own);
+      if (mine) return reconcileInterruptedToolCalls(SessionManager.open(mine.path, own));
       const legacy = (await SessionManager.list(cwd, options.dir)).find((r) => r.id === legacySessionId(sessionId));
-      if (legacy) return SessionManager.open(legacy.path, options.dir);
+      if (legacy) return reconcileInterruptedToolCalls(SessionManager.open(legacy.path, options.dir));
       mkdirSync(own, { recursive: true });
       // Inheritance is a CREATE-path decision: an existing session above ignores it entirely, which
       // is what makes it one-time by construction.
@@ -136,7 +141,93 @@ export function piSessionRecordStore(options: { dir: string; cwd?: string }): Pi
       }
       return publish(SessionManager.create(cwd, own, { id }), own);
     },
+    async openIfExists(sessionId) {
+      const id = piSessionId(sessionId);
+      const mine = (await SessionManager.list(cwd, own)).find((r) => r.id === id);
+      if (mine) return SessionManager.open(mine.path, own);
+      const legacy = (await SessionManager.list(cwd, options.dir)).find((r) => r.id === legacySessionId(sessionId));
+      return legacy ? SessionManager.open(legacy.path, options.dir) : undefined;
+    },
   };
+}
+
+/**
+ * Crash-safety reconciliation, run on every OPEN of an existing record.
+ *
+ * A turn that dies mid tool-execution leaves an assistant `tool_use` with no matching result (the
+ * assistant message is persisted before the tool runs). The next turn would then hand the provider
+ * an `assistant(tool_use) -> user` sequence that Anthropic and OpenAI reject — the session is
+ * poisoned. An honest "interrupted" error result is appended for each dangling call, restoring a
+ * valid transcript. Tool side-effect idempotency stays the tool's responsibility (SPEC §6); this
+ * restores transcript validity, not exactly-once execution.
+ *
+ * Pairing is TURN-LOCAL: a tool_use is paired only by a toolResult that immediately follows it (up
+ * to the next non-toolResult). Tool-call ids are not unique across turns — a local model may restart
+ * them each response — so matching against the whole transcript could falsely settle a leaf call
+ * against an earlier turn's identical id. An append-only log can only repair a gap AT THE LEAF; an
+ * earlier one is surfaced via log.warn rather than "fixed" with an orphaned result.
+ *
+ * The synthetic result splits its audiences: `content` (read by the model, may reach the end user)
+ * stays neutral — it must NOT say "aborted" (pi's word for a user cancellation) or leak infra
+ * detail; `details` carries the operational marker for developers and never reaches the provider.
+ */
+function reconcileInterruptedToolCalls(record: SessionManager): SessionManager {
+  const messages = record.getBranch().flatMap((entry) => {
+    const message = (entry as { type?: string; message?: AgentMessage }).message;
+    return (entry as { type?: string }).type === "message" && message ? [message] : [];
+  });
+
+  let leafIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "assistant") {
+      leafIdx = i;
+      break;
+    }
+  }
+  if (leafIdx === -1) return record; // no assistant turn yet
+  const leafReparable = messages.slice(leafIdx + 1).every((m) => m.role === "toolResult");
+
+  const toRepair: { id: string; name: string }[] = [];
+  const orphaned: string[] = [];
+  messages.forEach((m, idx) => {
+    if (m.role !== "assistant") return;
+    const paired = new Set<string>();
+    for (let j = idx + 1; j < messages.length; j++) {
+      const next = messages[j];
+      if (next?.role !== "toolResult") break;
+      paired.add(next.toolCallId);
+    }
+    for (const block of m.content) {
+      if (block.type !== "toolCall" || paired.has(block.id)) continue;
+      if (idx === leafIdx && leafReparable) toRepair.push({ id: block.id, name: block.name });
+      else orphaned.push(block.id);
+    }
+  });
+
+  if (orphaned.length > 0) {
+    log.warn(
+      `[fastagent] unmatched tool_use is not at the session leaf; leaving it unreconciled ` +
+        `(an append-only log cannot repair a mid-history gap): toolCallIds=${orphaned.join(",")}`,
+    );
+  }
+
+  for (const { id, name } of toRepair) {
+    record.appendMessage({
+      role: "toolResult",
+      toolCallId: id,
+      toolName: name,
+      content: [
+        {
+          type: "text",
+          text: "This tool call did not complete and its result is unavailable. Re-run it if the result is still needed.",
+        },
+      ],
+      details: { fastagent: "interrupted-tool-call" },
+      isError: true,
+      timestamp: Date.now(),
+    } as unknown as Parameters<SessionManager["appendMessage"]>[0]);
+  }
+  return record;
 }
 
 /** Where this engine's own records live, under the sessions directory both engines are pointed at. */
@@ -176,10 +267,13 @@ export function piInMemorySessionRecordStore(options: { cwd?: string } = {}): Pi
       // Keyed by the CALLER's id: the encoding exists to satisfy pi's filename rule, and in memory
       // there are no filenames - two rooms whose encodings collide must still not share a map slot.
       const existing = live.get(sessionId);
-      if (existing) return existing;
+      if (existing) return reconcileInterruptedToolCalls(existing);
       const created = SessionManager.inMemory(cwd, { id: piSessionId(sessionId) });
       live.set(sessionId, created);
       return created;
+    },
+    async openIfExists(sessionId) {
+      return live.get(sessionId);
     },
   };
 }

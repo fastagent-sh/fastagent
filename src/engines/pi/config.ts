@@ -15,13 +15,13 @@ import { pathToFileURL } from "node:url";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { FastagentTool } from "./tool.ts";
 import type { Models } from "@earendil-works/pi-ai";
-import type { AnyModel } from "./harness.ts";
+import type { AnyModel } from "./models.ts";
 import { THINKING_LEVELS } from "./session-settings.ts";
 import { isBindAddress } from "../../bind.ts";
 import { moduleLoadHint } from "../../loader.ts";
 import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
 
-// pi's thinking levels as a runtime value live in harness.ts (THE single source, with the
+// pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the
 // exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
 
 export interface FastagentConfig {
