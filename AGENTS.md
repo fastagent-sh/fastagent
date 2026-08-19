@@ -118,7 +118,15 @@ src/
 │   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
 └── engines/pi/              # the pi reference implementation
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
-    ├── invoke.ts            # L0 + the request-time turn mechanism (lease, translate, queue)
+    ├── turn-kit.ts          # the turn mechanism's pi-CLASS-neutral half, shared by every pi L0 (it
+    │                         # speaks pi's types, so NOT engine-neutral in this repo's sense):
+    │                         # lease (single-writer floor), terminals (settled message/thrown error →
+    │                         # SPEC terminal + retryable), EventQueue (push→pull), prompt image prep
+    ├── invoke.ts            # the harness L0: AgentHarness's two ports → one stream, plus what only it
+    │                         # has — its event vocabulary translated ONCE into the rich SessionEvent
+    │                         # layer, and the observation plane that layer feeds
+    ├── invoke-session.ts    # the AgentSession L0 (per-invoke): SPEC-conformance proof that pi's own
+    │                         # session class serves a turn. Not wired into serving — see its header
     ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
     ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
     ├── open.ts              # shared opener: directory → agent for dev/start/invoke
@@ -167,7 +175,7 @@ Full version: `CONTRIBUTING.md`. The essentials:
    npm run lint && npm run typecheck && npm test
    ```
 2. **Branch → PR → CI → merge.** Never commit directly to `main`. Branch prefixes: `feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`.
-3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. `main` enforces linear history; force-push is forbidden.
+3. **Squash merge only** (repo settings enforce it): one PR = one commit on `main`; curate the PR title/body — they become the commit message. Branch commits are working state, the PR is the design asset: put the durable *why* there, not in per-commit narration. `main` enforces linear history; force-push is forbidden.
 4. **Review policy.** Merging is an explicit maintainer decision — agents never merge. Green CI makes a PR eligible; report "ready to merge" and stop. External-contributor PRs are reviewed and merged by a maintainer.
 5. **After merge:**
    ```bash
@@ -185,4 +193,4 @@ Full version: `CONTRIBUTING.md`. The essentials:
 
 The reader is a senior engineer with full project context. Lead with the conclusion, use tables for structured comparisons, skip obvious reasoning, do not restate, and do not add decorative formatting or meta-narration. Density check: if cutting half the text loses no information, cut it.
 
-优先使用中文回答；面向仓库的产物（代码、注释、文档、commit/PR）一律英文。
+Everything that lands in or on the repository is English — code, comments, documentation, commit messages, PR titles and bodies, code reviews and review replies, issue discussion, and release notes.

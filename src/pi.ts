@@ -34,7 +34,8 @@ export {
 export type { LoadedDefinition, SkillCollision } from "./engines/pi/definition.ts";
 
 export { defineConfig, listModels, resolveModel, type FastagentConfig } from "./engines/pi/config.ts";
-export { inProcessLease, type Lease, type Release, type SessionObserver } from "./engines/pi/invoke.ts";
+export type { SessionObserver } from "./engines/pi/invoke.ts";
+export { inProcessLease, type Lease, type Release } from "./engines/pi/turn-kit.ts";
 export {
   createPiSessionControl,
   type CreatePiSessionControlOptions,
@@ -45,6 +46,7 @@ export {
   jsonlSessionStore,
   type PiSessionReader,
   type PiSessionStore,
+  type SessionInheritance,
 } from "./engines/pi/sessions.ts";
 
 export { GLOBAL_AUTH_PATH, fastagentCredentialStore, type FastagentAuthOptions } from "./engines/pi/auth.ts";

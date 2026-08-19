@@ -60,6 +60,13 @@ export interface ThreadParticipants {
    */
   admitsBareMessage(key: string): boolean;
   /**
+   * Has the agent answered into this thread before — the "first answered turn" fact
+   * (participant-model.md §8), unlike {@link ThreadParticipants.admitsBareMessage} which also weighs
+   * the second-human rule. An evicted record answers false (this store is a cache — see the header),
+   * so gate a repeatable read on it, never a durable claim.
+   */
+  agentSpokeIn(key: string): boolean;
+  /**
    * Merge in what was just heard. Idempotent; a failed write is a warning, never a failed delivery.
    *
    * The parameter only admits values the store can honour: observations accumulate, so `agentSpoke`
@@ -100,6 +107,9 @@ export function createThreadParticipants(path: string, label: string): ThreadPar
     admitsBareMessage(key) {
       const heard = records.get(key);
       return heard?.agentSpoke === true && heard.humans.length <= 1;
+    },
+    agentSpokeIn(key) {
+      return records.get(key)?.agentSpoke === true;
     },
     merge(key, heard) {
       const previous = records.get(key);

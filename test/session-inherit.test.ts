@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +44,18 @@ async function buildParent(store: PiSessionStore, id: string, n: number): Promis
 }
 
 describe("session inheritance (fork-on-first-open)", () => {
+  it("a newborn is staged outside the store's lookups, then published", async () => {
+    // The property the whole draft realm exists for, and the only test that fails without it: move
+    // the staging INTO the real directory and every other test here still passes, because publish's
+    // rename then targets the path the file already has — a no-op, the same end state, and only the
+    // crash window differs. A structural check that the mechanism ran, not proof of crash safety;
+    // that would need a failure injected between the draft and the rename.
+    const { dir, store } = await freshStore();
+    await buildParent(store, "room", 1);
+    await store.openOrCreate("thread", { parentSession: "room" });
+    expect(existsSync(join(dir, ".drafts"))).toBe(true);
+  });
+
   it("a new session naming a parent forks it once, then lives independently", async () => {
     const { store } = await freshStore();
     const parent = await buildParent(store, "room", 2);
@@ -80,6 +92,24 @@ describe("session inheritance (fork-on-first-open)", () => {
     const { store } = await freshStore();
     const child = await store.openOrCreate("thread", { parentSession: "ghost" });
     expect(await child.getEntries()).toHaveLength(0);
+  });
+
+  it("a RELATIVE dir is resolved like pi resolves it — against the store's cwd, not process.cwd()", async () => {
+    // pi's NodeExecutionEnv resolves a relative sessionsRoot against the store's `cwd`, while every
+    // direct fs call here (mkdir/rename/stat) resolves against process.cwd(). Publishing off the raw
+    // option would build a second, undiscoverable session tree beside the one pi reads — the child
+    // would vanish from `list({ cwd })`, and "the session exists" would stop being the record that
+    // inheritance already ran.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-rel-cwd-"));
+    const store = jsonlSessionStore({ dir: ".state/sessions", cwd: workspace });
+    await buildParent(store, "room", 2);
+    const child = await store.openOrCreate("thread", { parentSession: "room" });
+    expect(await contextText(child)).toContain("a2 answer");
+
+    // Discoverable by the store's own lookup, and living under the workspace — not under the
+    // process's cwd, where a raw relative join would have put it.
+    expect(await store.openIfExists("thread")).toBeDefined();
+    expect(existsSync(join(workspace, ".state", "sessions"))).toBe(true);
   });
 
   it("a branch hint picks the fork point — extended to the end of its exchange", async () => {
@@ -213,15 +243,16 @@ describe("session inheritance (fork-on-first-open)", () => {
   });
 
   it("a crashed draft cannot poison the store — drafts live outside every lookup", async () => {
-    // Simulates a crash mid-inheritance: garbage under `.inherit-tmp` (where drafts are forked)
+    // Simulates a crash mid-creation: garbage under `.drafts` (where every creation stages)
     // must be invisible — openIfExists finds nothing, and the next inheritance attempt runs afresh
     // and publishes a complete child. Exactly ONE file under the real directory afterwards.
+
     const { dir, store } = await freshStore();
     await buildParent(store, "room", 2);
     const realCwdDir = readdirSync(dir)
-      .filter((d) => d !== ".inherit-tmp")
+      .filter((d) => d !== ".drafts")
       .map((d) => join(dir, d))[0] as string;
-    const tmpCwdDir = join(dir, ".inherit-tmp", realCwdDir.split("/").at(-1) as string);
+    const tmpCwdDir = join(dir, ".drafts", realCwdDir.split("/").at(-1) as string);
     mkdirSync(tmpCwdDir, { recursive: true });
     writeFileSync(join(tmpCwdDir, "2020-01-01T00-00-00-000Z_thread.jsonl"), "{torn garbage");
 
@@ -236,7 +267,7 @@ describe("session inheritance (fork-on-first-open)", () => {
     const { dir, store } = await freshStore();
     await buildParent(store, "room", 2);
     const realCwdDir = readdirSync(dir)
-      .filter((d) => d !== ".inherit-tmp")
+      .filter((d) => d !== ".drafts")
       .map((d) => join(dir, d))[0] as string;
     // Tear the parent so the fork's read throws mid-inheritance.
     const parentFile = readdirSync(realCwdDir)
