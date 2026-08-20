@@ -6,21 +6,19 @@
  * never reach the consumer), and auth must fail closed.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Type, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { Type, type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { controlRoutes } from "../src/channels/control.ts";
-import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
-import { piHarnessFactory } from "../src/engines/pi/harness.ts";
+import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
-import { inMemorySessionStore } from "../src/engines/pi/sessions.ts";
+import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
+import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { router, serveNode } from "../src/host/node.ts";
 import { connectAgent, connectSessionControl } from "../src/session-remote.ts";
 import { UNSUPPORTED_CAPABILITY_CODE, type SessionEvent } from "../src/session.ts";
-import { makeFaux } from "./faux.ts";
 import { describeSpecConformance } from "./spec-conformance.ts";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
 const TOKEN = "test-token";
 
@@ -32,10 +30,6 @@ async function serveControl() {
   const commandList: Array<{ name: string; description?: string; source: string }> = [
     { name: "triage", description: "Sort an inbox", source: "skill" },
   ];
-  const { faux, models } = makeFaux({ models: [{ id: "faux-thinker", reasoning: true }] });
-  faux.setResponses([fauxAssistantMessage("hello over the wire")]);
-  const sessions = inMemorySessionStore();
-  const lease = inProcessLease();
   const gate: AgentTool = {
     name: "noop",
     label: "n",
@@ -45,29 +39,14 @@ async function serveControl() {
       return { content: [], details: {} };
     },
   };
-  const factory = piHarnessFactory({
-    env: new NodeExecutionEnv({ cwd: process.cwd() }),
-    sessions,
-
-    models,
-    model: faux.getModel(),
+  const { agent, control, faux } = await fauxControlledAgent([fauxAssistantMessage("hello over the wire")], {
+    faux: { models: [{ id: "faux-thinker", reasoning: true }] },
     tools: [gate],
-    systemPrompt: "test",
-  });
-  const { control, observer } = createPiSessionControl({
-    sessions,
-    boundary: () => ({
-      lease,
-      models,
-      harnessFactory: factory,
-      defaults: { model: faux.getModel(), thinkingLevel: "medium" },
-    }),
     // A non-empty, MUTABLE list: non-empty so the isomorphism check compares a real payload rather
     // than [] === [], mutable so the wire is pinned as per-call rather than prefetched-and-cached
     // like capabilities (the definition it answers for is live).
     commands: async () => [...commandList],
   });
-  const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
   const mounted = controlRoutes(control, { token: TOKEN, agent });
   const server = serveNode(router(mounted), { port: 0 });
   const port = await server.listening;
@@ -151,7 +130,7 @@ describe("session control over HTTP (Phase 3)", () => {
   it("a serve without the route reads as SKEW, not as an unreadable definition", async () => {
     // Both arrive as an uncoded non-2xx; without the distinction a client reports "this agent's
     // skills are unreadable" about a serve that simply predates the route.
-    const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const { control } = await fauxControlledAgent([]);
     const { "GET /control/commands": _dropped, ...withoutCommands } = controlRoutes(control, { token: TOKEN });
     const server = serveNode(router(withoutCommands), { port: 0 });
     const port = await server.listening;
@@ -233,14 +212,13 @@ describe("session control over HTTP (Phase 3)", () => {
   it("steer CARRIES a full Prompt over the wire: the exact images reach the run's controls, junk stripped", async () => {
     // A hub with a registered fake run whose controls RECORD what arrives — proving delivery
     // through transport → parser → rebuild → controls, not merely parser acceptance.
-    const sessions = inMemorySessionStore();
-    const { control, observer } = createPiSessionControl({ sessions });
+    const { control, observer } = await fauxControlledAgent([]);
     const received: unknown[] = [];
     observer(
       "sImg",
       { type: "run_started", timestamp: Date.now(), runId: "r1", data: {} },
       {
-        steer: async (prompt) => {
+        steer: async (prompt: { text: string }) => {
           received.push(prompt);
         },
         followUp: async () => {},
@@ -290,8 +268,7 @@ describe("session control over HTTP (Phase 3)", () => {
     // The one failure the contract admits on this read — `[]` would claim the agent has no names.
     // A client author should see what it looks like: an opaque non-2xx, not a coded answer. That is
     // the read-side gap tracked on the session-lifecycle issue, not a special case of this route.
-    const { control } = createPiSessionControl({
-      sessions: inMemorySessionStore(),
+    const { control } = await fauxControlledAgent([], {
       commands: async () => {
         throw new Error("skills/ unreadable: permission denied");
       },
@@ -364,7 +341,7 @@ describe("session control over HTTP (Phase 3)", () => {
   });
 
   it("without an agent, /control/invoke is not mounted", async () => {
-    const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+    const { control } = await fauxControlledAgent([], { boundary: false });
     const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
     const port = await server.listening;
     try {
@@ -579,7 +556,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const root = await mkdtemp(join(tmpdir(), "fa-ctl-mount-"));
     const stateRoot = join(root, "nested", ".fastagent"); // deliberately not pre-created
     try {
-      const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+      const { control } = await fauxControlledAgent([]);
       const base = { "GET /health": () => new Response("ok") };
       const mounted = mountSessionControl(base, control, stateRoot);
       expect(Object.keys(mounted.routes)).toEqual(expect.arrayContaining(["GET /health", "GET /control/state"]));
@@ -613,7 +590,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const root = await mkdtemp(join(tmpdir(), "fa-ctl-bind-"));
     try {
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+      const { control } = await fauxControlledAgent([]);
       const url = (host: string | undefined, stateRoot: string) => {
         mountSessionControl({}, control, stateRoot, { host }).announce(9000);
         return readFile(join(stateRoot, "control.json"), "utf8").then((s) => (JSON.parse(s) as { url: string }).url);
@@ -932,8 +909,8 @@ describe("session control over HTTP (Phase 3)", () => {
     expect(returned2).toBe(true);
   });
 
-  it("controlRoutes refuses to mount without a token", () => {
-    const { control } = createPiSessionControl({ sessions: inMemorySessionStore() });
+  it("controlRoutes refuses to mount without a token", async () => {
+    const { control } = await fauxControlledAgent([]);
     expect(() => controlRoutes(control, { token: "" })).toThrow(/token is required/);
   });
 });
@@ -951,27 +928,17 @@ afterAll(() => {
 
 /** A served agent in a caller-chosen posture, plus its remote client. */
 async function serveRemoteAgent(opts: {
-  responses?: Parameters<ReturnType<typeof makeFaux>["faux"]["setResponses"]>[0];
+  responses?: FauxResponseStep[];
   tools?: AgentTool[];
-  harnessFactory?: Parameters<typeof createPiAgentFromHarness>[0]["harnessFactory"];
+  /** Replace the engine binding entirely — the setup-failure posture. */
+  sessionFactory?: PiAgentSessionFactory;
 }): Promise<ReturnType<typeof connectAgent>> {
-  const { faux, models } = makeFaux();
-  if (opts.responses) faux.setResponses(opts.responses);
-  const sessions = inMemorySessionStore();
+  const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
   const lease = inProcessLease();
-  const factory =
-    opts.harnessFactory ??
-    piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions,
-
-      models,
-      model: faux.getModel(),
-      tools: opts.tools ?? [],
-      systemPrompt: "test",
-    });
   const { control, observer } = createPiSessionControl({ sessions });
-  const agent = createPiAgentFromHarness({ observer, lease, harnessFactory: factory });
+  const agent = opts.sessionFactory
+    ? createPiAgentFromSession({ observer, lease, sessionFactory: opts.sessionFactory })
+    : fauxAgent(opts.responses ?? [], { sessions, lease, observer, tools: opts.tools ?? [] }).agent;
   const server = serveNode(router(controlRoutes(control, { token: TOKEN, agent })), { port: 0 });
   const port = await server.listening;
   conformanceServers.push(() => server.close());
@@ -982,7 +949,7 @@ describeSpecConformance("remote agent over /control/invoke", {
   completing: () => serveRemoteAgent({ responses: [fauxAssistantMessage("spec ok")] }),
   failing: () =>
     serveRemoteAgent({
-      harnessFactory: async () => {
+      sessionFactory: async () => {
         throw new Error("engine setup exploded");
       },
     }),

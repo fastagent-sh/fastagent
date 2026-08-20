@@ -197,7 +197,7 @@ The pi reference implementation has three reusable rungs:
 
 | Rung | Function | Responsibility |
 |---|---|---|
-| L0 | `createPiAgentFromHarness` | Adapt a pi harness factory to the Agent Handler stream |
+| L0 | `createPiAgentFromSession` | Adapt a pi `AgentSession` factory to the Agent Handler stream |
 | L1 | `createPiAgent` | Assemble from typed model/instructions/tools/ports |
 | L2 | `createPiAgentFromDefinition` | Load a definition directory and build the prompt |
 
@@ -205,14 +205,14 @@ The pi reference implementation has three reusable rungs:
 model, auth, tools, sessions, and machinery paths. `dev`, `start`, `invoke`, and `fire` share this
 assembly rather than carrying parallel implementations.
 
-Each invocation builds a fresh harness for its session and discards it after the turn. Conversation
-continuity comes from `PiSessionStore`, not a resident harness. That is L0's choice on two axes a
+Each invocation binds a fresh `AgentSession` to its record and disposes it after the turn. Conversation
+continuity comes from `PiSessionRecordStore`, not a resident session. That is L0's choice on the axis a
 deployment owns rather than the architecture: per-invoke state (SPEC MUST 6 — what AgentCore and every
-scaled channel host require) and the `harness` engine class. Both are swappable at this rung alone;
-[conformance-levels.md](conformance-levels.md) states what each combination owes. Reopening is faithful to the whole
-record, not just the messages: pi's harness writes active-tool changes to the session but never reads
-them back (its own TUI harness is resident), so `piHarnessFactory` resolves the active-tool set itself
-(`harness.ts` `resolveHarnessActiveToolNames`): the UNION of the initial set (every non-deferred tool;
+scaled channel host require), swappable at this rung alone;
+[conformance-levels.md](conformance-levels.md) states what each posture owes. Reopening is faithful to the whole
+record, not just the messages: pi does not read active-tool changes back (its own session is resident,
+so it never needs to), which is why `piAgentSessionFactory` resolves the active-tool set itself: the
+UNION of the initial set (every non-deferred tool;
 pi's all-active default when nothing is deferred) and the session's accumulated activation DELTAS —
 dedicated `fastagent:tool-activation` custom entries the activation bridge writes, each carrying
 exactly the names that call activated. pi's own `active_tools_change` entries are full active-set
@@ -228,20 +228,31 @@ never resident process state as the source of continuity.
 
 ## 4. Event translation and terminal discipline
 
-Pi exposes a promise for the final assistant message and a subscription side channel for streaming
-events. `src/engines/pi/invoke.ts` combines them into one async iterable (over the lease/terminal/
-queue parts shared by both pi L0s in `turn-kit.ts`):
+Pi's `AgentSession` exposes a subscription for streaming events and a `prompt()` that resolves without
+a value — a turn's outcome is the assistant message the stream ended on, never an index into session
+state (compaction and overflow recovery both rewrite that array mid-turn).
+`src/engines/pi/invoke-session.ts` combines the two into one async iterable, over the lease/terminal/
+queue parts in `turn-kit.ts`:
 
 1. acquire the per-session lease;
-2. open/create the session and harness;
-3. subscribe to pi events and translate text/thinking/tool events;
-4. run the prompt;
-5. emit exactly one `completed` or `failed` terminal;
-6. unsubscribe, abort, and release the lease.
+2. publish `run_started` with the run's controls — BEFORE binding, so a dispatch that races the build
+   queues on it rather than finding no run;
+3. open/create the record and bind a session to it;
+4. subscribe, translating pi events ONCE into the rich `SessionEvent` vocabulary (the SPEC stream is
+   its projection);
+5. run the prompt;
+6. emit exactly one `completed` or `failed` terminal, then exactly one `run_settled`;
+7. unsubscribe, dispose, and release the lease.
 
 Setup, model, and tool-loop failures become `failed` events rather than thrown iteration errors.
-Consumer cancellation runs generator cleanup and aborts the harness. Cleanup anomalies are logged but
+Consumer cancellation runs generator cleanup and aborts the session. Cleanup anomalies are logged but
 cannot turn an already-terminal stream into a throw.
+
+pi retries a failed assistant request itself. That is free resilience while the turn is silent and
+corruption once it is not — SPEC deltas are append-only, so a second attempt would concatenate its
+answer onto the first one's half-sentence. The L0 refuses the retry exactly there: once answer text
+has been streamed, never on tool events (refusing on those would push the retry out to the caller,
+who can only re-run the whole prompt and execute the tool a second time).
 
 ## 5. Tools, skills, and execution environment
 
@@ -298,8 +309,8 @@ outside it entirely. A sandbox adapter provides an `ExecutionEnv` AND constrains
 
 The reference stores are:
 
-- `inMemorySessionStore()` for embedding/tests;
-- `jsonlSessionStore({ dir })` for restart-surviving local/single-machine continuity.
+- `piInMemorySessionRecordStore()` for embedding/tests;
+- `piSessionRecordStore({ dir })` for restart-surviving local/single-machine continuity.
 
 Opening an existing session reconciles a dangling leaf tool call left by an interrupted process by
 appending an explicit interrupted error result. This restores transcript validity; it does not make

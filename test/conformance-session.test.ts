@@ -11,12 +11,12 @@ import { type FauxResponseStep, Type, fauxAssistantMessage, fauxToolCall } from 
 import {
   type AgentSession,
   ModelRuntime,
-  SessionManager,
   type ToolDefinition,
   createAgentSessionFromServices,
   createAgentSessionServices,
 } from "@earendil-works/pi-coding-agent";
 import { createPiAgentFromSession, type PiAgentSessionFactory } from "../src/engines/pi/invoke-session.ts";
+import { piInMemorySessionRecordStore, piSessionRecordStore } from "../src/engines/pi/session-store.ts";
 import { collect } from "../src/collect.ts";
 import { AgentFailure } from "../src/collect.ts";
 import { describe, expect, it } from "vitest";
@@ -59,16 +59,9 @@ async function sessionFactory(
       skillsOverride: (base) => ({ skills: [], diagnostics: base.diagnostics }),
     },
   });
+  const store = dir === undefined ? piInMemorySessionRecordStore({ cwd }) : piSessionRecordStore({ dir, cwd });
   return async (sessionId) => {
-    let sessionManager: SessionManager;
-    if (dir === undefined) {
-      sessionManager = SessionManager.inMemory(cwd, { id: sessionId });
-    } else {
-      const existing = (await SessionManager.list(cwd, dir)).find((info) => info.id === sessionId);
-      sessionManager = existing
-        ? SessionManager.open(existing.path, dir)
-        : SessionManager.create(cwd, dir, { id: sessionId });
-    }
+    const sessionManager = await store.openOrCreate(sessionId);
     const { session } = await createAgentSessionFromServices({
       services,
       sessionManager,

@@ -109,9 +109,12 @@ export function describeSpecConformance(name: string, subject: ConformanceSubjec
     if (subject.pair) {
       it("MUST 6 portable — same session continues across instances: instance B sees instance A turn without location dependence", async () => {
         const { a, b, sawHistory } = await subject.pair!();
-        const e1 = await drain(a.invoke({ session: "spec-portable" }, { text: "turn one" }));
+        // A session id in the shape a real Caller mints (a telegram group), not a tidy identifier:
+        // whatever an engine has to do to store it must survive the round trip between instances.
+        const session = "-1001234567890";
+        const e1 = await drain(a.invoke({ session }, { text: "turn one" }));
         expect(e1.at(-1)?.type).toBe("completed");
-        const e2 = await drain(b.invoke({ session: "spec-portable" }, { text: "turn two" }));
+        const e2 = await drain(b.invoke({ session }, { text: "turn two" }));
         expect(e2.at(-1)?.type).toBe("completed");
         expect(sawHistory()).toBe(true);
       });

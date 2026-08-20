@@ -5,6 +5,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 /** FastAgent's read-only port over the current conversation manager. Serving and chat adapt their
  * different concrete session implementations to this one tool-runtime contract. */
@@ -15,10 +16,32 @@ export interface ReadonlySessionManager {
 }
 
 /**
- * The turn's tool-activation bridge — narrow closures over the CURRENT harness (invoke.ts builds it
- * per turn), so a loader tool can activate deferred tools mid-turn without tool.ts importing the
- * harness. pi records the change in the session (`active_tools_change`) and the per-invoke restore
- * (harness.ts) carries it into later turns; defineTool's wrapper stamps the newly-activated names on
+ * pi's AgentSession as the port above — the SAME adapter for both of its consumers: chat's resident
+ * session (session-builder.ts) and serving's per-invoke one (agent-session-factory.ts).
+ *
+ * `sessionId` is the CALLER's, not pi's. A tool correlates its own state by the id the channel
+ * minted; pi's is that id encoded into a filename-safe record name, and leaking the encoding here
+ * would hand a telegram tool `s-1001234567890` for a room it knows as `-1001234567890`.
+ */
+export function agentSessionManager(session: AgentSession, sessionId: string): ReadonlySessionManager {
+  return {
+    getSessionId: () => sessionId,
+    async getHeader() {
+      const header = session.sessionManager.getHeader();
+      if (!header) throw new Error("session has no metadata header");
+      return { id: sessionId, timestamp: header.timestamp };
+    },
+    async getBranch() {
+      return session.sessionManager.getBranch() as SessionTreeEntry[];
+    },
+  };
+}
+
+/**
+ * The turn's tool-activation bridge — narrow closures over the CURRENT session (bound per turn), so
+ * a loader tool can activate deferred tools mid-turn without tool.ts importing the engine. pi records
+ * the change in the session (`active_tools_change`) and the per-invoke restore
+ * (agent-session-factory.ts) carries it into later turns; defineTool's wrapper stamps the newly-activated names on
  * the tool result (`addedToolNames`) — the load point native deferred-loading providers preserve the
  * prompt-cache prefix with.
  */
@@ -38,14 +61,14 @@ export interface TurnContext {
   /** Current conversation manager. Absent outside a FastAgent-managed agent turn. */
   sessionManager?: ReadonlySessionManager;
   /** Tool activation for the current turn. Two producers, one consumer surface: invoke.ts bridges the
-   *  serving harness; chat.ts bridges pi's AgentSession (chat emulates deferral — same loader, same
+   *  served session; chat.ts bridges the resident one (chat emulates deferral — same loader, same
    *  semantics). Absent only outside any turn (a bare `fastagent tool` run). */
   tools?: ToolActivation;
 }
 
 export const turnContext = new AsyncLocalStorage<TurnContext>();
 
-/** The additive-activation contract, in ONE place for both bridges (invoke.ts over the harness,
+/** The additive-activation contract, in ONE place for both bridges (the served session,
  *  chat.ts over pi's AgentSession): dedupe → keep registered names only (pi's setters THROW on
  *  unknown) → exclude already-active → the names to actually add (empty = nothing to set). */
 export function additiveActivation(registered: string[], current: string[], names: string[]): string[] {

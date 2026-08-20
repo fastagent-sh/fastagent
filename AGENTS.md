@@ -118,15 +118,23 @@ src/
 │   └── state.ts            # atomic schedule state under <stateRoot>/schedule/ (fires.json + wakeups.json)
 └── engines/pi/              # the pi reference implementation
     ├── create.ts            # reusable assembly ladder L1–L2 + engine assets/prompt
-    ├── turn-kit.ts          # the turn mechanism's pi-CLASS-neutral half, shared by every pi L0 (it
-    │                         # speaks pi's types, so NOT engine-neutral in this repo's sense):
-    │                         # lease (single-writer floor), terminals (settled message/thrown error →
-    │                         # SPEC terminal + retryable), EventQueue (push→pull), prompt image prep
-    ├── invoke.ts            # the harness L0: AgentHarness's two ports → one stream, plus what only it
-    │                         # has — its event vocabulary translated ONCE into the rich SessionEvent
-    │                         # layer, and the observation plane that layer feeds
-    ├── invoke-session.ts    # the AgentSession L0 (per-invoke): SPEC-conformance proof that pi's own
-    │                         # session class serves a turn. Not wired into serving — see its header
+    ├── turn-kit.ts          # the turn mechanism's pi-CLASS-neutral half: lease (single-writer
+    │                         # floor), terminals (settled message/thrown error → SPEC terminal +
+    │                         # retryable), EventQueue (push→pull), prompt image prep, the SPEC
+    │                         # projection, and the observation seam (RunControls + SessionObserver)
+    ├── invoke-session.ts    # THE L0: pi's AgentSession, one per invoke, over the same durable
+    │                         # record. Events translate ONCE into the rich SessionEvent vocabulary;
+    │                         # the SPEC stream is its projection. Owns the run's identity, its
+    │                         # controls, and exactly one settlement
+    ├── agent-session-factory.ts # the engine binding: the assembly (model/prompt/skills/tools) bound
+    │                         # to one record per invoke. services shared, session per turn. Carries
+    │                         # the adaptations pi's TUI origins require — see its header
+    ├── session-store.ts     # session records on pi's SessionManager: Caller ids encoded into names
+    │                         # pi accepts, a record published on create (pi buffers until the first
+    │                         # assistant message), crash reconciliation for interrupted tool calls
+    ├── session-inheritance.ts # where a NEW thread starts from when it names a parent
+    │                         # (participant-model.md §5): fork the parent's active path to the branch
+    │                         # point, then bound the model's view with one mechanical compaction mark
     ├── session-control.ts   # the pi session-control hub: observation projections + dispatch (run modulation, boundary mutations, abortable compaction)
     ├── session-builder.ts   # definition-aware session builder: agent assembly → resident pi AgentSessionRuntime (chat TUI consumes it)
     ├── open.ts              # shared opener: directory → agent for dev/start/invoke
@@ -136,7 +144,6 @@ src/
     ├── search-tools.ts      # built-in search_tools loader for deferred tools (auto-mounted when any tool is deferred; author's wins)
     ├── wake-tool.ts         # the built-in `wake` tool (pi-coupled: defineTool): writes a wake-up into ToolContext.session; withWakeTool mounts it (serving path only)
     ├── channel.ts           # channels/ filesystem discovery (ChannelModule → Routes)
-    ├── harness.ts           # pi harness wiring (factory)
     ├── definition.ts        # AGENTS.md + skills loading and bundling
     ├── config.ts            # fastagent.config.ts loading + model/precedence (placement lives in paths.ts)
     ├── auth.ts, login.ts    # credential store/resolution (project-level auth.json default) + `login` flow
@@ -162,8 +169,8 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 
 - **The contract is engine-neutral.** `src/agent.ts` must not import any engine (`@earendil-works/pi-*` only under `src/engines/`).
 - **Fail visibly.** Errors must surface; no swallowed exceptions, no silent fallbacks. On the invoke path, failures become `failed` events (SPEC MUST 2), never thrown iteration errors.
-- **Per-invoke state is the DEFAULT level, not an axiom.** Today's serving path builds a fresh harness per invoke and discards it; durable state lives behind `PiSessionStore`. Do not introduce in-process session state *into that path* — it is what satisfies SPEC MUST 6 (no location dependence), which AgentCore and every horizontally-scaled channel host require. The SPEC permits a resident Agent at the cost of portable conformance; if a deployment posture wants one, that is a deliberate level choice with its own bill ([conformance-levels.md](docs/design/conformance-levels.md)), never a quiet drift in this one.
-- **Public surface is scoped on purpose.** `src/core.ts` is engine-neutral, `src/pi.ts` is the pi reference surface, and `src/index.ts` combines them. Pi-coupled internals (L0 `createPiAgentFromHarness`, `piHarnessFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
+- **Per-invoke state is the DEFAULT level, not an axiom.** The serving path binds a fresh `AgentSession` per invoke and disposes it; durable state lives behind `PiSessionRecordStore`. Do not introduce in-process session state *into that path* — it is what satisfies SPEC MUST 6 (no location dependence), which AgentCore and every horizontally-scaled channel host require. The SPEC permits a resident Agent at the cost of portable conformance; if a deployment posture wants one, that is a deliberate level choice with its own bill ([conformance-levels.md](docs/design/conformance-levels.md)), never a quiet drift in this one.
+- **Public surface is scoped on purpose.** `src/core.ts` is engine-neutral, `src/pi.ts` is the pi reference surface, and `src/index.ts` combines them. Pi-coupled internals (L0 `createPiAgentFromSession`, `piAgentSessionFactory`, assembly helpers) remain unexported — import them from their modules for tests/custom wiring, do not re-export them.
 - **The artifact is the truth.** Deployment behavior must come from the bundled definition, not the builder machine's global state.
 
 ## GitHub workflow (summary)

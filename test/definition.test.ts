@@ -271,8 +271,10 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       instructions: "You are a support bot.",
     });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    expect(seen).toBe("You are a support bot."); // verbatim: instructions ARE the prompt
-    expect(seen).not.toContain("operating inside pi"); // no coding base (that is L2/directory fidelity)
+    // pi appends its own working-directory line; what matters is that nothing else was imposed.
+    // pi appends its own working-directory line; what matters is that nothing else was imposed.
+    expect((seen ?? "").split("\nCurrent working directory:")[0]).toBe("You are a support bot.");
+    expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
   });
 
   it("appends the skills listing when skills are mounted", async () => {
@@ -305,7 +307,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     // The invariant fastagent owns: a hand-built agent is never forced into pi's coding persona.
     // (pi fills its own neutral default; that exact string is pi's behavior, not our contract.)
     expect(seen).toBeDefined(); // a system prompt did reach the model — guards against a vacuous pass
-    expect(seen).not.toContain("operating inside pi");
+    expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
   });
 });
 

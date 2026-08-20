@@ -4,7 +4,7 @@
  *
  *   L2  createPiAgentFromDefinition(dir, options)   — load a definition directory, assemble, then L1.
  *   L1  createPiAgent(options)                       — assemble from typed parts (the canonical ctor).
- *   L0  createPiAgentFromHarness({ harnessFactory }) — in invoke.ts (its body is the turn mechanism).
+ *   L0  createPiAgentFromSession({ sessionFactory }) — in invoke-session.ts (the turn mechanism).
  *
  * Above L2 sits the agent opener createPiAgentFromDir (open.ts), which both `dev` and
  * `start` drive. Each rung calls the one below; options narrow as you go up (L2 owns systemPrompt/skills —
@@ -22,15 +22,12 @@ import {
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { readImageProcessor } from "./read-image.ts";
-import type { Models, Provider } from "@earendil-works/pi-ai";
+import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
 import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
-import { type AnyModel, DEFAULT_THINKING_LEVEL, piHarnessFactory } from "./harness.ts";
-import { createPiModelRuntime, createPiModels } from "./models.ts";
 import { reportFindingsIfChanged } from "./report.ts";
-import { type PiSessionStore, inMemorySessionStore } from "./sessions.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import {
   type DefineToolOptions,
@@ -41,8 +38,12 @@ import {
   type MountedTool,
 } from "./tool.ts";
 import { withSearchTool } from "./search-tools.ts";
-import { type SessionObserver, createPiAgentFromHarness } from "./invoke.ts";
-import { type Lease, inProcessLease } from "./turn-kit.ts";
+import { type PiAgentSessionFactory, createPiAgentFromSession } from "./invoke-session.ts";
+import { piAgentSessionFactory } from "./agent-session-factory.ts";
+import { type AnyModel, DEFAULT_THINKING_LEVEL, createPiModelRuntime } from "./models.ts";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { type PiSessionRecordStore, piInMemorySessionRecordStore } from "./session-store.ts";
+import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts";
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
@@ -51,7 +52,7 @@ import { type Lease, inProcessLease } from "./turn-kit.ts";
 // (a deployment posture).
 //
 // These are pi-agent-core's tools, which reach the filesystem and the shell through the
-// {@link ExecutionEnv} the harness hands them per turn — NOT pi-coding-agent's, which are the same four
+// {@link ExecutionEnv} the binding hands them per turn — NOT pi-coding-agent's, which are the same four
 // tools wired to `node:fs` directly. Going through the env is the point, and the whole of it: it makes
 // {@link CreatePiAgentOptions.env} the one seam a sandbox adapter has to implement, instead of a knob
 // that governed everything except the tools that actually touch the machine. (It buys no decoupling
@@ -65,7 +66,7 @@ import { type Lease, inProcessLease } from "./turn-kit.ts";
 // renders (see session-builder.ts).
 
 /** pi's core default toolset (read/bash/edit/write). Rooted at the ExecutionEnv's cwd, supplied per
- *  turn as the harness tool context — hence no argument here. */
+ *  turn as the tool context — hence no argument here. */
 export function piDefaultTools(): MountedTool[] {
   // `read` needs its image pipeline INJECTED (core ships none); see read-image.ts for what is at stake.
   return [
@@ -229,57 +230,85 @@ function buildPiAgent(opts: {
   /** A pre-built collection, used verbatim. The DIRECTORY rungs pass one so the agent's own
    *  models.json is in scope (see createPiModelRuntime); building it is async, which is why it
    *  happens in the caller — L1 has no directory, so it keeps the synchronous built-ins path. */
-  models?: Models;
+  /** The model registry to run on. The directory rung passes one built from the agent's models.json. */
+  models?: ModelRuntime;
   systemPrompt?: string | (() => string);
   tools?: MountedTool[];
   skills?: Skill[];
-  /** Per-invoke prompt+skills source (see {@link PiHarnessFactoryOptions.live}); supersedes the two above. */
+  /** Per-invoke prompt+skills source (see {@link PiAgentSessionFactoryOptions.live}); supersedes the
+   *  two above. */
   live?: () => Promise<{ systemPrompt?: string; skills?: Skill[] }>;
-  sessions?: PiSessionStore;
+  /** Where conversations live. Defaults to in-memory; the directory opener passes a durable store. */
+  sessions?: PiSessionRecordStore;
+  /** Where pi reads its own settings; see {@link PiAgentSessionFactoryOptions.agentDir}. */
+  agentDir?: string;
   env?: ExecutionEnv;
   lease?: Lease;
   observer?: SessionObserver;
   onAssembly?: OnAssembly;
 }): Agent {
-  const models = opts.models ?? createPiModels({ providers: opts.providers, authPath: opts.authPath });
   const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
-  // Materialized here (not defaulted inside createPiAgentFromHarness) so the exposed parts carry
-  // the SAME lease instance the agent runs under — boundary mutations must contend on it.
+  // Materialized here (not defaulted inside the L0) so the exposed parts carry the SAME lease
+  // instance the agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
-  // The assembly's configured PAIR — handed to the factory and to the control plane as ONE value, so
-  // there is no wiring in which they could disagree (which levels exist depends on the model).
-  const defaults = {
-    model: resolveModel(models, opts.model),
-    thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+  const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd: env.cwd });
+  // The model and its runtime resolve on FIRST USE: building a ModelRuntime is async while
+  // assembling an agent is not, so the credential read belongs on the first turn rather than in the
+  // caller's constructor. Memoized by the factory, and shared with the control plane below so a
+  // boundary mutation validates against the registry the runs actually use.
+  let engine: Promise<{ modelRuntime: ModelRuntime; model: AnyModel }> | undefined;
+  const resolveEngine = () => {
+    engine ??= (async () => {
+      // The caller's registry when there is one — the directory rung builds it from the agent's own
+      // models.json, so a custom endpoint declared there is the one a turn resolves against.
+      const modelRuntime = opts.models ?? (await createPiModelRuntime({ authPath: opts.authPath }));
+      // ModelRuntime registers providers by config record, so an injected Provider INSTANCE (a
+      // gateway, a self-hosted endpoint, a test fake) goes in through its native seam.
+      for (const provider of opts.providers ?? []) modelRuntime.registerNativeProvider(provider);
+      return { modelRuntime, model: resolveModel(modelRuntime, opts.model) };
+    })();
+    return engine;
   };
-  const harnessFactory = piHarnessFactory({
-    sessions: opts.sessions ?? inMemorySessionStore(),
-    env,
-    models,
-    model: defaults.model,
+  const sessionFactory = piAgentSessionFactory({
+    sessions,
+    engine: resolveEngine,
     thinkingLevel: opts.thinkingLevel,
-    systemPrompt: opts.systemPrompt,
     tools: opts.tools,
+    systemPrompt: opts.systemPrompt,
     skills: opts.skills,
     live: opts.live,
+    cwd: env.cwd,
+    ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+    env,
   });
-  opts.onAssembly?.({ models, harnessFactory, lease, defaults });
-  return createPiAgentFromHarness({ lease, observer: opts.observer, cwd: env.cwd, harnessFactory });
+  opts.onAssembly?.({
+    lease,
+    sessionFactory,
+    // The control plane needs the registry and the configured pair as VALUES, and both only exist
+    // after the first credential read. Asking for them lazily keeps assembly synchronous without
+    // making the hub wait on a runtime it may never need (a control-less deployment never calls it).
+    engine: resolveEngine,
+    thinkingLevel: opts.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+  });
+  return createPiAgentFromSession({ lease, observer: opts.observer, sessionFactory });
 }
 
 /**
  * INTERNAL seam (workspace ↔ assembly): hands the hub-wiring consumer the assembly's live parts —
- * the SAME models collection, harness factory, and lease the agent runs with — so boundary
- * mutations (session-control.ts) contend on the real lease and validate against the real registry.
- * Called synchronously, exactly once, before the agent is returned. Not part of the public surface.
+ * the SAME session factory and lease the agent runs with, plus the model registry behind a thunk —
+ * so boundary mutations (session-control.ts) contend on the real lease and validate against the real
+ * registry. Called synchronously, exactly once, before the agent is returned. Not public surface.
  */
-type OnAssembly = (parts: {
-  models: Models;
-  harnessFactory: ReturnType<typeof piHarnessFactory>;
+export type PiAssemblyParts = {
   lease: Lease;
-  /** The resolved configured pair — what a session without overrides runs on. */
-  defaults: { model: AnyModel; thinkingLevel: ThinkingLevel };
-}) => void;
+  sessionFactory: PiAgentSessionFactory;
+  /** The registry and configured model, resolved on first use (a credential read is async). */
+  engine: () => Promise<{ modelRuntime: ModelRuntime; model: AnyModel }>;
+  /** The configured reasoning effort — the other half of the pair a session without overrides runs on. */
+  thinkingLevel: ThinkingLevel;
+};
+
+type OnAssembly = (parts: PiAssemblyParts) => void;
 
 /**
  * L1 system prompt: `instructions` ARE the prompt (no engine base, no wrapping); the skills listing
@@ -306,9 +335,13 @@ export interface CreatePiAgentOptions {
   /** Reasoning effort (pi's scale). Unset = pi's default; unsupported levels are clamped per model. */
   thinkingLevel?: ThinkingLevel;
   /**
-   * The system prompt itself — verbatim, no engine base and no wrapping (unlike the directory path,
-   * which assembles the engine base + AGENTS.md as segment ② + persona.md as segment ①). A plain string
-   * or a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
+   * The system prompt itself — no engine base and no wrapping (unlike the directory path, which
+   * assembles the engine base + AGENTS.md as segment ② + persona.md as segment ①). A plain string or
+   * a factory re-evaluated per invoke. When {@link skills} are mounted their listing is appended.
+   *
+   * Not byte-for-byte verbatim: pi appends its own `Current working directory:` line to whatever
+   * prompt it is given. What this rung guarantees is that no engine IDENTITY is imposed — a
+   * hand-built agent is not told it is a coding assistant.
    */
   instructions?: string | (() => string);
   /** The tool set to mount. `FastagentTool` (AgentTool plus the optional `deferred` marker, see
@@ -329,8 +362,9 @@ export interface CreatePiAgentOptions {
    * consulted when a provider is absent from the file (resolution order is upstream-owned).
    */
   authPath?: string;
-  /** Session persistence. Defaults to in-memory; inject jsonlSessionStore for restart-surviving continuity. */
-  sessions?: PiSessionStore;
+  /** Session persistence. Defaults to in-memory; inject piSessionRecordStore for restart-surviving
+   *  continuity. */
+  sessions?: PiSessionRecordStore;
   /** Filesystem/process environment. Defaults to a local NodeExecutionEnv at `process.cwd()`, and its
    *  cwd is the agent's. The default coding tools (read/bash/edit/write) take it as the turn's tool
    *  context, so injecting a constrained one narrows where the agent reads, writes and shells. It does
@@ -391,7 +425,7 @@ export interface CreatePiAgentFromDefinitionOptions {
    * dir) — unlike the dir-less {@link createPiAgent}/{@link createPiModels}, which default global.
    */
   authPath?: string;
-  sessions?: PiSessionStore;
+  sessions?: PiSessionRecordStore;
   /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it does more
    *  than root the default tools: persona.md and skills/ are read through it too. Two surfaces stay
    *  OUTSIDE it — ② project context (pi's loadProjectContextFiles uses node fs directly; see

@@ -135,8 +135,8 @@ createPiAgent({
   skills: [/* … */],               // optional: on-demand skill files
 
   // ── Tier 2: injectable ports (default values run fine) ──
-  sessions,   // PiSessionStore  — persistence (default: in-memory)
-  env,        // ExecutionEnv    — harness environment (default: local Node cwd)
+  sessions,   // PiSessionRecordStore  — persistence (default: in-memory)
+  env,        // ExecutionEnv    — engine environment (default: local Node cwd)
   lease,      // Lease           — concurrency floor (default: in-process fail-fast)
   providers,  // Provider[]      — your own model source (see §5)
 });
@@ -144,7 +144,7 @@ createPiAgent({
 
 | Port | Default | Reach for it when |
 |---|---|---|
-| `sessions` | `inMemorySessionStore()` (lost on restart) | `jsonlSessionStore({ dir })` for restart-surviving continuity, or your own `PiSessionStore` |
+| `sessions` | `piInMemorySessionRecordStore()` (lost on restart) | `piSessionRecordStore({ dir })` for restart-surviving continuity, or your own `PiSessionRecordStore` |
 | `env` | local `NodeExecutionEnv` (cwd) | filesystem/process IO for the default coding tools + definition loading; not a complete sandbox by itself |
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |

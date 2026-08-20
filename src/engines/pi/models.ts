@@ -1,10 +1,11 @@
 /**
  * The pi `Models` collection — the single hub that owns BOTH model resolution (provider/modelId
  * lookup) AND auth (per-request credential resolution). fastagent builds one per opener and threads
- * it into the harness alongside the selected `model`; the two must come from the same collection so
+ * it into the engine alongside the selected `model`; the two must come from the same collection so
  * the model's provider auth is in scope.
  */
 import { join } from "node:path";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Api, type Model, type Models, type Provider, defaultProviderAuthContext } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -46,6 +47,22 @@ export function createPiModels(options: CreatePiModelsOptions = {}): Models {
   for (const provider of options.providers ?? []) models.setProvider(provider);
   return models;
 }
+
+/**
+ * pi's Model with the API-shape generic erased — fastagent only passes models through to the engine,
+ * so the generic carries no information. One alias keeps the `any` auditable.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: intentional variance-friendly model type, audited at this single point
+export type AnyModel = Model<any>;
+
+/**
+ * The serving default for reasoning effort, pinned to what pi's TUI defaults to (its own
+ * DEFAULT_THINKING_LEVEL) — NOT inherited from the engine, whose fallback is "off": an author vibes
+ * at "medium" in pi and must get "medium" when served (fidelity), and pinning the value here means
+ * an upstream default change in either place cannot silently alter deployments. Models that do not
+ * support a level are clamped by pi per model.
+ */
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
 
 /**
  * The `ModelRuntime`-shaped sibling of {@link createPiModels} — the SAME hub semantics (built-in

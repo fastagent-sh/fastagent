@@ -2,12 +2,8 @@ import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import type { AgentEvent } from "../src/agent.ts";
-import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
-import { piHarnessFactory } from "../src/engines/pi/harness.ts";
 import { defineTool } from "../src/engines/pi/tool.ts";
-import { inMemorySessionStore } from "../src/index.ts";
-import { makeFaux } from "./faux.ts";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { fauxAgent } from "./agent.ts";
 
 /** Call a built tool's execute directly (the `fastagent tool` path — no session binding). */
 type RawExecute = (id: string, params: unknown, signal?: AbortSignal) => Promise<unknown>;
@@ -26,20 +22,10 @@ describe("shared ToolContext session manager", () => {
         return "ok";
       },
     });
-    const { faux, models } = makeFaux();
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("probe", {}, { id: "c1" })), fauxAssistantMessage("done")]);
-    const agent = createPiAgentFromHarness({
-      cwd: process.cwd(),
-      harnessFactory: piHarnessFactory({
-        env: new NodeExecutionEnv({ cwd: process.cwd() }),
-        sessions: inMemorySessionStore(),
-
-        models,
-        model: faux.getModel(),
-        tools: [probe],
-        systemPrompt: "test",
-      }),
-    });
+    const { agent } = fauxAgent(
+      [fauxAssistantMessage(fauxToolCall("probe", {}, { id: "c1" })), fauxAssistantMessage("done")],
+      { tools: [probe] },
+    );
 
     const events: AgentEvent[] = [];
     for await (const event of agent.invoke({ session: "sess-42" }, { text: "go" })) events.push(event);

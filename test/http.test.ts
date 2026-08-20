@@ -3,27 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
-import { createInvokeHandler, nodeListener, inMemorySessionStore, type Agent, type AgentEvent } from "../src/index.ts";
+import { createInvokeHandler, nodeListener, type Agent, type AgentEvent } from "../src/index.ts";
 import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
-import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
-import { piHarnessFactory } from "../src/engines/pi/harness.ts";
-import { makeFaux } from "./faux.ts";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { fauxAgent } from "./agent.ts";
 
-function makeAgent(responses: FauxResponseStep[]): Agent {
-  const { faux, models } = makeFaux();
-  faux.setResponses(responses);
-  return createPiAgentFromHarness({
-    harnessFactory: piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions: inMemorySessionStore(),
-
-      models,
-      model: faux.getModel(),
-      systemPrompt: "test",
-    }),
-  });
-}
+const makeAgent = (responses: FauxResponseStep[]): Agent => fauxAgent(responses).agent;
 
 /** Drive the Fetch handler directly (no server) and parse SSE lines into AgentEvent[]. */
 async function invoke(

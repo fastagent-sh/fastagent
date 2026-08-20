@@ -2,7 +2,7 @@
  * The built-in `wake` tool: the agent's self-scheduling surface. Calling it records a one-shot wake-up
  * (wakeups.ts); the scheduler fires it back into the SAME session, so the agent resumes THIS
  * conversation after a delay ("check the deploy in 10 minutes"). The session comes from the turn
- * context (ToolContext.sessionManager, set around the harness turn); the state root is closed over at build
+ * context (ToolContext.sessionManager, set around the turn); the state root is closed over at build
  * time (where it is known — the workspace opener), never read from the turn.
  *
  * Mounted by the opener ONLY when `config.selfSchedule` is on AND on the serving path (`dev`/`start`, where

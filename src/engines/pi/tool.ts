@@ -26,7 +26,7 @@ export interface ToolContext {
   sessionManager?: ReadonlySessionManager;
   /** Tool activation for the current turn (a loader tool activates {@link DefineToolOptions.deferred}
    *  tools with it — the built-in `search_tools` is one consumer). Provided by both the serving path
-   *  (invoke.ts, over the harness) and chat (over pi's AgentSession); undefined only outside any turn
+   *  (agent-session-factory.ts) and chat (session-builder.ts); undefined only outside any turn
    *  (a bare `fastagent tool` run). */
   tools?: ToolActivation;
 }
@@ -52,7 +52,7 @@ export interface DefineToolOptions<I extends z.ZodType> {
 }
 
 /**
- * A tool as MOUNTED: what the harness actually runs. Wider than the authored {@link AgentTool} on
+ * A tool as MOUNTED: what the engine actually runs. Wider than the authored {@link AgentTool} on
  * purpose — pi's default coding tools read the turn's tool context (its ExecutionEnv) as a fifth
  * `execute` parameter, while fastagent's own tools take four and are assignable to it unchanged.
  * Naming the wider type is what lets `defineTool` stay context-free for authors while both families

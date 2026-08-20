@@ -29,7 +29,6 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSession,
@@ -47,24 +46,15 @@ import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts"
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
-import { type ReadonlySessionManager, type ToolActivation, additiveActivation, turnContext } from "./tool-context.ts";
+import {
+  type ReadonlySessionManager,
+  type ToolActivation,
+  additiveActivation,
+  agentSessionManager,
+  turnContext,
+} from "./tool-context.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
-
-/** Adapt coding-agent's resident SessionManager to FastAgent's shared tool-runtime manager port. */
-function toolChatSessionManager(session: AgentSession): ReadonlySessionManager {
-  return {
-    getSessionId: () => session.sessionManager.getSessionId(),
-    async getHeader() {
-      const header = session.sessionManager.getHeader();
-      if (!header) throw new Error("chat session has no metadata header");
-      return { id: header.id, timestamp: header.timestamp };
-    },
-    async getBranch() {
-      return session.sessionManager.getBranch() as SessionTreeEntry[];
-    },
-  };
-}
 
 export interface BuildSessionRuntimeOptions {
   /** Model spec override (the CLI --model flag). Precedence: this > FASTAGENT_MODEL > config.model. */
@@ -86,7 +76,7 @@ export async function buildAgentSessionRuntime(
   sessionManager?: SessionManager,
 ): Promise<AgentSessionRuntime> {
   /** The turn's {@link ToolActivation} over pi's AgentSession — the counterpart of invoke.ts's
-   *  harness bridge, so the SAME builtin search_tools serves both paths. Additive; unknown names
+   *  serving bridge, so the SAME builtin search_tools serves both paths. Additive; unknown names
    *  filtered (`setActiveToolsByName` is authoritative on the session and rebuilds its prompt — our
    *  static override keeps the prompt identical to serving). */
   function sessionToolActivation(session: AgentSession): ToolActivation {
@@ -126,13 +116,12 @@ export async function buildAgentSessionRuntime(
     // (what you iterate is what you serve): the initial active set excludes deferred tools (applied
     // on the session in createRuntime — pi's session starts all-active), and the activation bridge
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
-    // instead of fastagent's harness.
+    // instead of the served one.
     const { config, modelSpec, agentDir, authPath, stateRoot, tools, deferredToolNames, toolCollisions, toolFailures } =
       await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
-    // ONE hub owns model resolution AND per-request auth — the ModelRuntime-shaped sibling of
-    // serving's createPiModels; see models.ts.
+    // ONE hub owns model resolution AND per-request auth; see models.ts.
     // agentDir carries the agent's own models.json (custom endpoints); stateRoot keeps pi's generated
     // catalog cache out of the definition dir. See createPiModelRuntime.
     const modelRuntime = await createPiModelRuntime({ authPath, agentDir, stateRoot });
@@ -159,7 +148,7 @@ export async function buildAgentSessionRuntime(
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
     // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
     // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
-    // resolves through sessionRef at call time, exactly like the serving path resolves its harness.
+    // resolves through sessionRef at call time, exactly like the serving path resolves its session.
     const customToolDefs = customTools.map((t) => ({
       name: t.name,
       label: t.name,
@@ -292,7 +281,7 @@ export async function buildAgentSessionRuntime(
     });
     sessionRef.current = {
       session: result.session,
-      sessionManager: toolChatSessionManager(result.session),
+      sessionManager: agentSessionManager(result.session, result.session.sessionManager.getSessionId()),
       activation: sessionToolActivation(result.session),
     };
     // Deferral emulation: pi's session starts with everything active — narrow it by SUBTRACTING

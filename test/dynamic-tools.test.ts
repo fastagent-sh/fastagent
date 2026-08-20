@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import type { AgentEvent } from "../src/agent.ts";
 import { piBasePrompt } from "../src/engines/pi/create.ts";
-import { piHarnessFactory } from "../src/engines/pi/harness.ts";
-import { createPiAgentFromHarness } from "../src/engines/pi/invoke.ts";
 import { makeSearchToolsTool, withSearchTool } from "../src/engines/pi/search-tools.ts";
 import { defineTool, isDeferredTool } from "../src/engines/pi/tool.ts";
-import { inMemorySessionStore } from "../src/index.ts";
-import { makeFaux } from "./faux.ts";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import { piInMemorySessionRecordStore } from "../src/engines/pi/session-store.ts";
+import { fauxAgent } from "./agent.ts";
 
 const weather = () =>
   defineTool({
@@ -78,37 +75,28 @@ describe("deferred tools: marker + mounting + prompt", () => {
   });
 });
 
-describe("deferred tools: end-to-end through invoke (faux model)", () => {
-  function makeAgent(
-    responses: Parameters<ReturnType<typeof makeFaux>["faux"]["setResponses"]>[0],
-    sessions = inMemorySessionStore(),
-  ) {
-    const { faux, models } = makeFaux();
-    faux.setResponses(responses);
-    const factory = piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions,
+/** The messages a record holds — a branch also carries non-message entries (activations, overrides). */
+function recordedMessages(record: { getBranch(): unknown[] }): unknown[] {
+  return record.getBranch().flatMap((entry) => {
+    const message = (entry as { message?: unknown }).message;
+    return message ? [message] : [];
+  });
+}
 
-      models,
-      model: faux.getModel(),
-      tools: withSearchTool([echo(), weather()]),
-      systemPrompt: "test",
-    });
-    return { agent: createPiAgentFromHarness({ harnessFactory: factory }), factory };
+describe("deferred tools: end-to-end through invoke (faux model)", () => {
+  function makeAgent(responses: FauxResponseStep[], sessions = piInMemorySessionRecordStore({ cwd: process.cwd() })) {
+    return fauxAgent(responses, { sessions, tools: withSearchTool([echo(), weather()]) });
   }
 
-  it("a deferred tool starts inactive; search_tools activates it and stamps addedToolNames; the next turn's fresh harness keeps it active", async () => {
-    const sessions = inMemorySessionStore();
-    const { agent, factory } = makeAgent(
+  it("search_tools activates a deferred tool and stamps addedToolNames on the activating result", async () => {
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const { agent } = makeAgent(
       [
         fauxAssistantMessage(fauxToolCall("search_tools", { query: "weather forecast" }, { id: "c1" })),
         fauxAssistantMessage("found it"),
       ],
       sessions,
     );
-
-    // Fresh session: deferred tool NOT active.
-    expect((await factory("s1")).getActiveTools().map((t) => t.name)).toEqual(["echo", "search_tools"]);
 
     const events: AgentEvent[] = [];
     for await (const e of agent.invoke({ session: "s1" }, { text: "what's the weather?" })) events.push(e);
@@ -119,24 +107,19 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     expect(JSON.stringify(ended.content)).toContain("lookup_weather");
 
     // …the session recorded the activation with the load point (addedToolNames on the toolResult)…
-    const { messages } = await (await sessions.openOrCreate("s1")).buildContext();
+    const messages = recordedMessages(await sessions.openOrCreate("s1"));
     const toolResult = messages.find((m) => (m as { role?: string }).role === "toolResult") as {
       addedToolNames?: string[];
     };
     expect(toolResult.addedToolNames).toEqual(["lookup_weather"]);
-
-    // …and the NEXT turn's fresh harness restores it (stateless invoke keeps the activation).
-    expect((await factory("s1")).getActiveTools().map((t) => t.name)).toEqual([
-      "echo",
-      "search_tools",
-      "lookup_weather",
-    ]);
+    // That the activation SURVIVES into the next turn is asserted where it is observable — against
+    // the tools the model is offered (agent-session-factory.test.ts).
   });
 
   it("parallel batch: two search_tools calls — addedToolNames lands on the activating call only, the other reports already-active", async () => {
     // pi executes a batch's tool calls in parallel; the stamp must come from each execute's OWN
     // activate() calls, not an active-set snapshot diff (which would stamp a sibling's activation).
-    const sessions = inMemorySessionStore();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const { agent } = makeAgent(
       [
         fauxAssistantMessage([
@@ -152,7 +135,7 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
     for await (const e of agent.invoke({ session: "s3" }, { text: "weather?" })) events.push(e);
     expect(events.at(-1)?.type).toBe("completed");
 
-    const { messages } = await (await sessions.openOrCreate("s3")).buildContext();
+    const messages = recordedMessages(await sessions.openOrCreate("s3"));
     const results = messages.filter((m) => (m as { role?: string }).role === "toolResult") as Array<{
       addedToolNames?: string[];
       content: Array<{ text?: string }>;
@@ -169,16 +152,23 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
   });
 
   it("no keyword match → reports the inactive catalog instead of activating anything", async () => {
-    const { agent, factory } = makeAgent([
+    let offeredNextTurn: string[] = [];
+    const { agent } = makeAgent([
       fauxAssistantMessage(fauxToolCall("search_tools", { query: "quantum chess" }, { id: "c1" })),
       fauxAssistantMessage("ok"),
+      (context) => {
+        offeredNextTurn = (context.tools ?? []).map((tool: { name: string }) => tool.name);
+        return fauxAssistantMessage("next");
+      },
     ]);
 
     const events: AgentEvent[] = [];
     for await (const e of agent.invoke({ session: "s2" }, { text: "go" })) events.push(e);
     const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
     expect(JSON.stringify(ended.content)).toMatch(/No tools matched .*lookup_weather/);
-    expect((await factory("s2")).getActiveTools().map((t) => t.name)).toEqual(["echo", "search_tools"]);
+    for await (const _ of agent.invoke({ session: "s2" }, { text: "again" })) {
+    }
+    expect(offeredNextTurn.sort()).toEqual(["echo", "search_tools"]);
   });
 
   it("a broad query over the activation cap activates NOTHING and asks for a narrower query", async () => {
@@ -193,26 +183,25 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
         execute: () => "ok",
       }),
     );
-    const { faux, models } = makeFaux();
-    faux.setResponses([
-      fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch" }, { id: "c1" })),
-      fauxAssistantMessage("ok"),
-    ]);
-    const factory = piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions: inMemorySessionStore(),
-
-      models,
-      model: faux.getModel(),
-      tools: withSearchTool(many),
-      systemPrompt: "test",
-    });
-    const agent = createPiAgentFromHarness({ harnessFactory: factory });
+    let offeredNextTurn: string[] = [];
+    const { agent } = fauxAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch" }, { id: "c1" })),
+        fauxAssistantMessage("ok"),
+        (context) => {
+          offeredNextTurn = (context.tools ?? []).map((tool: { name: string }) => tool.name);
+          return fauxAssistantMessage("next");
+        },
+      ],
+      { tools: withSearchTool(many) },
+    );
     const events: AgentEvent[] = [];
     for await (const e of agent.invoke({ session: "s4" }, { text: "go" })) events.push(e);
     const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
     expect(JSON.stringify(ended.content)).toMatch(/too many to activate at once/);
-    expect((await factory("s4")).getActiveTools().map((t) => t.name)).toEqual(["search_tools"]); // nothing activated
+    for await (const _ of agent.invoke({ session: "s4" }, { text: "again" })) {
+    }
+    expect(offeredNextTurn).toEqual(["search_tools"]); // nothing activated
   });
 
   it("the cap has a guaranteed escape: an exact tool name activates that one tool", async () => {
@@ -227,32 +216,31 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
         execute: () => "ok",
       }),
     );
-    const { faux, models } = makeFaux();
-    faux.setResponses([
-      fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch_3" }, { id: "c1" })),
-      fauxAssistantMessage("ok"),
-    ]);
-    const factory = piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions: inMemorySessionStore(),
-
-      models,
-      model: faux.getModel(),
-      tools: withSearchTool(many),
-      systemPrompt: "test",
-    });
-    const agent = createPiAgentFromHarness({ harnessFactory: factory });
+    let offeredNextTurn: string[] = [];
+    const { agent } = fauxAgent(
+      [
+        fauxAssistantMessage(fauxToolCall("search_tools", { query: "fetch_3" }, { id: "c1" })),
+        fauxAssistantMessage("ok"),
+        (context) => {
+          offeredNextTurn = (context.tools ?? []).map((tool: { name: string }) => tool.name);
+          return fauxAssistantMessage("next");
+        },
+      ],
+      { tools: withSearchTool(many) },
+    );
     const events: AgentEvent[] = [];
     for await (const e of agent.invoke({ session: "s7" }, { text: "go" })) events.push(e);
     const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
     expect(JSON.stringify(ended.content)).toMatch(/Activated: fetch_3/);
-    expect((await factory("s7")).getActiveTools().map((t) => t.name)).toEqual(["search_tools", "fetch_3"]);
+    for await (const _ of agent.invoke({ session: "s7" }, { text: "again" })) {
+    }
+    expect(offeredNextTurn.sort()).toEqual(["fetch_3", "search_tools"]);
   });
 
   it("a query matching an ALREADY-ACTIVE tool says so — never 'No tools matched' (capability-missing trap)", async () => {
     // Long conversations forget what they activated; the loader is the only discovery surface, so it
     // must answer for the whole catalog, not only the inactive slice.
-    const sessions = inMemorySessionStore();
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
     const { agent } = makeAgent(
       [
         fauxAssistantMessage(fauxToolCall("search_tools", { query: "echo" }, { id: "c1" })), // echo is ACTIVE
@@ -279,24 +267,16 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
         return frozen; // shared/frozen result — legal per the defineTool contract
       },
     });
-    const { faux, models } = makeFaux();
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("my_loader", {}, { id: "c1" })), fauxAssistantMessage("ok")]);
-    const sessions = inMemorySessionStore();
-    const factory = piHarnessFactory({
-      env: new NodeExecutionEnv({ cwd: process.cwd() }),
-      sessions,
-
-      models,
-      model: faux.getModel(),
-      tools: [loader, weather()],
-      systemPrompt: "test",
-    });
-    const agent = createPiAgentFromHarness({ harnessFactory: factory });
+    const sessions = piInMemorySessionRecordStore({ cwd: process.cwd() });
+    const { agent } = fauxAgent(
+      [fauxAssistantMessage(fauxToolCall("my_loader", {}, { id: "c1" })), fauxAssistantMessage("ok")],
+      { sessions, tools: [loader, weather()] },
+    );
     const events: AgentEvent[] = [];
     for await (const e of agent.invoke({ session: "s6" }, { text: "go" })) events.push(e);
     expect(events.at(-1)?.type).toBe("completed"); // no throw on the frozen object
     expect((frozen as { addedToolNames?: string[] }).addedToolNames).toBeUndefined(); // untouched
-    const { messages } = await (await sessions.openOrCreate("s6")).buildContext();
+    const messages = recordedMessages(await sessions.openOrCreate("s6"));
     const toolResult = messages.find((m) => (m as { role?: string }).role === "toolResult") as {
       addedToolNames?: string[];
     };
@@ -304,15 +284,22 @@ describe("deferred tools: end-to-end through invoke (faux model)", () => {
   });
 
   it("a noise query (no searchable tokens) activates nothing — vacuous every() must not match the catalog", async () => {
-    const { agent, factory } = makeAgent([
+    let offeredNextTurn: string[] = [];
+    const { agent } = makeAgent([
       fauxAssistantMessage(fauxToolCall("search_tools", { query: "???" }, { id: "c1" })),
       fauxAssistantMessage("ok"),
+      (context) => {
+        offeredNextTurn = (context.tools ?? []).map((tool: { name: string }) => tool.name);
+        return fauxAssistantMessage("next");
+      },
     ]);
     const events: AgentEvent[] = [];
     for await (const e of agent.invoke({ session: "s8" }, { text: "go" })) events.push(e);
     const ended = events.find((e) => e.type === "tool_ended") as Extract<AgentEvent, { type: "tool_ended" }>;
     expect(JSON.stringify(ended.content)).toMatch(/no searchable keywords/);
-    expect((await factory("s8")).getActiveTools().map((t) => t.name)).toEqual(["echo", "search_tools"]);
+    for await (const _ of agent.invoke({ session: "s8" }, { text: "again" })) {
+    }
+    expect(offeredNextTurn.sort()).toEqual(["echo", "search_tools"]);
   });
 
   it("search_tools outside a turn (bare `fastagent tool` run) degrades with a clear message", async () => {

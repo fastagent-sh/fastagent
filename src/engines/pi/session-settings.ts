@@ -1,7 +1,7 @@
 /**
  * What a session is SET TO, and what it may be set to. Model and thinking level are ONE setting —
  * which levels exist is a property of the model — so they resolve together, here, and `state()`, the
- * `set_thinking` gate and the fresh-harness resolve all read this rather than deriving their own.
+ * `set_thinking` gate and the per-invoke binding all read this rather than deriving their own.
  *
  * Read-only by design. The durable record may hold a level the current model cannot do; that record
  * is the user's PREFERENCE, so resolving per read restores it when the session returns to a capable
@@ -10,7 +10,8 @@
  */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Models, clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import type { AnyModel } from "./harness.ts";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AnyModel } from "./models.ts";
 
 /** Which strings are levels at all — the vocabulary. What a MODEL supports is
  *  `getSupportedThinkingLevels`. The `satisfies` anchor keeps this exhaustive against pi's union: a
@@ -107,4 +108,23 @@ export function resolveSessionSettings(
     availableThinkingLevels,
     ...(dropped.model || dropped.thinkingLevel ? { dropped } : {}),
   };
+}
+
+/**
+ * The entries on the session's ACTIVE path, root→leaf — what every last-wins settings read walks.
+ * `getBranch()` is exactly that walk: the journal can hold abandoned branches after a `navigate`,
+ * and reading it flat would run the session on a setting it moved away from.
+ *
+ * A chain that is not intact THROWS. `getBranch()` stops where a parent is missing and answers the
+ * SHORT path, which reads exactly like a short session — every override above the gap gone, the next
+ * turn silently on assembly defaults. The caller decides what to do with the fault (state() reports
+ * the settings as absent, dispatch answers with a code); what it must not do is guess.
+ */
+export function activePath(record: SessionManager): OverrideEntryLike[] {
+  const path = record.getBranch();
+  const root = path[0] as { id?: string; parentId?: string | null } | undefined;
+  if (root?.parentId != null) {
+    throw new Error(`session entry "${root.parentId}" is missing from the journal (parent of "${root.id}")`);
+  }
+  return path as unknown as OverrideEntryLike[];
 }
