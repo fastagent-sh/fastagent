@@ -270,6 +270,11 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         prompt = nextPrompt;
         skills = nextSkills;
         await loader.reload();
+        // A reload re-runs the extension factories (it begins by clearing pi's module cache), so it
+        // can fail an extension that loaded fine at boot — an author's edit is exactly when that
+        // happens. Reporting only the first build would drop the agent's extension silently, which
+        // is the failure this reporting exists to prevent.
+        reportExtensionErrors(await services);
       }
     }
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);

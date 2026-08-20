@@ -78,3 +78,29 @@ describe("dev-supervisor: the watched .env follows FASTAGENT_SECRETS_DIR", () =>
     expect(ig("/agent/tools/x.ts")).toBe(false); // code inputs unaffected
   });
 });
+
+describe("dev-supervisor: an agent with extensions/ restarts on definition edits too", () => {
+  const root = "/agent";
+  const plain = devWatchIgnored(root, join(root, ".secrets", ".env"));
+  const withExtensions = devWatchIgnored(root, join(root, ".secrets", ".env"), {
+    definitionRestartsWorker: true,
+  });
+
+  it("leaves the definition live-read when the agent ships no extensions", () => {
+    expect(plain(join(root, "persona.md"))).toBe(true); // pruned: live-read, no restart
+    expect(plain(join(root, "AGENTS.md"))).toBe(true);
+    expect(plain(join(root, "skills", "triage.md"))).toBe(true);
+  });
+
+  it("restarts on a definition edit when extensions/ is present", () => {
+    // pi's resource reload - how a live edit reaches the model - re-runs every extension factory
+    // without shutting the previous instances down. Restarting is what keeps that from stranding
+    // whatever they opened.
+    expect(withExtensions(join(root, "persona.md"))).toBe(false);
+    expect(withExtensions(join(root, "AGENTS.md"))).toBe(false);
+    expect(withExtensions(join(root, "skills", "triage.md"))).toBe(false);
+    // and the code inputs are unchanged
+    expect(withExtensions(join(root, "extensions", "notify.ts"))).toBe(false);
+    expect(withExtensions(join(root, "notes", "scratch.md"))).toBe(true);
+  });
+});

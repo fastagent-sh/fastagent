@@ -327,11 +327,13 @@ long as you remember it is shared by concurrent turns and by every session the a
 not a per-conversation scratchpad. Anything that belongs to one conversation belongs in the session,
 not in your module.
 
-One exception, and it bites in `dev`: **editing the definition rebuilds your extension.** `persona.md`
-and `skills/` are re-read live, and the only way pi serves a re-read one is a resource reload, which
-starts by clearing its extension module cache. So an edit to the persona re-runs your factory and
-discards the module state it held — even though nothing about the extension changed. Deployed agents
-do not hit this (their definition does not change under them); an author iterating in `dev` does.
+One consequence worth knowing: **an agent that ships `extensions/` restarts on definition edits.**
+Normally `persona.md`, `AGENTS.md` and `skills/` are live — edit them and the next turn sees the
+change, no restart. But serving a re-read definition goes through a pi resource reload, and that
+reload re-runs every extension factory (it clears their module cache first) without shutting the
+previous instances down. Rather than let a prompt edit quietly rebuild your extensions and strand
+whatever the old ones opened, `fastagent dev` restarts the worker for definition edits whenever
+`extensions/` is present. The startup line tells you which mode you are in.
 
 `chat` is the simpler case: one long-lived session, one instance, `session_start` once.
 
