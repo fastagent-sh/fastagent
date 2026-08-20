@@ -270,10 +270,11 @@ Earlier names win and collisions are reported. Broken discovered tools are repor
 Reusable integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting; package
 origin does not create a second tool runtime.
 
-Every `defineTool` execution receives the same generic runtime context. Serving adapts its fresh
-pi-agent-core `Session`; chat adapts pi coding agent's resident `SessionManager`; both expose the
-FastAgent-owned read-only port (`getSessionId`, `getHeader`, `getBranch`). Sessionless direct execution
-provides cwd but no manager.
+Every `defineTool` execution receives the same generic runtime context. Serving adapts the session it
+binds for the turn; chat adapts its resident one; both go through the same adapter onto the
+FastAgent-owned read-only port (`getSessionId`, `getHeader`, `getBranch`) — and `getSessionId` answers
+the CALLER's id, not pi's encoded record name. Sessionless direct execution provides cwd but no
+manager.
 
 **Deferred tools** (`defineTool({ deferred: true })`) are registered but not initially active: their
 schemas stay out of the request — and the model's sight — until the built-in `search_tools` loader

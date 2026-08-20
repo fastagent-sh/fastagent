@@ -9,19 +9,6 @@ updates:
       npm-dependencies:
         patterns:
           - "*"
-    ignore:
-      # pi 0.84 promoted the unfinished lane-based AgentHarness to pi-agent-core's default export
-      # and removed the working one: prompt/compact/abort/events.on all throw HarnessNotImplemented.
-      # The serving path (src/engines/pi/invoke.ts) runs on that class, so it cannot move yet.
-      #
-      # The condition is OURS, not upstream's. pi does not consume AgentHarness itself - its TUI,
-      # RPC and SDK all run on AgentSession - so waiting for someone else to finish it is waiting
-      # on work with no owner. The serving path moves to AgentSession instead (invoke-session.ts is
-      # the proof it holds the SPEC); drop this entry when the harness L0 is gone, not when an
-      # upstream release implements it. Hence the open-ended range: every version from 0.84 on
-      # breaks the same class, and 0.85 will not be different.
-      - dependency-name: "@earendil-works/pi-*"
-        versions: [">=0.84"]
 
   - package-ecosystem: github-actions
     directory: /

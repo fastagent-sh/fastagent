@@ -4,7 +4,7 @@
  * closures. Deploy-time ambients a tool closes over at build time do NOT belong here.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
+import type { SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 /** FastAgent's read-only port over the current conversation manager. Serving and chat adapt their
@@ -12,7 +12,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 export interface ReadonlySessionManager {
   getSessionId(): string;
   getHeader(): Promise<{ id: string; timestamp: string }>;
-  getBranch(): Promise<SessionTreeEntry[]>;
+  getBranch(): Promise<PiSessionEntry[]>;
 }
 
 /**
@@ -32,7 +32,7 @@ export function agentSessionManager(session: AgentSession, sessionId: string): R
       return { id: sessionId, timestamp: header.timestamp };
     },
     async getBranch() {
-      return session.sessionManager.getBranch() as SessionTreeEntry[];
+      return session.sessionManager.getBranch() as PiSessionEntry[];
     },
   };
 }

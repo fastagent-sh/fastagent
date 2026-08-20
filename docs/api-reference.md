@@ -207,7 +207,7 @@ interface ToolContext {
 interface ReadonlySessionManager {
   getSessionId(): string;
   getHeader(): Promise<{ id: string; timestamp: string }>;
-  getBranch(): Promise<SessionTreeEntry[]>;
+  getBranch(): Promise<PiSessionEntry[]>;
 }
 ```
 

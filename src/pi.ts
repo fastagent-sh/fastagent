@@ -17,14 +17,13 @@ export {
 } from "./engines/pi/tool.ts";
 export type { ReadonlySessionManager, ToolActivation } from "./engines/pi/tool-context.ts";
 export { z } from "zod";
-export type {
-  AgentTool,
-  ExecutionEnv,
-  Session,
-  SessionTreeEntry,
-  Skill,
-  SkillDiagnostic,
-} from "@earendil-works/pi-agent-core";
+export type { AgentTool, ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
+/**
+ * A conversation record, as the tool runtime and the control plane hold it. Its entries are pi's own
+ * — exported under a qualified name because `SessionEntry` in this package is the NEUTRAL one the
+ * control plane publishes (session.ts), and the two are different shapes.
+ */
+export type { SessionManager, SessionEntry as PiSessionEntry } from "@earendil-works/pi-coding-agent";
 
 export { loadChannels, type ChannelCollision } from "./engines/pi/channel.ts";
 export {
