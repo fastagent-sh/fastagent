@@ -14,7 +14,7 @@
  */
 import { prepareCompaction } from "@earendil-works/pi-agent-core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { SessionEntry as SessionTreeEntry, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { SessionEntry as PiSessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Models } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {
@@ -59,12 +59,12 @@ function textOf(content: unknown): string {
 }
 
 /**
- * pi `SessionTreeEntry` → neutral {@link SessionEntry}. Message entries map onto the guaranteed
+ * pi `PiSessionEntry` → neutral {@link SessionEntry}. Message entries map onto the guaranteed
  * kind vocabulary (user/assistant/tool) with a minimal render payload; every other engine record
  * keeps its pi type as an open-set kind with an EMPTY payload — present so `parentId` chains and
  * cursors stay intact, skippable by contract, and no pi message class leaks through the adapter.
  */
-function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
+function toSessionEntry(entry: PiSessionEntry): SessionEntry {
   const base = {
     id: entry.id,
     parentId: entry.parentId ?? undefined,
@@ -110,7 +110,7 @@ function toSessionEntry(entry: SessionTreeEntry): SessionEntry {
  *  position in the conversation, so it is neither published nor navigable — the client's rule stays
  *  "anything published is navigable". pi's own branch() is a pointer move and writes no record, so
  *  there is nothing else to exclude. */
-function isNavigable(entry: SessionTreeEntry): boolean {
+function isNavigable(entry: PiSessionEntry): boolean {
   return entry.type !== "label";
 }
 
@@ -346,7 +346,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
       // reading as a dangling head. This order makes the journal a superset of the leaf's chain,
       // which is what lets the published head be trusted as one of the published entries.
       const leafEntryId = opened.getLeafId() ?? undefined;
-      const all = (opened.getEntries() as unknown as SessionTreeEntry[]).filter(isNavigable).map(toSessionEntry);
+      const all = (opened.getEntries() as unknown as PiSessionEntry[]).filter(isNavigable).map(toSessionEntry);
       let entries = all;
       if (opts?.since !== undefined) {
         const idx = all.findIndex((e) => e.id === opts.since);
@@ -591,7 +591,7 @@ export function createPiSessionControl(options: CreatePiSessionControlOptions): 
             // same disposition as an unknown model spec. Same predicate `entries()` publishes by, so
             // "everything published is navigable" holds by construction rather than by two literals
             // agreeing.
-            const entry = existing.getEntry(command.targetId) as SessionTreeEntry | undefined;
+            const entry = existing.getEntry(command.targetId) as PiSessionEntry | undefined;
             if (!entry || !isNavigable(entry)) {
               return {
                 ok: false,
