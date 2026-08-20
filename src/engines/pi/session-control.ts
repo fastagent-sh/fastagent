@@ -2,7 +2,7 @@
  * The pi implementation of the session control plane: observation (`state`/`entries`/`events`,
  * design Phase 1) and run modulation (`dispatch`: steer/follow_up/abort, Phase 2a) over
  * invoke-driven runs. `createPiSessionControl` returns the neutral `SessionControl` plus the
- * {@link SessionObserver} to plug into the invoke pipeline (`createPiAgentFromSession({ observer })`)
+ * {@link SessionObserver} to plug into the invoke pipeline (`createPiAgent({ observer })`)
  * — the hub derives everything from the rich event stream (plus the {@link RunControls} the
  * run_started event carries), holds no durable state of its own, and never writes: durable truth
  * stays in the session repository (read via {@link PiSessionRecordStore}), live truth in the events the
