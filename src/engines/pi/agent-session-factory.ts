@@ -266,15 +266,9 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       const loader = (await services).resourceLoader;
       const definitionChanged =
         loader.getSystemPrompt() !== nextPrompt || loadedSkillSet(loader.getSkills().skills) !== skillSet(nextSkills);
-      // Extensions reload EVERY turn, definition change or not — a turn gets its OWN instance.
-      //
-      // They hold module state and receive session_start/session_shutdown per turn, so a shared
-      // instance breaks under concurrency, which serving has by construction: with A mid-turn and B
-      // running to completion inside it, B's shutdown clears the timer A's start opened, and A's own
-      // shutdown then finds nothing (measured, and pinned in definition-extensions.test.ts).
-      //
-      // Isolation restores what pi's extension contract already says a session_shutdown means. The
-      // bill, measured per turn: 0.67ms without extensions, 2.86ms with one — against a model call.
+      // Extensions reload even when the definition did not change, because a turn needs its OWN
+      // instance: they hold module state and get session_start/session_shutdown per turn, so one
+      // instance shared across concurrent turns has one turn's shutdown tearing down another's.
       if (definitionChanged || extensionPaths.length > 0) {
         prompt = nextPrompt;
         skills = nextSkills;
