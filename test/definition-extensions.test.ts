@@ -208,13 +208,14 @@ describe("definition: chat loads the same extensions serving does", () => {
 });
 
 describe("definition: extension lifecycle across per-invoke sessions", () => {
-  it("pairs every session_start with a session_shutdown", async () => {
+  it("one extension instance serves every turn, and session_start repeats on each", async () => {
     const counterKey = `__fa_ext_lifecycle_${Date.now()}__`;
     const dir = await agentDirWith({
       "extensions/lifecycle.ts": `
 export default async function (api) {
   const key = ${JSON.stringify(counterKey)};
-  globalThis[key] ??= { start: 0, shutdown: 0 };
+  globalThis[key] ??= { start: 0, shutdown: 0, factories: 0 };
+  globalThis[key].factories++;
   api.on("session_start", () => { globalThis[key].start++; });
   api.on("session_shutdown", () => { globalThis[key].shutdown++; });
 }
@@ -230,35 +231,45 @@ export default async function (api) {
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     await collect(agent.invoke({ session: "s" }, { text: "again" }));
 
-    const counts = (globalThis as Record<string, unknown>)[counterKey] as { start: number; shutdown: number };
-    expect(counts.start).toBe(2); // one session per invoke
-    expect(counts.shutdown).toBe(counts.start); // and each one cleaned up
+    const counts = (globalThis as Record<string, unknown>)[counterKey] as {
+      start: number;
+      shutdown: number;
+      factories: number;
+    };
+    // ONE instance for the process: pi caches extension modules in a process-global map, so a served
+    // agent cannot hand a turn its own copy however the loader is driven.
+    expect(counts.factories).toBe(1);
+    // session_start still fires per turn, because a session must be bound for its errors to surface
+    // at all — which is why the docs require start handlers to be idempotent.
+    expect(counts.start).toBe(2);
+    // No per-turn shutdown. Emitting one would tear down state the NEXT turn (or a concurrent one)
+    // is still using, since they are all the same instance.
+    expect(counts.shutdown).toBe(0);
   });
 });
 
-describe("extension lifecycle is per invoke, like the session it belongs to", () => {
+describe("extension lifecycle under concurrency", () => {
   /** Writes one line per lifecycle event into `<dir>/events.log`, from MODULE scope. */
   const lifecycleExtension = `
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 const logFile = join(import.meta.dirname, "..", "events.log");
-const instance = Math.random().toString(36).slice(2, 7);
 let live = new Set();
 export default async function (pi) {
   pi.on("session_start", async () => {
     const t = setInterval(() => {}, 1e6);
     live.add(t);
-    appendFileSync(logFile, \`start instance=\${instance} live=\${live.size}\\n\`);
+    appendFileSync(logFile, \`start live=\${live.size}\\n\`);
   });
   pi.on("session_shutdown", async () => {
     for (const t of live) clearInterval(t);
-    appendFileSync(logFile, \`shutdown instance=\${instance} cleared=\${live.size}\\n\`);
+    appendFileSync(logFile, \`shutdown cleared=\${live.size}\\n\`);
     live.clear();
   });
 }
 `;
 
-  it("a turn's shutdown cleans up ITS OWN resources, not another turn's", async () => {
+  it("a turn never tears down a resource another turn is using", async () => {
     const dir = await agentDirWith({ "extensions/lifecycle.ts": lifecycleExtension });
     const { faux } = makeFaux();
     let releaseA!: () => void;
@@ -285,10 +296,10 @@ export default async function (pi) {
     await a;
 
     const events = (await readFile(join(dir, "events.log"), "utf8")).trim().split("\n");
-    // Each turn gets its own extension instance, so each shutdown clears exactly what its own start
-    // opened. Sharing one instance across turns makes B's shutdown clear A's live timer.
-    expect(events.every((line) => line.includes("live=1") || line.includes("cleared=1"))).toBe(true);
-    const instances = new Set(events.map((line) => line.match(/instance=(\w+)/)?.[1]));
-    expect(instances.size).toBe(2); // one per turn
+    // The instance is shared (pi's module cache is process-global), so a per-turn shutdown would
+    // clear the timer A is still using — B's cleanup destroying A's resource. Not emitting one is
+    // what keeps concurrent turns from interfering.
+    expect(events.filter((line) => line.startsWith("start"))).toHaveLength(2);
+    expect(events.filter((line) => line.startsWith("shutdown"))).toHaveLength(0);
   });
 });

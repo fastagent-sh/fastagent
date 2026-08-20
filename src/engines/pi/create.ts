@@ -506,8 +506,8 @@ export async function createPiAgentFromDefinition(
     sessions: options.sessions,
     // Boot-resolved, not re-scanned per turn like the prompt: WHICH files are extensions is fixed
     // at boot, so an added extensions/ entry needs the restart that `tools/` already needs — which
-    // is why this sits outside `live` above. Whether those files are re-loaded per turn is a
-    // separate question, answered by the serving assembly (they are — one instance per turn).
+    // is why this sits outside `live` above. Nor are they re-LOADED per turn: pi's extension module
+    // cache is process-global, so the whole process shares one instance of each.
     extensionPaths: await loadExtensionPaths(dir, { cwd: env.cwd, env }),
     env,
     lease: options.lease,

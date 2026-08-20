@@ -307,17 +307,27 @@ Only the definition's own `extensions/` are loaded. The machine's `~/.pi` extens
 deliberately not — a served agent must not depend on the authoring machine's setup.
 
 Which files count as extensions is decided at startup: **adding or removing one needs a restart**,
-like `tools/`. Those files are then re-instantiated **per turn** when serving, so each turn gets its
-own module state and its own `session_start` / `session_shutdown` pair. Two consequences worth
-knowing when you write one:
+like `tools/`.
 
-- module-level state does **not** carry from one turn to the next — use `tools/` or your own store
-  for anything that must;
-- a resource opened in `session_start` is torn down by that same turn's `session_shutdown`, so it
-  cannot be leaked into, or clobbered by, a concurrent turn.
+**An extension is loaded once per process, not once per turn.** pi caches extension modules in a
+process-global map, so every turn a served agent takes shares one instance and one module scope.
+Serving is concurrent — several turns can be in flight at once — which makes two rules practical
+rather than pedantic:
 
-In `chat` the runtime is one long-lived session instead, so an extension is instantiated once and
-its module state lives as long as the chat does.
+- **`session_start` fires on every turn, against that one shared instance.** Write the handler so
+  running it again is harmless: guard with a flag, or reuse what you already opened. A handler that
+  unconditionally opens a timer or connection opens one per turn, and they accumulate.
+- **`session_shutdown` is not emitted per turn when serving.** It cannot be: the instance outlives
+  the turn, so tearing it down at the end of one turn would pull state out from under the turns
+  still running. Clean up in whatever opened the resource — the tool call or handler that owns it —
+  rather than expecting a per-turn teardown signal.
+
+Module state therefore *does* carry from turn to turn. That is useful (a cache, a pooled client) as
+long as you remember it is shared by concurrent turns and by every session the agent serves — it is
+not a per-conversation scratchpad. Anything that belongs to one conversation belongs in the session,
+not in your module.
+
+`chat` is the simpler case: one long-lived session, one instance, `session_start` once.
 
 What an extension can register is not uniformly *reachable*, because a served agent has no
 interactive surface:

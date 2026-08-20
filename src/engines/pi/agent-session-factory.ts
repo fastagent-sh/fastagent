@@ -266,10 +266,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       const loader = (await services).resourceLoader;
       const definitionChanged =
         loader.getSystemPrompt() !== nextPrompt || loadedSkillSet(loader.getSkills().skills) !== skillSet(nextSkills);
-      // Extensions reload even when the definition did not change, because a turn needs its OWN
-      // instance: they hold module state and get session_start/session_shutdown per turn, so one
-      // instance shared across concurrent turns has one turn's shutdown tearing down another's.
-      if (definitionChanged || extensionPaths.length > 0) {
+      if (definitionChanged) {
         prompt = nextPrompt;
         skills = nextSkills;
         await loader.reload();

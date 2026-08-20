@@ -382,15 +382,13 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
           unsub();
         }
       } finally {
-        try {
-          // Extensions get their shutdown before the session goes away. pi's dispose() only
-          // invalidates the runtime — it does not emit this — and a per-invoke session means an
-          // extension that opened a timer, watcher or connection on `session_start` would otherwise
-          // leak one per turn, forever. A handler that throws must not block the dispose below.
-          await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-        } catch (error) {
-          log.warn(`[fastagent] extension session_shutdown failed: ${String(error)}`);
-        }
+        // NO session_shutdown here, deliberately. A per-invoke session makes one look right, but the
+        // extension INSTANCE it would tear down is not per-invoke: pi caches extension modules in a
+        // process-global map, so every turn shares one. Emitting a shutdown per turn had a finished
+        // turn clearing a timer a concurrent turn had just opened (measured, and pinned in
+        // definition-extensions.test.ts). The lifecycle has to match the instance, not the session
+        // wrapper: one process, one instance, no per-turn teardown. Extensions that need per-turn
+        // cleanup do it in the tool or handler that opened the resource.
         try {
           session.dispose();
         } catch (error) {
