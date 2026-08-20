@@ -10,7 +10,7 @@
  */
 import type {
   AuthEvent,
-  AuthInteraction,
+  ProviderAuthInteraction,
   AuthPrompt,
   Credential,
   CredentialStore,
@@ -70,13 +70,20 @@ function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | un
 }
 
 /**
- * Map pi-ai's `AuthInteraction` onto the injected {@link LoginIO}. `doneSignal` fires when the flow
- * resolves, cancelling a prompt the provider left pending (a manual-code paste racing a callback
- * server it just won) so the one-shot CLI exits instead of hanging on stdin.
+ * Map pi-ai's `ProviderAuthInteraction` onto the injected {@link LoginIO}. `doneSignal` fires when
+ * the flow resolves, cancelling a prompt the provider left pending (a manual-code paste racing a
+ * callback server it just won) so the one-shot CLI exits instead of hanging on stdin.
+ *
+ * The signal is REQUIRED by that type (pi normalizes it before calling a provider), so a caller that
+ * passes none gets one that never fires — the same "no cancellation" the optional field meant.
  */
-function authCallbacks(io: LoginIO, userSignal: AbortSignal | undefined, doneSignal: AbortSignal): AuthInteraction {
+function authCallbacks(
+  io: LoginIO,
+  userSignal: AbortSignal | undefined,
+  doneSignal: AbortSignal,
+): ProviderAuthInteraction {
   return {
-    signal: userSignal,
+    signal: userSignal ?? new AbortController().signal,
     prompt: async (p: AuthPrompt): Promise<string> => {
       if (p.type === "select") {
         const v = await io.select(

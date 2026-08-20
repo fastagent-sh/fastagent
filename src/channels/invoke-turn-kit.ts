@@ -21,7 +21,7 @@ export interface BusyRetry {
   delayMs: number;
   maxWaitMs: number;
 }
-// Each retry is a lease-check-level reject (tryAcquire runs before harness assembly) — waiting is nearly
+// Each retry is a lease-check-level reject (tryAcquire runs before the session is bound) — waiting is nearly
 // free, and the loop exits within one delay of the holder finishing. So the cap is sized to outlast a
 // real tool-using wake turn (minutes), not to be short: 10 min. CEILING: a holder that runs longer than
 // this still surfaces the busy error to the user — the bound exists so a stuck lease can't hang a chat

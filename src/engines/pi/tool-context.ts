@@ -4,7 +4,7 @@
  * closures. Deploy-time ambients a tool closes over at build time do NOT belong here.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
+import type { SessionEntry as SessionTreeEntry } from "@earendil-works/pi-coding-agent";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 /** FastAgent's read-only port over the current conversation manager. Serving and chat adapt their

@@ -13,8 +13,8 @@
  * client gating on `capabilities()` never sends them.
  */
 import { prepareCompaction } from "@earendil-works/pi-agent-core";
-import type { SessionTreeEntry, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { SessionEntry as SessionTreeEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Models } from "@earendil-works/pi-ai";
 import { type Json, SESSION_BUSY_CODE } from "../../agent.ts";
 import {

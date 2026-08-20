@@ -17,14 +17,9 @@ export {
 } from "./engines/pi/tool.ts";
 export type { ReadonlySessionManager, ToolActivation } from "./engines/pi/tool-context.ts";
 export { z } from "zod";
-export type {
-  AgentTool,
-  ExecutionEnv,
-  Session,
-  SessionTreeEntry,
-  Skill,
-  SkillDiagnostic,
-} from "@earendil-works/pi-agent-core";
+export type { AgentTool, ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
+/** A record's entries, as the tool runtime and the control plane see them (pi's v3 jsonl shape). */
+export type { SessionEntry as SessionTreeEntry, SessionManager as Session } from "@earendil-works/pi-coding-agent";
 
 export { loadChannels, type ChannelCollision } from "./engines/pi/channel.ts";
 export {
