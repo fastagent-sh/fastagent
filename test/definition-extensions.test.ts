@@ -80,6 +80,19 @@ describe("definition: extensions/ discovery", () => {
     warn.mockRestore();
   });
 
+  it("refuses a subdirectory whose index.ts is a symlink out of the definition", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "fa-ext-outside-"));
+    await writeFile(join(outside, "real.ts"), markerExtension("escape"));
+    const dir = await agentDirWith({ "extensions/keep.ts": markerExtension("keep") });
+    await mkdir(join(dir, "extensions", "pkg"), { recursive: true });
+    await symlink(join(outside, "real.ts"), join(dir, "extensions", "pkg", "index.ts"));
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    expect((await loadAgentDefinition(dir)).extensionPaths).toEqual([join(dir, "extensions", "keep.ts")]);
+    expect(warn.mock.calls.flat().join("\n")).toContain("is a symlink and will not be loaded");
+    warn.mockRestore();
+  });
+
   it("refuses an extensions/ symlinked outside the agent dir", async () => {
     const outside = await mkdtemp(join(tmpdir(), "fa-ext-outside-"));
     await writeFile(join(outside, "evil.ts"), markerExtension("evil"));

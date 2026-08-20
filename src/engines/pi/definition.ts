@@ -139,10 +139,7 @@ async function readExtensionPaths(e: ExecutionEnv, root: string): Promise<string
   const paths: string[] = [];
   for (const entry of listed.value) {
     if (entry.kind === "symlink") {
-      log.warn(
-        `[fastagent] ${entry.path} is a symlink and will not be loaded: an extension must live inside ` +
-          `the definition so it travels with the artifact — move the file in, or link the whole extensions/ dir`,
-      );
+      warnSymlinkRefused(entry.path);
       continue;
     }
     if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
@@ -150,7 +147,7 @@ async function readExtensionPaths(e: ExecutionEnv, root: string): Promise<string
       continue;
     }
     if (entry.kind === "file") continue; // a README, a .json — not an extension, not a problem
-    const index = await firstExisting(e, [join(entry.path, "index.ts"), join(entry.path, "index.js")]);
+    const index = await firstRealFile(e, [join(entry.path, "index.ts"), join(entry.path, "index.js")]);
     if (index) {
       paths.push(index);
     } else {
@@ -163,13 +160,29 @@ async function readExtensionPaths(e: ExecutionEnv, root: string): Promise<string
   return paths.sort();
 }
 
-async function firstExisting(e: ExecutionEnv, candidates: string[]): Promise<string | undefined> {
+/**
+ * The first candidate that is a REAL file. `exists` would follow a symlink, which is how a
+ * subdirectory's `index.ts` could otherwise point outside the definition and slip past the rule the
+ * top-level entries already follow.
+ */
+async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<string | undefined> {
   for (const candidate of candidates) {
-    const found = await e.exists(candidate);
-    if (!found.ok) throw new Error(`cannot read ${candidate}: ${found.error.message}`);
-    if (found.value) return candidate;
+    const info = await e.fileInfo(candidate);
+    if (!info.ok) {
+      if (info.error.code === "not_found") continue;
+      throw new Error(`cannot read ${candidate}: ${info.error.message}`);
+    }
+    if (info.value.kind === "file") return candidate;
+    if (info.value.kind === "symlink") warnSymlinkRefused(candidate);
   }
   return undefined;
+}
+
+function warnSymlinkRefused(path: string): void {
+  log.warn(
+    `[fastagent] ${path} is a symlink and will not be loaded: an extension must live inside the ` +
+      `definition so it travels with the artifact — move the file in, or link the whole extensions/ dir`,
+  );
 }
 
 /** The skills half, shared by the full load and {@link loadAgentSkills}. `root` is already resolved. */
