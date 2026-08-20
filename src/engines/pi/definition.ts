@@ -121,8 +121,10 @@ export async function loadAgentDefinition(
  * fails to load is the failure mode this whole path exists to remove.
  *
  * Containment matches skills/tools/channels/schedules (the fifth of five surfaces): a symlinked
- * `extensions/` escaping the agent dir is refused. Entries INSIDE it are not re-checked — the same
- * rule `tools/` already lives by, and both are code the definition chose to run.
+ * `extensions/` escaping the agent dir is refused, and — like `loadModuleDir`, whose `entry.isFile()`
+ * excludes them — a symlinked ENTRY is not loaded either. pi's own discovery does follow those, but
+ * an extension reached through a link out of the definition is code the artifact does not carry: it
+ * resolves on the authoring machine and is missing in the container. Refused loudly, never silently.
  *
  * Absent is normal and silent; a FILE at that path is not — that is an author who meant something.
  */
@@ -136,9 +138,15 @@ async function readExtensionPaths(e: ExecutionEnv, root: string): Promise<string
   }
   const paths: string[] = [];
   for (const entry of listed.value) {
-    // A symlink is tried BOTH ways, like pi: the name decides whether it is a module or a package.
+    if (entry.kind === "symlink") {
+      log.warn(
+        `[fastagent] ${entry.path} is a symlink and will not be loaded: an extension must live inside ` +
+          `the definition so it travels with the artifact — move the file in, or link the whole extensions/ dir`,
+      );
+      continue;
+    }
     if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
-      if (entry.kind !== "directory") paths.push(entry.path);
+      if (entry.kind === "file") paths.push(entry.path);
       continue;
     }
     if (entry.kind === "file") continue; // a README, a .json — not an extension, not a problem
