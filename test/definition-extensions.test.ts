@@ -206,3 +206,32 @@ describe("definition: chat loads the same extensions serving does", () => {
     }
   });
 });
+
+describe("definition: extension lifecycle across per-invoke sessions", () => {
+  it("pairs every session_start with a session_shutdown", async () => {
+    const counterKey = `__fa_ext_lifecycle_${Date.now()}__`;
+    const dir = await agentDirWith({
+      "extensions/lifecycle.ts": `
+export default async function (api) {
+  const key = ${JSON.stringify(counterKey)};
+  globalThis[key] ??= { start: 0, shutdown: 0 };
+  api.on("session_start", () => { globalThis[key].start++; });
+  api.on("session_shutdown", () => { globalThis[key].shutdown++; });
+}
+`,
+    });
+    const { faux } = makeFaux();
+    faux.setResponses([() => fauxAssistantMessage("one"), () => fauxAssistantMessage("two")]);
+
+    const { agent } = await createPiAgentFromDefinition(dir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+    });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ session: "s" }, { text: "again" }));
+
+    const counts = (globalThis as Record<string, unknown>)[counterKey] as { start: number; shutdown: number };
+    expect(counts.start).toBe(2); // one session per invoke
+    expect(counts.shutdown).toBe(counts.start); // and each one cleaned up
+  });
+});

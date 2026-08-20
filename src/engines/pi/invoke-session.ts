@@ -383,6 +383,15 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         }
       } finally {
         try {
+          // Extensions get their shutdown before the session goes away. pi's dispose() only
+          // invalidates the runtime — it does not emit this — and a per-invoke session means an
+          // extension that opened a timer, watcher or connection on `session_start` would otherwise
+          // leak one per turn, forever. A handler that throws must not block the dispose below.
+          await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+        } catch (error) {
+          log.warn(`[fastagent] extension session_shutdown failed: ${String(error)}`);
+        }
+        try {
           session.dispose();
         } catch (error) {
           log.warn(`[fastagent] session dispose failed during cleanup: ${String(error)}`);
