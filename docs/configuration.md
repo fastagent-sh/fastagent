@@ -304,8 +304,20 @@ such a directory is warned about rather than skipped in silence. An extension th
 warned about too, and the agent keeps serving without it.
 
 Only the definition's own `extensions/` are loaded. The machine's `~/.pi` extensions are
-deliberately not — a served agent must not depend on the authoring machine's setup. Extensions are
-code, so they are read once at startup: adding one needs a restart, like `tools/`.
+deliberately not — a served agent must not depend on the authoring machine's setup.
+
+Which files count as extensions is decided at startup: **adding or removing one needs a restart**,
+like `tools/`. Those files are then re-instantiated **per turn** when serving, so each turn gets its
+own module state and its own `session_start` / `session_shutdown` pair. Two consequences worth
+knowing when you write one:
+
+- module-level state does **not** carry from one turn to the next — use `tools/` or your own store
+  for anything that must;
+- a resource opened in `session_start` is torn down by that same turn's `session_shutdown`, so it
+  cannot be leaked into, or clobbered by, a concurrent turn.
+
+In `chat` the runtime is one long-lived session instead, so an extension is instantiated once and
+its module state lives as long as the chat does.
 
 What an extension can register is not uniformly *reachable*, because a served agent has no
 interactive surface:

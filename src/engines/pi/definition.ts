@@ -106,10 +106,14 @@ export async function loadAgentDefinition(
  * are module specifiers, and a directory fails as `Cannot find module` into a
  * `LoadExtensionsResult.errors` entry nothing reads.
  *
- * SEPARATE from {@link loadAgentDefinition} on purpose. Prompt and skills are re-read every invoke
- * ("the directory is the agent, LIVE"); extensions are code pi imports once per process, so a serving
- * turn must not pay a directory scan — nor repeat this function's warnings — for a set that cannot
- * take effect until restart. Called once per assembly, like `tools/`.
+ * SEPARATE from {@link loadAgentDefinition} on purpose, and the split is DISCOVERY vs LOADING.
+ * Prompt and skills are re-read every invoke ("the directory is the agent, LIVE"). Scanning for
+ * extension entry points is not: a serving turn must not pay a directory walk — nor repeat this
+ * function's warnings — for a set that cannot change without a restart. Called once per assembly,
+ * like `tools/`.
+ *
+ * Loading those paths is the other half, and it does happen per turn: the serving assembly reloads
+ * them so each turn holds its own extension instance, because the lifecycle events fire per turn.
  *
  * Discovery follows pi's own rules, so an extension that works in pi works here:
  *
