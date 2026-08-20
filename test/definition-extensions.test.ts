@@ -3,7 +3,7 @@
  * `additionalExtensionPaths`, and reaching the model through the SERVING path — while pi's
  * machine-global discovery stays suppressed.
  */
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -233,5 +233,62 @@ export default async function (api) {
     const counts = (globalThis as Record<string, unknown>)[counterKey] as { start: number; shutdown: number };
     expect(counts.start).toBe(2); // one session per invoke
     expect(counts.shutdown).toBe(counts.start); // and each one cleaned up
+  });
+});
+
+describe("extension lifecycle is per invoke, like the session it belongs to", () => {
+  /** Writes one line per lifecycle event into `<dir>/events.log`, from MODULE scope. */
+  const lifecycleExtension = `
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
+const logFile = join(import.meta.dirname, "..", "events.log");
+const instance = Math.random().toString(36).slice(2, 7);
+let live = new Set();
+export default async function (pi) {
+  pi.on("session_start", async () => {
+    const t = setInterval(() => {}, 1e6);
+    live.add(t);
+    appendFileSync(logFile, \`start instance=\${instance} live=\${live.size}\\n\`);
+  });
+  pi.on("session_shutdown", async () => {
+    for (const t of live) clearInterval(t);
+    appendFileSync(logFile, \`shutdown instance=\${instance} cleared=\${live.size}\\n\`);
+    live.clear();
+  });
+}
+`;
+
+  it("a turn's shutdown cleans up ITS OWN resources, not another turn's", async () => {
+    const dir = await agentDirWith({ "extensions/lifecycle.ts": lifecycleExtension });
+    const { faux } = makeFaux();
+    let releaseA!: () => void;
+    let aRunning!: () => void;
+    const held = new Promise<void>((r) => (releaseA = r));
+    const started = new Promise<void>((r) => (aRunning = r));
+    faux.setResponses([
+      async () => {
+        aRunning();
+        await held; // A's model call hangs, so A's session outlives B's entire turn
+        return fauxAssistantMessage("a");
+      },
+      fauxAssistantMessage("b"),
+    ]);
+    const { agent } = await createPiAgentFromDefinition(dir, {
+      model: `${faux.getModel().provider}/${faux.getModel().id}`,
+      providers: [faux.provider],
+    });
+
+    const a = collect(agent.invoke({ session: "room-a" }, { text: "x" }));
+    await started;
+    await collect(agent.invoke({ session: "room-b" }, { text: "y" })); // B runs to completion inside A
+    releaseA();
+    await a;
+
+    const events = (await readFile(join(dir, "events.log"), "utf8")).trim().split("\n");
+    // Each turn gets its own extension instance, so each shutdown clears exactly what its own start
+    // opened. Sharing one instance across turns makes B's shutdown clear A's live timer.
+    expect(events.every((line) => line.includes("live=1") || line.includes("cleared=1"))).toBe(true);
+    const instances = new Set(events.map((line) => line.match(/instance=(\w+)/)?.[1]));
+    expect(instances.size).toBe(2); // one per turn
   });
 });
