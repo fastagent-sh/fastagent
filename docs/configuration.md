@@ -335,12 +335,16 @@ interactive surface:
 | | serving (`dev`, `start`, channels) | `chat` |
 |---|---|---|
 | tools it registers | offered to the model | offered to the model |
-| lifecycle handlers | run | run |
+| event handlers | run | run |
+| `session_start` | runs, **once per turn**, on the shared instance | runs once |
+| `session_shutdown` | **never emitted** — see above | on exit |
 | commands it registers | **not executable** — a leading `/name` is just prompt text | executable |
 | `select` / `confirm` / `input` | resolve immediately as "no answer" | shown to you |
 
 So an extension whose value is a slash command or a dialog is a `chat`-time tool today; one that
-registers model-callable tools or reacts to lifecycle events works everywhere.
+registers model-callable tools or reacts to events works everywhere — provided it does not depend
+on being told when to shut down. A served agent has no shutdown signal to give it: the process, not
+the turn, owns the extension, and the process exit is not currently observable by extensions.
 
 ### When the repo already owns `tools/` or `channels/`
 
