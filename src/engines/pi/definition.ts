@@ -106,15 +106,14 @@ export async function loadAgentDefinition(
  * are module specifiers, and a directory fails as `Cannot find module` into a
  * `LoadExtensionsResult.errors` entry nothing reads.
  *
- * SEPARATE from {@link loadAgentDefinition} on purpose, and the split is DISCOVERY vs LOADING.
- * Prompt and skills are re-read every invoke ("the directory is the agent, LIVE"). Scanning for
- * extension entry points is not: a serving turn must not pay a directory walk — nor repeat this
- * function's warnings — for a set that cannot change without a restart. Called once per assembly,
- * like `tools/`.
+ * SEPARATE from {@link loadAgentDefinition} on purpose. Prompt and skills are re-read every invoke
+ * ("the directory is the agent, LIVE"); scanning for extension entry points is not, since the set
+ * cannot change without a restart. Called once per assembly, like `tools/`.
  *
- * Loading those paths is the other half, and it happens once per ASSEMBLY: the ResourceLoader loads
- * them and serves every turn from that one instance. That is why there is no per-turn
- * `session_shutdown` — see the note in `invoke-session.ts`.
+ * Discovery runs on BOTH paths; loading does not. `chat` hands these to pi and runs them fully.
+ * Serving only announces them — pi's extension runtime is shared across sessions, and serving has
+ * concurrent turns for unrelated conversations (see `PiAgentSessionFactoryOptions.extensionPaths`).
+ * The refusals below are therefore about what the ARTIFACT may contain, and hold for both.
  *
  * Discovery follows pi's own rules, so an extension that works in pi works here:
  *

@@ -11,8 +11,7 @@
  * product, including editing its own AGENTS.md) never has its in-flight turn killed by the watcher.
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
 import { AGENT_CONFIG_NAMES, AGENT_MODELS_FILE, type ResolvedPlacement, resolveStateRoot } from "./paths.ts";
 import { isUnderDir } from "./engines/pi/definition.ts";
@@ -41,11 +40,7 @@ const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, pac
  * costs no watchers and triggers no restarts. Helper code imported from OUTSIDE tools//channels/ is
  * out of scope by design (keep it under tools/, or restart manually) — the startup log names the set.
  */
-export function devWatchIgnored(
-  root: string,
-  envFile: string,
-  options: { definitionRestartsWorker?: boolean } = {},
-): (path: string) => boolean {
+export function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
   // The `.env` is allow-listed by its RESOLVED path, not by the `.secrets` name: FASTAGENT_SECRETS_DIR
   // can put it in an in-agent directory called anything, and a name-based rule would prune the very
   // file the worker loads (a credential edit would then silently never restart it).
@@ -67,15 +62,6 @@ export function devWatchIgnored(
     if (rel === AGENT_MODELS_FILE) return false;
     const segments = rel.split(sep);
     if (CODE_INPUT_DIRS.includes(segments[0] as (typeof CODE_INPUT_DIRS)[number])) return false;
-    // With extensions/ present, the DEFINITION restarts the worker too. A live definition edit
-    // reaches the model through a resource reload, and pi's reload re-runs every extension factory
-    // (it clears their module cache first) without shutting the old instances down — so an edit that
-    // is meant to change a prompt silently rebuilds extensions and strands whatever the previous
-    // ones opened. A restart is the honest version of that: same fresh state, nothing left behind.
-    if (options.definitionRestartsWorker) {
-      if (rel === "persona.md" || rel === "AGENTS.md") return false;
-      if (segments[0] === "skills") return false;
-    }
     // The `.env` restarts too (credentials are process-bound). Keep it AND its ancestor directories
     // un-pruned so chokidar can descend to it; every sibling inside them (auth.json, .env.example)
     // prunes normally. An out-of-agent `.env` yields a `..`-prefixed envRel that matches nothing here
@@ -161,14 +147,9 @@ export async function runDevSupervisor(
 
   // chokidar gives reliable cross-platform recursion + structural ignore that native fs.watch
   // cannot; devWatchIgnored (above) narrows the scope to the process-bound code inputs.
-  // Does this agent ship extensions? If so the definition joins the restart set (see the note in
-  // devWatchIgnored); the check is the directory's presence, matching how the assembly discovers it.
-  const hasExtensions = existsSync(join(placement.agentDir, "extensions"));
   const watcher = watchTree(placement.agentDir, {
     ignoreInitial: true, // the startup scan is not a change
-    ignored: devWatchIgnored(placement.agentDir, dotEnvPath(placement.agentDir), {
-      definitionRestartsWorker: hasExtensions,
-    }),
+    ignored: devWatchIgnored(placement.agentDir, dotEnvPath(placement.agentDir)),
   });
   watcher.on("all", () => {
     clearTimeout(timer);
@@ -178,9 +159,7 @@ export async function runDevSupervisor(
     log.warn(`[fastagent] file watching error (${(error as Error).message}); some edits may need a manual restart`),
   );
   log.info(
-    hasExtensions
-      ? `[fastagent] watching ${WATCHED_HINT}, AGENTS.md/persona.md/skills — edits restart the dev worker (--no-watch to disable); the definition restarts too because extensions/ is present`
-      : `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills edits go live next turn without a restart`,
+    `[fastagent] watching ${WATCHED_HINT} — code edits restart the dev worker (--no-watch to disable); AGENTS.md/persona.md/skills edits go live next turn without a restart`,
   );
   // FASTAGENT_SECRETS_DIR can move the `.env` OUT of the agent dir entirely; the watcher follows it
   // anywhere inside (the resolved path is allow-listed above), but outside the watch root the worker

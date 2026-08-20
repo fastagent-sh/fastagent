@@ -68,9 +68,25 @@ export interface PiAgentSessionFactoryOptions {
    * means pi's own defaults, which is the intended baseline.
    */
   agentDir?: string;
-  /** The definition's own extension entry points (see {@link LoadedDefinition.extensionPaths}). Handed
-   *  to pi as `additionalExtensionPaths`, which is honoured even under `noExtensions: true` — so the
-   *  definition's extensions load while the authoring machine's `~/.pi` ones stay out. */
+  /**
+   * The definition's own extension entry points, for ANNOUNCING that serving does not run them.
+   *
+   * pi's extension machinery is built for one process serving one session: `bindCore()` copies the
+   * session's actions into a runtime the pi source itself calls "the shared runtime", extension
+   * modules are cached per assembly, and `session_start`/`session_shutdown` are a matched pair.
+   * Serving breaks every one of those assumptions — concurrent turns for unrelated conversations —
+   * and the failure is silent cross-talk: with two turns in flight, an extension calling
+   * `pi.sendMessage()` can deliver into the other conversation.
+   *
+   * Loading them anyway would be a correctness bug dressed as a feature, so serving does not, and
+   * warns when a definition ships some. `chat` runs them fully: one session, one runtime, which is
+   * exactly the shape pi is built for.
+   *
+   * Isolating them per session is mechanically possible — pi's uncached loader path builds a fresh
+   * module (jiti with `moduleCache: false`) and takes the runtime as an argument — but that function
+   * is not exported and the deep path is blocked by the package's `exports`. Reopening this needs
+   * that entry point upstream, not a workaround here.
+   */
   extensionPaths?: string[];
   /** Filesystem/process environment handed to pi's default coding tools. */
   env: ExecutionEnv;
@@ -192,6 +208,13 @@ export function reportExtensionErrors(services: AgentSessionServices): void {
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
   const { sessions, thinkingLevel, cwd, env } = options;
   const extensionPaths = options.extensionPaths ?? [];
+  if (extensionPaths.length > 0) {
+    log.warn(
+      `[fastagent] ${extensionPaths.length} extension(s) in the definition are NOT loaded when serving ` +
+        "(they run in `fastagent chat`): pi's extension runtime is shared across sessions, and serving " +
+        "runs concurrent turns for different conversations. See docs/configuration.md#extensions.",
+    );
+  }
   const tools = options.tools ?? [];
   const deferred = tools.filter(isDeferredTool).map((t) => t.name);
   // What the shared ResourceLoader serves, refreshed per turn before the session is built.
@@ -212,7 +235,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under
         // noExtensions, which is exactly the split we want — the artifact travels with its
         // extensions, the operator's ~/.pi ones stay out.
-        ...(extensionPaths.length > 0 ? { additionalExtensionPaths: extensionPaths } : {}),
+        // No additionalExtensionPaths: see PiAgentSessionFactoryOptions.extensionPaths.
         noPromptTemplates: true,
         noContextFiles: true,
         // A SPACE, not "", when the assembly has no prompt: pi treats an empty custom prompt as
@@ -223,9 +246,6 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         appendSystemPromptOverride: () => [],
         skillsOverride: (base) => ({ skills: toPiSkills(skills) as typeof base.skills, diagnostics: base.diagnostics }),
       },
-    }).then((built) => {
-      reportExtensionErrors(built);
-      return built;
     });
 
   return async (sessionId, inherit) => {
@@ -270,11 +290,6 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         prompt = nextPrompt;
         skills = nextSkills;
         await loader.reload();
-        // A reload re-runs the extension factories (it begins by clearing pi's module cache), so it
-        // can fail an extension that loaded fine at boot — an author's edit is exactly when that
-        // happens. Reporting only the first build would drop the agent's extension silently, which
-        // is the failure this reporting exists to prevent.
-        reportExtensionErrors(await services);
       }
     }
     const sessionManager: SessionManager = await sessions.openOrCreate(sessionId, inherit);
@@ -306,16 +321,6 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
     // listeners and has none by default, which on a server means a broken extension looks like an
     // extension that simply did nothing.
     //
-    // `uiContext` is deliberately NOT bound here. pi defaults it to a no-op, so an extension asking
-    // `select`/`confirm`/`input` gets an immediate "no answer" instead of hanging — degraded, but not
-    // stuck. Binding a logging stand-in would mean implementing 20+ members of `ExtensionUIContext`,
-    // most of them TUI geometry (widgets, footers, editors) that a served agent has no meaning for.
-    // The answering channel is a contract question, not a stub: see the `ask`/`answer` design.
-    if (extensionPaths.length > 0) {
-      await session.bindExtensions({
-        onError: (e) => log.warn(`[fastagent] extension ${e.extensionPath} failed on ${e.event}: ${e.error}`),
-      });
-    }
     // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the
     // deferred names (robust to pi mounting tools of its own, unlike an exact-set replacement), then
     // add back what THIS session has already discovered.

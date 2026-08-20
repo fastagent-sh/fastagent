@@ -290,69 +290,63 @@ optional read-only `sessionManager` during serving/chat turns.
 
 ## Extensions
 
-Extension modules under `extensions/` are loaded and travel with the definition, so an extension
-loads — and the tools it registers are mounted — identically in `dev`, `start`, `chat`, and a
-container. Two discovery shapes, matching pi:
+Extension modules under `extensions/` travel with the definition. **They run in `fastagent chat`.
+They are not loaded when serving** (`dev`, `start`, channels, a container) — see the split below,
+which is a limitation of pi's extension runtime rather than a decision about your agent.
+
+Two discovery shapes, matching pi:
 
 ```txt
-extensions/notify.ts        ->  loaded
-extensions/audit/index.ts   ->  loaded
+extensions/notify.ts        ->  discovered
+extensions/audit/index.ts   ->  discovered
 ```
 
 pi's third shape — a subdirectory whose `package.json` declares a `pi` field — is not supported;
-such a directory is warned about rather than skipped in silence. An extension that fails to load is
-warned about too, and the agent keeps serving without it.
+such a directory is warned about rather than skipped in silence. A symlinked entry is refused: an
+extension reached through a link out of the definition resolves on your machine and is missing in
+the container.
 
-Only the definition's own `extensions/` are loaded. The machine's `~/.pi` extensions are
+Only the definition's own `extensions/` are considered. The machine's `~/.pi` extensions are
 deliberately not — a served agent must not depend on the authoring machine's setup.
 
-Which files count as extensions is decided at startup: **adding or removing one needs a restart**,
-like `tools/`.
+### Why serving does not run them
 
-**An extension is loaded once per agent, not once per turn.** The agent's assembly loads it and
-serves every turn from that one instance, sharing one module scope. (Two agents in one process get
-an instance each.) Serving is concurrent — several turns can be in flight at once — which makes two
-rules practical rather than pedantic:
+pi's extension machinery is built for **one process serving one session**, which is what a terminal
+is. Its own source calls the object holding a session's actions "the shared runtime", and every
+`AgentSession` overwrites it on construction:
 
-- **`session_start` fires on every turn, against that one shared instance.** Write the handler so
-  running it again is harmless: guard with a flag, or reuse what you already opened. A handler that
-  unconditionally opens a timer or connection opens one per turn, and they accumulate.
-- **`session_shutdown` is not emitted per turn when serving.** It cannot be: the instance outlives
-  the turn, so tearing it down at the end of one turn would pull state out from under the turns
-  still running — including turns for entirely different conversations. Clean up in whatever opened the resource — the tool call or handler that owns it —
-  rather than expecting a per-turn teardown signal.
+```js
+// Copy actions into the shared runtime (all extension APIs reference this)
+this.runtime.sendMessage = actions.sendMessage;
+this.runtime.appendEntry = actions.appendEntry;
+```
 
-Module state therefore *does* carry from turn to turn. That is useful (a cache, a pooled client) as
-long as you remember it is shared by concurrent turns and by every session the agent serves — it is
-not a per-conversation scratchpad. Anything that belongs to one conversation belongs in the session,
-not in your module.
+Serving is the opposite shape: one process, many concurrent turns, belonging to conversations that
+have nothing to do with each other. With two turns in flight, the second one to start redirects
+those actions to itself — so an extension calling `pi.sendMessage()` during the first turn can
+deliver into the **other person's conversation**. The same sharing applies to the extension module
+itself, and to `session_start` / `session_shutdown`, which stop being a matched pair once several
+sessions share one instance.
 
-One consequence worth knowing: **an agent that ships `extensions/` restarts on definition edits.**
-Normally `persona.md`, `AGENTS.md` and `skills/` are live — edit them and the next turn sees the
-change, no restart. But serving a re-read definition goes through a pi resource reload, and that
-reload re-runs every extension factory (it clears their module cache first) without shutting the
-previous instances down. Rather than let a prompt edit quietly rebuild your extensions and strand
-whatever the old ones opened, `fastagent dev` restarts the worker for definition edits whenever
-`extensions/` is present. The startup line tells you which mode you are in.
+That is a silent correctness failure, and a silently wrong answer is worse than a missing feature.
+So serving does not load them, and warns at startup when a definition ships some.
 
-`chat` is the simpler case: one long-lived session, one instance, `session_start` once.
-
-What an extension can register is not uniformly *reachable*, because a served agent has no
-interactive surface:
+This is fixable upstream, and narrowly: pi already has an uncached loader path that builds a fresh
+module per call (jiti with `moduleCache: false`) and takes the runtime as an argument, which is
+exactly per-session isolation. That function is not currently exported. When it is, serving can run
+extensions with the same guarantees `chat` has today.
 
 | | serving (`dev`, `start`, channels) | `chat` |
 |---|---|---|
-| tools it registers | offered to the model | offered to the model |
-| event handlers | run | run |
-| `session_start` | runs, **once per turn**, on the shared instance | runs once |
-| `session_shutdown` | **never emitted** — see above | on exit |
-| commands it registers | **not executable** — a leading `/name` is just prompt text | executable |
-| `select` / `confirm` / `input` | resolve immediately as "no answer" | shown to you |
+| discovery, and its refusals | runs | runs |
+| tools it registers | **not mounted** | offered to the model |
+| event and lifecycle handlers | **not run** | run |
+| commands it registers | not executable | executable |
+| `select` / `confirm` / `input` | — | shown to you |
 
-So an extension whose value is a slash command or a dialog is a `chat`-time tool today; one that
-registers model-callable tools or reacts to events works everywhere — provided it does not depend
-on being told when to shut down. A served agent has no shutdown signal to give it: the process, not
-the turn, owns the extension, and the process exit is not currently observable by extensions.
+If your extension's value is a slash command or a dialog, `chat` was always its home. If it
+registers model-callable tools you need while served, write them as `tools/` — that is the path
+built for serving, and it is concurrency-safe.
 
 ### When the repo already owns `tools/` or `channels/`
 

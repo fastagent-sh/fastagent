@@ -504,10 +504,9 @@ export async function createPiAgentFromDefinition(
     },
     tools,
     sessions: options.sessions,
-    // Boot-resolved, not re-scanned per turn like the prompt: WHICH files are extensions is fixed
-    // at boot, so an added extensions/ entry needs the restart that `tools/` already needs — which
-    // is why this sits outside `live` above. Nor are they re-LOADED per turn: the assembly's
-    // ResourceLoader loads them once and every turn of this agent shares that instance.
+    // Discovered so the serving assembly can WARN that it does not run them (and so the refusals
+    // apply to the artifact either way) — `chat` is where they load. Boot-resolved: the set cannot
+    // change without a restart, which is why this sits outside `live` above.
     extensionPaths: await loadExtensionPaths(dir, { cwd: env.cwd, env }),
     env,
     lease: options.lease,
