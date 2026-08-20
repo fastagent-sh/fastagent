@@ -281,13 +281,19 @@ export async function buildAgentSessionRuntime(
       },
     });
     reportExtensionErrors(services);
+    // `tools` is pi's ALLOWLIST, and it gates extension-registered tools the same as any other. The
+    // serving path passes no allowlist, so omitting these would give one definition two tool sets:
+    // present when served, missing in chat. The names come from the loaded extensions themselves.
+    const extensionToolNames = services.resourceLoader
+      .getExtensions()
+      .extensions.flatMap((extension) => [...extension.tools.keys()]);
     const result = await createAgentSessionFromServices({
       services,
       sessionManager,
       sessionStartEvent,
       model,
       thinkingLevel,
-      tools: [...defaultNames, ...customTools.map((t) => t.name)],
+      tools: [...defaultNames, ...customTools.map((t) => t.name), ...extensionToolNames],
       customTools: customToolDefs,
     });
     sessionRef.current = {

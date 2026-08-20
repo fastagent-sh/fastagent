@@ -6,10 +6,12 @@
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
 import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
+import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
 import { log } from "../src/log.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -183,5 +185,24 @@ describe("definition: extension discovery is assembly-time, not per turn", () =>
     const complaints = warn.mock.calls.flat().filter((c) => String(c).includes("expected index.ts"));
     expect(complaints).toHaveLength(1); // the boot scan, not one per turn
     warn.mockRestore();
+  });
+});
+
+describe("definition: chat loads the same extensions serving does", () => {
+  it("mounts an extension-registered tool on the resident chat session", async () => {
+    // The chat placement: the agent dir is `<workspace>/fastagent/`, entered from the inside.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-chat-ext-"));
+    const dir = join(workspace, "fastagent");
+    await mkdir(join(dir, "extensions"), { recursive: true });
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+    await writeFile(join(dir, "extensions", "marker.ts"), markerExtension("chat_extension_marker"));
+
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      expect(rt.session.getAllTools().map((t) => t.name)).toContain("chat_extension_marker");
+    } finally {
+      await rt.dispose?.();
+    }
   });
 });
