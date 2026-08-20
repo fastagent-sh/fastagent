@@ -48,19 +48,6 @@ export interface LoadedDefinition {
   diagnostics: SkillDiagnostic[];
   /** Same-name conflicts across mounts (first-wins). */
   collisions: SkillCollision[];
-  /**
-   * Extension entry-point FILES under `<dir>/extensions/`, empty when there are none. Paths, not
-   * loaded objects — unlike skills (data: content inline, serializable), an extension is CODE that pi
-   * loads with jiti and binds to its own eventBus/runtime, so loading it here would reimplement pi's
-   * loader. The engine binding hands these to pi as `additionalExtensionPaths`, which survives
-   * `noExtensions: true` — that flag suppresses MACHINE-GLOBAL discovery (`~/.pi`), and the
-   * definition's own extensions were only ever collateral to it.
-   *
-   * FILES, not the directory: pi's `additionalExtensionPaths` are module specifiers, so handing it a
-   * directory fails with `Cannot find module` into a `LoadExtensionsResult.errors` entry nothing
-   * reads. Expanding here is what keeps a broken extension loud.
-   */
-  extensionPaths: string[];
   /** Absolute agent-definition directory path (persona.md/skills/ live here). */
   dir: string;
 }
@@ -105,13 +92,26 @@ export async function loadAgentDefinition(
   const persona = personaRead.ok ? personaRead.value : undefined;
 
   const { skills, diagnostics, collisions } = await readSkills(e, root);
-  const extensionPaths = await readExtensionPaths(e, root);
-  return { contextFiles, persona, skills, diagnostics, collisions, extensionPaths, dir: root };
+  return { contextFiles, persona, skills, diagnostics, collisions, dir: root };
 }
 
 /**
- * Entry-point files under `<root>/extensions/`, following pi's own discovery rules so an extension
- * that works in pi works here:
+ * Extension entry-point FILES under `<agentDir>/extensions/`, empty when there are none.
+ *
+ * Paths, not loaded objects — unlike skills (data: content inline, serializable), an extension is
+ * CODE that pi loads with jiti and binds to its own eventBus/runtime, so loading it here would
+ * reimplement pi's loader. The engine binding hands these to pi as `additionalExtensionPaths`, which
+ * survives `noExtensions: true` — that flag suppresses MACHINE-GLOBAL discovery (`~/.pi`), and the
+ * definition's own extensions were only ever collateral to it. FILES, not the directory: pi's paths
+ * are module specifiers, and a directory fails as `Cannot find module` into a
+ * `LoadExtensionsResult.errors` entry nothing reads.
+ *
+ * SEPARATE from {@link loadAgentDefinition} on purpose. Prompt and skills are re-read every invoke
+ * ("the directory is the agent, LIVE"); extensions are code pi imports once per process, so a serving
+ * turn must not pay a directory scan — nor repeat this function's warnings — for a set that cannot
+ * take effect until restart. Called once per assembly, like `tools/`.
+ *
+ * Discovery follows pi's own rules, so an extension that works in pi works here:
  *
  * 1. a direct `*.ts` / `*.js` file;
  * 2. a subdirectory with `index.ts` / `index.js`.
@@ -128,7 +128,15 @@ export async function loadAgentDefinition(
  *
  * Absent is normal and silent; a FILE at that path is not — that is an author who meant something.
  */
-async function readExtensionPaths(e: ExecutionEnv, root: string): Promise<string[]> {
+export async function loadExtensionPaths(
+  agentDir: string,
+  options: { cwd?: string; env?: ExecutionEnv } = {},
+): Promise<string[]> {
+  const cwd = options.cwd ?? agentDir;
+  const e = options.env ?? new NodeExecutionEnv({ cwd });
+  const rootResult = await e.absolutePath(agentDir);
+  if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
+  const root = rootResult.value;
   await assertInsideAgentDir(root, "extensions");
   const dir = join(root, "extensions");
   const listed = await e.listDir(dir);
@@ -180,8 +188,8 @@ async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<str
 
 function warnSymlinkRefused(path: string): void {
   log.warn(
-    `[fastagent] ${path} is a symlink and will not be loaded: an extension must live inside the ` +
-      `definition so it travels with the artifact — move the file in, or link the whole extensions/ dir`,
+    `[fastagent] ${path} is a symlink and will not be loaded: an extension must be a real file inside ` +
+      `the definition so it travels with the artifact — move it in`,
   );
 }
 

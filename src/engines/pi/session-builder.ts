@@ -44,7 +44,7 @@ import {
 import { reportExtensionErrors } from "./agent-session-factory.ts";
 import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts";
-import { canonicalPath, loadAgentDefinition } from "./definition.ts";
+import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
 import {
@@ -144,6 +144,9 @@ export async function buildAgentSessionRuntime(
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(agentDir, { cwd, env });
     reportFindingsIfChanged(definition.dir, definition);
+    // Assembly-time, like serving's: this whole function is memoized, so the scan and its warnings
+    // happen once per runtime rather than per session rebuild (/new, /resume, fork).
+    const extensionPaths = await loadExtensionPaths(agentDir, { cwd, env });
     const defaultNames = piDefaultTools().map((t) => t.name);
     const customTools = tools.filter((t) => !defaultNames.includes(t.name));
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
@@ -188,6 +191,7 @@ export async function buildAgentSessionRuntime(
       // Serving honors config.thinkingLevel (config → L2); the resident session must too (fidelity).
       thinkingLevel: config.thinkingLevel,
       definition,
+      extensionPaths,
       defaultNames,
       customTools,
       customToolDefs,
@@ -229,6 +233,7 @@ export async function buildAgentSessionRuntime(
       modelRuntime,
       thinkingLevel,
       definition,
+      extensionPaths,
       defaultNames,
       customTools,
       customToolDefs,
@@ -249,7 +254,7 @@ export async function buildAgentSessionRuntime(
         // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under
         // noExtensions. Without this the same definition would carry its extensions when served and
         // lose them in chat — one artifact, two behaviours.
-        ...(definition.extensionPaths.length > 0 ? { additionalExtensionPaths: definition.extensionPaths } : {}),
+        ...(extensionPaths.length > 0 ? { additionalExtensionPaths: extensionPaths } : {}),
         noPromptTemplates: true,
         noContextFiles: true,
         systemPromptOverride: () => systemPrompt,

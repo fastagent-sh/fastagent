@@ -26,7 +26,7 @@ import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
 import { resolveSecretsDir } from "../../paths.ts";
-import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
+import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import {
@@ -505,8 +505,9 @@ export async function createPiAgentFromDefinition(
     tools,
     sessions: options.sessions,
     // Boot-resolved, not re-read per turn like the prompt: extensions are CODE, and pi loads a
-    // module once per process. An added extensions/ needs the restart that `tools/` already needs.
-    extensionPaths: definition.extensionPaths,
+    // module once per process. An added extensions/ needs the restart that `tools/` already needs,
+    // which is why this sits outside `live` above.
+    extensionPaths: await loadExtensionPaths(dir, { cwd: env.cwd, env }),
     env,
     lease: options.lease,
     observer: options.observer,

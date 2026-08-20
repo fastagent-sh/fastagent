@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { collect, createPiAgentFromDefinition } from "../src/index.ts";
-import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
+import { loadExtensionPaths } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { makeFaux } from "./faux.ts";
 
@@ -40,7 +40,7 @@ async function agentDirWith(files: Record<string, string>): Promise<string> {
 describe("definition: extensions/ discovery", () => {
   it("has no extensions when the directory is absent", async () => {
     const dir = await agentDirWith({});
-    expect((await loadAgentDefinition(dir)).extensionPaths).toEqual([]);
+    expect(await loadExtensionPaths(dir)).toEqual([]);
   });
 
   it("finds direct .ts/.js files and subdirectory index files, ignoring non-extension files", async () => {
@@ -52,7 +52,7 @@ describe("definition: extensions/ discovery", () => {
       "extensions/data.json": "{}",
     });
 
-    expect((await loadAgentDefinition(dir)).extensionPaths).toEqual([
+    expect(await loadExtensionPaths(dir)).toEqual([
       join(dir, "extensions", "alpha.ts"),
       join(dir, "extensions", "beta.js"),
       join(dir, "extensions", "gamma", "index.ts"),
@@ -63,7 +63,7 @@ describe("definition: extensions/ discovery", () => {
     const dir = await agentDirWith({ "extensions/pkg/main.ts": markerExtension("pkg") });
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
-    expect((await loadAgentDefinition(dir)).extensionPaths).toEqual([]);
+    expect(await loadExtensionPaths(dir)).toEqual([]);
     expect(warn.mock.calls.flat().join("\n")).toContain("expected index.ts or index.js");
     warn.mockRestore();
   });
@@ -75,7 +75,7 @@ describe("definition: extensions/ discovery", () => {
     await symlink(join(outside, "escape.ts"), join(dir, "extensions", "escape.ts"));
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
-    expect((await loadAgentDefinition(dir)).extensionPaths).toEqual([join(dir, "extensions", "local.ts")]);
+    expect(await loadExtensionPaths(dir)).toEqual([join(dir, "extensions", "local.ts")]);
     expect(warn.mock.calls.flat().join("\n")).toContain("is a symlink and will not be loaded");
     warn.mockRestore();
   });
@@ -88,7 +88,7 @@ describe("definition: extensions/ discovery", () => {
     await symlink(join(outside, "real.ts"), join(dir, "extensions", "pkg", "index.ts"));
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
-    expect((await loadAgentDefinition(dir)).extensionPaths).toEqual([join(dir, "extensions", "keep.ts")]);
+    expect(await loadExtensionPaths(dir)).toEqual([join(dir, "extensions", "keep.ts")]);
     expect(warn.mock.calls.flat().join("\n")).toContain("is a symlink and will not be loaded");
     warn.mockRestore();
   });
@@ -99,7 +99,7 @@ describe("definition: extensions/ discovery", () => {
     const dir = await agentDirWith({});
     await symlink(outside, join(dir, "extensions"), "dir");
 
-    await expect(loadAgentDefinition(dir)).rejects.toThrow(/resolves outside the agent dir/);
+    await expect(loadExtensionPaths(dir)).rejects.toThrow(/resolves outside the agent dir/);
   });
 });
 
@@ -162,6 +162,26 @@ describe("definition: an extension that throws at runtime", () => {
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
 
     expect(warn.mock.calls.flat().join("\n")).toMatch(/extension .*boom\.ts failed on session_start/);
+    warn.mockRestore();
+  });
+});
+
+describe("definition: extension discovery is assembly-time, not per turn", () => {
+  it("does not repeat its warnings on every invoke", async () => {
+    const dir = await agentDirWith({ "extensions/pkg/main.ts": markerExtension("pkg") });
+    const { faux } = makeFaux();
+    faux.setResponses([() => fauxAssistantMessage("one"), () => fauxAssistantMessage("two")]);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    const { agent } = await createPiAgentFromDefinition(dir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+    });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    await collect(agent.invoke({ session: "s" }, { text: "again" }));
+
+    const complaints = warn.mock.calls.flat().filter((c) => String(c).includes("expected index.ts"));
+    expect(complaints).toHaveLength(1); // the boot scan, not one per turn
     warn.mockRestore();
   });
 });
