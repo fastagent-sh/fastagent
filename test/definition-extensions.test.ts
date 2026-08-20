@@ -1,7 +1,11 @@
 /**
- * The definition carries its own `extensions/`: discovered as entry-point FILES, handed to pi as
- * `additionalExtensionPaths`, and reaching the model through the SERVING path — while pi's
- * machine-global discovery stays suppressed.
+ * The definition carries its own `extensions/`: discovered as entry-point FILES with pi's own rules,
+ * refused when they would not survive the trip into a container, and loaded by `fastagent chat`.
+ *
+ * SERVING does not load them, and warns that it did not — pi's extension runtime is shared across
+ * sessions, which a concurrent server cannot use safely. These tests pin both halves: discovery and
+ * its refusals apply either way, tools reach the model in chat, and serving stays quiet-free about
+ * skipping them.
  */
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -170,5 +174,36 @@ describe("definition: chat runs the definition's extensions in full", () => {
     } finally {
       await rt.dispose?.();
     }
+  });
+});
+
+describe("definition: extensions/ discovery only complains about real candidates", () => {
+  it("ignores a symlinked non-module file instead of calling it a refused extension", async () => {
+    const dir = await agentDirWith({ "extensions/real.ts": markerExtension("real") });
+    const outside = await mkdtemp(join(tmpdir(), "fa-nonmod-"));
+    await writeFile(join(outside, "NOTES.md"), "notes\n");
+    await symlink(join(outside, "NOTES.md"), join(dir, "extensions", "NOTES.md"));
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    expect(await loadExtensionPaths(dir)).toHaveLength(1);
+    // A symlinked README in extensions/ is the author's business. Warning about it teaches people to
+    // ignore the warning that matters — the one about a symlinked extension.
+    expect(warn.mock.calls.flat().join("\n")).not.toMatch(/NOTES\.md/);
+    warn.mockRestore();
+  });
+
+  it("does not claim a directory lacks an index when its index was refused as a symlink", async () => {
+    const dir = await agentDirWith({});
+    await mkdir(join(dir, "extensions", "audit"), { recursive: true });
+    const outside = await mkdtemp(join(tmpdir(), "fa-idx-"));
+    await writeFile(join(outside, "index.ts"), markerExtension("audit"));
+    await symlink(join(outside, "index.ts"), join(dir, "extensions", "audit", "index.ts"));
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    expect(await loadExtensionPaths(dir)).toHaveLength(0);
+    const warnings = warn.mock.calls.flat().join("\n");
+    expect(warnings).toMatch(/symlink/i); // the real reason
+    expect(warnings).not.toMatch(/expected index\.ts/); // not a contradicting second story
+    warn.mockRestore();
   });
 });

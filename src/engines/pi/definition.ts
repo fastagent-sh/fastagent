@@ -14,7 +14,7 @@
  * (bad skill files, name collisions) are returned as data. An unreadable ② context file only warns (pi).
  */
 import { realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -150,19 +150,25 @@ export async function loadExtensionPaths(
   }
   const paths: string[] = [];
   for (const entry of listed.value) {
+    const looksLikeModule = entry.name.endsWith(".ts") || entry.name.endsWith(".js");
     if (entry.kind === "symlink") {
-      warnSymlinkRefused(entry.path);
+      // Only complain about a link that was TRYING to be an extension. A symlinked README or
+      // data.json in here is someone's own business, and warning about it trains authors to ignore
+      // the warning that matters. Directories are candidates too: their index.* is checked below.
+      if (looksLikeModule || !extname(entry.name)) warnSymlinkRefused(entry.path);
       continue;
     }
-    if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
+    if (looksLikeModule) {
       if (entry.kind === "file") paths.push(entry.path);
       continue;
     }
     if (entry.kind === "file") continue; // a README, a .json — not an extension, not a problem
     const index = await firstRealFile(e, [join(entry.path, "index.ts"), join(entry.path, "index.js")]);
-    if (index) {
-      paths.push(index);
-    } else {
+    if (index.path) {
+      paths.push(index.path);
+    } else if (!index.refused) {
+      // Silent when the index WAS found and refused for being a symlink: that warning already named
+      // the real problem, and "expected index.ts" on top of it describes a directory that has one.
       log.warn(
         `[fastagent] ${entry.path} is not a loadable extension: expected index.ts or index.js ` +
           `(pi's package.json "pi" manifest form is not supported here) — it will not be loaded`,
@@ -177,17 +183,22 @@ export async function loadExtensionPaths(
  * subdirectory's `index.ts` could otherwise point outside the definition and slip past the rule the
  * top-level entries already follow.
  */
-async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<string | undefined> {
+/** The first real file among the candidates, and whether one was found but REFUSED as a symlink. */
+async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<{ path?: string; refused: boolean }> {
+  let refused = false;
   for (const candidate of candidates) {
     const info = await e.fileInfo(candidate);
     if (!info.ok) {
       if (info.error.code === "not_found") continue;
       throw new Error(`cannot read ${candidate}: ${info.error.message}`);
     }
-    if (info.value.kind === "file") return candidate;
-    if (info.value.kind === "symlink") warnSymlinkRefused(candidate);
+    if (info.value.kind === "file") return { path: candidate, refused };
+    if (info.value.kind === "symlink") {
+      warnSymlinkRefused(candidate);
+      refused = true;
+    }
   }
-  return undefined;
+  return { refused };
 }
 
 function warnSymlinkRefused(path: string): void {

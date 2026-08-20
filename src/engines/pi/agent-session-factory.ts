@@ -195,8 +195,9 @@ function toolDefinitions(
 /**
  * Announce extensions pi failed to load. pi collects them into `LoadExtensionsResult.errors` and
  * carries on with the rest — sound for a TUI that shows them, silent for a server that never looks.
- * A definition served without the extension it ships is exactly the "quietly missing" failure this
- * path exists to remove, so the serving and chat assemblies both call this once per built services.
+ * A definition running without the extension it ships is exactly the "quietly missing" failure this
+ * exists to remove. CHAT calls it, once per built services — serving does not load extensions at
+ * all, and announces that instead (see PiAgentSessionFactoryOptions.extensionPaths).
  */
 export function reportExtensionErrors(services: AgentSessionServices): void {
   for (const { path, error } of services.resourceLoader.getExtensions().errors) {
