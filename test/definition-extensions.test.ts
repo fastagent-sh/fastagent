@@ -303,3 +303,38 @@ export default async function (pi) {
     expect(events.filter((line) => line.startsWith("shutdown"))).toHaveLength(0);
   });
 });
+
+describe("a definition edit rebuilds the extension instance", () => {
+  it("editing persona.md re-runs the extension factory — pi's reload clears its module cache", async () => {
+    const key = `__fa_ext_rebuild_${Date.now()}__`;
+    const dir = await agentDirWith({
+      "extensions/counter.ts": `
+export default async function (api) {
+  const k = ${JSON.stringify(key)};
+  globalThis[k] = (globalThis[k] ?? 0) + 1;
+}
+`,
+    });
+    const { faux } = makeFaux();
+    faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage("ok")));
+    const { agent } = await createPiAgentFromDefinition(dir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+    });
+
+    await collect(agent.invoke({ session: "s" }, { text: "one" }));
+    expect((globalThis as Record<string, unknown>)[key]).toBe(1);
+
+    await collect(agent.invoke({ session: "s" }, { text: "two" }));
+    expect((globalThis as Record<string, unknown>)[key]).toBe(1); // unchanged definition, same instance
+
+    // The definition is LIVE, and pi only serves a re-read one after ResourceLoader.reload() — which
+    // begins with clearExtensionCache(). Extensions are therefore rebuilt by an edit to persona.md,
+    // even though nothing about the extension changed. There is no narrower reload in pi's API and
+    // no session-level prompt setter, so this is a property to know, not a bug to fix here: state an
+    // extension holds does not survive an edit to the definition.
+    await writeFile(join(dir, "persona.md"), "You are extremely terse.\n");
+    await collect(agent.invoke({ session: "s" }, { text: "three" }));
+    expect((globalThis as Record<string, unknown>)[key]).toBe(2);
+  });
+});

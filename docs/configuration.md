@@ -327,6 +327,12 @@ long as you remember it is shared by concurrent turns and by every session the a
 not a per-conversation scratchpad. Anything that belongs to one conversation belongs in the session,
 not in your module.
 
+One exception, and it bites in `dev`: **editing the definition rebuilds your extension.** `persona.md`
+and `skills/` are re-read live, and the only way pi serves a re-read one is a resource reload, which
+starts by clearing its extension module cache. So an edit to the persona re-runs your factory and
+discards the module state it held — even though nothing about the extension changed. Deployed agents
+do not hit this (their definition does not change under them); an author iterating in `dev` does.
+
 `chat` is the simpler case: one long-lived session, one instance, `session_start` once.
 
 What an extension can register is not uniformly *reachable*, because a served agent has no
