@@ -41,6 +41,7 @@ import {
   createAgentSessionServices,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import { reportExtensionErrors } from "./agent-session-factory.ts";
 import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts";
 import { canonicalPath, loadAgentDefinition } from "./definition.ts";
@@ -245,6 +246,10 @@ export async function buildAgentSessionRuntime(
         // ~/.pi extensions, slash commands, global AGENTS.md, APPEND_SYSTEM.md) so this runtime runs
         // the same agent that gets served, not the authoring machine's pi setup on top.
         noExtensions: true,
+        // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under
+        // noExtensions. Without this the same definition would carry its extensions when served and
+        // lose them in chat — one artifact, two behaviours.
+        ...(definition.extensionPaths.length > 0 ? { additionalExtensionPaths: definition.extensionPaths } : {}),
         noPromptTemplates: true,
         noContextFiles: true,
         systemPromptOverride: () => systemPrompt,
@@ -270,6 +275,7 @@ export async function buildAgentSessionRuntime(
         }),
       },
     });
+    reportExtensionErrors(services);
     const result = await createAgentSessionFromServices({
       services,
       sessionManager,

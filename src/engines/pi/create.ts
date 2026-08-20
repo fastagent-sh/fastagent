@@ -242,6 +242,8 @@ function buildPiAgent(opts: {
   sessions?: PiSessionRecordStore;
   /** Where pi reads its own settings; see {@link PiAgentSessionFactoryOptions.agentDir}. */
   agentDir?: string;
+  /** The definition's extension entry points; see {@link PiAgentSessionFactoryOptions.extensionPaths}. */
+  extensionPaths?: string[];
   env?: ExecutionEnv;
   lease?: Lease;
   observer?: SessionObserver;
@@ -279,6 +281,7 @@ function buildPiAgent(opts: {
     live: opts.live,
     cwd: env.cwd,
     ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+    ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     env,
   });
   opts.onAssembly?.({
@@ -501,6 +504,9 @@ export async function createPiAgentFromDefinition(
     },
     tools,
     sessions: options.sessions,
+    // Boot-resolved, not re-read per turn like the prompt: extensions are CODE, and pi loads a
+    // module once per process. An added extensions/ needs the restart that `tools/` already needs.
+    extensionPaths: definition.extensionPaths,
     env,
     lease: options.lease,
     observer: options.observer,

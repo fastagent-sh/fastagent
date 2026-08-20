@@ -19,6 +19,7 @@ import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-ag
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
+import { log } from "../../log.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
 
 /** A same-name skill collision (the discarded side). Surfaced, never swallowed. */
@@ -47,6 +48,19 @@ export interface LoadedDefinition {
   diagnostics: SkillDiagnostic[];
   /** Same-name conflicts across mounts (first-wins). */
   collisions: SkillCollision[];
+  /**
+   * Extension entry-point FILES under `<dir>/extensions/`, empty when there are none. Paths, not
+   * loaded objects — unlike skills (data: content inline, serializable), an extension is CODE that pi
+   * loads with jiti and binds to its own eventBus/runtime, so loading it here would reimplement pi's
+   * loader. The engine binding hands these to pi as `additionalExtensionPaths`, which survives
+   * `noExtensions: true` — that flag suppresses MACHINE-GLOBAL discovery (`~/.pi`), and the
+   * definition's own extensions were only ever collateral to it.
+   *
+   * FILES, not the directory: pi's `additionalExtensionPaths` are module specifiers, so handing it a
+   * directory fails with `Cannot find module` into a `LoadExtensionsResult.errors` entry nothing
+   * reads. Expanding here is what keeps a broken extension loud.
+   */
+  extensionPaths: string[];
   /** Absolute agent-definition directory path (persona.md/skills/ live here). */
   dir: string;
 }
@@ -91,7 +105,63 @@ export async function loadAgentDefinition(
   const persona = personaRead.ok ? personaRead.value : undefined;
 
   const { skills, diagnostics, collisions } = await readSkills(e, root);
-  return { contextFiles, persona, skills, diagnostics, collisions, dir: root };
+  const extensionPaths = await readExtensionPaths(e, root);
+  return { contextFiles, persona, skills, diagnostics, collisions, extensionPaths, dir: root };
+}
+
+/**
+ * Entry-point files under `<root>/extensions/`, following pi's own discovery rules so an extension
+ * that works in pi works here:
+ *
+ * 1. a direct `*.ts` / `*.js` file;
+ * 2. a subdirectory with `index.ts` / `index.js`.
+ *
+ * pi has a third rule — a subdirectory whose `package.json` declares a `pi` field — which is NOT
+ * implemented here. That shape is reported rather than skipped: a definition whose extension silently
+ * fails to load is the failure mode this whole path exists to remove.
+ *
+ * Containment matches skills/tools/channels/schedules (the fifth of five surfaces): a symlinked
+ * `extensions/` escaping the agent dir is refused. Entries INSIDE it are not re-checked — the same
+ * rule `tools/` already lives by, and both are code the definition chose to run.
+ *
+ * Absent is normal and silent; a FILE at that path is not — that is an author who meant something.
+ */
+async function readExtensionPaths(e: ExecutionEnv, root: string): Promise<string[]> {
+  await assertInsideAgentDir(root, "extensions");
+  const dir = join(root, "extensions");
+  const listed = await e.listDir(dir);
+  if (!listed.ok) {
+    if (listed.error.code === "not_found") return [];
+    throw new Error(`cannot read ${dir}: ${listed.error.message}`);
+  }
+  const paths: string[] = [];
+  for (const entry of listed.value) {
+    // A symlink is tried BOTH ways, like pi: the name decides whether it is a module or a package.
+    if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
+      if (entry.kind !== "directory") paths.push(entry.path);
+      continue;
+    }
+    if (entry.kind === "file") continue; // a README, a .json — not an extension, not a problem
+    const index = await firstExisting(e, [join(entry.path, "index.ts"), join(entry.path, "index.js")]);
+    if (index) {
+      paths.push(index);
+    } else {
+      log.warn(
+        `[fastagent] ${entry.path} is not a loadable extension: expected index.ts or index.js ` +
+          `(pi's package.json "pi" manifest form is not supported here) — it will not be loaded`,
+      );
+    }
+  }
+  return paths.sort();
+}
+
+async function firstExisting(e: ExecutionEnv, candidates: string[]): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    const found = await e.exists(candidate);
+    if (!found.ok) throw new Error(`cannot read ${candidate}: ${found.error.message}`);
+    if (found.value) return candidate;
+  }
+  return undefined;
 }
 
 /** The skills half, shared by the full load and {@link loadAgentSkills}. `root` is already resolved. */

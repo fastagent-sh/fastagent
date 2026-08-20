@@ -68,6 +68,10 @@ export interface PiAgentSessionFactoryOptions {
    * means pi's own defaults, which is the intended baseline.
    */
   agentDir?: string;
+  /** The definition's own extension entry points (see {@link LoadedDefinition.extensionPaths}). Handed
+   *  to pi as `additionalExtensionPaths`, which is honoured even under `noExtensions: true` — so the
+   *  definition's extensions load while the authoring machine's `~/.pi` ones stay out. */
+  extensionPaths?: string[];
   /** Filesystem/process environment handed to pi's default coding tools. */
   env: ExecutionEnv;
 }
@@ -172,9 +176,22 @@ function toolDefinitions(
   })) as unknown as ToolDefinition[];
 }
 
+/**
+ * Announce extensions pi failed to load. pi collects them into `LoadExtensionsResult.errors` and
+ * carries on with the rest — sound for a TUI that shows them, silent for a server that never looks.
+ * A definition served without the extension it ships is exactly the "quietly missing" failure this
+ * path exists to remove, so the serving and chat assemblies both call this once per built services.
+ */
+export function reportExtensionErrors(services: AgentSessionServices): void {
+  for (const { path, error } of services.resourceLoader.getExtensions().errors) {
+    log.warn(`[fastagent] extension ${path} failed to load: ${error}`);
+  }
+}
+
 /** Open-or-create the record, then bind a fresh session to it. One call per invoke. */
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
   const { sessions, thinkingLevel, cwd, env } = options;
+  const extensionPaths = options.extensionPaths ?? [];
   const tools = options.tools ?? [];
   const deferred = tools.filter(isDeferredTool).map((t) => t.name);
   // What the shared ResourceLoader serves, refreshed per turn before the session is built.
@@ -192,6 +209,10 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         // The agent is the definition, not the authoring machine's pi setup: no ~/.pi extensions,
         // slash commands, global AGENTS.md or APPEND_SYSTEM.md (same posture as dev/start).
         noExtensions: true,
+        // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under
+        // noExtensions, which is exactly the split we want — the artifact travels with its
+        // extensions, the operator's ~/.pi ones stay out.
+        ...(extensionPaths.length > 0 ? { additionalExtensionPaths: extensionPaths } : {}),
         noPromptTemplates: true,
         noContextFiles: true,
         // A SPACE, not "", when the assembly has no prompt: pi treats an empty custom prompt as
@@ -202,6 +223,9 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
         appendSystemPromptOverride: () => [],
         skillsOverride: (base) => ({ skills: toPiSkills(skills) as typeof base.skills, diagnostics: base.diagnostics }),
       },
+    }).then((built) => {
+      reportExtensionErrors(built);
+      return built;
     });
 
   return async (sessionId, inherit) => {
@@ -274,6 +298,20 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       customTools: toolDefinitions(tools, cwd, env, sessionId, bound),
     });
     bound.session = session;
+    // An extension handler that throws is otherwise dropped: pi fans errors out to registered
+    // listeners and has none by default, which on a server means a broken extension looks like an
+    // extension that simply did nothing.
+    //
+    // `uiContext` is deliberately NOT bound here. pi defaults it to a no-op, so an extension asking
+    // `select`/`confirm`/`input` gets an immediate "no answer" instead of hanging — degraded, but not
+    // stuck. Binding a logging stand-in would mean implementing 20+ members of `ExtensionUIContext`,
+    // most of them TUI geometry (widgets, footers, editors) that a served agent has no meaning for.
+    // The answering channel is a contract question, not a stub: see the `ask`/`answer` design.
+    if (extensionPaths.length > 0) {
+      await session.bindExtensions({
+        onError: (e) => log.warn(`[fastagent] extension ${e.extensionPath} failed on ${e.event}: ${e.error}`),
+      });
+    }
     // Deferral, then restoration: pi starts every mounted tool active, so narrow by SUBTRACTING the
     // deferred names (robust to pi mounting tools of its own, unlike an exact-set replacement), then
     // add back what THIS session has already discovered.

@@ -288,6 +288,28 @@ export default defineConfig({
 Package tools receive the same `ToolContext` as definition-local `defineTool` tools, including the
 optional read-only `sessionManager` during serving/chat turns.
 
+## Extensions
+
+Extension modules under `extensions/` are loaded and travel with the definition, so the same agent
+behaves the same in `dev`, `start`, `chat`, and a container. Two discovery shapes, matching pi:
+
+```txt
+extensions/notify.ts        ->  loaded
+extensions/audit/index.ts   ->  loaded
+```
+
+pi's third shape — a subdirectory whose `package.json` declares a `pi` field — is not supported;
+such a directory is warned about rather than skipped in silence. An extension that fails to load is
+warned about too, and the agent keeps serving without it.
+
+Only the definition's own `extensions/` are loaded. The machine's `~/.pi` extensions are
+deliberately not — a served agent must not depend on the authoring machine's setup. Extensions are
+code, so they are read once at startup: adding one needs a restart, like `tools/`.
+
+Extensions can register tools and commands, and they can ask the user questions through pi's UI
+primitives. That last part has no answering channel when serving — `select`/`confirm`/`input`
+resolve immediately as "no answer" rather than reaching anyone.
+
 ### When the repo already owns `tools/` or `channels/`
 
 Nothing to do — the agent lives in `./fastagent/`, so FastAgent scans the agent's own directories,
