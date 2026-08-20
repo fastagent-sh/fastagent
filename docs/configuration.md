@@ -309,17 +309,17 @@ deliberately not — a served agent must not depend on the authoring machine's s
 Which files count as extensions is decided at startup: **adding or removing one needs a restart**,
 like `tools/`.
 
-**An extension is loaded once per process, not once per turn.** pi caches extension modules in a
-process-global map, so every turn a served agent takes shares one instance and one module scope.
-Serving is concurrent — several turns can be in flight at once — which makes two rules practical
-rather than pedantic:
+**An extension is loaded once per agent, not once per turn.** The agent's assembly loads it and
+serves every turn from that one instance, sharing one module scope. (Two agents in one process get
+an instance each.) Serving is concurrent — several turns can be in flight at once — which makes two
+rules practical rather than pedantic:
 
 - **`session_start` fires on every turn, against that one shared instance.** Write the handler so
   running it again is harmless: guard with a flag, or reuse what you already opened. A handler that
   unconditionally opens a timer or connection opens one per turn, and they accumulate.
 - **`session_shutdown` is not emitted per turn when serving.** It cannot be: the instance outlives
   the turn, so tearing it down at the end of one turn would pull state out from under the turns
-  still running. Clean up in whatever opened the resource — the tool call or handler that owns it —
+  still running — including turns for entirely different conversations. Clean up in whatever opened the resource — the tool call or handler that owns it —
   rather than expecting a per-turn teardown signal.
 
 Module state therefore *does* carry from turn to turn. That is useful (a cache, a pooled client) as

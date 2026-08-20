@@ -112,9 +112,9 @@ export async function loadAgentDefinition(
  * function's warnings — for a set that cannot change without a restart. Called once per assembly,
  * like `tools/`.
  *
- * Loading those paths is the other half, and it happens ONCE per process: pi caches extension
- * modules in a process-global map, so every turn a served agent takes shares one instance. That is
- * why there is no per-turn `session_shutdown` — see the note in `invoke-session.ts`.
+ * Loading those paths is the other half, and it happens once per ASSEMBLY: the ResourceLoader loads
+ * them and serves every turn from that one instance. That is why there is no per-turn
+ * `session_shutdown` — see the note in `invoke-session.ts`.
  *
  * Discovery follows pi's own rules, so an extension that works in pi works here:
  *

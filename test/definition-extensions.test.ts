@@ -208,6 +208,33 @@ describe("definition: chat loads the same extensions serving does", () => {
 });
 
 describe("definition: extension lifecycle across per-invoke sessions", () => {
+  it("two agents in one process get an instance each — the boundary is the assembly, not the process", async () => {
+    const key = `__fa_ext_perassembly_${Date.now()}__`;
+    const mk = async () =>
+      await agentDirWith({
+        "extensions/c.ts": `
+export default async function (api) {
+  const k = ${JSON.stringify(key)};
+  globalThis[k] = (globalThis[k] ?? 0) + 1;
+}
+`,
+      });
+    const [d1, d2] = [await mk(), await mk()];
+    const { faux } = makeFaux();
+    faux.setResponses(Array.from({ length: 8 }, () => fauxAssistantMessage("ok")));
+    const opts = { model: "faux/faux-1", providers: [faux.provider] };
+    const a1 = (await createPiAgentFromDefinition(d1, opts)).agent;
+    const a2 = (await createPiAgentFromDefinition(d2, opts)).agent;
+    const g = globalThis as unknown as Record<string, number>;
+
+    await collect(a1.invoke({ session: "s" }, { text: "1" }));
+    expect(g[key]).toBe(1);
+    await collect(a2.invoke({ session: "s" }, { text: "2" }));
+    expect(g[key]).toBe(2); // a second agent loads its own
+    await collect(a1.invoke({ session: "s" }, { text: "3" }));
+    expect(g[key]).toBe(2); // and the first one keeps the instance it had
+  });
+
   it("one extension instance serves every turn, and session_start repeats on each", async () => {
     const counterKey = `__fa_ext_lifecycle_${Date.now()}__`;
     const dir = await agentDirWith({
@@ -236,8 +263,8 @@ export default async function (api) {
       shutdown: number;
       factories: number;
     };
-    // ONE instance for the process: pi caches extension modules in a process-global map, so a served
-    // agent cannot hand a turn its own copy however the loader is driven.
+    // ONE instance for this agent: the extensions belong to the assembly's ResourceLoader, which
+    // loads them once and serves every turn from that. A turn cannot be given its own copy.
     expect(counts.factories).toBe(1);
     // session_start still fires per turn, because a session must be bound for its errors to surface
     // at all — which is why the docs require start handlers to be idempotent.

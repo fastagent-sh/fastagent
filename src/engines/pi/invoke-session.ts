@@ -383,11 +383,11 @@ export function createPiAgentFromSession(options: CreatePiAgentFromSessionOption
         }
       } finally {
         // NO session_shutdown here, deliberately. A per-invoke session makes one look right, but the
-        // extension INSTANCE it would tear down is not per-invoke: pi caches extension modules in a
-        // process-global map, so every turn shares one. Emitting a shutdown per turn had a finished
+        // extension INSTANCE it would tear down is not per-invoke: extensions belong to the agent's
+        // assembly and every turn shares one. Emitting a shutdown per turn had a finished
         // turn clearing a timer a concurrent turn had just opened (measured, and pinned in
         // definition-extensions.test.ts). The lifecycle has to match the instance, not the session
-        // wrapper: one process, one instance, no per-turn teardown. Extensions that need per-turn
+        // wrapper: one agent, one instance, no per-turn teardown. Extensions that need per-turn
         // cleanup do it in the tool or handler that opened the resource.
         try {
           session.dispose();
