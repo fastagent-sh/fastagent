@@ -14,7 +14,7 @@
  * (bad skill files, name collisions) are returned as data. An unreadable ② context file only warns (pi).
  */
 import { realpathSync } from "node:fs";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
@@ -150,15 +150,17 @@ export async function loadExtensionPaths(
   }
   const paths: string[] = [];
   for (const entry of listed.value) {
-    const looksLikeModule = entry.name.endsWith(".ts") || entry.name.endsWith(".js");
     if (entry.kind === "symlink") {
-      // Only complain about a link that was TRYING to be an extension. A symlinked README or
-      // data.json in here is someone's own business, and warning about it trains authors to ignore
-      // the warning that matters. Directories are candidates too: their index.* is checked below.
-      if (looksLikeModule || !extname(entry.name)) warnSymlinkRefused(entry.path);
+      // EVERY symlink here is announced, without guessing whether it meant to be an extension. The
+      // two mistakes are not equal: a needless line about a symlinked README costs a glance, while
+      // staying quiet about a symlinked extension loses a feature silently and only shows up in the
+      // container. A name-based guess also cannot see through the link — `audit.ext -> some/dir` is
+      // a directory candidate to pi and a mystery here — so the warning says what it knows and
+      // tells the author when to ignore it.
+      warnSymlinkRefused(entry.path);
       continue;
     }
-    if (looksLikeModule) {
+    if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
       if (entry.kind === "file") paths.push(entry.path);
       continue;
     }
@@ -204,7 +206,8 @@ async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<{ p
 function warnSymlinkRefused(path: string): void {
   log.warn(
     `[fastagent] ${path} is a symlink and will not be loaded: an extension must be a real file inside ` +
-      `the definition so it travels with the artifact — move it in`,
+      `the definition so it travels with the artifact — move it in. (If it is not an extension, ` +
+      `keep it outside extensions/ to silence this.)`,
   );
 }
 

@@ -178,17 +178,17 @@ describe("definition: chat runs the definition's extensions in full", () => {
 });
 
 describe("definition: extensions/ discovery only complains about real candidates", () => {
-  it("ignores a symlinked non-module file instead of calling it a refused extension", async () => {
+  it("announces every symlink, including a directory-shaped one with a dotted name", async () => {
     const dir = await agentDirWith({ "extensions/real.ts": markerExtension("real") });
     const outside = await mkdtemp(join(tmpdir(), "fa-nonmod-"));
-    await writeFile(join(outside, "NOTES.md"), "notes\n");
-    await symlink(join(outside, "NOTES.md"), join(dir, "extensions", "NOTES.md"));
+    await writeFile(join(outside, "index.ts"), markerExtension("linked"));
+    // `audit.ext -> dir` is a directory candidate to pi, and from a listing it is indistinguishable
+    // from a symlinked data file. Guessing by name would drop this one in silence.
+    await symlink(outside, join(dir, "extensions", "audit.ext"), "dir");
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
 
-    expect(await loadExtensionPaths(dir)).toHaveLength(1);
-    // A symlinked README in extensions/ is the author's business. Warning about it teaches people to
-    // ignore the warning that matters — the one about a symlinked extension.
-    expect(warn.mock.calls.flat().join("\n")).not.toMatch(/NOTES\.md/);
+    expect(await loadExtensionPaths(dir)).toHaveLength(1); // only the real one
+    expect(warn.mock.calls.flat().join("\n")).toMatch(/audit\.ext is a symlink/);
     warn.mockRestore();
   });
 
