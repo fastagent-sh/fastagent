@@ -290,8 +290,9 @@ optional read-only `sessionManager` during serving/chat turns.
 
 ## Extensions
 
-Extension modules under `extensions/` are loaded and travel with the definition, so the same agent
-behaves the same in `dev`, `start`, `chat`, and a container. Two discovery shapes, matching pi:
+Extension modules under `extensions/` are loaded and travel with the definition, so an extension
+loads — and the tools it registers are mounted — identically in `dev`, `start`, `chat`, and a
+container. Two discovery shapes, matching pi:
 
 ```txt
 extensions/notify.ts        ->  loaded
@@ -306,9 +307,18 @@ Only the definition's own `extensions/` are loaded. The machine's `~/.pi` extens
 deliberately not — a served agent must not depend on the authoring machine's setup. Extensions are
 code, so they are read once at startup: adding one needs a restart, like `tools/`.
 
-Extensions can register tools and commands, and they can ask the user questions through pi's UI
-primitives. That last part has no answering channel when serving — `select`/`confirm`/`input`
-resolve immediately as "no answer" rather than reaching anyone.
+What an extension can register is not uniformly *reachable*, because a served agent has no
+interactive surface:
+
+| | serving (`dev`, `start`, channels) | `chat` |
+|---|---|---|
+| tools it registers | offered to the model | offered to the model |
+| lifecycle handlers | run | run |
+| commands it registers | **not executable** — a leading `/name` is just prompt text | executable |
+| `select` / `confirm` / `input` | resolve immediately as "no answer" | shown to you |
+
+So an extension whose value is a slash command or a dialog is a `chat`-time tool today; one that
+registers model-callable tools or reacts to lifecycle events works everywhere.
 
 ### When the repo already owns `tools/` or `channels/`
 
