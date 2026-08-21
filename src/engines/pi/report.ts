@@ -60,8 +60,13 @@ const lastFindings = new Map<string, string>();
  *
  * `dir` must be the RESOLVED definition root (`LoadedDefinition.dir`), or two spellings of one path
  * become two memos and warn twice.
+ *
+ * `assembly` is REQUIRED, with no default: an omitted argument writes a signature that does not
+ * include the assembly findings, so the next caller that does pass them re-warns and an earlier one
+ * suppresses them — the "record without printing" variant this module's single door exists to rule
+ * out. Callers with nothing to add pass `[]` and say so.
  */
-export function reportFindingsIfChanged(dir: string, def: Findings, assembly: readonly AssemblyFinding[] = []): void {
+export function reportFindingsIfChanged(dir: string, def: Findings, assembly: readonly AssemblyFinding[]): void {
   const sig = findingsSignature(def, assembly);
   if (lastFindings.get(dir) === sig) return;
   lastFindings.set(dir, sig);

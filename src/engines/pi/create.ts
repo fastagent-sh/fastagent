@@ -100,6 +100,11 @@ export function resolveCodingTools(config: FastagentConfig): ResolvedCodingTools
   return { tools, names: tools.map((tool) => tool.name as CodingToolName) };
 }
 
+/** Which built-in coding capabilities a mounted set provides, read by NAME — the only observable. */
+function codingToolNamesIn(mounted: readonly MountedTool[]): CodingToolName[] {
+  return CODING_TOOL_NAMES.filter((name) => mounted.some((tool) => tool.name === name));
+}
+
 /**
  * Built-in coding tools this definition turned off, MINUS any name an authored tool has taken.
  *
@@ -209,8 +214,7 @@ export function piBasePrompt(
   // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line
   // (core.md §11), keeping the tools list + guidelines below. Preserve pi's coding identity only for
   // the full coding surface; a partial/empty surface must not claim machine capabilities it lacks.
-  const inferredCodingNames = CODING_TOOL_NAMES.filter((name) => mounted.some((tool) => tool.name === name));
-  const codingNames = options.codingToolNames ?? inferredCodingNames;
+  const codingNames = options.codingToolNames ?? codingToolNamesIn(mounted);
   const fullCodingSurface = CODING_TOOL_NAMES.every((name) => codingNames.includes(name));
   const identity =
     options.persona?.trim() ||
@@ -524,9 +528,7 @@ export async function createPiAgentFromDefinition(
   // property — the directory opener passes the resolved set explicitly.
   const codingToolNames =
     options.codingToolNames ??
-    (options.tools === undefined
-      ? [...CODING_TOOL_NAMES]
-      : CODING_TOOL_NAMES.filter((name) => options.tools?.some((tool) => tool.name === name)));
+    (options.tools === undefined ? [...CODING_TOOL_NAMES] : codingToolNamesIn(options.tools));
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by
   // the resolved dir): announced once here, and re-announced by a turn or by the control plane's
   // command list only when the set CHANGES — a runtime-written bad skill surfaces the moment it

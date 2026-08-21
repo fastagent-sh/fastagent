@@ -33,20 +33,20 @@ describe("report", () => {
         { type: "warning", code: "invalid_metadata", message: "description is required", path: "/a/x/SKILL.md" },
       ] as SkillDiagnostic[],
     };
-    reportFindingsIfChanged("/agent", findings); // reader A (a turn)
+    reportFindingsIfChanged("/agent", findings, []); // reader A (a turn)
     expect(lines(err)).toMatch(/invalid_metadata/);
     err.mockClear();
-    reportFindingsIfChanged("/agent", findings); // reader B (commands()) — same finding, same dir
+    reportFindingsIfChanged("/agent", findings, []); // reader B (commands()) — same finding, same dir
     expect(err).not.toHaveBeenCalled();
     // A DIFFERENT definition keeps its own budget …
-    reportFindingsIfChanged("/other-agent", findings);
+    reportFindingsIfChanged("/other-agent", findings, []);
     expect(lines(err)).toMatch(/invalid_metadata/);
     err.mockClear();
     // There is no record-without-printing door: the boot report goes through this same function, so
     // a caller that never reports cannot silently consume the announcement for every later reader.
-    reportFindingsIfChanged("/third-agent", findings); // boot
+    reportFindingsIfChanged("/third-agent", findings, []); // boot
     err.mockClear();
-    reportFindingsIfChanged("/third-agent", findings); // a turn, then commands() — already said
+    reportFindingsIfChanged("/third-agent", findings, []); // a turn, then commands() — already said
     expect(err).not.toHaveBeenCalled();
   });
 
