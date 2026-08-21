@@ -75,7 +75,7 @@ Prints the assembled surface without starting a server:
 - model source,
 - config path,
 - persona presence and context files (`AGENTS.md`),
-- skills, their diagnostics, and any assembly findings (`assemblyFindings` — definition-wide, e.g. skills with no reader),
+- skills and their diagnostics,
 - the resolved coding-tool names (`read`/`bash`/`edit`/`write`), plus authored tools and collisions,
 - channel files,
 - schedules (name + next fire instant; a broken schedule file is reported here, not first at `dev`),

@@ -28,7 +28,7 @@ import { type PiBoundaryWiring, createPiSessionControl } from "./session-control
 import { withWakeTool } from "./wake-tool.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import { type LoadedDefinition, loadAgentSkills } from "./definition.ts";
-import { definitionAssemblyFindings, reportFindingsIfChanged } from "./report.ts";
+import { reportFindingsIfChanged } from "./report.ts";
 import { type PiSessionRecordStore, piSessionRecordStore } from "./session-store.ts";
 import type { ToolCollision } from "./tool.ts";
 import type { MountedTool } from "./tool.ts";
@@ -227,7 +227,7 @@ export async function createPiAgentFromDir(
           // A skill whose frontmatter broke simply is not in `skills` — it would disappear from the
           // author's composer with no signal anywhere. The memo is SHARED with the turn path (keyed
           // by dir), so a finding is warned when it appears, not once per reader that notices it.
-          reportFindingsIfChanged(loaded.dir, loaded, definitionAssemblyFindings(loaded, codingToolNames));
+          reportFindingsIfChanged(loaded.dir, loaded);
           return loaded.skills.map((skill) => ({
             name: skill.name,
             description: skill.description,

@@ -7,12 +7,7 @@ import { resolve } from "node:path";
 import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { loadDotEnv } from "../../env.ts";
 
-import {
-  definitionAssemblyFindings,
-  reportFindingsIfChanged,
-  reportModuleLoadFailures,
-  reportToolCollisions,
-} from "../../engines/pi/report.ts";
+import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
@@ -122,5 +117,5 @@ function reportAgentsSkillsTools(a: Assembled): void {
   }
   reportToolCollisions(a.toolCollisions);
   reportModuleLoadFailures(a.toolFailures);
-  reportFindingsIfChanged(a.definition.dir, a.definition, definitionAssemblyFindings(a.definition, a.codingToolNames));
+  reportFindingsIfChanged(a.definition.dir, a.definition);
 }

@@ -294,14 +294,13 @@ export default defineConfig({
 ```
 
 Model-visible skills are loaded on demand from their `SKILL.md` paths, and chat-channel non-image
-attachments are downloaded to local paths. Both are read with the built-in `read` tool.
+attachments are downloaded to local paths. Both are read with a file tool.
 
-Skills get a startup warning when they are listed to the model but `read` is absent — an assembly
-that advertises a capability it cannot deliver is contradicting itself, and only the assembly can
-see that. Attachments do not: a channel states what it attached (name, size, path) and the agent
-answers for itself. Without `read` it will say it cannot open the file — the direct, visible
-consequence of the posture you configured, and images still travel inline through vision either
-way.
+Neither is checked ahead of time. A channel states what it attached (name, size, path) and the agent
+answers for itself; a skill listing is loaded when the model reaches for it. Without a reader the
+agent says it cannot open the file — the direct, visible consequence of the posture you configured,
+and images still travel inline through vision either way. (A pre-flight check would also have to
+guess: `codingTools: false` plus an authored `tools/read.ts` is a perfectly readable agent.)
 
 A disabled built-in is **refused, not merely hidden**: it never enters the session's tool registry,
 so nothing that activates a tool by name — a `chat` command, the control plane, the deferred-tool

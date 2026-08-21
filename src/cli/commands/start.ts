@@ -9,12 +9,7 @@ import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import { resolveSecretsDir, workspaceHint } from "../../paths.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
-import {
-  definitionAssemblyFindings,
-  reportFindingsIfChanged,
-  reportModuleLoadFailures,
-  reportToolCollisions,
-} from "../../engines/pi/report.ts";
+import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
@@ -136,7 +131,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
         `FASTAGENT_SECRETS_DIR at a persistent volume so a redeploy that replaces the dir does not wipe them.`,
     );
   }
-  reportFindingsIfChanged(definition.dir, definition, definitionAssemblyFindings(definition, codingToolNames));
+  reportFindingsIfChanged(definition.dir, definition);
 
   // AgentCore Runtime posture (FASTAGENT_AGENTCORE=1, set by the generated deploy artifacts): the
   // adapter (POST /invocations + GET /ping) is the container's only reachable surface, and cron

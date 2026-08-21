@@ -14,12 +14,7 @@ import { createPiModelRuntime } from "../../engines/pi/models.ts";
 import { resolveStateRoot, workspaceHint } from "../../paths.ts";
 import { resolveAgentTools, resolveCodingTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
-import {
-  definitionAssemblyFindings,
-  reportFindingsIfChanged,
-  reportModuleLoadFailures,
-  reportToolCollisions,
-} from "../../engines/pi/report.ts";
+import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { log } from "../../log.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
@@ -64,7 +59,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       failures: [],
       error: (e as Error).message,
     }));
-  const assemblyFindings = definitionAssemblyFindings(definition, tools.coding);
   const channels = await discoverChannelFiles(agentDir).catch(failStartup);
   // Loaded (imported + validated), not just discovered: info's job is "fix only what it reports", so a
   // broken schedule file (bad cron/tz, failed import) must show up HERE, not first at dev/start — and
@@ -121,12 +115,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           stateRoot,
           sessionsDir,
           authPath,
-          // Two entities, two keys: `diagnostics` is per-skill parse problems (path = the SKILL.md),
-          // while an assembly finding describes the definition as a whole (path = the definition dir,
-          // code outside the skill vocabulary). Merged, a machine consumer branching on `code` or
-          // resolving `path` gets a second shape without warning.
           diagnostics: definition.diagnostics,
-          assemblyFindings,
           skillCollisions: definition.collisions,
           toolCollisions: tools.collisions,
           toolFailures: tools.failures,
@@ -166,5 +155,5 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   reportModuleLoadFailures(tools.failures);
   reportModuleLoadFailures(sched.failures);
   if (tools.error) log.warn(`[fastagent] ${tools.error}`);
-  reportFindingsIfChanged(definition.dir, definition, assemblyFindings);
+  reportFindingsIfChanged(definition.dir, definition);
 }
