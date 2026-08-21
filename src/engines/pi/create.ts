@@ -470,8 +470,9 @@ export interface CreatePiAgentFromDefinitionOptions {
   /** Override tools. Defaults to {@link piDefaultTools} (lock down with a custom list). An authored
    *  `FastagentTool[]` (AgentTool plus the optional `deferred` marker) widens into {@link MountedTool}. */
   tools?: MountedTool[];
-  /** INTERNAL directory-opener fact: which mounted tools are pi's coding tools. Keeps prompt identity,
-   *  skill findings and chat parity tied to the resolver instead of inferring semantics from authored names. */
+  /** INTERNAL directory-opener fact: which mounted tools are pi's coding tools. Keeps prompt identity
+   *  and the disabled-built-in exclusion tied to the resolver instead of inferring semantics from
+   *  authored names. */
   codingToolNames?: readonly CodingToolName[];
   /**
    * The agent's working directory: where the default tools operate AND whose ancestors are walked for
@@ -521,11 +522,11 @@ export async function createPiAgentFromDefinition(
   // it; a caller's own search_tools wins).
   const tools = withSearchTool(options.tools ?? piDefaultTools());
   // An explicit `tools` list is the caller stating the whole surface, so the coding capabilities are
-  // whichever built-in NAMES appear in it — not none. A caller passing `piDefaultTools()` has a
-  // reader; telling them otherwise would give the model a capability-neutral identity and warn that
-  // their skills have no reader. Name-based, exactly like the exclusion below, and for the same
-  // reason: the name is the only thing either side can observe. `codingTools` stays a definition
-  // property — the directory opener passes the resolved set explicitly.
+  // whichever built-in NAMES appear in it — not none. A caller passing `piDefaultTools()` gets the
+  // identity that matches what they mounted, rather than the capability-neutral one. Name-based,
+  // exactly like the exclusion below, and for the same reason: the name is the only thing either
+  // side can observe. `codingTools` stays a definition property — the directory opener passes the
+  // resolved set explicitly.
   const codingToolNames =
     options.codingToolNames ??
     (options.tools === undefined ? [...CODING_TOOL_NAMES] : codingToolNamesIn(options.tools));
