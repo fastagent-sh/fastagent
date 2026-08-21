@@ -12,12 +12,13 @@
  * - the `AgentSession` and its tool bindings are per turn, because a tool's `execute` closes over the
  *   session it runs in and this posture has several in flight at once.
  */
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
   type AgentSessionServices,
+  type CreateAgentSessionServicesOptions,
   type ModelRuntime,
   type SessionManager,
   type ToolDefinition,
@@ -205,6 +206,53 @@ export function reportExtensionErrors(services: AgentSessionServices): void {
   }
 }
 
+/** What pi is allowed to discover, minus the parts each assembly fills in itself. */
+type DefinitionLoaderOptions = NonNullable<CreateAgentSessionServicesOptions["resourceLoaderOptions"]>;
+
+/**
+ * The resource posture a fastagent definition asks pi for — ONE definition of it, for both
+ * assemblies. Serving (`piAgentSessionFactory`) and chat (`buildAgentSessionRuntime`) build
+ * different sessions on top, but what pi is allowed to DISCOVER is not one of the differences:
+ * everything comes from the definition, nothing from the machine that happens to be running it.
+ *
+ * Two copies of this drifted once already: `additionalExtensionPaths` was added to both, and only
+ * one of them also passed the resulting tool names through pi's `tools` allowlist — so extensions
+ * worked when served and vanished in chat. A difference between the two has to be visible AS a
+ * difference, which is what the parameters are for: serving reads a prompt and skills that change
+ * per turn and passes NO extension paths (it does not run them — see
+ * {@link PiAgentSessionFactoryOptions.extensionPaths}); chat reads a fixed assembly and passes its
+ * own. Both are arguments now, rather than two files that happen to disagree.
+ */
+export function definitionResourceLoaderOptions(source: {
+  systemPrompt: () => string | undefined;
+  skills: () => Skill[];
+  /** Omitted by serving, which does not run them. */
+  extensionPaths?: readonly string[];
+}): DefinitionLoaderOptions {
+  return {
+    // Definition-only, like dev/start: pi's machine-global discovery (the operator's own ~/.pi
+    // extensions, slash commands, global AGENTS.md, APPEND_SYSTEM.md) stays out, so the agent that
+    // runs is the artifact, not the artifact plus whoever's laptop it is.
+    noExtensions: true,
+    // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under
+    // noExtensions, which is exactly the split wanted here — the artifact travels with its
+    // extensions, the machine's stay out.
+    ...(source.extensionPaths?.length ? { additionalExtensionPaths: [...source.extensionPaths] } : {}),
+    noPromptTemplates: true,
+    noContextFiles: true,
+    // A SPACE, not "", when the assembly has no prompt: pi treats an empty custom prompt as absent
+    // and substitutes its own coding-assistant identity, which an L1 agent
+    // (`createPiAgent({ model, tools })`) never asked for. pi appends its own working-directory line
+    // either way — that is engine behaviour this binding does not fight.
+    systemPromptOverride: () => source.systemPrompt() ?? " ",
+    appendSystemPromptOverride: () => [],
+    skillsOverride: (base) => ({
+      skills: toPiSkills(source.skills()) as typeof base.skills,
+      diagnostics: base.diagnostics,
+    }),
+  };
+}
+
 /** Open-or-create the record, then bind a fresh session to it. One call per invoke. */
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
   const { sessions, thinkingLevel, cwd, env } = options;
@@ -229,24 +277,14 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       cwd,
       agentDir: options.agentDir ?? join(cwd, ".fastagent", "pi"),
       modelRuntime,
-      resourceLoaderOptions: {
-        // The agent is the definition, not the authoring machine's pi setup: no ~/.pi extensions,
-        // slash commands, global AGENTS.md or APPEND_SYSTEM.md (same posture as dev/start).
-        noExtensions: true,
-        // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under
-        // noExtensions, which is exactly the split we want — the artifact travels with its
-        // extensions, the operator's ~/.pi ones stay out.
-        // No additionalExtensionPaths: see PiAgentSessionFactoryOptions.extensionPaths.
-        noPromptTemplates: true,
-        noContextFiles: true,
-        // A SPACE, not "", when the assembly has no prompt: pi treats an empty custom prompt as
-        // absent and substitutes its own coding-assistant identity, which an L1 agent
-        // (`createPiAgent({ model, tools })`) never asked for. pi appends its own working-directory
-        // line either way — that is engine behaviour this binding does not fight.
-        systemPromptOverride: () => prompt ?? " ",
-        appendSystemPromptOverride: () => [],
-        skillsOverride: (base) => ({ skills: toPiSkills(skills) as typeof base.skills, diagnostics: base.diagnostics }),
-      },
+      // No extensionPaths: serving does not run them (see PiAgentSessionFactoryOptions), which is
+      // the one resource question the two assemblies answer differently. The accessors read the
+      // CURRENT prompt/skills — serving refreshes both per turn, so a snapshot taken here would
+      // serve a stale definition after the first edit.
+      resourceLoaderOptions: definitionResourceLoaderOptions({
+        systemPrompt: () => prompt,
+        skills: () => skills,
+      }),
     });
 
   return async (sessionId, inherit) => {
@@ -362,18 +400,21 @@ function loadedSkillSet(skills: readonly { name: string; filePath?: string; desc
 
 /** fastagent's Skill (content inline) as pi's (read from filePath at invocation time). */
 function toPiSkills(skills: Skill[]) {
-  return skills.map((skill) => ({
-    name: skill.name,
-    description: skill.description,
-    filePath: skill.filePath,
-    baseDir: skill.filePath.slice(0, skill.filePath.lastIndexOf("/")),
-    sourceInfo: {
-      path: skill.filePath,
-      source: "fastagent",
-      scope: "project",
-      origin: "top-level",
-      baseDir: skill.filePath.slice(0, skill.filePath.lastIndexOf("/")),
-    },
-    disableModelInvocation: skill.disableModelInvocation ?? false,
-  }));
+  return skills.map((skill) => {
+    const baseDir = dirname(skill.filePath);
+    return {
+      name: skill.name,
+      description: skill.description,
+      filePath: skill.filePath,
+      baseDir,
+      sourceInfo: {
+        path: skill.filePath,
+        source: "fastagent",
+        scope: "project",
+        origin: "top-level",
+        baseDir,
+      },
+      disableModelInvocation: skill.disableModelInvocation ?? false,
+    };
+  });
 }
