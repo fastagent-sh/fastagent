@@ -8,14 +8,14 @@
  * everything platform-independent lives here, so a new event type or a wording change lands in ONE
  * place instead of one hunk per channel.
  */
-import { type AgentEvent, ATTACHMENT_UNSUPPORTED_CODE, type Json } from "../agent.ts";
+import type { AgentEvent, Json } from "../agent.ts";
 import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
 
 /** A terminal failure, as a channel hands it to its `onError`. */
 export interface ChannelFailure {
   details: string;
   retryable: boolean;
-  /** The engine's failure code, when it set one — see `ATTACHMENT_UNSUPPORTED_CODE`. */
+  /** The engine's failure code, when it set one. */
   code?: string;
 }
 
@@ -24,12 +24,6 @@ export interface ChannelFailure {
  *  The non-retryable branch keeps the "something went wrong" phrase deliberately — it is neutral (we only
  *  know a boolean, never the specific limitation) and shared verbatim across channels. */
 export function defaultErrorMessage(failed: ChannelFailure): string {
-  // A known limitation gets named. The generic line asks the user to rephrase, which cannot help
-  // when the agent simply has no reader — only the operator can fix that, and the user deserves to
-  // know it is not their message.
-  if (failed.code === ATTACHMENT_UNSUPPORTED_CODE) {
-    return "⚠️ I can't open file attachments — please paste the content as text.";
-  }
   return failed.retryable
     ? "⚠️ Temporary problem — please try again in a moment."
     : "⚠️ Sorry, something went wrong. Try rephrasing, or check I have access to what you need.";

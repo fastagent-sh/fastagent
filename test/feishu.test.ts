@@ -102,10 +102,10 @@ function feishuFetch(
 
 /** Build a channel on a temp state root; returns the handler + the recorded agent + the state home. */
 function buildChannel(
-  opts: Partial<FeishuChannelOptions> & { control?: SessionControl; canReadLocalFiles?: boolean } = {},
+  opts: Partial<FeishuChannelOptions> & { control?: SessionControl } = {},
   agentReply = "the answer",
 ) {
-  const { control, canReadLocalFiles, ...channelOpts } = opts;
+  const { control, ...channelOpts } = opts;
   const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
   tempRoots.push(root);
   const { agent, calls } = replyingAgent(agentReply);
@@ -115,7 +115,7 @@ function buildChannel(
     verificationToken: TOKEN,
     apiBaseUrl: BASE,
     ...channelOpts,
-  })({ agent: opts2Agent(opts) ?? agent, stateRoot: root, control, canReadLocalFiles: canReadLocalFiles ?? true });
+  })({ agent: opts2Agent(opts) ?? agent, stateRoot: root, control });
   const handler = routes["POST /feishu"];
   if (!handler) throw new Error("expected POST /feishu");
   const maybeIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
@@ -190,7 +190,6 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
     })({
       agent,
       stateRoot: root,
-      canReadLocalFiles: true,
     });
     const handler = routes["POST /feishu"];
     if (!handler) throw new Error("expected POST /feishu");
@@ -333,7 +332,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
 
 describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
-    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-construction", canReadLocalFiles: true };
+    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-construction" };
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
     expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
       /verificationToken/,
@@ -347,7 +346,6 @@ describe("construction fails closed", () => {
       buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "t" })({
         agent,
         stateRoot: "rel",
-        canReadLocalFiles: true,
       }),
     ).toThrow(/stateRoot/);
   });
@@ -483,7 +481,6 @@ describe("upgrade from the session-mode model", () => {
 
     const { agent } = replyingAgent();
     buildFeishuChannel({ appId: "app", appSecret: "secret", verificationToken: TOKEN, apiBaseUrl: BASE })({
-      canReadLocalFiles: true,
       agent,
       stateRoot: root,
     });
@@ -563,7 +560,7 @@ describe("turn flow", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent: restarted.agent, stateRoot: first.root, canReadLocalFiles: true });
+    })({ agent: restarted.agent, stateRoot: first.root });
     const again = routes["POST /feishu"];
     if (!again) throw new Error("expected POST /feishu");
     const idleAgain = (again as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
@@ -1682,47 +1679,10 @@ describe("turn flow", () => {
     expect(calls).toHaveLength(1);
     const prompt = calls[0]?.prompt.text ?? "";
     expect(prompt).toContain("[replied-to message (msg om_parent, from user ou_bob): [file: spec.pdf]]");
-    expect(prompt).toContain("attached files — read them with your tools");
+    expect(prompt).toContain("attached files:");
     expect(prompt).toContain("spec.pdf");
     expect(fx.calls("/im/v1/messages/om_parent/resources/fk1").length).toBe(1);
     expect(readFileSync(join(home, "files", "oc_1", "spec.pdf")).toString()).toBe("pdf-bytes");
-  });
-
-  it("a quoted file the agent cannot read costs the note, not the turn", async () => {
-    // A referent is CONTEXT, not the ask — this function's own policy. Every first message of a
-    // thread carries one, so hard-failing when the quoted message happens to be a file turns an
-    // ordinary platform edge into a lost turn, and tells the user to "send the content as text" for
-    // a file they never sent. Degrade like every other unreadable referent: skip it, say so.
-    const fx = feishuFetch({
-      "/im/v1/messages/om_parent_no_reader": (url) =>
-        url.includes("/resources/")
-          ? new Response(Buffer.from("must-not-download"), { status: 200 })
-          : Response.json({
-              code: 0,
-              msg: "ok",
-              data: {
-                items: [
-                  {
-                    message_id: "om_parent_no_reader",
-                    msg_type: "file",
-                    body: { content: '{"file_key":"fk1","file_name":"spec.pdf"}' },
-                    sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
-                  },
-                ],
-              },
-            }),
-    });
-    const { handler, calls, idle } = buildChannel({
-      canReadLocalFiles: false,
-      onError: (failed) => failed.details,
-    });
-    await handler(
-      feishuRequest(messageEvent({ id: "om_no_reader", text: "summarize this", parentId: "om_parent_no_reader" })),
-    );
-    await idle();
-    expect(calls).toHaveLength(1); // the turn RAN
-    expect(fx.calls("/im/v1/messages/om_parent_no_reader/resources/fk1")).toHaveLength(0); // nothing downloaded
-    expect(String(calls[0]?.prompt.text)).toMatch(/no local-file reader/); // and the model was told
   });
 
   it("a thread opened on the agent's own card reads that card AND the chain up to the ask", async () => {
@@ -2493,7 +2453,6 @@ describe("turn flow", () => {
     );
     const { agent, calls } = replyingAgent("recovered");
     const handler = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, apiBaseUrl: BASE })({
-      canReadLocalFiles: true,
       agent,
       stateRoot: root,
     })["POST /feishu"];
@@ -2604,7 +2563,7 @@ describe("the Lark compatibility profile", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent, stateRoot: root, canReadLocalFiles: true });
+    })({ agent, stateRoot: root });
     expect(routes["POST /feishu"]).toBeUndefined();
     const handler = routes["POST /lark"];
     if (!handler) throw new Error("expected POST /lark");
@@ -2627,7 +2586,7 @@ describe("the Lark compatibility profile", () => {
   });
 
   it("mount failures name each public factory", () => {
-    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-factory-name", canReadLocalFiles: true };
+    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-factory-name" };
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(
       /feishuChannel/,
     );

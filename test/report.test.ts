@@ -65,15 +65,15 @@ describe("report", () => {
       collisions: [],
       diagnostics: [],
     };
-    const findings = definitionAssemblyFindings(definition, false);
+    const findings = definitionAssemblyFindings(definition, []);
     expect(findings).toHaveLength(1);
     reportFindingsIfChanged(definition.dir, definition, findings);
     expect(lines(err)).toMatch(/skills_require_file_reader.*codingTools: \["read"\]/);
-    expect(definitionAssemblyFindings(definition, true)).toEqual([]);
+    expect(definitionAssemblyFindings(definition, ["read"])).toEqual([]);
     expect(
       definitionAssemblyFindings(
         { ...definition, skills: [{ ...definition.skills[0]!, disableModelInvocation: true }] },
-        false,
+        [],
       ),
     ).toEqual([]);
   });

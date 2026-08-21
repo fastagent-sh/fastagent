@@ -533,11 +533,7 @@ export async function createPiAgentFromDefinition(
   // the resolved dir): announced once here, and re-announced by a turn or by the control plane's
   // command list only when the set CHANGES — a runtime-written bad skill surfaces the moment it
   // appears, a static one does not spam. Log dedup, not session state (stateless invoke holds).
-  reportFindingsIfChanged(
-    definition.dir,
-    definition,
-    definitionAssemblyFindings(definition, codingToolNames.includes("read")),
-  );
+  reportFindingsIfChanged(definition.dir, definition, definitionAssemblyFindings(definition, codingToolNames));
   // Dir-aware default: the same secrets-dir-derived file the opener uses for this dir (the opener
   // passes an explicit authPath, so this only affects direct L2 callers).
   const authPath = options.authPath ?? defaultAuthPath(resolveSecretsDir(dir));
@@ -561,7 +557,7 @@ export async function createPiAgentFromDefinition(
     // next good edit heals both.
     live: async () => {
       const def = await loadAgentDefinition(dir, { cwd: env.cwd, env });
-      reportFindingsIfChanged(def.dir, def, definitionAssemblyFindings(def, codingToolNames.includes("read")));
+      reportFindingsIfChanged(def.dir, def, definitionAssemblyFindings(def, codingToolNames));
       return {
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity,

@@ -136,11 +136,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
         `FASTAGENT_SECRETS_DIR at a persistent volume so a redeploy that replaces the dir does not wipe them.`,
     );
   }
-  reportFindingsIfChanged(
-    definition.dir,
-    definition,
-    definitionAssemblyFindings(definition, codingToolNames.includes("read")),
-  );
+  reportFindingsIfChanged(definition.dir, definition, definitionAssemblyFindings(definition, codingToolNames));
 
   // AgentCore Runtime posture (FASTAGENT_AGENTCORE=1, set by the generated deploy artifacts): the
   // adapter (POST /invocations + GET /ping) is the container's only reachable surface, and cron
@@ -158,10 +154,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // so channels mount eagerly and a broken channel fails startup.
   const routed = agentcore
     ? undefined
-    : await routesFor(agentDir, traced, stateRoot, sessionControl, {
-        builtinInvoke: true,
-        canReadLocalFiles: codingToolNames.includes("read"),
-      }).catch(failStartup);
+    : await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: true }).catch(failStartup);
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = config.http?.host;
@@ -205,10 +198,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     // re-establishes it — so their presence is a configuration error, surfaced per envelope and by
     // the deploy driver's health probe (there is no boot to fail on this host).
     const lazyChannels = async (): Promise<Routes> => {
-      const surface = await routesFor(agentDir, traced, stateRoot, sessionControl, {
-        builtinInvoke: false,
-        canReadLocalFiles: codingToolNames.includes("read"),
-      });
+      const surface = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: false });
       if (surface.longConnections.length > 0) {
         throw new Error(
           `long-connection channel(s) ${surface.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +

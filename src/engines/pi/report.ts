@@ -17,14 +17,22 @@ export interface AssemblyFinding {
   path: string;
 }
 
-/** A model-visible skill is a path-based capability: pi tells the model to read SKILL.md on demand.
- *  Without the built-in local reader that listing is a dead instruction, so surface the mismatch. */
+/**
+ * A model-visible skill is a path-based capability: pi tells the model to read SKILL.md on demand.
+ * Without a `read` tool that listing is a dead instruction, so surface the mismatch.
+ *
+ * Takes the tool NAMES rather than a pre-computed boolean: six callers were each deriving
+ * `.includes("read")` on the way in, which is one reading of one rule copied six times. This is the
+ * only place in the codebase that still asks what the agent can do with a file — a channel states
+ * what it attached and lets the agent answer, but an assembly that lists skills it cannot open is
+ * contradicting itself, and only the assembly can see that.
+ */
 export function definitionAssemblyFindings(
   definition: Pick<LoadedDefinition, "dir" | "skills">,
-  canReadLocalFiles: boolean,
+  codingToolNames: readonly string[],
 ): AssemblyFinding[] {
   const visible = definition.skills.filter((skill) => !skill.disableModelInvocation);
-  return !canReadLocalFiles && visible.length > 0
+  return !codingToolNames.includes("read") && visible.length > 0
     ? [
         {
           code: "skills_require_file_reader",

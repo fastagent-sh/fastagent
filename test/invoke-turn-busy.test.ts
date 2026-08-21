@@ -35,7 +35,6 @@ async function run(agent: Agent, retry: BusyRetry = FAST): Promise<AgentEvent[]>
     botToken: "B",
     chatId: 1,
     filesDir: await mkdtemp(join(tmpdir(), "fa-")),
-    canReadLocalFiles: true,
   };
   const out: AgentEvent[] = [];
   for await (const e of invokeTurn(agent, "s", "hi", transport, noAttachments, undefined, retry)) out.push(e);

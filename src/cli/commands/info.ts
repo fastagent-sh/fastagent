@@ -64,7 +64,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       failures: [],
       error: (e as Error).message,
     }));
-  const assemblyFindings = definitionAssemblyFindings(definition, tools.coding.includes("read"));
+  const assemblyFindings = definitionAssemblyFindings(definition, tools.coding);
   const channels = await discoverChannelFiles(agentDir).catch(failStartup);
   // Loaded (imported + validated), not just discovered: info's job is "fix only what it reports", so a
   // broken schedule file (bad cron/tz, failed import) must show up HERE, not first at dev/start — and

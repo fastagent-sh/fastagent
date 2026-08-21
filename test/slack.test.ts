@@ -105,19 +105,13 @@ function storedTurn(id: string, seq: number, extra: Record<string, unknown> = {}
   };
 }
 
-function mount(
-  agent: Agent,
-  options: Partial<SlackChannelOptions> = {},
-  stateRoot = root(),
-  control?: SessionControl,
-  canReadLocalFiles?: boolean,
-) {
+function mount(agent: Agent, options: Partial<SlackChannelOptions> = {}, stateRoot = root(), control?: SessionControl) {
   const handler = slackChannel({
     botToken: "xoxb-test",
     signingSecret: SECRET,
     apiBaseUrl: API,
     ...options,
-  })({ agent, stateRoot, control, canReadLocalFiles: canReadLocalFiles ?? true })["POST /slack"]!;
+  })({ agent, stateRoot, control })["POST /slack"]!;
   const turnsIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
   idles.add(turnsIdle);
   return { handler, stateRoot, turnsIdle };
@@ -167,7 +161,7 @@ describe("Slack attachment capability", () => {
       return Response.json({ ok: true });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const { handler } = mount(agent, { onError: (failed) => failed.details }, root(), undefined, false);
+    const { handler } = mount(agent, { onError: (failed) => failed.details }, root(), undefined);
     await handler(
       signedRequest(
         message("1.0", {
