@@ -121,7 +121,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           stateRoot,
           sessionsDir,
           authPath,
-          diagnostics: [...definition.diagnostics, ...assemblyFindings],
+          // Two entities, two keys: `diagnostics` is per-skill parse problems (path = the SKILL.md),
+          // while an assembly finding describes the definition as a whole (path = the definition dir,
+          // code outside the skill vocabulary). Merged, a machine consumer branching on `code` or
+          // resolving `path` gets a second shape without warning.
+          diagnostics: definition.diagnostics,
+          assemblyFindings,
           skillCollisions: definition.collisions,
           toolCollisions: tools.collisions,
           toolFailures: tools.failures,
