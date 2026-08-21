@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -312,12 +313,19 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools are pi core four tools (same as pi default)", () => {
+  it("piDefaultTools is pi-coding-agent's coding four, and nothing else", () => {
+    // Same set createCodingTools returns — asserted against the source rather than a hand-written
+    // list, so it follows upstream instead of drifting from it.
     expect(
       piDefaultTools(process.cwd())
         .map((t) => t.name)
         .sort(),
-    ).toEqual(["bash", "edit", "read", "write"]);
+    ).toEqual(
+      createCodingTools(process.cwd())
+        .map((t) => t.name)
+        .sort(),
+    );
+    expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(["read", "bash", "edit", "write"]);
   });
 
   it("pi's read tool is rooted at the workspace it was built for", async () => {
