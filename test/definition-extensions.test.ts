@@ -227,6 +227,18 @@ export default async function (pi) {
 }
 `;
 
+  async function runtimeFor(files: Record<string, string>): Promise<unknown> {
+    const workspace = await mkdtemp(join(tmpdir(), "fa-chat-live-"));
+    const dir = join(workspace, "fastagent");
+    await mkdir(join(dir, "extensions"), { recursive: true });
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+    for (const [rel, content] of Object.entries(files)) await writeFile(join(dir, rel), content);
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    await rt.dispose?.();
+    return rt.session;
+  }
+
   async function chatToolNames(files: Record<string, string>): Promise<string[]> {
     const workspace = await mkdtemp(join(tmpdir(), "fa-chat-live-"));
     const dir = join(workspace, "fastagent");
@@ -242,13 +254,21 @@ export default async function (pi) {
     }
   }
 
-  it("fires session_start, so a tool registered from a handler reaches the session", async () => {
-    // pi emits session_start from bindExtensions(). Without that call an extension loads and is
-    // then never spoken to again: no lifecycle events, nothing registered from a handler, and no
-    // error listener either — it looks like an extension that chose to do nothing.
+  it("does not freeze the tool set, so a host-bound session_start can still add to it", async () => {
+    // The tool NAMES are not allow-listed. pi lets an extension register from session_start, a
+    // command or any handler, and those names cannot be in a build-time snapshot — an allowlist
+    // would have refreshTools() filter them straight back out.
+    //
+    // session_start itself is emitted by the HOST (InteractiveMode.bindCurrentSessionExtensions),
+    // which is why this asserts the absence of the freeze rather than the arrival of a late tool:
+    // buildAgentSessionRuntime is the assembly, not the host, and a test that bound extensions
+    // itself would be testing its own call.
     const names = await chatToolNames({ "extensions/two.ts": twoMoments });
     expect(names).toContain("at_load");
-    expect(names).toContain("at_session_start");
+    const session = (await runtimeFor({ "extensions/two.ts": twoMoments })) as unknown as {
+      _allowedToolNames?: Set<string>;
+    };
+    expect(session._allowedToolNames).toBeUndefined();
   });
 
   it("uses fastagent's own read tool, not pi's copy of it", async () => {
@@ -298,5 +318,38 @@ export default async function (pi) {
     } finally {
       await rt.dispose?.();
     }
+  });
+});
+
+describe("definition: chat rebuilds extensions when pi replaces the session", () => {
+  it("re-runs the extension factory on a session replacement, not once for the runtime", async () => {
+    // pi replaces the session on /new, /resume and fork, and its extension contract is that the
+    // replacement gets freshly loaded extensions. Memoizing the services with the assembly (they
+    // are memoized: prompt, tools and definition all are) would carry one session's extension
+    // objects into the next.
+    const key = `__fa_ext_rebuild_on_new_${Date.now()}__`;
+    const workspace = await mkdtemp(join(tmpdir(), "fa-newsess-"));
+    const dir = join(workspace, "fastagent");
+    await mkdir(join(dir, "extensions"), { recursive: true });
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+    await writeFile(
+      join(dir, "extensions", "count.ts"),
+      `
+export default async function (pi) {
+  const k = ${JSON.stringify(key)};
+  globalThis[k] = (globalThis[k] ?? 0) + 1;
+}
+`,
+    );
+
+    const first = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    await first.dispose?.();
+    const afterFirst = (globalThis as unknown as Record<string, number>)[key] ?? 0;
+    // A second runtime over the same directory stands in for the replacement pi performs: what
+    // matters is that building a session loads extensions rather than reusing a memoized set.
+    const second = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    await second.dispose?.();
+    expect((globalThis as unknown as Record<string, number>)[key]).toBeGreaterThan(afterFirst);
   });
 });
