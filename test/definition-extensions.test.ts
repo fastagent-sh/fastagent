@@ -322,11 +322,12 @@ export default async function (pi) {
 });
 
 describe("definition: chat rebuilds extensions when pi replaces the session", () => {
-  it("re-runs the extension factory on a session replacement, not once for the runtime", async () => {
+  it("re-runs the extension factory on newSession(), not once for the runtime", async () => {
     // pi replaces the session on /new, /resume and fork, and its extension contract is that the
-    // replacement gets freshly loaded extensions. Memoizing the services with the assembly (they
-    // are memoized: prompt, tools and definition all are) would carry one session's extension
-    // objects into the next.
+    // replacement gets freshly loaded extensions. The assembly is memoized (prompt, tools and
+    // definition all are); memoizing the services with it would carry one session's extension
+    // objects into the next. Driving runtime.newSession() is the only way to prove that — two
+    // separate runtimes would each load once and pass either way.
     const key = `__fa_ext_rebuild_on_new_${Date.now()}__`;
     const workspace = await mkdtemp(join(tmpdir(), "fa-newsess-"));
     const dir = join(workspace, "fastagent");
@@ -343,13 +344,16 @@ export default async function (pi) {
 `,
     );
 
-    const first = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
-    await first.dispose?.();
-    const afterFirst = (globalThis as unknown as Record<string, number>)[key] ?? 0;
-    // A second runtime over the same directory stands in for the replacement pi performs: what
-    // matters is that building a session loads extensions rather than reusing a memoized set.
-    const second = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
-    await second.dispose?.();
-    expect((globalThis as unknown as Record<string, number>)[key]).toBeGreaterThan(afterFirst);
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      const counts = globalThis as unknown as Record<string, number>;
+      const afterBuild = counts[key] ?? 0;
+      expect(afterBuild).toBeGreaterThan(0);
+      const { cancelled } = await rt.newSession();
+      expect(cancelled).toBe(false);
+      expect(counts[key]).toBeGreaterThan(afterBuild);
+    } finally {
+      await rt.dispose?.();
+    }
   });
 });
