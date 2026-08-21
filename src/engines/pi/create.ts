@@ -516,10 +516,17 @@ export async function createPiAgentFromDefinition(
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
   const tools = withSearchTool(options.tools ?? piDefaultTools());
-  // An explicit `tools` list is the caller stating the whole surface: no coding tools unless they
-  // named them. Only a directory agent's config decides otherwise (the opener passes the resolved
-  // set), which is what keeps `codingTools` a definition property rather than a library default.
-  const codingToolNames = options.codingToolNames ?? (options.tools === undefined ? [...CODING_TOOL_NAMES] : []);
+  // An explicit `tools` list is the caller stating the whole surface, so the coding capabilities are
+  // whichever built-in NAMES appear in it — not none. A caller passing `piDefaultTools()` has a
+  // reader; telling them otherwise would give the model a capability-neutral identity and warn that
+  // their skills have no reader. Name-based, exactly like the exclusion below, and for the same
+  // reason: the name is the only thing either side can observe. `codingTools` stays a definition
+  // property — the directory opener passes the resolved set explicitly.
+  const codingToolNames =
+    options.codingToolNames ??
+    (options.tools === undefined
+      ? [...CODING_TOOL_NAMES]
+      : CODING_TOOL_NAMES.filter((name) => options.tools?.some((tool) => tool.name === name)));
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by
   // the resolved dir): announced once here, and re-announced by a turn or by the control plane's
   // command list only when the set CHANGES — a runtime-written bad skill surfaces the moment it
