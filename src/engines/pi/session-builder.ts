@@ -28,7 +28,7 @@
  * workspace.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   type AgentSession,
@@ -41,7 +41,7 @@ import {
   createAgentSessionServices,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { reportExtensionErrors } from "./agent-session-factory.ts";
+import { definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
 import { resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
@@ -239,39 +239,14 @@ export async function buildAgentSessionRuntime(
       // fastagent's models + auth hub replaces pi's default (~/.pi-backed) one — the auth
       // unification point; see the header.
       modelRuntime,
-      resourceLoaderOptions: {
-        // Definition-only, like dev/start: suppress pi's machine-global discovery (the developer's own
-        // ~/.pi extensions, slash commands, global AGENTS.md, APPEND_SYSTEM.md) so this runtime runs
-        // the same agent that gets served, not the authoring machine's pi setup on top.
-        noExtensions: true,
-        // ...except the definition's OWN extensions/: pi honours additionalExtensionPaths even under
-        // noExtensions. Without this the same definition would carry its extensions when served and
-        // lose them in chat — one artifact, two behaviours.
-        ...(extensionPaths.length > 0 ? { additionalExtensionPaths: extensionPaths } : {}),
-        noPromptTemplates: true,
-        noContextFiles: true,
-        systemPromptOverride: () => systemPrompt,
-        appendSystemPromptOverride: () => [],
-        // Replace pi's discovered skills with fastagent's. fastagent's Skill (content inline) is
-        // reshaped to pi-coding-agent's (read from filePath/baseDir at invocation time).
-        skillsOverride: (base) => ({
-          skills: definition.skills.map((s) => ({
-            name: s.name,
-            description: s.description,
-            filePath: s.filePath,
-            baseDir: dirname(s.filePath),
-            sourceInfo: {
-              path: s.filePath,
-              source: "fastagent",
-              scope: "project",
-              origin: "top-level",
-              baseDir: dirname(s.filePath),
-            },
-            disableModelInvocation: s.disableModelInvocation ?? false,
-          })) as typeof base.skills,
-          diagnostics: base.diagnostics,
-        }),
-      },
+      // Chat's assembly is fixed for the life of the runtime (a rebuild makes a new one), so these
+      // read constants — where serving passes accessors that change per turn — and it DOES pass its
+      // extension paths: chat runs them.
+      resourceLoaderOptions: definitionResourceLoaderOptions({
+        systemPrompt: () => systemPrompt,
+        skills: () => definition.skills,
+        extensionPaths,
+      }),
     });
     reportExtensionErrors(services);
 
