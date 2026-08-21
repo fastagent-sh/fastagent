@@ -117,7 +117,7 @@ function mount(
     signingSecret: SECRET,
     apiBaseUrl: API,
     ...options,
-  })({ agent, stateRoot, control, canReadLocalFiles })["POST /slack"]!;
+  })({ agent, stateRoot, control, canReadLocalFiles: canReadLocalFiles ?? true })["POST /slack"]!;
   const turnsIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
   idles.add(turnsIdle);
   return { handler, stateRoot, turnsIdle };

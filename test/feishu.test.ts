@@ -115,7 +115,7 @@ function buildChannel(
     verificationToken: TOKEN,
     apiBaseUrl: BASE,
     ...channelOpts,
-  })({ agent: opts2Agent(opts) ?? agent, stateRoot: root, control, canReadLocalFiles });
+  })({ agent: opts2Agent(opts) ?? agent, stateRoot: root, control, canReadLocalFiles: canReadLocalFiles ?? true });
   const handler = routes["POST /feishu"];
   if (!handler) throw new Error("expected POST /feishu");
   const maybeIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
@@ -190,6 +190,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
     })({
       agent,
       stateRoot: root,
+      canReadLocalFiles: true,
     });
     const handler = routes["POST /feishu"];
     if (!handler) throw new Error("expected POST /feishu");
@@ -332,7 +333,7 @@ describe("bot identity cache (the lazy-construction mention race)", () => {
 
 describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
-    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-construction" };
+    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-construction", canReadLocalFiles: true };
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
     expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
       /verificationToken/,
@@ -343,7 +344,11 @@ describe("construction fails closed", () => {
     feishuFetch();
     const { agent } = replyingAgent();
     expect(() =>
-      buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "t" })({ agent, stateRoot: "rel" }),
+      buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "t" })({
+        agent,
+        stateRoot: "rel",
+        canReadLocalFiles: true,
+      }),
     ).toThrow(/stateRoot/);
   });
 });
@@ -478,6 +483,7 @@ describe("upgrade from the session-mode model", () => {
 
     const { agent } = replyingAgent();
     buildFeishuChannel({ appId: "app", appSecret: "secret", verificationToken: TOKEN, apiBaseUrl: BASE })({
+      canReadLocalFiles: true,
       agent,
       stateRoot: root,
     });
@@ -557,7 +563,7 @@ describe("turn flow", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent: restarted.agent, stateRoot: first.root });
+    })({ agent: restarted.agent, stateRoot: first.root, canReadLocalFiles: true });
     const again = routes["POST /feishu"];
     if (!again) throw new Error("expected POST /feishu");
     const idleAgain = (again as { turnsIdle?: () => Promise<void> }).turnsIdle ?? (async () => {});
@@ -2482,6 +2488,7 @@ describe("turn flow", () => {
     );
     const { agent, calls } = replyingAgent("recovered");
     const handler = buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: TOKEN, apiBaseUrl: BASE })({
+      canReadLocalFiles: true,
       agent,
       stateRoot: root,
     })["POST /feishu"];
@@ -2592,7 +2599,7 @@ describe("the Lark compatibility profile", () => {
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })({ agent, stateRoot: root });
+    })({ agent, stateRoot: root, canReadLocalFiles: true });
     expect(routes["POST /feishu"]).toBeUndefined();
     const handler = routes["POST /lark"];
     if (!handler) throw new Error("expected POST /lark");
@@ -2615,7 +2622,7 @@ describe("the Lark compatibility profile", () => {
   });
 
   it("mount failures name each public factory", () => {
-    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-factory-name" };
+    const ctx = { agent: {} as Agent, stateRoot: "/tmp/unused-feishu-factory-name", canReadLocalFiles: true };
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(
       /feishuChannel/,
     );

@@ -23,8 +23,8 @@ export interface SlackTurnTransport {
   channelId: string;
   filesDir: string;
   label: string;
-  /** Undefined preserves the legacy embedder posture; standard serving supplies an explicit fact. */
-  canReadLocalFiles?: boolean;
+  /** Whether the agent has a reader for absolute local paths; see ChannelContext. */
+  canReadLocalFiles: boolean;
 }
 
 export interface SlackTurnAttachments {
@@ -53,7 +53,7 @@ async function resolveInputs(
   transport: SlackTurnTransport,
   attachments: SlackTurnAttachments,
 ): Promise<ResolvedInputs> {
-  const canReadLocalFiles = transport.canReadLocalFiles !== false;
+  const { canReadLocalFiles } = transport;
   const images: ImageRef[] = [];
   const files: DownloadedSlackFile[] = [];
   for (const id of attachments.primaryFileIds) {

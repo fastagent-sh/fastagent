@@ -30,8 +30,8 @@ export interface TurnTransport {
   botToken: string;
   chatId: number | string;
   filesDir: string;
-  /** Undefined preserves the legacy embedder posture; standard serving supplies an explicit fact. */
-  canReadLocalFiles?: boolean;
+  /** Whether the agent has a reader for absolute local paths; see ChannelContext. */
+  canReadLocalFiles: boolean;
 }
 
 /** A turn's attachment inputs: the summoning message's own file_ids (primary) and the ones folded in
@@ -62,7 +62,7 @@ interface ResolvedAttachments {
 async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachments): Promise<ResolvedAttachments> {
   const { api, botToken, chatId, filesDir } = t;
   const { primary, buffered } = attachments;
-  const canReadLocalFiles = t.canReadLocalFiles !== false;
+  const { canReadLocalFiles } = t;
   if (!canReadLocalFiles && (primary.fileIds?.length ?? 0) > 0) throw new LocalFileAccessUnavailable();
   const images = await resolveImages(api, botToken, primary.imageFileIds);
   const files = canReadLocalFiles ? await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir) : undefined;

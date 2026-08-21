@@ -123,7 +123,12 @@ const telegramChannel = (
   const home = stateDir ?? freshStateDir();
   const root = rootOfHome.get(home);
   if (!root) throw new Error("test stateDir must come from freshStateDir()");
-  const handler = buildTelegramChannel(opts)({ agent, stateRoot: root, control, canReadLocalFiles })["POST /telegram"]!;
+  const handler = buildTelegramChannel(opts)({
+    agent,
+    stateRoot: root,
+    control,
+    canReadLocalFiles: canReadLocalFiles ?? true,
+  })["POST /telegram"]!;
   // Register the turn-queue idle so flush() awaits this channel's fire-and-forget turns deterministically.
   const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
   if (idle) channelIdles.add(idle);
@@ -169,9 +174,11 @@ describe("durable group buffer (single-process restarts)", () => {
     const root = mkdtempSync(join(tmpdir(), "tg-root-"));
     stateDirs.push(root);
     const { agent } = replyingAgent("ok");
-    const ch = buildTelegramChannel({ secretToken: SECRET, botToken: "1:A", route })({ agent, stateRoot: root })[
-      "POST /telegram"
-    ]!;
+    const ch = buildTelegramChannel({ secretToken: SECRET, botToken: "1:A", route })({
+      agent,
+      stateRoot: root,
+      canReadLocalFiles: true,
+    })["POST /telegram"]!;
     expect((await ch(tgRequest(group(1, "hello state root")))).status).toBe(200);
     // The buffer landed under the DERIVED channel home, not the root itself and not process.cwd().
     const home = join(root, "channels", "telegram");
@@ -182,9 +189,13 @@ describe("durable group buffer (single-process restarts)", () => {
 
   it("rejects a relative ctx.stateRoot for embedders that mount without loadChannels (fail visibly)", () => {
     const { agent } = replyingAgent("ok");
-    expect(() => buildTelegramChannel({ secretToken: SECRET, botToken: "1:A" })({ agent, stateRoot: "rel" })).toThrow(
-      /stateRoot/,
-    );
+    expect(() =>
+      buildTelegramChannel({ secretToken: SECRET, botToken: "1:A" })({
+        agent,
+        stateRoot: "rel",
+        canReadLocalFiles: true,
+      }),
+    ).toThrow(/stateRoot/);
   });
 
   it("a FAILED turn keeps the folded discussion — the next summon re-folds it (commit on completed only)", async () => {

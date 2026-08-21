@@ -10,11 +10,14 @@ import type { LoadedSchedule } from "../src/schedule/schedule.ts";
 describe("serving surface", () => {
   it("can suppress the fallback /invoke for AgentCore's publicly forwarded surface", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-surface-"));
-    const ordinary = await routesFor(dir, {} as Agent, join(dir, ".state"));
+    const ordinary = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, { canReadLocalFiles: true });
     expect(Object.keys(ordinary.routes)).toContain("POST /invoke");
     expect(ordinary.builtinInvoke).toBe(true);
 
-    const agentcore = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, { builtinInvoke: false });
+    const agentcore = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, {
+      builtinInvoke: false,
+      canReadLocalFiles: true,
+    });
     expect(Object.keys(agentcore.routes)).toEqual(["GET /health"]);
     expect(agentcore.builtinInvoke).toBe(false);
   });
@@ -26,7 +29,7 @@ describe("serving surface", () => {
       join(dir, "channels", "socket.mjs"),
       `export default { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };\n`,
     );
-    const surface = await routesFor(dir, {} as Agent, join(dir, ".state"));
+    const surface = await routesFor(dir, {} as Agent, join(dir, ".state"), undefined, { canReadLocalFiles: true });
     expect(Object.keys(surface.routes)).toEqual(["GET /health"]);
     expect(surface.builtinInvoke).toBe(false);
     expect(surface.longConnections.map((connection) => connection.name)).toEqual(["socket"]);

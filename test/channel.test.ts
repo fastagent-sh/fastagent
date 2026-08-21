@@ -7,7 +7,7 @@ import { loadChannels } from "../src/index.ts";
 import { discoverChannelFiles, inspectChannels } from "../src/engines/pi/channel.ts";
 
 // loadChannels only forwards the ctx to the factory; these factories ignore it.
-const fakeCtx = { agent: {} as Agent, stateRoot: "/unused-in-tests" };
+const fakeCtx = { agent: {} as Agent, stateRoot: "/unused-in-tests", canReadLocalFiles: true };
 const freshDir = () => mkdtemp(join(tmpdir(), "fa-chan-"));
 
 describe("loadChannels (filesystem discovery)", () => {
@@ -172,9 +172,9 @@ describe("loadChannels (filesystem discovery)", () => {
 
   it("rejects a relative stateRoot at the mount boundary (the contract says absolute — fail visibly)", async () => {
     const dir = await freshDir();
-    await expect(loadChannels(dir, { agent: {} as Agent, stateRoot: "rel/state" })).rejects.toThrow(
-      /stateRoot must be absolute/,
-    );
+    await expect(
+      loadChannels(dir, { agent: {} as Agent, stateRoot: "rel/state", canReadLocalFiles: true }),
+    ).rejects.toThrow(/stateRoot must be absolute/);
   });
 
   it("isolates (surfaces, not fatal) a channel file that does not default-export a function", async () => {

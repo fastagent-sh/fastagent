@@ -56,8 +56,8 @@ export interface FeishuTurnTransport {
    *  (participant-model.md §5). The engine reads it once, at session creation; every later turn
    *  carries it inertly. */
   parentSession?: string;
-  /** Undefined preserves the legacy embedder posture; standard serving supplies an explicit fact. */
-  canReadLocalFiles?: boolean;
+  /** Whether the agent has a reader for absolute local paths; see ChannelContext. */
+  canReadLocalFiles: boolean;
 }
 
 /** An attachment reference: the resource key inside its CARRYING message (the resource API addresses
@@ -224,7 +224,7 @@ async function walkReplyChain(
  * degrade independently.
  */
 async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurnAttachments): Promise<ResolvedInputs> {
-  const canReadLocalFiles = t.canReadLocalFiles !== false;
+  const { canReadLocalFiles } = t;
   const images = [...attachments.primary.images];
   const files = [...attachments.primary.files];
   let referentBlock = "";
