@@ -72,11 +72,22 @@ export async function* streamTurnWithBusyRetry(
   }
 }
 
-/** A primary local-file attachment cannot be represented faithfully for an agent without a reader. */
+/**
+ * A primary local-file attachment cannot be represented faithfully for an agent without a reader.
+ *
+ * Constructing this LOGS, because the fix belongs to the operator and nothing else would tell them:
+ * the user gets a customer-facing line (see `defaultErrorMessage`), which by design does not carry
+ * "mount the read coding tool". Without this, a misconfigured agent answers every attachment with a
+ * shrug and no one learns why.
+ */
 export class LocalFileAccessUnavailable extends Error {
-  constructor() {
+  constructor(label = "[fastagent]") {
     super("this agent cannot read local file attachments; mount the read coding tool or send the content as text");
     this.name = "LocalFileAccessUnavailable";
+    log.warn(
+      `${label} an attachment arrived but this agent has no \`read\` tool — the turn was refused. ` +
+        `Enable it with \`codingTools\` (or \`codingTools: ["read"]\` for least privilege).`,
+    );
   }
 }
 

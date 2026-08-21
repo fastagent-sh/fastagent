@@ -12,7 +12,7 @@
  * ancestors, and degrade per attachment: one expired background file must not block the current ask
  * or hide its still-readable siblings.
  */
-import type { Agent, AgentEvent, ImageRef, Scope } from "../../agent.ts";
+import { type Agent, type AgentEvent, ATTACHMENT_UNSUPPORTED_CODE, type ImageRef, type Scope } from "../../agent.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -375,7 +375,7 @@ export async function* invokeFeishuTurn(
       type: "failed",
       details: unavailable ? e.message : `could not load attachment: ${String(e)}`,
       retryable: !unavailable,
-      ...(unavailable ? { code: "attachment_unsupported" } : {}),
+      ...(unavailable ? { code: ATTACHMENT_UNSUPPORTED_CODE } : {}),
     };
     return;
   }

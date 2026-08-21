@@ -5,7 +5,7 @@
  * pure) because this half touches the Bot API + disk; split from telegram.ts so the factory keeps only
  * wiring and the per-turn lifecycle.
  */
-import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import { type Agent, type AgentEvent, ATTACHMENT_UNSUPPORTED_CODE, type ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -135,7 +135,7 @@ export async function* invokeTurn(
       type: "failed",
       details: unavailable ? e.message : `could not load attachment: ${String(e)}`,
       retryable: !unavailable,
-      ...(unavailable ? { code: "attachment_unsupported" } : {}),
+      ...(unavailable ? { code: ATTACHMENT_UNSUPPORTED_CODE } : {}),
     };
     return;
   }

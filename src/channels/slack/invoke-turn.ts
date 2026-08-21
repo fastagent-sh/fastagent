@@ -1,5 +1,5 @@
 /** Resolve Slack file IDs at dequeue, then stream one engine-neutral Agent turn. */
-import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import { type Agent, type AgentEvent, ATTACHMENT_UNSUPPORTED_CODE, type ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
@@ -123,7 +123,7 @@ export async function* invokeSlackTurn(
       type: "failed",
       details: unavailable ? error.message : `could not load Slack attachment: ${String(error)}`,
       retryable: !unavailable,
-      ...(unavailable ? { code: "attachment_unsupported" } : {}),
+      ...(unavailable ? { code: ATTACHMENT_UNSUPPORTED_CODE } : {}),
     };
     return;
   }

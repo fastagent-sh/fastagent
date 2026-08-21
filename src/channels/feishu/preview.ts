@@ -344,7 +344,12 @@ export async function streamFeishuReply(
         // we throw below regardless.
         finalized = true;
         {
-          const msg = formatError({ details: e.details, retryable: e.retryable }) ?? "";
+          const msg =
+            formatError({
+              details: e.details,
+              retryable: e.retryable,
+              ...(e.code !== undefined ? { code: e.code } : {}),
+            }) ?? "";
           try {
             await settle(msg);
           } catch (deliveryError) {
