@@ -283,7 +283,7 @@ Costs and behavior to know:
 interface ChannelContext {
   agent: Agent;
   stateRoot: string; // resolved state root (FASTAGENT_STATE_DIR > <root>/.state), absolute
-  canReadLocalFiles?: boolean; // standard serving supplies the assembled attachment-path capability
+  canReadLocalFiles: boolean; // required: whether the agent has a reader for absolute local paths
 }
 type ChannelModule = (ctx: ChannelContext) => Routes;
 interface LongConnection {
