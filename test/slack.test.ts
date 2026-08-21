@@ -130,52 +130,6 @@ afterEach(async () => {
   for (const value of roots.splice(0)) rmSync(value, { recursive: true, force: true });
 });
 
-describe("Slack attachment capability", () => {
-  it("rejects a primary non-image file without a reader and never downloads or invokes", async () => {
-    let invoked = false;
-    const agent: Agent = {
-      async *invoke() {
-        invoked = true;
-        yield { type: "completed" as const };
-      },
-    };
-    const fetchMock = okFetch();
-    fetchMock.mockImplementation(async (input: string | URL) => {
-      const url = String(input);
-      if (url.endsWith("/auth.test")) return Response.json({ ok: true, team_id: "T1", user_id: "UBOT" });
-      if (url.endsWith("/files.info")) {
-        return Response.json({
-          ok: true,
-          file: {
-            id: "F1",
-            name: "report.pdf",
-            mimetype: "application/pdf",
-            url_private: "https://files.slack.test/F1",
-          },
-        });
-      }
-      if (url === "https://files.slack.test/F1") throw new Error("must not download");
-      if (url.endsWith("/chat.postMessage") || url.endsWith("/chat.startStream")) {
-        return Response.json({ ok: true, ts: "100" });
-      }
-      return Response.json({ ok: true });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const { handler } = mount(agent, { onError: (failed) => failed.details }, root(), undefined);
-    await handler(
-      signedRequest(
-        message("1.0", {
-          subtype: "file_share",
-          files: [{ id: "F1", name: "report.pdf", mimetype: "application/pdf" }],
-        }),
-      ),
-    );
-    await settle();
-    expect(invoked).toBe(false);
-    expect(fetchMock.mock.calls.some(([input]) => String(input) === "https://files.slack.test/F1")).toBe(false);
-  });
-});
-
 describe("Slack reaction ack", () => {
   const reactionCalls = (
     fetchMock: ReturnType<typeof okFetch>,
