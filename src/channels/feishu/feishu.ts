@@ -218,7 +218,7 @@ function createFeishuRuntimeFactory(
   const baseUrl = opts.apiBaseUrl ?? profile.apiBase;
   const { kind } = profile;
   const label = `[${kind}]`;
-  return ({ agent, stateRoot, control }) => {
+  return ({ agent, stateRoot, canReadLocalFiles, control }) => {
     // Credential checks run when serving starts, not while the authored module is imported: deployment
     // can inspect the module shape before secrets exist, while serving still fails before ready.
     if (!appId || !appSecret) {
@@ -489,6 +489,7 @@ function createFeishuRuntimeFactory(
                 filesDir: join(stateHome, "files"),
                 label,
                 appId,
+                canReadLocalFiles,
                 ...(parentSession !== undefined ? { parentSession } : {}),
               },
               { primary: { images: rec.images, files: rec.files, parentId: rec.parentId }, buffered },

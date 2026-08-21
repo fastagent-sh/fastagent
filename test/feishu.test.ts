@@ -102,10 +102,10 @@ function feishuFetch(
 
 /** Build a channel on a temp state root; returns the handler + the recorded agent + the state home. */
 function buildChannel(
-  opts: Partial<FeishuChannelOptions> & { control?: SessionControl } = {},
+  opts: Partial<FeishuChannelOptions> & { control?: SessionControl; canReadLocalFiles?: boolean } = {},
   agentReply = "the answer",
 ) {
-  const { control, ...channelOpts } = opts;
+  const { control, canReadLocalFiles, ...channelOpts } = opts;
   const root = mkdtempSync(join(tmpdir(), "feishu-state-"));
   tempRoots.push(root);
   const { agent, calls } = replyingAgent(agentReply);
@@ -115,7 +115,7 @@ function buildChannel(
     verificationToken: TOKEN,
     apiBaseUrl: BASE,
     ...channelOpts,
-  })({ agent: opts2Agent(opts) ?? agent, stateRoot: root, control });
+  })({ agent: opts2Agent(opts) ?? agent, stateRoot: root, control, canReadLocalFiles });
   const handler = routes["POST /feishu"];
   if (!handler) throw new Error("expected POST /feishu");
   const maybeIdle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
@@ -1680,6 +1680,38 @@ describe("turn flow", () => {
     expect(prompt).toContain("spec.pdf");
     expect(fx.calls("/im/v1/messages/om_parent/resources/fk1").length).toBe(1);
     expect(readFileSync(join(home, "files", "oc_1", "spec.pdf")).toString()).toBe("pdf-bytes");
+  });
+
+  it("rejects a primary non-image referent without a reader and does not download or invoke", async () => {
+    const fx = feishuFetch({
+      "/im/v1/messages/om_parent_no_reader": (url) =>
+        url.includes("/resources/")
+          ? new Response(Buffer.from("must-not-download"), { status: 200 })
+          : Response.json({
+              code: 0,
+              msg: "ok",
+              data: {
+                items: [
+                  {
+                    message_id: "om_parent_no_reader",
+                    msg_type: "file",
+                    body: { content: '{"file_key":"fk1","file_name":"spec.pdf"}' },
+                    sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+                  },
+                ],
+              },
+            }),
+    });
+    const { handler, calls, idle } = buildChannel({
+      canReadLocalFiles: false,
+      onError: (failed) => failed.details,
+    });
+    await handler(
+      feishuRequest(messageEvent({ id: "om_no_reader", text: "summarize this", parentId: "om_parent_no_reader" })),
+    );
+    await idle();
+    expect(calls).toHaveLength(0);
+    expect(fx.calls("/im/v1/messages/om_parent_no_reader/resources/fk1")).toHaveLength(0);
   });
 
   it("a thread opened on the agent's own card reads that card AND the chain up to the ask", async () => {

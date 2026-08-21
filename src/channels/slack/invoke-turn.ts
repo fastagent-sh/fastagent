@@ -4,11 +4,13 @@ import { log } from "../../log.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
+  LocalFileAccessUnavailable,
   attachedFilesManifest,
   attributedFileName,
   backgroundImagesManifest,
   missingAttachmentsNote,
   streamTurnWithBusyRetry,
+  unreadableAttachmentsNote,
 } from "../invoke-turn-kit.ts";
 import type { SlackBufferedFileRef } from "./context-buffer.ts";
 import type { DownloadedSlackFile, SlackApi } from "./slack-api.ts";
@@ -21,6 +23,8 @@ export interface SlackTurnTransport {
   channelId: string;
   filesDir: string;
   label: string;
+  /** Undefined preserves the legacy embedder posture; standard serving supplies an explicit fact. */
+  canReadLocalFiles?: boolean;
 }
 
 export interface SlackTurnAttachments {
@@ -36,36 +40,45 @@ interface ResolvedInputs {
 async function resolveFile(
   transport: SlackTurnTransport,
   fileId: string,
-): Promise<{ image?: ImageRef; file?: DownloadedSlackFile }> {
+  canReadLocalFiles: boolean,
+): Promise<{ image?: ImageRef; file?: DownloadedSlackFile; unreadableFile?: true }> {
   const info = await transport.api.fileInfo(fileId);
-  return info.mimetype?.toLowerCase().startsWith("image/")
-    ? { image: await transport.api.fetchImage(info) }
-    : { file: await transport.api.fetchFile(info, transport.channelId, transport.filesDir) };
+  if (info.mimetype?.toLowerCase().startsWith("image/")) return { image: await transport.api.fetchImage(info) };
+  return canReadLocalFiles
+    ? { file: await transport.api.fetchFile(info, transport.channelId, transport.filesDir) }
+    : { unreadableFile: true };
 }
 
 async function resolveInputs(
   transport: SlackTurnTransport,
   attachments: SlackTurnAttachments,
 ): Promise<ResolvedInputs> {
+  const canReadLocalFiles = transport.canReadLocalFiles !== false;
   const images: ImageRef[] = [];
   const files: DownloadedSlackFile[] = [];
   for (const id of attachments.primaryFileIds) {
-    const resolved = await resolveFile(transport, id);
+    const resolved = await resolveFile(transport, id, canReadLocalFiles);
     if (resolved.image) images.push(resolved.image);
     if (resolved.file) files.push(resolved.file);
+    if (resolved.unreadableFile) throw new LocalFileAccessUnavailable();
   }
 
   const backgroundImages: { image: ImageRef; ref: SlackBufferedFileRef }[] = [];
   const backgroundFiles: { file: DownloadedSlackFile; ref: SlackBufferedFileRef }[] = [];
   let lost = 0;
   const results = await Promise.allSettled(
-    attachments.buffered.files.map(async (ref) => ({ ref, resolved: await resolveFile(transport, ref.id) })),
+    attachments.buffered.files.map(async (ref) => ({
+      ref,
+      resolved: await resolveFile(transport, ref.id, canReadLocalFiles),
+    })),
   );
+  let unreadable = 0;
   for (const result of results) {
     if (result.status === "fulfilled") {
       const { ref, resolved } = result.value;
       if (resolved.image) backgroundImages.push({ image: resolved.image, ref });
       if (resolved.file) backgroundFiles.push({ file: resolved.file, ref });
+      if (resolved.unreadableFile) unreadable++;
     } else {
       lost++;
       log.warn(`${transport.label} could not load an earlier (buffered) Slack file: ${String(result.reason)}`);
@@ -73,6 +86,7 @@ async function resolveInputs(
   }
 
   const missingNote = missingAttachmentsNote(lost + attachments.buffered.skipped);
+  const unreadableNote = unreadableAttachmentsNote(unreadable);
   const imageManifest = backgroundImagesManifest(
     images.length,
     backgroundImages.map(({ ref }) => ref),
@@ -87,7 +101,7 @@ async function resolveInputs(
   const allImages = [...images, ...backgroundImages.map(({ image }) => image)];
   return {
     images: allImages.length ? allImages : undefined,
-    promptSuffix: `${missingNote}${imageManifest}${attachedFilesManifest(allFiles)}`,
+    promptSuffix: `${missingNote}${unreadableNote}${imageManifest}${attachedFilesManifest(allFiles)}`,
   };
 }
 
@@ -104,7 +118,13 @@ export async function* invokeSlackTurn(
   try {
     resolved = await resolveInputs(transport, attachments);
   } catch (error) {
-    yield { type: "failed", details: `could not load Slack attachment: ${String(error)}`, retryable: true };
+    const unavailable = error instanceof LocalFileAccessUnavailable;
+    yield {
+      type: "failed",
+      details: unavailable ? error.message : `could not load Slack attachment: ${String(error)}`,
+      retryable: !unavailable,
+      ...(unavailable ? { code: "attachment_unsupported" } : {}),
+    };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, images: resolved.images };

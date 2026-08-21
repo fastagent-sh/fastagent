@@ -39,7 +39,8 @@ Supported keys:
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
 | `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
-| `tools` | Extra programmatic tools appended after default pi tools. Most users should prefer `tools/` discovery. |
+| `codingTools` | Select the built-in coding tools. Unset/`true`: all of `read`, `bash`, `edit`, `write`; `false`/`[]`: none; an array such as `["read"]`: exactly those names. Authored and conditional built-ins are independent. |
+| `tools` | Extra programmatic tools appended after enabled pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `http.host` | Bind address for `dev` / `start`. Unset (or `0.0.0.0`) binds all interfaces — what containers need. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
 | `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start`, where the scheduler poller runs). |
@@ -273,9 +274,40 @@ There are two ways to add tools:
 tools/lookup-order.ts  ->  lookup-order
 ```
 
-`config.tools` are appended after the default pi tools. Discovered `tools/` are appended after those.
-Name collisions are surfaced as warnings; existing tools win. Reusable packages do not need a separate
-plugin contract: export ordinary `FastagentTool[]` and mount them explicitly:
+By default, `config.tools` are appended after the pi coding tools (`read`, `bash`, `edit`, `write`),
+and discovered `tools/` are appended after those. To expose only authored tools:
+
+```ts
+import { defineConfig } from "@fastagent-sh/fastagent";
+
+export default defineConfig({
+  codingTools: false,
+});
+```
+
+For least privilege while retaining file-backed capabilities, select only `read`:
+
+```ts
+export default defineConfig({
+  codingTools: ["read"],
+});
+```
+
+Model-visible skills are loaded on demand from their `SKILL.md` paths, and chat-channel non-image
+attachments are downloaded to local paths. Both need the built-in `read` tool; FastAgent warns when
+model-visible skills have no reader, and channels reject an explicitly attached file rather than hand
+the model an unreadable path. Use `false` only when the agent needs neither capability (images still
+travel inline through vision).
+
+The setting removes only the selected coding tools. Authored `config.tools` and `tools/` still mount;
+`search_tools` still mounts when a deferred tool needs it, and `wake` remains controlled by
+`selfSchedule` on the serving path. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`,
+`tool`, and `info`) resolves the same setting. Run `fastagent info --json` and inspect `codingTools`
+(the resolved name array) plus `tools`.
+
+Name collisions are surfaced as warnings; existing tools win. With a coding tool enabled, its name
+wins over discovered tools; with it disabled, an authored tool may use that name. Reusable
+packages do not need a separate plugin contract: export ordinary `FastagentTool[]` and mount them explicitly:
 
 ```ts
 import { integrationTools } from "@acme/fastagent-tools";

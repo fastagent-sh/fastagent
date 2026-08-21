@@ -4,17 +4,43 @@
  */
 import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { log } from "../../log.ts";
-import type { SkillCollision } from "./definition.ts";
+import type { LoadedDefinition, SkillCollision } from "./definition.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import type { ToolCollision } from "./tool.ts";
 
 type Findings = { collisions: SkillCollision[]; diagnostics: SkillDiagnostic[] };
 
+/** A non-fatal problem created by the assembled capability surface rather than by parsing one skill. */
+export interface AssemblyFinding {
+  code: "skills_require_file_reader";
+  message: string;
+  path: string;
+}
+
+/** A model-visible skill is a path-based capability: pi tells the model to read SKILL.md on demand.
+ *  Without the built-in local reader that listing is a dead instruction, so surface the mismatch. */
+export function definitionAssemblyFindings(
+  definition: Pick<LoadedDefinition, "dir" | "skills">,
+  canReadLocalFiles: boolean,
+): AssemblyFinding[] {
+  const visible = definition.skills.filter((skill) => !skill.disableModelInvocation);
+  return !canReadLocalFiles && visible.length > 0
+    ? [
+        {
+          code: "skills_require_file_reader",
+          message: `model-visible skills (${visible.map((skill) => skill.name).join(", ")}) cannot be loaded without the read coding tool; enable codingTools: ["read"] or remove/disable those skills`,
+          path: definition.dir,
+        },
+      ]
+    : [];
+}
+
 /** Stable identity of a definition's non-fatal findings — the dedup key below. */
-function findingsSignature(def: Findings): string {
+function findingsSignature(def: Findings, assembly: readonly AssemblyFinding[]): string {
   const collisions = def.collisions.map((c) => `c:${c.name}:${c.winnerPath}:${c.loserPath}`);
   const diagnostics = def.diagnostics.map((d) => `d:${d.code}:${d.path}`);
-  return [...collisions, ...diagnostics].sort().join("\n");
+  const assembled = assembly.map((d) => `a:${d.code}:${d.path}:${d.message}`);
+  return [...collisions, ...diagnostics, ...assembled].sort().join("\n");
 }
 
 /**
@@ -35,11 +61,12 @@ const lastFindings = new Map<string, string>();
  * `dir` must be the RESOLVED definition root (`LoadedDefinition.dir`), or two spellings of one path
  * become two memos and warn twice.
  */
-export function reportFindingsIfChanged(dir: string, def: Findings): void {
-  const sig = findingsSignature(def);
+export function reportFindingsIfChanged(dir: string, def: Findings, assembly: readonly AssemblyFinding[] = []): void {
+  const sig = findingsSignature(def, assembly);
   if (lastFindings.get(dir) === sig) return;
   lastFindings.set(dir, sig);
   reportDefinitionWarnings(def.collisions, def.diagnostics);
+  for (const finding of assembly) log.warn(`[fastagent] ${finding.code}: ${finding.message} (${finding.path})`);
 }
 
 export function reportDefinitionWarnings(collisions: SkillCollision[], diagnostics: SkillDiagnostic[]): void {

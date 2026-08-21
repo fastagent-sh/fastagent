@@ -26,6 +26,9 @@ export type Routes = Record<string, ChannelHandler>;
 export interface ChannelContext {
   agent: Agent;
   stateRoot: string;
+  /** Whether the assembled agent can read absolute local attachment paths. Undefined preserves the
+   *  legacy embedder posture (assume available); standard directory serving always supplies a fact. */
+  canReadLocalFiles?: boolean;
   /** The serving session-control hub, when the serve wires one (`config.sessionControl`). Channels
    *  use it for DISPATCH only (the user-facing stop command); observation stays on the data plane. */
   control?: SessionControl;

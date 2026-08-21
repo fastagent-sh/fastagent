@@ -103,6 +103,12 @@ describe("init: scaffoldAgent", () => {
     expect(await readFile(join(dir, "fastagent", "tools", "fetch-url.ts"), "utf8")).toContain(
       'from "@fastagent-sh/fastagent"',
     );
+    const persona = await readFile(join(dir, "fastagent", "persona.md"), "utf8");
+    expect(persona).toContain("Use only the tools actually listed in your system prompt");
+    expect(persona).not.toContain("where your `read` / `write` / `edit` / `bash` tools operate");
+    const configTemplate = await readFile(join(dir, "fastagent", "fastagent.config.mjs"), "utf8");
+    expect(configTemplate).toContain('codingTools: ["read"]');
+    expect(configTemplate).toContain("non-image file attachments need `read`");
 
     // The scaffolded agent ASSEMBLES: ① persona + tools from fastagent/, ② context walked from the workspace.
     const a = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });

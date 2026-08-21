@@ -72,6 +72,14 @@ export async function* streamTurnWithBusyRetry(
   }
 }
 
+/** A primary local-file attachment cannot be represented faithfully for an agent without a reader. */
+export class LocalFileAccessUnavailable extends Error {
+  constructor() {
+    super("this agent cannot read local file attachments; mount the read coding tool or send the content as text");
+    this.name = "LocalFileAccessUnavailable";
+  }
+}
+
 /** What the attached-files manifest renders per file: display name, byte size, absolute local path. */
 export interface ManifestFile {
   name: string;
@@ -113,5 +121,13 @@ export function backgroundImagesManifest(
 export function missingAttachmentsNote(missing: number): string {
   return missing > 0
     ? `\n[note: ${missing} attachment(s) from the earlier discussion are not loaded (no longer available, or older than the most recent few)]`
+    : "";
+}
+
+/** Background files omitted because this agent has no declared local-file reader. Never render their
+ *  dead paths: tell the model exactly which context it does not have instead. */
+export function unreadableAttachmentsNote(unreadable: number): string {
+  return unreadable > 0
+    ? `\n[note: ${unreadable} non-image attachment(s) from the earlier discussion are not loaded because this agent has no local-file reader]`
     : "";
 }

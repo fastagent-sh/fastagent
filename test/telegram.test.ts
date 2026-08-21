@@ -113,12 +113,17 @@ const freshStateDir = (): string => {
  *  "restarts" and read files at the same paths. */
 const telegramChannel = (
   agent: Agent,
-  { stateDir, control, ...opts }: TelegramChannelOptions & { stateDir?: string; control?: SessionControl },
+  {
+    stateDir,
+    control,
+    canReadLocalFiles,
+    ...opts
+  }: TelegramChannelOptions & { stateDir?: string; control?: SessionControl; canReadLocalFiles?: boolean },
 ) => {
   const home = stateDir ?? freshStateDir();
   const root = rootOfHome.get(home);
   if (!root) throw new Error("test stateDir must come from freshStateDir()");
-  const handler = buildTelegramChannel(opts)({ agent, stateRoot: root, control })["POST /telegram"]!;
+  const handler = buildTelegramChannel(opts)({ agent, stateRoot: root, control, canReadLocalFiles })["POST /telegram"]!;
   // Register the turn-queue idle so flush() awaits this channel's fire-and-forget turns deterministically.
   const idle = (handler as { turnsIdle?: () => Promise<void> }).turnsIdle;
   if (idle) channelIdles.add(idle);
@@ -461,6 +466,25 @@ describe("buffered attachments (files/photos from un-summoned discussion)", () =
     const text = String(calls[0]?.text);
     expect(text).toMatch(/report\.pdf \(from @alice, msg 1, earlier discussion\)/); // attributed: "the file ALICE sent" resolves
     expect(text).toMatch(/attached files/);
+  });
+
+  it("does not download or render a buffered file path when the agent has no reader", async () => {
+    const got = attachFetch();
+    const { agent, calls } = replyingAgent("ok");
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "1:A",
+      route,
+      canReadLocalFiles: false,
+    });
+    await ch(tgRequest(doc(1, "report")));
+    await ch(tgRequest(summon(2, "@go summarize what you can")));
+    await until(() => calls.length > 0);
+    expect(got).toEqual([]);
+    const text = String(calls[0]?.text);
+    expect(text).toContain("no local-file reader");
+    expect(text).not.toContain("attached files — read them with your tools");
+    expect(text).not.toContain("report.pdf (");
   });
 
   it("a photo posted without summoning becomes a vision input on the next summon", async () => {
@@ -1538,6 +1562,43 @@ describe("telegram channel", () => {
     expect(existsSync(dest)).toBe(true);
     expect(calls[0]?.text).toMatch(/attached files/);
     expect(calls[0]?.text).toContain(dest);
+  });
+
+  it("fails a primary document clearly without a reader and never downloads or invokes", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    let invoked = false;
+    const agent: Agent = {
+      async *invoke(): AsyncIterable<AgentEvent> {
+        invoked = true;
+        yield { type: "completed" };
+      },
+    };
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      route: act,
+      apiBaseUrl: API,
+      canReadLocalFiles: false,
+      onError: (f) => `ERR: ${f.details}`,
+    });
+    const doc: TelegramUpdate = {
+      update_id: 12,
+      message: {
+        message_id: 5,
+        caption: "summarize",
+        document: { file_id: "d1", file_name: "report.pdf" },
+        chat: { id: 77, type: "private" },
+      },
+    };
+    expect((await ch(tgRequest(doc))).status).toBe(200);
+    await flush();
+    expect(invoked).toBe(false);
+    expect(callsTo(fetchMock, "getFile")).toHaveLength(0);
+    const writes = [...callsTo(fetchMock, "sendMessage"), ...callsTo(fetchMock, "editMessageText")].map(
+      (c) => bodyOf(c).text as string,
+    );
+    expect(writes.some((text) => /cannot read local file attachments/.test(text))).toBe(true);
   });
 
   it("surfaces an attachment fetch failure to the user (not a silent skip) and does not run the agent", async () => {

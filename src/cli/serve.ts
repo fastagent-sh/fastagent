@@ -43,11 +43,12 @@ export async function routesFor(
   agent: Agent,
   stateRoot: string,
   control?: SessionControl,
-  options: { builtinInvoke?: boolean } = {},
+  options: { builtinInvoke?: boolean; canReadLocalFiles?: boolean } = {},
 ): Promise<ServingSurface> {
   const { routes, longConnections, routeChannels, collisions, failures } = await loadChannels(agentDir, {
     agent,
     stateRoot,
+    canReadLocalFiles: options.canReadLocalFiles,
     control,
   });
   for (const c of collisions) {

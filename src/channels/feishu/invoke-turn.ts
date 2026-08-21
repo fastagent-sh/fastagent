@@ -17,11 +17,13 @@ import { log } from "../../log.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
+  LocalFileAccessUnavailable,
   attachedFilesManifest,
   attributedFileName,
   backgroundImagesManifest,
   missingAttachmentsNote,
   streamTurnWithBusyRetry,
+  unreadableAttachmentsNote,
 } from "../invoke-turn-kit.ts";
 import { BUFFER_ATTACH_MAX } from "../context-buffer.ts";
 import type { FeishuBufferedRef } from "./context-buffer.ts";
@@ -54,6 +56,8 @@ export interface FeishuTurnTransport {
    *  (participant-model.md §5). The engine reads it once, at session creation; every later turn
    *  carries it inertly. */
   parentSession?: string;
+  /** Undefined preserves the legacy embedder posture; standard serving supplies an explicit fact. */
+  canReadLocalFiles?: boolean;
 }
 
 /** An attachment reference: the resource key inside its CARRYING message (the resource API addresses
@@ -220,6 +224,7 @@ async function walkReplyChain(
  * degrade independently.
  */
 async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurnAttachments): Promise<ResolvedInputs> {
+  const canReadLocalFiles = t.canReadLocalFiles !== false;
   const images = [...attachments.primary.images];
   const files = [...attachments.primary.files];
   let referentBlock = "";
@@ -263,6 +268,7 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   }
 
   // Primary first and fail-fast: these are resources the current user explicitly pointed at.
+  if (!canReadLocalFiles && files.length > 0) throw new LocalFileAccessUnavailable();
   const imageRefs: ImageRef[] = [];
   for (const ref of images) imageRefs.push(await t.api.fetchImage(ref.msg, ref.key));
   const downloaded: DownloadedFile[] = [];
@@ -307,12 +313,15 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       log.warn(`${t.label} could not load an earlier (buffered) image: ${String(result.reason)}`);
     }
   }
-  const fileResults = await Promise.allSettled(
-    bufferedFiles.map(async (ref) => ({
-      ref,
-      file: await t.api.fetchFile(ref.messageId, ref.key, ref.name ?? ref.key, t.chatId, t.filesDir),
-    })),
-  );
+  const unreadable = canReadLocalFiles ? 0 : bufferedFiles.length;
+  const fileResults = canReadLocalFiles
+    ? await Promise.allSettled(
+        bufferedFiles.map(async (ref) => ({
+          ref,
+          file: await t.api.fetchFile(ref.messageId, ref.key, ref.name ?? ref.key, t.chatId, t.filesDir),
+        })),
+      )
+    : [];
   for (const result of fileResults) {
     if (result.status === "fulfilled") backgroundFiles.push(result.value);
     else {
@@ -323,6 +332,7 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   const missingNote = missingAttachmentsNote(
     lost + attachments.buffered.skipped + mergedImages.dropped + mergedFiles.dropped,
   );
+  const unreadableNote = unreadableAttachmentsNote(unreadable);
   const backgroundImageManifest = backgroundImagesManifest(
     imageRefs.length,
     backgroundImages.map(({ ref }) => ref),
@@ -337,7 +347,7 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   const allImages = [...imageRefs, ...backgroundImages.map(({ image }) => image)];
   return {
     images: allImages.length ? allImages : undefined,
-    promptSuffix: `${referentBlock}${missingNote}${backgroundImageManifest}${attachedFilesManifest(allFiles)}`,
+    promptSuffix: `${referentBlock}${missingNote}${unreadableNote}${backgroundImageManifest}${attachedFilesManifest(allFiles)}`,
     referentIds: [...(attachments.primary.parentId !== undefined ? [attachments.primary.parentId] : []), ...chain.ids],
   };
 }
@@ -360,7 +370,13 @@ export async function* invokeFeishuTurn(
   try {
     resolved = await resolveTurnInputs(transport, attachments);
   } catch (e) {
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
+    const unavailable = e instanceof LocalFileAccessUnavailable;
+    yield {
+      type: "failed",
+      details: unavailable ? e.message : `could not load attachment: ${String(e)}`,
+      retryable: !unavailable,
+      ...(unavailable ? { code: "attachment_unsupported" } : {}),
+    };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${REPLY_INSTRUCTION}`, images: resolved.images };

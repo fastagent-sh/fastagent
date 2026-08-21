@@ -262,11 +262,17 @@ the source.
 
 Workspace tools are merged in this order:
 
-1. pi coding tools (`read`, `bash`, `edit`, `write`);
+1. the pi coding tools selected by `config.codingTools` (`read`, `bash`, `edit`, `write`);
 2. `config.tools`;
 3. discovered `tools/*.ts|js|mjs`.
 
-Earlier names win and collisions are reported. Broken discovered tools are reported and skipped.
+Unset/`true` selects all four for authoring/serving fidelity; `false`/`[]` selects none; an array selects
+exact names in canonical order. The array is deliberate minimum privilege: file-backed skills and
+non-image channel attachments need `read`, while a public-facing read-only agent should not have to
+accept `bash`/`edit`/`write` merely to retain those capabilities. An agent with neither capability can
+remove the full machine-reaching coding surface without changing its standard `fastagent start`
+workflow. Conditional built-ins (`search_tools` for deferred tools, `wake` for self-scheduling) keep
+their own policies. Earlier names win and collisions are reported. Broken discovered tools are reported and skipped.
 Reusable integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting; package
 origin does not create a second tool runtime.
 

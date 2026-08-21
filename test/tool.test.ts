@@ -93,6 +93,43 @@ describe("loadTools (filesystem discovery)", () => {
     expect(toolNames).not.toContain("hostonly"); // cwd's own tools/ is the host's, not the agent's surface
   });
 
+  it("codingTools false with an empty definition stays empty instead of restoring pi defaults", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-empty-"));
+    const resolved = await resolveAgentTools({ codingTools: false }, agentDir);
+    expect(resolved.tools).toEqual([]);
+    expect(resolved.codingToolNames).toEqual([]);
+    expect(resolved.toolNames).toEqual([]);
+  });
+
+  it("codingTools false mounts and reports only authored tools, including a tool named like a coding default", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-no-coding-"));
+    await mkdir(join(agentDir, "tools"));
+    await writeFile(
+      join(agentDir, "tools", "read.mjs"),
+      `export default { description: "Business read", parameters: { type: "object" }, async execute() { return { content: [], details: "ok" }; } };`,
+    );
+
+    const { tools, toolNames, toolCollisions } = await resolveAgentTools({ codingTools: false }, agentDir);
+    expect(tools.map((t) => t.name)).toEqual(["read"]);
+    expect(toolNames).toEqual(["read"]);
+    expect(toolCollisions).toEqual([]);
+  });
+
+  it("codingTools false leaves the deferred search_tools policy unchanged", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-no-coding-deferred-"));
+    const deferred = defineTool({
+      name: "lookup",
+      description: "Look up a business record.",
+      input: z.object({}),
+      deferred: true,
+      execute: () => "ok",
+    });
+
+    const { tools, deferredToolNames } = await resolveAgentTools({ codingTools: false, tools: [deferred] }, agentDir);
+    expect(tools.map((t) => t.name).sort()).toEqual(["lookup", "search_tools"]);
+    expect(deferredToolNames).toEqual(["lookup"]);
+  });
+
   it("isolates (surfaces, not fatal) a tool file that does not default-export a tool", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-tools-"));
     await mkdir(join(dir, "tools"));
