@@ -145,15 +145,15 @@ createPiAgent({
 | Port | Default | Reach for it when |
 |---|---|---|
 | `sessions` | `piInMemorySessionRecordStore()` (lost on restart) | `piSessionRecordStore({ dir })` for restart-surviving continuity, or your own `PiSessionRecordStore` |
-| `env` | local `NodeExecutionEnv` (cwd) | filesystem/process IO for the default coding tools + definition loading; not a complete sandbox by itself |
+| `env` | local `NodeExecutionEnv` (cwd) | filesystem/process IO for definition loading; not a sandbox |
 | `lease` | `inProcessLease()` | a distributed lock across instances (implement `Lease`) |
 | `providers` | built-in providers | your own gateway / self-hosted endpoint (see §5) |
 
-The default coding tools (`read`/`bash`/`edit`/`write`) DO go through `env` — they take it as the turn's
-tool context. Two surfaces do not: ② project context (pi's loader reads node fs directly) and
-author-written `tools/`, which are code and can import anything. So injecting `env` narrows where a
-directory agent reaches, but does not isolate it; a complete sandbox adapter also has to constrain the
-process. That adapter is future work.
+`env` governs definition loading. It does NOT govern the default coding tools (`read`/`bash`/`edit`/
+`write`), which are pi's own and reach the filesystem directly, rooted at the workspace they were
+built for; nor author-written `tools/`, which are code and can import anything. Injecting `env`
+therefore does not isolate a directory agent — a sandbox has to constrain the process, and that
+adapter is future work.
 
 ## 4. Auth
 

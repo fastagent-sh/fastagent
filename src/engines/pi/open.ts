@@ -118,7 +118,7 @@ export async function resolveAgentAssembly(
     );
   }
   const { tools, codingToolNames, toolNames, deferredToolNames, toolCollisions, toolFailures } =
-    await resolveAgentTools(config, agentDir);
+    await resolveAgentTools(config, agentDir, workspace);
   // The state root: sessions/channel state/schedule state derive from it (FASTAGENT_STATE_DIR moves it
   // in one knob — a container points it at its volume); the finer overrides below still win.
   const stateRoot = resolveStateRoot(agentDir);

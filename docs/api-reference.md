@@ -127,10 +127,10 @@ Common options:
 |---|---|
 | `model` | Required `provider/modelId` spec string. |
 | `instructions` | String or function returning the system prompt. |
-| `tools` | Agent tools — `MountedTool[]`. An authored `FastagentTool[]` (what `defineTool` returns) widens into it; the wider type additionally admits pi's default coding tools, which read the turn's `ExecutionEnv` as a fifth `execute` parameter. |
+| `tools` | Agent tools — `MountedTool[]`. An authored `FastagentTool[]` (what `defineTool` returns) widens into it; the wider type additionally admits pi's default coding tools, which are rooted at the workspace they were built for. |
 | `skills` | Loaded Agent Skills. |
 | `sessions` | `PiSessionRecordStore`. |
-| `env` | `ExecutionEnv` for the default coding tools (they take it as the turn's tool context) and the definition loader. Narrows where they touch the machine; it does not sandbox author-written `tools/`, which can import anything. |
+| `env` | `ExecutionEnv` for the definition loader. Not a sandbox: the default coding tools and author-written `tools/` both reach the machine directly. |
 | `lease` | Same-session concurrency lease. |
 | `providers` | Extra model providers. |
 

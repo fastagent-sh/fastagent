@@ -41,8 +41,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // tool), is isolated the same way everywhere (G2): info, dev, AND start report it and keep going with
   // the tools that loaded. The `error`/`.catch` below only fires for a whole-load fault (an unreadable
   // tools/ dir), not a single bad file.
-  const resolvedCodingToolNames = resolveCodingTools(config).names;
-  const tools = await resolveAgentTools(config, agentDir)
+  const resolvedCodingToolNames = resolveCodingTools(config, workspace).names;
+  const tools = await resolveAgentTools(config, agentDir, workspace)
     .then((r) => ({
       coding: r.codingToolNames,
       names: r.toolNames,

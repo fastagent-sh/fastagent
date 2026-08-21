@@ -19,7 +19,9 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   // The same tool set dev/start mount (enabled coding tools + config.tools + discovered, deduped), so the runner
   // exercises exactly what gets served — a shadowed tool is surfaced, not silently run. Resolve the
   // placement like the openers, so `fastagent tool` finds the SAME tools/ as dev/start.
-  const { tools, toolCollisions, toolFailures } = await resolveAgentTools(config, agentDir).catch(failStartup);
+  const { tools, toolCollisions, toolFailures } = await resolveAgentTools(config, agentDir, workspace).catch(
+    failStartup,
+  );
   for (const c of toolCollisions) {
     console.error(
       `[fastagent] warn: tool "${c.name}" (${c.source}) is shadowed by a default/config tool — not mounted`,
