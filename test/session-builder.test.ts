@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { buildAgentSessionRuntime } from "../src/engines/pi/session-builder.ts";
+import { log } from "../src/log.ts";
 
 // `chat` must run the SAME agent dev/start serve, presented in pi's TUI — NOT pi's vanilla
 // discovery. buildAgentSessionRuntime is split out precisely so that injection is inspectable without a
@@ -398,6 +399,57 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
     } finally {
       process.chdir(originalCwd);
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("session builder: the credential hint belongs to the runtime, not to each session", () => {
+  it("warns once, not again on every newSession()", async () => {
+    // Model resolution moved into createRuntime (extensions must load before a model they register
+    // can resolve), which put this warning on a per-session path. Credentials do not change between
+    // /new and /resume, so repeating it is nagging about a setting the user did not touch.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-hint-"));
+    const dir = join(workspace, "fastagent");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      const hintsAfterBuild = warn.mock.calls
+        .flat()
+        .filter((c: unknown) => String(c).includes("no credentials for")).length;
+      await rt.newSession();
+      await rt.newSession();
+      const hintsAfterReplacements = warn.mock.calls
+        .flat()
+        .filter((c: unknown) => String(c).includes("no credentials for")).length;
+      expect(hintsAfterReplacements).toBe(hintsAfterBuild);
+    } finally {
+      warn.mockRestore();
+      await rt.dispose?.();
+    }
+  });
+});
+
+describe("session builder: chat offers the model the same tool set serving does", () => {
+  it("activates fastagent's tools without pi's extra ones", async () => {
+    // Dropping the `tools` allowlist (it froze the set against extensions registering from a
+    // handler) put this at risk: pi mounts read-only helpers of its own — grep, find, ls — that
+    // fastagent's tool set does not include. It mounts them without activating them, which is why
+    // the allowlist was removable; a version of this that stated the active set explicitly offered
+    // the model all three and was caught by the assertion above.
+    const dir = await mkdtemp(join(tmpdir(), "fa-active-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      const active = rt.session.getActiveToolNames().sort();
+      expect(active).toEqual(["bash", "edit", "read", "write"]);
+      // ...and they ARE mounted, just not offered — so this is about activation, not discovery.
+      expect(rt.session.getAllTools().map((t) => t.name)).toContain("grep");
+    } finally {
+      await rt.dispose?.();
     }
   });
 });

@@ -288,6 +288,66 @@ export default defineConfig({
 Package tools receive the same `ToolContext` as definition-local `defineTool` tools, including the
 optional read-only `sessionManager` during serving/chat turns.
 
+## Extensions
+
+Extension modules under `extensions/` travel with the definition. **They run in `fastagent chat`.
+They are not loaded when serving** (`dev`, `start`, channels, a container) — see the split below,
+which is a limitation of pi's extension runtime rather than a decision about your agent.
+
+Two discovery shapes, matching pi:
+
+```txt
+extensions/notify.ts        ->  discovered
+extensions/audit/index.ts   ->  discovered
+```
+
+pi's third shape — a subdirectory whose `package.json` declares a `pi` field — is not supported;
+such a directory is warned about rather than skipped in silence. A symlinked entry is refused: an
+extension reached through a link out of the definition resolves on your machine and is missing in
+the container.
+
+Only the definition's own `extensions/` are considered. The machine's `~/.pi` extensions are
+deliberately not — a served agent must not depend on the authoring machine's setup.
+
+### Why serving does not run them
+
+pi's extension machinery is built for **one process serving one session**, which is what a terminal
+is. Its own source calls the object holding a session's actions "the shared runtime", and every
+`AgentSession` overwrites it on construction:
+
+```js
+// Copy actions into the shared runtime (all extension APIs reference this)
+this.runtime.sendMessage = actions.sendMessage;
+this.runtime.appendEntry = actions.appendEntry;
+```
+
+Serving is the opposite shape: one process, many concurrent turns, belonging to conversations that
+have nothing to do with each other. With two turns in flight, the second one to start redirects
+those actions to itself — so an extension calling `pi.sendMessage()` during the first turn can
+deliver into the **other person's conversation**. The same sharing applies to the extension module
+itself, and to `session_start` / `session_shutdown`, which stop being a matched pair once several
+sessions share one instance.
+
+That is a silent correctness failure, and a silently wrong answer is worse than a missing feature.
+So serving does not load them, and warns at startup when a definition ships some.
+
+This is fixable upstream, and narrowly: pi already has an uncached loader path that builds a fresh
+module per call (jiti with `moduleCache: false`) and takes the runtime as an argument, which is
+exactly per-session isolation. That function is not currently exported. When it is, serving can run
+extensions with the same guarantees `chat` has today.
+
+| | serving (`dev`, `start`, channels) | `chat` |
+|---|---|---|
+| discovery, and its refusals | runs | runs |
+| tools it registers | **not mounted** | offered to the model |
+| event and lifecycle handlers | **not run** | run |
+| commands it registers | not executable | executable |
+| `select` / `confirm` / `input` | — | shown to you |
+
+If your extension's value is a slash command or a dialog, `chat` was always its home. If it
+registers model-callable tools you need while served, write them as `tools/` — that is the path
+built for serving, and it is concurrency-safe.
+
 ### When the repo already owns `tools/` or `channels/`
 
 Nothing to do — the agent lives in `./fastagent/`, so FastAgent scans the agent's own directories,

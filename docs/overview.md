@@ -19,6 +19,7 @@ agent/
 ├── tools/              # optional code tools
 ├── channels/           # optional webhook/bot adapters
 ├── schedules/          # optional cron time triggers
+├── extensions/         # optional pi extension modules (chat only — see configuration.md)
 ├── AGENTS.md           # optional project context (yours, or a host repo's)
 ├── reference.md        # optional markdown context (any file layout)
 └── fastagent.config.mjs # optional deployment choices

@@ -22,7 +22,14 @@ import { openExternalUrl } from "./open-url.ts";
 import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** What the dev watcher restarts on (agent-dir-relative): the process-bound code inputs only. */
-const WATCHED_HINT = "tools/, channels/, schedules/, package.json, fastagent.config.*, models.json, .secrets/.env";
+/**
+ * The agent-dir directories loaded ONCE per worker: a restart is their only re-read. One list, so
+ * the watcher and the line printed at startup cannot disagree — a directory watched but unannounced
+ * looks broken, and one announced but unwatched silently strands the author mid-edit.
+ */
+const CODE_INPUT_DIRS = ["tools", "channels", "schedules", "extensions"] as const;
+
+const WATCHED_HINT = `${CODE_INPUT_DIRS.map((dir) => `${dir}/`).join(", ")}, package.json, fastagent.config.*, models.json, .secrets/.env`;
 
 /**
  * chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. When
@@ -54,7 +61,7 @@ export function devWatchIgnored(root: string, envFile: string): (path: string) =
     // repairs it would not be the edit that restarts.
     if (rel === AGENT_MODELS_FILE) return false;
     const segments = rel.split(sep);
-    if (segments[0] === "tools" || segments[0] === "channels" || segments[0] === "schedules") return false;
+    if (CODE_INPUT_DIRS.includes(segments[0] as (typeof CODE_INPUT_DIRS)[number])) return false;
     // The `.env` restarts too (credentials are process-bound). Keep it AND its ancestor directories
     // un-pruned so chokidar can descend to it; every sibling inside them (auth.json, .env.example)
     // prunes normally. An out-of-agent `.env` yields a `..`-prefixed envRel that matches nothing here

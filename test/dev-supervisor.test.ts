@@ -13,6 +13,11 @@ describe("dev-supervisor: devWatchIgnored (the narrow watch scope)", () => {
     expect(ignored(join(root, "tools", "lib", "helper.ts"))).toBe(false); // nested under tools/
     expect(ignored(join(root, "channels", "telegram.ts"))).toBe(false);
     expect(ignored(join(root, "schedules", "daily.ts"))).toBe(false); // loaded once per worker — restart is the re-read
+    // Which FILES are extensions is decided at boot, so an added or removed entry needs the restart
+    // this watcher exists to give. (Their per-turn reload is a different thing and does not help:
+    // it re-instantiates the set discovered at boot.)
+    expect(ignored(join(root, "extensions", "notify.ts"))).toBe(false);
+    expect(ignored(join(root, "extensions", "notify", "index.ts"))).toBe(false);
     expect(ignored(join(root, "package.json"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.mjs"))).toBe(false);
     expect(ignored(join(root, "fastagent.config.ts"))).toBe(false);

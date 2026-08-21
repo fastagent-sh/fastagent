@@ -19,6 +19,7 @@ import type { ExecutionEnv, Skill, SkillDiagnostic } from "@earendil-works/pi-ag
 import { loadSkills } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
+import { log } from "../../log.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
 
 /** A same-name skill collision (the discarded side). Surfaced, never swallowed. */
@@ -92,6 +93,122 @@ export async function loadAgentDefinition(
 
   const { skills, diagnostics, collisions } = await readSkills(e, root);
   return { contextFiles, persona, skills, diagnostics, collisions, dir: root };
+}
+
+/**
+ * Extension entry-point FILES under `<agentDir>/extensions/`, empty when there are none.
+ *
+ * Paths, not loaded objects — unlike skills (data: content inline, serializable), an extension is
+ * CODE that pi loads with jiti and binds to its own eventBus/runtime, so loading it here would
+ * reimplement pi's loader. The engine binding hands these to pi as `additionalExtensionPaths`, which
+ * survives `noExtensions: true` — that flag suppresses MACHINE-GLOBAL discovery (`~/.pi`), and the
+ * definition's own extensions were only ever collateral to it. FILES, not the directory: pi's paths
+ * are module specifiers, and a directory fails as `Cannot find module` into a
+ * `LoadExtensionsResult.errors` entry nothing reads.
+ *
+ * SEPARATE from {@link loadAgentDefinition} on purpose. Prompt and skills are re-read every invoke
+ * ("the directory is the agent, LIVE"); scanning for extension entry points is not, since the set
+ * cannot change without a restart. Called once per assembly, like `tools/`.
+ *
+ * Discovery runs on BOTH paths; loading does not. `chat` hands these to pi and runs them fully.
+ * Serving only announces them — pi's extension runtime is shared across sessions, and serving has
+ * concurrent turns for unrelated conversations (see `PiAgentSessionFactoryOptions.extensionPaths`).
+ * The refusals below are therefore about what the ARTIFACT may contain, and hold for both.
+ *
+ * Discovery follows pi's own rules, so an extension that works in pi works here:
+ *
+ * 1. a direct `*.ts` / `*.js` file;
+ * 2. a subdirectory with `index.ts` / `index.js`.
+ *
+ * pi has a third rule — a subdirectory whose `package.json` declares a `pi` field — which is NOT
+ * implemented here. That shape is reported rather than skipped: a definition whose extension silently
+ * fails to load is the failure mode this whole path exists to remove.
+ *
+ * Containment matches skills/tools/channels/schedules (the fifth of five surfaces): a symlinked
+ * `extensions/` escaping the agent dir is refused, and — like `loadModuleDir`, whose `entry.isFile()`
+ * excludes them — a symlinked ENTRY is not loaded either. pi's own discovery does follow those, but
+ * an extension reached through a link out of the definition is code the artifact does not carry: it
+ * resolves on the authoring machine and is missing in the container. Refused loudly, never silently.
+ *
+ * Absent is normal and silent; a FILE at that path is not — that is an author who meant something.
+ */
+export async function loadExtensionPaths(
+  agentDir: string,
+  options: { cwd?: string; env?: ExecutionEnv } = {},
+): Promise<string[]> {
+  const cwd = options.cwd ?? agentDir;
+  const e = options.env ?? new NodeExecutionEnv({ cwd });
+  const rootResult = await e.absolutePath(agentDir);
+  if (!rootResult.ok) throw new Error(`cannot resolve agent dir "${agentDir}": ${rootResult.error.message}`);
+  const root = rootResult.value;
+  await assertInsideAgentDir(root, "extensions");
+  const dir = join(root, "extensions");
+  const listed = await e.listDir(dir);
+  if (!listed.ok) {
+    if (listed.error.code === "not_found") return [];
+    throw new Error(`cannot read ${dir}: ${listed.error.message}`);
+  }
+  const paths: string[] = [];
+  for (const entry of listed.value) {
+    if (entry.kind === "symlink") {
+      // EVERY symlink here is announced, without guessing whether it meant to be an extension. The
+      // two mistakes are not equal: a needless line about a symlinked README costs a glance, while
+      // staying quiet about a symlinked extension loses a feature silently and only shows up in the
+      // container. A name-based guess also cannot see through the link — `audit.ext -> some/dir` is
+      // a directory candidate to pi and a mystery here — so the warning says what it knows and
+      // tells the author when to ignore it.
+      warnSymlinkRefused(entry.path);
+      continue;
+    }
+    if (entry.name.endsWith(".ts") || entry.name.endsWith(".js")) {
+      if (entry.kind === "file") paths.push(entry.path);
+      continue;
+    }
+    if (entry.kind === "file") continue; // a README, a .json — not an extension, not a problem
+    const index = await firstRealFile(e, [join(entry.path, "index.ts"), join(entry.path, "index.js")]);
+    if (index.path) {
+      paths.push(index.path);
+    } else if (!index.refused) {
+      // Silent when the index WAS found and refused for being a symlink: that warning already named
+      // the real problem, and "expected index.ts" on top of it describes a directory that has one.
+      log.warn(
+        `[fastagent] ${entry.path} is not a loadable extension: expected index.ts or index.js ` +
+          `(pi's package.json "pi" manifest form is not supported here) — it will not be loaded`,
+      );
+    }
+  }
+  return paths.sort();
+}
+
+/**
+ * The first candidate that is a REAL file. `exists` would follow a symlink, which is how a
+ * subdirectory's `index.ts` could otherwise point outside the definition and slip past the rule the
+ * top-level entries already follow.
+ */
+/** The first real file among the candidates, and whether one was found but REFUSED as a symlink. */
+async function firstRealFile(e: ExecutionEnv, candidates: string[]): Promise<{ path?: string; refused: boolean }> {
+  let refused = false;
+  for (const candidate of candidates) {
+    const info = await e.fileInfo(candidate);
+    if (!info.ok) {
+      if (info.error.code === "not_found") continue;
+      throw new Error(`cannot read ${candidate}: ${info.error.message}`);
+    }
+    if (info.value.kind === "file") return { path: candidate, refused };
+    if (info.value.kind === "symlink") {
+      warnSymlinkRefused(candidate);
+      refused = true;
+    }
+  }
+  return { refused };
+}
+
+function warnSymlinkRefused(path: string): void {
+  log.warn(
+    `[fastagent] ${path} is a symlink and will not be loaded: an extension must be a real file inside ` +
+      `the definition so it travels with the artifact — move it in. (If it is not an extension, ` +
+      `keep it outside extensions/ to silence this.)`,
+  );
 }
 
 /** The skills half, shared by the full load and {@link loadAgentSkills}. `root` is already resolved. */

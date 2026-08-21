@@ -26,7 +26,7 @@ import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
 import { resolveSecretsDir } from "../../paths.ts";
-import { type LoadedDefinition, loadAgentDefinition } from "./definition.ts";
+import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
 import type { ModuleLoadFailure } from "../../loader.ts";
 import {
@@ -242,6 +242,8 @@ function buildPiAgent(opts: {
   sessions?: PiSessionRecordStore;
   /** Where pi reads its own settings; see {@link PiAgentSessionFactoryOptions.agentDir}. */
   agentDir?: string;
+  /** The definition's extension entry points; see {@link PiAgentSessionFactoryOptions.extensionPaths}. */
+  extensionPaths?: string[];
   env?: ExecutionEnv;
   lease?: Lease;
   observer?: SessionObserver;
@@ -279,6 +281,7 @@ function buildPiAgent(opts: {
     live: opts.live,
     cwd: env.cwd,
     ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+    ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     env,
   });
   opts.onAssembly?.({
@@ -501,6 +504,10 @@ export async function createPiAgentFromDefinition(
     },
     tools,
     sessions: options.sessions,
+    // Discovered so the serving assembly can WARN that it does not run them (and so the refusals
+    // apply to the artifact either way) — `chat` is where they load. Boot-resolved: the set cannot
+    // change without a restart, which is why this sits outside `live` above.
+    extensionPaths: await loadExtensionPaths(dir, { cwd: env.cwd, env }),
     env,
     lease: options.lease,
     observer: options.observer,
