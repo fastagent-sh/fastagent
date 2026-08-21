@@ -523,12 +523,15 @@ describe("session builder: codingTools narrows chat exactly as it narrows servin
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
     try {
       expect(rt.session.getActiveToolNames().sort()).toEqual(["read"]);
-      // What `codingTools` guarantees is that the model is not OFFERED them. pi still mounts its own
-      // read/bash/edit/write into the registry; `noTools: "builtin"` keeps them out of the active
-      // set. Worth stating, because for the security-shaped posture (`codingTools: false`, a
-      // public-facing agent) "mounted but inactive" is the whole distance between safe and not.
-      expect(rt.session.getAllTools().map((t) => t.name)).toContain("bash");
-      expect(rt.session.getActiveToolNames()).not.toContain("bash");
+      // A BOUNDARY, not a default: the disabled built-ins are refused at the registry, so nothing
+      // that activates by name — a TUI command, the control plane, a deferred-tool loader — can put
+      // one back. "Mounted but inactive" would be the whole distance between safe and not for a
+      // public-facing agent running `codingTools: false`.
+      const mounted = rt.session.getAllTools().map((tool) => tool.name);
+      expect(mounted).not.toContain("bash");
+      expect(mounted).not.toContain("write");
+      rt.session.setActiveToolsByName(["read", "bash"]);
+      expect(rt.session.getActiveToolNames()).not.toContain("bash"); // asking for it does not get it
     } finally {
       await rt.dispose?.();
     }

@@ -42,7 +42,7 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
-import { resolveModel } from "./config.ts";
+import { CODING_TOOL_NAMES, resolveModel } from "./config.ts";
 import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
@@ -157,6 +157,8 @@ export async function buildAgentSessionRuntime(
     // resolveTools() applied `codingTools` — so narrowing needs nothing here: what the definition
     // disabled never reaches this list, and pi's own copies stay out via `noTools: "builtin"`.
     const customTools = tools;
+    // What the definition turned OFF, for pi to refuse rather than merely leave inactive.
+    const excludedCodingTools = CODING_TOOL_NAMES.filter((name) => !codingToolNames.includes(name));
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
     // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
     // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
@@ -202,6 +204,7 @@ export async function buildAgentSessionRuntime(
       extensionPaths,
       customTools,
       customToolDefs,
+      excludedCodingTools,
       deferredToolNames,
       systemPrompt,
     };
@@ -247,6 +250,7 @@ export async function buildAgentSessionRuntime(
       definition,
       extensionPaths,
       customToolDefs,
+      excludedCodingTools,
       deferredToolNames,
       systemPrompt,
     } = await assemblyFor(cwd);
@@ -308,6 +312,10 @@ export async function buildAgentSessionRuntime(
       // was really there for (the machine's `defaultTools` setting cannot add pi's own copies on top
       // of ours) without freezing anything.
       noTools: "builtin",
+      // Disabled coding tools are refused at the REGISTRY, not just left inactive: chat has a TUI
+      // that can activate a tool by name, so "mounted but inactive" would make `codingTools` a
+      // default rather than a boundary.
+      ...(excludedCodingTools.length > 0 ? { excludeTools: excludedCodingTools } : {}),
       customTools: customToolDefs,
     });
     sessionRef.current = {

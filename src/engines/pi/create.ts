@@ -280,6 +280,8 @@ function buildPiAgent(opts: {
   agentDir?: string;
   /** The definition's extension entry points; see {@link PiAgentSessionFactoryOptions.extensionPaths}. */
   extensionPaths?: string[];
+  /** Disabled built-ins; see {@link PiAgentSessionFactoryOptions.excludedToolNames}. */
+  excludedToolNames?: readonly string[];
   env?: ExecutionEnv;
   lease?: Lease;
   observer?: SessionObserver;
@@ -318,6 +320,7 @@ function buildPiAgent(opts: {
     cwd: env.cwd,
     ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
+    ...(opts.excludedToolNames?.length ? { excludedToolNames: opts.excludedToolNames } : {}),
     env,
   });
   opts.onAssembly?.({
@@ -555,6 +558,8 @@ export async function createPiAgentFromDefinition(
     // apply to the artifact either way) — `chat` is where they load. Boot-resolved: the set cannot
     // change without a restart, which is why this sits outside `live` above.
     extensionPaths: await loadExtensionPaths(dir, { cwd: env.cwd, env }),
+    // The disabled built-ins, refused at the registry — see PiAgentSessionFactoryOptions.
+    excludedToolNames: CODING_TOOL_NAMES.filter((name) => !codingToolNames.includes(name)),
     env,
     lease: options.lease,
     observer: options.observer,

@@ -299,6 +299,12 @@ model-visible skills have no reader, and channels reject an explicitly attached 
 the model an unreadable path. Use `false` only when the agent needs neither capability (images still
 travel inline through vision).
 
+A disabled built-in is **refused, not merely hidden**: it never enters the session's tool registry,
+so nothing that activates a tool by name — a `chat` command, the control plane, the deferred-tool
+loader — can bring it back at runtime. That makes `codingTools` usable as a capability boundary for a
+public-facing agent, rather than a default someone can undo. It does not restrict tools you author
+yourself: `tools/` and `config.tools` are yours to scope.
+
 The setting removes only the selected coding tools. Authored `config.tools` and `tools/` still mount;
 `search_tools` still mounts when a deferred tool needs it, and `wake` remains controlled by
 `selfSchedule` on the serving path. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`,
