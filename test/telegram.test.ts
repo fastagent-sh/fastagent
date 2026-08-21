@@ -113,11 +113,7 @@ const freshStateDir = (): string => {
  *  "restarts" and read files at the same paths. */
 const telegramChannel = (
   agent: Agent,
-  {
-    stateDir,
-    control,
-    ...opts
-  }: TelegramChannelOptions & { stateDir?: string; control?: SessionControl; canReadLocalFiles?: boolean },
+  { stateDir, control, ...opts }: TelegramChannelOptions & { stateDir?: string; control?: SessionControl },
 ) => {
   const home = stateDir ?? freshStateDir();
   const root = rootOfHome.get(home);
