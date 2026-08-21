@@ -7,6 +7,10 @@
  *   - the prompt-suffix wording: {@link attachedFilesManifest}, {@link backgroundImagesManifest},
  *     {@link missingAttachmentsNote}, {@link attributedFileName}.
  *
+ * None of it asks what the agent can DO with an attachment. A channel resolves platform resources
+ * and states what it found; deciding whether to open a file is the agent's, and an agent without a
+ * file tool answers that it cannot — visibly, and as the direct consequence of its own `codingTools`.
+ *
  * Attachment RESOLUTION stays per channel — the platform resource models (Bot API file_ids,
  * message-scoped Feishu keys, Slack file objects) are real differences.
  */
@@ -72,25 +76,6 @@ export async function* streamTurnWithBusyRetry(
   }
 }
 
-/**
- * A primary local-file attachment cannot be represented faithfully for an agent without a reader.
- *
- * Constructing this LOGS, because the fix belongs to the operator and nothing else would tell them:
- * the user gets a customer-facing line (see `defaultErrorMessage`), which by design does not carry
- * "mount the read coding tool". Without this, a misconfigured agent answers every attachment with a
- * shrug and no one learns why.
- */
-export class LocalFileAccessUnavailable extends Error {
-  constructor(label = "[fastagent]") {
-    super("this agent cannot read local file attachments; mount the read coding tool or send the content as text");
-    this.name = "LocalFileAccessUnavailable";
-    log.warn(
-      `${label} an attachment arrived but this agent has no \`read\` tool — the turn was refused. ` +
-        `Enable it with \`codingTools\` (or \`codingTools: ["read"]\` for least privilege).`,
-    );
-  }
-}
-
 /** What the attached-files manifest renders per file: display name, byte size, absolute local path. */
 export interface ManifestFile {
   name: string;
@@ -98,11 +83,18 @@ export interface ManifestFile {
   path: string;
 }
 
-/** The downloaded-file manifest appended to the prompt — the agent reads the paths with its tools.
- *  Empty input renders nothing. */
+/**
+ * The downloaded-file manifest appended to the prompt: name, size, path. Empty input renders nothing.
+ *
+ * It STATES, it does not instruct. The earlier wording ("read them with your tools") was an
+ * assumption about the reader, and an assumption has to be verified — which is where a capability
+ * flag threaded through eight files came from. An agent with a file tool decides for itself whether
+ * to open one, and how much of it; an agent without one says so. Neither needs this line to have
+ * guessed first.
+ */
 export function attachedFilesManifest(files: readonly ManifestFile[]): string {
   return files.length
-    ? `\n\n[attached files — read them with your tools:\n${files.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
+    ? `\n\n[attached files:\n${files.map((f) => `- ${f.name} (${f.size} bytes) → ${f.path}`).join("\n")}\n]`
     : "";
 }
 
@@ -132,13 +124,5 @@ export function backgroundImagesManifest(
 export function missingAttachmentsNote(missing: number): string {
   return missing > 0
     ? `\n[note: ${missing} attachment(s) from the earlier discussion are not loaded (no longer available, or older than the most recent few)]`
-    : "";
-}
-
-/** Background files omitted because this agent has no declared local-file reader. Never render their
- *  dead paths: tell the model exactly which context it does not have instead. */
-export function unreadableAttachmentsNote(unreadable: number): string {
-  return unreadable > 0
-    ? `\n[note: ${unreadable} non-image attachment(s) from the earlier discussion are not loaded because this agent has no local-file reader]`
     : "";
 }

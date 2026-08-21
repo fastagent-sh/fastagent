@@ -7,12 +7,7 @@ import { resolve } from "node:path";
 import { runDevSupervisor } from "../../dev-supervisor.ts";
 import { loadDotEnv } from "../../env.ts";
 
-import {
-  definitionAssemblyFindings,
-  reportFindingsIfChanged,
-  reportModuleLoadFailures,
-  reportToolCollisions,
-} from "../../engines/pi/report.ts";
+import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
@@ -90,9 +85,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   // Trace each turn's agent loop (tool calls + reply) to the log at debug level — shown in dev, gated
   // out in start (level info), keeping end-user content out of production logs. Wired in both postures.
   const traced = logAgentLoop(a.agent);
-  const routed = await routesFor(a.agentDir, traced, a.stateRoot, a.sessionControl, {
-    canReadLocalFiles: a.codingToolNames.includes("read"),
-  }).catch(failStartup);
+  const routed = await routesFor(a.agentDir, traced, a.stateRoot, a.sessionControl).catch(failStartup);
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = a.config.http?.host;
@@ -124,9 +117,5 @@ function reportAgentsSkillsTools(a: Assembled): void {
   }
   reportToolCollisions(a.toolCollisions);
   reportModuleLoadFailures(a.toolFailures);
-  reportFindingsIfChanged(
-    a.definition.dir,
-    a.definition,
-    definitionAssemblyFindings(a.definition, a.codingToolNames.includes("read")),
-  );
+  reportFindingsIfChanged(a.definition.dir, a.definition);
 }

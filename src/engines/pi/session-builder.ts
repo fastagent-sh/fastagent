@@ -54,12 +54,7 @@ import {
   agentSessionManager,
   turnContext,
 } from "./tool-context.ts";
-import {
-  definitionAssemblyFindings,
-  reportFindingsIfChanged,
-  reportModuleLoadFailures,
-  reportToolCollisions,
-} from "./report.ts";
+import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
 
 export interface BuildSessionRuntimeOptions {
@@ -143,11 +138,7 @@ export async function buildAgentSessionRuntime(
     const modelRuntime = await createPiModelRuntime({ authPath, agentDir, stateRoot });
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(agentDir, { cwd, env });
-    reportFindingsIfChanged(
-      definition.dir,
-      definition,
-      definitionAssemblyFindings(definition, codingToolNames.includes("read")),
-    );
+    reportFindingsIfChanged(definition.dir, definition);
     // Assembly-time, like serving's: this whole function is memoized, so the scan and its warnings
     // happen once per runtime rather than per session rebuild (/new, /resume, fork).
     const extensionPaths = await loadExtensionPaths(agentDir, { cwd, env });

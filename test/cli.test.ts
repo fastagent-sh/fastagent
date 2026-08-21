@@ -323,11 +323,6 @@ describe("cli papercuts", () => {
     expect(info.context.length).toBeGreaterThan(0); // the AGENTS.md is loaded as ② project context
     expect(info.skills.map((s: { name: string }) => s.name)).toEqual(["greet"]); // the malformed skill is skipped
     expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // info SURFACES loader diagnostics
-    // Its OWN key: a skill diagnostic points at a SKILL.md, an assembly finding at the definition
-    // dir with a code from a different vocabulary. One field holding both hands a machine consumer
-    // two shapes under one name.
-    expect(JSON.stringify(info.assemblyFindings)).toMatch(/skills_require_file_reader/);
-    expect(JSON.stringify(info.diagnostics)).not.toMatch(/skills_require_file_reader/);
     expect(info.channels).toEqual(["github"]);
     await expect(stat(join(dir, "fastagent", ".state"))).rejects.toThrow(); // read-only: never creates the state root
   });

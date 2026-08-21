@@ -125,7 +125,7 @@ export function telegramChannel({
   botUsername,
   apiBaseUrl = "https://api.telegram.org",
 }: TelegramChannelOptions): ChannelModule {
-  return ({ agent, stateRoot, canReadLocalFiles, control }) => {
+  return ({ agent, stateRoot, control }) => {
     // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
     if (!secretToken) {
       throw new Error(
@@ -273,7 +273,6 @@ export function telegramChannel({
                 botToken,
                 chatId: rec.chatId,
                 filesDir: join(stateHome, "files"),
-                canReadLocalFiles,
               },
               {
                 primary: {

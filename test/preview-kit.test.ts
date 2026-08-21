@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { ATTACHMENT_UNSUPPORTED_CODE } from "../src/agent.ts";
 import type { AgentEvent } from "../src/agent.ts";
 import {
   applyTurnEvent,
@@ -101,20 +100,5 @@ describe("turn-view reducer", () => {
   it("composeTurnBody skips empty parts and joins with blank lines", () => {
     expect(composeTurnBody(["a", "", "  ", "b"])).toBe("a\n\nb");
     expect(composeTurnBody(["", " "])).toBe("");
-  });
-});
-
-describe("defaultErrorMessage: a known limitation is named, not shrugged at", () => {
-  it("tells the user what cannot happen when the agent has no reader", () => {
-    // The generic non-retryable line asks the user to rephrase, which cannot help: only the operator
-    // can mount a tool. Naming it keeps the user from re-sending the file in five formats.
-    expect(defaultErrorMessage({ details: "…", retryable: false, code: ATTACHMENT_UNSUPPORTED_CODE })).toMatch(
-      /can't open file attachments/i,
-    );
-  });
-
-  it("keeps the neutral wording for a failure it cannot name", () => {
-    expect(defaultErrorMessage({ details: "…", retryable: false })).toMatch(/something went wrong/i);
-    expect(defaultErrorMessage({ details: "…", retryable: true })).toMatch(/try again/i);
   });
 });

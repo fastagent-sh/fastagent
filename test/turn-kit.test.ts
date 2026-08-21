@@ -2,10 +2,9 @@
  * `retryable` classification — the one bit every SPEC failure carries, and the reason a channel
  * either retries or reports. Structured status/code first, prose only as the last-resort ceiling.
  */
-import { describe, expect, it, vi } from "vitest";
-import { LocalFileAccessUnavailable } from "../src/channels/invoke-turn-kit.ts";
+import { describe, expect, it } from "vitest";
+import { attachedFilesManifest } from "../src/channels/invoke-turn-kit.ts";
 import { classifyRetryable, errorToTerminal, toTerminal } from "../src/engines/pi/turn-kit.ts";
-import { log } from "../src/log.ts";
 
 describe("classifyRetryable (structured signal first, prose as the ceiling)", () => {
   it("a status decides, whatever the prose says", () => {
@@ -72,22 +71,20 @@ describe("terminals read the engine's own signal", () => {
   });
 });
 
-describe("LocalFileAccessUnavailable: the operator hears what the user cannot fix", () => {
-  it("logs the actionable fix when constructed", () => {
-    // The user-facing message deliberately does NOT say "mount the read coding tool" — that is not
-    // their lever. It has to reach the operator instead, and the throw site is the only place that
-    // knows. Before this, the sentence lived in an Error the default onError never rendered, so a
-    // misconfigured agent answered every attachment with a shrug and nobody learned why.
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      const err = new LocalFileAccessUnavailable("[telegram]");
-      expect(err.name).toBe("LocalFileAccessUnavailable");
-      const logged = warn.mock.calls.flat().join("\n");
-      expect(logged).toMatch(/\[telegram\]/);
-      expect(logged).toMatch(/no `read` tool/);
-      expect(logged).toMatch(/codingTools/);
-    } finally {
-      warn.mockRestore();
-    }
+describe("attachedFilesManifest: states, does not instruct", () => {
+  it("gives name, size and path without telling the agent what to do with them", () => {
+    const rendered = attachedFilesManifest([{ name: "spec.pdf", size: 1234, path: "/state/files/spec.pdf" }]);
+    expect(rendered).toContain("spec.pdf");
+    expect(rendered).toContain("1234");
+    expect(rendered).toContain("/state/files/spec.pdf");
+    // The earlier wording was "read them with your tools" — an assumption about the reader. An
+    // assumption has to be verified, which is where a capability flag threaded through eight files
+    // came from. An agent with a file tool decides for itself; one without says it cannot. Neither
+    // needs this line to have guessed first.
+    expect(rendered).not.toMatch(/your tools|read them/i);
+  });
+
+  it("renders nothing for no files", () => {
+    expect(attachedFilesManifest([])).toBe("");
   });
 });

@@ -41,7 +41,7 @@ const PR_OPENED = {
 
 /** The old two-arg shape over the ChannelModule contract, returning the mounted handler directly. */
 const githubChannel = (agent: Agent, opts: GithubChannelOptions) =>
-  buildGithubChannel(opts)({ agent, stateRoot: "/unused-in-tests", canReadLocalFiles: true })["POST /webhook"]!;
+  buildGithubChannel(opts)({ agent, stateRoot: "/unused-in-tests" })["POST /webhook"]!;
 
 describe("github channel", () => {
   it("a post-ACK turn counts as process-wide in-flight work (the AgentCore /ping depends on it)", async () => {

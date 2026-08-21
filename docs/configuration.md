@@ -294,10 +294,13 @@ export default defineConfig({
 ```
 
 Model-visible skills are loaded on demand from their `SKILL.md` paths, and chat-channel non-image
-attachments are downloaded to local paths. Both need the built-in `read` tool; FastAgent warns when
-model-visible skills have no reader, and channels reject an explicitly attached file rather than hand
-the model an unreadable path. Use `false` only when the agent needs neither capability (images still
-travel inline through vision).
+attachments are downloaded to local paths. Both are read with a file tool.
+
+Neither is checked ahead of time. A channel states what it attached (name, size, path) and the agent
+answers for itself; a skill listing is loaded when the model reaches for it. Without a reader the
+agent says it cannot open the file — the direct, visible consequence of the posture you configured,
+and images still travel inline through vision either way. (A pre-flight check would also have to
+guess: `codingTools: false` plus an authored `tools/read.ts` is a perfectly readable agent.)
 
 A disabled built-in is **refused, not merely hidden**: it never enters the session's tool registry,
 so nothing that activates a tool by name — a `chat` command, the control plane, the deferred-tool

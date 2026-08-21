@@ -205,7 +205,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
   }
   const reactionEmojis = resolveReactionEmojis(reactionAck);
 
-  return ({ agent, stateRoot, canReadLocalFiles, control }) => {
+  return ({ agent, stateRoot, control }) => {
     if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
     if (!signingSecret)
       throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
@@ -362,7 +362,7 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
               agent,
               turn.session,
               prompt,
-              { api, channelId: turn.channelId, filesDir: join(stateHome, "files"), label, canReadLocalFiles },
+              { api, channelId: turn.channelId, filesDir: join(stateHome, "files"), label },
               { primaryFileIds: turn.fileIds, buffered },
               () => {
                 store.remove(turn.id);
