@@ -414,9 +414,9 @@ export interface CreatePiAgentOptions {
    *  continuity. */
   sessions?: PiSessionRecordStore;
   /** Filesystem/process environment. Defaults to a local NodeExecutionEnv at `process.cwd()`, and its
-   *  cwd is the agent's. The default coding tools (read/bash/edit/write) take it as the turn's tool
-   *  context, so injecting a constrained one narrows where the agent reads, writes and shells. It does
-   *  NOT constrain author-written `tools/`, which are code and can import anything. */
+   *  cwd is the agent's. It governs definition loading and is handed to tools that ask for it as the
+   *  turn's context; it does NOT constrain the default coding tools (pi's own, rooted at the workspace)
+   *  or author-written `tools/`, which are code and can import anything. Not a sandbox. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;
@@ -478,8 +478,8 @@ export interface CreatePiAgentFromDefinitionOptions {
    */
   authPath?: string;
   sessions?: PiSessionRecordStore;
-  /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it does more
-   *  than root the default tools: persona.md and skills/ are read through it too. Two surfaces stay
+  /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it is what
+   *  persona.md and skills/ are read through. Two surfaces stay
    *  OUTSIDE it — ② project context (pi's loadProjectContextFiles uses node fs directly; see
    *  definition.ts) and author-written `tools/`, which are code and can import anything. Injecting an
    *  env narrows the blast radius rather than closing it. */
