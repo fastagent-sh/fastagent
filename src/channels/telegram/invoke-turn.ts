@@ -63,9 +63,11 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
   const { api, botToken, chatId, filesDir } = t;
   const { primary, buffered } = attachments;
   const { canReadLocalFiles } = t;
-  if (!canReadLocalFiles && (primary.fileIds?.length ?? 0) > 0) throw new LocalFileAccessUnavailable();
+  if (!canReadLocalFiles && (primary.fileIds?.length ?? 0) > 0) throw new LocalFileAccessUnavailable("[telegram]");
   const images = await resolveImages(api, botToken, primary.imageFileIds);
-  const files = canReadLocalFiles ? await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir) : undefined;
+  // No reader-check here: the guard above already refused a non-empty list, and an empty one resolves
+  // to nothing either way. Two readings of one rule, two lines apart, is one too many.
+  const files = await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir);
   const bufferedImages: ImageRef[] = [];
   const bufferedFiles: { file: DownloadedFile; ref: BufferedRef }[] = [];
   let lost = 0;

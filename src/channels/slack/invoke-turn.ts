@@ -60,7 +60,7 @@ async function resolveInputs(
     const resolved = await resolveFile(transport, id, canReadLocalFiles);
     if (resolved.image) images.push(resolved.image);
     if (resolved.file) files.push(resolved.file);
-    if (resolved.unreadableFile) throw new LocalFileAccessUnavailable();
+    if (resolved.unreadableFile) throw new LocalFileAccessUnavailable(transport.label);
   }
 
   const backgroundImages: { image: ImageRef; ref: SlackBufferedFileRef }[] = [];

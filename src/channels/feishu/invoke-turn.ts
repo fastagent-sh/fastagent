@@ -227,6 +227,11 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   const { canReadLocalFiles } = t;
   const images = [...attachments.primary.images];
   const files = [...attachments.primary.files];
+  // The ASK's own files, before a referent's join them. Fail-fast applies to these only: the user
+  // pointed at them, so silently dropping them would answer a question they did not ask.
+  if (!canReadLocalFiles && files.length > 0) throw new LocalFileAccessUnavailable(t.label);
+  // A referent's unreadable files degrade instead (see below); counted for the note.
+  let unreadableReferentFiles = 0;
   let referentBlock = "";
   let chain: ReplyChain = { block: "", images: [], files: [], ids: [] };
   if (attachments.primary.parentId !== undefined) {
@@ -257,8 +262,14 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
         mentions: parent.mentions as FeishuMention[] | undefined,
       });
       // The referent's own resources join the turn as primary inputs, carried by the PARENT message id.
+      // Images always: vision needs no reader. Files only if there IS one — a quoted file must not
+      // cost the user their turn, which is what this function's own policy says two paragraphs up.
       for (const key of parsed.imageKeys) images.push({ msg: parentId, key });
-      for (const ref of parsed.fileRefs) files.push({ msg: parentId, key: ref.key, name: ref.name });
+      if (canReadLocalFiles) {
+        for (const ref of parsed.fileRefs) files.push({ msg: parentId, key: ref.key, name: ref.name });
+      } else {
+        unreadableReferentFiles += parsed.fileRefs.length;
+      }
       const from = fetchedSenderLabel(parent.sender, t.appId);
       referentBlock = `\n\n[replied-to message (msg ${parentId}${from ? `, from ${from}` : ""}): ${truncateCodePointPrefix(parsed.text, REFERENT_MAX_CODE_POINTS) || "(empty)"}]`;
       // The referent's own parent starts the chain walk; the referent id seeds the cycle guard.
@@ -267,8 +278,6 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
     }
   }
 
-  // Primary first and fail-fast: these are resources the current user explicitly pointed at.
-  if (!canReadLocalFiles && files.length > 0) throw new LocalFileAccessUnavailable();
   const imageRefs: ImageRef[] = [];
   for (const ref of images) imageRefs.push(await t.api.fetchImage(ref.msg, ref.key));
   const downloaded: DownloadedFile[] = [];
@@ -313,7 +322,9 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
       log.warn(`${t.label} could not load an earlier (buffered) image: ${String(result.reason)}`);
     }
   }
-  const unreadable = canReadLocalFiles ? 0 : bufferedFiles.length;
+  // Everything skipped for want of a reader: this turn's buffered files, plus any the referent
+  // carried. One number, one note — the model is told what it did not get.
+  const unreadable = canReadLocalFiles ? 0 : bufferedFiles.length + unreadableReferentFiles;
   const fileResults = canReadLocalFiles
     ? await Promise.allSettled(
         bufferedFiles.map(async (ref) => ({

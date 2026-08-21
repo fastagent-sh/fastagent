@@ -1688,7 +1688,11 @@ describe("turn flow", () => {
     expect(readFileSync(join(home, "files", "oc_1", "spec.pdf")).toString()).toBe("pdf-bytes");
   });
 
-  it("rejects a primary non-image referent without a reader and does not download or invoke", async () => {
+  it("a quoted file the agent cannot read costs the note, not the turn", async () => {
+    // A referent is CONTEXT, not the ask — this function's own policy. Every first message of a
+    // thread carries one, so hard-failing when the quoted message happens to be a file turns an
+    // ordinary platform edge into a lost turn, and tells the user to "send the content as text" for
+    // a file they never sent. Degrade like every other unreadable referent: skip it, say so.
     const fx = feishuFetch({
       "/im/v1/messages/om_parent_no_reader": (url) =>
         url.includes("/resources/")
@@ -1716,8 +1720,9 @@ describe("turn flow", () => {
       feishuRequest(messageEvent({ id: "om_no_reader", text: "summarize this", parentId: "om_parent_no_reader" })),
     );
     await idle();
-    expect(calls).toHaveLength(0);
-    expect(fx.calls("/im/v1/messages/om_parent_no_reader/resources/fk1")).toHaveLength(0);
+    expect(calls).toHaveLength(1); // the turn RAN
+    expect(fx.calls("/im/v1/messages/om_parent_no_reader/resources/fk1")).toHaveLength(0); // nothing downloaded
+    expect(String(calls[0]?.prompt.text)).toMatch(/no local-file reader/); // and the model was told
   });
 
   it("a thread opened on the agent's own card reads that card AND the chain up to the ask", async () => {
