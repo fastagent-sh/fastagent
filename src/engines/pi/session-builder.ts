@@ -213,6 +213,10 @@ export async function buildAgentSessionRuntime(
     return assembly;
   };
 
+  // The credential hint belongs to the RUNTIME, not to each session it builds: model resolution
+  // moved into createRuntime (extensions must load first), and repeating this on every /new,
+  // /resume and fork would nag about a setting that did not change.
+  let credentialHintShown = false;
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
     const {
       modelRuntime,
@@ -283,9 +287,11 @@ export async function buildAgentSessionRuntime(
     // user is fine and must not be warned): only when that provider has no usable auth AND pi's old
     // file exists does the bare provider error get its cause named.
     if (
+      !credentialHintShown &&
       (await probeAuthSource(modelRuntime, modelSpec)) === undefined &&
       existsSync(join(getAgentDir(), "auth.json"))
     ) {
+      credentialHintShown = true;
       log.warn(
         `[fastagent] no credentials for ${modelSpec} in ${authPath} — this runtime no longer reads ` +
           `pi's ~/.pi auth; run \`fastagent login\` (or /login in the TUI) to store credentials for this agent`,
