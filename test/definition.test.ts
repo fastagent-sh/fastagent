@@ -501,30 +501,36 @@ describe("create L2: an explicit tools list states its own coding capabilities",
   });
 });
 
-describe("create L2: the workspace roots the tools, the env loads the definition", () => {
-  it("keeps `cwd` and a custom `env` apart", async () => {
-    // Two different directories doing two different jobs. `cwd` is the workspace the agent works ON —
-    // where read/bash/edit/write land. `env` is how the definition is read. Taking the tool root off
-    // the env would silently point the tools at the loader's directory whenever a caller supplies
-    // both, which is exactly when it matters.
+describe("create L2: the workspace roots the tools, the env reads the definition", () => {
+  it("keeps `cwd` and a custom `env` apart, through the assembled agent", async () => {
+    // Two directories doing two jobs. `cwd` is the workspace: where read/bash/edit/write land AND
+    // whose ancestors carry ② project context. `env` is the IO the loader uses. Reading either root
+    // off the other silently points half the agent at the wrong directory, and only a caller passing
+    // both would ever notice — so this drives the real agent instead of re-calling the helpers.
     const workspace = await mkdtemp(join(tmpdir(), "fa-ws-"));
     const definitionDir = await mkdtemp(join(tmpdir(), "fa-def-"));
-    await writeFile(join(workspace, "marker.txt"), "workspace file\n");
+    await writeFile(join(workspace, "AGENTS.md"), "# Workspace context\n\nThe marker is FROM-WORKSPACE.\n");
     await writeFile(join(definitionDir, "persona.md"), "You are terse.\n");
 
     const { faux } = makeFaux();
-    faux.setResponses([fauxAssistantMessage("ok")]);
-    const { agent } = await createPiAgentFromDefinition(definitionDir, {
+    let systemPrompt = "";
+    faux.setResponses([
+      (context) => {
+        systemPrompt = context.systemPrompt ?? "";
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const { agent, definition } = await createPiAgentFromDefinition(definitionDir, {
       model: "faux/faux-1",
       providers: [faux.provider],
       cwd: workspace,
       env: new NodeExecutionEnv({ cwd: definitionDir }),
     });
-    void agent;
+    // The BOOT snapshot (what callers report diagnostics from) walked the workspace.
+    expect(JSON.stringify(definition.contextFiles)).toContain("FROM-WORKSPACE");
 
-    // The tools built for that workspace resolve relative paths against it.
-    const read = piDefaultTools(workspace).find((t) => t.name === "read")!;
-    const result = await read.execute("t1", { path: "marker.txt" }, undefined, undefined, {} as never);
-    expect((result.content[0] as { text: string }).text).toContain("workspace file");
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    // ...and so did the LIVE re-read that actually reaches the model.
+    expect(systemPrompt).toContain("FROM-WORKSPACE");
   });
 });

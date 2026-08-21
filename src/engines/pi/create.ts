@@ -414,10 +414,12 @@ export interface CreatePiAgentOptions {
   /** Session persistence. Defaults to in-memory; inject piSessionRecordStore for restart-surviving
    *  continuity. */
   sessions?: PiSessionRecordStore;
-  /** Filesystem/process environment. Defaults to a local NodeExecutionEnv at `process.cwd()`, and its
-   *  cwd is the agent's. It governs definition loading and is handed to tools that ask for it as the
-   *  turn's context; it does NOT constrain the default coding tools (pi's own, rooted at the workspace)
-   *  or author-written `tools/`, which are code and can import anything. Not a sandbox. */
+  /** Filesystem/process environment, handed to tools that read one as the turn's context. Defaults to
+   *  a local NodeExecutionEnv at `process.cwd()`. At THIS rung nothing else consumes it: L1 loads no
+   *  definition. It does NOT constrain the default coding tools (pi's own, rooted at the workspace they
+   *  were built for) or author-written `tools/`, which are code and can import anything. Not a
+   *  sandbox — see {@link createPiAgentFromDefinition} for the rung where it also reads the
+   *  definition. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;
@@ -506,7 +508,10 @@ export async function createPiAgentFromDefinition(
   const env = options.env ?? new NodeExecutionEnv({ cwd });
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to
   // report (skills/diagnostics/collisions). Serving does NOT close over it — see `live` below.
-  const definition = await loadAgentDefinition(dir, { cwd: env.cwd, env });
+  // `cwd`, not `env.cwd`, for the same reason as the tools below: `cwd` is the run root whose
+  // ancestors carry ② project context. Reading it off the env pointed the AGENTS.md walk at the
+  // loader's directory whenever a caller supplied both.
+  const definition = await loadAgentDefinition(dir, { cwd, env });
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
   // `cwd`, not `env.cwd`: the workspace is what this option MEANS, and a caller may hand a custom env
@@ -549,7 +554,7 @@ export async function createPiAgentFromDefinition(
     // not silently vanish from the agent, and a static one must not spam every turn's log. The
     // next good edit heals both.
     live: async () => {
-      const def = await loadAgentDefinition(dir, { cwd: env.cwd, env });
+      const def = await loadAgentDefinition(dir, { cwd, env });
       reportFindingsIfChanged(def.dir, def);
       return {
         systemPrompt: assembleSystemPrompt({
@@ -569,7 +574,7 @@ export async function createPiAgentFromDefinition(
     // Discovered so the serving assembly can WARN that it does not run them (and so the refusals
     // apply to the artifact either way) — `chat` is where they load. Boot-resolved: the set cannot
     // change without a restart, which is why this sits outside `live` above.
-    extensionPaths: await loadExtensionPaths(dir, { cwd: env.cwd, env }),
+    extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
     // The disabled built-ins, refused at the registry — see PiAgentSessionFactoryOptions. A name an
     // AUTHORED tool has taken is not excluded: with the built-in off, that name is the author's to
     // reuse (documented), and pi's denylist works on names, so excluding it would delete their tool.
