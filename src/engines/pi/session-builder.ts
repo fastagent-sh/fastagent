@@ -323,14 +323,17 @@ export async function buildAgentSessionRuntime(
     // session.bindExtensions() with the TUI's uiContext, abort handler and command actions — binding
     // here too would emit session_start twice per chat, so an extension opening a resource on start
     // would open two.
-    // Deferral emulation: pi's session starts with everything active — narrow it by SUBTRACTING
-    // the deferred names from whatever is active (robust to pi mounting tools of its own; an
-    // exact-set-equality gate would silently stop narrowing the day pi adds one). Applied on EVERY
-    // build including /resume: pi's chat session does not record activations (its SessionContext has
-    // no activeToolNames), so "restore prior activations" is not implementable here — deferral stays
-    // consistently ON and a resumed conversation re-discovers via search_tools (documented divergence
-    // from serving, where activations persist in the session). The deferred SET comes from the shared
-    // assembly (one definition of "deferred"), never recomputed here.
+    // Deferral emulation: pi starts THIS agent's tools active — its own four default names, which
+    // our customTools have replaced, plus every custom and extension tool. (Tools pi mounts but does
+    // not activate, like grep/find/ls, stay inactive, which is the same set serving offers.) So
+    // narrow by SUBTRACTING the deferred names from whatever is active, rather than stating a set:
+    // an exact-set-equality gate would silently stop narrowing the day pi activates one more.
+    //
+    // Applied on EVERY build including /resume: pi's chat session does not record activations (its
+    // SessionContext has no activeToolNames), so "restore prior activations" is not implementable
+    // here — deferral stays consistently ON and a resumed conversation re-discovers via search_tools
+    // (a documented divergence from serving, where activations persist in the session). The deferred
+    // SET comes from the shared assembly (one definition of "deferred"), never recomputed here.
     if (deferredToolNames.length > 0) {
       const active = result.session.getActiveToolNames();
       if (deferredToolNames.some((n) => active.includes(n))) {

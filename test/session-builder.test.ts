@@ -431,3 +431,25 @@ describe("session builder: the credential hint belongs to the runtime, not to ea
     }
   });
 });
+
+describe("session builder: chat offers the model the same tool set serving does", () => {
+  it("activates fastagent's tools without pi's extra ones", async () => {
+    // Dropping the `tools` allowlist (it froze the set against extensions registering from a
+    // handler) put this at risk: pi mounts read-only helpers of its own — grep, find, ls — that
+    // fastagent's tool set does not include. It mounts them without activating them, which is why
+    // the allowlist was removable; a version of this that stated the active set explicitly offered
+    // the model all three and was caught by the assertion above.
+    const dir = await mkdtemp(join(tmpdir(), "fa-active-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      const active = rt.session.getActiveToolNames().sort();
+      expect(active).toEqual(["bash", "edit", "read", "write"]);
+      // ...and they ARE mounted, just not offered — so this is about activation, not discovery.
+      expect(rt.session.getAllTools().map((t) => t.name)).toContain("grep");
+    } finally {
+      await rt.dispose?.();
+    }
+  });
+});
