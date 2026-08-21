@@ -57,10 +57,11 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // That seam was worth naming and is not worth keeping: `env` never isolated anything on its own —
 // author-written `tools/` import whatever they like, which the docs say plainly — so it narrowed a
 // blast radius rather than closing it, and sandboxing is an explicit non-goal today. The bill was
-// concrete: a 167-line parity suite asserting the two families stay identical, a hand-injected image
-// pipeline because core's `read` has none, and no access to `grep`/`find`/`ls`, which exist only on
-// this side. When a real sandbox arrives it will tell us where the seam belongs; a guess that costs
-// this much every day is not a down payment.
+// concrete: a 167-line parity suite asserting the two families stay identical, and a hand-injected
+// image pipeline because core's `read` has none. Both are gone with the swap. `grep`/`find`/`ls` live
+// on this side too and are now reachable — mounting them is a separate decision about the default
+// surface, not something this change makes. When a real sandbox arrives it will tell us where the seam
+// belongs; a guess that costs this much every day is not a down payment.
 //
 // `chat` is unaffected: it takes these NAMES only and lets pi's own runtime rebuild the tools it
 // renders (see session-builder.ts).
@@ -508,7 +509,10 @@ export async function createPiAgentFromDefinition(
   const definition = await loadAgentDefinition(dir, { cwd: env.cwd, env });
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
-  const tools = withSearchTool(options.tools ?? piDefaultTools(env.cwd));
+  // `cwd`, not `env.cwd`: the workspace is what this option MEANS, and a caller may hand a custom env
+  // for definition loading whose root is a different directory. Taking it off the env would silently
+  // point read/bash/edit/write at the loader's directory.
+  const tools = withSearchTool(options.tools ?? piDefaultTools(cwd));
   // An explicit `tools` list is the caller stating the whole surface, so the coding capabilities are
   // whichever built-in NAMES appear in it — not none. A caller passing `piDefaultTools()` gets the
   // identity that matches what they mounted, rather than the capability-neutral one. Name-based,

@@ -304,8 +304,9 @@ pi-coding-agent's, rooted at the workspace at construction, and they reach `node
 while they were pi-agent-core's look-alikes, which take the env as the turn's tool context, so that
 `env` would be the single seam a sandbox adapter implements. That was given up deliberately: the seam
 never closed anything by itself — author-written `tools/` import whatever they like — while it cost a
-167-line parity suite, a hand-built image pipeline for a `read` that ships none, and access to
-`grep`/`find`/`ls`, which exist only on the coding-agent side.
+167-line parity suite and a hand-built image pipeline for a `read` that ships none. (`grep`/`find`/`ls`
+also live only on the coding-agent side; whether they belong in the default surface is a separate
+question.)
 
 `env` is therefore NOT a sandbox, and the gaps are specific: the default tools bypass it, fastagent's
 OWN tools (`tools/`) are author code that can import anything, `loadProjectContextFiles` reads ②

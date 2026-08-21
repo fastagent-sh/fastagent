@@ -500,3 +500,31 @@ describe("create L2: an explicit tools list states its own coding capabilities",
     }
   });
 });
+
+describe("create L2: the workspace roots the tools, the env loads the definition", () => {
+  it("keeps `cwd` and a custom `env` apart", async () => {
+    // Two different directories doing two different jobs. `cwd` is the workspace the agent works ON —
+    // where read/bash/edit/write land. `env` is how the definition is read. Taking the tool root off
+    // the env would silently point the tools at the loader's directory whenever a caller supplies
+    // both, which is exactly when it matters.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    const definitionDir = await mkdtemp(join(tmpdir(), "fa-def-"));
+    await writeFile(join(workspace, "marker.txt"), "workspace file\n");
+    await writeFile(join(definitionDir, "persona.md"), "You are terse.\n");
+
+    const { faux } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("ok")]);
+    const { agent } = await createPiAgentFromDefinition(definitionDir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+      cwd: workspace,
+      env: new NodeExecutionEnv({ cwd: definitionDir }),
+    });
+    void agent;
+
+    // The tools built for that workspace resolve relative paths against it.
+    const read = piDefaultTools(workspace).find((t) => t.name === "read")!;
+    const result = await read.execute("t1", { path: "marker.txt" }, undefined, undefined, {} as never);
+    expect((result.content[0] as { text: string }).text).toContain("workspace file");
+  });
+});
