@@ -207,3 +207,96 @@ describe("definition: extensions/ discovery only complains about real candidates
     warn.mockRestore();
   });
 });
+
+describe("definition: chat brings extensions to life, not just into memory", () => {
+  /** Registers at import time AND from session_start — pi supports both; only one used to survive. */
+  const twoMoments = `
+export default async function (pi) {
+  pi.registerTool({
+    name: "at_load", label: "a", description: "d",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ output: "ok" }),
+  });
+  pi.on("session_start", async () => {
+    pi.registerTool({
+      name: "at_session_start", label: "b", description: "d",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ output: "ok" }),
+    });
+  });
+}
+`;
+
+  async function chatToolNames(files: Record<string, string>): Promise<string[]> {
+    const workspace = await mkdtemp(join(tmpdir(), "fa-chat-live-"));
+    const dir = join(workspace, "fastagent");
+    await mkdir(join(dir, "extensions"), { recursive: true });
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');
+    for (const [rel, content] of Object.entries(files)) await writeFile(join(dir, rel), content);
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      return rt.session.getAllTools().map((t) => t.name);
+    } finally {
+      await rt.dispose?.();
+    }
+  }
+
+  it("fires session_start, so a tool registered from a handler reaches the session", async () => {
+    // pi emits session_start from bindExtensions(). Without that call an extension loads and is
+    // then never spoken to again: no lifecycle events, nothing registered from a handler, and no
+    // error listener either — it looks like an extension that chose to do nothing.
+    const names = await chatToolNames({ "extensions/two.ts": twoMoments });
+    expect(names).toContain("at_load");
+    expect(names).toContain("at_session_start");
+  });
+
+  it("uses fastagent's own read tool, not pi's copy of it", async () => {
+    // fastagent's `read` is createReadTool({ imageProcessor }) (create.ts). Chat used to allow-list
+    // the NAME "read", which mounted pi's own — silently dropping image reading in chat only.
+    const names = await chatToolNames({});
+    expect(names).toContain("read");
+    expect(names.filter((n) => n === "read")).toHaveLength(1); // and exactly one of them
+  });
+});
+
+describe("definition: an extension can define the model chat runs on", () => {
+  it("resolves a model registered by an extension's registerProvider()", async () => {
+    // pi documents registerProvider() as the way an extension adds providers/models, and extensions
+    // only execute when the services are built. Resolving the configured model before that failed
+    // with a bare "unknown model" — and probed auth for a provider that did not exist yet.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-prov-"));
+    const dir = join(workspace, "fastagent");
+    await mkdir(join(dir, "extensions"), { recursive: true });
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "acme-proxy/acme-1" };\n');
+    await writeFile(
+      join(dir, "extensions", "provider.ts"),
+      `
+export default async function (pi) {
+  pi.registerProvider("acme-proxy", {
+    baseUrl: "https://proxy.example.com",
+    apiKey: "$ACME_KEY",
+    api: "anthropic-messages",
+    models: [{
+      id: "acme-1",
+      name: "Acme 1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 16384,
+    }],
+  });
+}
+`,
+    );
+
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      expect(rt.session.model?.id).toBe("acme-1");
+    } finally {
+      await rt.dispose?.();
+    }
+  });
+});

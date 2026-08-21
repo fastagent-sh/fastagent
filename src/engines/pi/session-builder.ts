@@ -43,7 +43,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { reportExtensionErrors } from "./agent-session-factory.ts";
 import { resolveModel } from "./config.ts";
-import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "./create.ts";
+import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
@@ -126,29 +126,16 @@ export async function buildAgentSessionRuntime(
     // agentDir carries the agent's own models.json (custom endpoints); stateRoot keeps pi's generated
     // catalog cache out of the definition dir. See createPiModelRuntime.
     const modelRuntime = await createPiModelRuntime({ authPath, agentDir, stateRoot });
-    // MIGRATION HINT (deliberate breaking change): chat historically used pi's own `~/.pi` auth;
-    // it now reads the agent's credential file like every other command. Probe the RESOLVED
-    // model's provider through the normal resolution path (stored credential OR env var — an
-    // env-authed user is fine and must not be warned): only when that provider has no usable auth
-    // AND pi's old file exists does the bare provider error get its cause named.
-    if (
-      (await probeAuthSource(modelRuntime, modelSpec)) === undefined &&
-      existsSync(join(getAgentDir(), "auth.json"))
-    ) {
-      log.warn(
-        `[fastagent] no credentials for ${modelSpec} in ${authPath} — this runtime no longer reads ` +
-          `pi's ~/.pi auth; run \`fastagent login\` (or /login in the TUI) to store credentials for this agent`,
-      );
-    }
-    const model = resolveModel(modelRuntime, modelSpec);
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(agentDir, { cwd, env });
     reportFindingsIfChanged(definition.dir, definition);
     // Assembly-time, like serving's: this whole function is memoized, so the scan and its warnings
     // happen once per runtime rather than per session rebuild (/new, /resume, fork).
     const extensionPaths = await loadExtensionPaths(agentDir, { cwd, env });
-    const defaultNames = piDefaultTools().map((t) => t.name);
-    const customTools = tools.filter((t) => !defaultNames.includes(t.name));
+    // ALL of them, pi's four included: fastagent's `read` is `createReadTool({ imageProcessor })`
+    // (create.ts), and letting pi mount its own instead would silently drop image reading in chat.
+    // Serving already does it this way.
+    const customTools = tools;
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
     // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
     // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
@@ -169,10 +156,9 @@ export async function buildAgentSessionRuntime(
         if (!bound) throw new Error("tool executed before its session was built (lifecycle invariant broken)");
         return turnContext.run(
           { cwd, sessionManager: bound.sessionManager, tools: bound.activation },
-          // pi's per-turn TOOL context (5th parameter) is read only by its default coding tools, and
-          // those are filtered out of `customTools` above; fastagent's own take theirs from
-          // `turnContext` (AsyncLocalStorage). So this env exists to satisfy the shape, and it is the
-          // chat cwd's — the same root a default tool would have got, had one reached here.
+          // pi's per-turn TOOL context (5th parameter) is read only by its default coding tools;
+          // fastagent's own take theirs from `turnContext` (AsyncLocalStorage). This env satisfies
+          // the shape for both, and is the chat cwd's — the same root pi would have handed them.
           () => t.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
         );
       },
@@ -185,62 +171,11 @@ export async function buildAgentSessionRuntime(
       contextFiles: definition.contextFiles,
     });
 
-    return {
-      model,
-      modelRuntime,
-      // Serving honors config.thinkingLevel (config → L2); the resident session must too (fidelity).
-      thinkingLevel: config.thinkingLevel,
-      definition,
-      extensionPaths,
-      defaultNames,
-      customTools,
-      customToolDefs,
-      deferredToolNames,
-      systemPrompt,
-    };
-  }
-
-  // pi calls the factory again on /new, /resume, switch, and fork. Config/tools dynamic imports are
-  // ESM-cached, so treating same-cwd rebuilds as hot reload would yield a half-fresh agent (fresh
-  // AGENTS.md/skills, stale config/tools). Keep the runtime a coherent startup snapshot: restart to
-  // load edits. And keep it workspace-scoped — `.env` is process-global, so a switch to another cwd
-  // would leak env or require mutating global env at runtime.
-  const rootCwd = canonicalPath(dir);
-  // The CURRENT pi session + its activation bridge, BOUND TOGETHER — rebuilt on /new//resume/fork
-  // while the memoized assembly (and its tool execute closures) stays. The bridge must share the
-  // session's lifetime, NOT be rebuilt per tool call (a per-call chain serializes nothing). Note on
-  // parallel batches: pi wraps SDK customTools in its own before/after active-set diff, so an
-  // activating tool must carry `executionMode: "sequential"` (the builtin loader does) — pi then runs
-  // the whole batch serially and the outer diff sees correct snapshots.
-  const sessionRef: {
-    current?: { session: AgentSession; sessionManager: ReadonlySessionManager; activation: ToolActivation };
-  } = {};
-  let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
-  const assemblyFor = (cwd: string) => {
-    // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would
-    // otherwise mismatch a non-realpath rootCwd.
-    const activeCwd = canonicalPath(cwd);
-    if (activeCwd !== rootCwd) {
-      throw workspaceScopeError(activeCwd);
-    }
-    assembly ??= resolveAssembly(rootCwd);
-    return assembly;
-  };
-
-  const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-    const {
-      model,
-      modelRuntime,
-      thinkingLevel,
-      definition,
-      extensionPaths,
-      defaultNames,
-      customTools,
-      customToolDefs,
-      deferredToolNames,
-      systemPrompt,
-    } = await assemblyFor(cwd);
-
+    // BEFORE the model is resolved, because an extension may be what defines it. pi's
+    // `registerProvider()` is the documented way to add models/providers, and extensions only run
+    // when the services are built — resolving first would fail a definition whose configured model
+    // comes from its own extension with a bare "unknown model", and would probe auth for a provider
+    // that does not exist yet.
     const services = await createAgentSessionServices({
       cwd,
       // fastagent's models + auth hub replaces pi's default (~/.pi-backed) one — the auth
@@ -281,19 +216,82 @@ export async function buildAgentSessionRuntime(
       },
     });
     reportExtensionErrors(services);
-    // `tools` is pi's ALLOWLIST, and it gates extension-registered tools the same as any other. The
-    // serving path passes no allowlist, so omitting these would give one definition two tool sets:
-    // present when served, missing in chat. The names come from the loaded extensions themselves.
-    const extensionToolNames = services.resourceLoader
-      .getExtensions()
-      .extensions.flatMap((extension) => [...extension.tools.keys()]);
+
+    // MIGRATION HINT (deliberate breaking change): chat historically used pi's own `~/.pi` auth;
+    // it now reads the agent's credential file like every other command. Probe the RESOLVED
+    // model's provider through the normal resolution path (stored credential OR env var — an
+    // env-authed user is fine and must not be warned): only when that provider has no usable auth
+    // AND pi's old file exists does the bare provider error get its cause named.
+    if (
+      (await probeAuthSource(modelRuntime, modelSpec)) === undefined &&
+      existsSync(join(getAgentDir(), "auth.json"))
+    ) {
+      log.warn(
+        `[fastagent] no credentials for ${modelSpec} in ${authPath} — this runtime no longer reads ` +
+          `pi's ~/.pi auth; run \`fastagent login\` (or /login in the TUI) to store credentials for this agent`,
+      );
+    }
+    const model = resolveModel(modelRuntime, modelSpec);
+
+    return {
+      model,
+      modelRuntime,
+      services,
+      // Serving honors config.thinkingLevel (config → L2); the resident session must too (fidelity).
+      thinkingLevel: config.thinkingLevel,
+      definition,
+      extensionPaths,
+      customTools,
+      customToolDefs,
+      deferredToolNames,
+      systemPrompt,
+    };
+  }
+
+  // pi calls the factory again on /new, /resume, switch, and fork. Config/tools dynamic imports are
+  // ESM-cached, so treating same-cwd rebuilds as hot reload would yield a half-fresh agent (fresh
+  // AGENTS.md/skills, stale config/tools). Keep the runtime a coherent startup snapshot: restart to
+  // load edits. And keep it workspace-scoped — `.env` is process-global, so a switch to another cwd
+  // would leak env or require mutating global env at runtime.
+  const rootCwd = canonicalPath(dir);
+  // The CURRENT pi session + its activation bridge, BOUND TOGETHER — rebuilt on /new//resume/fork
+  // while the memoized assembly (and its tool execute closures) stays. The bridge must share the
+  // session's lifetime, NOT be rebuilt per tool call (a per-call chain serializes nothing). Note on
+  // parallel batches: pi wraps SDK customTools in its own before/after active-set diff, so an
+  // activating tool must carry `executionMode: "sequential"` (the builtin loader does) — pi then runs
+  // the whole batch serially and the outer diff sees correct snapshots.
+  const sessionRef: {
+    current?: { session: AgentSession; sessionManager: ReadonlySessionManager; activation: ToolActivation };
+  } = {};
+  let assembly: Promise<Awaited<ReturnType<typeof resolveAssembly>>> | undefined;
+  const assemblyFor = (cwd: string) => {
+    // Canonical paths: pi's process.cwd() fallback is a realpath, so a symlinked workspace would
+    // otherwise mismatch a non-realpath rootCwd.
+    const activeCwd = canonicalPath(cwd);
+    if (activeCwd !== rootCwd) {
+      throw workspaceScopeError(activeCwd);
+    }
+    assembly ??= resolveAssembly(rootCwd);
+    return assembly;
+  };
+
+  const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
+    const { model, services, thinkingLevel, extensionPaths, customToolDefs, deferredToolNames } =
+      await assemblyFor(cwd);
+
     const result = await createAgentSessionFromServices({
       services,
       sessionManager,
       sessionStartEvent,
       model,
       thinkingLevel,
-      tools: [...defaultNames, ...customTools.map((t) => t.name), ...extensionToolNames],
+      // NO `tools` allowlist. It would freeze the tool set at build time, and pi lets an extension
+      // register from `session_start`, a command, or any handler — those names would not be in a
+      // startup snapshot, so `refreshTools()` would filter them straight back out and the extension
+      // would look like it did nothing. `noTools: "builtin"` gets the same guarantee the allowlist
+      // was really there for (the machine's `defaultTools` setting cannot add pi's own copies on top
+      // of ours) without freezing anything.
+      noTools: "builtin",
       customTools: customToolDefs,
     });
     sessionRef.current = {
@@ -301,6 +299,18 @@ export async function buildAgentSessionRuntime(
       sessionManager: agentSessionManager(result.session, result.session.sessionManager.getSessionId()),
       activation: sessionToolActivation(result.session),
     };
+    // Extensions only come ALIVE here. pi emits session_start from bindExtensions(), so without this
+    // call an extension loads, registers what it registers at import time, and then never hears
+    // another thing: no session_start, no tool registered from a handler, no shutdown. That is a
+    // definition whose extension half silently does nothing — the failure this whole path exists to
+    // remove. Binding also installs the error listener; pi fans handler errors to registered
+    // listeners and has none by default, so a throwing extension would otherwise look like an
+    // extension that simply did nothing.
+    if (extensionPaths.length > 0) {
+      await result.session.bindExtensions({
+        onError: (e) => log.warn(`[fastagent] extension ${e.extensionPath} failed on ${e.event}: ${e.error}`),
+      });
+    }
     // Deferral emulation: pi's session starts with everything active — narrow it by SUBTRACTING
     // the deferred names from whatever is active (robust to pi mounting tools of its own; an
     // exact-set-equality gate would silently stop narrowing the day pi adds one). Applied on EVERY
