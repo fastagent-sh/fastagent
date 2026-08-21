@@ -401,7 +401,7 @@ export interface CreatePiAgentOptions {
   instructions?: string | (() => string);
   /** The tool set to mount. `FastagentTool` (AgentTool plus the optional `deferred` marker, see
    *  {@link DefineToolOptions}) widens into {@link MountedTool}, which additionally admits pi's default
-   *  coding tools — they read the turn's ExecutionEnv as a fifth `execute` parameter. */
+   *  coding tools — those bind their workspace at construction rather than reading a turn context. */
   tools?: MountedTool[];
   skills?: Skill[];
   // ── Tier 2: injectable ports ───────────────────────────────────────────────

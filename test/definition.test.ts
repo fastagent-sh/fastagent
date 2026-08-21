@@ -510,15 +510,23 @@ describe("create L2: the workspace roots the tools, the env reads the definition
     const workspace = await mkdtemp(join(tmpdir(), "fa-ws-"));
     const definitionDir = await mkdtemp(join(tmpdir(), "fa-def-"));
     await writeFile(join(workspace, "AGENTS.md"), "# Workspace context\n\nThe marker is FROM-WORKSPACE.\n");
+    await writeFile(join(workspace, "marker.txt"), "READ-FROM-WORKSPACE\n");
     await writeFile(join(definitionDir, "persona.md"), "You are terse.\n");
+    await writeFile(join(definitionDir, "marker.txt"), "READ-FROM-DEFINITION-DIR\n");
 
     const { faux } = makeFaux();
     let systemPrompt = "";
+    // First turn: call `read` on a bare relative path. Whichever root the tool was built for is the
+    // one that resolves it, and each directory holds a different file at that name.
     faux.setResponses([
       (context) => {
         systemPrompt = context.systemPrompt ?? "";
-        return fauxAssistantMessage("ok");
+        return {
+          ...fauxAssistantMessage(""),
+          content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "marker.txt" } }],
+        } as ReturnType<typeof fauxAssistantMessage>;
       },
+      fauxAssistantMessage("done"),
     ]);
     const { agent, definition } = await createPiAgentFromDefinition(definitionDir, {
       model: "faux/faux-1",
@@ -529,7 +537,13 @@ describe("create L2: the workspace roots the tools, the env reads the definition
     // The BOOT snapshot (what callers report diagnostics from) walked the workspace.
     expect(JSON.stringify(definition.contextFiles)).toContain("FROM-WORKSPACE");
 
-    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "hi" })) events.push(e);
+    // THE tool actually ran, against the workspace root it was built for.
+    const toolText = JSON.stringify(events);
+    expect(toolText).toContain("READ-FROM-WORKSPACE");
+    expect(toolText).not.toContain("READ-FROM-DEFINITION-DIR");
+
     // ...and so did the LIVE re-read that actually reaches the model.
     expect(systemPrompt).toContain("FROM-WORKSPACE");
     // And the model is told the SAME root its tools resolve against — naming the loader's directory
