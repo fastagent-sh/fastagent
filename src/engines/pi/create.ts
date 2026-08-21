@@ -100,6 +100,20 @@ export function resolveCodingTools(config: FastagentConfig): ResolvedCodingTools
   return { tools, names: tools.map((tool) => tool.name as CodingToolName) };
 }
 
+/**
+ * Built-in coding tools this definition turned off, MINUS any name an authored tool has taken.
+ *
+ * pi's denylist matches by name, so excluding a name an author reused would delete their tool rather
+ * than pi's — and with the built-in disabled, that name is theirs to use (see docs/configuration.md).
+ */
+export function disabledBuiltinNames(
+  codingToolNames: readonly CodingToolName[],
+  mounted: readonly MountedTool[],
+): CodingToolName[] {
+  const authored = new Set(mounted.map((tool) => tool.name));
+  return CODING_TOOL_NAMES.filter((name) => !codingToolNames.includes(name) && !authored.has(name));
+}
+
 /** `config.tools` semantics: extra tools APPENDED after enabled pi coding tools, never replacing them. */
 export function resolveTools(config: FastagentConfig): MountedTool[] {
   const coding = resolveCodingTools(config).tools;
@@ -558,8 +572,10 @@ export async function createPiAgentFromDefinition(
     // apply to the artifact either way) — `chat` is where they load. Boot-resolved: the set cannot
     // change without a restart, which is why this sits outside `live` above.
     extensionPaths: await loadExtensionPaths(dir, { cwd: env.cwd, env }),
-    // The disabled built-ins, refused at the registry — see PiAgentSessionFactoryOptions.
-    excludedToolNames: CODING_TOOL_NAMES.filter((name) => !codingToolNames.includes(name)),
+    // The disabled built-ins, refused at the registry — see PiAgentSessionFactoryOptions. A name an
+    // AUTHORED tool has taken is not excluded: with the built-in off, that name is the author's to
+    // reuse (documented), and pi's denylist works on names, so excluding it would delete their tool.
+    excludedToolNames: disabledBuiltinNames(codingToolNames, tools),
     env,
     lease: options.lease,
     observer: options.observer,

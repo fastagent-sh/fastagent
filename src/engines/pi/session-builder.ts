@@ -42,8 +42,8 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
-import { CODING_TOOL_NAMES, resolveModel } from "./config.ts";
-import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
+import { resolveModel } from "./config.ts";
+import { assembleSystemPrompt, disabledBuiltinNames, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
@@ -157,8 +157,9 @@ export async function buildAgentSessionRuntime(
     // resolveTools() applied `codingTools` — so narrowing needs nothing here: what the definition
     // disabled never reaches this list, and pi's own copies stay out via `noTools: "builtin"`.
     const customTools = tools;
-    // What the definition turned OFF, for pi to refuse rather than merely leave inactive.
-    const excludedCodingTools = CODING_TOOL_NAMES.filter((name) => !codingToolNames.includes(name));
+    // What the definition turned OFF, for pi to refuse rather than merely leave inactive — minus any
+    // name an authored tool has taken (that name is the author's once the built-in is disabled).
+    const excludedCodingTools = disabledBuiltinNames(codingToolNames, tools);
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
     // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
     // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge

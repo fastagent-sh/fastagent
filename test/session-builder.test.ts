@@ -537,3 +537,35 @@ describe("session builder: codingTools narrows chat exactly as it narrows servin
     }
   });
 });
+
+describe("session builder: disabling a built-in frees its name for an authored tool", () => {
+  it("mounts an authored `read` when codingTools is false", async () => {
+    // The denylist that makes `codingTools` a boundary matches by NAME, so excluding a name the
+    // author reused would delete THEIR tool instead of pi's — silently, and only for the four
+    // built-in names. Docs promise the opposite: with the built-in off, the name is theirs.
+    const dir = await mkdtemp(join(tmpdir(), "fa-authored-read-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      'export default { model: "openai-codex/gpt-5.5", codingTools: false };\n',
+    );
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await writeFile(
+      join(dir, "tools", "read.mjs"),
+      `export default {
+         description: "the author's own reader",
+         parameters: { type: "object", properties: {} },
+         execute: async () => ({ content: [{ type: "text", text: "mine" }], details: {} }),
+       };\n`,
+    );
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      expect(rt.session.getAllTools().map((t) => t.name)).toContain("read");
+      expect(rt.session.getActiveToolNames()).toContain("read");
+      // ...and the built-ins the author did NOT take are still refused.
+      expect(rt.session.getAllTools().map((t) => t.name)).not.toContain("bash");
+    } finally {
+      await rt.dispose?.();
+    }
+  });
+});
