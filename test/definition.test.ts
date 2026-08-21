@@ -532,5 +532,9 @@ describe("create L2: the workspace roots the tools, the env reads the definition
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
     // ...and so did the LIVE re-read that actually reaches the model.
     expect(systemPrompt).toContain("FROM-WORKSPACE");
+    // And the model is told the SAME root its tools resolve against — naming the loader's directory
+    // as the working directory would be a lie the model has no way to detect.
+    expect(systemPrompt).toContain(workspace);
+    expect(systemPrompt).not.toContain(definitionDir);
   });
 });

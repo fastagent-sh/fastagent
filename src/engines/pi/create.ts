@@ -290,15 +290,21 @@ function buildPiAgent(opts: {
   /** Disabled built-ins; see {@link PiAgentSessionFactoryOptions.excludedToolNames}. */
   excludedToolNames?: readonly string[];
   env?: ExecutionEnv;
+  /** The WORKSPACE: where tools operate, what the model is told its working directory is, and what
+   *  session records are keyed to. Defaults to the env's root, which is the same thing at L1 — the
+   *  two only diverge when a caller names a workspace AND hands a separately-rooted env, and then
+   *  every one of those three must follow the workspace, not the loader. */
+  cwd?: string;
   lease?: Lease;
   observer?: SessionObserver;
   onAssembly?: OnAssembly;
 }): Agent {
   const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
+  const cwd = opts.cwd ?? env.cwd;
   // Materialized here (not defaulted inside the L0) so the exposed parts carry the SAME lease
   // instance the agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
-  const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd: env.cwd });
+  const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
   // The model and its runtime resolve on FIRST USE: building a ModelRuntime is async while
   // assembling an agent is not, so the credential read belongs on the first turn rather than in the
   // caller's constructor. Memoized by the factory, and shared with the control plane below so a
@@ -324,7 +330,7 @@ function buildPiAgent(opts: {
     systemPrompt: opts.systemPrompt,
     skills: opts.skills,
     live: opts.live,
-    cwd: env.cwd,
+    cwd,
     ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     ...(opts.excludedToolNames?.length ? { excludedToolNames: opts.excludedToolNames } : {}),
@@ -564,7 +570,9 @@ export async function createPiAgentFromDefinition(
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
           skills: def.skills,
-          cwd: env.cwd,
+          // The workspace, matching where the tools operate. Telling the model one directory while
+          // `read`/`bash` resolve relative paths against another is a lie it cannot detect.
+          cwd,
         }),
         skills: def.skills,
       };
@@ -575,6 +583,7 @@ export async function createPiAgentFromDefinition(
     // apply to the artifact either way) — `chat` is where they load. Boot-resolved: the set cannot
     // change without a restart, which is why this sits outside `live` above.
     extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
+    cwd,
     // The disabled built-ins, refused at the registry — see PiAgentSessionFactoryOptions. A name an
     // AUTHORED tool has taken is not excluded: with the built-in off, that name is the author's to
     // reuse (documented), and pi's denylist works on names, so excluding it would delete their tool.
