@@ -72,6 +72,25 @@ export async function* streamTurnWithBusyRetry(
   }
 }
 
+/**
+ * A primary local-file attachment cannot be represented faithfully for an agent without a reader.
+ *
+ * Constructing this LOGS, because the fix belongs to the operator and nothing else would tell them:
+ * the user gets a customer-facing line (see `defaultErrorMessage`), which by design does not carry
+ * "mount the read coding tool". Without this, a misconfigured agent answers every attachment with a
+ * shrug and no one learns why.
+ */
+export class LocalFileAccessUnavailable extends Error {
+  constructor(label = "[fastagent]") {
+    super("this agent cannot read local file attachments; mount the read coding tool or send the content as text");
+    this.name = "LocalFileAccessUnavailable";
+    log.warn(
+      `${label} an attachment arrived but this agent has no \`read\` tool — the turn was refused. ` +
+        `Enable it with \`codingTools\` (or \`codingTools: ["read"]\` for least privilege).`,
+    );
+  }
+}
+
 /** What the attached-files manifest renders per file: display name, byte size, absolute local path. */
 export interface ManifestFile {
   name: string;
@@ -113,5 +132,13 @@ export function backgroundImagesManifest(
 export function missingAttachmentsNote(missing: number): string {
   return missing > 0
     ? `\n[note: ${missing} attachment(s) from the earlier discussion are not loaded (no longer available, or older than the most recent few)]`
+    : "";
+}
+
+/** Background files omitted because this agent has no declared local-file reader. Never render their
+ *  dead paths: tell the model exactly which context it does not have instead. */
+export function unreadableAttachmentsNote(unreadable: number): string {
+  return unreadable > 0
+    ? `\n[note: ${unreadable} non-image attachment(s) from the earlier discussion are not loaded because this agent has no local-file reader]`
     : "";
 }

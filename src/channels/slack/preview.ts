@@ -226,7 +226,12 @@ async function streamClassicSlackReply(
       if (event.type === "failed") {
         await finishPump();
         finalized = true;
-        const notice = formatError({ details: event.details, retryable: event.retryable }) ?? "";
+        const notice =
+          formatError({
+            details: event.details,
+            retryable: event.retryable,
+            ...(event.code !== undefined ? { code: event.code } : {}),
+          }) ?? "";
         await finalize(notice).catch((error) =>
           log.error(`${label} failed to deliver the agent-failure notice: ${String(error)}`),
         );
@@ -421,7 +426,12 @@ async function streamNativeSlackReply(
         return;
       } else if (event.type === "failed") {
         finalized = true;
-        const notice = formatError({ details: event.details, retryable: event.retryable }) ?? "";
+        const notice =
+          formatError({
+            details: event.details,
+            retryable: event.retryable,
+            ...(event.code !== undefined ? { code: event.code } : {}),
+          }) ?? "";
         if (notice) {
           pendingText += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
           fullAnswer += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;

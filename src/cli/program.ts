@@ -193,7 +193,7 @@ const tool: CommandSpec = {
   ],
   examples: [{ cmd: `fastagent tool add '{"a":2,"b":3}'` }],
   notes:
-    "Mounts the same tool set dev/start serve (defaults + config.tools + discovered tools/, " +
+    "Mounts the same tool set dev/start serve (enabled coding tools + config.tools + discovered tools/, " +
     "deduped), so a shadowed or broken tool is surfaced here exactly as it would be when serving.",
   run: async (args) =>
     (await import("./commands/tool.ts")).runTool(args[0] as string, args[1] as string, args[2] as string),

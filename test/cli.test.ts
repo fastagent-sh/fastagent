@@ -304,8 +304,11 @@ describe("cli papercuts", () => {
 
   it("info reports the assembled surface as JSON (incl. load diagnostics), read-only (no sessions dir)", async () => {
     const dir = await agentWorkspace("fa-info-", {
+      "fastagent.config.mjs": "export default { codingTools: false };\n",
       "skills/greet/SKILL.md": "---\nname: greet\ndescription: Greet warmly.\n---\nHi.\n",
       "skills/bad/SKILL.md": "---\nname: bad\n---\nno description.\n", // malformed
+      "tools/lookup.mjs":
+        'export default { description: "Lookup", parameters: { type: "object" }, async execute() { return "ok"; } };\n',
       "channels/github.ts": 'export default () => ({ "POST /x": () => new Response("ok") });\n',
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
@@ -315,9 +318,16 @@ describe("cli papercuts", () => {
     expect(code).toBe(0); // an unset model is reported, not fatal
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
+    expect(info.codingTools).toEqual([]);
+    expect(info.tools).toEqual(["lookup"]); // authored surface remains; coding defaults are disabled
     expect(info.context.length).toBeGreaterThan(0); // the AGENTS.md is loaded as ② project context
     expect(info.skills.map((s: { name: string }) => s.name)).toEqual(["greet"]); // the malformed skill is skipped
-    expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // info SURFACES the loader diagnostic to the user
+    expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // info SURFACES loader diagnostics
+    // Its OWN key: a skill diagnostic points at a SKILL.md, an assembly finding at the definition
+    // dir with a code from a different vocabulary. One field holding both hands a machine consumer
+    // two shapes under one name.
+    expect(JSON.stringify(info.assemblyFindings)).toMatch(/skills_require_file_reader/);
+    expect(JSON.stringify(info.diagnostics)).not.toMatch(/skills_require_file_reader/);
     expect(info.channels).toEqual(["github"]);
     await expect(stat(join(dir, "fastagent", ".state"))).rejects.toThrow(); // read-only: never creates the state root
   });
@@ -397,6 +407,7 @@ describe("cli papercuts", () => {
     expect(info.schedules[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
     expect(JSON.stringify(info.scheduleFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
     expect(info.selfSchedule).toBe(false); // no config → wake tool won't mount
+    expect(info.codingTools).toEqual(["read", "bash", "edit", "write"]); // omitted keeps the compatible surface
 
     // text mode: next instant on the schedules line, the failure as a stderr warning
     const text = await run(["info", dir], undefined, env);

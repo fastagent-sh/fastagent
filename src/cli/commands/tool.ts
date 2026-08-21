@@ -16,7 +16,7 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   const { agentDir, workspace } = placementOrExit(resolve(dirArg));
   loadDotEnv(agentDir); // a tool may read a key from .env
   const { config } = await loadConfig(agentDir).catch(failStartup);
-  // The same tool set dev/start mount (defaults + config.tools + discovered, deduped), so the runner
+  // The same tool set dev/start mount (enabled coding tools + config.tools + discovered, deduped), so the runner
   // exercises exactly what gets served — a shadowed tool is surfaced, not silently run. Resolve the
   // placement like the openers, so `fastagent tool` finds the SAME tools/ as dev/start.
   const { tools, toolCollisions, toolFailures } = await resolveAgentTools(config, agentDir).catch(failStartup);

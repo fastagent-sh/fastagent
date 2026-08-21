@@ -12,13 +12,19 @@ import {
 } from "../../engines/pi/config.ts";
 import { createPiModelRuntime } from "../../engines/pi/models.ts";
 import { resolveStateRoot, workspaceHint } from "../../paths.ts";
-import { resolveAgentTools } from "../../engines/pi/create.ts";
+import { resolveAgentTools, resolveCodingTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
-import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
+import {
+  definitionAssemblyFindings,
+  reportFindingsIfChanged,
+  reportModuleLoadFailures,
+  reportToolCollisions,
+} from "../../engines/pi/report.ts";
 import { log } from "../../log.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
+import { codingToolsLabel } from "../shared.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -40,8 +46,10 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // tool), is isolated the same way everywhere (G2): info, dev, AND start report it and keep going with
   // the tools that loaded. The `error`/`.catch` below only fires for a whole-load fault (an unreadable
   // tools/ dir), not a single bad file.
+  const resolvedCodingToolNames = resolveCodingTools(config).names;
   const tools = await resolveAgentTools(config, agentDir)
     .then((r) => ({
+      coding: r.codingToolNames,
       names: r.toolNames,
       deferred: r.deferredToolNames,
       collisions: r.toolCollisions,
@@ -49,12 +57,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       error: undefined as string | undefined,
     }))
     .catch((e: unknown) => ({
+      coding: resolvedCodingToolNames,
       names: [] as string[],
       deferred: [] as string[],
       collisions: [],
       failures: [],
       error: (e as Error).message,
     }));
+  const assemblyFindings = definitionAssemblyFindings(definition, tools.coding.includes("read"));
   const channels = await discoverChannelFiles(agentDir).catch(failStartup);
   // Loaded (imported + validated), not just discovered: info's job is "fix only what it reports", so a
   // broken schedule file (bad cron/tz, failed import) must show up HERE, not first at dev/start — and
@@ -97,6 +107,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           model: modelSpec ?? null,
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
+          codingTools: tools.coding,
           context: definition.contextFiles.map((f) => f.path),
           persona: definition.persona !== undefined,
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
@@ -110,7 +121,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           stateRoot,
           sessionsDir,
           authPath,
+          // Two entities, two keys: `diagnostics` is per-skill parse problems (path = the SKILL.md),
+          // while an assembly finding describes the definition as a whole (path = the definition dir,
+          // code outside the skill vocabulary). Merged, a machine consumer branching on `code` or
+          // resolving `path` gets a second shape without warning.
           diagnostics: definition.diagnostics,
+          assemblyFindings,
           skillCollisions: definition.collisions,
           toolCollisions: tools.collisions,
           toolFailures: tools.failures,
@@ -134,6 +150,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
+  line("codingTools", codingToolsLabel(tools.coding));
   line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   line("persona", definition.persona ? "persona.md" : "(none)");
   line("skills", definition.skills.map((skill) => skill.name).join(", ") || "(none)");
@@ -149,5 +166,5 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   reportModuleLoadFailures(tools.failures);
   reportModuleLoadFailures(sched.failures);
   if (tools.error) log.warn(`[fastagent] ${tools.error}`);
-  reportFindingsIfChanged(definition.dir, definition);
+  reportFindingsIfChanged(definition.dir, definition, assemblyFindings);
 }

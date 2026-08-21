@@ -1,6 +1,11 @@
 import type { SkillDiagnostic } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { reportDefinitionWarnings, reportFindingsIfChanged, reportToolCollisions } from "../src/engines/pi/report.ts";
+import {
+  definitionAssemblyFindings,
+  reportDefinitionWarnings,
+  reportFindingsIfChanged,
+  reportToolCollisions,
+} from "../src/engines/pi/report.ts";
 
 // Locks the warning WORDING shared by the CLI runners and `chat` (the reason A1 deduped these into one
 // module: two copies could drift). Spies on console.error rather than going through a runner.
@@ -28,21 +33,49 @@ describe("report", () => {
         { type: "warning", code: "invalid_metadata", message: "description is required", path: "/a/x/SKILL.md" },
       ] as SkillDiagnostic[],
     };
-    reportFindingsIfChanged("/agent", findings); // reader A (a turn)
+    reportFindingsIfChanged("/agent", findings, []); // reader A (a turn)
     expect(lines(err)).toMatch(/invalid_metadata/);
     err.mockClear();
-    reportFindingsIfChanged("/agent", findings); // reader B (commands()) — same finding, same dir
+    reportFindingsIfChanged("/agent", findings, []); // reader B (commands()) — same finding, same dir
     expect(err).not.toHaveBeenCalled();
     // A DIFFERENT definition keeps its own budget …
-    reportFindingsIfChanged("/other-agent", findings);
+    reportFindingsIfChanged("/other-agent", findings, []);
     expect(lines(err)).toMatch(/invalid_metadata/);
     err.mockClear();
     // There is no record-without-printing door: the boot report goes through this same function, so
     // a caller that never reports cannot silently consume the announcement for every later reader.
-    reportFindingsIfChanged("/third-agent", findings); // boot
+    reportFindingsIfChanged("/third-agent", findings, []); // boot
     err.mockClear();
-    reportFindingsIfChanged("/third-agent", findings); // a turn, then commands() — already said
+    reportFindingsIfChanged("/third-agent", findings, []); // a turn, then commands() — already said
     expect(err).not.toHaveBeenCalled();
+  });
+
+  it("finds and reports model-visible skills that have no local-file reader", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const definition = {
+      dir: "/skills-agent",
+      skills: [
+        {
+          name: "writing",
+          description: "Write well",
+          content: "Instructions",
+          filePath: "/skills-agent/skills/writing/SKILL.md",
+        },
+      ],
+      collisions: [],
+      diagnostics: [],
+    };
+    const findings = definitionAssemblyFindings(definition, false);
+    expect(findings).toHaveLength(1);
+    reportFindingsIfChanged(definition.dir, definition, findings);
+    expect(lines(err)).toMatch(/skills_require_file_reader.*codingTools: \["read"\]/);
+    expect(definitionAssemblyFindings(definition, true)).toEqual([]);
+    expect(
+      definitionAssemblyFindings(
+        { ...definition, skills: [{ ...definition.skills[0]!, disableModelInvocation: true }] },
+        false,
+      ),
+    ).toEqual([]);
   });
 
   it("renders tool collisions to stderr", () => {

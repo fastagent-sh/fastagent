@@ -73,6 +73,16 @@ export const SESSION_BUSY_CODE = "session_busy";
 export const ABORTED_CODE = "aborted";
 
 /**
+ * The `failed.code` set when a turn carried an attachment the agent has no way to open — a local
+ * file with no `read` tool mounted. A CONFIGURATION limitation, not an unknown failure: the channel
+ * knows exactly what is wrong and can say so, where the generic "something went wrong" would leave
+ * the user guessing at a problem only the operator can fix. Exported for the same reason as
+ * {@link SESSION_BUSY_CODE}: its consumer (`defaultErrorMessage`, and any channel's own `onError`)
+ * must branch on it rather than string-match the message.
+ */
+export const ATTACHMENT_UNSUPPORTED_CODE = "attachment_unsupported";
+
+/**
  * One turn = one invoke, returning a single async event stream. The stream MUST terminate with
  * exactly one of completed / failed, or be cancelled by the caller (no terminal event). Any
  * AsyncIterable producer that implements this conforms (interface, not base class).

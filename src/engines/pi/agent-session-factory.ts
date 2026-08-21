@@ -89,6 +89,14 @@ export interface PiAgentSessionFactoryOptions {
    * that entry point upstream, not a workaround here.
    */
   extensionPaths?: string[];
+  /**
+   * Built-in coding tools this definition DISABLED, refused at the registry rather than merely left
+   * inactive. `noTools: "builtin"` only keeps pi's own copies out of the active set, and anything
+   * that can activate a tool by name — a TUI command, the control plane, a deferred-tool loader —
+   * could put one back. `codingTools` is a capability decision for public-facing agents, so the
+   * disabled names must not be mountable at all.
+   */
+  excludedToolNames?: readonly string[];
   /** Filesystem/process environment handed to pi's default coding tools. */
   env: ExecutionEnv;
 }
@@ -257,6 +265,7 @@ export function definitionResourceLoaderOptions(source: {
 export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): PiAgentSessionFactory {
   const { sessions, thinkingLevel, cwd, env } = options;
   const extensionPaths = options.extensionPaths ?? [];
+  const excludedToolNames = options.excludedToolNames ?? [];
   if (extensionPaths.length > 0) {
     log.warn(
       `[fastagent] ${extensionPaths.length} extension(s) in the definition are NOT loaded when serving ` +
@@ -353,6 +362,7 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       // tool set already IS those four (create.ts piDefaultTools), so letting both in would offer
       // the model each one twice, under one name.
       noTools: "builtin",
+      ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
       customTools: toolDefinitions(tools, cwd, env, sessionId, bound),
     });
     bound.session = session;

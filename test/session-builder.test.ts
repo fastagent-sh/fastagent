@@ -13,10 +13,10 @@ import { log } from "../src/log.ts";
 // AgentTool via `config.tools` lets the custom-tool path be tested without installing the package.
 /** A fresh AGENT dir (`<tmp>/fastagent/`). Passing it to the builder resolves to itself, with the
  *  temp dir as the workspace — the same placement `init` produces, entered from the inside. */
-async function freshAgentDir(prefix: string): Promise<string> {
+async function freshAgentDir(prefix: string, options: { persona?: boolean } = {}): Promise<string> {
   const dir = join(await mkdtemp(join(tmpdir(), prefix)), "fastagent");
   await mkdir(dir);
-  await writeFile(join(dir, "persona.md"), "You are terse.\n"); // an agent, not an empty dir
+  if (options.persona !== false) await writeFile(join(dir, "persona.md"), "You are terse.\n");
   return dir;
 }
 
@@ -134,6 +134,60 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         const rebuilt = rt.session;
         expect(rebuilt.getActiveToolNames()).not.toContain("lookup_weather");
         expect(rebuilt.getActiveToolNames()).toContain("search_tools");
+      } finally {
+        await rt.dispose();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an empty codingTools false chat surface empty and uses a capability-neutral default identity", async () => {
+    const dir = await freshAgentDir("fa-chat-empty-", { persona: false });
+    try {
+      await writeFile(
+        join(dir, "fastagent.config.mjs"),
+        `export default { model: "openai-codex/gpt-5.5", codingTools: false };\n`,
+      );
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        const state = rt.session.agent.state;
+        expect(state.tools).toEqual([]);
+        expect(state.systemPrompt).toContain("Available tools:\n(none)");
+        expect(state.systemPrompt).toContain("You are an AI assistant operating inside pi, an agent harness.");
+        expect(state.systemPrompt).not.toContain("You help users by reading files");
+      } finally {
+        await rt.dispose();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors codingTools false in chat's mounted surface and generated prompt", async () => {
+    const dir = await freshAgentDir("fa-chat-no-coding-");
+    try {
+      await writeFile(
+        join(dir, "fastagent.config.mjs"),
+        `export default {
+           model: "openai-codex/gpt-5.5",
+           codingTools: false,
+           tools: [{
+             name: "lookup",
+             description: "Look up a business record.",
+             parameters: { type: "object", properties: {} },
+             execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+           }],
+         };\n`,
+      );
+      const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+      try {
+        const state = rt.session.agent.state;
+        expect(state.tools.map((t) => t.name)).toEqual(["lookup"]);
+        expect(state.systemPrompt).toContain("- lookup: Look up a business record.");
+        for (const name of ["read", "bash", "edit", "write"]) {
+          expect(state.systemPrompt).not.toContain(`- ${name}:`);
+        }
       } finally {
         await rt.dispose();
       }
@@ -448,6 +502,68 @@ describe("session builder: chat offers the model the same tool set serving does"
       expect(active).toEqual(["bash", "edit", "read", "write"]);
       // ...and they ARE mounted, just not offered — so this is about activation, not discovery.
       expect(rt.session.getAllTools().map((t) => t.name)).toContain("grep");
+    } finally {
+      await rt.dispose?.();
+    }
+  });
+});
+
+describe("session builder: codingTools narrows chat exactly as it narrows serving", () => {
+  it("mounts and activates only the configured coding tools", async () => {
+    // Both assemblies take their tool list from resolveAgentAssembly, so a least-privilege posture
+    // needs no per-assembly narrowing: what the definition disabled never reaches either list, and
+    // pi's own copies stay out via `noTools: "builtin"`. Before the allowlist was dropped, chat
+    // narrowed a second time by NAME — a second place for the two paths to disagree.
+    const dir = await mkdtemp(join(tmpdir(), "fa-coding-narrow-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      'export default { model: "openai-codex/gpt-5.5", codingTools: ["read"] };\n',
+    );
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      expect(rt.session.getActiveToolNames().sort()).toEqual(["read"]);
+      // A BOUNDARY, not a default: the disabled built-ins are refused at the registry, so nothing
+      // that activates by name — a TUI command, the control plane, a deferred-tool loader — can put
+      // one back. "Mounted but inactive" would be the whole distance between safe and not for a
+      // public-facing agent running `codingTools: false`.
+      const mounted = rt.session.getAllTools().map((tool) => tool.name);
+      expect(mounted).not.toContain("bash");
+      expect(mounted).not.toContain("write");
+      rt.session.setActiveToolsByName(["read", "bash"]);
+      expect(rt.session.getActiveToolNames()).not.toContain("bash"); // asking for it does not get it
+    } finally {
+      await rt.dispose?.();
+    }
+  });
+});
+
+describe("session builder: disabling a built-in frees its name for an authored tool", () => {
+  it("mounts an authored `read` when codingTools is false", async () => {
+    // The denylist that makes `codingTools` a boundary matches by NAME, so excluding a name the
+    // author reused would delete THEIR tool instead of pi's — silently, and only for the four
+    // built-in names. Docs promise the opposite: with the built-in off, the name is theirs.
+    const dir = await mkdtemp(join(tmpdir(), "fa-authored-read-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      'export default { model: "openai-codex/gpt-5.5", codingTools: false };\n',
+    );
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await writeFile(
+      join(dir, "tools", "read.mjs"),
+      `export default {
+         description: "the author's own reader",
+         parameters: { type: "object", properties: {} },
+         execute: async () => ({ content: [{ type: "text", text: "mine" }], details: {} }),
+       };\n`,
+    );
+    const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
+    try {
+      expect(rt.session.getAllTools().map((t) => t.name)).toContain("read");
+      expect(rt.session.getActiveToolNames()).toContain("read");
+      // ...and the built-ins the author did NOT take are still refused.
+      expect(rt.session.getAllTools().map((t) => t.name)).not.toContain("bash");
     } finally {
       await rt.dispose?.();
     }

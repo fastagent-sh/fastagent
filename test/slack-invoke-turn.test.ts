@@ -56,7 +56,7 @@ describe("Slack turn attachment resolution", () => {
         agent,
         "s1",
         "read these",
-        { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
+        { api, channelId: "C1", filesDir: "/state", label: "[slack]", canReadLocalFiles: true },
         { primaryFileIds: ["IMG", "DOC"], buffered: { files: [], skipped: 0 } },
         completed,
       ),
@@ -78,7 +78,7 @@ describe("Slack turn attachment resolution", () => {
         agent,
         "s1",
         "read it",
-        { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
+        { api, channelId: "C1", filesDir: "/state", label: "[slack]", canReadLocalFiles: true },
         { primaryFileIds: ["F1"], buffered: { files: [], skipped: 0 } },
       ),
     );
@@ -107,7 +107,7 @@ describe("Slack turn attachment resolution", () => {
         agent,
         "s1",
         "answer",
-        { api, channelId: "C1", filesDir: "/state", label: "[slack]" },
+        { api, channelId: "C1", filesDir: "/state", label: "[slack]", canReadLocalFiles: true },
         {
           primaryFileIds: [],
           buffered: {

@@ -30,7 +30,13 @@ const FAST: BusyRetry = { delayMs: 10, maxWaitMs: 500 };
 const noAttachments = { primary: {}, buffered: { files: [], images: [], skipped: 0 } };
 
 async function run(agent: Agent, retry: BusyRetry = FAST): Promise<AgentEvent[]> {
-  const transport = { api: "http://t.test", botToken: "B", chatId: 1, filesDir: await mkdtemp(join(tmpdir(), "fa-")) };
+  const transport = {
+    api: "http://t.test",
+    botToken: "B",
+    chatId: 1,
+    filesDir: await mkdtemp(join(tmpdir(), "fa-")),
+    canReadLocalFiles: true,
+  };
   const out: AgentEvent[] = [];
   for await (const e of invokeTurn(agent, "s", "hi", transport, noAttachments, undefined, retry)) out.push(e);
   return out;

@@ -11,7 +11,7 @@
  *   - prompt  → systemPromptOverride = base + instructions ONLY; pi appends the skill section and env
  *               (cwd) itself (including it here would duplicate it).
  *   - skills  → skillsOverride (fastagent's skills, for the section + invocation).
- *   - tools   → default coding tools by NAME (pi rebuilds them cwd-bound for rich rendering) +
+ *   - tools   → enabled default coding tools by NAME (pi rebuilds them cwd-bound for rich rendering) +
  *               fastagent's custom tools via pi's customTools path (so they survive /new, /resume, fork).
  *   - models  → a ModelRuntime with builtins only (`modelsPath: null`, no availability network), so
  *               the model surface equals serving's `createPiModels()` — pi's machine-global
@@ -43,7 +43,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { definitionResourceLoaderOptions, reportExtensionErrors } from "./agent-session-factory.ts";
 import { resolveModel } from "./config.ts";
-import { assembleSystemPrompt, piBasePrompt } from "./create.ts";
+import { assembleSystemPrompt, disabledBuiltinNames, piBasePrompt } from "./create.ts";
 import { canonicalPath, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { createPiModelRuntime, probeAuthSource } from "./models.ts";
 import { log } from "../../log.ts";
@@ -54,7 +54,12 @@ import {
   agentSessionManager,
   turnContext,
 } from "./tool-context.ts";
-import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "./report.ts";
+import {
+  definitionAssemblyFindings,
+  reportFindingsIfChanged,
+  reportModuleLoadFailures,
+  reportToolCollisions,
+} from "./report.ts";
 import { resolveAgentAssembly } from "./open.ts";
 
 export interface BuildSessionRuntimeOptions {
@@ -118,8 +123,18 @@ export async function buildAgentSessionRuntime(
     // on the session in createRuntime — pi's session starts all-active), and the activation bridge
     // above rides the same turn context, so the SAME search_tools works against pi's AgentSession
     // instead of the served one.
-    const { config, modelSpec, agentDir, authPath, stateRoot, tools, deferredToolNames, toolCollisions, toolFailures } =
-      await resolveAgentAssembly(cwd, options);
+    const {
+      config,
+      modelSpec,
+      agentDir,
+      authPath,
+      stateRoot,
+      tools,
+      codingToolNames,
+      deferredToolNames,
+      toolCollisions,
+      toolFailures,
+    } = await resolveAgentAssembly(cwd, options);
     reportToolCollisions(toolCollisions);
     reportModuleLoadFailures(toolFailures);
     // ONE hub owns model resolution AND per-request auth; see models.ts.
@@ -128,14 +143,23 @@ export async function buildAgentSessionRuntime(
     const modelRuntime = await createPiModelRuntime({ authPath, agentDir, stateRoot });
     const env = new NodeExecutionEnv({ cwd });
     const definition = await loadAgentDefinition(agentDir, { cwd, env });
-    reportFindingsIfChanged(definition.dir, definition);
+    reportFindingsIfChanged(
+      definition.dir,
+      definition,
+      definitionAssemblyFindings(definition, codingToolNames.includes("read")),
+    );
     // Assembly-time, like serving's: this whole function is memoized, so the scan and its warnings
     // happen once per runtime rather than per session rebuild (/new, /resume, fork).
     const extensionPaths = await loadExtensionPaths(agentDir, { cwd, env });
     // ALL of them, pi's four included: fastagent's `read` is `createReadTool({ imageProcessor })`
     // (create.ts), and letting pi mount its own instead would silently drop image reading in chat.
-    // Serving already does it this way.
+    // Serving already does it this way. And `tools` is ALREADY the configured surface —
+    // resolveTools() applied `codingTools` — so narrowing needs nothing here: what the definition
+    // disabled never reaches this list, and pi's own copies stay out via `noTools: "builtin"`.
     const customTools = tools;
+    // What the definition turned OFF, for pi to refuse rather than merely leave inactive — minus any
+    // name an authored tool has taken (that name is the author's once the built-in is disabled).
+    const excludedCodingTools = disabledBuiltinNames(codingToolNames, tools);
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
     // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
     // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
@@ -167,7 +191,7 @@ export async function buildAgentSessionRuntime(
     // base + instructions ONLY — pi appends the skill section and env (cwd) itself (including
     // them here would duplicate them).
     const systemPrompt = assembleSystemPrompt({
-      base: piBasePrompt({ tools, persona: definition.persona }),
+      base: piBasePrompt({ tools, persona: definition.persona, codingToolNames }),
       contextFiles: definition.contextFiles,
     });
 
@@ -181,6 +205,7 @@ export async function buildAgentSessionRuntime(
       extensionPaths,
       customTools,
       customToolDefs,
+      excludedCodingTools,
       deferredToolNames,
       systemPrompt,
     };
@@ -226,6 +251,7 @@ export async function buildAgentSessionRuntime(
       definition,
       extensionPaths,
       customToolDefs,
+      excludedCodingTools,
       deferredToolNames,
       systemPrompt,
     } = await assemblyFor(cwd);
@@ -287,6 +313,10 @@ export async function buildAgentSessionRuntime(
       // was really there for (the machine's `defaultTools` setting cannot add pi's own copies on top
       // of ours) without freezing anything.
       noTools: "builtin",
+      // Disabled coding tools are refused at the REGISTRY, not just left inactive: chat has a TUI
+      // that can activate a tool by name, so "mounted but inactive" would make `codingTools` a
+      // default rather than a boundary.
+      ...(excludedCodingTools.length > 0 ? { excludeTools: excludedCodingTools } : {}),
       customTools: customToolDefs,
     });
     sessionRef.current = {

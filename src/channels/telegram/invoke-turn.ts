@@ -5,15 +5,17 @@
  * pure) because this half touches the Bot API + disk; split from telegram.ts so the factory keeps only
  * wiring and the per-turn lifecycle.
  */
-import type { Agent, AgentEvent, ImageRef } from "../../agent.ts";
+import { type Agent, type AgentEvent, ATTACHMENT_UNSUPPORTED_CODE, type ImageRef } from "../../agent.ts";
 import { log } from "../../log.ts";
 import {
   type BusyRetry,
   DEFAULT_BUSY_RETRY,
+  LocalFileAccessUnavailable,
   attachedFilesManifest,
   attributedFileName,
   missingAttachmentsNote,
   streamTurnWithBusyRetry,
+  unreadableAttachmentsNote,
 } from "../invoke-turn-kit.ts";
 import type { BufferedRef } from "./context-buffer.ts";
 import { type DownloadedFile, resolveFiles, resolveImages } from "./telegram-api.ts";
@@ -28,6 +30,8 @@ export interface TurnTransport {
   botToken: string;
   chatId: number | string;
   filesDir: string;
+  /** Whether the agent has a reader for absolute local paths; see ChannelContext. */
+  canReadLocalFiles: boolean;
 }
 
 /** A turn's attachment inputs: the summoning message's own file_ids (primary) and the ones folded in
@@ -58,7 +62,11 @@ interface ResolvedAttachments {
 async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachments): Promise<ResolvedAttachments> {
   const { api, botToken, chatId, filesDir } = t;
   const { primary, buffered } = attachments;
+  const { canReadLocalFiles } = t;
+  if (!canReadLocalFiles && (primary.fileIds?.length ?? 0) > 0) throw new LocalFileAccessUnavailable("[telegram]");
   const images = await resolveImages(api, botToken, primary.imageFileIds);
+  // No reader-check here: the guard above already refused a non-empty list, and an empty one resolves
+  // to nothing either way. Two readings of one rule, two lines apart, is one too many.
   const files = await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir);
   const bufferedImages: ImageRef[] = [];
   const bufferedFiles: { file: DownloadedFile; ref: BufferedRef }[] = [];
@@ -71,12 +79,15 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
       log.warn(`[telegram] could not load an earlier (buffered) photo: ${String(r.reason)}`);
     }
   }
-  const fileResults = await Promise.allSettled(
-    buffered.files.map(async (ref) => ({
-      ref,
-      files: (await resolveFiles(api, botToken, [ref.id], chatId, filesDir)) ?? [],
-    })),
-  );
+  const unreadable = canReadLocalFiles ? 0 : buffered.files.length;
+  const fileResults = canReadLocalFiles
+    ? await Promise.allSettled(
+        buffered.files.map(async (ref) => ({
+          ref,
+          files: (await resolveFiles(api, botToken, [ref.id], chatId, filesDir)) ?? [],
+        })),
+      )
+    : [];
   for (const r of fileResults) {
     if (r.status === "fulfilled") {
       for (const file of r.value.files) bufferedFiles.push({ file, ref: r.value.ref });
@@ -86,6 +97,7 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
     }
   }
   const missingNote = missingAttachmentsNote(lost + buffered.skipped);
+  const unreadableNote = unreadableAttachmentsNote(unreadable);
   // PRIMARY first, background after — consistent with "primary wins": what the user pointed at this
   // turn leads. Buffered file entries are attributed like the fold's text lines ("the file Bob sent"
   // resolves); buffered PHOTOS cannot be (ImageRef carries no label), so their attribution stops at
@@ -98,7 +110,7 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
   const allImages = [...(images ?? []), ...bufferedImages];
   return {
     images: allImages.length ? allImages : undefined,
-    promptSuffix: `${missingNote}${attachedFilesManifest(allFiles)}`,
+    promptSuffix: `${missingNote}${unreadableNote}${attachedFilesManifest(allFiles)}`,
   };
 }
 
@@ -120,7 +132,13 @@ export async function* invokeTurn(
   try {
     resolved = await resolveTurnAttachments(transport, attachments);
   } catch (e) {
-    yield { type: "failed", details: `could not load attachment: ${String(e)}`, retryable: true };
+    const unavailable = e instanceof LocalFileAccessUnavailable;
+    yield {
+      type: "failed",
+      details: unavailable ? e.message : `could not load attachment: ${String(e)}`,
+      retryable: !unavailable,
+      ...(unavailable ? { code: ATTACHMENT_UNSUPPORTED_CODE } : {}),
+    };
     return;
   }
   const prompt = { text: `${text}${resolved.promptSuffix}${HTML_INSTRUCTION}`, images: resolved.images };

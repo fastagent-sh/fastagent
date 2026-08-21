@@ -36,12 +36,17 @@ import { failStartup, failUsage } from "./fail.ts";
 /**
  * The padded label writer for the STARTUP report (`dev`/`start`, stderr via the log level). Hand-spaced
  * labels drift out of alignment the moment a longer one appears — which is exactly what happened when
- * `workspace:` joined `config:`/`model:`/`state:`. `info` keeps its own writer on purpose: its report is
+ * `codingTools:` joined `workspace:`/`config:`/`model:`/`state:`. `info` keeps its own writer on purpose: its report is
  * stdout DATA (pipeable, its own label set, its own width), not a log line — the shared thing is the
  * policy (pad, never hand-space), not a constant.
  */
 export function reportLine(label: string, value: string): void {
-  log.info(`[fastagent] ${`${label}:`.padEnd(11)}${value}`);
+  log.info(`[fastagent] ${`${label}:`.padEnd(13)}${value}`);
+}
+
+/** Human-facing form of the resolved coding-tool surface; callers pass resolver output, never config. */
+export function codingToolsLabel(names: readonly string[]): string {
+  return names.length > 0 ? names.join(", ") : "(none)";
 }
 
 /** The workspace hint under the `agent:`/`workspace:` pair, when there is one ({@link workspaceHint}):

@@ -9,7 +9,12 @@ import { loadDotEnv } from "../../env.ts";
 import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/config.ts";
 import { resolveSecretsDir, workspaceHint } from "../../paths.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
-import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
+import {
+  definitionAssemblyFindings,
+  reportFindingsIfChanged,
+  reportModuleLoadFailures,
+  reportToolCollisions,
+} from "../../engines/pi/report.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
@@ -29,7 +34,15 @@ import {
   serve,
   startSchedules,
 } from "../serve.ts";
-import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
+import {
+  codingToolsLabel,
+  parseBind,
+  parsePort,
+  reportAuth,
+  reportLine,
+  resolveFirstRunModel,
+  reportWorkspaceHint,
+} from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
@@ -71,6 +84,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     stateRoot,
     sessionsDir,
     authPath,
+    codingToolNames,
     toolNames,
     deferredToolNames,
     toolCollisions,
@@ -91,6 +105,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   reportLine("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   if (definition.persona) reportLine("persona", "persona.md");
   reportLine("skills", definition.skills.map((s) => s.name).join(", ") || "(none)");
+  reportLine("codingTools", codingToolsLabel(codingToolNames));
   if (toolNames.length > 0) reportLine("tools", toolNames.join(", "));
   if (deferredToolNames.length > 0) {
     reportLine("deferred", `${deferredToolNames.join(", ")} (activated via search_tools)`);
@@ -121,7 +136,11 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
         `FASTAGENT_SECRETS_DIR at a persistent volume so a redeploy that replaces the dir does not wipe them.`,
     );
   }
-  reportFindingsIfChanged(definition.dir, definition);
+  reportFindingsIfChanged(
+    definition.dir,
+    definition,
+    definitionAssemblyFindings(definition, codingToolNames.includes("read")),
+  );
 
   // AgentCore Runtime posture (FASTAGENT_AGENTCORE=1, set by the generated deploy artifacts): the
   // adapter (POST /invocations + GET /ping) is the container's only reachable surface, and cron
@@ -139,7 +158,10 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // so channels mount eagerly and a broken channel fails startup.
   const routed = agentcore
     ? undefined
-    : await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: true }).catch(failStartup);
+    : await routesFor(agentDir, traced, stateRoot, sessionControl, {
+        builtinInvoke: true,
+        canReadLocalFiles: codingToolNames.includes("read"),
+      }).catch(failStartup);
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = config.http?.host;
@@ -183,7 +205,10 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     // re-establishes it — so their presence is a configuration error, surfaced per envelope and by
     // the deploy driver's health probe (there is no boot to fail on this host).
     const lazyChannels = async (): Promise<Routes> => {
-      const surface = await routesFor(agentDir, traced, stateRoot, sessionControl, { builtinInvoke: false });
+      const surface = await routesFor(agentDir, traced, stateRoot, sessionControl, {
+        builtinInvoke: false,
+        canReadLocalFiles: codingToolNames.includes("read"),
+      });
       if (surface.longConnections.length > 0) {
         throw new Error(
           `long-connection channel(s) ${surface.longConnections.map((c) => c.name).join(", ")} cannot serve on ` +

@@ -26,6 +26,15 @@ export type Routes = Record<string, ChannelHandler>;
 export interface ChannelContext {
   agent: Agent;
   stateRoot: string;
+  /**
+   * Whether the assembled agent can read absolute local attachment paths.
+   *
+   * REQUIRED, and deliberately not optional: the unsafe answer would be the default. An absent
+   * value read as "assume it can" hands the model paths it cannot open — the failure this exists to
+   * prevent — and every transport would re-derive the rule (`x !== false`) on its own. One fact,
+   * stated by whoever assembles the agent.
+   */
+  canReadLocalFiles: boolean;
   /** The serving session-control hub, when the serve wires one (`config.sessionControl`). Channels
    *  use it for DISPATCH only (the user-facing stop command); observation stays on the data plane. */
   control?: SessionControl;

@@ -172,6 +172,25 @@ function createPiAgentFromDir(
 
 The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
 
+Directory config can disable pi's default coding tools without changing the authored tool surface:
+
+```ts
+type CodingToolName = "read" | "bash" | "edit" | "write";
+
+interface FastagentConfig {
+  codingTools?: boolean | CodingToolName[];
+  tools?: FastagentTool[];
+}
+```
+
+Unset/`true` mounts all four; `false`/`[]` mounts none; an array mounts exactly those names in canonical
+order. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) applies
+the same resolved surface. Model-visible skills and chat-channel non-image attachments require the
+built-in `read`; use `codingTools: ["read"]` when those capabilities remain needed. Conditional
+built-ins stay independent: deferred tools may add `search_tools`, and `selfSchedule` may add `wake`
+while serving. The lower-level `createPiAgent` API remains explicit: its `tools` option is the exact set
+supplied by the caller and has no `codingTools` option.
+
 ## Tool authoring
 
 ```ts
@@ -264,6 +283,7 @@ Costs and behavior to know:
 interface ChannelContext {
   agent: Agent;
   stateRoot: string; // resolved state root (FASTAGENT_STATE_DIR > <root>/.state), absolute
+  canReadLocalFiles: boolean; // required: whether the agent has a reader for absolute local paths
 }
 type ChannelModule = (ctx: ChannelContext) => Routes;
 interface LongConnection {

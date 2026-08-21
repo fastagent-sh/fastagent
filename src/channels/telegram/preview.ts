@@ -162,7 +162,12 @@ export async function streamReply(
         // below regardless.
         finalized = true;
         {
-          const msg = formatError({ details: e.details, retryable: e.retryable }) ?? "";
+          const msg =
+            formatError({
+              details: e.details,
+              retryable: e.retryable,
+              ...(e.code !== undefined ? { code: e.code } : {}),
+            }) ?? "";
           await finalize(api, botToken, target, messageId, msg).catch(() => {});
         }
         throw new Error(`agent failed: ${e.details} (retryable=${e.retryable})`);

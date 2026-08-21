@@ -64,6 +64,19 @@ describe("config: loadConfig validation", () => {
     await writeFile(join(bad, "fastagent.config.mjs"), `export default { selfSchedule: "yes" };\n`);
     await expect(loadConfig(bad)).rejects.toThrow(/selfSchedule.*must be a boolean/);
   });
+
+  it("codingTools: accepts booleans or a unique known-name array; rejects every other shape", async () => {
+    const load = async (value: string) => {
+      const dir = await mkdtemp(join(tmpdir(), "fa-coding-tools-"));
+      await writeFile(join(dir, "fastagent.config.mjs"), `export default { codingTools: ${value} };\n`);
+      return loadConfig(dir);
+    };
+    expect((await load("false")).config.codingTools).toBe(false);
+    expect((await load('["read"]')).config.codingTools).toEqual(["read"]);
+    await expect(load('"no"')).rejects.toThrow(/codingTools.*must be a boolean or an array/);
+    await expect(load('["cat"]')).rejects.toThrow(/codingTools\[0\].*read, bash, edit, write/);
+    await expect(load('["read", "read"]')).rejects.toThrow(/must not contain duplicate "read"/);
+  });
 });
 
 describe("config: resolveStateRoot / resolveSecretsDir (the machinery dirs)", () => {
@@ -284,14 +297,23 @@ describe("config: loadConfig", () => {
   });
 });
 
-describe("config: resolveTools (append-after-defaults semantics)", () => {
-  it("without config.tools returns pi defaults; with config.tools appends after defaults instead of replacing", () => {
+describe("config: resolveTools (coding defaults + authored tools)", () => {
+  it("enables pi coding tools by default and appends config.tools", () => {
     const defaults = resolveTools({});
-    expect(defaults.length).toBeGreaterThan(0);
+    expect(defaults.map((t) => t.name)).toEqual(["read", "bash", "edit", "write"]);
+    expect(resolveTools({ codingTools: true }).map((t) => t.name)).toEqual(defaults.map((t) => t.name));
 
     const extra = { name: "ping" } as unknown as FastagentTool;
     const merged = resolveTools({ tools: [extra] });
     expect(merged.map((t) => t.name)).toEqual([...defaults.map((t) => t.name), "ping"]);
+  });
+
+  it("codingTools false/[] remove all coding tools; an array selects names in canonical order", () => {
+    const extra = { name: "ping" } as unknown as FastagentTool;
+    expect(resolveTools({ codingTools: false }).map((t) => t.name)).toEqual([]);
+    expect(resolveTools({ codingTools: [] }).map((t) => t.name)).toEqual([]);
+    expect(resolveTools({ codingTools: ["write", "read"] }).map((t) => t.name)).toEqual(["read", "write"]);
+    expect(resolveTools({ codingTools: false, tools: [extra] }).map((t) => t.name)).toEqual(["ping"]);
   });
 });
 

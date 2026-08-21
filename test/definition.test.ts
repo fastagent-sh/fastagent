@@ -473,3 +473,31 @@ describe("definition: skills/ gets the same containment guard as tools/channels/
     await expect(loadAgentDefinition(agent)).rejects.toThrow(/resolves outside the agent dir/);
   });
 });
+
+describe("create L2: an explicit tools list states its own coding capabilities", () => {
+  it("does not claim a caller passing `read` lacks a file reader", async () => {
+    // `tools` is the caller stating the whole surface, which used to be read as "no coding tools at
+    // all" — so an L2 caller who passed a reader got the capability-neutral identity AND a warning
+    // that their model-visible skills had no way to read themselves.
+    const dir = await mkdtemp(join(tmpdir(), "fa-l2-caps-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await mkdir(join(dir, "skills", "triage"), { recursive: true });
+    await writeFile(
+      join(dir, "skills", "triage", "SKILL.md"),
+      "---\nname: triage\ndescription: Triage things.\n---\n\nSteps.\n",
+    );
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const { faux } = makeFaux();
+    faux.setResponses([fauxAssistantMessage("ok")]);
+    try {
+      await createPiAgentFromDefinition(dir, {
+        model: "faux/faux-1",
+        providers: [faux.provider],
+        tools: piDefaultTools(),
+      });
+      expect(warn.mock.calls.flat().join("\n")).not.toMatch(/reader/i);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
