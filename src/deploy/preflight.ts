@@ -482,10 +482,6 @@ export async function preflightDeploy(input: {
         : /(^|[\s"'=])(0\.0\.0\.0|::)($|[\s"'\]])/.test(keptDockerfile);
 
   const configBind = classifyBind(config.http?.host);
-  // Unset and an explicit "0.0.0.0" both classify as wildcard, and only the explicit one travels into
-  // the image and binds there. classifyBind must not learn that difference — it answers about a value,
-  // and unset is the absence of one — so it is made here, where the question is about a container.
-  const configStatesWildcard = config.http?.host !== undefined && configBind === "wildcard";
   // `http.host` only decides the bind when nothing on the command line does. When the container
   // passes the wildcard, a laptop-shaped `http.host` travels in and is ignored — gating on it would
   // refuse a container that answers perfectly well.
@@ -507,7 +503,10 @@ export async function preflightDeploy(input: {
   // A kept Dockerfile with no wildcard bind, and no config saying it either: a serve binds 127.0.0.1
   // unless told otherwise, so the published port, the health check and every webhook go dark — and
   // nothing in the container logs says why.
-  if (keptDockerfile !== undefined && !cmdBindsWildcard && !configStatesWildcard) {
+  // Only when config says NOTHING. A non-wildcard `http.host` is the same bind problem and the branch
+  // above already named it with the address; two warnings would describe one container twice, and the
+  // second would claim it defaulted to 127.0.0.1 when the config chose that address explicitly.
+  if (keptDockerfile !== undefined && !cmdBindsWildcard && config.http?.host === undefined) {
     const issue =
       `no wildcard bind found in your Dockerfile — a serve binds 127.0.0.1 unless told otherwise, so ` +
       `the container would answer nothing from outside. Add \`--bind 0.0.0.0\` to its CMD` +

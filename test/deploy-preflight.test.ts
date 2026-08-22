@@ -76,9 +76,16 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const gatedSpecific = await call(dir, cfg("192.168.1.5"), { run: true });
     expect(gatedSpecific.ok).toBe(false); // unconditional: a gate that stops firing must fail this
     if (!gatedSpecific.ok) expect(gatedSpecific.gate).toMatch(/fails to bind at start/);
-    // Plan mode only produces artifacts, so it warns and proceeds.
+    // Plan mode only produces artifacts, so it warns and proceeds — with ONE warning. The Dockerfile
+    // and the config are two halves of one bind, and a second message would describe the same
+    // container again, claiming it defaulted to 127.0.0.1 when the config chose that address.
     const planned = await call(dir, cfg("127.0.0.1"));
-    expect(planned.ok && planned.messages.some((m) => m.level === "warn" && /http\.host/.test(m.text))).toBe(true);
+    expect(planned.ok).toBe(true);
+    if (planned.ok) {
+      const binds = planned.messages.filter((m) => /bind|http\.host/.test(m.text));
+      expect(binds).toHaveLength(1);
+      expect(binds[0]?.text).toMatch(/http\.host/);
+    }
     // And an explicit wildcard in config is silent whatever the Dockerfile does.
     const wildcard = await call(dir, cfg("0.0.0.0"), { run: true });
     expect(wildcard.ok && wildcard.messages.every((m) => !/http\.host/.test(m.text))).toBe(true);

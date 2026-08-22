@@ -319,11 +319,10 @@ export async function buildAgentSessionRuntime(
     // session.bindExtensions() with the TUI's uiContext, abort handler and command actions — binding
     // here too would emit session_start twice per chat, so an extension opening a resource on start
     // would open two.
-    // Deferral emulation: pi starts THIS agent's tools active — its own four default names, which
-    // our customTools have replaced, plus every custom and extension tool. (Tools pi mounts but does
-    // not activate, like grep/find/ls, stay inactive, which is the same set serving offers.) So
-    // narrow by SUBTRACTING the deferred names from whatever is active, rather than stating a set:
-    // an exact-set-equality gate would silently stop narrowing the day pi activates one more.
+    // Deferral emulation: pi starts THIS agent's tools active — every coding tool it mounted, plus
+    // every custom and extension tool. So narrow by SUBTRACTING the deferred names from whatever is
+    // active, rather than stating a set: an exact-set-equality gate would silently stop narrowing the
+    // day pi activates one more.
     //
     // Applied on EVERY build including /resume: pi's chat session does not record activations (its
     // SessionContext has no activeToolNames), so "restore prior activations" is not implementable
