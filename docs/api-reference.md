@@ -183,11 +183,10 @@ interface FastagentConfig {
 }
 ```
 
-Unset mounts the **read-only four** (`read`, `grep`, `find`, `ls`); `true` adds `bash`, `edit`, `write`;
-`false`/`[]` mounts none; an array mounts exactly those names in canonical order. Every
-directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) applies the same
-resolved surface, and `createPiAgentFromDefinition` lands on the same default when the caller names no
-`tools`.
+Unset/`true` mounts all seven; `false`/`[]` mounts none; an array mounts exactly those names in
+canonical order. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and
+`info`) applies the same resolved surface, and `createPiAgentFromDefinition` lands on the same default
+when the caller names no `tools`.
 
 Conditional built-ins stay independent: deferred tools may add `search_tools`, and `selfSchedule` may
 add `wake` while serving. The lower-level `createPiAgent` API remains explicit: its `tools` option is

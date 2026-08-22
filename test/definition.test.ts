@@ -14,7 +14,7 @@ import {
   createPiAgentFromDefinition,
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
-import { assembleSystemPrompt, piAllCodingTools, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
+import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { isUnderDir } from "../src/engines/pi/definition.ts";
@@ -186,7 +186,7 @@ describe("create: assembleSystemPrompt (four segments)", () => {
   });
 
   it("piBasePrompt renders the tool list from actual tools so base and toolset stay aligned", () => {
-    const withTools = piBasePrompt({ tools: piAllCodingTools(process.cwd()) });
+    const withTools = piBasePrompt({ tools: piDefaultTools(process.cwd()) });
     expect(withTools).toContain("- read:");
     expect(withTools).toContain("- bash:");
     expect(piBasePrompt()).toContain("(none)");
@@ -253,7 +253,7 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("- read:");
     // default = the READ-ONLY coding tools; mutating ones need `codingTools: true`. Custom code tools
     // stay an explicit `tools:` injection, no magic dir.
-    expect(seenTools.sort()).toEqual(["find", "grep", "ls", "read"]);
+    expect(seenTools.sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
   });
 });
 
@@ -314,15 +314,12 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools is the read-only four; piAllCodingTools is every one", () => {
-    // Asserted against pi's own two groupings rather than hand-written lists, so both sets follow
-    // upstream; the ORDER of the full set is ours, and it is what the config reports and mounts in.
-    expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(
-      createReadOnlyTools(process.cwd()).map((t) => t.name),
-    );
-    const all = piAllCodingTools(process.cwd()).map((t) => t.name);
-    expect(all).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
-    expect([...all].sort()).toEqual(
+  it("piDefaultTools is every pi coding tool, read-only ones first", () => {
+    // Asserted against pi's own two groupings rather than a hand-written list, so the set follows
+    // upstream; the ORDER is ours, and it is what the config reports and mounts in.
+    const names = piDefaultTools(process.cwd()).map((t) => t.name);
+    expect(names).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+    expect([...names].sort()).toEqual(
       [
         ...new Set([...createReadOnlyTools(process.cwd()), ...createCodingTools(process.cwd())].map((t) => t.name)),
       ].sort(),
@@ -564,9 +561,9 @@ describe("create L2: the workspace roots the tools, the env reads the definition
 
 describe("create L2: the identity matches what is mounted", () => {
   it("does not claim a coding surface it did not mount", async () => {
-    // The default mounts the read-only four. Reporting the full seven — which is what deriving the
-    // capability set from "was `tools` passed?" did — tells the model it can execute commands and
-    // edit files. It cannot, and it has no way to find that out except by trying.
+    // Reporting a capability set derived from "was `tools` passed?" rather than from the tools told
+    // the model it could execute commands and edit files while none of that was mounted. It has no
+    // way to find out except by trying.
     const dir = await mkdtemp(join(tmpdir(), "fa-identity-"));
     await writeFile(join(dir, "persona.md"), "");
     const { faux } = makeFaux();
@@ -577,7 +574,11 @@ describe("create L2: the identity matches what is mounted", () => {
         return fauxAssistantMessage("ok");
       },
     ]);
-    const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
+    const { agent } = await createPiAgentFromDefinition(dir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+      tools: piDefaultTools(dir).filter((t) => t.name === "read" || t.name === "grep"),
+    });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
 
     expect(prompt).toContain("- read:");

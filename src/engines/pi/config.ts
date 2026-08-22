@@ -25,19 +25,14 @@ import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../.
 // exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
 
 /**
- * pi's coding tools, split by the only line that matters for a served agent: whether using one can
- * change something.
+ * pi's coding tools, in canonical mount/report order.
  *
- * READ_ONLY answers questions about the workspace. MUTATING writes files and runs commands — and a
- * served agent takes its instructions from whoever can message it, so granting those is granting
- * them to that person. The default is the read-only half for that reason; `codingTools: true` opts
- * into the rest.
+ * pi ships two overlapping groupings and neither is the whole set: `createCodingTools` is the classic
+ * four it hands a terminal (read/bash/edit/write, no searching), `createReadOnlyTools` is
+ * read/grep/find/ls. `read` is in both. This union is what `codingTools` selects from, read-only ones
+ * first — the order a report reads in, and the order of increasing consequence.
  */
-export const READ_ONLY_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
-const MUTATING_TOOL_NAMES = ["bash", "edit", "write"] as const;
-
-/** All of them, in canonical mount/report order. */
-export const CODING_TOOL_NAMES = [...READ_ONLY_TOOL_NAMES, ...MUTATING_TOOL_NAMES] as const;
+export const CODING_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
 export type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
 
 export interface FastagentConfig {
@@ -47,16 +42,9 @@ export interface FastagentConfig {
    *  "xhigh" | "max"). Unset = pi's default. Authors tune thinking in the pi TUI while vibing — this
    *  is the serving-side counterpart (fidelity). Levels a model doesn't support are clamped by pi. */
   thinkingLevel?: ThinkingLevel;
-  /** Which pi coding tools to mount.
-   *
-   *  - unset — the READ-ONLY four: `read`, `grep`, `find`, `ls`
-   *  - `true` — those plus `bash`, `edit`, `write`
-   *  - `false` / `[]` — none
-   *  - an array — exactly those names, in canonical order
-   *
-   *  The default is read-only because a served agent acts on messages from whoever can reach it:
-   *  mounting `bash` mounts it for them. Authored tools (`config.tools` + discovered `tools/`) and
-   *  conditional built-ins (`search_tools`, `wake`) are independent of this. */
+  /** Which pi coding tools to mount. Unset/`true` = all seven; `false`/`[]` = none; an array mounts
+   *  exactly those names, in canonical order. Authored tools (`config.tools` + discovered `tools/`)
+   *  and conditional built-ins (`search_tools`, `wake`) are independent of this. */
   codingTools?: boolean | CodingToolName[];
   /** Extra custom tools, appended after enabled pi coding tools — never replaces them. `FastagentTool`
    *  = AgentTool plus the optional `deferred` marker (see defineTool). */

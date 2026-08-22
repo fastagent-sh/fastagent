@@ -298,24 +298,16 @@ describe("config: loadConfig", () => {
 });
 
 describe("config: resolveTools (coding defaults + authored tools)", () => {
-  it("defaults to the read-only tools; `true` adds the mutating ones", () => {
-    // A served agent acts on messages from whoever can reach it, so mounting `bash` mounts it for
-    // them. Reading is the safe half and the useful default; the rest is an explicit yes.
-    const defaults = resolveTools({}, process.cwd());
-    expect(defaults.map((t) => t.name)).toEqual(["read", "grep", "find", "ls"]);
-    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual([
-      "read",
-      "grep",
-      "find",
-      "ls",
-      "bash",
-      "edit",
-      "write",
-    ]);
+  it("mounts every coding tool by default, and `true` says the same thing", () => {
+    // Fidelity: the author vibed in local pi with the full toolset. What keeps that safe is the bind
+    // address, not a narrower agent.
+    const all = ["read", "grep", "find", "ls", "bash", "edit", "write"];
+    expect(resolveTools({}, process.cwd()).map((t) => t.name)).toEqual(all);
+    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual(all);
 
+    // config.tools are APPENDED after them, never replacing.
     const extra = { name: "ping" } as unknown as FastagentTool;
-    const merged = resolveTools({ tools: [extra] }, process.cwd());
-    expect(merged.map((t) => t.name)).toEqual([...defaults.map((t) => t.name), "ping"]);
+    expect(resolveTools({ tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual([...all, "ping"]);
   });
 
   it("codingTools false/[] remove all coding tools; an array selects names in canonical order", () => {

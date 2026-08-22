@@ -107,10 +107,8 @@ describe("init: scaffoldAgent", () => {
     expect(persona).toContain("Use only the tools actually listed in your system prompt");
     expect(persona).not.toContain("where your `read` / `write` / `edit` / `bash` tools operate");
     const configTemplate = await readFile(join(dir, "fastagent", "fastagent.config.mjs"), "utf8");
-    // The scaffold documents the OPT-IN, not the default: a new agent already reads, greps, finds and
-    // lists; what it does not do is run commands or change files, and that is the line worth showing.
-    expect(configTemplate).toContain("codingTools: true");
-    expect(configTemplate).toContain("read, grep, find, ls");
+    expect(configTemplate).toContain('codingTools: ["read", "grep", "find", "ls"]');
+    expect(configTemplate).toContain("default: all seven");
 
     // The scaffolded agent ASSEMBLES: ① persona + tools from fastagent/, ② context walked from the workspace.
     const a = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });

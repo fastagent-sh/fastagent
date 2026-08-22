@@ -245,7 +245,16 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         const st = rt.session.agent.state;
         // Default coding tools (rebuilt by pi from names) PLUS the config's custom tool, registered
         // through the session factory — definition-only, nothing machine-global leaked in.
-        expect(st.tools.map((t) => t.name).sort()).toEqual(["find", "grep", "ls", "ping", "read"]);
+        expect(st.tools.map((t) => t.name).sort()).toEqual([
+          "bash",
+          "edit",
+          "find",
+          "grep",
+          "ls",
+          "ping",
+          "read",
+          "write",
+        ]);
         // The injected system prompt is fastagent's: the definition's AGENTS.md and skill are in it.
         const sp = st.systemPrompt ?? "";
         expect(sp).toContain("MAGIC_CHAT_MARKER_91");
@@ -498,12 +507,10 @@ describe("session builder: chat offers the model the same tool set serving does"
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
     try {
       const active = rt.session.getActiveToolNames().sort();
-      expect(active).toEqual(["find", "grep", "ls", "read"]);
-      // And on the default posture the mutating half is not even in the registry: `noTools: "builtin"`
-      // keeps pi's own read/bash/edit/write out, and fastagent mounts only the read-only four. Nothing
-      // that activates by name can reach a shell here.
-      expect(rt.session.getAllTools().map((t) => t.name)).not.toContain("bash");
-      expect(rt.session.getAllTools().map((t) => t.name)).not.toContain("write");
+      expect(active).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
+      // Exactly one copy of each: `noTools: "builtin"` keeps pi's own read/bash/edit/write out, and
+      // fastagent mounts its own. Two under one name would be the model's problem to disambiguate.
+      expect(rt.session.getAllTools().filter((tool) => tool.name === "bash")).toHaveLength(1);
     } finally {
       await rt.dispose?.();
     }

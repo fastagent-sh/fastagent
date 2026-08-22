@@ -39,7 +39,7 @@ Supported keys:
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
 | `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
-| `codingTools` | Select the built-in coding tools. Unset: the read-only four (`read`, `grep`, `find`, `ls`); `true`: those plus `bash`, `edit`, `write`; `false`/`[]`: none; an array such as `["read"]`: exactly those names. Authored and conditional built-ins are independent. |
+| `codingTools` | Select the built-in coding tools. Unset/`true`: all seven (`read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`); `false`/`[]`: none; an array such as `["read"]`: exactly those names. Authored and conditional built-ins are independent. |
 | `tools` | Extra programmatic tools appended after enabled pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `http.host` | Bind address for `dev` / `start`. Unset (or `0.0.0.0`) binds all interfaces — what containers need. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
@@ -274,29 +274,21 @@ There are two ways to add tools:
 tools/lookup-order.ts  ->  lookup-order
 ```
 
-By default an agent mounts the **read-only** coding tools — `read`, `grep`, `find`, `ls` — and
-`config.tools` plus discovered `tools/` are appended after them.
+By default, `config.tools` are appended after all seven pi coding tools (`read`, `grep`, `find`, `ls`,
+`bash`, `edit`, `write`), and discovered `tools/` are appended after those.
 
-The default stops there because serving is not a terminal. A directory agent acts on messages from
-whoever can reach it, so mounting `bash` mounts it for that person, and `edit`/`write` let them change
-the definition the agent runs on. Reading is the half that answers questions without changing
-anything, and it is what skills and file attachments need.
+The full set is the default for fidelity: you vibed in local pi with it, and an agent that quietly
+loses capabilities when served is a different agent. What keeps that from being a hazard is exposure,
+not capability — a serve binds loopback unless you say otherwise, so reaching those tools means
+reaching the machine first (see [Bind address](#bind-address)).
 
-To add the mutating half, say so:
+To narrow, name what you want — or nothing at all:
 
 ```ts
 import { defineConfig } from "@fastagent-sh/fastagent";
 
 export default defineConfig({
-  codingTools: true, // read, grep, find, ls + bash, edit, write
-});
-```
-
-To narrow further, name what you want — or nothing at all:
-
-```ts
-export default defineConfig({
-  codingTools: ["read"], // no searching either
+  codingTools: ["read", "grep", "find", "ls"], // look, don't touch
 });
 
 export default defineConfig({

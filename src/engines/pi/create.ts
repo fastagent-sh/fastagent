@@ -18,7 +18,6 @@ import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import {
   CODING_TOOL_NAMES,
-  READ_ONLY_TOOL_NAMES,
   type CodingToolName,
   type FastagentConfig,
   defaultAuthPath,
@@ -46,12 +45,12 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
-// The READ-ONLY half is the default: `read`, `grep`, `find`, `ls`. Local pi hands the whole toolset to
-// the person typing, who is also the person it answers to; a served agent answers to whoever can
-// message it, so mounting `bash` mounts it for them, and `edit`/`write` let them rewrite the
-// definition it runs on. Reading is the half that answers questions without changing anything, and it
-// is what skills and file attachments need. `codingTools: true` adds the rest, `[names]` picks, and
-// `false` mounts none; L1/L2 callers can pass an explicit `tools` list instead.
+// The full pi toolset is the default, for fidelity: authors vibe in local pi with it, so serving with
+// fewer tools is behavior drift. A directory agent narrows with `codingTools: [names]` or opts out
+// with `codingTools: false`; L1/L2 library callers pass a restricted `tools` list directly.
+//
+// What keeps a full toolset from being a hazard is EXPOSURE, not capability: a serve binds loopback
+// unless told otherwise, so reaching those tools means reaching the machine first.
 //
 // They are pi-coding-agent's, the same package everything else here comes from (definition.ts,
 // models.ts, the session runtime). pi-agent-core ships four look-alikes that reach the machine through
@@ -70,22 +69,17 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // `chat` is unaffected: it takes these NAMES only and lets pi's own runtime rebuild the tools it
 // renders (see session-builder.ts).
 
-/** Every pi coding tool, in canonical order, rooted at the workspace it operates in. */
-export function piAllCodingTools(cwd: string): MountedTool[] {
-  // `read` is in both of pi's groupings; take it once, from the read-only side.
-  const mutating = createCodingTools(cwd).filter((tool) => tool.name !== "read");
-  return [...createReadOnlyTools(cwd), ...mutating];
-}
-
 /**
- * What an agent mounts when nobody said otherwise: the read-only four.
+ * Every pi coding tool, in canonical order, rooted at the workspace it operates in — and the default
+ * an agent mounts when nobody says otherwise.
  *
- * ONE default for every rung — a directory agent's `codingTools` (resolveCodingTools) and an L2
- * caller who names no tools land on the same set. Serving means acting on messages from whoever can
- * reach the agent, so `bash`/`edit`/`write` are granted to them too; that is a yes worth typing.
+ * pi ships two overlapping groupings and neither is the whole set: `createCodingTools` is the classic
+ * four it hands a terminal (read/bash/edit/write, no searching), `createReadOnlyTools` is
+ * read/grep/find/ls. `read` is in both; the union is what `codingTools` selects from.
  */
 export function piDefaultTools(cwd: string): MountedTool[] {
-  return createReadOnlyTools(cwd);
+  const mutating = createCodingTools(cwd).filter((tool) => tool.name !== "read");
+  return [...createReadOnlyTools(cwd), ...mutating];
 }
 
 export interface ResolvedCodingTools {
@@ -97,12 +91,14 @@ export interface ResolvedCodingTools {
  *  re-interpreting undefined/true/false/arrays independently. */
 export function resolveCodingTools(config: FastagentConfig, cwd: string): ResolvedCodingTools {
   const requested = config.codingTools;
-  // Unset is the READ-ONLY half, not everything: serving means acting on messages from whoever can
-  // reach the agent, so `bash`/`edit`/`write` are theirs too once mounted. `true` says yes to that.
+  // Unset/true = everything, for fidelity: the author vibed in local pi with the full toolset, and an
+  // agent that quietly loses capabilities when served is a different agent. The exposure that makes
+  // that dangerous is addressed where it belongs — the serve binds loopback unless told otherwise —
+  // rather than by narrowing what the agent can do.
   const enabled = new Set<CodingToolName>(
-    requested === false ? [] : requested === true ? CODING_TOOL_NAMES : (requested ?? READ_ONLY_TOOL_NAMES),
+    requested === false ? [] : requested === true || requested === undefined ? CODING_TOOL_NAMES : requested,
   );
-  const tools = piAllCodingTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
+  const tools = piDefaultTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
   return { tools, names: tools.map((tool) => tool.name as CodingToolName) };
 }
 

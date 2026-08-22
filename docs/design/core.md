@@ -262,7 +262,7 @@ the source.
 
 Workspace tools are merged in this order:
 
-1. the pi coding tools selected by `config.codingTools` — the read-only four (`read`, `grep`, `find`, `ls`) unless the definition says otherwise, plus `bash`/`edit`/`write` when it does;
+1. the pi coding tools selected by `config.codingTools` (all seven by default: `read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`);
 2. `config.tools`;
 3. discovered `tools/*.ts|js|mjs`.
 
