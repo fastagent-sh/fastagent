@@ -471,22 +471,27 @@ export async function preflightDeploy(input: {
   const dockerfileHome = join(agentDir, "Dockerfile");
   const keptDockerfile = !force && (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
   const generated = keptDockerfile !== undefined && isGeneratedDockerfile(keptDockerfile);
-  // For a file WE generate the shape is known, so look for the flag itself. For one we did not, do
-  // not guess: multi-stage builds, ENTRYPOINT/CMD interaction, line continuations and a `0.0.0.0`
-  // sitting in a comment or an unused ENV all defeat a regex, and a regex that SILENCES the warning
-  // is the dangerous direction — it would wave through the exact container this exists to catch.
-  const cmdBindsWildcard =
-    keptDockerfile === undefined
-      ? true // no kept file: this plan writes one, and it passes --bind 0.0.0.0
-      : generated
-        ? /--bind["',\s]+(0\.0\.0\.0|::)["',\s]/.test(keptDockerfile)
-        : false; // unknown, and unknown is not a yes
+  // What a generated Dockerfile binds is knowable: we wrote its CMD, it is one line, and it is the
+  // only CMD in the file. Read THAT line — not the file, where a `--bind 0.0.0.0` sitting in a
+  // comment would answer for a CMD that has none.
+  //
+  // What a hand-written one binds is not knowable here, and no amount of pattern-matching makes it
+  // so: multi-stage builds, ENTRYPOINT/CMD interaction, line continuations, an unused ENV. Guessing
+  // toward silence is the dangerous direction — it waves through exactly the container this exists
+  // to catch — so an unknown stays unknown and is reported as one.
+  const generatedCmd = generated ? keptDockerfile?.split("\n").find((line) => line.startsWith("CMD")) : undefined;
+  const generatedCmdBindsWildcard =
+    generatedCmd !== undefined && /--bind["',\s]+(0\.0\.0\.0|::)["',\s]/.test(generatedCmd);
 
   const configBind = classifyBind(config.http?.host);
+  // Unset and an explicit "0.0.0.0" both classify as wildcard, and only the explicit one travels into
+  // the image and binds there. classifyBind must not learn that difference — it answers about a
+  // value, and unset is the absence of one — so it is made here, where the question is a container.
+  const configStatesWildcard = config.http?.host !== undefined && configBind === "wildcard";
   // `http.host` only decides the bind when nothing on the command line does. When the container
   // passes the wildcard, a laptop-shaped `http.host` travels in and is ignored — gating on it would
   // refuse a container that answers perfectly well.
-  if (!cmdBindsWildcard && configBind !== "wildcard") {
+  if (keptDockerfile !== undefined && !generatedCmdBindsWildcard && configBind !== "wildcard") {
     const issue =
       `fastagent.config.ts sets http.host: "${config.http?.host}", and your Dockerfile does not pass ` +
       `--bind — so in the image ` +
@@ -499,27 +504,24 @@ export async function preflightDeploy(input: {
     // answers nothing, or crash-loops on a bind that cannot resolve inside the container.
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
-  }
-
-  // A kept Dockerfile that does not (or may not) bind the wildcard, with no config saying it either:
-  // a serve binds 127.0.0.1 unless told otherwise, so the published port, the health check and every
-  // webhook go dark — and nothing in the container logs says why.
-  //
-  // Only when config says NOTHING. A non-wildcard `http.host` is the same bind problem and the branch
-  // above already named it with the address; two warnings would describe one container twice.
-  if (keptDockerfile !== undefined && !cmdBindsWildcard && config.http?.host === undefined) {
-    const issue = generated
-      ? `your Dockerfile's CMD does not pass \`--bind 0.0.0.0\` — a serve binds 127.0.0.1 unless told ` +
-        `otherwise, so the container would answer nothing from outside. Re-generate it with --force, ` +
-        `or add the flag.`
-      : `check that your Dockerfile's CMD passes \`--bind 0.0.0.0\` — a serve binds 127.0.0.1 unless ` +
-        `told otherwise, and a container bound to loopback answers nothing from outside. This is not ` +
-        `verified: reading which CMD a hand-written Dockerfile ends up running is not something ` +
-        `deploy attempts.`;
-    // Gate `--run` only for a file WE generated, where the shape is known and the finding is certain.
-    // A hand-written one gets the same concern as a prompt, and its owner decides.
-    if (run && generated) return { ok: false, gate: issue };
+  } else if (generated && !generatedCmdBindsWildcard && !configStatesWildcard) {
+    // Ours, so the finding is certain: the CMD we wrote is right there and it has no wildcard bind.
+    const issue =
+      `your Dockerfile's CMD does not pass \`--bind 0.0.0.0\` — a serve binds 127.0.0.1 unless told ` +
+      `otherwise, so the container would answer nothing from outside. Re-generate it with --force, or ` +
+      `add the flag.`;
+    if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
+  } else if (keptDockerfile !== undefined && !generated) {
+    // Not ours: say what was NOT checked. An `http.host: "0.0.0.0"` does not settle it either — a CMD
+    // is free to pass `--bind 127.0.0.1` and the flag wins.
+    messages.push({
+      level: "warn",
+      text:
+        `check that your Dockerfile's CMD passes \`--bind 0.0.0.0\` — a serve binds 127.0.0.1 unless ` +
+        `told otherwise, and a container bound to loopback answers nothing from outside. This is not ` +
+        `verified: which CMD a hand-written Dockerfile ends up running is not something deploy reads.`,
+    });
   }
 
   const extraSecrets = config.deploy?.secrets ?? [];
