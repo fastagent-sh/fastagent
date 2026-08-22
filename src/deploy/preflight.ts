@@ -502,18 +502,24 @@ export async function preflightDeploy(input: {
   // itself: the published port, the health check and every webhook go dark, and nothing in the
   // container logs says why. Read the file that will actually run rather than the one this plan would
   // have written, since --force is what decides between them.
+  //
+  // The test is "does this file mention the wildcard ANYWHERE", not "does its effective CMD bind it".
+  // Parsing a Dockerfile properly means multi-stage builds, ENTRYPOINT/CMD interaction, line
+  // continuations and indentation — and a half-parser that claims to have checked is worse than one
+  // that admits what it looked at. So this errs toward silence: any `0.0.0.0` or `::` anywhere counts,
+  // which a file that binds the wildcard will always have, and the message says what was looked for.
   if (!force && (await exists(dockerfileHome))) {
     const kept = await readFile(dockerfileHome, "utf8");
-    const cmd = kept.split("\n").find((line) => line.startsWith("CMD")) ?? "";
-    if (cmd && !/0\.0\.0\.0|::/.test(cmd)) {
+    const generated = isGeneratedDockerfile(kept);
+    if (!/0\.0\.0\.0|::/.test(kept)) {
       const issue =
-        `your Dockerfile's CMD does not bind the wildcard — a serve now binds 127.0.0.1 unless told ` +
-        `otherwise, so the container would answer nothing from outside. Add \`--bind 0.0.0.0\` to the ` +
-        `CMD` +
-        (isGeneratedDockerfile(kept) ? " (or re-generate it with --force)." : ".");
-      // Same disposition as the other travel issues: warn when producing artifacts, gate `--run`,
-      // which would otherwise ship a box that answers nothing.
-      if (run) return { ok: false, gate: issue };
+        `no wildcard bind found in your Dockerfile — a serve binds 127.0.0.1 unless told otherwise, ` +
+        `so the container would answer nothing from outside. Add \`--bind 0.0.0.0\` to its CMD` +
+        (generated ? ", or re-generate it with --force." : ".");
+      // Gate `--run` only for a file WE generated, where the shape is known and the finding is
+      // certain. A hand-written Dockerfile can bind the wildcard in ways this does not read, so it
+      // gets the same sentence as a warning and the operator decides.
+      if (run && generated) return { ok: false, gate: issue };
       messages.push({ level: "warn", text: issue });
     }
   }

@@ -470,7 +470,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
 });
 
 describe("deploy pre-flight: a kept Dockerfile must still bind the wildcard", () => {
-  it("gates --run and warns in plan mode when its CMD has no wildcard bind", async () => {
+  it("gates --run for a stale GENERATED file, warns for a hand-written one", async () => {
     // The upgrade path this exists for: a Dockerfile generated before the serve defaulted to
     // loopback runs `fastagent start /app` with no --bind. Under the new default that container
     // answers only itself — published port, health check and every webhook go dark, and nothing in
@@ -483,16 +483,26 @@ describe("deploy pre-flight: a kept Dockerfile must still bind the wildcard", ()
     const gated = await call(dir, cfg, { run: true });
     expect(gated.ok).toBe(false);
     if (!gated.ok) {
-      expect(gated.gate).toMatch(/does not bind the wildcard/);
+      expect(gated.gate).toMatch(/no wildcard bind found/);
       expect(gated.gate).toMatch(/--force/); // it was ours to regenerate
     }
-
     const planned = await call(dir, cfg);
     expect(planned.ok && planned.messages.some((m) => m.level === "warn" && /wildcard/.test(m.text))).toBe(true);
 
-    // A CMD that DOES bind the wildcard is silent, and so is a hand-written one that does.
-    await writeFile(dir + "/Dockerfile", stale.replace('"/app"', '"/app", "--bind", "0.0.0.0"'));
-    const fine = await call(dir, cfg, { run: true });
-    expect(fine.ok && fine.messages.every((m) => !/wildcard/.test(m.text))).toBe(true);
+    // A HAND-WRITTEN one only warns, even under --run: this reads the file for a mention of the
+    // wildcard, not an effective CMD, and a Dockerfile someone owns can bind it in ways a
+    // non-parser will not see. Claiming to have checked would be worse than saying what was looked for.
+    await writeFile(join(dir, "Dockerfile"), 'FROM node:22-slim\nCMD ["fastagent", "start", "/app"]\n');
+    const handWritten = await call(dir, cfg, { run: true });
+    expect(handWritten.ok).toBe(true);
+    if (handWritten.ok) {
+      expect(handWritten.messages.some((m) => m.level === "warn" && /no wildcard bind found/.test(m.text))).toBe(true);
+      expect(handWritten.messages.every((m) => !/--force/.test(m.text))).toBe(true);
+    }
+
+    // Any mention of the wildcard is enough to stay silent — including one this would not have parsed.
+    await writeFile(join(dir, "Dockerfile"), 'FROM node:22-slim\nENV HOST=0.0.0.0\nENTRYPOINT ["/entry.sh"]\n');
+    const mentions = await call(dir, cfg, { run: true });
+    expect(mentions.ok && mentions.messages.every((m) => !/wildcard/.test(m.text))).toBe(true);
   });
 });
