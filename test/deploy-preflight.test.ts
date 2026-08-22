@@ -487,7 +487,7 @@ describe("preflight: how a models.json endpoint's credential reaches the host", 
 });
 
 describe("deploy pre-flight: a kept Dockerfile must still bind the wildcard", () => {
-  it("gates --run for a stale GENERATED file, warns for a hand-written one", async () => {
+  it("gates a stale GENERATED file; asks about a hand-written one without claiming to have checked", async () => {
     // The upgrade path this exists for: a Dockerfile generated before the serve defaulted to
     // loopback runs `fastagent start /app` with no --bind. Under the new default that container
     // answers only itself — published port, health check and every webhook go dark, and nothing in
@@ -500,45 +500,37 @@ describe("deploy pre-flight: a kept Dockerfile must still bind the wildcard", ()
     const gated = await call(dir, cfg, { run: true });
     expect(gated.ok).toBe(false);
     if (!gated.ok) {
-      expect(gated.gate).toMatch(/no wildcard bind found/);
+      expect(gated.gate).toMatch(/does not pass/);
       expect(gated.gate).toMatch(/--force/); // it was ours to regenerate
     }
     const planned = await call(dir, cfg);
-    expect(planned.ok && planned.messages.some((m) => m.level === "warn" && /wildcard/.test(m.text))).toBe(true);
+    expect(planned.ok && planned.messages.some((m) => m.level === "warn" && /--bind/.test(m.text))).toBe(true);
 
-    // A HAND-WRITTEN one only warns, even under --run: this reads the file for a mention of the
-    // wildcard, not an effective CMD, and a Dockerfile someone owns can bind it in ways a
-    // non-parser will not see. Claiming to have checked would be worse than saying what was looked for.
-    await writeFile(join(dir, "Dockerfile"), 'FROM node:22-slim\nCMD ["fastagent", "start", "/app"]\n');
+    // The generated shape is known, so the flag itself is what counts — and `::1` is loopback, not a
+    // wildcard, however much of one it contains.
+    await writeFile(join(dir, "Dockerfile"), stale.replace('"/app"', '"/app", "--bind", "::1"'));
+    expect((await call(dir, cfg, { run: true })).ok).toBe(false);
+    await writeFile(join(dir, "Dockerfile"), stale.replace('"/app"', '"/app", "--bind", "::"'));
+    expect((await call(dir, cfg, { run: true })).ok).toBe(true);
+
+    // A HAND-WRITTEN one is never gated and never silenced by pattern-matching: which CMD it ends up
+    // running is not something this reads (multi-stage builds, ENTRYPOINT interaction, a `0.0.0.0`
+    // in a comment), so it asks rather than claiming a verdict. Silencing on a regex would be the
+    // dangerous direction — it would wave through exactly the container this exists to catch.
+    await writeFile(join(dir, "Dockerfile"), 'FROM node:22-slim\nENV HOST=0.0.0.0\nENTRYPOINT ["/entry.sh"]\n');
     const handWritten = await call(dir, cfg, { run: true });
     expect(handWritten.ok).toBe(true);
     if (handWritten.ok) {
-      expect(handWritten.messages.some((m) => m.level === "warn" && /no wildcard bind found/.test(m.text))).toBe(true);
-      expect(handWritten.messages.every((m) => !/--force/.test(m.text))).toBe(true);
+      const asked = handWritten.messages.find((m) => /--bind/.test(m.text));
+      expect(asked?.level).toBe("warn");
+      expect(asked?.text).toMatch(/not verified/);
     }
 
-    // Any mention of the wildcard is enough to stay silent — including one this would not have parsed.
-    await writeFile(join(dir, "Dockerfile"), 'FROM node:22-slim\nENV HOST=0.0.0.0\nENTRYPOINT ["/entry.sh"]\n');
-    const mentions = await call(dir, cfg, { run: true });
-    expect(mentions.ok && mentions.messages.every((m) => !/wildcard/.test(m.text))).toBe(true);
-
-    // A loopback IPv6 literal is NOT a wildcard, however much of one it contains: `::1` binds this
-    // container only, and letting the `::` inside it count would wave through exactly what this stops.
-    await writeFile(join(dir, "Dockerfile"), stale.replace('"/app"', '"/app", "--bind", "::1"'));
-    const loopbackV6 = await call(dir, cfg, { run: true });
-    expect(loopbackV6.ok).toBe(false);
-    if (!loopbackV6.ok) expect(loopbackV6.gate).toMatch(/no wildcard bind found/);
-    // ...while a bare `::` is the v6 wildcard and passes.
-    await writeFile(join(dir, "Dockerfile"), stale.replace('"/app"', '"/app", "--bind", "::"'));
-    const wildcardV6 = await call(dir, cfg, { run: true });
-    expect(wildcardV6.ok).toBe(true);
-
-    // And an explicit `http.host: "0.0.0.0"` binds the wildcard from inside the image, so a Dockerfile
-    // that never mentions one is correct — flagging it would be telling the operator to fix a
-    // container that already answers.
+    // An explicit `http.host: "0.0.0.0"` binds the wildcard from inside the image, so there is
+    // nothing to ask about — flagging it would send the operator to fix a container that answers.
     await writeFile(join(dir, "Dockerfile"), stale);
     const viaConfig = await call(dir, { ...cfg, http: { host: "0.0.0.0" } }, { run: true });
     expect(viaConfig.ok).toBe(true);
-    if (viaConfig.ok) expect(viaConfig.messages.every((m) => !/wildcard/.test(m.text))).toBe(true);
+    if (viaConfig.ok) expect(viaConfig.messages.every((m) => !/--bind/.test(m.text))).toBe(true);
   });
 });
