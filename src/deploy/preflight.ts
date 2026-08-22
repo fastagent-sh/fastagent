@@ -462,74 +462,73 @@ export async function preflightDeploy(input: {
     shipsGit,
   };
   const port = config.http?.port ?? 8787;
-  // `http.host` travels in the artifact (config is what deploy ships), and any non-wildcard value that
-  // is right on a laptop is wrong in a container: the wildcard bind is what makes the published port,
-  // the health check and webhook ingress reachable at all. `--bind` is the local-only knob; config is not.
+  // What will the CONTAINER bind? Two things can answer, and the CLI flag wins over config, so the
+  // question has to be asked in that order — not as two independent checks that can each be right
+  // about their own input and wrong about the container.
+  //
+  // A generated Dockerfile passes `--bind 0.0.0.0`, which overrides whatever `http.host` travelled in.
+  // A kept one might not, and then config is what binds.
+  const dockerfileHome = join(agentDir, "Dockerfile");
+  const keptDockerfile = !force && (await exists(dockerfileHome)) ? await readFile(dockerfileHome, "utf8") : undefined;
+  const generated = keptDockerfile !== undefined && isGeneratedDockerfile(keptDockerfile);
+  // For a file WE generate the shape is known, so look for the flag itself. For one we did not, do
+  // not pretend to parse a Dockerfile — multi-stage builds, ENTRYPOINT/CMD interaction and line
+  // continuations all defeat a regex — and take any standalone mention of a wildcard as a yes.
+  const cmdBindsWildcard =
+    keptDockerfile === undefined
+      ? true // no kept file: this plan writes one, and it passes --bind 0.0.0.0
+      : generated
+        ? /--bind["',\s]+(0\.0\.0\.0|::)["',\s]/.test(keptDockerfile)
+        : /(^|[\s"'=])(0\.0\.0\.0|::)($|[\s"'\]])/.test(keptDockerfile);
+
   const configBind = classifyBind(config.http?.host);
-  // Unset and an explicit "0.0.0.0" both classify as wildcard, but only the explicit one travels into
-  // the image and binds there. The Dockerfile check below needs that difference; classifyBind must
-  // not learn it, since it answers about a value and unset is the absence of one.
-  const wildcardFromConfig = config.http?.host !== undefined && configBind === "wildcard";
-  if (configBind !== "wildcard") {
+  // Unset and an explicit "0.0.0.0" both classify as wildcard, and only the explicit one travels into
+  // the image and binds there. classifyBind must not learn that difference — it answers about a value,
+  // and unset is the absence of one — so it is made here, where the question is about a container.
+  const configStatesWildcard = config.http?.host !== undefined && configBind === "wildcard";
+  // `http.host` only decides the bind when nothing on the command line does. When the container
+  // passes the wildcard, a laptop-shaped `http.host` travels in and is ignored — gating on it would
+  // refuse a container that answers perfectly well.
+  if (!cmdBindsWildcard && configBind !== "wildcard") {
     const issue =
-      `fastagent.config.ts sets http.host: "${config.http?.host}" — it travels into the image, where ` +
+      `fastagent.config.ts sets http.host: "${config.http?.host}", and your Dockerfile does not pass ` +
+      `--bind — so in the image ` +
       (configBind === "loopback"
         ? `nothing outside the container can reach the serve (published port, health check, webhooks).`
         : `that address does not exist, so the container fails to bind at start.`) +
-      ` Drop it and use \`--bind ${config.http?.host}\` locally instead.`;
+      ` Drop it and use \`--bind ${config.http?.host}\` locally instead, or pass --bind 0.0.0.0 in the CMD.`;
     // Same disposition as the model-travel issue: warn when producing artifacts (the operator may be
     // deploying somewhere that fronts the port), gate `--run` — which would otherwise ship a box that
     // answers nothing, or crash-loops on a bind that cannot resolve inside the container.
     if (run) return { ok: false, gate: issue };
     messages.push({ level: "warn", text: issue });
   }
-  // What the agent declared it needs on the box (fastagent.config deploy.secrets) — carried like channel
-  // secrets: listed in the runbook, set from the local env under --run, gated if a value is missing.
+
+  // A kept Dockerfile with no wildcard bind, and no config saying it either: a serve binds 127.0.0.1
+  // unless told otherwise, so the published port, the health check and every webhook go dark — and
+  // nothing in the container logs says why.
+  if (keptDockerfile !== undefined && !cmdBindsWildcard && !configStatesWildcard) {
+    const issue =
+      `no wildcard bind found in your Dockerfile — a serve binds 127.0.0.1 unless told otherwise, so ` +
+      `the container would answer nothing from outside. Add \`--bind 0.0.0.0\` to its CMD` +
+      (generated ? ", or re-generate it with --force." : ".");
+    // Gate `--run` only for a file WE generated, where the shape is known and the finding is certain.
+    if (run && generated) return { ok: false, gate: issue };
+    messages.push({ level: "warn", text: issue });
+  }
+
   const extraSecrets = config.deploy?.secrets ?? [];
   // deploy.apt only shapes the GENERATED Dockerfile. Warn ONLY when the kept Dockerfile is HAND-WRITTEN
   // (its apt won't include these) — a fastagent-generated one is handled by writeArtifacts. Don't suggest
   // --force here: it would overwrite the user's hand-written file.
-  const dockerfileHome = join(agentDir, "Dockerfile");
-  if (config.deploy?.apt?.length && !force && (await exists(dockerfileHome))) {
-    if (!isGeneratedDockerfile(await readFile(dockerfileHome, "utf8"))) {
+  if (config.deploy?.apt?.length && keptDockerfile !== undefined) {
+    if (!generated) {
       messages.push({
         level: "warn",
         text:
           `kept your hand-written Dockerfile — deploy.apt (${config.deploy.apt.join(", ")}) is ` +
           `NOT applied; install those packages in your Dockerfile.`,
       });
-    }
-  }
-
-  // A kept Dockerfile — hand-written, or generated before the serve started defaulting to loopback —
-  // runs whatever CMD it already has. Without an explicit wildcard bind that container answers only
-  // itself: the published port, the health check and every webhook go dark, and nothing in the
-  // container logs says why. Read the file that will actually run rather than the one this plan would
-  // have written, since --force is what decides between them.
-  //
-  // The test is "does this file mention the wildcard ANYWHERE", not "does its effective CMD bind it".
-  // Parsing a Dockerfile properly means multi-stage builds, ENTRYPOINT/CMD interaction, line
-  // continuations and indentation — and a half-parser that claims to have checked is worse than one
-  // that admits what it looked at. So this errs toward silence: any `0.0.0.0` or `::` anywhere counts,
-  // which a file that binds the wildcard will always have, and the message says what was looked for.
-  // `http.host: "0.0.0.0"` binds the wildcard from inside the image without any CMD flag, so a
-  // Dockerfile that never mentions one is fine — the check above already passed that config through.
-  if (!force && !wildcardFromConfig && (await exists(dockerfileHome))) {
-    const kept = await readFile(dockerfileHome, "utf8");
-    const generated = isGeneratedDockerfile(kept);
-    // `0.0.0.0` or a BARE `::` — not any address that happens to contain one. `::1` is loopback and
-    // `2001:db8::1` is one host; letting either count would wave through the exact container this
-    // check exists to stop.
-    if (!/(^|[\s"'=])(0\.0\.0\.0|::)($|[\s"'\]])/.test(kept)) {
-      const issue =
-        `no wildcard bind found in your Dockerfile — a serve binds 127.0.0.1 unless told otherwise, ` +
-        `so the container would answer nothing from outside. Add \`--bind 0.0.0.0\` to its CMD` +
-        (generated ? ", or re-generate it with --force." : ".");
-      // Gate `--run` only for a file WE generated, where the shape is known and the finding is
-      // certain. A hand-written Dockerfile can bind the wildcard in ways this does not read, so it
-      // gets the same sentence as a warning and the operator decides.
-      if (run && generated) return { ok: false, gate: issue };
-      messages.push({ level: "warn", text: issue });
     }
   }
 

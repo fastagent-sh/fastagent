@@ -57,9 +57,18 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     }
   });
 
-  it("http.host travels into the image: gates --run, warns in plan mode, wildcard is silent", async () => {
+  it("http.host only decides the bind when the Dockerfile does not", async () => {
     const dir = await workspace();
     const cfg = (host?: string): FastagentConfig => ({ model: "openai/gpt-4o-mini", http: host ? { host } : {} });
+
+    // With no Dockerfile yet, this plan writes one that passes `--bind 0.0.0.0`. The flag beats
+    // config, so a laptop-shaped http.host travels in and is ignored — gating on it would refuse a
+    // container that answers perfectly well.
+    const generatedWins = await call(dir, cfg("127.0.0.1"), { run: true });
+    expect(generatedWins.ok).toBe(true);
+
+    // A hand-written Dockerfile with no --bind is the case where config still decides.
+    await writeFile(join(dir, "Dockerfile"), 'FROM node:22-slim\nCMD ["fastagent", "start", "/app"]\n');
     const gated = await call(dir, cfg("127.0.0.1"), { run: true });
     expect(gated.ok).toBe(false);
     if (!gated.ok) expect(gated.gate).toMatch(/nothing outside the container can reach the serve/);
@@ -70,6 +79,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     // Plan mode only produces artifacts, so it warns and proceeds.
     const planned = await call(dir, cfg("127.0.0.1"));
     expect(planned.ok && planned.messages.some((m) => m.level === "warn" && /http\.host/.test(m.text))).toBe(true);
+    // And an explicit wildcard in config is silent whatever the Dockerfile does.
     const wildcard = await call(dir, cfg("0.0.0.0"), { run: true });
     expect(wildcard.ok && wildcard.messages.every((m) => !/http\.host/.test(m.text))).toBe(true);
   });
