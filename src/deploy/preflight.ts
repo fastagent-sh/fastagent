@@ -491,7 +491,8 @@ export async function preflightDeploy(input: {
   // `http.host` only decides the bind when nothing on the command line does. When the container
   // passes the wildcard, a laptop-shaped `http.host` travels in and is ignored — gating on it would
   // refuse a container that answers perfectly well.
-  if (keptDockerfile !== undefined && !generatedCmdBindsWildcard && configBind !== "wildcard") {
+  // Ours AND config-decided: the CMD we wrote passes no --bind, so `http.host` is what binds.
+  if (generated && !generatedCmdBindsWildcard && configBind !== "wildcard") {
     const issue =
       `fastagent.config.ts sets http.host: "${config.http?.host}", and your Dockerfile does not pass ` +
       `--bind — so in the image ` +
