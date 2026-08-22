@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -185,14 +186,14 @@ describe("create: assembleSystemPrompt (four segments)", () => {
   });
 
   it("piBasePrompt renders the tool list from actual tools so base and toolset stay aligned", () => {
-    const withTools = piBasePrompt({ tools: piDefaultTools() });
+    const withTools = piBasePrompt({ tools: piDefaultTools(process.cwd()) });
     expect(withTools).toContain("- read:");
     expect(withTools).toContain("- bash:");
     expect(piBasePrompt()).toContain("(none)");
   });
 
   it("a persona.md persona overrides the engine identity but keeps the tool list + guidelines", () => {
-    const tools = piDefaultTools();
+    const tools = piDefaultTools(process.cwd());
     const persona = piBasePrompt({ tools, persona: "You are the Repo Bot." });
     expect(persona).toContain("You are the Repo Bot.");
     expect(persona).not.toContain("operating inside pi"); // default identity replaced
@@ -312,21 +313,27 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools are pi core four tools (same as pi default)", () => {
+  it("piDefaultTools is pi-coding-agent's coding four, and nothing else", () => {
+    // Same set createCodingTools returns — asserted against the source rather than a hand-written
+    // list, so it follows upstream instead of drifting from it.
     expect(
-      piDefaultTools()
+      piDefaultTools(process.cwd())
         .map((t) => t.name)
         .sort(),
-    ).toEqual(["bash", "edit", "read", "write"]);
+    ).toEqual(
+      createCodingTools(process.cwd())
+        .map((t) => t.name)
+        .sort(),
+    );
+    expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(["read", "bash", "edit", "write"]);
   });
 
-  it("pi's read tool can read the fixture (same behavior as local pi)", async () => {
-    const read = piDefaultTools().find((t) => t.name === "read")!;
-    // The env IS the tool's root now (pi 0.83 hands it in as the turn's tool context), so a direct call
-    // has to supply one — the same thing `fastagent tool` does, and the harness for every served turn.
-    const r = await read.execute("t1", { path: "AGENTS.md" }, undefined, undefined, {
-      env: new NodeExecutionEnv({ cwd: fixtureDir }),
-    });
+  it("pi's read tool is rooted at the workspace it was built for", async () => {
+    // The root is fixed at CONSTRUCTION now, not handed in per turn: these are pi-coding-agent's
+    // tools, which take a cwd. Every caller builds them for the workspace the agent works on, so a
+    // relative path resolves against that workspace and nothing else.
+    const read = piDefaultTools(fixtureDir).find((t) => t.name === "read")!;
+    const r = await read.execute("t1", { path: "AGENTS.md" }, undefined, undefined, {} as never);
     const text = (r.content[0] as any).text as string;
     expect(text).toContain("Haiku Bot");
   });
@@ -493,11 +500,63 @@ describe("create L2: an explicit tools list states its own coding capabilities",
       await createPiAgentFromDefinition(dir, {
         model: "faux/faux-1",
         providers: [faux.provider],
-        tools: piDefaultTools(),
+        tools: piDefaultTools(process.cwd()),
       });
       expect(warn.mock.calls.flat().join("\n")).not.toMatch(/reader/i);
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("create L2: the workspace roots the tools, the env reads the definition", () => {
+  it("keeps `cwd` and a custom `env` apart, through the assembled agent", async () => {
+    // Two directories doing two jobs. `cwd` is the workspace: where read/bash/edit/write land AND
+    // whose ancestors carry ② project context. `env` is the IO the loader uses. Reading either root
+    // off the other silently points half the agent at the wrong directory, and only a caller passing
+    // both would ever notice — so this drives the real agent instead of re-calling the helpers.
+    const workspace = await mkdtemp(join(tmpdir(), "fa-ws-"));
+    const definitionDir = await mkdtemp(join(tmpdir(), "fa-def-"));
+    await writeFile(join(workspace, "AGENTS.md"), "# Workspace context\n\nThe marker is FROM-WORKSPACE.\n");
+    await writeFile(join(workspace, "marker.txt"), "READ-FROM-WORKSPACE\n");
+    await writeFile(join(definitionDir, "persona.md"), "You are terse.\n");
+    await writeFile(join(definitionDir, "marker.txt"), "READ-FROM-DEFINITION-DIR\n");
+
+    const { faux } = makeFaux();
+    let systemPrompt = "";
+    // First turn: call `read` on a bare relative path. Whichever root the tool was built for is the
+    // one that resolves it, and each directory holds a different file at that name.
+    faux.setResponses([
+      (context) => {
+        systemPrompt = context.systemPrompt ?? "";
+        return {
+          ...fauxAssistantMessage(""),
+          content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "marker.txt" } }],
+        } as ReturnType<typeof fauxAssistantMessage>;
+      },
+      fauxAssistantMessage("done"),
+    ]);
+    const { agent, definition } = await createPiAgentFromDefinition(definitionDir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+      cwd: workspace,
+      env: new NodeExecutionEnv({ cwd: definitionDir }),
+    });
+    // The BOOT snapshot (what callers report diagnostics from) walked the workspace.
+    expect(JSON.stringify(definition.contextFiles)).toContain("FROM-WORKSPACE");
+
+    const events = [];
+    for await (const e of agent.invoke({ session: "s" }, { text: "hi" })) events.push(e);
+    // THE tool actually ran, against the workspace root it was built for.
+    const toolText = JSON.stringify(events);
+    expect(toolText).toContain("READ-FROM-WORKSPACE");
+    expect(toolText).not.toContain("READ-FROM-DEFINITION-DIR");
+
+    // ...and so did the LIVE re-read that actually reaches the model.
+    expect(systemPrompt).toContain("FROM-WORKSPACE");
+    // And the model is told the SAME root its tools resolve against — naming the loader's directory
+    // as the working directory would be a lie the model has no way to detect.
+    expect(systemPrompt).toContain(workspace);
+    expect(systemPrompt).not.toContain(definitionDir);
   });
 });

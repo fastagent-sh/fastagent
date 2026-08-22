@@ -299,17 +299,19 @@ initial active set at build, and the same builtin loader activates through a ses
 ToolActivation bridge (`sessionToolActivation`) riding the same turn context, so the author debugs
 exactly what serves.
 
-**`ExecutionEnv` is where the default tools reach the machine.** `read`/`bash`/`edit`/`write` come from
-pi-agent-core and take the env as the turn's tool context (pi 0.83), rather than from pi-coding-agent,
-whose identical four are wired to `node:fs` directly — the model-facing surface is asserted equal in
-test/tools-parity.test.ts, so the choice is about WHERE they touch the machine, not what the agent sees.
-Injecting a custom `env` therefore governs the tools that actually do the touching, which is what makes
-it a seam worth having.
+**`ExecutionEnv` governs definition loading, not the tools.** `read`/`bash`/`edit`/`write` are
+pi-coding-agent's, rooted at the workspace at construction, and they reach `node:fs` directly. For a
+while they were pi-agent-core's look-alikes, which take the env as the turn's tool context, so that
+`env` would be the single seam a sandbox adapter implements. That was given up deliberately: the seam
+never closed anything by itself — author-written `tools/` import whatever they like — while it cost a
+167-line parity suite and a hand-built image pipeline for a `read` that ships none. (`grep`/`find`/`ls`
+also live only on the coding-agent side; whether they belong in the default surface is a separate
+question.)
 
-It is still not a complete sandbox, and the gaps are specific: `loadProjectContextFiles` reads ② context
-through node fs DIRECTLY rather than the env (definition.ts states this as a known break), fastagent's
-OWN tools (`tools/`) are author code that can import anything, and `deploy`/channel machinery runs
-outside it entirely. A sandbox adapter provides an `ExecutionEnv` AND constrains the process it runs in;
+`env` is therefore NOT a sandbox, and the gaps are specific: the default tools bypass it, fastagent's
+OWN tools (`tools/`) are author code that can import anything, `loadProjectContextFiles` reads ②
+context through node fs directly, and `deploy`/channel machinery runs outside it entirely. A sandbox
+adapter constrains the process it runs in;
 `env` alone narrows the blast radius rather than closing it.
 
 ## 6. Sessions and concurrency

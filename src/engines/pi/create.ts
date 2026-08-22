@@ -11,17 +11,9 @@
  * they come from the definition; the openers own model/tools — from config resolution).
  */
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
-import {
-  type ExecutionEnv,
-  type Skill,
-  type ThinkingLevel,
-  createBashTool,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-} from "@earendil-works/pi-agent-core";
+import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { readImageProcessor } from "./read-image.ts";
+import { createCodingTools } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import {
@@ -57,30 +49,26 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // fewer tools is behavior drift. A directory agent can narrow with `codingTools: [names]` or opt out
 // with `codingTools: false`; L1/L2 library callers can pass a restricted `tools` list directly.
 //
-// These are pi-agent-core's tools, which reach the filesystem and the shell through the
-// {@link ExecutionEnv} the binding hands them per turn — NOT pi-coding-agent's, which are the same four
-// tools wired to `node:fs` directly. Going through the env is the point, and the whole of it: it makes
-// {@link CreatePiAgentOptions.env} the one seam a sandbox adapter has to implement, instead of a knob
-// that governed everything except the tools that actually touch the machine. (It buys no decoupling
-// from pi-coding-agent — definition.ts, models.ts and read-image.ts all import it regardless.)
+// They are pi-coding-agent's, the same package everything else here comes from (definition.ts,
+// models.ts, the session runtime). pi-agent-core ships four look-alikes that reach the machine through
+// the per-turn {@link ExecutionEnv} instead of `node:fs`, and those were used here for a while to keep
+// `env` the single seam a sandbox adapter would implement.
 //
-// The swap holds only while the two behave alike, which they do NOT for free: core's `read` does
-// nothing with images unless a processor is injected (read-image.ts), and both families are compared
-// on every path in test/tools-parity.test.ts.
+// That seam was worth naming and is not worth keeping: `env` never isolated anything on its own —
+// author-written `tools/` import whatever they like, which the docs say plainly — so it narrowed a
+// blast radius rather than closing it, and sandboxing is an explicit non-goal today. The bill was
+// concrete: a 167-line parity suite asserting the two families stay identical, and a hand-injected
+// image pipeline because core's `read` has none. Both are gone with the swap. `grep`/`find`/`ls` live
+// on this side too and are now reachable — mounting them is a separate decision about the default
+// surface, not something this change makes. When a real sandbox arrives it will tell us where the seam
+// belongs; a guess that costs this much every day is not a down payment.
 //
 // `chat` is unaffected: it takes these NAMES only and lets pi's own runtime rebuild the tools it
 // renders (see session-builder.ts).
 
-/** pi's core default toolset (read/bash/edit/write). Rooted at the ExecutionEnv's cwd, supplied per
- *  turn as the tool context — hence no argument here. */
-export function piDefaultTools(): MountedTool[] {
-  // `read` needs its image pipeline INJECTED (core ships none); see read-image.ts for what is at stake.
-  return [
-    createReadTool({ imageProcessor: readImageProcessor }),
-    createBashTool(),
-    createEditTool(),
-    createWriteTool(),
-  ];
+/** pi's default coding toolset (read/bash/edit/write), rooted at the workspace it operates in. */
+export function piDefaultTools(cwd: string): MountedTool[] {
+  return createCodingTools(cwd);
 }
 
 export interface ResolvedCodingTools {
@@ -90,13 +78,13 @@ export interface ResolvedCodingTools {
 
 /** Resolve the config's one coding-tool policy. Every directory consumer uses this result rather than
  *  re-interpreting undefined/true/false/arrays independently. */
-export function resolveCodingTools(config: FastagentConfig): ResolvedCodingTools {
+export function resolveCodingTools(config: FastagentConfig, cwd: string): ResolvedCodingTools {
   const requested = config.codingTools;
   const enabled =
     requested === false
       ? new Set<CodingToolName>()
       : new Set<CodingToolName>(Array.isArray(requested) ? requested : CODING_TOOL_NAMES);
-  const tools = piDefaultTools().filter((tool) => enabled.has(tool.name as CodingToolName));
+  const tools = piDefaultTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
   return { tools, names: tools.map((tool) => tool.name as CodingToolName) };
 }
 
@@ -120,8 +108,8 @@ export function disabledBuiltinNames(
 }
 
 /** `config.tools` semantics: extra tools APPENDED after enabled pi coding tools, never replacing them. */
-export function resolveTools(config: FastagentConfig): MountedTool[] {
-  const coding = resolveCodingTools(config).tools;
+export function resolveTools(config: FastagentConfig, cwd: string): MountedTool[] {
+  const coding = resolveCodingTools(config, cwd).tools;
   return config.tools ? [...coding, ...config.tools] : coding;
 }
 
@@ -133,6 +121,7 @@ export function resolveTools(config: FastagentConfig): MountedTool[] {
 export async function resolveAgentTools(
   config: FastagentConfig,
   agentDir: string,
+  cwd: string,
 ): Promise<{
   tools: MountedTool[];
   codingToolNames: CodingToolName[];
@@ -143,11 +132,11 @@ export async function resolveAgentTools(
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
 }> {
-  // Discovered `tools/` come from `agentDir` (the agent's own surface); the default coding tools carry
-  // no root of their own — they operate through the ExecutionEnv handed to them per turn, whose cwd is
-  // the workspace.
+  // Discovered `tools/` come from `agentDir` (the agent's own surface); the default coding tools are
+  // rooted at `cwd`, the WORKSPACE — the project the agent works on, which is where an author expects
+  // `read`/`bash` to land, and which is not always the definition directory.
   const discovered = await loadTools(agentDir);
-  const coding = resolveCodingTools(config);
+  const coding = resolveCodingTools(config, cwd);
   const configured = config.tools ? [...coding.tools, ...config.tools] : coding.tools;
   const merged = mergeDiscoveredTools(configured, discovered.tools);
   // The built-in `search_tools` loader mounts here — the one place the agent's full tool set is
@@ -301,15 +290,21 @@ function buildPiAgent(opts: {
   /** Disabled built-ins; see {@link PiAgentSessionFactoryOptions.excludedToolNames}. */
   excludedToolNames?: readonly string[];
   env?: ExecutionEnv;
+  /** The WORKSPACE: where tools operate, what the model is told its working directory is, and what
+   *  session records are keyed to. Defaults to the env's root, which is the same thing at L1 — the
+   *  two only diverge when a caller names a workspace AND hands a separately-rooted env, and then
+   *  every one of those three must follow the workspace, not the loader. */
+  cwd?: string;
   lease?: Lease;
   observer?: SessionObserver;
   onAssembly?: OnAssembly;
 }): Agent {
   const env = opts.env ?? new NodeExecutionEnv({ cwd: process.cwd() });
+  const cwd = opts.cwd ?? env.cwd;
   // Materialized here (not defaulted inside the L0) so the exposed parts carry the SAME lease
   // instance the agent runs under — boundary mutations must contend on it.
   const lease = opts.lease ?? inProcessLease();
-  const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd: env.cwd });
+  const sessions = opts.sessions ?? piInMemorySessionRecordStore({ cwd });
   // The model and its runtime resolve on FIRST USE: building a ModelRuntime is async while
   // assembling an agent is not, so the credential read belongs on the first turn rather than in the
   // caller's constructor. Memoized by the factory, and shared with the control plane below so a
@@ -335,7 +330,7 @@ function buildPiAgent(opts: {
     systemPrompt: opts.systemPrompt,
     skills: opts.skills,
     live: opts.live,
-    cwd: env.cwd,
+    cwd,
     ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
     ...(opts.excludedToolNames?.length ? { excludedToolNames: opts.excludedToolNames } : {}),
@@ -406,7 +401,7 @@ export interface CreatePiAgentOptions {
   instructions?: string | (() => string);
   /** The tool set to mount. `FastagentTool` (AgentTool plus the optional `deferred` marker, see
    *  {@link DefineToolOptions}) widens into {@link MountedTool}, which additionally admits pi's default
-   *  coding tools — they read the turn's ExecutionEnv as a fifth `execute` parameter. */
+   *  coding tools — those bind their workspace at construction rather than reading a turn context. */
   tools?: MountedTool[];
   skills?: Skill[];
   // ── Tier 2: injectable ports ───────────────────────────────────────────────
@@ -425,10 +420,12 @@ export interface CreatePiAgentOptions {
   /** Session persistence. Defaults to in-memory; inject piSessionRecordStore for restart-surviving
    *  continuity. */
   sessions?: PiSessionRecordStore;
-  /** Filesystem/process environment. Defaults to a local NodeExecutionEnv at `process.cwd()`, and its
-   *  cwd is the agent's. The default coding tools (read/bash/edit/write) take it as the turn's tool
-   *  context, so injecting a constrained one narrows where the agent reads, writes and shells. It does
-   *  NOT constrain author-written `tools/`, which are code and can import anything. */
+  /** Filesystem/process environment, handed to tools that read one as the turn's context. Defaults to
+   *  a local NodeExecutionEnv at `process.cwd()`. At THIS rung nothing else consumes it: L1 loads no
+   *  definition. It does NOT constrain the default coding tools (pi's own, rooted at the workspace they
+   *  were built for) or author-written `tools/`, which are code and can import anything. Not a
+   *  sandbox — see {@link createPiAgentFromDefinition} for the rung where it also reads the
+   *  definition. */
   env?: ExecutionEnv;
   /** Single-writer lease. Defaults to in-process fail-fast inProcessLease(). */
   lease?: Lease;
@@ -490,8 +487,8 @@ export interface CreatePiAgentFromDefinitionOptions {
    */
   authPath?: string;
   sessions?: PiSessionRecordStore;
-  /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it does more
-   *  than root the default tools: persona.md and skills/ are read through it too. Two surfaces stay
+  /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it is what
+   *  persona.md and skills/ are read through. Two surfaces stay
    *  OUTSIDE it — ② project context (pi's loadProjectContextFiles uses node fs directly; see
    *  definition.ts) and author-written `tools/`, which are code and can import anything. Injecting an
    *  env narrows the blast radius rather than closing it. */
@@ -517,10 +514,16 @@ export async function createPiAgentFromDefinition(
   const env = options.env ?? new NodeExecutionEnv({ cwd });
   // Boot-time load: fail-visibly at startup on a broken directory, and give callers the snapshot to
   // report (skills/diagnostics/collisions). Serving does NOT close over it — see `live` below.
-  const definition = await loadAgentDefinition(dir, { cwd: env.cwd, env });
+  // `cwd`, not `env.cwd`, for the same reason as the tools below: `cwd` is the run root whose
+  // ancestors carry ② project context. Reading it off the env pointed the AGENTS.md walk at the
+  // loader's directory whenever a caller supplied both.
+  const definition = await loadAgentDefinition(dir, { cwd, env });
   // Deferred tools need their loader on every rung (idempotent — the workspace opener already applied
   // it; a caller's own search_tools wins).
-  const tools = withSearchTool(options.tools ?? piDefaultTools());
+  // `cwd`, not `env.cwd`: the workspace is what this option MEANS, and a caller may hand a custom env
+  // for definition loading whose root is a different directory. Taking it off the env would silently
+  // point read/bash/edit/write at the loader's directory.
+  const tools = withSearchTool(options.tools ?? piDefaultTools(cwd));
   // An explicit `tools` list is the caller stating the whole surface, so the coding capabilities are
   // whichever built-in NAMES appear in it — not none. A caller passing `piDefaultTools()` gets the
   // identity that matches what they mounted, rather than the capability-neutral one. Name-based,
@@ -557,7 +560,7 @@ export async function createPiAgentFromDefinition(
     // not silently vanish from the agent, and a static one must not spam every turn's log. The
     // next good edit heals both.
     live: async () => {
-      const def = await loadAgentDefinition(dir, { cwd: env.cwd, env });
+      const def = await loadAgentDefinition(dir, { cwd, env });
       reportFindingsIfChanged(def.dir, def);
       return {
         systemPrompt: assembleSystemPrompt({
@@ -567,7 +570,9 @@ export async function createPiAgentFromDefinition(
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
           skills: def.skills,
-          cwd: env.cwd,
+          // The workspace, matching where the tools operate. Telling the model one directory while
+          // `read`/`bash` resolve relative paths against another is a lie it cannot detect.
+          cwd,
         }),
         skills: def.skills,
       };
@@ -577,7 +582,8 @@ export async function createPiAgentFromDefinition(
     // Discovered so the serving assembly can WARN that it does not run them (and so the refusals
     // apply to the artifact either way) — `chat` is where they load. Boot-resolved: the set cannot
     // change without a restart, which is why this sits outside `live` above.
-    extensionPaths: await loadExtensionPaths(dir, { cwd: env.cwd, env }),
+    extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
+    cwd,
     // The disabled built-ins, refused at the registry — see PiAgentSessionFactoryOptions. A name an
     // AUTHORED tool has taken is not excluded: with the built-in off, that name is the author's to
     // reuse (documented), and pi's denylist works on names, so excluding it would delete their tool.

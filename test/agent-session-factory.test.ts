@@ -211,7 +211,7 @@ describe("piAgentSessionFactory: the definition reaches the model", () => {
         systemPrompt: "base",
         // pi lists skills only when `read` is mounted — a skill is a file the model has to open, so
         // advertising one it cannot read would be an empty offer. Serving always has it.
-        tools: piDefaultTools(),
+        tools: piDefaultTools(process.cwd()),
         skills: [{ name: "release", description: "Cut a release", filePath: skillFile }] as Parameters<
           typeof piAgentSessionFactory
         >[0]["skills"],

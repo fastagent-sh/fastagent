@@ -88,14 +88,14 @@ describe("loadTools (filesystem discovery)", () => {
     await mkdir(join(cwd, "tools"), { recursive: true });
     await writeFile(join(cwd, "tools", "hostonly.mjs"), tool); // the host repo's tool at cwd — must NOT be scanned
 
-    const { toolNames } = await resolveAgentTools({}, agentDir);
+    const { toolNames } = await resolveAgentTools({}, agentDir, process.cwd());
     expect(toolNames).toContain("foo"); // discovered from agentDir
     expect(toolNames).not.toContain("hostonly"); // cwd's own tools/ is the host's, not the agent's surface
   });
 
   it("codingTools false with an empty definition stays empty instead of restoring pi defaults", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-empty-"));
-    const resolved = await resolveAgentTools({ codingTools: false }, agentDir);
+    const resolved = await resolveAgentTools({ codingTools: false }, agentDir, process.cwd());
     expect(resolved.tools).toEqual([]);
     expect(resolved.codingToolNames).toEqual([]);
     expect(resolved.toolNames).toEqual([]);
@@ -109,7 +109,11 @@ describe("loadTools (filesystem discovery)", () => {
       `export default { description: "Business read", parameters: { type: "object" }, async execute() { return { content: [], details: "ok" }; } };`,
     );
 
-    const { tools, toolNames, toolCollisions } = await resolveAgentTools({ codingTools: false }, agentDir);
+    const { tools, toolNames, toolCollisions } = await resolveAgentTools(
+      { codingTools: false },
+      agentDir,
+      process.cwd(),
+    );
     expect(tools.map((t) => t.name)).toEqual(["read"]);
     expect(toolNames).toEqual(["read"]);
     expect(toolCollisions).toEqual([]);
@@ -125,7 +129,11 @@ describe("loadTools (filesystem discovery)", () => {
       execute: () => "ok",
     });
 
-    const { tools, deferredToolNames } = await resolveAgentTools({ codingTools: false, tools: [deferred] }, agentDir);
+    const { tools, deferredToolNames } = await resolveAgentTools(
+      { codingTools: false, tools: [deferred] },
+      agentDir,
+      process.cwd(),
+    );
     expect(tools.map((t) => t.name).sort()).toEqual(["lookup", "search_tools"]);
     expect(deferredToolNames).toEqual(["lookup"]);
   });

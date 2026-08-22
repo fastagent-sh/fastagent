@@ -97,7 +97,7 @@ export interface PiAgentSessionFactoryOptions {
    * disabled names must not be mountable at all.
    */
   excludedToolNames?: readonly string[];
-  /** Filesystem/process environment handed to pi's default coding tools. */
+  /** Filesystem/process environment: definition loading, and the turn context for tools that read one. */
   env: ExecutionEnv;
 }
 

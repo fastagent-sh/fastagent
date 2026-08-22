@@ -299,21 +299,24 @@ describe("config: loadConfig", () => {
 
 describe("config: resolveTools (coding defaults + authored tools)", () => {
   it("enables pi coding tools by default and appends config.tools", () => {
-    const defaults = resolveTools({});
+    const defaults = resolveTools({}, process.cwd());
     expect(defaults.map((t) => t.name)).toEqual(["read", "bash", "edit", "write"]);
-    expect(resolveTools({ codingTools: true }).map((t) => t.name)).toEqual(defaults.map((t) => t.name));
+    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual(defaults.map((t) => t.name));
 
     const extra = { name: "ping" } as unknown as FastagentTool;
-    const merged = resolveTools({ tools: [extra] });
+    const merged = resolveTools({ tools: [extra] }, process.cwd());
     expect(merged.map((t) => t.name)).toEqual([...defaults.map((t) => t.name), "ping"]);
   });
 
   it("codingTools false/[] remove all coding tools; an array selects names in canonical order", () => {
     const extra = { name: "ping" } as unknown as FastagentTool;
-    expect(resolveTools({ codingTools: false }).map((t) => t.name)).toEqual([]);
-    expect(resolveTools({ codingTools: [] }).map((t) => t.name)).toEqual([]);
-    expect(resolveTools({ codingTools: ["write", "read"] }).map((t) => t.name)).toEqual(["read", "write"]);
-    expect(resolveTools({ codingTools: false, tools: [extra] }).map((t) => t.name)).toEqual(["ping"]);
+    expect(resolveTools({ codingTools: false }, process.cwd()).map((t) => t.name)).toEqual([]);
+    expect(resolveTools({ codingTools: [] }, process.cwd()).map((t) => t.name)).toEqual([]);
+    expect(resolveTools({ codingTools: ["write", "read"] }, process.cwd()).map((t) => t.name)).toEqual([
+      "read",
+      "write",
+    ]);
+    expect(resolveTools({ codingTools: false, tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual(["ping"]);
   });
 });
 
