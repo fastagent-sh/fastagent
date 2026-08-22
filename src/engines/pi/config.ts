@@ -49,8 +49,9 @@ export interface FastagentConfig {
   /** Extra custom tools, appended after enabled pi coding tools — never replaces them. `FastagentTool`
    *  = AgentTool plus the optional `deferred` marker (see defineTool). */
   tools?: FastagentTool[];
-  /** `host` is the bind address: unset (or `0.0.0.0`) binds all interfaces — what containers need;
-   *  `127.0.0.1` keeps the serve (including `/control/*`) off the LAN. Precedence: `--bind` > this. */
+  /** `host` is the bind address: unset binds `127.0.0.1` (this machine only); `0.0.0.0` binds all
+   *  interfaces, which containers need — and which `deploy` states in the container itself, since
+   *  this value travels into the image. Precedence: `--bind` > this. */
   http?: { port?: number; host?: string };
   /** Mount the built-in `wake` tool so the agent can schedule its OWN follow-up turns (self-scheduling).
    *  Off by default — self-scheduling is an autonomy capability, opt in when you want it. Only takes
@@ -60,10 +61,10 @@ export interface FastagentConfig {
    * Serve the session control plane over HTTP (`/control/*`: state/entries/events + dispatch —
    * steer/abort/compact/set_model…) for remote consumers: a Web panel, a desktop app, `fastagent
    * attach`. Default off (it is a remote-control surface). When on, `dev`/`start` generate a
-   * per-boot bearer token and write `<stateRoot>/control.json` for local discovery. The serve
-   * binds all interfaces by default, so the routes are LAN-reachable with the token as the only
-   * protection — bind loopback (`--bind 127.0.0.1`; not `http.host`, which travels into a deployed
-   * image), firewall the port, or wrap it for real exposure (design §14).
+   * per-boot bearer token and write `<stateRoot>/control.json` for local discovery. The serve binds
+   * loopback by default, so these routes are off the LAN unless you bind wider — if you do
+   * (`--bind 0.0.0.0`), the token is their only protection: firewall the port, or wrap it for real
+   * exposure (design §14).
    */
   sessionControl?: boolean;
   /** Deploy-time declarations for what the agent needs on the box, so real agents don't hand-write a

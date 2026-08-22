@@ -517,7 +517,10 @@ export async function preflightDeploy(input: {
   if (!force && !wildcardFromConfig && (await exists(dockerfileHome))) {
     const kept = await readFile(dockerfileHome, "utf8");
     const generated = isGeneratedDockerfile(kept);
-    if (!/0\.0\.0\.0|::/.test(kept)) {
+    // `0.0.0.0` or a BARE `::` — not any address that happens to contain one. `::1` is loopback and
+    // `2001:db8::1` is one host; letting either count would wave through the exact container this
+    // check exists to stop.
+    if (!/(^|[\s"'=])(0\.0\.0\.0|::)($|[\s"'\]])/.test(kept)) {
       const issue =
         `no wildcard bind found in your Dockerfile — a serve binds 127.0.0.1 unless told otherwise, ` +
         `so the container would answer nothing from outside. Add \`--bind 0.0.0.0\` to its CMD` +

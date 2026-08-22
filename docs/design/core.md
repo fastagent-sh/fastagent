@@ -266,7 +266,7 @@ Workspace tools are merged in this order:
 2. `config.tools`;
 3. discovered `tools/*.ts|js|mjs`.
 
-Unset/`true` selects all four for authoring/serving fidelity; `false`/`[]` selects none; an array selects
+Unset/`true` selects all seven for authoring/serving fidelity; `false`/`[]` selects none; an array selects
 exact names in canonical order. The array is deliberate minimum privilege: file-backed skills and
 non-image channel attachments need `read`, while a public-facing read-only agent should not have to
 accept `bash`/`edit`/`write` merely to retain those capabilities. An agent with neither capability can

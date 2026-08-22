@@ -505,6 +505,17 @@ describe("deploy pre-flight: a kept Dockerfile must still bind the wildcard", ()
     const mentions = await call(dir, cfg, { run: true });
     expect(mentions.ok && mentions.messages.every((m) => !/wildcard/.test(m.text))).toBe(true);
 
+    // A loopback IPv6 literal is NOT a wildcard, however much of one it contains: `::1` binds this
+    // container only, and letting the `::` inside it count would wave through exactly what this stops.
+    await writeFile(join(dir, "Dockerfile"), stale.replace('"/app"', '"/app", "--bind", "::1"'));
+    const loopbackV6 = await call(dir, cfg, { run: true });
+    expect(loopbackV6.ok).toBe(false);
+    if (!loopbackV6.ok) expect(loopbackV6.gate).toMatch(/no wildcard bind found/);
+    // ...while a bare `::` is the v6 wildcard and passes.
+    await writeFile(join(dir, "Dockerfile"), stale.replace('"/app"', '"/app", "--bind", "::"'));
+    const wildcardV6 = await call(dir, cfg, { run: true });
+    expect(wildcardV6.ok).toBe(true);
+
     // And an explicit `http.host: "0.0.0.0"` binds the wildcard from inside the image, so a Dockerfile
     // that never mentions one is correct — flagging it would be telling the operator to fix a
     // container that already answers.
