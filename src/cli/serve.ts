@@ -129,10 +129,9 @@ export function mountSessionControl(
       chmodSync(tmp, 0o600); // an existing file keeps its old mode on rewrite — pin it
       renameSync(tmp, path);
       log.info(`[fastagent] session control on /control/* (token in ${path})`);
-      // The serve binds ALL interfaces by DEFAULT (containers require it), so /control/* is
-      // LAN-reachable with the bearer token as the only protection — the tunnel and deploy paths warn
-      // loudly, and the LAN path must not be the silent third way past the local trust story. A
-      // loopback bind closes exactly that reach, so it earns silence.
+      // The serve binds loopback by default, so /control/* is off the LAN unless the operator widened
+      // it. When they did, the bearer token is its only protection — the tunnel and deploy paths warn
+      // loudly, and this LAN path must not be the silent third way past the local trust story.
       const bind = classifyBind(options.host);
       if (bind !== "loopback") {
         log.warn(
@@ -281,7 +280,9 @@ export function readyAddressLines(host: string | undefined, boundPort: number, b
 /**
  * Bind HTTP, open long-connection channels, and report ready only when both forms are usable. Each
  * adapter owns reconnects; a terminal close rejects `closed` and fails the process visibly. Abort is
- * the sole clean-shutdown command. `host` unset binds all interfaces.
+ * the sole clean-shutdown command. `host` unset binds all interfaces — but the CLI always passes a
+ * resolved address (bind.ts DEFAULT_BIND, loopback), and the deploy container passes the wildcard
+ * explicitly, so "unset" is reachable only by an embedder calling this directly.
  */
 export function serve(
   surface: ServingSurface,
