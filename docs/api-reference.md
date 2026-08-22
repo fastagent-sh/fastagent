@@ -175,7 +175,7 @@ The same opener used by `fastagent dev`, `invoke`, and `start`: load config, res
 Directory config can disable pi's default coding tools without changing the authored tool surface:
 
 ```ts
-type CodingToolName = "read" | "bash" | "edit" | "write";
+type CodingToolName = "read" | "grep" | "find" | "ls" | "bash" | "edit" | "write";
 
 interface FastagentConfig {
   codingTools?: boolean | CodingToolName[];
@@ -183,13 +183,15 @@ interface FastagentConfig {
 }
 ```
 
-Unset/`true` mounts all four; `false`/`[]` mounts none; an array mounts exactly those names in canonical
-order. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) applies
-the same resolved surface. Model-visible skills and chat-channel non-image attachments require the
-built-in `read`; use `codingTools: ["read"]` when those capabilities remain needed. Conditional
-built-ins stay independent: deferred tools may add `search_tools`, and `selfSchedule` may add `wake`
-while serving. The lower-level `createPiAgent` API remains explicit: its `tools` option is the exact set
-supplied by the caller and has no `codingTools` option.
+Unset mounts the **read-only four** (`read`, `grep`, `find`, `ls`); `true` adds `bash`, `edit`, `write`;
+`false`/`[]` mounts none; an array mounts exactly those names in canonical order. Every
+directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) applies the same
+resolved surface, and `createPiAgentFromDefinition` lands on the same default when the caller names no
+`tools`.
+
+Conditional built-ins stay independent: deferred tools may add `search_tools`, and `selfSchedule` may
+add `wake` while serving. The lower-level `createPiAgent` API remains explicit: its `tools` option is
+the exact set supplied by the caller and has no `codingTools` option.
 
 ## Tool authoring
 

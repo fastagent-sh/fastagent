@@ -245,7 +245,7 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
         const st = rt.session.agent.state;
         // Default coding tools (rebuilt by pi from names) PLUS the config's custom tool, registered
         // through the session factory — definition-only, nothing machine-global leaked in.
-        expect(st.tools.map((t) => t.name).sort()).toEqual(["bash", "edit", "ping", "read", "write"]);
+        expect(st.tools.map((t) => t.name).sort()).toEqual(["find", "grep", "ls", "ping", "read"]);
         // The injected system prompt is fastagent's: the definition's AGENTS.md and skill are in it.
         const sp = st.systemPrompt ?? "";
         expect(sp).toContain("MAGIC_CHAT_MARKER_91");
@@ -489,19 +489,21 @@ describe("session builder: the credential hint belongs to the runtime, not to ea
 describe("session builder: chat offers the model the same tool set serving does", () => {
   it("activates fastagent's tools without pi's extra ones", async () => {
     // Dropping the `tools` allowlist (it froze the set against extensions registering from a
-    // handler) put this at risk: pi mounts read-only helpers of its own — grep, find, ls — that
-    // fastagent's tool set does not include. It mounts them without activating them, which is why
-    // the allowlist was removable; a version of this that stated the active set explicitly offered
-    // the model all three and was caught by the assertion above.
+    // handler) put this at risk. fastagent's default set is now pi's read-only four, so what must
+    // NOT appear is the mutating half — pi mounts read/bash/edit/write of its own and leaves them
+    // inactive, and a version of this that stated the active set explicitly offered them anyway.
     const dir = await mkdtemp(join(tmpdir(), "fa-active-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
     try {
       const active = rt.session.getActiveToolNames().sort();
-      expect(active).toEqual(["bash", "edit", "read", "write"]);
-      // ...and they ARE mounted, just not offered — so this is about activation, not discovery.
-      expect(rt.session.getAllTools().map((t) => t.name)).toContain("grep");
+      expect(active).toEqual(["find", "grep", "ls", "read"]);
+      // And on the default posture the mutating half is not even in the registry: `noTools: "builtin"`
+      // keeps pi's own read/bash/edit/write out, and fastagent mounts only the read-only four. Nothing
+      // that activates by name can reach a shell here.
+      expect(rt.session.getAllTools().map((t) => t.name)).not.toContain("bash");
+      expect(rt.session.getAllTools().map((t) => t.name)).not.toContain("write");
     } finally {
       await rt.dispose?.();
     }

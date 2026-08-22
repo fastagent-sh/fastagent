@@ -262,7 +262,7 @@ the source.
 
 Workspace tools are merged in this order:
 
-1. the pi coding tools selected by `config.codingTools` (`read`, `bash`, `edit`, `write`);
+1. the pi coding tools selected by `config.codingTools` — the read-only four (`read`, `grep`, `find`, `ls`) unless the definition says otherwise, plus `bash`/`edit`/`write` when it does;
 2. `config.tools`;
 3. discovered `tools/*.ts|js|mjs`.
 
@@ -299,7 +299,7 @@ initial active set at build, and the same builtin loader activates through a ses
 ToolActivation bridge (`sessionToolActivation`) riding the same turn context, so the author debugs
 exactly what serves.
 
-**`ExecutionEnv` governs definition loading, not the tools.** `read`/`bash`/`edit`/`write` are
+**`ExecutionEnv` governs definition loading, not the tools.** The coding tools are
 pi-coding-agent's, rooted at the workspace at construction, and they reach `node:fs` directly. For a
 while they were pi-agent-core's look-alikes, which take the env as the turn's tool context, so that
 `env` would be the single seam a sandbox adapter implements. That was given up deliberately: the seam

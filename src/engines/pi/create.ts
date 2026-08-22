@@ -13,11 +13,12 @@
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createCodingTools } from "@earendil-works/pi-coding-agent";
+import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import {
   CODING_TOOL_NAMES,
+  READ_ONLY_TOOL_NAMES,
   type CodingToolName,
   type FastagentConfig,
   defaultAuthPath,
@@ -45,9 +46,12 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
-// The full pi toolset is the default for fidelity: authors vibe in local pi with it, so serving with
-// fewer tools is behavior drift. A directory agent can narrow with `codingTools: [names]` or opt out
-// with `codingTools: false`; L1/L2 library callers can pass a restricted `tools` list directly.
+// The READ-ONLY half is the default: `read`, `grep`, `find`, `ls`. Local pi hands the whole toolset to
+// the person typing, who is also the person it answers to; a served agent answers to whoever can
+// message it, so mounting `bash` mounts it for them, and `edit`/`write` let them rewrite the
+// definition it runs on. Reading is the half that answers questions without changing anything, and it
+// is what skills and file attachments need. `codingTools: true` adds the rest, `[names]` picks, and
+// `false` mounts none; L1/L2 callers can pass an explicit `tools` list instead.
 //
 // They are pi-coding-agent's, the same package everything else here comes from (definition.ts,
 // models.ts, the session runtime). pi-agent-core ships four look-alikes that reach the machine through
@@ -66,9 +70,22 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // `chat` is unaffected: it takes these NAMES only and lets pi's own runtime rebuild the tools it
 // renders (see session-builder.ts).
 
-/** pi's default coding toolset (read/bash/edit/write), rooted at the workspace it operates in. */
+/** Every pi coding tool, in canonical order, rooted at the workspace it operates in. */
+export function piAllCodingTools(cwd: string): MountedTool[] {
+  // `read` is in both of pi's groupings; take it once, from the read-only side.
+  const mutating = createCodingTools(cwd).filter((tool) => tool.name !== "read");
+  return [...createReadOnlyTools(cwd), ...mutating];
+}
+
+/**
+ * What an agent mounts when nobody said otherwise: the read-only four.
+ *
+ * ONE default for every rung — a directory agent's `codingTools` (resolveCodingTools) and an L2
+ * caller who names no tools land on the same set. Serving means acting on messages from whoever can
+ * reach the agent, so `bash`/`edit`/`write` are granted to them too; that is a yes worth typing.
+ */
 export function piDefaultTools(cwd: string): MountedTool[] {
-  return createCodingTools(cwd);
+  return createReadOnlyTools(cwd);
 }
 
 export interface ResolvedCodingTools {
@@ -80,11 +97,12 @@ export interface ResolvedCodingTools {
  *  re-interpreting undefined/true/false/arrays independently. */
 export function resolveCodingTools(config: FastagentConfig, cwd: string): ResolvedCodingTools {
   const requested = config.codingTools;
-  const enabled =
-    requested === false
-      ? new Set<CodingToolName>()
-      : new Set<CodingToolName>(Array.isArray(requested) ? requested : CODING_TOOL_NAMES);
-  const tools = piDefaultTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
+  // Unset is the READ-ONLY half, not everything: serving means acting on messages from whoever can
+  // reach the agent, so `bash`/`edit`/`write` are theirs too once mounted. `true` says yes to that.
+  const enabled = new Set<CodingToolName>(
+    requested === false ? [] : requested === true ? CODING_TOOL_NAMES : (requested ?? READ_ONLY_TOOL_NAMES),
+  );
+  const tools = piAllCodingTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
   return { tools, names: tools.map((tool) => tool.name as CodingToolName) };
 }
 
@@ -525,14 +543,13 @@ export async function createPiAgentFromDefinition(
   // point read/bash/edit/write at the loader's directory.
   const tools = withSearchTool(options.tools ?? piDefaultTools(cwd));
   // An explicit `tools` list is the caller stating the whole surface, so the coding capabilities are
-  // whichever built-in NAMES appear in it — not none. A caller passing `piDefaultTools()` gets the
-  // identity that matches what they mounted, rather than the capability-neutral one. Name-based,
-  // exactly like the exclusion below, and for the same reason: the name is the only thing either
-  // side can observe. `codingTools` stays a definition property — the directory opener passes the
-  // resolved set explicitly.
-  const codingToolNames =
-    options.codingToolNames ??
-    (options.tools === undefined ? [...CODING_TOOL_NAMES] : codingToolNamesIn(options.tools));
+  // Read off what is ACTUALLY mounted, never from how the caller got here. Deriving it from "was
+  // `tools` passed?" made the default case claim all seven while mounting four, so the model was told
+  // it could run commands. Name-based, exactly like the exclusion below, and for the same reason: the
+  // name is the only thing either side can observe. The directory opener still passes its resolved
+  // set explicitly — the one case where intent and mount legitimately differ (a built-in name an
+  // author reused; see disabledBuiltinNames).
+  const codingToolNames = options.codingToolNames ?? codingToolNamesIn(tools);
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by
   // the resolved dir): announced once here, and re-announced by a turn or by the control plane's
   // command list only when the set CHANGES — a runtime-written bad skill surfaces the moment it

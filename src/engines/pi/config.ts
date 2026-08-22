@@ -24,8 +24,20 @@ import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../.
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the
 // exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
 
-/** pi's machine-reaching coding tools, in canonical mount/report order. */
-export const CODING_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
+/**
+ * pi's coding tools, split by the only line that matters for a served agent: whether using one can
+ * change something.
+ *
+ * READ_ONLY answers questions about the workspace. MUTATING writes files and runs commands — and a
+ * served agent takes its instructions from whoever can message it, so granting those is granting
+ * them to that person. The default is the read-only half for that reason; `codingTools: true` opts
+ * into the rest.
+ */
+export const READ_ONLY_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
+const MUTATING_TOOL_NAMES = ["bash", "edit", "write"] as const;
+
+/** All of them, in canonical mount/report order. */
+export const CODING_TOOL_NAMES = [...READ_ONLY_TOOL_NAMES, ...MUTATING_TOOL_NAMES] as const;
 export type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
 
 export interface FastagentConfig {
@@ -35,9 +47,16 @@ export interface FastagentConfig {
    *  "xhigh" | "max"). Unset = pi's default. Authors tune thinking in the pi TUI while vibing — this
    *  is the serving-side counterpart (fidelity). Levels a model doesn't support are clamped by pi. */
   thinkingLevel?: ThinkingLevel;
-  /** Which pi coding tools to mount. Unset/true = all (`read`, `bash`, `edit`, `write`); false/[] =
-   *  none; an array mounts exactly those names, in canonical order. Authored tools (`config.tools` +
-   *  discovered `tools/`) and conditional built-ins (`search_tools`, `wake`) are independent. */
+  /** Which pi coding tools to mount.
+   *
+   *  - unset — the READ-ONLY four: `read`, `grep`, `find`, `ls`
+   *  - `true` — those plus `bash`, `edit`, `write`
+   *  - `false` / `[]` — none
+   *  - an array — exactly those names, in canonical order
+   *
+   *  The default is read-only because a served agent acts on messages from whoever can reach it:
+   *  mounting `bash` mounts it for them. Authored tools (`config.tools` + discovered `tools/`) and
+   *  conditional built-ins (`search_tools`, `wake`) are independent of this. */
   codingTools?: boolean | CodingToolName[];
   /** Extra custom tools, appended after enabled pi coding tools — never replaces them. `FastagentTool`
    *  = AgentTool plus the optional `deferred` marker (see defineTool). */
@@ -156,7 +175,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     throw new Error(`${path}: "sessionControl" must be a boolean`);
   }
   if (c.codingTools !== undefined && typeof c.codingTools !== "boolean" && !Array.isArray(c.codingTools)) {
-    throw new Error(`${path}: "codingTools" must be a boolean or an array containing read, bash, edit, write`);
+    throw new Error(`${path}: "codingTools" must be a boolean or an array of ${CODING_TOOL_NAMES.join(", ")}`);
   }
   if (Array.isArray(c.codingTools)) {
     const valid = new Set<string>(CODING_TOOL_NAMES);
