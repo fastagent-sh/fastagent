@@ -498,9 +498,8 @@ describe("session builder: the credential hint belongs to the runtime, not to ea
 describe("session builder: chat offers the model the same tool set serving does", () => {
   it("activates fastagent's tools without pi's extra ones", async () => {
     // Dropping the `tools` allowlist (it froze the set against extensions registering from a
-    // handler) put this at risk. fastagent's default set is now pi's read-only four, so what must
-    // NOT appear is the mutating half — pi mounts read/bash/edit/write of its own and leaves them
-    // inactive, and a version of this that stated the active set explicitly offered them anyway.
+    // handler) put this at risk: pi mounts read/bash/edit/write of ITS OWN and leaves them inactive,
+    // so a version of this that stated the active set explicitly offered the model two of each.
     const dir = await mkdtemp(join(tmpdir(), "fa-active-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
     await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');

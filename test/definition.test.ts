@@ -251,8 +251,8 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("season-words");
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
-    // default = the READ-ONLY coding tools; mutating ones need `codingTools: true`. Custom code tools
-    // stay an explicit `tools:` injection, no magic dir.
+    // default = every pi coding tool (fidelity with local pi); narrowing is `codingTools: [names]`.
+    // Custom code tools stay an explicit `tools:` injection, no magic dir.
     expect(seenTools.sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
   });
 });

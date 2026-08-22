@@ -497,6 +497,27 @@ export async function preflightDeploy(input: {
     }
   }
 
+  // A kept Dockerfile — hand-written, or generated before the serve started defaulting to loopback —
+  // runs whatever CMD it already has. Without an explicit wildcard bind that container answers only
+  // itself: the published port, the health check and every webhook go dark, and nothing in the
+  // container logs says why. Read the file that will actually run rather than the one this plan would
+  // have written, since --force is what decides between them.
+  if (!force && (await exists(dockerfileHome))) {
+    const kept = await readFile(dockerfileHome, "utf8");
+    const cmd = kept.split("\n").find((line) => line.startsWith("CMD")) ?? "";
+    if (cmd && !/0\.0\.0\.0|::/.test(cmd)) {
+      const issue =
+        `your Dockerfile's CMD does not bind the wildcard — a serve now binds 127.0.0.1 unless told ` +
+        `otherwise, so the container would answer nothing from outside. Add \`--bind 0.0.0.0\` to the ` +
+        `CMD` +
+        (isGeneratedDockerfile(kept) ? " (or re-generate it with --force)." : ".");
+      // Same disposition as the other travel issues: warn when producing artifacts, gate `--run`,
+      // which would otherwise ship a box that answers nothing.
+      if (run) return { ok: false, gate: issue };
+      messages.push({ level: "warn", text: issue });
+    }
+  }
+
   return {
     ok: true,
     messages,

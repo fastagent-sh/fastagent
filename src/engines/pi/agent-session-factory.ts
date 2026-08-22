@@ -360,8 +360,8 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       thinkingLevel: settings.thinkingLevel,
       // pi would otherwise mount its own read/bash/edit/write ON TOP of whatever fastagent mounted,
       // offering the model two tools under one name. fastagent supplies its own copies of the ones
-      // this agent is configured for, so pi's are always redundant — and on the default read-only
-      // posture, keeping them out is also what makes `bash` absent rather than merely inactive.
+      // this agent is configured for, so pi's are always redundant — and for a narrowed definition,
+      // keeping them out is what makes an excluded tool absent rather than merely inactive.
       noTools: "builtin",
       ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
       customTools: toolDefinitions(tools, cwd, env, sessionId, bound),
