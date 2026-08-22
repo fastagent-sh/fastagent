@@ -561,3 +561,29 @@ describe("create L2: the workspace roots the tools, the env reads the definition
     expect(systemPrompt).not.toContain(definitionDir);
   });
 });
+
+describe("create L2: the identity matches what is mounted", () => {
+  it("does not claim a coding surface it did not mount", async () => {
+    // The default mounts the read-only four. Reporting the full seven — which is what deriving the
+    // capability set from "was `tools` passed?" did — tells the model it can execute commands and
+    // edit files. It cannot, and it has no way to find that out except by trying.
+    const dir = await mkdtemp(join(tmpdir(), "fa-identity-"));
+    await writeFile(join(dir, "persona.md"), "");
+    const { faux } = makeFaux();
+    let prompt = "";
+    faux.setResponses([
+      (context) => {
+        prompt = context.systemPrompt ?? "";
+        return fauxAssistantMessage("ok");
+      },
+    ]);
+    const { agent } = await createPiAgentFromDefinition(dir, { model: "faux/faux-1", providers: [faux.provider] });
+    await collect(agent.invoke({ session: "s" }, { text: "hi" }));
+
+    expect(prompt).toContain("- read:");
+    expect(prompt).toContain("- grep:");
+    expect(prompt).not.toContain("- bash:");
+    // ...and the identity is the capability-neutral one, not pi's "executing commands, editing code".
+    expect(prompt).not.toContain("executing commands");
+  });
+});
