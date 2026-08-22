@@ -13,11 +13,12 @@
 import { formatSkillsForSystemPrompt } from "@earendil-works/pi-agent-core";
 import type { ExecutionEnv, Skill, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createCodingTools } from "@earendil-works/pi-coding-agent";
+import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import {
   CODING_TOOL_NAMES,
+  READ_ONLY_TOOL_NAMES,
   type CodingToolName,
   type FastagentConfig,
   defaultAuthPath,
@@ -66,9 +67,22 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // `chat` is unaffected: it takes these NAMES only and lets pi's own runtime rebuild the tools it
 // renders (see session-builder.ts).
 
-/** pi's default coding toolset (read/bash/edit/write), rooted at the workspace it operates in. */
+/** Every pi coding tool, in canonical order, rooted at the workspace it operates in. */
+export function piAllCodingTools(cwd: string): MountedTool[] {
+  // `read` is in both of pi's groupings; take it once, from the read-only side.
+  const mutating = createCodingTools(cwd).filter((tool) => tool.name !== "read");
+  return [...createReadOnlyTools(cwd), ...mutating];
+}
+
+/**
+ * What an agent mounts when nobody said otherwise: the read-only four.
+ *
+ * ONE default for every rung — a directory agent's `codingTools` (resolveCodingTools) and an L2
+ * caller who names no tools land on the same set. Serving means acting on messages from whoever can
+ * reach the agent, so `bash`/`edit`/`write` are granted to them too; that is a yes worth typing.
+ */
 export function piDefaultTools(cwd: string): MountedTool[] {
-  return createCodingTools(cwd);
+  return createReadOnlyTools(cwd);
 }
 
 export interface ResolvedCodingTools {
@@ -80,11 +94,12 @@ export interface ResolvedCodingTools {
  *  re-interpreting undefined/true/false/arrays independently. */
 export function resolveCodingTools(config: FastagentConfig, cwd: string): ResolvedCodingTools {
   const requested = config.codingTools;
-  const enabled =
-    requested === false
-      ? new Set<CodingToolName>()
-      : new Set<CodingToolName>(Array.isArray(requested) ? requested : CODING_TOOL_NAMES);
-  const tools = piDefaultTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
+  // Unset is the READ-ONLY half, not everything: serving means acting on messages from whoever can
+  // reach the agent, so `bash`/`edit`/`write` are theirs too once mounted. `true` says yes to that.
+  const enabled = new Set<CodingToolName>(
+    requested === false ? [] : requested === true ? CODING_TOOL_NAMES : (requested ?? READ_ONLY_TOOL_NAMES),
+  );
+  const tools = piAllCodingTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
   return { tools, names: tools.map((tool) => tool.name as CodingToolName) };
 }
 

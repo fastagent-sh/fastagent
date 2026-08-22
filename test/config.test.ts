@@ -74,7 +74,7 @@ describe("config: loadConfig validation", () => {
     expect((await load("false")).config.codingTools).toBe(false);
     expect((await load('["read"]')).config.codingTools).toEqual(["read"]);
     await expect(load('"no"')).rejects.toThrow(/codingTools.*must be a boolean or an array/);
-    await expect(load('["cat"]')).rejects.toThrow(/codingTools\[0\].*read, bash, edit, write/);
+    await expect(load('["cat"]')).rejects.toThrow(/codingTools\[0\].*read, grep, find, ls, bash, edit, write/);
     await expect(load('["read", "read"]')).rejects.toThrow(/must not contain duplicate "read"/);
   });
 });
@@ -298,10 +298,20 @@ describe("config: loadConfig", () => {
 });
 
 describe("config: resolveTools (coding defaults + authored tools)", () => {
-  it("enables pi coding tools by default and appends config.tools", () => {
+  it("defaults to the read-only tools; `true` adds the mutating ones", () => {
+    // A served agent acts on messages from whoever can reach it, so mounting `bash` mounts it for
+    // them. Reading is the safe half and the useful default; the rest is an explicit yes.
     const defaults = resolveTools({}, process.cwd());
-    expect(defaults.map((t) => t.name)).toEqual(["read", "bash", "edit", "write"]);
-    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual(defaults.map((t) => t.name));
+    expect(defaults.map((t) => t.name)).toEqual(["read", "grep", "find", "ls"]);
+    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "bash",
+      "edit",
+      "write",
+    ]);
 
     const extra = { name: "ping" } as unknown as FastagentTool;
     const merged = resolveTools({ tools: [extra] }, process.cwd());
@@ -449,5 +459,21 @@ describe("rewriteConfigModel (first-run picker write-back)", async () => {
   it("returns null for a hand-shaped config (no model line, no scaffold block shape)", () => {
     expect(rewriteConfigModel("export default { http: { port: 8787 } };\n", "x/y")).toBeNull(); // one-liner
     expect(rewriteConfigModel("export default defineConfig({\n});\n", "x/y")).toBeNull(); // wrapper call
+  });
+});
+
+describe("config: codingTools accepts the read-only names too", () => {
+  it("mounts grep/find/ls when named explicitly", () => {
+    expect(resolveTools({ codingTools: ["grep", "ls"] }, process.cwd()).map((t) => t.name)).toEqual(["grep", "ls"]);
+  });
+
+  it("keeps canonical order regardless of how the array is written", () => {
+    // Order is the config's, not the caller's: reports, prompts and mount order all read this list,
+    // and two definitions with the same set should present identically.
+    expect(resolveTools({ codingTools: ["write", "grep", "read"] }, process.cwd()).map((t) => t.name)).toEqual([
+      "read",
+      "grep",
+      "write",
+    ]);
   });
 });

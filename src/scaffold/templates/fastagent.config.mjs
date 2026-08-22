@@ -10,8 +10,9 @@
 export default {
   // model: "openai-codex/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
-  // codingTools: ["read"], // least privilege: keep skill/file reading, disable shell + file mutation
-  // codingTools: false,    // no coding tools; model-visible skills and non-image file attachments need `read`
+  // codingTools: true,     // add bash/edit/write to the read-only default (read, grep, find, ls).
+  //                        // A served agent acts on whoever messages it, so this grants them too.
+  // codingTools: false,    // no coding tools at all; skills and file attachments need `read`
   http: { port: 8787 },
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
   //                     // ("check the deploy in 10 min"). Cron jobs need no opt-in — drop a schedules/<name>.ts.

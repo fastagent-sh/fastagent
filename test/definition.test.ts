@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCodingTools } from "@earendil-works/pi-coding-agent";
+import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -14,7 +14,7 @@ import {
   createPiAgentFromDefinition,
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
-import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
+import { assembleSystemPrompt, piAllCodingTools, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { isUnderDir } from "../src/engines/pi/definition.ts";
@@ -186,7 +186,7 @@ describe("create: assembleSystemPrompt (four segments)", () => {
   });
 
   it("piBasePrompt renders the tool list from actual tools so base and toolset stay aligned", () => {
-    const withTools = piBasePrompt({ tools: piDefaultTools(process.cwd()) });
+    const withTools = piBasePrompt({ tools: piAllCodingTools(process.cwd()) });
     expect(withTools).toContain("- read:");
     expect(withTools).toContain("- bash:");
     expect(piBasePrompt()).toContain("(none)");
@@ -251,8 +251,9 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("season-words");
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
-    // default = pi core toolset (fidelity); custom code tools = explicit tools: injection, no magic dir
-    expect(seenTools.sort()).toEqual(["bash", "edit", "read", "write"]);
+    // default = the READ-ONLY coding tools; mutating ones need `codingTools: true`. Custom code tools
+    // stay an explicit `tools:` injection, no magic dir.
+    expect(seenTools.sort()).toEqual(["find", "grep", "ls", "read"]);
   });
 });
 
@@ -313,19 +314,19 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools is pi-coding-agent's coding four, and nothing else", () => {
-    // Same set createCodingTools returns — asserted against the source rather than a hand-written
-    // list, so it follows upstream instead of drifting from it.
-    expect(
-      piDefaultTools(process.cwd())
-        .map((t) => t.name)
-        .sort(),
-    ).toEqual(
-      createCodingTools(process.cwd())
-        .map((t) => t.name)
-        .sort(),
+  it("piDefaultTools is the read-only four; piAllCodingTools is every one", () => {
+    // Asserted against pi's own two groupings rather than hand-written lists, so both sets follow
+    // upstream; the ORDER of the full set is ours, and it is what the config reports and mounts in.
+    expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(
+      createReadOnlyTools(process.cwd()).map((t) => t.name),
     );
-    expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(["read", "bash", "edit", "write"]);
+    const all = piAllCodingTools(process.cwd()).map((t) => t.name);
+    expect(all).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+    expect([...all].sort()).toEqual(
+      [
+        ...new Set([...createReadOnlyTools(process.cwd()), ...createCodingTools(process.cwd())].map((t) => t.name)),
+      ].sort(),
+    );
   });
 
   it("pi's read tool is rooted at the workspace it was built for", async () => {
