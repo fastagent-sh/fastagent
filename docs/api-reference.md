@@ -86,7 +86,7 @@ JSON.
 ```ts
 function nodeListener(handler: (req: Request) => Promise<Response>): (req, res) => void;
 function router(routes: Routes): ChannelHandler;
-// `host` is the bind address; unset binds all interfaces (what containers need).
+// `host` is the bind address; unset binds all interfaces (the CLI passes DEFAULT_BIND = 127.0.0.1).
 function serveNode(handler: ChannelHandler, options: { port: number; host?: string }): {
   listening: Promise<number>;
   close(): Promise<void>;

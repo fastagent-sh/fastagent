@@ -14,6 +14,17 @@ function normalize(host: string): string {
     .replace(/^::ffff:/, "");
 }
 
+/**
+ * Where a serve binds when nobody said otherwise: THIS MACHINE.
+ *
+ * The alternative — every interface — makes the very first `fastagent start` reachable from the LAN,
+ * and the built-in `POST /invoke` has no authentication of its own. That combination hands the
+ * agent's whole tool surface to anyone on the network, without the author doing anything wrong.
+ * Reaching a serve should require reaching the machine first; `--bind 0.0.0.0` (or `http.host`) is
+ * the one-line yes, and `deploy` writes it into the container, where the wildcard IS correct.
+ */
+export const DEFAULT_BIND = "127.0.0.1";
+
 /** A bindable host: an IP literal (v4/v6, brackets optional) or "localhost". No other DNS name — a
  *  bind address must be an address of THIS machine, and resolving one is not this module's job. */
 export function isBindAddress(host: string): boolean {
@@ -36,10 +47,16 @@ export function bindAddress(host: string): string {
 }
 
 /**
- * How far a bind address reaches: `wildcard` (unset or all-interfaces) reaches every interface and
- * answers on loopback too; `loopback` is this machine only; `specific` is one interface, reachable
- * only as itself. Loopback covers the whole reserved range (127/8, ::1) — a `127.0.0.2` bind is no
- * more LAN-reachable than `127.0.0.1`.
+ * How far a bind address reaches: `wildcard` (all interfaces) reaches every interface and answers on
+ * loopback too; `loopback` is this machine only; `specific` is one interface, reachable only as
+ * itself. Loopback covers the whole reserved range (127/8, ::1) — a `127.0.0.2` bind is no more
+ * LAN-reachable than `127.0.0.1`.
+ *
+ * `undefined` classifies as `wildcard` because this asks about a VALUE, and the only caller that
+ * passes undefined is the deploy pre-flight asking "does config.http.host ship something that breaks
+ * a container?" — nothing shipped is nothing to break. What a serve does without a value is
+ * {@link DEFAULT_BIND}, which is loopback, and that decision lives at the CLI where the flag can
+ * override it.
  */
 export function classifyBind(host: string | undefined): "wildcard" | "loopback" | "specific" {
   if (host === undefined) return "wildcard";

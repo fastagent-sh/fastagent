@@ -93,8 +93,8 @@ function dockerfile(input: ContainerInput): string {
   // `start /app` is absolute, so exec form is both correct and signal-clean. (A `cd` on that path was a
   // bug: after `cd fastagent`, `./fastagent/node_modules/...` resolves one level too deep.)
   const bunCmd = prefix
-    ? `["sh", "-c", "cd ${prefix.replace(/\/$/, "")} && exec bun run fastagent start /app"]`
-    : `["bun", "run", "fastagent", "start", "/app"]`;
+    ? `["sh", "-c", "cd ${prefix.replace(/\/$/, "")} && exec bun run fastagent start /app --bind 0.0.0.0"]`
+    : `["bun", "run", "fastagent", "start", "/app", "--bind", "0.0.0.0"]`;
   const layoutNote = prefix
     ? `The whole directory is the agent's workspace; the agent itself lives in ${prefix}`
     : `The directory IS the agent — it is also its own workspace.`;
@@ -122,7 +122,7 @@ FROM node:22-slim
 ${apt}WORKDIR /app
 ${pin}RUN npm i -g @fastagent-sh/fastagent@${input.version}
 COPY . .
-CMD ["fastagent", "start", "/app"]
+CMD ["fastagent", "start", "/app", "--bind", "0.0.0.0"]
 `;
   }
   const isBun = input.runtime === "bun";
@@ -164,7 +164,7 @@ CMD ${bunCmd}
   return `${head}COPY ${into("package.json")} ${into("package-lock.json*")} ./${prefix}
 RUN ${at(install)}
 COPY . .
-CMD ["./${into("node_modules/.bin/fastagent")}", "start", "/app"]
+CMD ["./${into("node_modules/.bin/fastagent")}", "start", "/app", "--bind", "0.0.0.0"]
 `;
 }
 

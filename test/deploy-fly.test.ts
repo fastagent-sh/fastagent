@@ -189,7 +189,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(df).toContain("COPY . ."); // …then the whole workspace
     // The npm entrypoint needs NO shell: assert the property (the binary path resolves from the image's
     // WORKDIR) rather than transcribing the line — a `cd` here once made it resolve one level too deep.
-    const cmdBin = /CMD \["(\.\/[^"]+)", "start", "\/app"\]/.exec(df)?.[1];
+    const cmdBin = /CMD \["(\.\/[^"]+)", "start", "\/app", "--bind", "0\.0\.0\.0"\]/.exec(df)?.[1];
     expect(cmdBin).toBeDefined();
     expect(posix.normalize(posix.join("/app", cmdBin as string))).toBe("/app/fastagent/node_modules/.bin/fastagent");
     expect(df).not.toContain("sh"); // exec form: PID 1 is the agent, so SIGTERM reaches it
@@ -222,7 +222,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(bunDf).toContain("cd fastagent && bun install --frozen-lockfile");
     // Bun DOES need a cwd (it resolves the script from the package.json beside it), so a shell — with
     // `exec`, or sh stays PID 1 and swallows SIGTERM.
-    expect(bunDf).toContain(`CMD ["sh", "-c", "cd fastagent && exec bun run fastagent start /app"]`);
+    expect(bunDf).toContain(`CMD ["sh", "-c", "cd fastagent && exec bun run fastagent start /app --bind 0.0.0.0"]`);
 
     // The agent this deploy was FOR is pinned into every image shape. The container re-resolves
     // placement at /app, and a workspace may hold SEVERAL agents (all of which ship — the build context
@@ -241,7 +241,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(mdDf).toContain("ENV FASTAGENT_AGENT=fastagent");
     expect(mdDf).toContain("npm i -g @fastagent-sh/fastagent@9.9.9"); // pinned global — no deps to install
     expect(mdDf).not.toContain("npm ci");
-    expect(mdDf).toContain(`["fastagent", "start", "/app"]`);
+    expect(mdDf).toContain(`["fastagent", "start", "/app", "--bind", "0.0.0.0"]`);
   });
 
   it("falls back to npm install when a code workspace has no lockfile (npm ci would hard-fail)", () => {
@@ -256,7 +256,7 @@ describe("deploy/fly: planFlyDeploy", () => {
   it("code-workspace CMD runs the LOCAL bin, never npx/bunx (bare `fastagent` on npm is a third party)", () => {
     const npm = dockerfile(planFlyDeploy({ ...base, modelAuth: undefined, channels: [] }));
     // The LOCAL bin, resolved from the image WORKDIR — never npx (which would fetch an unrelated package).
-    const bin = /CMD \["(\.\/[^"]+)", "start", "\/app"\]/.exec(npm)?.[1];
+    const bin = /CMD \["(\.\/[^"]+)", "start", "\/app", "--bind", "0\.0\.0\.0"\]/.exec(npm)?.[1];
     expect(posix.normalize(posix.join("/app", bin as string))).toBe("/app/fastagent/node_modules/.bin/fastagent");
     expect(npm).not.toContain("npx");
   });
@@ -268,7 +268,7 @@ describe("deploy/fly: planFlyDeploy", () => {
     expect(bun).toContain("FROM oven/bun:1.3.13");
     expect(bun).toContain("bun install --frozen-lockfile"); // base.hasLockfile: true → frozen
     // The LOCAL bin, never the registry — the npm package named `fastagent` is an unrelated third party.
-    expect(bun).toContain('CMD ["sh", "-c", "cd fastagent && exec bun run fastagent start /app"]');
+    expect(bun).toContain('CMD ["sh", "-c", "cd fastagent && exec bun run fastagent start /app --bind 0.0.0.0"]');
     expect(bun).not.toContain("node:22-slim");
     // Unpinned bun (a bun lockfile but no packageManager version) → oven/bun:1; no lockfile → plain install.
     const unpinned = dockerfile(

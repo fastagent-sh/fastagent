@@ -79,7 +79,8 @@ export function router(routes: Routes): ChannelHandler {
  * Serve `handler` on a Node HTTP server. Thin mechanism: bind, report the port, let the caller stop
  * accepting or force-close active connections — no logging/signals/exit (the CLI owns those).
  * `listening` resolves with the bound port (useful for port 0) or rejects on a bind error.
- * `host` is the bind address; unset means all interfaces (what containers need).
+ * `host` is the bind address; unset means all interfaces. Callers pass one — the CLI defaults to
+ * loopback (bind.ts DEFAULT_BIND), and `deploy` states the wildcard in the container.
  */
 export function serveNode(
   handler: ChannelHandler,

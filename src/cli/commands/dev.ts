@@ -13,7 +13,7 @@ import { setLogLevel } from "../../log.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { workspaceHint } from "../../paths.ts";
-import { bindAddress } from "../../bind.ts";
+import { DEFAULT_BIND, bindAddress } from "../../bind.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import { assertTunnelBindable, maybeTunnel, mountSessionControl, routesFor, serve, startSchedules } from "../serve.ts";
 import {
@@ -89,7 +89,7 @@ async function serveOnce(dir: string, opts: DevOptions): Promise<void> {
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = a.config.http?.host;
-  const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
+  const host = bindFlag ?? (configured === undefined ? DEFAULT_BIND : bindAddress(configured));
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
   const withControl = mountSessionControl(routed.routes, a.sessionControl, a.stateRoot, {
     tunnel: opts.tunnel ?? false,
