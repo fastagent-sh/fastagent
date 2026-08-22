@@ -466,6 +466,10 @@ export async function preflightDeploy(input: {
   // is right on a laptop is wrong in a container: the wildcard bind is what makes the published port,
   // the health check and webhook ingress reachable at all. `--bind` is the local-only knob; config is not.
   const configBind = classifyBind(config.http?.host);
+  // Unset and an explicit "0.0.0.0" both classify as wildcard, but only the explicit one travels into
+  // the image and binds there. The Dockerfile check below needs that difference; classifyBind must
+  // not learn it, since it answers about a value and unset is the absence of one.
+  const wildcardFromConfig = config.http?.host !== undefined && configBind === "wildcard";
   if (configBind !== "wildcard") {
     const issue =
       `fastagent.config.ts sets http.host: "${config.http?.host}" — it travels into the image, where ` +
@@ -508,7 +512,9 @@ export async function preflightDeploy(input: {
   // continuations and indentation — and a half-parser that claims to have checked is worse than one
   // that admits what it looked at. So this errs toward silence: any `0.0.0.0` or `::` anywhere counts,
   // which a file that binds the wildcard will always have, and the message says what was looked for.
-  if (!force && (await exists(dockerfileHome))) {
+  // `http.host: "0.0.0.0"` binds the wildcard from inside the image without any CMD flag, so a
+  // Dockerfile that never mentions one is fine — the check above already passed that config through.
+  if (!force && !wildcardFromConfig && (await exists(dockerfileHome))) {
     const kept = await readFile(dockerfileHome, "utf8");
     const generated = isGeneratedDockerfile(kept);
     if (!/0\.0\.0\.0|::/.test(kept)) {

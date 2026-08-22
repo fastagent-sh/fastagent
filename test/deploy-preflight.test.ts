@@ -504,5 +504,13 @@ describe("deploy pre-flight: a kept Dockerfile must still bind the wildcard", ()
     await writeFile(join(dir, "Dockerfile"), 'FROM node:22-slim\nENV HOST=0.0.0.0\nENTRYPOINT ["/entry.sh"]\n');
     const mentions = await call(dir, cfg, { run: true });
     expect(mentions.ok && mentions.messages.every((m) => !/wildcard/.test(m.text))).toBe(true);
+
+    // And an explicit `http.host: "0.0.0.0"` binds the wildcard from inside the image, so a Dockerfile
+    // that never mentions one is correct — flagging it would be telling the operator to fix a
+    // container that already answers.
+    await writeFile(join(dir, "Dockerfile"), stale);
+    const viaConfig = await call(dir, { ...cfg, http: { host: "0.0.0.0" } }, { run: true });
+    expect(viaConfig.ok).toBe(true);
+    if (viaConfig.ok) expect(viaConfig.messages.every((m) => !/wildcard/.test(m.text))).toBe(true);
   });
 });
