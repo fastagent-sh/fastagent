@@ -10,8 +10,6 @@
 export default {
   // model: "openai-codex/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
-  // codingTools: false,    // read + search only; no bash/edit/write (read/grep/find/ls always mount)
-  // codingTools: ["edit"], // ...or just the one you want
   http: { port: 8787 },
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns
   //                     // ("check the deploy in 10 min"). Cron jobs need no opt-in — drop a schedules/<name>.ts.

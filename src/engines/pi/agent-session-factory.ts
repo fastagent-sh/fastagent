@@ -89,12 +89,7 @@ export interface PiAgentSessionFactoryOptions {
    * that entry point upstream, not a workaround here.
    */
   extensionPaths?: string[];
-  /**
-   * Built-in coding tools this definition disabled, refused at the registry rather than merely left
-   * inactive. `noTools: "builtin"` only keeps pi's own copies out of the active set; this denylist
-   * keeps a TUI command, control-plane action, or deferred-tool loader from restoring one by name, so
-   * the runtime tool set stays faithful to `codingTools`.
-   */
+  /** Built-ins omitted by an explicit lower-level tool list; directory agents mount all of them. */
   excludedToolNames?: readonly string[];
   /** Filesystem/process environment: definition loading, and the turn context for tools that read one. */
   env: ExecutionEnv;
@@ -357,10 +352,8 @@ export function piAgentSessionFactory(options: PiAgentSessionFactoryOptions): Pi
       sessionManager,
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
-      // pi would otherwise mount its own read/bash/edit/write ON TOP of whatever fastagent mounted,
-      // offering the model two tools under one name. fastagent supplies its own copies of the ones
-      // this agent is configured for, so pi's are always redundant — and for a narrowed definition,
-      // keeping them out is what makes an excluded tool absent rather than merely inactive.
+      // pi would otherwise mount its built-ins on top of fastagent's copies, offering duplicate names.
+      // Lower-level callers with an explicit list also rely on omitted built-ins staying omitted.
       noTools: "builtin",
       ...(excludedToolNames.length > 0 ? { excludeTools: [...excludedToolNames] } : {}),
       customTools: toolDefinitions(tools, cwd, env, sessionId, bound),

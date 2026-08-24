@@ -12,7 +12,7 @@ import {
 } from "../../engines/pi/config.ts";
 import { createPiModelRuntime } from "../../engines/pi/models.ts";
 import { resolveStateRoot, workspaceHint } from "../../paths.ts";
-import { resolveAgentTools, resolveCodingTools } from "../../engines/pi/create.ts";
+import { CODING_TOOL_NAMES, resolveAgentTools } from "../../engines/pi/create.ts";
 import { loadAgentDefinition } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
 import { log } from "../../log.ts";
@@ -41,7 +41,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // tool), is isolated the same way everywhere (G2): info, dev, AND start report it and keep going with
   // the tools that loaded. The `error`/`.catch` below only fires for a whole-load fault (an unreadable
   // tools/ dir), not a single bad file.
-  const resolvedCodingToolNames = resolveCodingTools(config, workspace).names;
+  const resolvedCodingToolNames = [...CODING_TOOL_NAMES];
   const tools = await resolveAgentTools(config, agentDir, workspace)
     .then((r) => ({
       coding: r.codingToolNames,

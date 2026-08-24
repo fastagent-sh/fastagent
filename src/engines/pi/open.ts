@@ -11,7 +11,6 @@
 import { mkdir } from "node:fs/promises";
 import type { Agent } from "../../agent.ts";
 import {
-  type CodingToolName,
   type FastagentConfig,
   type LoadedConfig,
   defaultSessionsDir,
@@ -21,7 +20,7 @@ import {
 } from "./config.ts";
 import { resolveStateRoot, resolvePlacement } from "../../paths.ts";
 import type { SessionControl } from "../../session.ts";
-import type { PiAssemblyParts } from "./create.ts";
+import type { CodingToolName, PiAssemblyParts } from "./create.ts";
 import { createPiAgentFromDefinition, resolveAgentTools } from "./create.ts";
 import type { SessionObserver } from "./turn-kit.ts";
 import { type PiBoundaryWiring, createPiSessionControl } from "./session-control.ts";
@@ -92,9 +91,9 @@ export interface AgentAssembly {
   stateRoot: string;
   /** Absolute credentials file (--auth-path/authPath option > FASTAGENT_AUTH_PATH > <agentDir>/.secrets/auth.json). */
   authPath: string;
-  /** The full mounted tool surface (enabled coding tools + config.tools + discovered tools/, search_tools applied). */
+  /** The full mounted tool surface (all coding tools + config.tools + discovered tools/, search_tools applied). */
   tools: MountedTool[];
-  /** The pi coding tools selected by the one config resolver, in canonical order. */
+  /** The complete pi coding-tool set, in canonical order. */
   codingToolNames: CodingToolName[];
   toolNames: string[];
   deferredToolNames: string[];
@@ -172,7 +171,7 @@ export async function createPiAgentFromDir(
   sessions: PiSessionRecordStore;
   /** The observation plane over this agent's sessions; present iff `options.sessionControl`. */
   sessionControl?: SessionControl;
-  /** pi coding tools selected by config, in canonical order. */
+  /** The complete pi coding-tool set, in canonical order. */
   codingToolNames: CodingToolName[];
   /** Non-default, active-by-default tool names in effect: config.tools + discovered tools/. Each name
    *  lives in exactly one report slot — deferred names are in {@link deferredToolNames} instead. */
@@ -253,7 +252,6 @@ export async function createPiAgentFromDir(
     thinkingLevel: config.thinkingLevel,
     cwd: workspace,
     tools: mountedTools,
-    codingToolNames,
     authPath,
     // Skills are definition-only (the agent is its directory), so dev mirrors deployment exactly.
     sessions,

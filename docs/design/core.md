@@ -262,16 +262,14 @@ the source.
 
 Workspace tools are merged in this order:
 
-1. pi's fixed read-only baseline, `read`/`grep`/`find`/`ls` (`read` also opens skills and channel attachments), plus the mutating tools `config.codingTools` selects (`bash`/`edit`/`write` by default);
+1. all pi coding tools: `read`/`grep`/`find`/`ls`/`bash`/`edit`/`write`;
 2. `config.tools`;
 3. discovered `tools/*.ts|js|mjs`.
 
-Unset/`true` adds all three mutating tools, for authoring/serving fidelity; `false`/`[]` adds none; an
-array adds exactly those. `read`/`grep`/`find`/`ls` are not selectable: together they are pi's useful
-read-only mode, and `read` additionally supports file-backed skills and non-image channel attachments.
-What an author can say is that the agent should not also change files or run commands, which is the
-line the setting draws, and it costs nothing else about the standard `fastagent start` workflow. Conditional built-ins (`search_tools` for deferred tools, `wake` for self-scheduling) keep
-their own policies. Earlier names win and collisions are reported. Broken discovered tools are reported and skipped.
+The coding set is fixed for directory agents. Isolation belongs around the whole agent process, where
+it also covers authored tools and channel code; a built-in allowlist would not. Conditional built-ins
+(`search_tools` for deferred tools, `wake` for self-scheduling) keep their own policies. Earlier names
+win and collisions are reported. Broken discovered tools are reported and skipped.
 Reusable integrations export ordinary `FastagentTool[]` for explicit `config.tools` mounting; package
 origin does not create a second tool runtime.
 

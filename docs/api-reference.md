@@ -172,29 +172,18 @@ function createPiAgentFromDir(
 
 The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
 
-Directory config can disable pi's default coding tools without changing the authored tool surface:
-
 ```ts
-// Always mounted, not selectable: read, grep, find, ls
-type MutatingToolName = "bash" | "edit" | "write";
-type CodingToolName = "read" | "grep" | "find" | "ls" | MutatingToolName;
+type CodingToolName = "read" | "grep" | "find" | "ls" | "bash" | "edit" | "write";
 
 interface FastagentConfig {
-  codingTools?: boolean | MutatingToolName[];
   tools?: FastagentTool[];
 }
 ```
 
-`read`, `grep`, `find`, `ls` are the fixed read-only baseline. `read` also opens skills and channel
-attachments. `codingTools` chooses what is added: unset/`true` mounts `bash`, `edit`, `write`;
-`false`/`[]` mounts none of them;
-an array mounts exactly those. A baseline name is refused for an authored tool (rename it); a mutating name is free once the built-in is disabled. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and
-`info`) applies the same resolved surface, and `createPiAgentFromDefinition` lands on the same default
-when the caller names no `tools`.
-
-Conditional built-ins stay independent: deferred tools may add `search_tools`, and `selfSchedule` may
-add `wake` while serving. The lower-level `createPiAgent` API remains explicit: its `tools` option is
-the exact set supplied by the caller and has no `codingTools` option.
+Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and `info`) mounts the
+complete coding set. Conditional built-ins stay independent: deferred tools may add `search_tools`,
+and `selfSchedule` may add `wake` while serving. The lower-level `createPiAgent` and
+`createPiAgentFromDefinition` APIs remain explicit: pass `tools` to replace their default set.
 
 ## Tool authoring
 

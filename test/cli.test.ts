@@ -304,7 +304,7 @@ describe("cli papercuts", () => {
 
   it("info reports the assembled surface as JSON (incl. load diagnostics), read-only (no sessions dir)", async () => {
     const dir = await agentWorkspace("fa-info-", {
-      "fastagent.config.mjs": "export default { codingTools: false };\n",
+      "fastagent.config.mjs": "export default {};\n",
       "skills/greet/SKILL.md": "---\nname: greet\ndescription: Greet warmly.\n---\nHi.\n",
       "skills/bad/SKILL.md": "---\nname: bad\n---\nno description.\n", // malformed
       "tools/lookup.mjs":
@@ -318,8 +318,8 @@ describe("cli papercuts", () => {
     expect(code).toBe(0); // an unset model is reported, not fatal
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
-    expect(info.codingTools).toEqual(["read", "grep", "find", "ls"]); // `false` keeps the baseline
-    expect(info.tools).toEqual(["lookup"]); // authored surface remains; mutating defaults are disabled
+    expect(info.codingTools).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+    expect(info.tools).toEqual(["lookup"]);
     expect(info.context.length).toBeGreaterThan(0); // the AGENTS.md is loaded as ② project context
     expect(info.skills.map((s: { name: string }) => s.name)).toEqual(["greet"]); // the malformed skill is skipped
     expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // info SURFACES loader diagnostics

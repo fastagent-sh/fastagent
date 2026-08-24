@@ -182,7 +182,7 @@ export async function loadTools(
 }
 
 /**
- * Merge resolved tools (enabled pi coding tools + `config.tools`) with discovered `tools/`, deduped by name.
+ * Merge resolved tools (pi coding tools + `config.tools`) with discovered `tools/`, deduped by name.
  * Existing tools win; dropped discovered tools surface as collisions.
  */
 export function mergeDiscoveredTools(

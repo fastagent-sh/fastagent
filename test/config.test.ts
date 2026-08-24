@@ -14,7 +14,6 @@ import {
   resolveSessionsDirOverride,
 } from "../src/engines/pi/config.ts";
 import { resolveSecretsDir, resolveStateRoot } from "../src/paths.ts";
-import { resolveCodingTools } from "../src/engines/pi/create.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -64,20 +63,10 @@ describe("config: loadConfig validation", () => {
     await expect(loadConfig(bad)).rejects.toThrow(/selfSchedule.*must be a boolean/);
   });
 
-  it("codingTools: accepts booleans or a unique known-name array; rejects every other shape", async () => {
-    const load = async (value: string) => {
-      const dir = await mkdtemp(join(tmpdir(), "fa-coding-tools-"));
-      await writeFile(join(dir, "fastagent.config.mjs"), `export default { codingTools: ${value} };\n`);
-      return loadConfig(dir);
-    };
-    expect((await load("false")).config.codingTools).toBe(false);
-    expect((await load('["edit"]')).config.codingTools).toEqual(["edit"]);
-    await expect(load('"no"')).rejects.toThrow(/codingTools.*must be a boolean or an array/);
-    await expect(load('["cat"]')).rejects.toThrow(/codingTools\[0\].*bash, edit, write/);
-    await expect(load('["edit", "edit"]')).rejects.toThrow(/must not contain duplicate "edit"/);
-    // A baseline name is not on the menu: read/grep/find/ls are always mounted, so accepting one
-    // would be accepting a request that changes nothing.
-    await expect(load('["read"]')).rejects.toThrow(/codingTools\[0\].*bash, edit, write/);
+  it("rejects codingTools because directory agents always get the complete set", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-coding-tools-retired-"));
+    await writeFile(join(dir, "fastagent.config.mjs"), `export default { codingTools: false };\n`);
+    await expect(loadConfig(dir)).rejects.toThrow(/unknown key "codingTools"/);
   });
 });
 
@@ -296,22 +285,6 @@ describe("config: loadConfig", () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-config-"));
     await writeFile(join(dir, "fastagent.config.mjs"), `export default { channels: (agent) => ({}) };`);
     await expect(loadConfig(dir)).rejects.toThrow(/unknown key "channels"/);
-  });
-});
-
-describe("config: resolveCodingTools", () => {
-  it("always mounts the baseline; `codingTools` decides what is added to it", () => {
-    const baseline = ["read", "grep", "find", "ls"];
-    const all = [...baseline, "bash", "edit", "write"];
-    expect(resolveCodingTools({}, process.cwd()).names).toEqual(all);
-    expect(resolveCodingTools({ codingTools: true }, process.cwd()).names).toEqual(all);
-    expect(resolveCodingTools({ codingTools: false }, process.cwd()).names).toEqual(baseline);
-    expect(resolveCodingTools({ codingTools: [] }, process.cwd()).names).toEqual(baseline);
-    expect(resolveCodingTools({ codingTools: ["write", "edit"] }, process.cwd()).names).toEqual([
-      ...baseline,
-      "edit",
-      "write",
-    ]);
   });
 });
 

@@ -39,8 +39,7 @@ Supported keys:
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
 | `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
-| `codingTools` | Which tools that CHANGE things the agent gets, on top of `read`/`grep`/`find`/`ls`, which are always mounted. Unset/`true`: `bash`, `edit`, `write`; `false`/`[]`: none of them; an array such as `["edit"]`: exactly those. Authored and conditional built-ins are independent. |
-| `tools` | Extra programmatic tools appended after enabled pi coding tools. Most users should prefer `tools/` discovery. |
+| `tools` | Extra programmatic tools appended after the pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `http.host` | Bind address for `dev` / `start`. Unset (or `0.0.0.0`) binds all interfaces — what containers need. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
 | `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start`, where the scheduler poller runs). |
@@ -281,57 +280,20 @@ There are two ways to add tools:
 tools/lookup-order.ts  ->  lookup-order
 ```
 
-An agent always has pi's read-only set: `read`, `grep`, `find` and `ls`. This is the fixed baseline;
-`codingTools` controls only what can change files or run commands. `read` also supports FastAgent's own
-features: the model opens `skills/` through `SKILL.md`, and channel attachments arrive as local paths.
+Every directory agent mounts pi's complete coding set: `read`, `grep`, `find`, `ls`, `bash`, `edit`,
+and `write`. These are basic agent capabilities, not a security policy. `read` also opens model-visible
+skills and downloaded channel attachments.
 
-`codingTools` chooses what is added on top: the tools that **change** something.
+If a deployment needs isolation, sandbox the whole agent process and restrict what that sandbox can
+reach. A tool allowlist would cover only pi's built-ins while authored tools and channel code remain
+ordinary executable code, so it cannot provide that boundary.
 
-```ts
-import { defineConfig } from "@fastagent-sh/fastagent";
+`config.tools` and discovered `tools/` are appended after the coding tools. Name collisions are
+reported and the existing coding tool wins. Conditional built-ins remain independent: `search_tools`
+mounts when a deferred tool needs it, and `wake` remains controlled by `selfSchedule` on the serving
+path. Run `fastagent info --json` to inspect the complete mounted surface.
 
-export default defineConfig({
-  codingTools: false,      // read and search, nothing else
-  // codingTools: true,    // + bash, edit, write  (the default)
-  // codingTools: ["edit"] // + edit only: writes files, runs nothing
-});
-```
-
-Unset means all of them, for fidelity: you vibed in local pi with a full toolset, and an agent whose
-capabilities change when served is a different agent. Narrowing is your call about your own
-deployment — FastAgent has no boundary to offer here (see [Bind address](#bind-address)), so a
-narrower default would imply one it cannot enforce.
-
-`config.tools` and discovered `tools/` are appended after whatever this resolves to. A **baseline name
-is refused**: `tools/read.ts` fails at startup, because an agent whose `read` is something else cannot
-load its own `SKILL.md` or open an attachment — rename yours. A **mutating name is yours** once you
-have disabled the built-in (`codingTools: false` plus `tools/edit.ts` mounts your editor), which is
-the same rule seen from the side where the name is genuinely free. Otherwise the enabled built-in
-wins and the collision is reported.
-
-Model-visible skills are loaded on demand from their `SKILL.md` paths, and chat-channel non-image
-attachments are downloaded to local paths. Both are read with `read`, which is why it is baseline
-rather than a setting.
-
-Neither is checked ahead of time. A channel states what it attached (name, size, path) and the agent
-answers for itself; a skill listing is loaded when the model reaches for it.
-
-A tool `codingTools` did not select is **refused, not merely hidden**: it never enters the session's
-tool registry, so nothing that activates a tool by name — a `chat` command, the control plane, the
-deferred-tool loader — can bring it back at runtime. That is what makes `codingTools: false` mean
-something at runtime rather than at startup only. It is not a security boundary and nothing here is
-(see [Bind address](#bind-address)); it does not restrict tools you author yourself, which are yours
-to scope.
-
-The setting decides only the mutating tools. The baseline, authored `config.tools` and `tools/` still mount;
-`search_tools` still mounts when a deferred tool needs it, and `wake` remains controlled by
-`selfSchedule` on the serving path. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`,
-`tool`, and `info`) resolves the same setting. Run `fastagent info --json` and inspect `codingTools`
-(the resolved name array) plus `tools`.
-
-Name collisions are surfaced as warnings; existing tools win. With a coding tool enabled, its name
-wins over discovered tools; with it disabled, an authored tool may use that name. Reusable
-packages do not need a separate plugin contract: export ordinary `FastagentTool[]` and mount them explicitly:
+Reusable packages do not need a separate plugin contract: export ordinary `FastagentTool[]` and mount them explicitly:
 
 ```ts
 import { integrationTools } from "@acme/fastagent-tools";

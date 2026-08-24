@@ -16,15 +16,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
-import {
-  CODING_TOOL_NAMES,
-  BASELINE_TOOL_NAMES,
-  MUTATING_TOOL_NAMES,
-  type CodingToolName,
-  type FastagentConfig,
-  defaultAuthPath,
-  resolveModel,
-} from "./config.ts";
+import { type FastagentConfig, defaultAuthPath, resolveModel } from "./config.ts";
 import { resolveSecretsDir } from "../../paths.ts";
 import { type LoadedDefinition, loadAgentDefinition, loadExtensionPaths } from "./definition.ts";
 import { reportFindingsIfChanged } from "./report.ts";
@@ -47,10 +39,9 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
-// read/grep/find/ls are the directory agent's fixed read-only baseline; `read` also opens skills and
-// channel attachments. The default adds pi's mutating active set (bash/edit/write), for fidelity with
-// local pi; a directory agent narrows that addition with `codingTools`, while L1/L2 library callers
-// pass their exact `tools` list directly.
+// A directory agent gets every pi coding tool. Restricting what those tools can reach belongs at the
+// sandbox boundary, not in an allowlist that leaves authored tools unrestricted. L1/L2 library callers
+// can still pass an exact `tools` list because they own the lower-level assembly.
 //
 // This is not a security boundary and no default here could be one: the built-in POST /invoke has no
 // authentication, author-written `tools/` import whatever they like, and a WebSocket or Socket-Mode
@@ -78,38 +69,19 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
  *
  * pi ships two overlapping groupings and neither is the whole set: `createCodingTools` is the four it
  * ACTIVATES for a terminal (read/bash/edit/write, no searching), `createReadOnlyTools` is
- * read/grep/find/ls. `read` is in both; the union is what `codingTools` selects from.
+ * read/grep/find/ls. `read` is in both; a directory agent mounts their union.
  */
+export const CODING_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
+export type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
+
 export function piAllCodingTools(cwd: string): MountedTool[] {
   const mutating = createCodingTools(cwd).filter((tool) => tool.name !== "read");
   return [...createReadOnlyTools(cwd), ...mutating];
 }
 
-/** What an agent mounts unasked: everything. `codingTools` subtracts from it, never adds. */
+/** The default for lower-level callers too; pass `tools` explicitly to replace it. */
 export function piDefaultTools(cwd: string): MountedTool[] {
   return piAllCodingTools(cwd);
-}
-
-export interface ResolvedCodingTools {
-  tools: MountedTool[];
-  names: CodingToolName[];
-}
-
-/** Resolve the config's one coding-tool policy. Every directory consumer uses this result rather than
- *  re-interpreting undefined/true/false/arrays independently. */
-export function resolveCodingTools(config: FastagentConfig, cwd: string): ResolvedCodingTools {
-  const requested = config.codingTools;
-  // The baseline is not part of the decision — it is always there (BASELINE_TOOL_NAMES). What
-  // `codingTools` chooses is what gets ADDED to it, so `false` leaves an agent that reads and
-  // searches rather than one that cannot open its own skills. Unset means all of them, for fidelity:
-  // an agent whose capabilities change when served is a different agent, and narrowing is the
-  // author's call about their own deployment — not a default that would imply a boundary this cannot
-  // enforce (see the §1 note above).
-  const added =
-    requested === false ? [] : requested === true || requested === undefined ? MUTATING_TOOL_NAMES : requested;
-  const enabled = new Set<CodingToolName>([...BASELINE_TOOL_NAMES, ...added]);
-  const tools = piAllCodingTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
-  return { tools, names: tools.map((tool) => tool.name as CodingToolName) };
 }
 
 /** Which built-in coding capabilities a mounted set provides, read by NAME — the only observable. */
@@ -118,12 +90,10 @@ function codingToolNamesIn(mounted: readonly MountedTool[]): CodingToolName[] {
 }
 
 /**
- * Built-in coding tools this definition turned off, MINUS any name an authored tool has taken.
- *
- * pi's denylist matches by name, so excluding a name an author reused would delete their tool rather
- * than pi's — and with the built-in disabled, that name is theirs to use (see docs/configuration.md).
+ * Built-in coding tools omitted by an explicit lower-level `tools` list, minus any name that list
+ * reused. pi's denylist matches by name, so excluding a reused name would delete the caller's tool.
  */
-export function disabledBuiltinNames(
+function disabledBuiltinNames(
   codingToolNames: readonly CodingToolName[],
   mounted: readonly MountedTool[],
 ): CodingToolName[] {
@@ -132,8 +102,8 @@ export function disabledBuiltinNames(
 }
 
 /**
- * The full tool set an agent mounts: enabled pi coding tools + `config.tools` + discovered `tools/` (deduped,
- * existing win), plus the non-default tool names and collisions to report. One source for the
+ * The full directory-agent tool set: all pi coding tools + `config.tools` + discovered `tools/`
+ * (deduped, existing win), plus the authored names and collisions to report. One source for the
  * dev/start openers AND `fastagent tool`, so they all mount exactly the same set.
  */
 export async function resolveAgentTools(
@@ -154,21 +124,9 @@ export async function resolveAgentTools(
   // rooted at `cwd`, the WORKSPACE — the project the agent works on, which is where an author expects
   // `read`/`bash` to land, and which is not always the definition directory.
   const discovered = await loadTools(agentDir);
-  const coding = resolveCodingTools(config, cwd);
-  // A BASELINE name is refused, not shadowed. `disabledBuiltinNames` lets an author take a mutating
-  // name because they can disable the built-in first — the name is genuinely free. A baseline name
-  // never is: shipping `tools/read.ts` would leave the agent unable to load its own `SKILL.md` or open
-  // an attachment, silently, while every doc says it can. Failing at startup is the only honest
-  // outcome, and renaming costs the author one line.
-  const authoredNames = new Set([...(config.tools ?? []), ...discovered.tools].map((tool) => tool.name));
-  const takenBaseline = BASELINE_TOOL_NAMES.filter((name) => authoredNames.has(name));
-  if (takenBaseline.length > 0) {
-    throw new Error(
-      `${takenBaseline.join(", ")} ${takenBaseline.length === 1 ? "is" : "are"} reserved for the always-mounted ` +
-        `read-only baseline — rename your tool`,
-    );
-  }
-  const configured = [...coding.tools];
+  const codingTools = piAllCodingTools(cwd);
+  const codingToolNames = codingToolNamesIn(codingTools);
+  const configured = [...codingTools];
   const configuredNames = new Set(configured.map((tool) => tool.name));
   const configuredCollisions: ToolCollision[] = [];
   for (const tool of config.tools ?? []) {
@@ -189,12 +147,11 @@ export async function resolveAgentTools(
   const builtinLoaderMounted =
     !merged.tools.some((t) => t.name === "search_tools") && tools.some((t) => t.name === "search_tools");
   const toolCollisions = [...discovered.collisions, ...configuredCollisions, ...merged.collisions];
-  // `toolNames` is the AUTHOR's active-by-default surface (config.tools + tools/): exclude ENABLED pi
-  // coding tools, the builtin loader (like wake, a builtin gets its own report line, not an anonymous
-  // slot in the author's list — an author-DEFINED search_tools still shows), and deferred tools —
-  // each name lives in exactly ONE report slot, and deferred names live in `deferredToolNames`.
-  // Enabled built-ins win collisions; an author owns a mutating name only after disabling it.
-  const defaultNames = new Set<string>(coding.names);
+  // `toolNames` is the AUTHOR's active-by-default surface (config.tools + tools/): exclude pi coding
+  // tools, the builtin loader (like wake, a builtin gets its own report line, not an anonymous slot in
+  // the author's list — an author-DEFINED search_tools still shows), and deferred tools. Each name
+  // lives in exactly ONE report slot, and deferred names live in `deferredToolNames`.
+  const defaultNames = new Set<string>(codingToolNames);
   const toolNames = tools
     .filter(
       (t) => !defaultNames.has(t.name) && !isDeferredTool(t) && !(builtinLoaderMounted && t.name === "search_tools"),
@@ -202,7 +159,7 @@ export async function resolveAgentTools(
     .map((t) => t.name);
   return {
     tools,
-    codingToolNames: coding.names,
+    codingToolNames,
     toolNames,
     deferredToolNames: tools.filter(isDeferredTool).map((t) => t.name),
     toolCollisions,
@@ -229,9 +186,7 @@ export async function resolveAgentTools(
  * tool list is generated from the actually-mounted tools (base and toolset must agree). An authored
  * `persona` (from persona.md) replaces the default identity line, keeping the tools list + guidelines.
  */
-export function piBasePrompt(
-  options: { tools?: MountedTool[]; persona?: string; codingToolNames?: readonly CodingToolName[] } = {},
-): string {
+export function piBasePrompt(options: { tools?: MountedTool[]; persona?: string } = {}): string {
   const mounted = options.tools ?? [];
   // Deferred tools stay OUT of the list: their schemas are not in the request until activated, so
   // naming them here would invite calls to tools that don't exist yet; discovery is search_tools' job
@@ -244,7 +199,7 @@ export function piBasePrompt(
   // Segment ① identity: an authored persona (persona.md) replaces the default engine identity line
   // (core.md §11), keeping the tools list + guidelines below. Preserve pi's coding identity only for
   // the full coding surface; a partial/empty surface must not claim machine capabilities it lacks.
-  const codingNames = options.codingToolNames ?? codingToolNamesIn(mounted);
+  const codingNames = codingToolNamesIn(mounted);
   // The four this sentence NAMES — reading, executing, editing, writing. Searching is not part of the
   // claim, so requiring it would demote an agent that can do everything the identity says it can.
   const fullCodingSurface = (["read", "bash", "edit", "write"] as const).every((name) => codingNames.includes(name));
@@ -510,10 +465,6 @@ export interface CreatePiAgentFromDefinitionOptions {
   /** Override tools. Defaults to {@link piDefaultTools} (lock down with a custom list). An authored
    *  `FastagentTool[]` (AgentTool plus the optional `deferred` marker) widens into {@link MountedTool}. */
   tools?: MountedTool[];
-  /** INTERNAL directory-opener fact: which mounted tools are pi's coding tools. Keeps prompt identity
-   *  and the disabled-built-in exclusion tied to the resolver instead of inferring semantics from
-   *  authored names. */
-  codingToolNames?: readonly CodingToolName[];
   /**
    * The agent's working directory: where the default tools operate AND whose ancestors are walked for
    * ② project context (AGENTS.md). Defaults to `dir`. Set it to the enclosing repo so a coding agent
@@ -567,14 +518,9 @@ export async function createPiAgentFromDefinition(
   // for definition loading whose root is a different directory. Taking it off the env would silently
   // point read/bash/edit/write at the loader's directory.
   const tools = withSearchTool(options.tools ?? piDefaultTools(cwd));
-  // An explicit `tools` list is the caller stating the whole surface, so the coding capabilities are
-  // Read off what is ACTUALLY mounted, never from how the caller got here. Deriving it from "was
-  // `tools` passed?" made the default case claim all seven while mounting four, so the model was told
-  // it could run commands. Name-based, exactly like the exclusion below, and for the same reason: the
-  // name is the only thing either side can observe. The directory opener still passes its resolved
-  // set explicitly — the one case where intent and mount legitimately differ (a built-in name an
-  // author reused; see disabledBuiltinNames).
-  const codingToolNames = options.codingToolNames ?? codingToolNamesIn(tools);
+  // An explicit `tools` list is the caller stating the whole lower-level surface. Read capabilities
+  // from what is actually mounted; the name is the only thing the engine and model can observe.
+  const codingToolNames = codingToolNamesIn(tools);
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by
   // the resolved dir): announced once here, and re-announced by a turn or by the control plane's
   // command list only when the set CHANGES — a runtime-written bad skill surfaces the moment it
@@ -608,7 +554,7 @@ export async function createPiAgentFromDefinition(
         systemPrompt: assembleSystemPrompt({
           // Segment ①: an authored persona (persona.md, def.persona) overrides the engine identity,
           // re-read per turn like AGENTS.md so edits go live; options.base still wins for full control.
-          base: options.base ?? piBasePrompt({ tools, persona: def.persona, codingToolNames }),
+          base: options.base ?? piBasePrompt({ tools, persona: def.persona }),
           // ② project context: AGENTS.md files (agentDir + cwd-ancestor walk) via loadProjectContextFiles.
           contextFiles: def.contextFiles,
           skills: def.skills,
@@ -626,9 +572,8 @@ export async function createPiAgentFromDefinition(
     // change without a restart, which is why this sits outside `live` above.
     extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
     cwd,
-    // The disabled built-ins, refused at the registry — see PiAgentSessionFactoryOptions. A name an
-    // AUTHORED tool has taken is not excluded: with the built-in off, that name is the author's to
-    // reuse (documented), and pi's denylist works on names, so excluding it would delete their tool.
+    // Lower-level callers may pass an exact list. Keep omitted pi built-ins out of that session;
+    // a reused name stays because pi's denylist would otherwise remove the caller's tool too.
     excludedToolNames: disabledBuiltinNames(codingToolNames, tools),
     env,
     lease: options.lease,

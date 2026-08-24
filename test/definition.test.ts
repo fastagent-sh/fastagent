@@ -251,8 +251,8 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("season-words");
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
-    // default = every pi coding tool; `codingTools` subtracts. Custom code tools stay an explicit
-    // `tools:` injection, no magic dir.
+    // Every directory agent gets pi's complete coding set. Custom tools stay an explicit `tools:`
+    // injection, with no second discovery mechanism.
     expect(seenTools.sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
   });
 });
@@ -273,7 +273,6 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
       instructions: "You are a support bot.",
     });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
-    // pi appends its own working-directory line; what matters is that nothing else was imposed.
     // pi appends its own working-directory line; what matters is that nothing else was imposed.
     expect((seen ?? "").split("\nCurrent working directory:")[0]).toBe("You are a support bot.");
     expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
@@ -314,9 +313,9 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools is every pi coding tool; codingTools subtracts from it", () => {
+  it("piDefaultTools is every pi coding tool", () => {
     // Asserted against pi's own groupings rather than a hand-written list, so the set follows
-    // upstream; the ORDER is ours, and it is what the config reports and mounts in.
+    // upstream; the ORDER is ours, and it is what directory agents report and mount.
     expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(
       piAllCodingTools(process.cwd()).map((t) => t.name),
     );

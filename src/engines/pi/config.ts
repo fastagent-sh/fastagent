@@ -24,27 +24,6 @@ import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../.
 // pi's thinking levels as a runtime value live in session-settings.ts (THE single source, with the
 // exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
 
-/**
- * The fixed read-only baseline: pi's own coherent set for reading and looking around a workspace.
- *
- * `read` is also how the model opens skills and channel attachments. The other three make read-only
- * mode useful; they are fixed because `codingTools` controls only the mutating tools added on top.
- */
-export const BASELINE_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
-
-/**
- * The tools that change something: files, or the machine. These are what `codingTools` decides.
- *
- * The split is pi's own (`createReadOnlyTools` vs the rest of `createCodingTools`): this setting
- * chooses whether the read-only baseline can also run commands or change files.
- */
-export const MUTATING_TOOL_NAMES = ["bash", "edit", "write"] as const;
-export type MutatingToolName = (typeof MUTATING_TOOL_NAMES)[number];
-
-/** Everything pi offers, in canonical mount/report order. */
-export const CODING_TOOL_NAMES = [...BASELINE_TOOL_NAMES, ...MUTATING_TOOL_NAMES] as const;
-export type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
-
 export interface FastagentConfig {
   /** "provider/modelId". Precedence: CLI --model > FASTAGENT_MODEL > config. */
   model?: string;
@@ -52,19 +31,7 @@ export interface FastagentConfig {
    *  "xhigh" | "max"). Unset = pi's default. Authors tune thinking in the pi TUI while vibing — this
    *  is the serving-side counterpart (fidelity). Levels a model doesn't support are clamped by pi. */
   thinkingLevel?: ThinkingLevel;
-  /**
-   * Which tools that CHANGE things the agent gets, on top of the ones it always has
-   * ({@link BASELINE_TOOL_NAMES}: `read`, `grep`, `find`, `ls`).
-   *
-   *  - unset / `true` — all of them: `bash`, `edit`, `write`
-   *  - `false` / `[]` — none; the agent can read and search, and that is all
-   *  - an array — exactly those, e.g. `["edit"]` for an agent that writes files but runs nothing
-   *
-   * Authored tools (`config.tools` + discovered `tools/`) and conditional built-ins (`search_tools`,
-   * `wake`) are independent of this.
-   */
-  codingTools?: boolean | MutatingToolName[];
-  /** Extra custom tools, appended after enabled pi coding tools — never replaces them. `FastagentTool`
+  /** Extra custom tools, appended after the pi coding tools — never replaces them. `FastagentTool`
    *  = AgentTool plus the optional `deferred` marker (see defineTool). */
   tools?: FastagentTool[];
   /** `host` is the bind address: unset (or `0.0.0.0`) binds all interfaces — what containers need;
@@ -162,7 +129,6 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
     if (
       key !== "model" &&
       key !== "thinkingLevel" &&
-      key !== "codingTools" &&
       key !== "tools" &&
       key !== "http" &&
       key !== "deploy" &&
@@ -170,7 +136,7 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
       key !== "sessionControl"
     ) {
       throw new Error(
-        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, codingTools, tools, http, deploy, selfSchedule, sessionControl)`,
+        `${path}: unknown key "${key}" (valid keys: model, thinkingLevel, tools, http, deploy, selfSchedule, sessionControl)`,
       );
     }
   }
@@ -179,20 +145,6 @@ export async function loadConfig(dir: string): Promise<LoadedConfig> {
   }
   if (c.sessionControl !== undefined && typeof c.sessionControl !== "boolean") {
     throw new Error(`${path}: "sessionControl" must be a boolean`);
-  }
-  if (c.codingTools !== undefined && typeof c.codingTools !== "boolean" && !Array.isArray(c.codingTools)) {
-    throw new Error(`${path}: "codingTools" must be a boolean or an array of ${MUTATING_TOOL_NAMES.join(", ")}`);
-  }
-  if (Array.isArray(c.codingTools)) {
-    const valid = new Set<string>(MUTATING_TOOL_NAMES);
-    const seen = new Set<string>();
-    for (const [i, name] of c.codingTools.entries()) {
-      if (typeof name !== "string" || !valid.has(name)) {
-        throw new Error(`${path}: "codingTools[${i}]" must be one of ${MUTATING_TOOL_NAMES.join(", ")}`);
-      }
-      if (seen.has(name)) throw new Error(`${path}: "codingTools" must not contain duplicate "${name}"`);
-      seen.add(name);
-    }
   }
   if (c.thinkingLevel !== undefined && !(THINKING_LEVELS as ReadonlySet<string>).has(c.thinkingLevel as string)) {
     throw new Error(`${path}: "thinkingLevel" must be one of ${[...THINKING_LEVELS].join(", ")}`);

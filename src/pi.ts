@@ -2,6 +2,7 @@
 export {
   createPiAgent,
   createPiAgentFromDefinition,
+  type CodingToolName,
   type CreatePiAgentFromDefinitionOptions,
   type CreatePiAgentOptions,
 } from "./engines/pi/create.ts";
@@ -33,8 +34,6 @@ export {
 export type { LoadedDefinition, SkillCollision } from "./engines/pi/definition.ts";
 
 export {
-  type CodingToolName,
-  type MutatingToolName,
   defineConfig,
   listModels,
   resolveModel,

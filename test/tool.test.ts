@@ -93,57 +93,40 @@ describe("loadTools (filesystem discovery)", () => {
     expect(toolNames).not.toContain("hostonly"); // cwd's own tools/ is the host's, not the agent's surface
   });
 
-  it("codingTools false leaves the baseline, and nothing else", async () => {
-    // `false` removes what changes things, leaving pi's fixed read-only set. `read` also supports
-    // skills and channel attachments.
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-empty-"));
-    const resolved = await resolveAgentTools({ codingTools: false }, agentDir, process.cwd());
-    expect(resolved.tools.map((t) => t.name)).toEqual(["read", "grep", "find", "ls"]);
-    expect(resolved.codingToolNames).toEqual(["read", "grep", "find", "ls"]);
-    expect(resolved.toolNames).toEqual([]); // no AUTHORED tools
+  it("always mounts every coding tool", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-all-"));
+    const resolved = await resolveAgentTools({}, agentDir, process.cwd());
+    expect(resolved.codingToolNames).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+    expect(resolved.toolNames).toEqual([]); // no authored tools
   });
 
-  it("refuses an authored tool named like a BASELINE tool", async () => {
-    // Not a collision to report and continue past: the agent would keep serving while silently
-    // unable to read its own skills.
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-no-coding-"));
+  it("keeps a coding built-in when authored tools reuse its name", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-read-collision-"));
     await mkdir(join(agentDir, "tools"));
     await writeFile(
       join(agentDir, "tools", "read.mjs"),
-      `export default { description: "Business read", parameters: { type: "object" }, async execute() { return { content: [], details: "ok" }; } };`,
+      `export default { description: "Discovered read", parameters: { type: "object" }, async execute() { return "mine"; } };`,
     );
-    await expect(resolveAgentTools({ codingTools: false }, agentDir, process.cwd())).rejects.toThrow(
-      /read is reserved.*read-only baseline/,
-    );
-  });
-
-  it("keeps an enabled mutating built-in when authored tools reuse its name", async () => {
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-enabled-edit-"));
-    await mkdir(join(agentDir, "tools"));
-    await writeFile(
-      join(agentDir, "tools", "edit.mjs"),
-      `export default { description: "Discovered edit", parameters: { type: "object" }, async execute() { return "mine"; } };`,
-    );
-    const configuredEdit = defineTool({
-      name: "edit",
-      description: "Configured edit",
+    const configuredRead = defineTool({
+      name: "read",
+      description: "Configured read",
       input: z.object({}),
       execute: () => "mine",
     });
 
-    const resolved = await resolveAgentTools({ tools: [configuredEdit] }, agentDir, process.cwd());
-    expect(resolved.tools.filter((tool) => tool.name === "edit")).toHaveLength(1);
-    expect(resolved.tools.find((tool) => tool.name === "edit")?.description).not.toMatch(/Configured|Discovered/);
-    expect(resolved.codingToolNames).toContain("edit");
-    expect(resolved.toolNames).not.toContain("edit");
+    const resolved = await resolveAgentTools({ tools: [configuredRead] }, agentDir, process.cwd());
+    expect(resolved.tools.filter((tool) => tool.name === "read")).toHaveLength(1);
+    expect(resolved.tools.find((tool) => tool.name === "read")?.description).not.toMatch(/Configured|Discovered/);
+    expect(resolved.codingToolNames).toContain("read");
+    expect(resolved.toolNames).not.toContain("read");
     expect(resolved.toolCollisions).toEqual([
-      { name: "edit", source: "config.tools" },
-      { name: "edit", source: "tools/edit" },
+      { name: "read", source: "config.tools" },
+      { name: "read", source: "tools/read" },
     ]);
   });
 
-  it("codingTools false leaves the deferred search_tools policy unchanged", async () => {
-    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-no-coding-deferred-"));
+  it("keeps the deferred search_tools policy independent", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-deferred-"));
     const deferred = defineTool({
       name: "lookup",
       description: "Look up a business record.",
@@ -152,12 +135,18 @@ describe("loadTools (filesystem discovery)", () => {
       execute: () => "ok",
     });
 
-    const { tools, deferredToolNames } = await resolveAgentTools(
-      { codingTools: false, tools: [deferred] },
-      agentDir,
-      process.cwd(),
-    );
-    expect(tools.map((t) => t.name).sort()).toEqual(["find", "grep", "lookup", "ls", "read", "search_tools"]);
+    const { tools, deferredToolNames } = await resolveAgentTools({ tools: [deferred] }, agentDir, process.cwd());
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "bash",
+      "edit",
+      "find",
+      "grep",
+      "lookup",
+      "ls",
+      "read",
+      "search_tools",
+      "write",
+    ]);
     expect(deferredToolNames).toEqual(["lookup"]);
   });
 
