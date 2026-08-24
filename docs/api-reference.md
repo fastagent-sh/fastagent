@@ -188,7 +188,7 @@ interface FastagentConfig {
 `read`, `grep`, `find`, `ls` are always mounted — fastagent's own features are built on them (skills
 load by the model reading `SKILL.md`; channel attachments arrive as local paths). `codingTools`
 chooses what is added: unset/`true` mounts `bash`, `edit`, `write`; `false`/`[]` mounts none of them;
-an array mounts exactly those. An authored tool takes its name outright, baseline included. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and
+an array mounts exactly those. A baseline name is refused for an authored tool (rename it); a mutating name is free once the built-in is disabled. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and
 `info`) applies the same resolved surface, and `createPiAgentFromDefinition` lands on the same default
 when the caller names no `tools`.
 

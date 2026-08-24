@@ -103,25 +103,18 @@ describe("loadTools (filesystem discovery)", () => {
     expect(resolved.toolNames).toEqual([]); // no AUTHORED tools
   });
 
-  it("codingTools false mounts and reports only authored tools, including a tool named like a coding default", async () => {
+  it("refuses an authored tool named like a BASELINE tool", async () => {
+    // Not a collision to report and continue past: the agent would keep serving while silently
+    // unable to read its own skills.
     const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-no-coding-"));
     await mkdir(join(agentDir, "tools"));
     await writeFile(
       join(agentDir, "tools", "read.mjs"),
       `export default { description: "Business read", parameters: { type: "object" }, async execute() { return { content: [], details: "ok" }; } };`,
     );
-
-    const { tools, toolNames, toolCollisions } = await resolveAgentTools(
-      { codingTools: false },
-      agentDir,
-      process.cwd(),
+    await expect(resolveAgentTools({ codingTools: false }, agentDir, process.cwd())).rejects.toThrow(
+      /read is always mounted/,
     );
-    // The authored `read` takes the name outright — pi's would otherwise shadow it — while the rest
-    // of the baseline is untouched. Same rule the mutating half follows: a name someone took is theirs.
-    expect(tools.map((t) => t.name).sort()).toEqual(["find", "grep", "ls", "read"]);
-    expect(tools.find((t) => t.name === "read")?.description).toBe("Business read");
-    expect(toolNames).toEqual(["read"]);
-    expect(toolCollisions).toEqual([]);
   });
 
   it("codingTools false leaves the deferred search_tools policy unchanged", async () => {

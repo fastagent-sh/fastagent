@@ -302,8 +302,11 @@ capabilities change when served is a different agent. Narrowing is your call abo
 deployment — FastAgent has no boundary to offer here (see [Bind address](#bind-address)), so a
 narrower default would imply one it cannot enforce.
 
-`config.tools` and discovered `tools/` are appended after whatever this resolves to, and **an authored
-tool takes its name outright** — ship `tools/read.ts` and yours is the `read` the model gets.
+`config.tools` and discovered `tools/` are appended after whatever this resolves to. A **baseline name
+is refused**: `tools/read.ts` fails at startup, because an agent whose `read` is something else cannot
+load its own `SKILL.md` or open an attachment — rename yours. A **mutating name is yours** once you
+have disabled the built-in (`codingTools: false` plus `tools/edit.ts` mounts your editor), which is
+the same rule seen from the side where the name is genuinely free.
 
 Model-visible skills are loaded on demand from their `SKILL.md` paths, and chat-channel non-image
 attachments are downloaded to local paths. Both are read with `read`, which is why it is baseline

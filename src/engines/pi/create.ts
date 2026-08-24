@@ -163,13 +163,21 @@ export async function resolveAgentTools(
   // `read`/`bash` to land, and which is not always the definition directory.
   const discovered = await loadTools(agentDir);
   const coding = resolveCodingTools(config, cwd);
-  // An AUTHORED tool wins its name outright, baseline included: an author who ships `tools/read.ts`
-  // means their reader, and pi's would shadow it under the same name. This is the same rule
-  // `disabledBuiltinNames` follows for the mutating half — a name someone took is theirs — applied
-  // where the baseline would otherwise take it back by never being optional.
+  // A BASELINE name is refused, not shadowed. `disabledBuiltinNames` lets an author take a mutating
+  // name because they can disable the built-in first — the name is genuinely free. A baseline name
+  // never is: shipping `tools/read.ts` would leave the agent unable to load its own `SKILL.md` or open
+  // an attachment, silently, while every doc says it can. Failing at startup is the only honest
+  // outcome, and renaming costs the author one line.
   const authoredNames = new Set([...(config.tools ?? []), ...discovered.tools].map((tool) => tool.name));
-  const codingTools = coding.tools.filter((tool) => !authoredNames.has(tool.name));
-  const configured = config.tools ? [...codingTools, ...config.tools] : codingTools;
+  const takenBaseline = BASELINE_TOOL_NAMES.filter((name) => authoredNames.has(name));
+  if (takenBaseline.length > 0) {
+    throw new Error(
+      `${takenBaseline.join(", ")} ${takenBaseline.length === 1 ? "is" : "are"} always mounted (skills and ` +
+        `channel attachments are read with them) — rename your tool, or the agent would lose the capability ` +
+        `its own definition depends on`,
+    );
+  }
+  const configured = config.tools ? [...coding.tools, ...config.tools] : coding.tools;
   const merged = mergeDiscoveredTools(configured, discovered.tools);
   // The built-in `search_tools` loader mounts here — the one place the agent's full tool set is
   // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; an
@@ -184,8 +192,8 @@ export async function resolveAgentTools(
   // coding tools, the builtin loader (like wake, a builtin gets its own report line, not an anonymous
   // slot in the author's list — an author-DEFINED search_tools still shows), and deferred tools —
   // each name lives in exactly ONE report slot, and deferred names live in `deferredToolNames`. When
-  // A name the AUTHOR took is theirs in this report too, even when pi has one like it: `codingTools`
-  // reports what pi mounted, and an authored `read` is not that.
+  // A mutating name the AUTHOR took is theirs in this report too: `codingTools` reports what pi
+  // mounted, and an authored `edit` is not that. (A baseline name never gets here — refused above.)
   const defaultNames = new Set<string>(coding.names.filter((name) => !authoredNames.has(name)));
   const toolNames = tools
     .filter(

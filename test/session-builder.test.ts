@@ -551,17 +551,15 @@ describe("session builder: codingTools narrows chat exactly as it narrows servin
   });
 });
 
-describe("session builder: disabling a built-in frees its name for an authored tool", () => {
-  it("mounts an authored `read` when codingTools is false", async () => {
-    // The denylist that makes `codingTools` a boundary matches by NAME, so excluding a name the
-    // author reused would delete THEIR tool instead of pi's — silently, and only for the four
-    // built-in names. Docs promise the opposite: with the built-in off, the name is theirs.
+describe("session builder: a baseline name is refused, a mutating one is free", () => {
+  it("refuses an authored `read`, because the agent cannot lose it", async () => {
+    // `disabledBuiltinNames` lets an author take `bash`/`edit`/`write` — they can disable the
+    // built-in first, so the name is genuinely free. A baseline name never is: shipping tools/read.ts
+    // would leave the agent unable to load its own SKILL.md or open an attachment, silently, while
+    // every doc says it can.
     const dir = await mkdtemp(join(tmpdir(), "fa-authored-read-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");
-    await writeFile(
-      join(dir, "fastagent.config.mjs"),
-      'export default { model: "openai-codex/gpt-5.5", codingTools: false };\n',
-    );
+    await writeFile(join(dir, "fastagent.config.mjs"), 'export default { model: "openai-codex/gpt-5.5" };\n');
     await mkdir(join(dir, "tools"), { recursive: true });
     await writeFile(
       join(dir, "tools", "read.mjs"),
@@ -571,12 +569,33 @@ describe("session builder: disabling a built-in frees its name for an authored t
          execute: async () => ({ content: [{ type: "text", text: "mine" }], details: {} }),
        };\n`,
     );
+    await expect(buildAgentSessionRuntime(dir, {}, SessionManager.inMemory())).rejects.toThrow(
+      /read is always mounted/,
+    );
+  });
+
+  it("mounts an authored `edit` when codingTools leaves that name free", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-authored-edit-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    await writeFile(
+      join(dir, "fastagent.config.mjs"),
+      'export default { model: "openai-codex/gpt-5.5", codingTools: false };\n',
+    );
+    await mkdir(join(dir, "tools"), { recursive: true });
+    await writeFile(
+      join(dir, "tools", "edit.mjs"),
+      `export default {
+         description: "the author's own editor",
+         parameters: { type: "object", properties: {} },
+         execute: async () => ({ content: [{ type: "text", text: "mine" }], details: {} }),
+       };\n`,
+    );
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
     try {
-      expect(rt.session.getAllTools().map((t) => t.name)).toContain("read");
-      expect(rt.session.getActiveToolNames()).toContain("read");
-      // ...and the built-ins the author did NOT take are still refused.
-      expect(rt.session.getAllTools().map((t) => t.name)).not.toContain("bash");
+      const mounted = rt.session.getAllTools().map((t) => t.name);
+      expect(mounted).toContain("edit");
+      expect(rt.session.getAllTools().find((t) => t.name === "edit")?.description).toBe("the author's own editor");
+      expect(mounted).toContain("read"); // baseline untouched
     } finally {
       await rt.dispose?.();
     }
