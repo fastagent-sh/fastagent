@@ -459,7 +459,7 @@ export interface CreatePiAgentFromDefinitionOptions {
    *  `FastagentTool[]` (AgentTool plus the optional `deferred` marker) widens into {@link MountedTool}. */
   tools?: MountedTool[];
   /**
-   * The agent's working directory: where the default tools operate AND whose ancestors are walked for
+   * The agent's working directory: where the coding tools operate AND whose ancestors are walked for
    * ② project context (AGENTS.md). Defaults to `dir`. Set it to the enclosing repo so a coding agent
    * whose definition lives in `dir` operates on — and reads the AGENTS.md of — that repo (core.md
    * scenario grid); that is what the CLI's opener does with the workspace.
@@ -474,11 +474,10 @@ export interface CreatePiAgentFromDefinitionOptions {
    */
   authPath?: string;
   sessions?: PiSessionRecordStore;
-  /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it is what
-   *  persona.md and skills/ are read through. Two surfaces stay
-   *  OUTSIDE it — ② project context (pi's loadProjectContextFiles uses node fs directly; see
-   *  definition.ts) and author-written `tools/`, which are code and can import anything. Injecting an
-   *  env narrows the blast radius rather than closing it. */
+  /** Filesystem/process environment; see {@link CreatePiAgentOptions.env}. At THIS rung it reads
+   *  persona.md and skills/. The seven coding tools, ② project context (pi's
+   *  loadProjectContextFiles uses node fs directly), and author-written `tools/` stay outside it.
+   *  Injecting an env narrows the blast radius rather than closing it. */
   env?: ExecutionEnv;
   lease?: Lease;
   /** Observation-plane tap; see {@link CreatePiAgentOptions.observer}. */
