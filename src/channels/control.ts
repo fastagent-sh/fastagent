@@ -46,10 +46,15 @@ const json = (value: unknown, status = 200): Response =>
  * either way, and a deployment cannot know the origins of the GUIs that will manage it (§14's
  * asymmetry). Without this the plane is unreachable from ANY browser: `authorization` is not
  * CORS-safelisted, so every call preflights, including a plain GET.
+ *
+ * `content-type` is allowed for the same reason `authorization` is — only three values are
+ * safelisted (form-urlencoded, multipart, text/plain) and `application/json` is not one, so a
+ * browser POSTing to /control/dispatch or /control/invoke names it in the preflight. Allowing only
+ * `authorization` would leave the plane's two WRITE routes unreachable while every GET worked.
  */
 const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
-  "access-control-allow-headers": "authorization",
+  "access-control-allow-headers": "authorization, content-type",
   "access-control-allow-methods": "GET, POST, OPTIONS",
 };
 

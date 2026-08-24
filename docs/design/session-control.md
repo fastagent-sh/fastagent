@@ -435,7 +435,10 @@ consumers are isomorphic; that is the entire payoff of keeping the envelope out 
 **Browser reachability.** The bearer token travels in `Authorization`, which is not CORS-safelisted,
 so a browser preflights EVERY call to the plane — including a plain `GET`. Each path therefore
 answers `OPTIONS` with 204 and no token (a preflight carries none, which is its purpose), and every
-response carries `access-control-allow-origin: *` plus the allowed headers and methods. `*` is the
+response carries `access-control-allow-origin: *` plus the allowed headers and methods. Allowed
+headers are `authorization, content-type`: only three content-types are safelisted and
+`application/json` is not among them, so a browser POSTing to `dispatch`/`invoke` names it too —
+allowing just `authorization` would leave exactly the plane's WRITE routes unreachable. `*` is the
 answer rather than a concession: authorisation here is the token — never the origin, never a cookie
 — so an origin that cannot present it gets 401 either way, and a deployment cannot know the origins
 of the GUIs that will manage it (the same asymmetry [§14](#14-security-boundary) settles). The

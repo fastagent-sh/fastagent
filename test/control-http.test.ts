@@ -100,34 +100,56 @@ describe("session control over HTTP (Phase 3)", () => {
 
   it("a browser can reach the plane: preflight without a token, CORS headers on every answer", async () => {
     const served = await serveControl();
-    const cors = (res: Response) => ({
-      origin: res.headers.get("access-control-allow-origin"),
-      headers: res.headers.get("access-control-allow-headers"),
-      methods: res.headers.get("access-control-allow-methods"),
-    });
-    const expected = { origin: "*", headers: "authorization", methods: "GET, POST, OPTIONS" };
+    const origin = (res: Response) => res.headers.get("access-control-allow-origin");
+    /** The check a BROWSER performs, not a string compare: everything the preflight named must be
+     *  covered. Pinning the exact header value instead is what let `content-type` go missing while
+     *  the assertion passed — and with it the plane's two write routes. */
+    const permits = (res: Response, method: string, headers: string[]) => {
+      const listed = (name: string) =>
+        (res.headers.get(name) ?? "").split(",").map((part) => part.trim().toLowerCase());
+      return {
+        method: listed("access-control-allow-methods").includes(method.toLowerCase()),
+        headers: headers.every((h) => listed("access-control-allow-headers").includes(h.toLowerCase())),
+      };
+    };
     try {
-      // DERIVED, like the 401 sweep: every mounted path preflights, so a route added later cannot
-      // ship browser-unreachable. A hand-written list would silently keep passing.
-      const paths = [...new Set(served.routeKeys.map((key) => key.split(" ")[1] as string))];
-      expect(paths).toContain("/control/events");
-      for (const path of paths) {
-        // No token, and an Origin like a browser sends: a preflight cannot carry credentials.
+      // DERIVED from what the server MOUNTS, like the 401 sweep: a route added later cannot ship
+      // browser-unreachable, and a POST route is checked as a POST route.
+      expect(served.routeKeys).toContain("POST /control/dispatch");
+      for (const key of served.routeKeys) {
+        const [method, path] = key.split(" ") as [string, string];
+        if (method === "OPTIONS") continue;
+        // What the browser would actually name: a JSON body is NOT a safelisted content-type, so
+        // every POST preflight carries it alongside the token header.
+        const requested = method === "POST" ? ["authorization", "content-type"] : ["authorization"];
+        // No token — a preflight cannot carry credentials, which is its entire purpose.
         const res = await fetch(`${served.url}${path}`, {
           method: "OPTIONS",
-          headers: { origin: "http://localhost:5173", "access-control-request-headers": "authorization" },
+          headers: {
+            origin: "http://localhost:5173",
+            "access-control-request-method": method,
+            "access-control-request-headers": requested.join(", "),
+          },
         });
-        expect(res.status).toBe(204);
-        expect(cors(res)).toEqual(expected);
+        expect({ path: key, status: res.status, origin: origin(res) }).toEqual({
+          path: key,
+          status: 204,
+          origin: "*",
+        });
+        expect({ path: key, ...permits(res, method, requested) }).toEqual({
+          path: key,
+          method: true,
+          headers: true,
+        });
       }
 
       // A rejected call must stay READABLE: without the headers the browser hands the client an
       // opaque network error instead of the 401 that says "your token is wrong".
-      expect(cors(await fetch(`${served.url}/control/capabilities`))).toEqual(expected);
+      expect(origin(await fetch(`${served.url}/control/capabilities`))).toBe("*");
       // 400 (authenticated, missing param) and 200 alike.
       const auth = { authorization: `Bearer ${TOKEN}` };
-      expect(cors(await fetch(`${served.url}/control/state`, { headers: auth }))).toEqual(expected);
-      expect(cors(await fetch(`${served.url}/control/capabilities`, { headers: auth }))).toEqual(expected);
+      expect(origin(await fetch(`${served.url}/control/state`, { headers: auth }))).toBe("*");
+      expect(origin(await fetch(`${served.url}/control/capabilities`, { headers: auth }))).toBe("*");
       // SSE too — the long-lived route a GUI actually renders from. Asserted at the handler, not
       // over the wire: a quiet session sends no chunk, and Node withholds response headers until
       // one, so a fetch here would block for the full heartbeat interval.
@@ -135,7 +157,7 @@ describe("session control over HTTP (Phase 3)", () => {
       const events = controlRoutes(control, { token: TOKEN })["GET /control/events"] as ChannelHandler;
       const sse = await events(new Request("http://x/control/events?session=s", { headers: auth }));
       expect(sse.headers.get("content-type")).toBe("text/event-stream");
-      expect(cors(sse)).toEqual(expected);
+      expect(origin(sse)).toBe("*");
       await sse.body?.cancel();
     } finally {
       served.close();
