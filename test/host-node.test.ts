@@ -10,6 +10,16 @@ describe("host/node: router", () => {
   const handle = router(routes);
   const req = (method: string, path: string) => new Request(`http://h${path}`, { method });
 
+  it("HEAD is served by a GET route, with no body", async () => {
+    // Deliberate, and a change from the hand-rolled matcher that answered 405: RFC 9110 makes HEAD
+    // identical to GET except for the content, so a server supporting GET on a path supports HEAD
+    // on it. The control plane advertises only GET in allow-methods, which is what a browser obeys.
+    const handle = router({ "GET /x": () => new Response("body-here") });
+    const head = await handle(new Request("http://h/x", { method: "HEAD" }));
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+  });
+
   it("a PATTERN route reports a method miss as 405, like a literal one", async () => {
     // The 404/405 split must be decided by the matcher that dispatches. Comparing pathname strings
     // works only for literal keys: `/files/a.txt` is matched by `POST /files/*` yet equals no key,
@@ -32,6 +42,17 @@ describe("host/node: router", () => {
 });
 
 describe("host/node: serveNode", () => {
+  it("a bind failure rejects `listening` instead of hanging", async () => {
+    const first = serveNode(() => new Response("ok"), { port: 0, host: "127.0.0.1" });
+    const taken = await first.listening;
+    try {
+      const second = serveNode(() => new Response("ok"), { port: taken, host: "127.0.0.1" });
+      await expect(second.listening).rejects.toThrow(/EADDRINUSE/);
+    } finally {
+      await first.close();
+    }
+  });
+
   it("binds a handler, serves it over HTTP, and closes the socket", async () => {
     const host = serveNode((req) => new Response(`hi ${new URL(req.url).pathname}`), { port: 0 });
     const port = await host.listening;

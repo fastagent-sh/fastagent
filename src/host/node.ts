@@ -149,7 +149,15 @@ export function serveNode(
       port: options.port,
       ...(options.host !== undefined ? { hostname: options.host } : {}),
     },
-    (info) => onListening(info.port),
+    (info) => {
+      // Detach before resolving: this listener answers the BIND, and leaving it attached would let
+      // a later runtime error call reject() on a settled promise — swallowed, with nothing raised
+      // anywhere. Detached, an error after bind is an unhandled 'error' event, which is loud.
+      // (Not reachable from a test without forging an event on a server this function does not
+      // expose; the bind-failure half below is covered.)
+      server.off("error", onBindError);
+      onListening(info.port);
+    },
   ) as Server;
   server.once("error", onBindError); // a bind failure surfaces here, before "listening"
   const close = () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
