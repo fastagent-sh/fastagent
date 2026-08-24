@@ -286,7 +286,7 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
   });
 
-  it("cannot activate a coding tool omitted from its explicit list", async () => {
+  it("cannot activate a coding tool omitted from its replacement set", async () => {
     let activated: string[] | undefined;
     let offeredAfter: string[] = [];
     const { faux } = makeFaux();
@@ -601,7 +601,7 @@ describe("create L2: the workspace roots the tools, the env reads the definition
   });
 });
 
-describe("create L2: an explicit tool list is exact", () => {
+describe("create L2: explicit tools replace the coding defaults", () => {
   it("keeps omitted built-ins out of the runtime registry", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-l2-tools-"));
     await writeFile(join(dir, "persona.md"), "You are terse.\n");

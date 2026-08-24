@@ -41,7 +41,7 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 //
 // A directory agent gets every pi coding tool. Restricting what those tools can reach belongs at the
 // sandbox boundary, not in an allowlist that leaves authored tools unrestricted. L1/L2 library callers
-// can still pass an exact `tools` list because they own the lower-level assembly.
+// can still replace the coding defaults through `tools`; deferred tools may add `search_tools`.
 //
 // This is not a security boundary and no default here could be one: the built-in POST /invoke has no
 // authentication, author-written `tools/` import whatever they like, and a WebSocket or Socket-Mode
@@ -322,8 +322,8 @@ function buildPiAgent(opts: {
     cwd,
     ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
-    // `noTools: "builtin"` leaves pi's built-ins in the registry; exact lower-level lists must also
-    // deny every omitted name so a loader cannot reactivate one later.
+    // `noTools: "builtin"` leaves pi's built-ins in the registry; a lower-level replacement must also
+    // deny every omitted coding name so a loader cannot reactivate one later.
     excludedToolNames: omittedBuiltinNames(opts.tools ?? []),
     env,
   });
