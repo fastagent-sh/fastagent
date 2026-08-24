@@ -299,8 +299,7 @@ describe("config: loadConfig", () => {
 
 describe("config: resolveTools (coding defaults + authored tools)", () => {
   it("mounts every coding tool by default, and `true` says the same thing", () => {
-    // Fidelity: the author vibed in local pi with the full toolset. What keeps that safe is the bind
-    // address, not a narrower agent.
+    // Fidelity: the same set the author vibed with in local pi. Narrowing is theirs to choose.
     const all = ["read", "grep", "find", "ls", "bash", "edit", "write"];
     expect(resolveTools({}, process.cwd()).map((t) => t.name)).toEqual(all);
     expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual(all);
