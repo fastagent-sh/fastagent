@@ -262,11 +262,11 @@ the source.
 
 Workspace tools are merged in this order:
 
-1. the pi coding tools selected by `config.codingTools` (all seven by default: `read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`);
+1. the pi coding tools selected by `config.codingTools` (default: pi's active four — `read`, `bash`, `edit`, `write`; `true` adds `grep`, `find`, `ls`);
 2. `config.tools`;
 3. discovered `tools/*.ts|js|mjs`.
 
-Unset/`true` selects all seven for authoring/serving fidelity; `false`/`[]` selects none; an array selects
+Unset selects pi's active four for authoring/serving fidelity, `true` selects all seven; `false`/`[]` selects none; an array selects
 exact names in canonical order. The array is deliberate minimum privilege: file-backed skills and
 non-image channel attachments need `read`, while a public-facing read-only agent should not have to
 accept `bash`/`edit`/`write` merely to retain those capabilities. An agent with neither capability can

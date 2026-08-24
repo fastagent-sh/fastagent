@@ -10,7 +10,8 @@
 export default {
   // model: "openai-codex/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max); default "medium" (pi TUI parity)
-  // codingTools: ["read", "grep", "find", "ls"], // look, don't touch (default: all seven)
+  // codingTools: true,     // add grep/find/ls to the default read/bash/edit/write
+  // codingTools: ["read", "grep", "find", "ls"], // look, don't touch
   // codingTools: false,    // no coding tools at all; skills and file attachments need `read`
   http: { port: 8787 },
   // selfSchedule: true, // mount the built-in `wake` tool: the agent schedules its own follow-up turns

@@ -298,15 +298,25 @@ describe("config: loadConfig", () => {
 });
 
 describe("config: resolveTools (coding defaults + authored tools)", () => {
-  it("mounts every coding tool by default, and `true` says the same thing", () => {
-    // Fidelity: the same set the author vibed with in local pi. Narrowing is theirs to choose.
-    const all = ["read", "grep", "find", "ls", "bash", "edit", "write"];
-    expect(resolveTools({}, process.cwd()).map((t) => t.name)).toEqual(all);
-    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual(all);
+  it("defaults to pi's active four; `true` adds the ones pi mounts but leaves inactive", () => {
+    // Fidelity means the set a local pi session OFFERS the model, which is read/bash/edit/write — pi
+    // mounts grep/find/ls too and does not activate them. `true` is how an author says they want
+    // those as well; narrowing is theirs to choose either way.
+    const four = ["read", "bash", "edit", "write"];
+    expect(resolveTools({}, process.cwd()).map((t) => t.name)).toEqual(four);
+    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "bash",
+      "edit",
+      "write",
+    ]);
 
     // config.tools are APPENDED after them, never replacing.
     const extra = { name: "ping" } as unknown as FastagentTool;
-    expect(resolveTools({ tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual([...all, "ping"]);
+    expect(resolveTools({ tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual([...four, "ping"]);
   });
 
   it("codingTools false/[] remove all coding tools; an array selects names in canonical order", () => {

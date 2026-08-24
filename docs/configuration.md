@@ -39,7 +39,7 @@ Supported keys:
 |---|---|
 | `model` | Default model spec, in `provider/modelId` form. |
 | `thinkingLevel` | Reasoning effort for the model, on pi's scale: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max`. Default: `medium` — pinned by fastagent to match the pi TUI's default (authors vibe at `medium`, so serving must match; the pin also means an upstream default change cannot silently alter deployments). Levels a model doesn't support are clamped by the engine. |
-| `codingTools` | Select the built-in coding tools. Unset/`true`: all seven (`read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`); `false`/`[]`: none; an array such as `["read"]`: exactly those names. Authored and conditional built-ins are independent. |
+| `codingTools` | Select the built-in coding tools. Unset: `read`, `bash`, `edit`, `write` (what a local pi session offers the model); `true`: those plus `grep`, `find`, `ls`; `false`/`[]`: none; an array such as `["read"]`: exactly those names. Authored and conditional built-ins are independent. |
 | `tools` | Extra programmatic tools appended after enabled pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
 | `http.host` | Bind address for `dev` / `start`. Unset (or `0.0.0.0`) binds all interfaces — what containers need. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
@@ -281,15 +281,16 @@ There are two ways to add tools:
 tools/lookup-order.ts  ->  lookup-order
 ```
 
-By default, `config.tools` are appended after all seven pi coding tools (`read`, `grep`, `find`, `ls`,
-`bash`, `edit`, `write`), and discovered `tools/` are appended after those.
+By default, `config.tools` are appended after pi's four active coding tools (`read`, `bash`, `edit`,
+`write`), and discovered `tools/` are appended after those.
 
-The full set is the default for fidelity: you vibed in local pi with it, and an agent that quietly
-loses capabilities when served is a different agent. Narrowing it is your call about your own
-deployment — FastAgent has no boundary to offer here (see [Bind address](#bind-address)), so a
-narrower default would imply one it cannot enforce.
+That set is the default for fidelity: it is what a local pi session offers the model, and an agent
+that quietly gains or loses capabilities when served is a different agent. pi also mounts `grep`,
+`find` and `ls` without activating them — `codingTools: true` is how you take those as well, and it
+is worth it for an agent that has to locate a file before reading it.
 
-To narrow, name what you want — or nothing at all:
+Narrowing is your call about your own deployment. FastAgent has no boundary to offer here (see
+[Bind address](#bind-address)), so a narrower default would imply one it cannot enforce:
 
 ```ts
 import { defineConfig } from "@fastagent-sh/fastagent";

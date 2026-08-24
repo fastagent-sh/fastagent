@@ -183,7 +183,8 @@ interface FastagentConfig {
 }
 ```
 
-Unset/`true` mounts all seven; `false`/`[]` mounts none; an array mounts exactly those names in
+Unset mounts `read`, `bash`, `edit`, `write` — pi's own active set; `true` adds `grep`, `find`, `ls`,
+which pi mounts but leaves inactive; `false`/`[]` mounts none; an array mounts exactly those names in
 canonical order. Every directory-opening workflow (`dev`, `start`, `invoke`, `chat`, `tool`, and
 `info`) applies the same resolved surface, and `createPiAgentFromDefinition` lands on the same default
 when the caller names no `tools`.

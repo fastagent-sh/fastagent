@@ -18,6 +18,7 @@ import type { Provider } from "@earendil-works/pi-ai";
 import type { Agent } from "../../agent.ts";
 import {
   CODING_TOOL_NAMES,
+  DEFAULT_CODING_TOOL_NAMES,
   type CodingToolName,
   type FastagentConfig,
   defaultAuthPath,
@@ -72,16 +73,20 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // renders (see session-builder.ts).
 
 /**
- * Every pi coding tool, in canonical order, rooted at the workspace it operates in — and the default
- * an agent mounts when nobody says otherwise.
+ * Every pi coding tool, in canonical order, rooted at the workspace it operates in.
  *
- * pi ships two overlapping groupings and neither is the whole set: `createCodingTools` is the classic
- * four it hands a terminal (read/bash/edit/write, no searching), `createReadOnlyTools` is
+ * pi ships two overlapping groupings and neither is the whole set: `createCodingTools` is the four it
+ * ACTIVATES for a terminal (read/bash/edit/write, no searching), `createReadOnlyTools` is
  * read/grep/find/ls. `read` is in both; the union is what `codingTools` selects from.
  */
-export function piDefaultTools(cwd: string): MountedTool[] {
+export function piAllCodingTools(cwd: string): MountedTool[] {
   const mutating = createCodingTools(cwd).filter((tool) => tool.name !== "read");
   return [...createReadOnlyTools(cwd), ...mutating];
+}
+
+/** What an agent mounts unasked: pi's default ACTIVE set — see {@link DEFAULT_CODING_TOOL_NAMES}. */
+export function piDefaultTools(cwd: string): MountedTool[] {
+  return createCodingTools(cwd);
 }
 
 export interface ResolvedCodingTools {
@@ -98,9 +103,9 @@ export function resolveCodingTools(config: FastagentConfig, cwd: string): Resolv
   // call about their own deployment (`codingTools: ["read", "grep", "find", "ls"]`), not a default
   // that would imply a boundary this cannot enforce — see the §1 note above.
   const enabled = new Set<CodingToolName>(
-    requested === false ? [] : requested === true || requested === undefined ? CODING_TOOL_NAMES : requested,
+    requested === false ? [] : requested === true ? CODING_TOOL_NAMES : (requested ?? DEFAULT_CODING_TOOL_NAMES),
   );
-  const tools = piDefaultTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
+  const tools = piAllCodingTools(cwd).filter((tool) => enabled.has(tool.name as CodingToolName));
   return { tools, names: tools.map((tool) => tool.name as CodingToolName) };
 }
 
@@ -220,7 +225,9 @@ export function piBasePrompt(
   // (core.md §11), keeping the tools list + guidelines below. Preserve pi's coding identity only for
   // the full coding surface; a partial/empty surface must not claim machine capabilities it lacks.
   const codingNames = options.codingToolNames ?? codingToolNamesIn(mounted);
-  const fullCodingSurface = CODING_TOOL_NAMES.every((name) => codingNames.includes(name));
+  // The four this sentence NAMES — reading, executing, editing, writing. Searching is not part of the
+  // claim, so requiring it would demote an agent that can do everything the identity says it can.
+  const fullCodingSurface = DEFAULT_CODING_TOOL_NAMES.every((name) => codingNames.includes(name));
   const identity =
     options.persona?.trim() ||
     (fullCodingSurface

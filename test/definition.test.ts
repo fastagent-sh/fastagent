@@ -14,7 +14,7 @@ import {
   createPiAgentFromDefinition,
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
-import { assembleSystemPrompt, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
+import { assembleSystemPrompt, piAllCodingTools, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { isUnderDir } from "../src/engines/pi/definition.ts";
@@ -251,9 +251,9 @@ describe("create: createPiAgentFromDefinition (directory → agent)", () => {
     expect(seenSystemPrompt).toContain("season-words");
     expect(seenSystemPrompt).toContain("operating inside pi");
     expect(seenSystemPrompt).toContain("- read:");
-    // default = every pi coding tool (fidelity with local pi); narrowing is `codingTools: [names]`.
+    // default = pi's active four (fidelity with a local session); `codingTools: true` adds the rest.
     // Custom code tools stay an explicit `tools:` injection, no magic dir.
-    expect(seenTools.sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
+    expect(seenTools.sort()).toEqual(["bash", "edit", "read", "write"]);
   });
 });
 
@@ -314,10 +314,13 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools is every pi coding tool, read-only ones first", () => {
-    // Asserted against pi's own two groupings rather than a hand-written list, so the set follows
-    // upstream; the ORDER is ours, and it is what the config reports and mounts in.
-    const names = piDefaultTools(process.cwd()).map((t) => t.name);
+  it("piDefaultTools is pi's active four; piAllCodingTools is every one", () => {
+    // Asserted against pi's own groupings rather than hand-written lists, so both follow upstream;
+    // the ORDER of the full set is ours, and it is what the config reports and mounts in.
+    expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(
+      createCodingTools(process.cwd()).map((t) => t.name),
+    );
+    const names = piAllCodingTools(process.cwd()).map((t) => t.name);
     expect(names).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
     expect([...names].sort()).toEqual(
       [
@@ -577,7 +580,7 @@ describe("create L2: the identity matches what is mounted", () => {
     const { agent } = await createPiAgentFromDefinition(dir, {
       model: "faux/faux-1",
       providers: [faux.provider],
-      tools: piDefaultTools(dir).filter((t) => t.name === "read" || t.name === "grep"),
+      tools: piAllCodingTools(dir).filter((t) => t.name === "read" || t.name === "grep"),
     });
     await collect(agent.invoke({ session: "s" }, { text: "hi" }));
 

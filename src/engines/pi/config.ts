@@ -33,6 +33,15 @@ import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../.
  * first — the order a report reads in, and the order of increasing consequence.
  */
 export const CODING_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
+
+/**
+ * What an agent mounts when `codingTools` is unset: pi's own default ACTIVE set.
+ *
+ * pi mounts all seven and activates these four, so this is what an author's local session offers the
+ * model — the fidelity this default exists for. `grep`/`find`/`ls` are one `codingTools: true` away,
+ * and worth it for an agent that has to locate a file, but they are not what pi hands you unasked.
+ */
+export const DEFAULT_CODING_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
 export type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
 
 export interface FastagentConfig {
@@ -42,9 +51,15 @@ export interface FastagentConfig {
    *  "xhigh" | "max"). Unset = pi's default. Authors tune thinking in the pi TUI while vibing — this
    *  is the serving-side counterpart (fidelity). Levels a model doesn't support are clamped by pi. */
   thinkingLevel?: ThinkingLevel;
-  /** Which pi coding tools to mount. Unset/`true` = all seven; `false`/`[]` = none; an array mounts
-   *  exactly those names, in canonical order. Authored tools (`config.tools` + discovered `tools/`)
-   *  and conditional built-ins (`search_tools`, `wake`) are independent of this. */
+  /** Which pi coding tools to mount.
+   *
+   *  - unset — `read`, `bash`, `edit`, `write`: what a local pi session offers the model
+   *  - `true` — those plus `grep`, `find`, `ls` (pi mounts these but leaves them inactive)
+   *  - `false` / `[]` — none
+   *  - an array — exactly those names, in canonical order
+   *
+   *  Authored tools (`config.tools` + discovered `tools/`) and conditional built-ins
+   *  (`search_tools`, `wake`) are independent of this. */
   codingTools?: boolean | CodingToolName[];
   /** Extra custom tools, appended after enabled pi coding tools — never replaces them. `FastagentTool`
    *  = AgentTool plus the optional `deferred` marker (see defineTool). */

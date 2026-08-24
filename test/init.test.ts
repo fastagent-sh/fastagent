@@ -108,7 +108,7 @@ describe("init: scaffoldAgent", () => {
     expect(persona).not.toContain("where your `read` / `write` / `edit` / `bash` tools operate");
     const configTemplate = await readFile(join(dir, "fastagent", "fastagent.config.mjs"), "utf8");
     expect(configTemplate).toContain('codingTools: ["read", "grep", "find", "ls"]');
-    expect(configTemplate).toContain("default: all seven");
+    expect(configTemplate).toContain("codingTools: true");
 
     // The scaffolded agent ASSEMBLES: ① persona + tools from fastagent/, ② context walked from the workspace.
     const a = await createPiAgentFromDir(dir, { model: "openai-codex/gpt-5.5" });
