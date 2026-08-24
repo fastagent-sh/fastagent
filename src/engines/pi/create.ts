@@ -100,9 +100,9 @@ export interface ResolvedCodingTools {
  *  re-interpreting undefined/true/false/arrays independently. */
 export function resolveCodingTools(config: FastagentConfig, cwd: string): ResolvedCodingTools {
   const requested = config.codingTools;
-  // Unset/true = everything, for fidelity: the author vibed in local pi with the full toolset, and an
-  // agent that quietly loses capabilities when served is a different agent. Narrowing is the author's
-  // call about their own deployment (`codingTools: ["read", "grep", "find", "ls"]`), not a default
+  // Unset = pi's active four, for fidelity: that is what a local pi session offers the model, and an
+  // agent whose capabilities change when served is a different agent. `true` = all seven, taking the
+  // ones pi mounts inactive. Narrowing is the author's call about their own deployment, not a default
   // that would imply a boundary this cannot enforce — see the §1 note above.
   const enabled = new Set<CodingToolName>(
     requested === false ? [] : requested === true ? CODING_TOOL_NAMES : (requested ?? DEFAULT_CODING_TOOL_NAMES),
