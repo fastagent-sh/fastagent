@@ -57,12 +57,11 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // author-written `tools/` import whatever they like, which the docs say plainly — so it narrowed a
 // blast radius rather than closing it, and sandboxing is an explicit non-goal today. The bill was
 // concrete: a 167-line parity suite asserting the two families stay identical, and a hand-injected
-// image pipeline because core's `read` has none. Both are gone with the swap. `grep`/`find`/`ls` live
-// on this side too and form the baseline with `read`. When a real sandbox arrives it will tell us where
-// the seam belongs; a guess that costs this much every day is not a down payment.
+// image pipeline because core's `read` has none. Both are gone with the swap. All seven tools now come
+// from coding-agent and bypass `ExecutionEnv` together. When a real sandbox arrives it must wrap the
+// process; a partial seam that costs this much every day is not a down payment.
 //
-// `chat` is unaffected: it takes these NAMES only and lets pi's own runtime rebuild the tools it
-// renders (see session-builder.ts).
+// Chat receives the same tool objects through pi's `customTools` path; pi's builtin copies stay off.
 
 /**
  * Every pi coding tool, in canonical order, rooted at the workspace it operates in.
@@ -89,16 +88,10 @@ function codingToolNamesIn(mounted: readonly MountedTool[]): CodingToolName[] {
   return CODING_TOOL_NAMES.filter((name) => mounted.some((tool) => tool.name === name));
 }
 
-/**
- * Built-in coding tools omitted by an explicit lower-level `tools` list, minus any name that list
- * reused. pi's denylist matches by name, so excluding a reused name would delete the caller's tool.
- */
-function disabledBuiltinNames(
-  codingToolNames: readonly CodingToolName[],
-  mounted: readonly MountedTool[],
-): CodingToolName[] {
-  const authored = new Set(mounted.map((tool) => tool.name));
-  return CODING_TOOL_NAMES.filter((name) => !codingToolNames.includes(name) && !authored.has(name));
+/** Built-ins omitted by an explicit lower-level tool list. A reused name stays mounted. */
+function omittedBuiltinNames(mounted: readonly MountedTool[]): CodingToolName[] {
+  const mountedNames = new Set(mounted.map((tool) => tool.name));
+  return CODING_TOOL_NAMES.filter((name) => !mountedNames.has(name));
 }
 
 /**
@@ -120,7 +113,7 @@ export async function resolveAgentTools(
   toolCollisions: ToolCollision[];
   toolFailures: ModuleLoadFailure[];
 }> {
-  // Discovered `tools/` come from `agentDir` (the agent's own surface); the default coding tools are
+  // Discovered `tools/` come from `agentDir` (the agent's own surface); the coding tools are
   // rooted at `cwd`, the WORKSPACE — the project the agent works on, which is where an author expects
   // `read`/`bash` to land, and which is not always the definition directory.
   const discovered = await loadTools(agentDir);
@@ -285,7 +278,7 @@ function buildPiAgent(opts: {
   agentDir?: string;
   /** The definition's extension entry points; see {@link PiAgentSessionFactoryOptions.extensionPaths}. */
   extensionPaths?: string[];
-  /** Disabled built-ins; see {@link PiAgentSessionFactoryOptions.excludedToolNames}. */
+  /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
   env?: ExecutionEnv;
   /** The WORKSPACE: where tools operate, what the model is told its working directory is, and what
@@ -420,8 +413,8 @@ export interface CreatePiAgentOptions {
   sessions?: PiSessionRecordStore;
   /** Filesystem/process environment, handed to tools that read one as the turn's context. Defaults to
    *  a local NodeExecutionEnv at `process.cwd()`. At THIS rung nothing else consumes it: L1 loads no
-   *  definition. It does NOT constrain the default coding tools (pi's own, rooted at the workspace they
-   *  were built for) or author-written `tools/`, which are code and can import anything. Not a
+   *  definition. It does NOT constrain the coding tools (pi's own, rooted at the workspace they were
+   *  built for) or author-written `tools/`, which are code and can import anything. Not a
    *  sandbox — see {@link createPiAgentFromDefinition} for the rung where it also reads the
    *  definition. */
   env?: ExecutionEnv;
@@ -516,11 +509,8 @@ export async function createPiAgentFromDefinition(
   // it; a caller's own search_tools wins).
   // `cwd`, not `env.cwd`: the workspace is what this option MEANS, and a caller may hand a custom env
   // for definition loading whose root is a different directory. Taking it off the env would silently
-  // point read/bash/edit/write at the loader's directory.
+  // point the coding tools at the loader's directory.
   const tools = withSearchTool(options.tools ?? piDefaultTools(cwd));
-  // An explicit `tools` list is the caller stating the whole lower-level surface. Read capabilities
-  // from what is actually mounted; the name is the only thing the engine and model can observe.
-  const codingToolNames = codingToolNamesIn(tools);
   // Boot findings go through the SAME memoized reporter every later reader uses (report.ts, keyed by
   // the resolved dir): announced once here, and re-announced by a turn or by the control plane's
   // command list only when the set CHANGES — a runtime-written bad skill surfaces the moment it
@@ -572,9 +562,8 @@ export async function createPiAgentFromDefinition(
     // change without a restart, which is why this sits outside `live` above.
     extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
     cwd,
-    // Lower-level callers may pass an exact list. Keep omitted pi built-ins out of that session;
-    // a reused name stays because pi's denylist would otherwise remove the caller's tool too.
-    excludedToolNames: disabledBuiltinNames(codingToolNames, tools),
+    // `noTools: "builtin"` does not remove pi's built-ins from the registry; this denylist does.
+    excludedToolNames: omittedBuiltinNames(tools),
     env,
     lease: options.lease,
     observer: options.observer,

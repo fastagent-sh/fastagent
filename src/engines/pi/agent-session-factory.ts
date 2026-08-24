@@ -89,7 +89,7 @@ export interface PiAgentSessionFactoryOptions {
    * that entry point upstream, not a workaround here.
    */
   extensionPaths?: string[];
-  /** Built-ins omitted by an explicit lower-level tool list; directory agents mount all of them. */
+  /** Built-ins omitted by an explicit lower-level tool list. */
   excludedToolNames?: readonly string[];
   /** Filesystem/process environment: definition loading, and the turn context for tools that read one. */
   env: ExecutionEnv;
@@ -187,8 +187,8 @@ function toolDefinitions(
       if (!session) throw new Error("tool executed before its session was bound (lifecycle invariant broken)");
       return turnContext.run(
         { cwd, sessionManager: agentSessionManager(session, sessionId), tools: sessionToolActivation(session) },
-        // pi's own fifth `execute` parameter is read only by its default coding tools; fastagent's
-        // take theirs from turnContext. This env is here to satisfy the shape.
+        // Lower-level MountedTools may consume the fifth-argument env. Directory coding tools are
+        // cwd-bound and ignore it; authored tools read FastAgent's turnContext instead.
         () => tool.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
       );
     },

@@ -11,8 +11,8 @@
  *   - prompt  → systemPromptOverride = base + instructions ONLY; pi appends the skill section and env
  *               (cwd) itself (including it here would duplicate it).
  *   - skills  → skillsOverride (fastagent's skills, for the section + invocation).
- *   - tools   → enabled default coding tools by NAME (pi rebuilds them cwd-bound for rich rendering) +
- *               fastagent's custom tools via pi's customTools path (so they survive /new, /resume, fork).
+ *   - tools   → all seven coding tools plus authored tools through pi's customTools path; pi's builtin
+ *               copies are suppressed, and the injected set survives /new, /resume, and fork.
  *   - models  → a ModelRuntime with builtins only (`modelsPath: null`, no availability network), so
  *               the model surface equals serving's `createPiModels()` — pi's machine-global
  *               models.json does not leak in.
@@ -155,9 +155,8 @@ export async function buildAgentSessionRuntime(
         if (!bound) throw new Error("tool executed before its session was built (lifecycle invariant broken)");
         return turnContext.run(
           { cwd, sessionManager: bound.sessionManager, tools: bound.activation },
-          // pi's per-turn TOOL context (5th parameter) is read only by its default coding tools;
-          // fastagent's own take theirs from `turnContext` (AsyncLocalStorage). This env satisfies
-          // the shape for both, and is the chat cwd's — the same root pi would have handed them.
+          // Lower-level MountedTools may consume the fifth-argument env. Directory coding tools are
+          // cwd-bound and ignore it; authored tools read FastAgent's turnContext instead.
           () => t.execute(id, params, signal, undefined, { env }) as Promise<unknown>,
         );
       },

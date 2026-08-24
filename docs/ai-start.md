@@ -194,7 +194,7 @@ Use `createPiAgentFromDefinition` or `createPiAgentFromDir`, then mount `createI
 
 Keep authentication, users, database, session ownership, and policy in the host application.
 
-`ExecutionEnv` governs definition loading, not the default coding tools (pi's own, rooted at the workspace) and not author-written `tools/`. Do not claim that injecting `env` isolates a directory agent — it does not.
+`ExecutionEnv` governs definition loading, not the seven coding tools (pi's own, rooted at the workspace) and not author-written `tools/`. Do not claim that injecting `env` isolates a directory agent — it does not.
 
 ## Deploy
 

@@ -32,10 +32,8 @@ export async function runTool(name: string, argsJson: string, dirArg: string): P
   if (!tool) {
     failStartup(new Error(`unknown tool "${name}". available: ${tools.map((t) => t.name).join(", ") || "(none)"}`));
   }
-  // Two contexts, because the two tool families read different ones and this command must serve both
-  // exactly as serving does: fastagent's own tools take cwd/session/activation from `turnContext`
-  // (AsyncLocalStorage), and pi's default coding tools take the ExecutionEnv from the turn's TOOL
-  // context — which no turn supplies here, so this stands in for it, rooted at the same workspace.
+  // Authored tools read cwd from turnContext; coding tools are already rooted at the workspace. Keep
+  // the fifth-argument env for lower-level MountedTools that explicitly consume it.
   const env = new NodeExecutionEnv({ cwd: workspace });
   const result = await turnContext
     .run({ cwd: workspace }, () => tool.execute(`cli-${name}`, args, undefined, undefined, { env }))

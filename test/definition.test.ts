@@ -14,7 +14,13 @@ import {
   createPiAgentFromDefinition,
   type CreatePiAgentFromDefinitionOptions,
 } from "../src/index.ts";
-import { assembleSystemPrompt, piAllCodingTools, piBasePrompt, piDefaultTools } from "../src/engines/pi/create.ts";
+import {
+  assembleSystemPrompt,
+  type PiAssemblyParts,
+  piAllCodingTools,
+  piBasePrompt,
+  piDefaultTools,
+} from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
 import { isUnderDir } from "../src/engines/pi/definition.ts";
@@ -561,7 +567,27 @@ describe("create L2: the workspace roots the tools, the env reads the definition
   });
 });
 
-describe("create L2: the identity matches what is mounted", () => {
+describe("create L2: an explicit tool list is exact", () => {
+  it("keeps omitted built-ins out of the runtime registry", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-l2-tools-"));
+    await writeFile(join(dir, "persona.md"), "You are terse.\n");
+    const { faux } = makeFaux();
+    let assembly!: PiAssemblyParts;
+    await createPiAgentFromDefinition(dir, {
+      model: "faux/faux-1",
+      providers: [faux.provider],
+      tools: piAllCodingTools(dir).filter((tool) => tool.name === "read"),
+      onAssembly: (parts) => {
+        assembly = parts;
+      },
+    });
+
+    const session = await assembly.sessionFactory("s");
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["read"]);
+    session.setActiveToolsByName(["read", "bash", "write"]);
+    expect(session.getActiveToolNames()).toEqual(["read"]);
+  });
+
   it("does not claim a coding surface it did not mount", async () => {
     // Reporting a capability set derived from "was `tools` passed?" rather than from the tools told
     // the model it could execute commands and edit files while none of that was mounted. It has no
