@@ -117,6 +117,31 @@ describe("loadTools (filesystem discovery)", () => {
     );
   });
 
+  it("keeps an enabled mutating built-in when authored tools reuse its name", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-enabled-edit-"));
+    await mkdir(join(agentDir, "tools"));
+    await writeFile(
+      join(agentDir, "tools", "edit.mjs"),
+      `export default { description: "Discovered edit", parameters: { type: "object" }, async execute() { return "mine"; } };`,
+    );
+    const configuredEdit = defineTool({
+      name: "edit",
+      description: "Configured edit",
+      input: z.object({}),
+      execute: () => "mine",
+    });
+
+    const resolved = await resolveAgentTools({ tools: [configuredEdit] }, agentDir, process.cwd());
+    expect(resolved.tools.filter((tool) => tool.name === "edit")).toHaveLength(1);
+    expect(resolved.tools.find((tool) => tool.name === "edit")?.description).not.toMatch(/Configured|Discovered/);
+    expect(resolved.codingToolNames).toContain("edit");
+    expect(resolved.toolNames).not.toContain("edit");
+    expect(resolved.toolCollisions).toEqual([
+      { name: "edit", source: "config.tools" },
+      { name: "edit", source: "tools/edit" },
+    ]);
+  });
+
   it("codingTools false leaves the deferred search_tools policy unchanged", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-no-coding-deferred-"));
     const deferred = defineTool({

@@ -306,7 +306,8 @@ narrower default would imply one it cannot enforce.
 is refused**: `tools/read.ts` fails at startup, because an agent whose `read` is something else cannot
 load its own `SKILL.md` or open an attachment — rename yours. A **mutating name is yours** once you
 have disabled the built-in (`codingTools: false` plus `tools/edit.ts` mounts your editor), which is
-the same rule seen from the side where the name is genuinely free.
+the same rule seen from the side where the name is genuinely free. Otherwise the enabled built-in
+wins and the collision is reported.
 
 Model-visible skills are loaded on demand from their `SKILL.md` paths, and chat-channel non-image
 attachments are downloaded to local paths. Both are read with `read`, which is why it is baseline

@@ -319,7 +319,7 @@ describe("cli papercuts", () => {
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
     expect(info.codingTools).toEqual(["read", "grep", "find", "ls"]); // `false` keeps the baseline
-    expect(info.tools).toEqual(["lookup"]); // authored surface remains; coding defaults are disabled
+    expect(info.tools).toEqual(["lookup"]); // authored surface remains; mutating defaults are disabled
     expect(info.context.length).toBeGreaterThan(0); // the AGENTS.md is loaded as ② project context
     expect(info.skills.map((s: { name: string }) => s.name)).toEqual(["greet"]); // the malformed skill is skipped
     expect(JSON.stringify(info.diagnostics)).toMatch(/description/); // info SURFACES loader diagnostics

@@ -14,8 +14,7 @@ import {
   resolveSessionsDirOverride,
 } from "../src/engines/pi/config.ts";
 import { resolveSecretsDir, resolveStateRoot } from "../src/paths.ts";
-import { resolveTools } from "../src/engines/pi/create.ts";
-import type { FastagentTool } from "../src/engines/pi/tool.ts";
+import { resolveCodingTools } from "../src/engines/pi/create.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -300,36 +299,18 @@ describe("config: loadConfig", () => {
   });
 });
 
-describe("config: resolveTools (coding defaults + authored tools)", () => {
+describe("config: resolveCodingTools", () => {
   it("always mounts the baseline; `codingTools` decides what is added to it", () => {
-    // read/grep/find/ls are not a capability an author opts into — skills load by the model reading
-    // SKILL.md, and channel attachments arrive as paths. An agent without them cannot use fastagent's
-    // own features, so they are not on the menu; `codingTools` chooses what CHANGES things.
     const baseline = ["read", "grep", "find", "ls"];
     const all = [...baseline, "bash", "edit", "write"];
-    expect(resolveTools({}, process.cwd()).map((t) => t.name)).toEqual(all);
-    expect(resolveTools({ codingTools: true }, process.cwd()).map((t) => t.name)).toEqual(all);
-
-    // config.tools are APPENDED after them, never replacing.
-    const extra = { name: "ping" } as unknown as FastagentTool;
-    expect(resolveTools({ tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual([...all, "ping"]);
-  });
-
-  it("false/[] leave the baseline; an array adds exactly those, in canonical order", () => {
-    const baseline = ["read", "grep", "find", "ls"];
-    const extra = { name: "ping" } as unknown as FastagentTool;
-    // Not "no tools": an agent that cannot read is one that cannot open its own skills.
-    expect(resolveTools({ codingTools: false }, process.cwd()).map((t) => t.name)).toEqual(baseline);
-    expect(resolveTools({ codingTools: [] }, process.cwd()).map((t) => t.name)).toEqual(baseline);
-    // Order is the config's, not the caller's: reports, prompts and mount order all read this list.
-    expect(resolveTools({ codingTools: ["write", "edit"] }, process.cwd()).map((t) => t.name)).toEqual([
+    expect(resolveCodingTools({}, process.cwd()).names).toEqual(all);
+    expect(resolveCodingTools({ codingTools: true }, process.cwd()).names).toEqual(all);
+    expect(resolveCodingTools({ codingTools: false }, process.cwd()).names).toEqual(baseline);
+    expect(resolveCodingTools({ codingTools: [] }, process.cwd()).names).toEqual(baseline);
+    expect(resolveCodingTools({ codingTools: ["write", "edit"] }, process.cwd()).names).toEqual([
       ...baseline,
       "edit",
       "write",
-    ]);
-    expect(resolveTools({ codingTools: false, tools: [extra] }, process.cwd()).map((t) => t.name)).toEqual([
-      ...baseline,
-      "ping",
     ]);
   });
 });

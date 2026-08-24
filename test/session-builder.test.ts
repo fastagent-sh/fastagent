@@ -536,10 +536,9 @@ describe("session builder: codingTools narrows chat exactly as it narrows servin
     const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
     try {
       expect(rt.session.getActiveToolNames().sort()).toEqual(["edit", "find", "grep", "ls", "read"]);
-      // A BOUNDARY, not a default: the disabled built-ins are refused at the registry, so nothing
-      // that activates by name — a TUI command, the control plane, a deferred-tool loader — can put
-      // one back. "Mounted but inactive" would be the whole distance between safe and not for a
-      // public-facing agent running `codingTools: false`.
+      // A runtime rule, not a startup default: disabled built-ins are absent from the registry, so a
+      // TUI command, the control plane, or a deferred-tool loader cannot activate one by name. This is
+      // not a security boundary; authored tools remain unrestricted.
       const mounted = rt.session.getAllTools().map((tool) => tool.name);
       expect(mounted).not.toContain("bash");
       expect(mounted).not.toContain("write");

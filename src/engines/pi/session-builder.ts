@@ -144,9 +144,9 @@ export async function buildAgentSessionRuntime(
     const extensionPaths = await loadExtensionPaths(agentDir, { cwd, env });
     // ALL of them, pi's four included: fastagent's `read` is `createReadTool({ imageProcessor })`
     // (create.ts), and letting pi mount its own instead would silently drop image reading in chat.
-    // Serving already does it this way. And `tools` is ALREADY the configured surface —
-    // resolveTools() applied `codingTools` — so narrowing needs nothing here: what the definition
-    // disabled never reaches this list, and pi's own copies stay out via `noTools: "builtin"`.
+    // Serving already does it this way. And `tools` is ALREADY the configured surface — the shared
+    // assembly applied `codingTools` — so narrowing needs nothing here: what the definition disabled
+    // never reaches this list, and pi's own copies stay out via `noTools: "builtin"`.
     const customTools = tools;
     // What the definition turned OFF, for pi to refuse rather than merely leave inactive — minus any
     // name an authored tool has taken (that name is the author's once the built-in is disabled).

@@ -47,11 +47,10 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
-// pi's ACTIVE four are the default, for fidelity: read/bash/edit/write is what a local pi session
-// offers the model, so serving with a different set is behavior drift in either direction. pi also
-// mounts grep/find/ls without activating them — `codingTools: true` takes those as well. A directory
-// agent narrows with `codingTools: [names]` or opts out with `false`; L1/L2 library callers pass a
-// restricted `tools` list directly.
+// read/grep/find/ls are the directory agent's baseline: skills and channel attachments depend on
+// them. The default adds pi's mutating active set (bash/edit/write), for fidelity with local pi; a
+// directory agent narrows that addition with `codingTools`, while L1/L2 library callers pass their
+// exact `tools` list directly.
 //
 // This is not a security boundary and no default here could be one: the built-in POST /invoke has no
 // authentication, author-written `tools/` import whatever they like, and a WebSocket or Socket-Mode
@@ -68,9 +67,8 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // blast radius rather than closing it, and sandboxing is an explicit non-goal today. The bill was
 // concrete: a 167-line parity suite asserting the two families stay identical, and a hand-injected
 // image pipeline because core's `read` has none. Both are gone with the swap. `grep`/`find`/`ls` live
-// on this side too and are now reachable — mounting them is a separate decision about the default
-// surface, not something this change makes. When a real sandbox arrives it will tell us where the seam
-// belongs; a guess that costs this much every day is not a down payment.
+// on this side too and form the baseline with `read`. When a real sandbox arrives it will tell us where
+// the seam belongs; a guess that costs this much every day is not a down payment.
 //
 // `chat` is unaffected: it takes these NAMES only and lets pi's own runtime rebuild the tools it
 // renders (see session-builder.ts).
@@ -133,12 +131,6 @@ export function disabledBuiltinNames(
   return CODING_TOOL_NAMES.filter((name) => !codingToolNames.includes(name) && !authored.has(name));
 }
 
-/** `config.tools` semantics: extra tools APPENDED after enabled pi coding tools, never replacing them. */
-export function resolveTools(config: FastagentConfig, cwd: string): MountedTool[] {
-  const coding = resolveCodingTools(config, cwd).tools;
-  return config.tools ? [...coding, ...config.tools] : coding;
-}
-
 /**
  * The full tool set an agent mounts: enabled pi coding tools + `config.tools` + discovered `tools/` (deduped,
  * existing win), plus the non-default tool names and collisions to report. One source for the
@@ -177,7 +169,17 @@ export async function resolveAgentTools(
         `its own definition depends on`,
     );
   }
-  const configured = config.tools ? [...coding.tools, ...config.tools] : coding.tools;
+  const configured = [...coding.tools];
+  const configuredNames = new Set(configured.map((tool) => tool.name));
+  const configuredCollisions: ToolCollision[] = [];
+  for (const tool of config.tools ?? []) {
+    if (configuredNames.has(tool.name)) {
+      configuredCollisions.push({ name: tool.name, source: "config.tools" });
+      continue;
+    }
+    configuredNames.add(tool.name);
+    configured.push(tool);
+  }
   const merged = mergeDiscoveredTools(configured, discovered.tools);
   // The built-in `search_tools` loader mounts here — the one place the agent's full tool set is
   // computed — so `dev`/`start`/`info`/`fastagent tool` all see the same surface (idempotent; an
@@ -187,14 +189,13 @@ export async function resolveAgentTools(
   // on the deferred-authored-loader case, where withSearchTool returns a new array without adding one).
   const builtinLoaderMounted =
     !merged.tools.some((t) => t.name === "search_tools") && tools.some((t) => t.name === "search_tools");
-  const toolCollisions = [...discovered.collisions, ...merged.collisions];
+  const toolCollisions = [...discovered.collisions, ...configuredCollisions, ...merged.collisions];
   // `toolNames` is the AUTHOR's active-by-default surface (config.tools + tools/): exclude ENABLED pi
   // coding tools, the builtin loader (like wake, a builtin gets its own report line, not an anonymous
   // slot in the author's list — an author-DEFINED search_tools still shows), and deferred tools —
-  // each name lives in exactly ONE report slot, and deferred names live in `deferredToolNames`. When
-  // A mutating name the AUTHOR took is theirs in this report too: `codingTools` reports what pi
-  // mounted, and an authored `edit` is not that. (A baseline name never gets here — refused above.)
-  const defaultNames = new Set<string>(coding.names.filter((name) => !authoredNames.has(name)));
+  // each name lives in exactly ONE report slot, and deferred names live in `deferredToolNames`.
+  // Enabled built-ins win collisions; an author owns a mutating name only after disabling it.
+  const defaultNames = new Set<string>(coding.names);
   const toolNames = tools
     .filter(
       (t) => !defaultNames.has(t.name) && !isDeferredTool(t) && !(builtinLoaderMounted && t.name === "search_tools"),
@@ -202,7 +203,7 @@ export async function resolveAgentTools(
     .map((t) => t.name);
   return {
     tools,
-    codingToolNames: coding.names.filter((name) => !authoredNames.has(name)),
+    codingToolNames: coding.names,
     toolNames,
     deferredToolNames: tools.filter(isDeferredTool).map((t) => t.name),
     toolCollisions,
