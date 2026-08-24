@@ -571,6 +571,8 @@ side, mount the bearer-authenticated routes (dev/start do this automatically whe
 ```ts
 import { controlRoutes, connectSessionControl } from "@fastagent-sh/fastagent/core";
 
+// One mount point: the plane OWNS the /control prefix and answers everything under it — routes,
+// preflight, 404/405, and a failing handler — so a browser client can read every reply.
 const routes = controlRoutes(sessionControl, { token }); // GET/POST /control/*, SSE at /control/events
 
 // Client side — the SAME SessionControl interface, isomorphic to local:

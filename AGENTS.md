@@ -55,10 +55,14 @@ src/
 │                           # path helpers the CLI/deploy share (displayPath, exists). Engine-neutral,
 │                           # so the scaffold/deploy/watcher/env consume it without touching engines/pi.
 ├── version.ts              # package version (deploy pins it into the image)
-├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface)
+├── host/node.ts             # Node HTTP host: Routes/ChannelHandler/serveNode/router (public surface).
+│                         # Hono is the routing + node-adapter MECHANISM here and never leaves this
+│                         # file — the types a channel author or embedder writes stay pure Fetch
+│                         # (SPEC §11), because an app embedding fastagent may run its own framework.
 ├── scaffold/                # `init` / `add <channel>` / `add skill` + templates/ (real files)
 ├── channels/
-│   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract)
+│   ├── http.ts              # HTTP/SSE channel (consumes only the Agent contract). Node's HTTP bridge
+│   │                     # is the HOST's job, not this channel's — see host/node.ts
 │   ├── control.ts           # session-control transport: bearer-token /control/* routes (dispatch + SSE events with wire envelope + /control/invoke)
 │   ├── body.ts, respond.ts  # channel-authoring kit (body cap, responses)
 │   ├── preview-kit.ts       # SHARED turn-view reducer (event → view state + line renderers) + preview policies (ChannelFailure, wording)

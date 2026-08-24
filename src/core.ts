@@ -10,7 +10,7 @@ export type { Agent, AgentEvent, ImageRef, Json, Prompt, Scope } from "./agent.t
 export { collect, AgentFailure, type CollectResult } from "./collect.ts";
 export type { ModuleLoadFailure } from "./loader.ts";
 
-export { createInvokeHandler, nodeListener } from "./channels/http.ts";
+export { createInvokeHandler } from "./channels/http.ts";
 export { controlRoutes, type ControlRoutesOptions, type WireEvent } from "./channels/control.ts";
 export {
   ControlRequestError,
@@ -27,6 +27,7 @@ export {
   type LongConnection,
   type LongConnectionChannelModule,
   type Routes,
+  nodeListener,
   router,
   serveNode,
 } from "./host/node.ts";

@@ -9,7 +9,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
-import { controlRoutes } from "../src/channels/control.ts";
+import { controlPlaneRoutes, controlRoutes, mountControlPlane } from "../src/channels/control.ts";
 import { log } from "../src/log.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
@@ -54,7 +54,9 @@ async function serveControl() {
   return {
     agent,
     commandList,
-    routeKeys: Object.keys(mounted),
+    mountKeys: Object.keys(mounted),
+    // The plane's OWN routes: the mount point is one wildcard key, so sweeps derive from here.
+    routeKeys: Object.keys(controlPlaneRoutes(control, { token: TOKEN, agent })),
     localControl: control,
     url: `http://127.0.0.1:${port}`,
     close: () => server.close(),
@@ -167,11 +169,36 @@ describe("session control over HTTP (Phase 3)", () => {
       // over the wire: a quiet session sends no chunk, and Node withholds response headers until
       // one, so a fetch here would block for the full heartbeat interval.
       const { control } = await fauxControlledAgent([]);
-      const events = controlRoutes(control, { token: TOKEN })["GET /control/events"] as ChannelHandler;
-      const sse = await events(new Request("http://x/control/events?session=s", { headers: auth }));
+      // Through the PLANE, not the bare handler: CORS is a property of the plane's exit now, so
+      // reaching past it would assert nothing about what a browser receives.
+      const plane = mountControlPlane(controlPlaneRoutes(control, { token: TOKEN }))["/control/*"] as ChannelHandler;
+      const sse = await plane(new Request("http://x/control/events?session=s", { headers: auth }));
       expect(sse.headers.get("content-type")).toBe("text/event-stream");
       expect(origin(sse)).toBe("*");
       await sse.body?.cancel();
+    } finally {
+      served.close();
+    }
+  });
+
+  it("the replies no route produces are the plane's own, and a browser can read all of them", async () => {
+    // THE reason the plane owns its prefix. Each of these is generated where no route runs, so
+    // while the plane was a flat route dictionary they came from the HOST — bare, unreadable to a
+    // browser, and each discovered separately. Owning the prefix makes them the plane's answers.
+    const served = await serveControl();
+    const cors = (res: Response) => res.headers.get("access-control-allow-origin");
+    try {
+      const auth = { authorization: `Bearer ${TOKEN}` };
+      // 1. A path under the prefix that no route serves. 404 (not 405) is load-bearing: a remote
+      //    client reads it as "this serve predates the route", i.e. version skew, not a fault.
+      const unknown = await fetch(`${served.url}/control/nonexistent`, { headers: auth });
+      expect({ status: unknown.status, cors: cors(unknown) }).toEqual({ status: 404, cors: "*" });
+      // 2. A known path under a method it does not serve.
+      const wrongMethod = await fetch(`${served.url}/control/dispatch`, { headers: auth });
+      expect({ status: wrongMethod.status, cors: cors(wrongMethod) }).toEqual({ status: 405, cors: "*" });
+      // 3. Outside the prefix stays the HOST's business — the plane must not answer for the whole
+      //    server, only for what it owns.
+      expect((await fetch(`${served.url}/not-control`)).status).toBe(404);
     } finally {
       served.close();
     }
@@ -244,9 +271,11 @@ describe("session control over HTTP (Phase 3)", () => {
     // method, so leaving the derived OPTIONS behind would make the path exist and answer 405 —
     // turning a diagnosable skew back into the uncoded failure this distinction exists to prevent.
     const withoutCommands = Object.fromEntries(
-      Object.entries(controlRoutes(control, { token: TOKEN })).filter(([key]) => !key.endsWith(" /control/commands")),
+      Object.entries(controlPlaneRoutes(control, { token: TOKEN })).filter(
+        ([key]) => !key.endsWith(" /control/commands"),
+      ),
     );
-    const server = serveNode(router(withoutCommands), { port: 0 });
+    const server = serveNode(router(mountControlPlane(withoutCommands)), { port: 0 });
     const port = await server.listening;
     try {
       const remote = await connectSessionControl({ url: `http://127.0.0.1:${port}`, token: TOKEN });
@@ -569,7 +598,7 @@ describe("session control over HTTP (Phase 3)", () => {
     const quietAgent = {
       invoke: () => ({ [Symbol.asyncIterator]: () => ({ next: hang, return: async () => ({ done: true }) }) }),
     } as never;
-    const routes = controlRoutes(quietControl, { token: TOKEN, agent: quietAgent });
+    const routes = controlPlaneRoutes(quietControl, { token: TOKEN, agent: quietAgent });
     const auth = { authorization: `Bearer ${TOKEN}` };
     fakeTimers.useFakeTimers();
     try {
@@ -673,9 +702,11 @@ describe("session control over HTTP (Phase 3)", () => {
       const { control } = await fauxControlledAgent([]);
       const base = { "GET /health": () => new Response("ok") };
       const mounted = mountSessionControl(base, control, stateRoot);
-      expect(Object.keys(mounted.routes)).toEqual(expect.arrayContaining(["GET /health", "GET /control/state"]));
-      // Collision is PATH-level, matching the router's semantics: an any-method channel key would
-      // dodge an exact-key check yet still shadow the method-qualified control route at match time.
+      // The plane mounts as ONE prefix entry, not as N routes — that is what lets it own its own
+      // 404/405/preflight instead of leaving them to the host.
+      expect(Object.keys(mounted.routes)).toEqual(expect.arrayContaining(["GET /health", "/control/*"]));
+      // Collision is PREFIX-level: the plane owns everything under it, so a channel route landing
+      // anywhere beneath is shadowed — including a path the plane does not itself serve.
       expect(() => mountSessionControl({ "/control/dispatch": () => new Response("x") }, control, stateRoot)).toThrow(
         /collide with the session control plane/,
       );

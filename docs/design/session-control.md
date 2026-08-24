@@ -433,22 +433,35 @@ interface (and `connectAgent` does the same for the data plane's `Agent`). Local
 consumers are isomorphic; that is the entire payoff of keeping the envelope out of the API.
 
 **Browser reachability.** The bearer token travels in `Authorization`, which is not CORS-safelisted,
-so a browser preflights EVERY call to the plane — including a plain `GET`. Each path therefore
-answers `OPTIONS` with 204 and no token (a preflight carries none, which is its purpose), and every
-response carries `access-control-allow-origin: *` plus the allowed headers and methods. Allowed
-headers are `authorization, content-type`: only three content-types are safelisted and
-`application/json` is not among them, so a browser POSTing to `dispatch`/`invoke` names it too —
-allowing just `authorization` would leave exactly the plane's WRITE routes unreachable. Allowed
-METHODS are per path rather than plane-wide, and the plane catches a rejecting handler itself: both
-are the same rule, that a reply the browser cannot read is worse than the failure it describes. A
-method advertised but not served returns the host's 405, and a handler that throws returns the
-host's 500 — neither carries CORS headers, so both would surface as a bare "network error". `*` is the
-answer rather than a concession: authorisation here is the token — never the origin, never a cookie
-— so an origin that cannot present it gets 401 either way, and a deployment cannot know the origins
-of the GUIs that will manage it (the same asymmetry [§14](#14-security-boundary) settles). The
-headers ride error responses too: without them a 401 reaches the client as an opaque network error,
-hiding the answer it needs. `fastagent attach` is unaffected either way — Node's fetch does not
-enforce CORS — which is why the gap stayed invisible while blocking every browser client.
+so a browser preflights EVERY call to the plane — including a plain `GET`. `fastagent attach` is
+unaffected (Node's fetch does not enforce CORS), which is why the gap stayed invisible while
+blocking every browser client.
+
+The plane is therefore mounted as ONE sub-application owning the `/control` prefix, not as a set of
+routes that happen to share it. That is a correctness property, not tidiness: CORS belongs to every
+reply that LEAVES the plane, and three of those are produced where no route runs — an unknown path
+under the prefix, a method a path does not serve, and a handler that throws. As separate routes
+those three came from the host, outside anything the plane could decorate, and each surfaced as a
+bare "network error" in a browser. Owning the prefix makes them the plane's own answers, and the
+headers go on at the single exit they share.
+
+What it advertises: `access-control-allow-origin: *`, `access-control-allow-headers:
+authorization, content-type`, and allowed METHODS **per path**. Each value is forced.
+
+- `*` is the answer rather than a concession — authorisation here is the token, never the origin
+  and never a cookie, so an origin that cannot present it gets 401 either way, and a deployment
+  cannot know the origins of the GUIs that will manage it (the asymmetry [§14](#14-security-boundary)
+  settles).
+- `content-type` because only three values are safelisted and `application/json` is not among them:
+  a browser POSTing to `dispatch`/`invoke` names it in the preflight, so allowing just
+  `authorization` leaves precisely the WRITE routes unreachable while every read works.
+- Per-path methods because advertising a method a path does not serve invites the browser to send
+  it, only to meet a rejection it cannot read. Advertising the truth stops that request at the
+  browser, with an accurate diagnosis.
+
+`OPTIONS` is answered before any auth — a preflight carries no token, which is its entire purpose —
+and 404 stays distinct from 405, because a remote client reads 404 as "this serve predates the
+route" (skew) rather than as a fault.
 
 ## 14. Security boundary
 
