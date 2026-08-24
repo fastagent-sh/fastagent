@@ -132,14 +132,13 @@ export async function buildAgentSessionRuntime(
     // Assembly-time, like serving's: this whole function is memoized, so the scan and its warnings
     // happen once per runtime rather than per session rebuild (/new, /resume, fork).
     const extensionPaths = await loadExtensionPaths(agentDir, { cwd, env });
-    // ALL of them: fastagent mounts pi's complete coding set itself, and `noTools: "builtin"` below
-    // keeps the runtime from adding duplicate copies.
-    const customTools = tools;
+    // fastagent mounts pi's complete coding set itself; `noTools: "builtin"` below keeps the runtime
+    // from adding duplicate copies.
     // Adapt fastagent's AgentTool to pi's ToolDefinition (`parameters` is plain JSON-Schema; pi accepts
     // it). Each execute runs inside the turn context with the CURRENT session's activation bridge — the
     // assembly is memoized across /new//resume/fork rebuilds while the session changes, so the bridge
     // resolves through sessionRef at call time, exactly like the serving path resolves its session.
-    const customToolDefs = customTools.map((t) => ({
+    const customToolDefs = tools.map((t) => ({
       name: t.name,
       label: t.name,
       description: t.description ?? "",
@@ -177,7 +176,7 @@ export async function buildAgentSessionRuntime(
       thinkingLevel: config.thinkingLevel,
       definition,
       extensionPaths,
-      customTools,
+      customTools: tools,
       customToolDefs,
       deferredToolNames,
       systemPrompt,

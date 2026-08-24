@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineTool, loadTools, z } from "../src/index.ts";
-import { resolveAgentTools } from "../src/engines/pi/create.ts";
+import { CODING_TOOL_NAMES, resolveAgentTools } from "../src/engines/pi/create.ts";
 
 describe("defineTool", () => {
   it("builds a pi AgentTool: JSON-schema parameters, validated + auto-wrapped execute", async () => {
@@ -96,7 +96,7 @@ describe("loadTools (filesystem discovery)", () => {
   it("always mounts every coding tool", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-all-"));
     const resolved = await resolveAgentTools({}, agentDir, process.cwd());
-    expect(resolved.codingToolNames).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+    expect(resolved.tools.map((tool) => tool.name)).toEqual([...CODING_TOOL_NAMES]);
     expect(resolved.toolNames).toEqual([]); // no authored tools
   });
 
@@ -117,7 +117,6 @@ describe("loadTools (filesystem discovery)", () => {
     const resolved = await resolveAgentTools({ tools: [configuredRead] }, agentDir, process.cwd());
     expect(resolved.tools.filter((tool) => tool.name === "read")).toHaveLength(1);
     expect(resolved.tools.find((tool) => tool.name === "read")?.description).not.toMatch(/Configured|Discovered/);
-    expect(resolved.codingToolNames).toContain("read");
     expect(resolved.toolNames).not.toContain("read");
     expect(resolved.toolCollisions).toEqual([
       { name: "read", source: "config.tools" },

@@ -2,7 +2,6 @@
 export {
   createPiAgent,
   createPiAgentFromDefinition,
-  type CodingToolName,
   type CreatePiAgentFromDefinitionOptions,
   type CreatePiAgentOptions,
 } from "./engines/pi/create.ts";

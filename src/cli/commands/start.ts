@@ -10,6 +10,7 @@ import { resolveAuthPath, resolveSessionsDirOverride } from "../../engines/pi/co
 import { resolveSecretsDir, workspaceHint } from "../../paths.ts";
 import { isUnderDir } from "../../engines/pi/definition.ts";
 import { reportFindingsIfChanged, reportModuleLoadFailures, reportToolCollisions } from "../../engines/pi/report.ts";
+import { CODING_TOOL_NAMES } from "../../engines/pi/create.ts";
 import { createPiAgentFromDir } from "../../engines/pi/open.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { createWakeAlarmSink, reconcileWakeAlarms } from "../../schedule/wake-alarm.ts";
@@ -29,15 +30,7 @@ import {
   serve,
   startSchedules,
 } from "../serve.ts";
-import {
-  codingToolsLabel,
-  parseBind,
-  parsePort,
-  reportAuth,
-  reportLine,
-  resolveFirstRunModel,
-  reportWorkspaceHint,
-} from "../shared.ts";
+import { parseBind, parsePort, reportAuth, reportLine, resolveFirstRunModel, reportWorkspaceHint } from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
@@ -79,7 +72,6 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
     stateRoot,
     sessionsDir,
     authPath,
-    codingToolNames,
     toolNames,
     deferredToolNames,
     toolCollisions,
@@ -100,7 +92,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   reportLine("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   if (definition.persona) reportLine("persona", "persona.md");
   reportLine("skills", definition.skills.map((s) => s.name).join(", ") || "(none)");
-  reportLine("codingTools", codingToolsLabel(codingToolNames));
+  reportLine("codingTools", CODING_TOOL_NAMES.join(", "));
   if (toolNames.length > 0) reportLine("tools", toolNames.join(", "));
   if (deferredToolNames.length > 0) {
     reportLine("deferred", `${deferredToolNames.join(", ")} (activated via search_tools)`);

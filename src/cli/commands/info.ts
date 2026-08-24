@@ -19,7 +19,6 @@ import { log } from "../../log.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { loadSchedules } from "../../schedule/discover.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
-import { codingToolsLabel } from "../shared.ts";
 
 export interface InfoOptions {
   json?: boolean;
@@ -41,10 +40,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // tool), is isolated the same way everywhere (G2): info, dev, AND start report it and keep going with
   // the tools that loaded. The `error`/`.catch` below only fires for a whole-load fault (an unreadable
   // tools/ dir), not a single bad file.
-  const resolvedCodingToolNames = [...CODING_TOOL_NAMES];
   const tools = await resolveAgentTools(config, agentDir, workspace)
     .then((r) => ({
-      coding: r.codingToolNames,
       names: r.toolNames,
       deferred: r.deferredToolNames,
       collisions: r.toolCollisions,
@@ -52,7 +49,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       error: undefined as string | undefined,
     }))
     .catch((e: unknown) => ({
-      coding: resolvedCodingToolNames,
       names: [] as string[],
       deferred: [] as string[],
       collisions: [],
@@ -101,7 +97,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           model: modelSpec ?? null,
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
-          codingTools: tools.coding,
+          codingTools: [...CODING_TOOL_NAMES],
           context: definition.contextFiles.map((f) => f.path),
           persona: definition.persona !== undefined,
           skills: definition.skills.map((skill) => ({ name: skill.name, description: skill.description })),
@@ -139,7 +135,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or config.model)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
-  line("codingTools", codingToolsLabel(tools.coding));
+  line("codingTools", CODING_TOOL_NAMES.join(", "));
   line("context", definition.contextFiles.map((f) => f.path).join(", ") || "(none)");
   line("persona", definition.persona ? "persona.md" : "(none)");
   line("skills", definition.skills.map((skill) => skill.name).join(", ") || "(none)");

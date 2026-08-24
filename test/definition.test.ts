@@ -17,11 +17,11 @@ import {
   z,
 } from "../src/index.ts";
 import {
+  CODING_TOOL_NAMES,
   assembleSystemPrompt,
   type PiAssemblyParts,
   piAllCodingTools,
   piBasePrompt,
-  piDefaultTools,
 } from "../src/engines/pi/create.ts";
 import { loadAgentDefinition } from "../src/engines/pi/definition.ts";
 import { log } from "../src/log.ts";
@@ -194,14 +194,14 @@ describe("create: assembleSystemPrompt (four segments)", () => {
   });
 
   it("piBasePrompt renders the tool list from actual tools so base and toolset stay aligned", () => {
-    const withTools = piBasePrompt({ tools: piDefaultTools(process.cwd()) });
+    const withTools = piBasePrompt({ tools: piAllCodingTools(process.cwd()) });
     expect(withTools).toContain("- read:");
     expect(withTools).toContain("- bash:");
     expect(piBasePrompt()).toContain("(none)");
   });
 
   it("a persona.md persona overrides the engine identity but keeps the tool list + guidelines", () => {
-    const tools = piDefaultTools(process.cwd());
+    const tools = piAllCodingTools(process.cwd());
     const persona = piBasePrompt({ tools, persona: "You are the Repo Bot." });
     expect(persona).toContain("You are the Repo Bot.");
     expect(persona).not.toContain("operating inside pi"); // default identity replaced
@@ -353,14 +353,11 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
 });
 
 describe("create: toolset (real pi tools, fidelity)", () => {
-  it("piDefaultTools is every pi coding tool", () => {
+  it("piAllCodingTools is every pi coding tool", () => {
     // Asserted against pi's own groupings rather than a hand-written list, so the set follows
     // upstream; the ORDER is ours, and it is what directory agents report and mount.
-    expect(piDefaultTools(process.cwd()).map((t) => t.name)).toEqual(
-      piAllCodingTools(process.cwd()).map((t) => t.name),
-    );
     const names = piAllCodingTools(process.cwd()).map((t) => t.name);
-    expect(names).toEqual(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+    expect(names).toEqual([...CODING_TOOL_NAMES]);
     expect([...names].sort()).toEqual(
       [
         ...new Set([...createReadOnlyTools(process.cwd()), ...createCodingTools(process.cwd())].map((t) => t.name)),
@@ -372,7 +369,7 @@ describe("create: toolset (real pi tools, fidelity)", () => {
     // The root is fixed at CONSTRUCTION now, not handed in per turn: these are pi-coding-agent's
     // tools, which take a cwd. Every caller builds them for the workspace the agent works on, so a
     // relative path resolves against that workspace and nothing else.
-    const read = piDefaultTools(fixtureDir).find((t) => t.name === "read")!;
+    const read = piAllCodingTools(fixtureDir).find((t) => t.name === "read")!;
     const r = await read.execute("t1", { path: "AGENTS.md" }, undefined, undefined, {} as never);
     const text = (r.content[0] as any).text as string;
     expect(text).toContain("Haiku Bot");
@@ -540,7 +537,7 @@ describe("create L2: an explicit tools list states its own coding capabilities",
       await createPiAgentFromDefinition(dir, {
         model: "faux/faux-1",
         providers: [faux.provider],
-        tools: piDefaultTools(process.cwd()),
+        tools: piAllCodingTools(process.cwd()),
       });
       expect(warn.mock.calls.flat().join("\n")).not.toMatch(/reader/i);
     } finally {

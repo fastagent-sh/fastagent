@@ -173,8 +173,6 @@ function createPiAgentFromDir(
 The same opener used by `fastagent dev`, `invoke`, and `start`: load config, resolve model/tools, pick session storage, and assemble the directory. Set `serving: true` only for a long-running host that also runs the scheduler; it allows an opted-in workspace to mount its `wake` tool.
 
 ```ts
-type CodingToolName = "read" | "grep" | "find" | "ls" | "bash" | "edit" | "write";
-
 interface FastagentConfig {
   tools?: FastagentTool[];
 }
