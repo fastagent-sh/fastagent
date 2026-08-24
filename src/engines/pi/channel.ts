@@ -9,8 +9,10 @@ import {
   type ChannelModule,
   type LongConnection,
   type LongConnectionChannelModule,
-  parseRouteKey,
   type Routes,
+  assertRoutePath,
+  parseRouteKey,
+  routePathsOverlap,
 } from "../../host/node.ts";
 import { type ModuleLoadFailure, isModuleFile, loadModuleDir } from "../../loader.ts";
 import { assertInsideAgentDir } from "../../paths.ts";
@@ -105,9 +107,10 @@ function validateRoutes(value: unknown, label: string): [string, (req: Request) 
     if (typeof handler !== "function") {
       throw new Error(`${label}: route "${route}" must map to a handler function, got ${typeof handler}`);
     }
-    if (!parseRouteKey(route).path.startsWith("/")) {
-      throw new Error(`${label}: route "${route}" is not a valid route key (expected "METHOD /path" or "/path")`);
-    }
+    assertRoutePath(
+      parseRouteKey(route).path,
+      (problem) => `${label}: route "${route}" is not a valid route key — ${problem}`,
+    );
   }
   return routes;
 }
@@ -165,7 +168,7 @@ export async function loadChannels(
         const clash = Object.keys(routes).some((key) => {
           const existing = parseRouteKey(key);
           return (
-            existing.path === parsed.path &&
+            routePathsOverlap(existing.path, parsed.path) &&
             (existing.method === undefined || parsed.method === undefined || existing.method === parsed.method)
           );
         });

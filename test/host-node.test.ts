@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Routes, router, serveNode } from "../src/host/node.ts";
+import { type Routes, assertRoutePath, routePathsOverlap, router, serveNode } from "../src/host/node.ts";
 
 describe("host/node: router", () => {
   const routes: Routes = {
@@ -38,6 +38,32 @@ describe("host/node: router", () => {
     expect((await handle(req("DELETE", "/any"))).status).toBe(200); // method-agnostic key
     expect((await handle(req("GET", "/webhook"))).status).toBe(405); // path exists, wrong method
     expect((await handle(req("GET", "/missing"))).status).toBe(404);
+  });
+});
+
+describe("host/node: the route path language", () => {
+  it("a prefix mount overlaps everything beneath it; literals only overlap when equal", () => {
+    // The question every collision check asks. It has to be decidable, which is why the language is
+    // literal paths + `/*` mounts and nothing else: a prefix mount answers for paths it does not
+    // serve (its own 404), so an unnoticed overlap is a channel silently going dark.
+    expect(routePathsOverlap("/control/*", "/control/state")).toBe(true);
+    expect(routePathsOverlap("/control/state", "/control/*")).toBe(true);
+    expect(routePathsOverlap("/control/*", "/control")).toBe(true);
+    expect(routePathsOverlap("/control/*", "/control/anything/deep")).toBe(true);
+    expect(routePathsOverlap("/control/*", "/controlled")).toBe(false); // prefix is path-segment-wise
+    expect(routePathsOverlap("/a", "/a")).toBe(true);
+    expect(routePathsOverlap("/a", "/b")).toBe(false);
+    expect(routePathsOverlap("/a/*", "/b/*")).toBe(false);
+    expect(routePathsOverlap("/a/*", "/a/b/*")).toBe(true);
+  });
+
+  it("rejects the patterns that would make overlap undecidable", () => {
+    const check = (path: string) => () => assertRoutePath(path, (problem) => `bad: ${problem}`);
+    expect(check("/files/:id")).toThrow(/parameter patterns/);
+    expect(check("/files/*/raw")).toThrow(/trailing/);
+    expect(check("files")).toThrow(/must start/);
+    expect(check("/files/*")).not.toThrow();
+    expect(check("/files")).not.toThrow();
   });
 });
 

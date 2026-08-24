@@ -8,13 +8,13 @@ import type { Agent } from "../agent.ts";
 import { createStateSync } from "../channels/agentcore-state.ts";
 import { agentcoreRoutes, UnknownScheduleError } from "../channels/agentcore.ts";
 import { activeWork } from "../channels/busy.ts";
-import { CONTROL_PREFIX, controlRoutes } from "../channels/control.ts";
+import { controlRoutes } from "../channels/control.ts";
 import { INVOKE_EXAMPLE_BODY, createInvokeHandler } from "../channels/http.ts";
 import { text } from "../channels/respond.ts";
 import { type LoadedLongConnectionChannel, loadChannels } from "../engines/pi/channel.ts";
 import { reportModuleLoadFailures } from "../engines/pi/report.ts";
 import { answersLocalhost, bindLabel, classifyBind, clientHost } from "../bind.ts";
-import { type Routes, parseRouteKey, router, serveNode } from "../host/node.ts";
+import { type Routes, parseRouteKey, routePathsOverlap, router, serveNode } from "../host/node.ts";
 import { log } from "../log.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { loadSchedules } from "../schedule/discover.ts";
@@ -105,10 +105,9 @@ export function mountSessionControl(
   // landing there is shadowed — including one the plane does not itself serve, which would
   // otherwise reach the plane's own 404 instead of the channel. Wider than the old exact-path
   // check, and for the same reason: the failure it prevents is silent.
-  const collisions = Object.keys(routes).filter((key) => {
-    const path = parseRouteKey(key).path;
-    return path === CONTROL_PREFIX || path.startsWith(`${CONTROL_PREFIX}/`);
-  });
+  const collisions = Object.keys(routes).filter((key) =>
+    Object.keys(mounted).some((mountKey) => routePathsOverlap(parseRouteKey(key).path, parseRouteKey(mountKey).path)),
+  );
   if (collisions.length > 0) {
     throw new Error(
       `channel route(s) ${collisions.map((key) => `"${key}"`).join(", ")} collide with the session control plane — ` +

@@ -64,6 +64,46 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
 }
 
 /**
+ * The path language a {@link Routes} key speaks: a LITERAL path, or a PREFIX mount ending in `/*`
+ * that owns everything beneath it (the session control plane is one).
+ *
+ * Deliberately narrower than the matcher underneath, which would also accept parameter patterns
+ * (`/x/:id`). The reason is {@link routePathsOverlap}: two channels must never silently shadow each
+ * other, so "do these two routes overlap?" has to be decidable — and for arbitrary patterns it is
+ * not. Widening this language means answering that question first.
+ */
+export function assertRoutePath(path: string, describe: (problem: string) => string): void {
+  if (!path.startsWith("/")) throw new Error(describe('must start with "/"'));
+  if (path.includes(":")) throw new Error(describe("parameter patterns (:id) are not supported"));
+  const star = path.indexOf("*");
+  if (star !== -1 && path !== `${path.slice(0, star - 1)}/*`) {
+    throw new Error(describe('"*" is only allowed as a trailing "/*" prefix mount'));
+  }
+}
+
+/** The prefix a `/*` mount owns, or undefined for a literal path. */
+function mountPrefix(path: string): string | undefined {
+  return path.endsWith("/*") ? path.slice(0, -2) : undefined;
+}
+
+/**
+ * Would these two route paths answer the same request? THE overlap question, asked in one place so
+ * every caller that must refuse a collision (channel loading, control-plane mounting) refuses the
+ * same set. A literal pair collides when equal; a prefix mount collides with anything beneath it,
+ * including a path it does not itself serve — the request would still reach the mount's own 404
+ * instead of the other channel.
+ */
+export function routePathsOverlap(a: string, b: string): boolean {
+  const pa = mountPrefix(a);
+  const pb = mountPrefix(b);
+  const under = (prefix: string, path: string) => path === prefix || path.startsWith(`${prefix}/`);
+  if (pa !== undefined && pb !== undefined) return under(pa, pb) || under(pb, pa);
+  if (pa !== undefined) return under(pa, b);
+  if (pb !== undefined) return under(pb, a);
+  return a === b;
+}
+
+/**
  * Compose a {@link Routes} table into one handler: path match (optionally method-qualified),
  * 405 when the path exists under another method, 404 otherwise.
  *

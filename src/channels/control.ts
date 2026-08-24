@@ -29,7 +29,7 @@ import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";
 import { text } from "./respond.ts";
 
 /** The prefix this plane OWNS: everything under it is the plane's to answer. */
-export const CONTROL_PREFIX = "/control";
+const CONTROL_PREFIX = "/control";
 
 /** The SSE payload: one control-plane event in its transport envelope. */
 export interface WireEvent {
