@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCodingTools, createReadOnlyTools } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { makeFaux } from "./faux.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -12,7 +12,9 @@ import {
   collect,
   createPiAgent,
   createPiAgentFromDefinition,
+  defineTool,
   type CreatePiAgentFromDefinitionOptions,
+  z,
 } from "../src/index.ts";
 import {
   assembleSystemPrompt,
@@ -282,6 +284,38 @@ describe("create L1: createPiAgent (instructions ARE the prompt)", () => {
     // pi appends its own working-directory line; what matters is that nothing else was imposed.
     expect((seen ?? "").split("\nCurrent working directory:")[0]).toBe("You are a support bot.");
     expect(seen).not.toContain("operating inside pi"); // no engine identity forced on a hand-built agent
+  });
+
+  it("cannot activate a coding tool omitted from its explicit list", async () => {
+    let activated: string[] | undefined;
+    let offeredAfter: string[] = [];
+    const { faux } = makeFaux();
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("try_enable_bash", {}, { id: "c1" })),
+      (context) => {
+        offeredAfter = (context.tools ?? []).map((tool) => tool.name);
+        return fauxAssistantMessage("done");
+      },
+    ]);
+    const agent = createPiAgent({
+      providers: [faux.provider],
+      model: "faux/faux-1",
+      tools: [
+        defineTool({
+          name: "try_enable_bash",
+          description: "Try to enable bash.",
+          input: z.object({}),
+          execute: async (_input, ctx) => {
+            activated = await ctx.tools?.activate(["bash"]);
+            return activated;
+          },
+        }),
+      ],
+    });
+
+    await collect(agent.invoke({ session: "s" }, { text: "enable bash" }));
+    expect(activated).toEqual([]);
+    expect(offeredAfter).toEqual(["try_enable_bash"]);
   });
 
   it("appends the skills listing when skills are mounted", async () => {

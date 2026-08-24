@@ -278,8 +278,6 @@ function buildPiAgent(opts: {
   agentDir?: string;
   /** The definition's extension entry points; see {@link PiAgentSessionFactoryOptions.extensionPaths}. */
   extensionPaths?: string[];
-  /** Built-ins omitted by an explicit lower-level tool list. */
-  excludedToolNames?: readonly string[];
   env?: ExecutionEnv;
   /** The WORKSPACE: where tools operate, what the model is told its working directory is, and what
    *  session records are keyed to. Defaults to the env's root, which is the same thing at L1 — the
@@ -324,7 +322,9 @@ function buildPiAgent(opts: {
     cwd,
     ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
     ...(opts.extensionPaths ? { extensionPaths: opts.extensionPaths } : {}),
-    ...(opts.excludedToolNames?.length ? { excludedToolNames: opts.excludedToolNames } : {}),
+    // `noTools: "builtin"` leaves pi's built-ins in the registry; exact lower-level lists must also
+    // deny every omitted name so a loader cannot reactivate one later.
+    excludedToolNames: omittedBuiltinNames(opts.tools ?? []),
     env,
   });
   opts.onAssembly?.({
@@ -561,8 +561,6 @@ export async function createPiAgentFromDefinition(
     // change without a restart, which is why this sits outside `live` above.
     extensionPaths: await loadExtensionPaths(dir, { cwd, env }),
     cwd,
-    // `noTools: "builtin"` does not remove pi's built-ins from the registry; this denylist does.
-    excludedToolNames: omittedBuiltinNames(tools),
     env,
     lease: options.lease,
     observer: options.observer,
