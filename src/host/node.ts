@@ -74,18 +74,21 @@ export function parseRouteKey(key: string): { method?: string; path: string } {
  */
 export function router(routes: Routes): ChannelHandler {
   const app = new Hono();
-  const mountedPaths = new Set<string>();
+  const paths: string[] = [];
   for (const [key, handler] of Object.entries(routes)) {
     const { method, path } = parseRouteKey(key);
-    mountedPaths.add(path);
+    if (!paths.includes(path)) paths.push(path);
     const bound = (c: { req: { raw: Request } }) => handler(c.req.raw);
     if (method) app.on(method, path, bound);
     else app.all(path, bound);
   }
-  app.notFound((c) => {
-    const known = mountedPaths.has(new URL(c.req.url).pathname);
-    return known ? text("method not allowed\n", 405) : text("not found\n", 404);
-  });
+  // "The path exists" is decided by the SAME matcher that dispatches, never by comparing pathname
+  // strings: a pattern route (`POST /x/*`) matches paths no literal comparison would recognise, and
+  // the two answers drifting apart is exactly how a method miss starts reporting itself as 404 —
+  // which a remote client reads as version skew rather than as its own mistake. Registered after
+  // the method-qualified routes, so it is only reached when the path matched and the method did not.
+  for (const path of paths) app.all(path, () => text("method not allowed\n", 405));
+  app.notFound(() => text("not found\n", 404));
   return (req) => app.fetch(req);
 }
 

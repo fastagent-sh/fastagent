@@ -10,6 +10,18 @@ describe("host/node: router", () => {
   const handle = router(routes);
   const req = (method: string, path: string) => new Request(`http://h${path}`, { method });
 
+  it("a PATTERN route reports a method miss as 405, like a literal one", async () => {
+    // The 404/405 split must be decided by the matcher that dispatches. Comparing pathname strings
+    // works only for literal keys: `/files/a.txt` is matched by `POST /files/*` yet equals no key,
+    // so a GET to it would answer 404 — and a remote client reads 404 as "this serve predates the
+    // route", i.e. version skew, rather than as the wrong method.
+    const handle = router({ "POST /files/*": () => new Response("stored", { status: 201 }) });
+    const req = (method: string, path: string) => new Request(`http://h${path}`, { method });
+    expect((await handle(req("POST", "/files/a.txt"))).status).toBe(201);
+    expect((await handle(req("GET", "/files/a.txt"))).status).toBe(405); // matched the path, not the method
+    expect((await handle(req("GET", "/elsewhere"))).status).toBe(404);
+  });
+
   it("matches method + path, 405 on a known path with the wrong method, 404 otherwise", async () => {
     expect((await handle(req("POST", "/webhook"))).status).toBe(202);
     expect((await handle(req("GET", "/health"))).status).toBe(200);
