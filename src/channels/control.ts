@@ -22,6 +22,7 @@ import { INVALID_COMMAND_CODE, type SessionCommand, type SessionControl, type Se
 import { timingSafeEqual } from "node:crypto";
 import type { Agent } from "../agent.ts";
 import { type Routes, parseRouteKey } from "../host/node.ts";
+import { log } from "../log.ts";
 import { readBodyCapped } from "./body.ts";
 import { MAX_BODY_BYTES, createInvokeHandler, sseHeartbeat } from "./http.ts";
 import { text } from "./respond.ts";
@@ -55,28 +56,59 @@ const json = (value: unknown, status = 200): Response =>
 const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
   "access-control-allow-headers": "authorization, content-type",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
 };
 
-const withCorsHeaders = (res: Response): Response => {
+/** `methods` is per PATH, not a plane-wide constant: advertising a method a path does not serve
+ *  invites the browser to send it, and the host's 405 comes back without these headers — an opaque
+ *  network error in place of a method it was told to use. Advertising the truth stops that request
+ *  at the browser, with an accurate diagnosis. */
+const withCorsHeaders = (res: Response, methods: string): Response => {
   for (const [name, value] of Object.entries(CORS_HEADERS)) res.headers.set(name, value);
+  res.headers.set("access-control-allow-methods", methods);
   return res;
 };
 
 /**
- * The plane's routes, made reachable from a browser: CORS headers on EVERY response (a 401 or 400
- * without them reaches the client as an opaque "network error", hiding the very answer it needs),
- * plus an unauthenticated `OPTIONS` per path — a preflight carries no token, which is its entire
- * purpose. Paths are DERIVED from the table, so a route added later is covered without anyone
- * remembering to; `router` does exact matching, so each one needs its own entry.
+ * The plane's routes, made reachable from a browser: CORS headers on EVERY response this plane
+ * produces — including the 500 a rejecting handler would otherwise leave to the host, whose
+ * synthesized reply carries none. Without them a 401, a 400 or a 500 reaches the client as an
+ * opaque "network error", hiding the very answer it needs. Plus an unauthenticated `OPTIONS` per
+ * path: a preflight carries no token, which is its entire purpose.
+ *
+ * Paths and their methods are DERIVED from the table, so a route added later is covered without
+ * anyone remembering to; `router` does exact matching, so each path needs its own entry.
  */
 function browserReachable(routes: Routes): Routes {
+  const methodsByPath = new Map<string, Set<string>>();
+  for (const key of Object.keys(routes)) {
+    const { method, path } = parseRouteKey(key);
+    const methods = methodsByPath.get(path) ?? new Set(["OPTIONS"]);
+    // A key with no method serves ANY method (host contract), so advertise everything this plane
+    // speaks rather than guessing which one the route meant.
+    if (method) methods.add(method);
+    else for (const m of ["GET", "POST"]) methods.add(m);
+    methodsByPath.set(path, methods);
+  }
+  const allowed = (path: string): string => [...(methodsByPath.get(path) ?? [])].join(", ");
+
   const wrapped: Routes = {};
   for (const [key, handler] of Object.entries(routes)) {
-    wrapped[key] = async (req) => withCorsHeaders(await handler(req));
+    const methods = allowed(parseRouteKey(key).path);
+    wrapped[key] = async (req) => {
+      try {
+        return withCorsHeaders(await handler(req), methods);
+      } catch (error) {
+        // The plane's OWN totality boundary. The host has one too, but its 500 carries no CORS
+        // headers, so a rejecting handler (`commands()` on an unreadable definition) would reach a
+        // browser as an opaque network error. Logged here because the host's catch no longer sees
+        // it, and the message stays internal — same discipline as the host's.
+        log.error(`[control] ${key} failed: ${String(error)}`);
+        return withCorsHeaders(text("internal error\n", 500), methods);
+      }
+    };
   }
-  for (const path of new Set(Object.keys(routes).map((key) => parseRouteKey(key).path))) {
-    wrapped[`OPTIONS ${path}`] = () => withCorsHeaders(new Response(null, { status: 204 }));
+  for (const path of methodsByPath.keys()) {
+    wrapped[`OPTIONS ${path}`] = () => withCorsHeaders(new Response(null, { status: 204 }), allowed(path));
   }
   return wrapped;
 }

@@ -438,7 +438,11 @@ answers `OPTIONS` with 204 and no token (a preflight carries none, which is its 
 response carries `access-control-allow-origin: *` plus the allowed headers and methods. Allowed
 headers are `authorization, content-type`: only three content-types are safelisted and
 `application/json` is not among them, so a browser POSTing to `dispatch`/`invoke` names it too —
-allowing just `authorization` would leave exactly the plane's WRITE routes unreachable. `*` is the
+allowing just `authorization` would leave exactly the plane's WRITE routes unreachable. Allowed
+METHODS are per path rather than plane-wide, and the plane catches a rejecting handler itself: both
+are the same rule, that a reply the browser cannot read is worse than the failure it describes. A
+method advertised but not served returns the host's 405, and a handler that throws returns the
+host's 500 — neither carries CORS headers, so both would surface as a bare "network error". `*` is the
 answer rather than a concession: authorisation here is the token — never the origin, never a cookie
 — so an origin that cannot present it gets 401 either way, and a deployment cannot know the origins
 of the GUIs that will manage it (the same asymmetry [§14](#14-security-boundary) settles). The

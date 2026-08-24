@@ -10,6 +10,7 @@ import { Type, type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from 
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
 import { controlRoutes } from "../src/channels/control.ts";
+import { log } from "../src/log.ts";
 import { inProcessLease } from "../src/engines/pi/turn-kit.ts";
 import { fauxAgent, fauxControlledAgent } from "./agent.ts";
 import { createPiSessionControl } from "../src/engines/pi/session-control.ts";
@@ -122,6 +123,12 @@ describe("session control over HTTP (Phase 3)", () => {
         // What the browser would actually name: a JSON body is NOT a safelisted content-type, so
         // every POST preflight carries it alongside the token header.
         const requested = method === "POST" ? ["authorization", "content-type"] : ["authorization"];
+        // The methods advertised must be the ones this PATH serves. Advertising a method the path
+        // does not serve sends the browser into a host-generated 405 that carries no CORS headers.
+        const servedHere = served.routeKeys
+          .filter((k) => k.endsWith(` ${path}`))
+          .map((k) => k.split(" ")[0] as string)
+          .filter((m) => m !== "OPTIONS"); // OPTIONS is derived, and compared out of `advertised` too
         // No token — a preflight cannot carry credentials, which is its entire purpose.
         const res = await fetch(`${served.url}${path}`, {
           method: "OPTIONS",
@@ -141,6 +148,12 @@ describe("session control over HTTP (Phase 3)", () => {
           method: true,
           headers: true,
         });
+        const advertised = (res.headers.get("access-control-allow-methods") ?? "")
+          .split(",")
+          .map((m) => m.trim())
+          .filter((m) => m !== "OPTIONS")
+          .sort();
+        expect({ path, advertised }).toEqual({ path, advertised: [...new Set(servedHere)].sort() });
       }
 
       // A rejected call must stay READABLE: without the headers the browser hands the client an
@@ -161,6 +174,33 @@ describe("session control over HTTP (Phase 3)", () => {
       await sse.body?.cancel();
     } finally {
       served.close();
+    }
+  });
+
+  it("a handler that REJECTS still answers a browser: CORS-bearing 500, not an opaque network error", async () => {
+    // The host has its own totality boundary, but its synthesized 500 carries no CORS headers — so
+    // without the plane's own catch, the one failure `commands()` admits is invisible to a GUI.
+    const { control } = await fauxControlledAgent([], {
+      commands: async () => {
+        throw new Error("skills/ unreadable: permission denied");
+      },
+    });
+    const server = serveNode(router(controlRoutes(control, { token: TOKEN })), { port: 0 });
+    const port = await server.listening;
+    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/control/commands`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.status).toBe(500);
+      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      // Failing visibly is not optional just because the client now gets a readable status.
+      expect(errors.mock.calls.map(String).join("\n")).toMatch(/permission denied/);
+      // ...and the internal message stays internal.
+      expect(await res.text()).not.toMatch(/permission denied/);
+    } finally {
+      errors.mockRestore();
+      server.close();
     }
   });
 
