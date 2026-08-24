@@ -49,8 +49,10 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 // fewer tools is behavior drift. A directory agent narrows with `codingTools: [names]` or opts out
 // with `codingTools: false`; L1/L2 library callers pass a restricted `tools` list directly.
 //
-// What keeps a full toolset from being a hazard is EXPOSURE, not capability: a serve binds loopback
-// unless told otherwise, so reaching those tools means reaching the machine first.
+// This is not a security boundary and no default here could be one: the built-in POST /invoke has no
+// authentication, author-written `tools/` import whatever they like, and a WebSocket or Socket-Mode
+// channel dials OUT, so no bind address constrains who can message the agent. Whoever can reach an
+// agent can use everything it mounts — put it behind something that decides who may.
 //
 // They are pi-coding-agent's, the same package everything else here comes from (definition.ts,
 // models.ts, the session runtime). pi-agent-core ships four look-alikes that reach the machine through
@@ -92,9 +94,9 @@ export interface ResolvedCodingTools {
 export function resolveCodingTools(config: FastagentConfig, cwd: string): ResolvedCodingTools {
   const requested = config.codingTools;
   // Unset/true = everything, for fidelity: the author vibed in local pi with the full toolset, and an
-  // agent that quietly loses capabilities when served is a different agent. The exposure that makes
-  // that dangerous is addressed where it belongs — the serve binds loopback unless told otherwise —
-  // rather than by narrowing what the agent can do.
+  // agent that quietly loses capabilities when served is a different agent. Narrowing is the author's
+  // call about their own deployment (`codingTools: ["read", "grep", "find", "ls"]`), not a default
+  // that would imply a boundary this cannot enforce — see the §1 note above.
   const enabled = new Set<CodingToolName>(
     requested === false ? [] : requested === true || requested === undefined ? CODING_TOOL_NAMES : requested,
   );
