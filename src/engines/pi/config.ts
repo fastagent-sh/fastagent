@@ -25,21 +25,18 @@ import { AGENT_CONFIG_NAMES, resolveOverridePath, resolveSecretsDir } from "../.
 // exhaustiveness anchor against pi's union) — config validation consumes it, never redefines it.
 
 /**
- * The tools an agent always has: reading and looking around its workspace.
+ * The fixed read-only baseline: pi's own coherent set for reading and looking around a workspace.
  *
- * Not configurable, because they are not a capability the author opts into — they are how fastagent's
- * own features work. `skills/` are loaded by the model reading `SKILL.md` on demand, and channel
- * attachments arrive as local paths. An agent without `read` cannot use either, which is not a
- * posture anyone wants; it is a broken agent.
+ * `read` is also how the model opens skills and channel attachments. The other three make read-only
+ * mode useful; they are fixed because `codingTools` controls only the mutating tools added on top.
  */
 export const BASELINE_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
 
 /**
  * The tools that change something: files, or the machine. These are what `codingTools` decides.
  *
- * The split is pi's own (`createReadOnlyTools` vs the rest of `createCodingTools`), and it is the
- * only line worth putting a switch on — a served agent acts on messages from whoever can reach it,
- * so this is the difference between answering questions and taking actions.
+ * The split is pi's own (`createReadOnlyTools` vs the rest of `createCodingTools`): this setting
+ * chooses whether the read-only baseline can also run commands or change files.
  */
 export const MUTATING_TOOL_NAMES = ["bash", "edit", "write"] as const;
 export type MutatingToolName = (typeof MUTATING_TOOL_NAMES)[number];

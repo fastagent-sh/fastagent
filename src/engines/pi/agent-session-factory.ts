@@ -90,11 +90,10 @@ export interface PiAgentSessionFactoryOptions {
    */
   extensionPaths?: string[];
   /**
-   * Built-in coding tools this definition DISABLED, refused at the registry rather than merely left
-   * inactive. `noTools: "builtin"` only keeps pi's own copies out of the active set, and anything
-   * that can activate a tool by name — a TUI command, the control plane, a deferred-tool loader —
-   * could put one back. `codingTools` is a capability decision for public-facing agents, so the
-   * disabled names must not be mountable at all.
+   * Built-in coding tools this definition disabled, refused at the registry rather than merely left
+   * inactive. `noTools: "builtin"` only keeps pi's own copies out of the active set; this denylist
+   * keeps a TUI command, control-plane action, or deferred-tool loader from restoring one by name, so
+   * the runtime tool set stays faithful to `codingTools`.
    */
   excludedToolNames?: readonly string[];
   /** Filesystem/process environment: definition loading, and the turn context for tools that read one. */

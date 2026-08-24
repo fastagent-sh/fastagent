@@ -47,10 +47,10 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
-// read/grep/find/ls are the directory agent's baseline: skills and channel attachments depend on
-// them. The default adds pi's mutating active set (bash/edit/write), for fidelity with local pi; a
-// directory agent narrows that addition with `codingTools`, while L1/L2 library callers pass their
-// exact `tools` list directly.
+// read/grep/find/ls are the directory agent's fixed read-only baseline; `read` also opens skills and
+// channel attachments. The default adds pi's mutating active set (bash/edit/write), for fidelity with
+// local pi; a directory agent narrows that addition with `codingTools`, while L1/L2 library callers
+// pass their exact `tools` list directly.
 //
 // This is not a security boundary and no default here could be one: the built-in POST /invoke has no
 // authentication, author-written `tools/` import whatever they like, and a WebSocket or Socket-Mode
@@ -164,9 +164,8 @@ export async function resolveAgentTools(
   const takenBaseline = BASELINE_TOOL_NAMES.filter((name) => authoredNames.has(name));
   if (takenBaseline.length > 0) {
     throw new Error(
-      `${takenBaseline.join(", ")} ${takenBaseline.length === 1 ? "is" : "are"} always mounted (skills and ` +
-        `channel attachments are read with them) — rename your tool, or the agent would lose the capability ` +
-        `its own definition depends on`,
+      `${takenBaseline.join(", ")} ${takenBaseline.length === 1 ? "is" : "are"} reserved for the always-mounted ` +
+        `read-only baseline — rename your tool`,
     );
   }
   const configured = [...coding.tools];

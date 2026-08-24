@@ -152,8 +152,8 @@ describe("session builder: buildAgentSessionRuntime injects fastagent's assemble
       const rt = await buildAgentSessionRuntime(dir, {}, SessionManager.inMemory());
       try {
         const state = rt.session.agent.state;
-        // `false` removes what CHANGES things; reading and searching are how skills and attachments
-        // work at all, so they stay.
+        // `false` removes what changes things, not the fixed read-only baseline. `read` also remains
+        // available for skills and attachments.
         expect(state.tools.map((t) => t.name).sort()).toEqual(["find", "grep", "ls", "read"]);
         expect(state.systemPrompt).toContain("- read:");
         expect(state.systemPrompt).not.toContain("- bash:");
@@ -569,7 +569,7 @@ describe("session builder: a baseline name is refused, a mutating one is free", 
        };\n`,
     );
     await expect(buildAgentSessionRuntime(dir, {}, SessionManager.inMemory())).rejects.toThrow(
-      /read is always mounted/,
+      /read is reserved.*read-only baseline/,
     );
   });
 

@@ -281,9 +281,9 @@ There are two ways to add tools:
 tools/lookup-order.ts  ->  lookup-order
 ```
 
-An agent always has `read`, `grep`, `find` and `ls`. They are not a capability you opt into — they are
-how FastAgent's own features work: `skills/` are loaded by the model reading `SKILL.md` on demand, and
-channel attachments arrive as local paths. An agent without them cannot use either.
+An agent always has pi's read-only set: `read`, `grep`, `find` and `ls`. This is the fixed baseline;
+`codingTools` controls only what can change files or run commands. `read` also supports FastAgent's own
+features: the model opens `skills/` through `SKILL.md`, and channel attachments arrive as local paths.
 
 `codingTools` chooses what is added on top: the tools that **change** something.
 

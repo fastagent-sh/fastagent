@@ -94,8 +94,8 @@ describe("loadTools (filesystem discovery)", () => {
   });
 
   it("codingTools false leaves the baseline, and nothing else", async () => {
-    // `false` removes what CHANGES things. read/grep/find/ls stay because fastagent's own features
-    // are built on them — skills load by the model reading SKILL.md, attachments arrive as paths.
+    // `false` removes what changes things, leaving pi's fixed read-only set. `read` also supports
+    // skills and channel attachments.
     const agentDir = await mkdtemp(join(tmpdir(), "fa-tools-empty-"));
     const resolved = await resolveAgentTools({ codingTools: false }, agentDir, process.cwd());
     expect(resolved.tools.map((t) => t.name)).toEqual(["read", "grep", "find", "ls"]);
@@ -113,7 +113,7 @@ describe("loadTools (filesystem discovery)", () => {
       `export default { description: "Business read", parameters: { type: "object" }, async execute() { return { content: [], details: "ok" }; } };`,
     );
     await expect(resolveAgentTools({ codingTools: false }, agentDir, process.cwd())).rejects.toThrow(
-      /read is always mounted/,
+      /read is reserved.*read-only baseline/,
     );
   });
 
