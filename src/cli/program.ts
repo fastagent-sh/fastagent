@@ -31,7 +31,7 @@ const NO_INPUT: FlagSpec = {
 const PORT: FlagSpec = { flags: "--port <n>", description: "HTTP port" };
 const BIND: FlagSpec = {
   flags: "--bind <addr>",
-  description: "bind address (default: 127.0.0.1, this machine only; 0.0.0.0 exposes it to the LAN)",
+  description: "bind address (default: all interfaces; 127.0.0.1 keeps it off the LAN)",
 };
 const TUNNEL: FlagSpec = {
   flags: "--tunnel",
@@ -271,7 +271,7 @@ const start: CommandSpec = {
   notes:
     "Precedence chains:\n" +
     "  port:     --port > PORT env > fastagent.config.ts http.port > 8787\n" +
-    "  bind:     --bind > fastagent.config.ts http.host > 127.0.0.1\n" +
+    "  bind:     --bind > fastagent.config.ts http.host > all interfaces\n" +
     "  state:    FASTAGENT_STATE_DIR > <agent dir>/.state — mutable machine state\n" +
     "            (sessions, channel state, schedule state); point it at a mounted\n" +
     "            volume so a redeploy that replaces the directory never wipes it\n" +

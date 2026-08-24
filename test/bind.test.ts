@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_BIND,
-  answersLocalhost,
-  bindAddress,
-  bindLabel,
-  classifyBind,
-  clientHost,
-  isBindAddress,
-} from "../src/bind.ts";
+import { answersLocalhost, bindAddress, bindLabel, classifyBind, clientHost, isBindAddress } from "../src/bind.ts";
 
 describe("bind: one reading of a bind address", () => {
   it("accepts IP literals and localhost, rejects anything unbindable", () => {
@@ -65,22 +57,5 @@ describe("bind: one reading of a bind address", () => {
     expect(clientHost("192.168.1.5")).toBe("192.168.1.5"); // a specific bind only answers as itself
     expect(clientHost("::1")).toBe("[::1]"); // IPv6 needs brackets in a URL
     expect(clientHost("[::1]")).toBe("[::1]"); // …and must not get a second pair
-  });
-});
-
-describe("DEFAULT_BIND (what a serve does when nobody said)", () => {
-  it("is loopback, not the wildcard", () => {
-    // The built-in POST /invoke has no authentication. Binding every interface by default would put
-    // the agent's whole tool surface on the LAN on the first `fastagent start`, with the author
-    // having done nothing wrong. Reaching a serve should mean reaching the machine first.
-    expect(classifyBind(DEFAULT_BIND)).toBe("loopback");
-    // ...and it must be the loopback address a client can actually dial, since --tunnel reaches the
-    // serve by dialing localhost (127.0.0.2 is loopback and does NOT answer that).
-    expect(answersLocalhost(DEFAULT_BIND)).toBe(true);
-  });
-
-  it("is an address, not a name — nothing downstream should resolve it", () => {
-    expect(bindAddress(DEFAULT_BIND)).toBe(DEFAULT_BIND);
-    expect(isBindAddress(DEFAULT_BIND)).toBe(true);
   });
 });

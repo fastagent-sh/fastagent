@@ -42,11 +42,11 @@ Supported keys:
 | `codingTools` | Select the built-in coding tools. Unset/`true`: all seven (`read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`); `false`/`[]`: none; an array such as `["read"]`: exactly those names. Authored and conditional built-ins are independent. |
 | `tools` | Extra programmatic tools appended after enabled pi coding tools. Most users should prefer `tools/` discovery. |
 | `http.port` | Default port for `dev` / `start`. |
-| `http.host` | Bind address for `dev` / `start`. Unset binds `127.0.0.1` (this machine only); `0.0.0.0` binds all interfaces. `--bind` overrides it, and is what you want for a one-off — this value travels into a deployed image, where `deploy` gates a non-wildcard value **if the Dockerfile does not pass `--bind` itself** (the generated one does, and the flag wins). See [Bind address](#bind-address). |
+| `http.host` | Bind address for `dev` / `start`. Unset (or `0.0.0.0`) binds all interfaces — what containers need. `--bind` overrides it; prefer the flag for a local-only bind, since this value travels into a deployed image (see [Bind address](#bind-address)). |
 | `selfSchedule` | Mount the built-in `wake` tool so the agent can schedule its own follow-up turns (self-scheduling). Off by default — an autonomy capability, opt in when you want it; only active on the serving path (`dev`/`start`, where the scheduler poller runs). |
 | `sessionControl` | Serve the session control plane at `/control/*` (state/entries/live events + dispatch: steer/abort/compact/set_model…) for remote consumers — a Web panel, a desktop app, `fastagent attach`. Off by default (it is a remote-control surface). When on, `dev`/`start` mint a per-boot bearer token into `<stateRoot>/control.json`; the serve binds loopback by default, so these routes are off the LAN unless you bind wider — if you do (`--bind 0.0.0.0`), the token is their only protection, so firewall the port or wrap it. On a deployed box (`fastagent deploy`) the routes ride the public host URL with the token minted inside the container: read `<stateRoot>/control.json` on the box, or front the endpoint with real auth; `deploy` warns about this. |
 | `deploy.secrets` | Extra secret env-var names the deployed agent needs (e.g. `["GH_TOKEN"]`). `deploy` lists them in the runbook and, under `--run`, carries each value from your local env to the host secret store; a missing value gates the run. |
-| `deploy.apt` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). **A Dockerfile you own must bind the wildcard itself** (`CMD ["fastagent", "start", "/app", "--bind", "0.0.0.0"]`) — unless `http.host` already says `0.0.0.0`, which travels into the image and binds there. A serve binds `127.0.0.1` otherwise, and that container answers nothing from outside. For a Dockerfile it generated, `deploy` checks the flag and gates `--run` when it is missing. For one you wrote it does **not** try to work out which `CMD` your build ends up running — it asks you to confirm, once per deploy, and never blocks. A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile, a missing bind) is kept but flagged; `--force` regenerates it. |
+| `deploy.apt` | Extra apt packages baked into the generated image (`["git", "ripgrep"]` — Debian default repos). For a package needing a custom apt repo (e.g. `gh`) or a different base image, provide your own `Dockerfile` — `deploy` keeps an existing one (and warns that `deploy.apt` isn't applied to a hand-written Dockerfile). A `Dockerfile` fastagent generated that later drifts from the current config (a changed `deploy.apt`, a new lockfile, a missing bind) is kept but flagged; `--force` regenerates it. |
 
 Unknown keys fail at startup. This catches typos such as `modle` instead of silently degrading to defaults.
 
@@ -209,21 +209,24 @@ Use `PORT` in hosted environments that inject a port.
 ## Bind address
 
 ```txt
---bind > fastagent.config.* http.host > 127.0.0.1
+--bind > fastagent.config.* http.host > all interfaces
 ```
 
 `localhost` is accepted and resolved to `127.0.0.1` as it is read, so what binds, what the startup
 lines print and what `control.json` records are the same address — a name would leave that to
 `dns.lookup` on one side and to the client's resolver on the other, which can disagree.
 
-**Loopback is the default**: a serve answers this machine and nothing else until you say otherwise.
-The built-in `POST /invoke` carries no authentication of its own, so an all-interfaces default would
-put the agent's whole tool surface on the LAN on the very first `fastagent start`. Say `--bind
-0.0.0.0` when you want that — and `deploy` says it for you, in the container, where the wildcard is
-what makes the published port, the health check and webhook ingress reachable at all.
-
+All interfaces is the default because containers require it. A desktop app driving a local agent wants
+the opposite: `--bind 127.0.0.1` keeps the port — `/control/*` with it — unreachable from the LAN.
 `<stateRoot>/control.json` records the address a client should dial, so clients read it rather than
 assume one.
+
+**FastAgent does not provide a security boundary, and a default cannot be one.** The built-in
+`POST /invoke` has no authentication; author-written `tools/` can import anything; a WebSocket or
+Socket-Mode channel dials OUT, so no bind address constrains who can message the agent. Whoever can
+reach an agent can use everything it mounts. Put it behind an application, a gateway, or a network
+you control — that is where the boundary belongs, and a narrower default here would substitute a
+feeling for one.
 
 Two edges: `--tunnel` reaches the serve by dialing `localhost`, so a bind that name never resolves to
 (`--bind 192.168.1.5`, or even `--bind 127.0.0.2`) is refused with it; and `http.host` travels into a deployed image, where any non-wildcard bind

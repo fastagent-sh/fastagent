@@ -183,25 +183,3 @@ describe("cli: bind address policy", () => {
     expect(readyAddressLines("127.0.0.1", 1, false)).toHaveLength(1);
   });
 });
-
-describe("the deployed container binds the wildcard explicitly", () => {
-  it("passes --bind 0.0.0.0 in every CMD form", async () => {
-    // `fastagent start` defaults to loopback now, which is right on a laptop and wrong in a
-    // container: nothing outside could reach the published port, the health check or a webhook. The
-    // container states the wildcard rather than relying on an unset default, so the two decisions
-    // cannot drift apart silently.
-    const { containerArtifacts } = await import("../src/deploy/container.ts");
-    const base = { hasLockfile: true, bunVersion: "1", agentPrefix: "", apt: [], shipsGit: false, excludes: [] };
-    for (const facts of [
-      { ...base, runtime: "node" as const, hasPackageJson: true },
-      { ...base, runtime: "node" as const, hasPackageJson: false },
-      { ...base, runtime: "bun" as const, hasPackageJson: true },
-    ]) {
-      const dockerfile = containerArtifacts(facts as never).find((a) => a.path === "Dockerfile");
-      const cmd = (dockerfile?.content ?? "").split("\n").find((line) => line.startsWith("CMD"));
-      expect(cmd, JSON.stringify({ runtime: facts.runtime, hasPackageJson: facts.hasPackageJson })).toMatch(
-        /0\.0\.0\.0/,
-      );
-    }
-  });
-});

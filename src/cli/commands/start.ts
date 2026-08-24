@@ -17,7 +17,7 @@ import { setWakeupsSink } from "../../schedule/wakeups.ts";
 import { logAgentLoop } from "../../observe.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { exists } from "../../paths.ts";
-import { DEFAULT_BIND, bindAddress } from "../../bind.ts";
+import { bindAddress } from "../../bind.ts";
 import { type Routes, parseRouteKey } from "../../host/node.ts";
 import { failStartup, placementOrExit } from "../fail.ts";
 import {
@@ -153,7 +153,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // `http.host` enters here the way the flag enters `parseBind` — through `bindAddress`, so a
   // configured `localhost` is an ADDRESS by the time anything binds, renders or dials it.
   const configured = config.http?.host;
-  const host = bindFlag ?? (configured === undefined ? DEFAULT_BIND : bindAddress(configured));
+  const host = bindFlag ?? (configured === undefined ? undefined : bindAddress(configured));
   assertTunnelBindable(host, opts.tunnel ?? false, bindFlag ? "flag" : "config");
   const withControl = mountSessionControl(routed?.routes ?? {}, sessionControl, stateRoot, {
     tunnel: opts.tunnel ?? false,
