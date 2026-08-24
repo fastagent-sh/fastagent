@@ -6,7 +6,8 @@
  * web stream primitives give cancellation (consumer disconnect → cancel() → iterator.return() →
  * invoke cancellation, SPEC MUST 3), backpressure (pull-based), and the body cap natively.
  *
- * `nodeListener` is the thin node:http adapter for the embedded `fastagent dev/start` server.
+ * Serving it is somebody else's job: the node:http bridge and the route table belong to the HOST
+ * (`src/host/node.ts`). This file knows only the Agent contract and the wire shape of one stream.
  */
 import type { Agent } from "../agent.ts";
 import { readBodyCapped } from "./body.ts";
