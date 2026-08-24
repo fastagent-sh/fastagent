@@ -90,19 +90,18 @@ export function router(routes: Routes): ChannelHandler {
 }
 
 /**
- * The node:http adapter for a Fetch handler — the embedded server uses it, and an embedder mounting
- * fastagent on its OWN node:http server can too.
+ * The TOTALITY boundary every serving path shares, and not decoration: `loadChannels` imports
+ * arbitrary author code, so a channel that throws — or simply forgets to return — must become a
+ * logged 500 rather than escape as an unhandled rejection. Both the exported listener and
+ * `serveNode` route through it; wiring only one would leave the path `dev`/`start` actually use
+ * failing silently while the exported one looked correct.
  *
- * The wrapper is the TOTALITY boundary, and it is not decoration: `loadChannels` imports arbitrary
- * author code, so a channel that throws — or simply forgets to return — must become a 500 rather
- * than escape as an unhandled rejection. The message stays internal: the adapter's own error page
- * would otherwise echo the exception text (a stack, a path, a key in an error string) straight to
- * the client.
+ * The message stays internal (rule 8 is about the LOG being visible, not the client): an adapter's
+ * default error page would otherwise echo exception text — a stack, a path, a key inside an error
+ * string — straight to whoever made the request.
  */
-export function nodeListener(
-  handler: (req: Request) => Promise<Response>,
-): (req: IncomingMessage, res: ServerResponse) => void {
-  return getRequestListener(async (req) => {
+function totalFetch(handler: ChannelHandler): (req: Request) => Promise<Response> {
+  return async (req) => {
     try {
       const response = await handler(req);
       if (!(response instanceof Response)) throw new TypeError("handler did not return a Response");
@@ -111,7 +110,15 @@ export function nodeListener(
       log.error(`[host] request failed: ${String(error)}`);
       return text("internal error\n", 500);
     }
-  });
+  };
+}
+
+/** The node:http adapter for a Fetch handler — the embedded server uses it, and an embedder mounting
+ *  fastagent on its OWN node:http server can too. */
+export function nodeListener(
+  handler: (req: Request) => Promise<Response>,
+): (req: IncomingMessage, res: ServerResponse) => void {
+  return getRequestListener(totalFetch(handler));
 }
 
 /**
@@ -135,7 +142,7 @@ export function serveNode(
   // closeAllConnections, which the caller-owned force-close depends on.
   const server = serve(
     {
-      fetch: async (req) => handler(req),
+      fetch: totalFetch(handler),
       port: options.port,
       ...(options.host !== undefined ? { hostname: options.host } : {}),
     },

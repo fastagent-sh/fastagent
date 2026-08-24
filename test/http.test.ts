@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
-import { createInvokeHandler, nodeListener, type Agent, type AgentEvent } from "../src/index.ts";
+import { createInvokeHandler, nodeListener, serveNode, type Agent, type AgentEvent } from "../src/index.ts";
 import { INVOKE_EXAMPLE_BODY } from "../src/channels/http.ts";
 import { fauxAgent } from "./agent.ts";
 
@@ -319,6 +319,32 @@ describe("nodeListener totality (the host must survive arbitrary channel code)",
     }
   });
 
+  it("the SERVING path has the same boundary: a throwing handler is logged, and says nothing else", async () => {
+    // Not a duplicate of the nodeListener case: `dev`/`start` reach the socket through serveNode, so
+    // wiring the boundary into only the exported listener would leave the path that actually serves
+    // users failing silently — which is how it was first written.
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m) => {
+      errs.push(String(m));
+    });
+    const host = serveNode(
+      async () => {
+        throw new Error("boom /etc/secret-path");
+      },
+      { port: 0 },
+    );
+    const port = await host.listening;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/x`);
+      expect(res.status).toBe(500);
+      const body = await res.text();
+      expect(errs.some((e) => /request failed.*boom/.test(e))).toBe(true); // visible in the log
+      expect(body).not.toMatch(/etc\/secret-path/); // ...and nowhere else
+    } finally {
+      await host.close();
+    }
+  });
+
   it("a body stream that errors mid-flight surfaces and does not crash the server", async () => {
     const errs: string[] = [];
     vi.spyOn(console, "error").mockImplementation((m) => {
@@ -342,11 +368,13 @@ describe("nodeListener totality (the host must survive arbitrary channel code)",
     try {
       // Reading is only the TRIGGER; a truncated body is the expected shape of this failure, so
       // the read itself is allowed to throw. What is asserted is what happens on the SERVER.
+      let delivered = "";
       await (async () => {
         const res = await fetch(`http://127.0.0.1:${host.port}/boom`);
         const reader = res.body!.getReader();
         for (;;) {
-          const { done } = await reader.read();
+          const { done, value } = await reader.read();
+          if (value) delivered += new TextDecoder().decode(value);
           if (done) return;
         }
       })().catch(() => undefined);
@@ -355,6 +383,9 @@ describe("nodeListener totality (the host must survive arbitrary channel code)",
       expect(errs.some((e) => /blew up mid-flight|request failed/.test(e))).toBe(true);
       // ...and the server is still there.
       expect(await (await fetch(`http://127.0.0.1:${host.port}/next`)).text()).toBe("alive");
+      // The failure must not be told to the CLIENT: once headers are out an adapter can only append
+      // to the body, and appending the exception text would publish whatever it names.
+      expect(delivered).not.toMatch(/blew up mid-flight/);
     } finally {
       await host.close();
     }
