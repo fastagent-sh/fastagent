@@ -46,9 +46,11 @@ import { type Lease, type SessionObserver, inProcessLease } from "./turn-kit.ts"
 
 // ── §1 tools ─────────────────────────────────────────────────────────────────
 //
-// The full pi toolset is the default, for fidelity: authors vibe in local pi with it, so serving with
-// fewer tools is behavior drift. A directory agent narrows with `codingTools: [names]` or opts out
-// with `codingTools: false`; L1/L2 library callers pass a restricted `tools` list directly.
+// pi's ACTIVE four are the default, for fidelity: read/bash/edit/write is what a local pi session
+// offers the model, so serving with a different set is behavior drift in either direction. pi also
+// mounts grep/find/ls without activating them — `codingTools: true` takes those as well. A directory
+// agent narrows with `codingTools: [names]` or opts out with `false`; L1/L2 library callers pass a
+// restricted `tools` list directly.
 //
 // This is not a security boundary and no default here could be one: the built-in POST /invoke has no
 // authentication, author-written `tools/` import whatever they like, and a WebSocket or Socket-Mode

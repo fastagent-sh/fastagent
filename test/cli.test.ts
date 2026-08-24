@@ -402,7 +402,7 @@ describe("cli papercuts", () => {
     expect(info.schedules[0].next).toMatch(/T09:00:00\.000Z$/); // loaded → the next instant is printable
     expect(JSON.stringify(info.scheduleFailures)).toMatch(/bad\.mjs/); // the broken one is surfaced per-file
     expect(info.selfSchedule).toBe(false); // no config → wake tool won't mount
-    expect(info.codingTools).toEqual(["read", "bash", "edit", "write"]); // omitted = every coding tool
+    expect(info.codingTools).toEqual(["read", "bash", "edit", "write"]); // omitted = pi's active four
 
     // text mode: next instant on the schedules line, the failure as a stderr warning
     const text = await run(["info", dir], undefined, env);
